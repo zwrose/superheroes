@@ -182,17 +182,26 @@ def test_k1_the_payload_contract_predicate_calls_the_same_judge():
         _result(checks=_with("right", answer="maybe"))), shaped
 
 
-def test_k1_the_submit_guard_refuses_a_result_missing_a_check_and_keeps_the_step_pending():
-    # axis: E1 at submit — the refusal names the check; a resubmit with the check is accepted
-    targets = [{"id": "t0"}]
-    for checks in (None, _without("testWouldFail"), _with("right", answer="perhaps")):
-        fault = RD.audit_results_fault({"results": [_result(checks=checks)]}, targets)
-        assert fault is not None and "results[0]" in fault and "checks" in fault, fault
-    assert RD.audit_results_fault({"results": [_result()]}, targets) is None
-    # a not-discharged ruling owes the answers too
-    assert RD.audit_results_fault({"results": [_result(ruling="not-discharged", checks=None)]}, targets)
-    assert RD.audit_results_fault({"results": [_result(ruling="not-discharged", checks=_checks(right="no"))]},
-                                  targets) is None
+@pytest.mark.parametrize("ruling,checks", [
+    ("discharged", None),
+    ("discharged", _without("testWouldFail")),
+    ("discharged", _with("right", answer="perhaps")),
+    ("not-discharged", None),
+], ids=["no-checks", "one-check-missing", "unusable-answer", "not-discharged-no-checks"])
+def test_k1_the_submit_guard_refuses_a_result_missing_a_check_and_keeps_the_step_pending(
+        tmp_path, ruling, checks):
+    # axis: E1 at submit — a session at the audits step refuses the result through `cmd_submit`, names the check,
+    # leaves the state hash and the pending phase/attempt as they were, and takes the corrected checks on the
+    # same attempt and hash — see bite-proof record c1l11f_wo_b_break_it_baseline
+    d, n = TRD._at(tmp_path, RD.P_AUDITS)
+    bad, _targets = TRD._audit_artifact(n, ruling=ruling)
+    if checks is None:
+        del bad["results"][0]["checks"]
+    else:
+        bad["results"][0]["checks"] = checks
+    good, _ = TRD._audit_artifact(n, ruling=ruling, checks=_checks(right="no") if ruling == "not-discharged"
+                                  else _checks())
+    TRD._assert_shape_refused(d, n, bad, "audit-ruling-shape", ["results[0]", "checks"], good)
 
 
 def test_k1_the_submit_guard_judges_the_test_match_against_the_target_the_result_answers():

@@ -4288,8 +4288,11 @@ def _fold_second_test(state, config, artifact, session_dir=None):
             copy_ = stamped[0]
             first_runs = held.get(break_it.RUNS_FIELD)
             first_runs = list(first_runs) if isinstance(first_runs, list) else []
-            copy_[break_it.RUNS_FIELD] = first_runs + [r for r in copy_.get(break_it.RUNS_FIELD, [])
-                                                       if r not in first_runs]
+            # axis: the second test is the test role's latest version: the first test's reviewer baseline is dropped (the carried block is the baseline now) and the second test's own run marks where the first test's explanations stop counting — see bite-proof record c1l11f_wo_b_break_it_baseline
+            copy_.pop(REVIEWER_TEST_FIELD, None)
+            second_runs = [dict(r, **{SECOND_TEST_FIELD: True}) for r in copy_.get(break_it.RUNS_FIELD, [])
+                           if isinstance(r, dict)]
+            copy_[break_it.RUNS_FIELD] = first_runs + [r for r in second_runs if r not in first_runs]
             for run in runs:
                 # axis: the second test's run joins the round's history as the finding's latest, so the kept-check reads it — see bite-proof record c1l7_wo_c_second_test
                 _record_round_append(state, "breakItRuns", dict(run, findingKey=key))
@@ -7244,12 +7247,15 @@ def _head_line_anchors(section):
     return anchors
 
 
-def _removal_anchor(head_anchors, here):
+def _removal_anchor(head_anchors, here, replaced_header=False):
     """The head line a line removed at section position ``here`` (between ``head_anchors[here - 1]`` and
     ``head_anchors[here]``) anchors on: the nearest anchorable line after it in the same PR hunk, else the
-    nearest before it in that hunk, else None. It never crosses a hunk header."""
+    nearest before it in that hunk, else None. It never crosses a hunk header. ``replaced_header`` says the
+    line's own hunk header was removed and ``here`` is the position of the header that replaces it, so the
+    line's hunk is the one that follows ``here``, not the one before it."""
     ahead, behind = head_anchors[here:], head_anchors[:here]
-    hunk = behind[-1][0] if behind else None
+    # axis: a removal whose hunk header the group replaces takes its hunk from the surviving (following) hunk, never the preceding one — see bite-proof record c1l11f_wo_b_break_it_baseline
+    hunk = None if replaced_header else (behind[-1][0] if behind else None)
     if hunk is None and ahead:
         hunk = ahead[0][0]
     if hunk is None:
@@ -7286,11 +7292,20 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
     for lines in groups:
         index = int(_FIX_DELTA_GROUP_HEADER.match(lines[0]).group(1)) - 1
         head_lines, content = [], False
+        # `header_gone`: a PR hunk header this group removed, not yet replaced; `waiting`: the removed body
+        # lines of that hunk, which anchor in the hunk the replacing header opens
+        header_gone, waiting = False, 0
         for ln in lines[1:]:
             mark, text = ln[0], ln[1:]
+            if mark in (" ", "-") and text.startswith("@@"):
+                # an earlier removed header that nothing replaced was a hunk that did not survive
+                header_gone, waiting = mark == "-", 0
             if mark == "-":
                 content = content or not text.startswith("@@")
                 if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
+                    if header_gone:
+                        waiting += 1
+                        continue
                     # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk.
                     anchor = _removal_anchor(head_anchors, min(max(index, 0), len(head_anchors)))
                     if anchor is not None:
@@ -7300,6 +7315,12 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
                 if index < 0 or index >= len(head_numbers):
                     return None
                 content = content or not text.startswith("@@")
+                if header_gone and text.startswith("@@"):
+                    # axis: removed lines whose hunk header the group replaces anchor in the surviving hunk that header opens, not the one before it — see bite-proof record c1l11f_wo_b_break_it_baseline
+                    anchor = _removal_anchor(head_anchors, index, replaced_header=True) if waiting else None
+                    if anchor is not None:
+                        head_lines.append(anchor)
+                    header_gone, waiting = False, 0
                 if head_numbers[index] is not None and not text.startswith("@@"):
                     head_lines.append(head_numbers[index])
             index += 1
@@ -7420,9 +7441,15 @@ def _reported_unnamed_changes(state):
 
 def _changed_why(finding):
     """The build session's reason for changing the finding's break-it test: the latest non-blank
-    `changedWhy` on its run list, else None."""
+    `changedWhy` on its run list recorded after the test role's latest version was set, else None. A
+    second test replaces the first as the test role's version, and its own run (marked `secondTest`)
+    ends the earlier test's explanations."""
     runs = finding.get(break_it.RUNS_FIELD)
-    for run in reversed(runs if isinstance(runs, list) else []):
+    runs = runs if isinstance(runs, list) else []
+    # axis: an explanation counts only when it was recorded after the baseline (the second test's run) was set — see bite-proof record c1l11f_wo_b_break_it_baseline
+    start = max((i + 1 for i, run in enumerate(runs)
+                 if isinstance(run, dict) and run.get(SECOND_TEST_FIELD) is True), default=0)
+    for run in reversed(runs[start:]):
         why = run.get("changedWhy") if isinstance(run, dict) else None
         if isinstance(why, str) and why.strip():
             return why.strip()
@@ -7443,10 +7470,67 @@ def _audit_head(state, config):
     return _resolve_head_commit(repo_root) if _nonempty_str(repo_root) else None
 
 
+def _final_diff_files(repo_root, base, head):
+    """``{path: text}`` for the files the final diff (``base...head``) carries that a break-it body search
+    reads, collected as ``break_it._body_search`` collects its candidates (a text git cannot decode is
+    None); None when git cannot list or read them, so the search is not made."""
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering), and so is this one's
+    from break_it_body import supported_suffixes
+    suffixes = supported_suffixes()
+    listed = _git_bytes(repo_root, "diff", "--name-only", "-z", base + "..." + head)
+    if listed is None:
+        return None
+    files = {}
+    for name in listed.decode("utf-8", errors="surrogateescape").split("\0"):
+        if not name or os.path.splitext(name.lower())[1] not in suffixes or break_it._path_unsafe(name):
+            continue
+        tree = _git_bytes(repo_root, "ls-tree", "-z", head, "--", name)
+        if tree is None:
+            return None
+        meta = tree.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
+        if len(meta) != 3 or meta[0] not in break_it._REGULAR_MODES or meta[1] != "blob":
+            continue
+        blob = _git_bytes(repo_root, "cat-file", "blob", meta[2])
+        if blob is None:
+            return None
+        try:
+            files[name] = blob.decode("utf-8")
+        except UnicodeDecodeError:
+            files[name] = None
+    return files
+
+
+def _locate_in_final_diff(config, head, content, path, cache):
+    """``(text, where)``: the file of the final diff that holds the break-it test ``content`` (the file at
+    ``path``) unchanged up to formatting and its title, once, as ``break_it.check_kept`` reads it
+    (``break_it_body.locate``), and where it sits; None when it is not so found. Fails closed: a language
+    the search does not read, no match, more than one, any status but ``found`` and a git read that fails
+    are all None, and ``cache`` (one list, filled on first use) holds the diff's files for the audit."""
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering), and so is this one's
+    from break_it_body import locate
+    repo_root, base = config.get("repoRoot"), config.get("baseRef")
+    if not (_nonempty_str(repo_root) and _nonempty_str(base) and _nonempty_str(head) and _nonempty_str(path)
+            and isinstance(content, str)) or base.startswith("-") or head.startswith("-"):
+        return None
+    if not cache:
+        cache.append(_final_diff_files(repo_root, base, head))
+    files = cache[0]
+    if files is None:
+        return None
+    found = locate(content, path, list(files.items()))
+    # axis: a test found away from its path (relocated within the final diff) is credited as at its path, only where locate finds it whole and once — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if found["status"] != "found" or not isinstance(files.get(found["path"]), str):
+        return None
+    return files[found["path"]], found["path"]
+
+
 def _break_it_target_facts(state, config, finding, head):
     """The `breakIt` block of an audit target: the test role's test, the test committed at the audited
     head, the build session's reason for a change, and how the two compare (`audits.BREAK_IT_MATCHES`).
-    Fails closed: a committed test git cannot read is `missing`."""
+    The reviewer's version is the latest test a test-role seat wrote for the finding (`reviewerTest` when
+    held, else the carried block); a committed test equals a version when its bytes do or when
+    ``break_it_body.locate`` finds it in the final diff up to formatting and title, at its path or
+    relocated. Fails closed: a committed test git cannot read is `missing`."""
     block, _kind = break_it.carried_block(finding)
     path = block["path"] if block is not None else None
     current = block["content"] if block is not None else None
@@ -7461,16 +7545,32 @@ def _break_it_target_facts(state, config, finding, head):
         except UnicodeDecodeError:
             committed = None
     why = _changed_why(finding)
-    if committed is None:
-        match = audits.MATCH_MISSING
-    elif committed == reviewer:
+    diff_files = []
+
+    def held_as(version):
+        """``(text, where)`` of the committed test equal to ``version``, else None."""
+        if version is None:
+            return None
+        if committed is not None and committed == version:
+            return committed, path
+        return _locate_in_final_diff(config, head, version, path, diff_files)
+
+    # axis: the reviewer's version matches the committed test up to formatting, title and relocation, not by exact bytes alone — see bite-proof record c1l11f_wo_b_break_it_baseline
+    hit = held_as(reviewer)
+    if hit is not None:
         match = audits.MATCH_SAME
-    elif committed == current and why is not None:
-        match = audits.MATCH_CHANGED_EXPLAINED
     else:
-        match = audits.MATCH_CHANGED_UNEXPLAINED
-    return {"path": path, "reviewerTest": reviewer, "committedTest": committed,
-            "changedWhy": why, "match": match}
+        # axis: the explained version matches up to the same equivalence, and only with a reason recorded after the baseline — see bite-proof record c1l11f_wo_b_break_it_baseline
+        hit = held_as(current) if why is not None else None
+        if hit is not None:
+            match = audits.MATCH_CHANGED_EXPLAINED
+        else:
+            match = audits.MATCH_MISSING if committed is None else audits.MATCH_CHANGED_UNEXPLAINED
+    facts = {"path": path, "reviewerTest": reviewer, "committedTest": committed if hit is None else hit[0],
+             "changedWhy": why, "match": match}
+    if hit is not None and hit[1] != path:
+        facts["committedPath"] = hit[1]
+    return facts
 
 
 def _audit_fix_group(finding, key):
