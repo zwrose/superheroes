@@ -3161,8 +3161,9 @@ def _limit_expired_refusal(reads, repo_root=None, env=None):
     expired = {
         "failedRead": "limit-expired", "remedy": _ADOPT_ORIGINAL_REMEDY_UNREAD,
     }
+    is_time = isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool)
     # axis: a limit authorization lasts until its reset time, so a spawn after the reset, past the remote lookups that followed the check, is refused unread — see bite-proof record i2272_launcher
-    if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) and now >= resets_at:
+    if is_time and now >= resets_at:
         return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
     relied = reads.get("relied") or []
     if relied:
@@ -3171,15 +3172,12 @@ def _limit_expired_refusal(reads, repo_root=None, env=None):
 
         for cfg, started_ts in relied:
             reading = cloud_relay.account_limit(repo_root, cfg, env=env, now=now)
-            # axis: a limit authorization also needs the limit to still hold when the spawn is next, so a reply that withdrew it during the remote lookups refuses the spawn unread — see bite-proof record i2272_launcher
-            if not (
-                isinstance(reading, dict) and reading.get("ok") is True
-                and reading.get("limited") is True
-                and cloud_recover._is_number(started_ts)
-                and cloud_recover._is_number(reading.get("recordedAt"))
-                and started_ts < reading["recordedAt"]
-            ):
+            # axis: a limit authorization also needs the limit to still hold when the spawn is next, so a reply that withdrew it during the remote lookups refuses the spawn unread; the relied lanes were stamped when relied on, so the shared rule is applied to the stamp it needs — see bite-proof record i2272_launcher
+            if not cloud_recover.limit_relief(reading, {"standDown": 1}, started_ts):
                 return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
+        # axis: the account reads above take time, so the clock is read again after them and a reset crossed during a read refuses the spawn unread — see bite-proof record i2272_launcher
+        if is_time and _now_fn() >= resets_at:
+            return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
     return None
 
 
@@ -3366,16 +3364,8 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         reading = readings[cfg]
         started_ts = info.get("startedTs")
         lane_premise = premises.get(launch_id)
-        stand_down = lane_premise.get("standDown") if isinstance(lane_premise, dict) else None
-        # axis: a lane is limited only while its account reads limited, with the limit recorded after the lane started, and only when its reserved premise carries the launcher's standDown stamp, since a lane launched before the stand-down check existed cannot stand down on waking; a limit that has passed, one recorded before the lane started, a lane with no started time, an account with no reading and an unstamped lane leave the lane needing a listing — see bite-proof record i2272_launcher
-        if (
-            isinstance(stand_down, int) and not isinstance(stand_down, bool) and stand_down == 1
-            and isinstance(reading, dict) and reading.get("ok") is True
-            and reading.get("limited") is True
-            and cloud_recover._is_number(started_ts)
-            and cloud_recover._is_number(reading.get("recordedAt"))
-            and started_ts < reading["recordedAt"]
-        ):
+        # axis: a lane is limited only by the one rule recovery shares (cloud_recover.limit_relief): its account reads limited, the limit recorded after the lane started, and its reserved premise carrying the launcher's standDown stamp; a limit that has passed, one recorded before the lane started, a lane with no started time, an account with no reading and an unstamped lane leave the lane needing a listing — see bite-proof record i2272_launcher
+        if cloud_recover.limit_relief(reading, lane_premise, started_ts):
             relief[launch_id] = reading
     if relief:
         # axis: the issue's comments are read in the remote-read stage, before the local snapshot the decision rests on — see bite-proof record i2272_launcher

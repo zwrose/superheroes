@@ -567,7 +567,7 @@ def test_t1_the_successor_premise_adopts_the_pushed_branch_and_passes_the_launch
     premise = got["premise"]
     assert premise["baseCommit"] == w.base != sha  # the lane's own base is kept; the pushed work rides beside it
     assert premise["adoptsBranch"] == BRANCH and premise["adoptsHead"] == sha
-    assert "placeCall" not in premise and "standingExclusions" not in premise
+    assert "placeCall" not in premise and "standingExclusions" not in premise and "standDown" not in premise
     original = _premise(w, 17)
     for key in set(original) - set(CR._LAUNCHER_STAMPED):
         assert premise[key] == original[key]

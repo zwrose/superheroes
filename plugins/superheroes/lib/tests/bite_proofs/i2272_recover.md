@@ -456,6 +456,28 @@ FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_4_the_helper_re
 
 **(r2b) the second limit read.** Guarded element: `cloud_recover.successor`, the `limited_stop and _limit_reading(...) is None` refusal just before the supersession is recorded. Neutralization: prefixed it with `False and`. Same command. Red: `test_3c_a_limit_that_expires_during_the_pushed_work_read_refuses_before_the_supersession_is_recorded` and `test_3c_an_account_limit_stop_that_still_holds_is_adopted_and_the_limit_is_reread` (the second read is gone) failed. Restore: `False and` removed. Green: the file passes.
 
+## Round 7 — the stand-down comment leg and the shared eligibility rule
+
+**(r7a) the stand-down comment leg.** Guarded element: `cloud_recover.assess`, the `elif stood_down is not None:` leg right after the handover leg (a comment opening with `cloud_builder.STAND_DOWN_HEADER`, created at or after the lane's start, is stop evidence `stand-down`). Neutralization: `elif stood_down is not None:` became `elif False and stood_down is not None:`. Command: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_recover.py -k test_5 -q -p no:randomly`.
+
+Red (final lines):
+```
+FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_5_a_stand_down_comment_after_the_lanes_start_is_stop_evidence_and_is_recorded_like_a_handover
+FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_5_a_stand_down_stop_is_resumed_by_the_successor_after_the_limit_reset
+2 failed, 2 passed, 56 deselected in 14.06s
+```
+Restore: `False and ` removed by the inverse edit. Green (final line): `4 passed, 56 deselected in 1.86s`.
+
+**(r7b) the shared rule's stamp test.** Guarded element: `cloud_recover._stand_down_stamped` (used by `limit_relief`, which the launcher and `_limit_reading` both call), the `not isinstance(stand_down, bool)` exclusion. Neutralization: the clause was removed. Command: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_recover.py::test_5_limit_relief_edges plugins/superheroes/lib/tests/test_i2272_launcher.py::test_only_a_stand_down_stamp_of_one_relieves_a_limited_lane -q -p no:randomly`.
+
+Red (final lines):
+```
+FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_5_limit_relief_edges
+FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_only_a_stand_down_stamp_of_one_relieves_a_limited_lane[True]
+2 failed, 4 passed in 3.93s
+```
+Restore: the clause put back by the inverse edit. Green (final line): `6 passed in 4.25s`.
+
 ## After all nine
 
 Every neutralization was restored by its inverse edit before the next began. The final run of the whole detector file, with the

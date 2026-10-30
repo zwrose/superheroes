@@ -257,11 +257,6 @@ def test_only_a_stand_down_stamp_of_one_relieves_a_limited_lane(tmp_path, accoun
     )
 
 
-def test_recovery_strips_the_stand_down_stamp_from_a_successor_premise():
-    import cloud_recover
-    assert "standDown" in cloud_recover._LAUNCHER_STAMPED
-
-
 def test_orchestration_says_an_older_lane_still_needs_the_session_read():
     path = os.path.join(os.path.dirname(L.__file__), "..", "skills", "showrunner", "reference", "orchestration.md")
     with open(path, encoding="utf-8") as fh:
@@ -520,7 +515,7 @@ def test_a_limit_that_expires_before_a_local_retry_refuses_the_retry(tmp_path, a
 
     def clock():
         reads.append(1)
-        return RESETS_AT - 60 if len(reads) <= 3 else RESETS_AT
+        return RESETS_AT - 60 if len(reads) <= 4 else RESETS_AT
 
     monkeypatch.setattr(L, "_now_fn", clock)
     spawned = []
@@ -532,7 +527,7 @@ def test_a_limit_that_expires_before_a_local_retry_refuses_the_retry(tmp_path, a
     result = _local_adoption(repo, tmp_path, failing_spawn)
     assert result["ok"] is False
     assert result["reason"] == TOKEN_UNREAD
-    assert len(reads) == 4
+    assert len(reads) == 5  # each check reads the clock before and after its account rereads
     assert len(spawned) == 1
     _terminalized_at_original_session(repo, result)
 

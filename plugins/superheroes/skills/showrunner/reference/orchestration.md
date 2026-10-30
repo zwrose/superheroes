@@ -497,7 +497,10 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
      successor runs on the owner's machine. `successor` reads the limit again just before it records
      the supersession and refuses `stop-evidence-expired` if the limit no longer holds. The routing
      step places the launch: cloud when cloud is ready, the owner's machine otherwise. Until that
-     launch starts, `assess` keeps answering `stopped`, so an interrupted recovery is rerun, never lost.
+     launch starts, `assess` keeps answering `stopped`, so an interrupted recovery is rerun, never lost:
+     a takeover interrupted after the notice is resumed from the original's stand-down comment
+     (`assess` evidence `stand-down`, which `successor` accepts without a limit re-read) or, before
+     the builder wakes, from the limit while it holds.
      `successor` passes over a pushed branch whose head another of the issue's pushed branches
      already contains (it names it in `passedOver`); a branch holding work found nowhere else still
      refuses `pushed-branch-ambiguous`.

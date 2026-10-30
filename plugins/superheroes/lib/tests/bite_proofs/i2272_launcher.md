@@ -576,3 +576,27 @@ FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_a_detective_pr
 ```
 
 **Restore:** the condition put back; the combined run of the three tests of this entry and (g) printed `3 passed in 4.45s`.
+
+## (i2) the clock is read again after the final account rereads — axis: a reset crossed during the final account read refuses `limit-expired`
+
+**Guarded element:** `launcher.py` `_limit_expired_refusal`, the second `_now_fn()` comparison with `resets_at` after the loop over `reads["relied"]`.
+
+**Neutralization:** `if is_time and _now_fn() >= resets_at:` became `if False and is_time and _now_fn() >= resets_at:`.
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_reset_during_final_limit_read_break_it.py -q -p no:randomly`
+
+**Red (final lines):**
+```
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_reset_during_final_limit_read_break_it.py:55: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_i2272_reset_during_final_limit_read_break_it.py::test_reset_during_final_account_read_prevents_cloud_spawn
+1 failed in 2.65s
+```
+
+**Restore:** `False and ` removed by the inverse edit; the run of this test with `test_a_limit_that_expires_before_a_local_retry_refuses_the_retry` printed the final lines below.
+
+**Green (final lines):**
+```
+..                                                                       [100%]
+2 passed in 3.45s
+```
