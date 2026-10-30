@@ -68,6 +68,8 @@ WHY_TOKENS = (WHY_NO_EARLIER, WHY_EARLIER_UNUSABLE, WHY_NOT_ANCESTOR, WHY_NOT_CO
 _SHA_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
 _UNCLEAR_PREFIXES = (lane_call.WHY_NOT_SET, lane_call.WHY_UNMATCHABLE, lane_call.WHY_NO_PATHS)
 _MISSING_RECORD = "review-record-missing"
+# Axis: a user's submodule settings (diff.ignoreSubmodules, diff.submodule) never hide or reshape a gitlink update.
+_DIFF_ARGS = (*review_diff_bytes.REVIEW_DIFF_ARGS, "--ignore-submodules=none", "--submodule=short")
 
 
 def _is_sha(value):
@@ -234,7 +236,7 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     # 4. the changed files
     if not _is_sha(base):
         return _full(result, WHY_DIFF_UNREADABLE, "the base is not a full commit sha")
-    diff_args = list(review_diff_bytes.REVIEW_DIFF_ARGS)
+    diff_args = list(_DIFF_ARGS)
     code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (base, last_reviewed)])
     code_b, current_text = run(["diff", *diff_args, "%s...%s" % (base, head)])
     sources = {}
@@ -321,7 +323,7 @@ def _read_earlier(path):
 
 def _cli_proven(repo_root, base, head, proof):
     code, current = _production_git(repo_root)(
-        ["diff", *review_diff_bytes.REVIEW_DIFF_ARGS, "%s...%s" % (base, head)])
+        ["diff", *_DIFF_ARGS, "%s...%s" % (base, head)])
     if code != 0:
         return []
     proven, _ = countable_lines.proven_copies(current, repo_root, proof, head=head)
