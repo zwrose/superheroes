@@ -288,7 +288,10 @@ def test_fr19_a_judge_name_on_a_finding_whose_earlier_finding_is_open_routes_it_
     state["round"] = 2
     _verify(state, [_raw("new one", line=2)], {"new one": "CONFIRMED"})
     assert _payload(state)["earlier"] == []
-    _synth(state, [_group(_ids(state)["new one"])])
+    grouping = [_group(_ids(state)["new one"], ref="e1")]  # the judge names the open finding, which the order never offered
+    fault = RD.synthesis_staged_id_fault(state, {"grouping": grouping})
+    assert fault is not None and fault.startswith(RD.STAGED_ID_UNRESOLVABLE_CAUSE) and "repeatOf 'e1'" in fault, fault
+    RD._fold_synthesis(state, state["config"], {"grouping": grouping})  # the fold ignores a name that does not validate
     assert _titles(state) == ["new one"] and "repeatOf" not in _row(state, _raw("new one", line=2))
 
 
@@ -1056,6 +1059,8 @@ def test_t3b_a_judge_named_repeat_kept_as_shown_wrong_is_marked_and_kept_by_exac
     scripted = {2: [reworded, fixme_too], 3: [reworded]}
 
     def synth(rnd, payload):
+        if rnd == 1:  # the head moves once (to a commit of the same tree) between the judgment and the finding raised again
+            _git(r.checkout, "commit", "-q", "--allow-empty", "-m", "move the head")
         if rnd == 2:  # the judge names the reworded finding a repeat of the shown-wrong one, e1
             ref = {e["title"]: e["ref"] for e in payload["earlier"]}["shown wrong one"]
             ids = {f["title"]: f["id"] for f in payload["findings"]}
@@ -1067,6 +1072,8 @@ def test_t3b_a_judge_named_repeat_kept_as_shown_wrong_is_marked_and_kept_by_exac
                 verdicts={(1, "shown wrong one"): C1L7._SECOND_REFUTED}, synth=synth)
     r.drive()
     state = r.state()
+    judged, raised_again = RD._verifier_head(state, r.dir, 1), RD._verifier_head(state, r.dir, 2)
+    assert judged and raised_again and judged != raised_again, "premise: the head moved between the two verifier judgments"
     # premise: round 2 kept it as shown-wrong on the judge's name alone, under its own confirmed grade
     (named,) = state["rounds"]["2"]["repeatMarks"]
     assert (named["source"], named["kept"], named["grade"]["verdict"]) == ("judge", True, "confirmed"), named

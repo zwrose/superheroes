@@ -269,6 +269,17 @@ def test_a_ledger_the_record_writer_cannot_read_or_no_state_pools_nothing():
     assert [e["outcome"] for e in RM.build_pool(_state(row, rulingsLog="x", rounds="x"), 2, [])] == ["craft"]
 
 
+def test_s3b_a_member_of_a_wrong_closed_representative_pools_with_the_representatives_wrong_grade():
+    # bites on: `session_entry` carrying the resolved representative's wrong grade into a merged member's entry
+    wrong_rep = _row(_raw("wrong rep"), "refuted", grade=dict(_WRONG), refutedReason="guard holds")
+    member = dict(_raw("merged member"), raisedSeq=1, grade={"verdict": "confirmed", "reason": "r"},
+                  **{SC.MERGED_INTO_FIELD: _key(wrong_rep)})
+    inputs = RM.read_inputs(_state(wrong_rep, member))
+    entry = RM.session_entry(inputs[0][_key(member)], 2, inputs)
+    assert entry["outcome"] == "shown-wrong"
+    assert entry["grade"]["verdict"] == "wrong"
+
+
 def test_s4_a_ledger_row_pools_with_the_outcome_the_record_writer_gives_it():
     # bites on: the outcome of `session_entry` coming from the record writer's decision (a row's own disposition,
     # its mergedInto link, its repeatKept, its ruling and the break-it ruling are all read there)

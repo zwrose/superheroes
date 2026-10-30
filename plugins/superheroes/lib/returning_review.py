@@ -143,13 +143,17 @@ def _proven_files(proven):
     return files
 
 
-def _sections_by_file(diff_text):
-    """``{file: concatenated section text}`` of ``diff_text``, or None when a section's header cannot be read."""
+def _sections_by_file(diff_text, sources=None):
+    """``{file: concatenated section text}`` of ``diff_text``, or None when a section's header cannot be read.
+    When ``sources`` is a dict, it gains ``{file: {old paths}}`` for every renamed or copied section."""
     out = {}
     for section in countable_lines.parse_sections(diff_text):
         if section["unreadable"]:
             return None
         out[section["file"]] = out.get(section["file"], "") + section["text"]
+        old = section.get("oldFile")
+        if sources is not None and old and old != section["file"]:
+            sources.setdefault(section["file"], set()).add(old)
     return out
 
 
@@ -243,8 +247,9 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     diff_args = list(review_diff_bytes.REVIEW_DIFF_ARGS)
     code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (base, last_reviewed)])
     code_b, current_text = run(["diff", *diff_args, "%s...%s" % (base, head)])
-    reviewed = _sections_by_file(reviewed_text) if code_a == 0 else None
-    current = _sections_by_file(current_text) if code_b == 0 else None
+    sources = {}
+    reviewed = _sections_by_file(reviewed_text, sources) if code_a == 0 else None
+    current = _sections_by_file(current_text, sources) if code_b == 0 else None
     if reviewed is None or current is None:
         return _full(result, WHY_DIFF_UNREADABLE, "git could not produce the diff of the earlier review or of the head against the base")
     proven_files = _proven_files(proven)
@@ -258,7 +263,10 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
 
     # 5. the incremental diff, and the files a catch-up changed too
     # Axis: the incremental diff runs from the last reviewed commit to the head, never over the whole section of the change.
-    code, delta = run(["diff", *diff_args, last_reviewed, head, "--", *files])
+    # Axis: a rename's source path is part of the surface, so the diff shows the move and a risk area on the source still matches.
+    # Axis: a proven copy is never passed on, whether it arrives as a changed file or as a rename's source path.
+    paths = sorted(p for p in set(files).union(*(sources.get(f, set()) for f in files)) if p not in proven_files)
+    code, delta = run(["diff", *diff_args, last_reviewed, head, "--", *paths])
     if code != 0:
         return _full(result, WHY_DIFF_UNREADABLE, "git could not produce the diff since the last reviewed commit")
     result["deltaDiff"] = delta
@@ -284,7 +292,7 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
                      % (countable, countable_lines.COUNTABLE_LINES_BAR))
 
     # 7. the risk
-    delta_basis = lane_call.call(repo_root, list(files))
+    delta_basis = lane_call.call(repo_root, list(paths))
     earlier_areas = _basis_areas(earlier.get("laneBasis"))
     if earlier_areas is None:
         return _full(result, WHY_BASIS_UNUSABLE, "the earlier review's risk basis cannot be read")
