@@ -267,10 +267,13 @@ _VERIFY_COUNTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED", "unverified", "ambiguous"
 
 def _nothing_to_verify(state, rnd):
     """Whether the round's verifier phase had no staged finding: `verifyPasses` is a non-empty list and every entry is a dict whose
-    verdict and unanswered counts are all present zeros. Anything else, a missing or malformed record included, had something to verify."""
+    verdict and unanswered counts are all present zeros and none held a finding for a second test (an absent or malformed `held`
+    reads as zero). Anything else, a missing or malformed record included, had something to verify."""
     passes = (state["rounds"].get(str(rnd)) or {}).get("verifyPasses")
     return isinstance(passes, list) and bool(passes) and all(
-        isinstance(p, dict) and all(_int(p.get(k)) and p[k] == 0 for k in _VERIFY_COUNTS) for p in passes)
+        # axis: a pass whose findings were all held ran a verifier, so it never reads as nothing to verify — see bite-proof record c1l7_wo_f_held_record
+        isinstance(p, dict) and all(_int(p.get(k)) and p[k] == 0 for k in _VERIFY_COUNTS)
+        and not (_int(p.get("held")) and p["held"] > 0) for p in passes)
 
 
 def _status_reviewers(state, setup=None, rows=()):
