@@ -49,6 +49,7 @@ import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import round_phases  # noqa: E402
 import sanitized_view  # noqa: E402
 import seat_map as seat_map_module  # noqa: E402
 import session_contract  # noqa: E402
@@ -843,7 +844,23 @@ def _lane(a, rd, meta):
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
 
 
-BASIS_EVIDENCE_MAX = 10      # matched or unmatchable paths kept per list
+_CAPPED_LANES = ("micro", "light")  # the lanes this writer holds to the round cap; the full lane's driver holds its own
+
+
+def _refuse_lane_over_round_cap(lane, rounds):
+    """Refuse a light or micro account over the round cap, bar the one extra audit round (FR-52).
+
+    The full lane is left to its driver; a lane value this module does not know is not capped (the below-floor rule
+    reads it not-reviewed)."""
+    count = rounds["count"]
+    # axis: a light or micro record never shows a round past the cap, except the one extra audit round — see bite-proof record c1l11b_wo_e_lane_round_cap
+    if lane in _CAPPED_LANES and count > round_phases.ROUND_CAP + (1 if "extraAudit" in rounds else 0):
+        raise Refusal("review-record-round-cap-exceeded",
+                      f"the {lane} lane's review ran {count} rounds; its cap is {round_phases.ROUND_CAP}"
+                      + (" (five with the extra audit round)" if "extraAudit" in rounds else ""))
+
+
+BASIS_EVIDENCE_MAX = 10     # matched or unmatchable paths kept per list
 BASIS_AREAS_MAX = 20         # touched areas kept on the record
 BASIS_PATHS_MAX = 40         # matched paths kept across all touched areas together
 BASIS_WHY_MAX = 12           # reason lines kept; the touches ones are the cut ones
@@ -1328,6 +1345,7 @@ def build_record(account, readers, prior=None):
     meta = rd["pr_meta"](a["pr"], a["repo"])
     fc = {"sha": meta["head"], "source": "GitHub PR"} if meta else {"sha": a["finalCommit"], "source": SESSION}
     ci, lane = _ci(rd, a["repo"], fc["sha"], a.get("repoRoot")), _lane(a, rd, meta)
+    _refuse_lane_over_round_cap(lane["value"], a["rounds"])
     for fact, session, code, from_code in (("lane", a["lane"], lane["value"], lane["source"] != SESSION),
                                            ("finalCommit", a["finalCommit"], fc["sha"], bool(meta)),
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
