@@ -2971,7 +2971,7 @@ _ADOPT_ORIGINAL_REMEDY_UNREAD = (
     "post the results on the issue (orchestration.md § Acting on the builders' account), save "
     "them to a file and launch again with --cloud-sessions-file; or get the lane's handover "
     "(cloud_recover.py ask, then assess). A lane that handed back before the adopted branch's "
-    "first pull request opened needs no read, unless a fix order went to its session that the relay did not confirm delivered before the handback. When the issue's newest "
+    "first pull request opened needs no read, unless a fix order went to its session. When the issue's newest "
     "lane is a local lane on this account, resume that same session instead of adopting."
 )
 _ADOPT_ORIGINAL_REMEDY_STATE = (
@@ -3081,18 +3081,6 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _relay_stamp(value):
-    """Epoch seconds of a relay UTC stamp (``...%S.%fZ`` or ``...%SZ``); None for anything else."""
-    if not isinstance(value, str):
-        return None
-    for form in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
-        try:
-            return datetime.strptime(value, form).replace(tzinfo=timezone.utc).timestamp()
-        except ValueError:
-            continue
-    return None
-
-
 def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
     """None, or ``(reason, detail)``: an adoption must not launch beside a live builder that could still write the adopted branch.
 
@@ -3103,8 +3091,7 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
     ambiguous keeps it: a lane bound to the adopted branch by its premise is dropped when
     ``origin`` shows that branch gone; any other lane is dropped when it handed back before the
     branch's first pull request opened and neither a ``vet not-ready`` nor a fix-order relay record
-    addressed to it reopened it (any such record does, unless its decision is delivered with a stamp at or
-    before the handback), since a pull request on the branch before the handback would itself be the
+    addressed to it reopened it (any fix-order relay record to its session does), since a pull request on the branch before the handback would itself be the
     first, so the lane's pull request was on another branch and nothing sends it back to this one.
     For the lanes left, the recorded host listing (``sessions_file``) must show the lane's session
     archived, failed or gone: a row that is none of those is live, and a listing that cannot be
@@ -3208,21 +3195,12 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
             reopened = False
             for relay in relays.get("records") or []:
                 # axis: a fix-order relay record whose target is not a non-empty string is ambiguous and may have been sent to this lane, so it is matched against every handed-back lane
-                # axis: a fix order addressed to the lane's session keeps the lane whatever its compose time, since delivery can follow a later handback — see bite-proof record i2254_original_session
+                # axis: any fix order addressed to the lane's session keeps the lane whatever its compose or decision time, since delivery can follow a later handback — see bite-proof record i2254_original_session
                 if isinstance(relay, dict) and (
                     not isinstance(relay.get("session"), str)
                     or not relay.get("session")
                     or relay.get("session") == info["cloudSessionName"]
                 ):
-                    decision = relay.get("decision")
-                    decided_at = _relay_stamp(decision.get("at")) if isinstance(decision, dict) else None
-                    # axis: only a fix order the relay confirmed delivered at or before the handback is answered by it, so any other record to the lane keeps it — see bite-proof record i2254_original_session
-                    if (
-                        isinstance(relay.get("session"), str) and relay.get("session")
-                        and isinstance(decision, dict) and decision.get("delivered") is True
-                        and decided_at is not None and decided_at <= handback
-                    ):
-                        continue
                     reopened = True
             if reopened:
                 kept[launch_id] = info

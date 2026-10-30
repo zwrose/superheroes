@@ -835,8 +835,8 @@ def test_a_relay_record_for_another_session_does_not_keep_the_lane(
     _proceeds(result, calls)
 
 
-def test_a_fix_order_delivered_before_the_handback_does_not_keep_the_lane(tmp_path, first_pr, monkeypatch):
-    # axis: a fix order the relay confirmed delivered at or before the handback is answered by it, so the lane is dropped on the first-pull-request timing — see bite-proof record i2254_original_session
+def test_a_fix_order_delivered_before_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: any fix order to the lane's session keeps the lane, even one the relay confirmed delivered before the handback — see bite-proof record i2254_original_session
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo)
     _relay_records(monkeypatch, [{
@@ -845,7 +845,8 @@ def test_a_fix_order_delivered_before_the_handback_does_not_keep_the_lane(tmp_pa
     }])
     first_pr(time.time() + 3600)
     result, calls = _adopt(repo, tmp_path)
-    _proceeds(result, calls)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
 
 
 def test_a_fix_order_delivered_after_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
@@ -1142,3 +1143,17 @@ def test_the_branch_read_tells_gone_from_present_from_unknown(tmp_path):
     assert L._adopted_branch_absent(repo, branch + "-nope", env) is True
     _git(repo, "remote", "set-url", "origin", str(tmp_path / "missing.git"))
     assert L._adopted_branch_absent(repo, branch, env) is None
+
+
+def test_a_relay_state_with_a_malformed_pending_entry_keeps_the_lane(tmp_path, first_pr):
+    # axis: a pending relay entry that is not a dict may be a damaged fix order, so the real relay read refuses and the lane stays — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    state, _ = cloud_relay._state_path(repo, cloud_relay._env(None))
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"relays": {}, "pending": {"m": None}}, fh)
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]

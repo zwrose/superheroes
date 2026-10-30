@@ -522,8 +522,7 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   The check counts a lane only when it could still write the adopted branch: a lane bound to the
   adopted branch by its premise (it names the same branch, or the same pull request number), and
   any other lane unless it handed back before the branch's first pull request opened with no fix
-  order since (no `vet not-ready` after the handback, and no fix order to its session unless the
-  relay confirmed it delivered before the handback).
+  order since (no `vet not-ready` after the handback, and no fix order to its session).
   A handed-back lane had opened its own pull request before its handback, so a pull request on the
   adopted branch opened before then would itself be the branch's first; the lane's pull request was
   on another branch, and with no fix order since it writes only that branch. A bound lane whose
