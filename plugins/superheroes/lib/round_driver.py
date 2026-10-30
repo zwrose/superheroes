@@ -1632,7 +1632,8 @@ def _seed_carried(state, cfg, returning):
         hunks = {} if split.get("unknown") else split.get("auditTargets") or {}
     for key, finding in rows.items():
         # a carried finding is audited only where the change since the last reviewed commit touches its line
-        if (finding in usable and _fix_hunks_over_line(hunks, finding["file"], finding.get("line"))
+        # a carried finding whose record shows a break-it run has lost its test's bytes (the record keeps display fields only), so no audit can check the test: it goes to the verifier
+        if (finding in usable and not _carried_test_unrecoverable(finding) and _fix_hunks_over_line(hunks, finding["file"], finding.get("line"))
                 and _fixer_delta_lines(baseline, head_diff, finding["file"], finding.get("line"))):
             audited[key] = finding
     state["_carriedToVerify"] = [f for key, f in rows.items() if key not in audited]
@@ -1646,6 +1647,14 @@ def _seed_carried(state, cfg, returning):
     state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
     state["fixBatch"] = []
     return True
+
+
+def _carried_test_unrecoverable(finding):
+    """True when a carried finding's earlier record shows it carried a break-it test whose bytes the record does not
+    keep (the record's finding rows hold the display runs only, no suggestion block): such a finding is unresolved
+    until a reviewer attaches the test again, so it is sent to the verifier and never discharged by an audit."""
+    runs = finding.get(break_it.RUNS_FIELD) if isinstance(finding, dict) else None
+    return bool(runs) and not break_it.carries_test(finding)
 
 
 def _with_carried(state, compiled):
@@ -1667,12 +1676,19 @@ def _with_carried(state, compiled):
             continue
         # axis: a fresh report that matches a carried finding is merged into it and its evidence survives, under the carried key — see bite-proof record c1l11b_wo_h_carried_merge
         merged = _merge_same_finding(rows[id(h)], c)
+        fresh_key = _finding_identity_key(c)
         for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
             if field in h:
                 merged[field] = h[field]
             else:
                 merged.pop(field, None)
         rows[id(h)] = merged
+        # a break-it run bound to the fresh report's key is rebound to the carried key the merged row keeps, so the kept-check finds its disposition
+        new_key = _finding_identity_key(merged)
+        if fresh_key and new_key and fresh_key != new_key:
+            for run in state.get("rounds", {}).get(str(state.get("round")), {}).get("breakItRuns") or []:
+                if isinstance(run, dict) and run.get("findingKey") == fresh_key:
+                    run["findingKey"] = new_key
     return rest + [rows[id(h)] for h in held]
 
 
