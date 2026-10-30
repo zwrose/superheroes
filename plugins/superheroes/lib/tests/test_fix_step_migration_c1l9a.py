@@ -117,6 +117,28 @@ def test_e12_the_build_session_becomes_the_fix_maker_when_the_old_fixer_differs_
     assert _state(session_dir)["config"]["fixerVendor"] == host_vendor
 
 
+def test_e12_the_replaced_external_fixers_family_stays_a_maker_so_its_commits_are_not_self_audited(tmp_path):
+    session_dir, _before, _anchor = _migrated_session(tmp_path)
+    state = _state(session_dir)
+    state["config"]["fixerVendor"] = "claude"
+    state["config"]["seatMap"] = {"hostFamily": "openai"}
+    state["seatMapReceipts"] = []
+    state.pop("seatMap", None)
+    former_family = RD.model_registry.family_for("code-fixer", "claude")
+    host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
+    assert former_family is not None and host_vendor not in (None, "claude")
+    RD.save_state(session_dir, state)
+    RD.cmd_next(session_dir)
+    after = _state(session_dir)
+    assert after["config"]["fixerVendor"] == host_vendor
+    assert after["formerFixerFamilies"] == [former_family]
+    assert former_family in RD.receipt_disclosures.accumulated_maker_families(after)
+    after["config"]["vendors"] = ["claude", host_vendor]
+    vendor, independence = RD._auditor_vendor(
+        after["config"], host_vendor, maker_families=RD.receipt_disclosures.accumulated_maker_families(after))
+    assert (vendor, independence) == (None, "unseatable")
+
+
 def test_e12_a_second_command_migrates_nothing_again(tmp_path):
     session_dir, _before, _anchor = _migrated_session(tmp_path)
     first = RD.cmd_next(session_dir)

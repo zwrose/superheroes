@@ -376,11 +376,16 @@ def pinned_auditor_vendors(seat_map):
 def accumulated_maker_families(state):
     """Every maker family any submitted seat map named, plus the effective map's: a later, recomposed
     map that omits an earlier maker does not release it — the receipt writer unions them, so the
-    decisions that read makers do too. Seat identities still come from the latest map alone."""
+    decisions that read makers do too. Seat identities still come from the latest map alone. The
+    families of external fixers a session upgrade replaced (`state["formerFixerFamilies"]`) join
+    them: their commits stay in the step, so they stay makers."""
     if not isinstance(state, dict):
         return frozenset()
+    former = state.get("formerFixerFamilies")
     return (maker_families(seat_map_receipts.effective_seat_map(state))
-            | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
+            | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset())
+            | frozenset(f for f in (former if isinstance(former, list) else ())
+                        if isinstance(f, str) and f))
 
 
 def nonpanel_barred(state, config):

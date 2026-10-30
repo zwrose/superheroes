@@ -588,6 +588,46 @@ def test_e13_a_ruling_while_the_step_is_pending_rewrites_the_batch_and_guidance_
     assert fx.submit(_bound(test_key, fx.commit_fix()), pending=again)["ok"] is True
 
 
+def test_e13_a_ruling_that_empties_the_slice_after_the_step_committed_fixes_keeps_it_for_the_fold(tmp_path):
+    fx = Fixture(tmp_path)
+    n = fx.reach()
+    key = fx.keys()[0]
+    sha = fx.commit_fix()
+    prov = {"ruledBy": "owner", "ruledAt": "2026-08-26T00:00:00Z", "records": ["rulings.json"]}
+    ruling = tmp_path / "ruling.json"
+    ruling.write_text(json.dumps({"_provenance": prov, "rulings": [
+        {"id": key, "ruling": "out-of-scope", "reason": "defer",
+         "followUp": {"item": "backlog item", "revisitTrigger": "next milestone",
+                      "classClosure": "owner backlog"}}]}))
+    out = RD.cmd_rule(str(fx.session), str(ruling), "owner")
+    assert out["ok"] is True, out
+    state = fx.state()
+    # the committed fix is not converged past: the step stays pending with its slice
+    assert state["terminal"] is None and state["step"] == RD.P_APPLY_FIXES
+    assert [RD._finding_identity_key(r) for r in state["_fixBatch"]] == [key]
+    assert any(d["kind"] == "fix-batch-held" for d in state["decisions"])
+    again = RD.cmd_next(str(fx.session))
+    assert (again["phase"], again["attempt"]) == (RD.P_APPLY_FIXES, n["attempt"])
+    assert fx.submit(_bound(key, sha), pending=again)["ok"] is True
+    assert fx.state()["rounds"]["1"]["fix"]["commits"] == [{"finding": key, "commit": sha}]
+
+
+def test_e13_a_ruling_that_empties_the_slice_before_any_commit_still_settles(tmp_path):
+    fx = Fixture(tmp_path)
+    fx.reach()
+    key = fx.keys()[0]
+    prov = {"ruledBy": "owner", "ruledAt": "2026-08-26T00:00:00Z", "records": ["rulings.json"]}
+    ruling = tmp_path / "ruling.json"
+    ruling.write_text(json.dumps({"_provenance": prov, "rulings": [
+        {"id": key, "ruling": "out-of-scope", "reason": "defer",
+         "followUp": {"item": "backlog item", "revisitTrigger": "next milestone",
+                      "classClosure": "owner backlog"}}]}))
+    assert RD.cmd_rule(str(fx.session), str(ruling), "owner")["ok"] is True
+    state = fx.state()
+    assert state["step"] != RD.P_APPLY_FIXES or state["terminal"] is not None
+    assert not any(d["kind"] == "fix-batch-held" for d in state["decisions"])
+
+
 # ---- E14 / E15 -----------------------------------------------------------------------------------------------
 
 def test_e14_next_no_longer_takes_a_fixer_vendor(tmp_path):

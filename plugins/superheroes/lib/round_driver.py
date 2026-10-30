@@ -5174,8 +5174,9 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     setting P_APPLY_FIXES. Returns ``"queued"`` when a fix batch was queued, ``"excluded"`` when
     the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
     is 0; on a continuation the caller enters post-fix), ``"empty"`` when no row was offered and
-    none is named by a ruling (the caller settles), or ``"faulted"`` when a disposition-
-    ledger read fault parked the session.
+    none is named by a ruling (the caller settles), ``"held"`` when a ruling emptied a step that
+    already holds commits (``keep_step_start``; the slice stays for its fold), or ``"faulted"``
+    when a disposition-ledger read fault parked the session.
     """
     cap = _fix_batch_cap(config)
     offered_nonempty = bool(rows)
@@ -5195,6 +5196,14 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if not filtered:
         # Only rows the discharge filter dropped count as excluded by discharge; rows the
         # once-per-episode rule dropped do not.
+        if keep_step_start and _step_has_new_commits(state, config):
+            # A ruling arriving mid-step cannot unwind commits the step already holds: the slice
+            # stays as it is, so the report still folds, verifies and audits them — an empty slice
+            # would converge on changes no one reviewed.
+            _decision(state, "fix-batch-held",
+                      "a ruling emptied the fix batch after the step committed fixes — the slice "
+                      "stays, so those commits fold, verify and are audited before the round settles")
+            return "held"
         excluded_by_discharge = len(rows) - discharge_survivors
         if excluded_by_discharge:
             rec = state["rounds"].setdefault(str(state["round"]), {})
@@ -5221,6 +5230,13 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         state.pop("_prBodyAtStep", None)
     state["step"] = P_APPLY_FIXES
     return "queued"
+
+
+def _step_has_new_commits(state, config):
+    """True when HEAD of the configured repository has moved off the head the step started at."""
+    start = state.get("_fixStepHead")
+    head = _fix_step_head(config)
+    return _nonempty_str(start) and head is not None and head != start
 
 
 def _fix_step_head(config):
@@ -7349,10 +7365,21 @@ def _migrate_fixer_step(session_dir, state):
     state["_fixStepHead"] = head if _nonempty_str(head) else _fix_step_head(state.get("config"))
     state.pop("_escalatedRung", None)
     # the build session applies the fixes from here on, so it is the fix maker: an earlier external
-    # fixer's vendor stays in the rounds that recorded it (`rounds[n]["fixerVendor"]`), not in the config
+    # fixer's vendor stays in the rounds that recorded it (`rounds[n]["fixerVendor"]`), not in the
+    # config. Its commits since the preserved start head still count for the step, so its family
+    # stays a maker: the audit of them is never seated on that family.
     config = state.get("config")
     vendor = _build_session_vendor(seat_map_receipts.effective_seat_map(state))
     if isinstance(config, dict) and vendor is not None:
+        former = config.get("fixerVendor")
+        former_family = (model_registry.family_for("code-fixer", former)
+                         if _nonempty_str(former) and former != vendor else None)
+        if former_family is not None:
+            held = state.get("formerFixerFamilies")
+            held = list(held) if isinstance(held, list) else []
+            if former_family not in held:
+                held.append(former_family)
+            state["formerFixerFamilies"] = held
         config["fixerVendor"] = vendor
     return True, attempt
 
