@@ -9,9 +9,9 @@ layers over one core:
 
   - Layer 1 (`run_loop`): the ported control-flow of `review_panel_shell.js::reviewPanel` with
     every effectful step behind an injectable seam (`reviewer`, `synthesis`, `verifier`,
-    `auditor`, `fix_step`, `verify_runner`, `changed_subjects`, `panel_diff`, `io`). Same run-SHAPE, not the JS
+    `auditor`, `fix_step`, `fix_commits`, `fix_step_head`, `verify_runner`, `changed_subjects`, `panel_diff`, `io`). Same run-SHAPE, not the JS
     idioms. `changed_subjects` derives the fix's changed policy subjects from git (the reviewed vs
-    head diff), NEVER the fixer's self-report (#157/#158) — the library default + the CLI path wire
+    head diff), NEVER the session's self-report (#157/#158) — the library default + the CLI path wire
     the real derivation; the eval harness injects a scripted replay. `panel_diff` derives the
     git head diff for unknown-surface full panels — the library default + the CLI path wire the
     real git helper; run_loop may inject a scripted replay.
@@ -64,8 +64,6 @@ import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import countable_lines  # noqa: E402
 import circuit_breaker  # noqa: E402
-import command_refusals  # noqa: E402
-import observed_refusals  # noqa: E402
 import mode_registry  # noqa: E402
 import decision_kinds  # noqa: E402
 import delta_surface  # noqa: E402
@@ -75,7 +73,6 @@ import engine_adapter  # noqa: E402
 import finding_outcomes  # noqa: E402
 import payload_contracts  # noqa: E402
 import engine_pref  # noqa: E402
-import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import order_lint  # noqa: E402
@@ -124,93 +121,11 @@ CHEAP = "reviewer"
 # with its findings carried as unverified. The code leg's read goes through the constant now.
 REDISPATCH_BUDGET = loop_plan_common.REDISPATCH_BUDGET
 MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
-# Claude-ladder rung for self-recovery escalation — not owner-configurable.
-# escalate() returns None (no escalation recorded) when the fixer vendor's ladder
-# does not contain this pair (codex/cursor ladders omit it) or the pair tops its ladder.
-_SELF_RECOVERY_FIXER_MODEL = "sonnet-5.5"
-_SELF_RECOVERY_FIXER_EFFORT = "high"
-
-# Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
+# Fold-owned guidance record key inside judgmentDispositions entries.
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
-QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
 # The verifier's grade on a finding; only `_fold_verifiers` writes it (`_seed_ledger_entry` strips a seat's).
 GRADE_FIELD = "grade"
 
-
-def _fixer_create_items(batch):
-    """The path of each batch row that carries a break-it test the driver itself stamped for that path.
-
-    The test file such a finding names is written by the fixer, so it does not exist when the
-    order is linted. The stamp is the driver's: compile strips a seat-supplied one and only the
-    break-it intercept stamps a copy, so an unstamped row, or one stamped for another path, is
-    never exempted. A per-area row yields its ``file`` when the stamp names it; an attached row
-    (any other taxonomy whose suggestion is a block) yields its carried block's ``path`` when the
-    stamp names that.
-    """
-    out = []
-    for row in batch if isinstance(batch, list) else []:
-        if not isinstance(row, dict):
-            continue
-        stamp = row.get(break_it.RUN_FIELD)
-        stamped_path = stamp.get("path") if isinstance(stamp, dict) else None
-        if not (isinstance(stamped_path, str) and stamped_path):
-            continue
-        if break_it.is_break_it(row):
-            # axis: only a break-it row carrying the driver's own stamp for its own file is exempted from the existence check — see bite-proof record wo_2_1910_fixer_lint_break_it
-            if stamped_path == row.get("file"):
-                out.append(row["file"])
-            continue
-        block, kind = break_it.carried_block(row)
-        # axis: an attached row is exempted only when the driver's stamp names the very path its carried block writes
-        if kind == break_it.KIND_ATTACHED and stamped_path == block["path"]:
-            out.append(block["path"])
-    return out
-
-
-def _order_lint_text(order_text, context):
-    """The rendered order minus every quoted-data block: the lint grades the driver's text, never the owner's.
-
-    The owner's verify command is quoted data wherever it rides. The round economy (C13 layer 2d)
-    retired the fixer template's bare ``VERIFY_COMMAND`` placeholder in favour of the scoped
-    ``VERIFY_BUDGET``, which quotes the owner's command INSIDE driver-authored prose — so the
-    command is sourced from the session config (``verify_command``), never from a placeholder no
-    template fills any more, and the elision is NARROW: only the command itself is replaced, and
-    only where it rides inside the budget block, so the budget's own target-file list, its
-    instructions, and every path in them stay graded by the lint.
-    """
-    ph = context.get("placeholders") if isinstance(context.get("placeholders"), dict) else {}
-    # Mask an inlined implementer template first: an elision landing inside it would break the
-    # verbatim match the lint's own mask needs, and the two doors would grade differently.
-    text, _ = order_lint.mask_template(order_text)
-    # Every quoted string shares the mask's newline policy, so a CR in owner data cannot defeat
-    # the elision against the already-folded text.
-    budget = ph.get("VERIFY_BUDGET")
-    verify = context.get("verify_command")
-    if isinstance(budget, str):
-        budget = order_lint.normalize_newlines(budget)
-    if isinstance(verify, str):
-        verify = order_lint.normalize_newlines(verify)
-    # The budget QUOTES the owner's command as its TAIL (`_fixer_verify_budget` appends it last),
-    # so the elision is anchored to that tail. A first-occurrence replace would search from the
-    # front and could rewrite a driver-authored target path the owner's command is a substring of
-    # (target `prefix/foo/bar.py`, command `foo/bar.py`) — hiding a path the lint must grade and
-    # leaving the owner's command in the text. Anchoring makes that impossible: nothing but the
-    # quoted tail is ever removed, and a budget that does not end in the command is left whole
-    # (the lint then grades it — fail-closed, never fail-open).
-    if (isinstance(budget, str) and budget.strip()
-            and isinstance(verify, str) and verify.strip() and budget.endswith(verify)):
-        elided = budget[:-len(verify)] + QUOTED_DATA_LINT_ELISION
-        text = text.replace(budget, elided, 1)
-    # The threat-model and standing-rulings blocks are owner prose end to end: the whole rendered
-    # block (the renderer's own formatter, so the bytes match) is elided.
-    for quoted in (ph.get("GATE_GUIDANCE"), context.get("ratified_residuals"),
-                   round_orders.format_threat_model_block(context).rstrip(),
-                   round_orders.format_rulings_block(context).rstrip()):
-        if isinstance(quoted, str):
-            quoted = order_lint.normalize_newlines(quoted)
-        if isinstance(quoted, str) and quoted.strip():
-            text = text.replace(quoted, QUOTED_DATA_LINT_ELISION, 1)
-    return text
 GATE_GUIDANCE_ROW_BYTE_CAP = 2000
 GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
 # Bounds each header field so one oversized value cannot cost its entry a place under the
@@ -472,7 +387,7 @@ P_SCOPED = round_phases.P_SCOPED
 P_GAPSWEEP = round_phases.P_GAPSWEEP
 P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_VERIFY = round_phases.P_VERIFY
-P_FIXER = round_phases.P_FIXER
+P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 P_TERMINAL = round_phases.P_TERMINAL
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
@@ -1394,6 +1309,32 @@ def _round_cap(config):
     if isinstance(val, int) and not isinstance(val, bool) and val >= 1:
         return val
     return round_phases.ROUND_CAP
+
+
+def _build_session_vendor(seat_map_obj):
+    """The vendor token of the build session's family: the seat map's `hostFamily`, else its
+    `authorFamily`, mapped to the registered vendor whose models sit in that family. None when the
+    map names no family, or the family maps to no vendor (the fixer stays unknown: a disclosed
+    degraded audit, never a guess)."""
+    if not isinstance(seat_map_obj, dict):
+        return None
+    family = next((f for f in (seat_map_obj.get("hostFamily"), seat_map_obj.get("authorFamily"))
+                   if isinstance(f, str) and f), None)
+    for vendor in model_registry.vendors():
+        if family is not None and model_registry.family_for("reviewer", vendor) == family:
+            return vendor
+    return None
+
+
+def _with_build_session_vendor(config_overrides):
+    """The CLI path's session config with `fixerVendor` set to the build session's vendor, read from
+    the supplied seat map; a `fixerVendor` already given is kept, and no seat map leaves it unset."""
+    overrides = dict(config_overrides) if config_overrides else {}
+    if overrides.get("fixerVendor") is None:
+        vendor = _build_session_vendor(overrides.get("seatMap"))
+        if vendor is not None:
+            overrides["fixerVendor"] = vendor
+    return overrides or None
 
 
 def new_state(config=None):
@@ -2955,10 +2896,8 @@ def _advance(state, config):
         payload = {"hunks": state.get("_newSurface") or {}, "tier": DEEP}
     elif step == P_VERIFY:
         payload = {"command": _verify_command(config)}
-    elif step == P_FIXER:
-        payload = {"batch": state.get("_fixBatch") or []}
-        if state.get("_escalatedRung"):
-            payload["escalatedRung"] = state["_escalatedRung"]
+    elif step == P_APPLY_FIXES:
+        payload = {"batch": state.get("_fixBatch") or [], "startHead": state.get("_fixStepHead")}
     return {"action": step, "round": rnd, "phase": step, "payload": payload}
 
 
@@ -3024,19 +2963,20 @@ def _record_adapter_provenance(state, artifact, phase):
 
 
 def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_dir=None,
-          verified_head_resolution=None, panel_diff_seam=None):
+          verified_head_resolution=None, panel_diff_seam=None, fix_commits=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
 
-    `changed_subjects_seam` is threaded to the fixer fold: run_loop passes the injected seam (the
-    eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
+    `changed_subjects_seam` is threaded to the apply-fixes fold: run_loop passes the injected seam
+    (the eval harness replays the fixture's subjects); the CLI submit path passes None so the fold
     wires the real git derivation. It is inert for every other phase.
 
-    `panel_diff_seam` is threaded to verify and fixer folds (unknown-surface full panels): run_loop
-    passes the injected seam; the CLI submit path passes None so those folds wire the real git
-    derivation. It is inert for every other phase.
+    `panel_diff_seam` is threaded to verify and apply-fixes folds (unknown-surface full panels):
+    run_loop passes the injected seam; the CLI submit path passes None so those folds wire the real
+    git derivation. It is inert for every other phase.
 
-    `verified_head_resolution` is inert for every phase but ``P_VERIFY``."""
+    `verified_head_resolution` is inert for every phase but ``P_VERIFY``. `fix_commits` is inert
+    for every phase but ``P_APPLY_FIXES``: the bindings the submit chokepoint verified against git."""
     if session_contract.disposition_ledger_owner_classification(state) == (
         session_contract.DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
     ):
@@ -3060,9 +3000,9 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact, resolution=verified_head_resolution,
                      panel_diff_seam=panel_diff_seam)
-    elif phase == P_FIXER:
-        _fold_fixer(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
-                    panel_diff_seam=panel_diff_seam)
+    elif phase == P_APPLY_FIXES:
+        _fold_apply_fixes(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
+                          panel_diff_seam=panel_diff_seam, fix_commits=fix_commits)
     return state
 
 
@@ -3265,14 +3205,14 @@ def _panel_raised_keys(compiled):
 
 
 def _rounds_with_fix_report(state):
-    """{round: keys} for each earlier round whose fixer reported fixes, was not escalated, and
-    recorded the identity keys of the findings it was handed (`fixReportedKeys`)."""
+    """{round: keys} for each earlier round whose build session reported fixes and recorded the
+    identity keys of the findings it fixed (`fixReportedKeys`)."""
     reported = {}
     rounds = state.get("rounds")
     for round_text, rec in (rounds.items() if isinstance(rounds, dict) else ()):
         fix = rec.get("fix") if isinstance(rec, dict) else None
         keys = rec.get("fixReportedKeys") if isinstance(rec, dict) else None
-        if (not isinstance(fix, dict) or not fix.get("fixes") or fix.get("escalated")
+        if (not isinstance(fix, dict) or not fix.get("fixes")
                 or not isinstance(keys, list) or not str(round_text).isdigit()):
             continue
         reported[int(round_text)] = {k for k in keys if isinstance(k, str) and k}
@@ -3280,7 +3220,7 @@ def _rounds_with_fix_report(state):
 
 
 def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
-    """A finding a fixer reported fixed, that this complete full panel did not raise again, is
+    """A finding the build session reported fixed, that this complete full panel did not raise again, is
     `fixed` — provided the fix report came after the finding's latest raise. Called before the
     panel's findings are staged, so the end-of-loop settle never counts it a leftover. A finding
     that already has a current disposition (one no ruling reopened), was merged into another, or
@@ -4609,9 +4549,9 @@ def _gate_guidance_entries(state, rnd):
 
 
 def _gate_guidance_block(entries):
-    """Derive the ``GATE_GUIDANCE`` substitution for dispatch-fixer orders.
+    """Derive the owner-gate guidance prose the build session reads for an apply-fixes step.
 
-    The only producer of owner-gate guidance prose in rendered fixer orders. Input is the
+    The only producer of owner-gate guidance prose in the fix guidance file. Input is the
     pre-validated list from ``_gate_guidance_entries``. Wording never claims whether a gate ran.
     The block never omits an entry; over the aggregate cap it refuses."""
     if not isinstance(entries, list):
@@ -4681,7 +4621,7 @@ def _gate_guidance_block(entries):
 
 def _hold_owner_choice(state, blocking):
     """Triage before composing an autonomous fix batch. A blocking finding carrying `tradeoff: true`
-    is a PRODUCT-CHOICE call only the owner can settle, so it is held OUT of the fixer's batch: the
+    is a PRODUCT-CHOICE call only the owner can settle, so it is held OUT of the fix batch: the
     batch returns without it, its identity key joins the persisted `ownerChoiceHeld` list (deduped,
     append-only) and the hold is journaled once per call. A held finding is not dropped — it is
     handed back open unless something settles it (`_terminal_converged` refuses to converge over an
@@ -5173,14 +5113,19 @@ def _note_sent_under_decision(state, rows):
             sent[root] = max(sent.get(root, 0), _decision_seq(decision))
 
 
-def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0):
+def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0,
+                     keep_step_start=False):
     """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
+
+    It also records the head the step starts at (``_fixStepHead``) and clears the staged PR body
+    snapshot the next emission takes. ``keep_step_start`` re-slices the step already under way (a
+    ruling arriving) and leaves both as they are.
 
     Every batch passes ``_resolve_ruled_batch``, which adds the findings an owner ruling names. With
     no offered row and none named, nothing is recorded and the caller settles.
 
     May terminate the round (park cannot-certify or resolve empty-batch convergence) instead of
-    setting P_FIXER. Returns ``"queued"`` when a fix batch was dispatched, ``"excluded"`` when
+    setting P_APPLY_FIXES. Returns ``"queued"`` when a fix batch was queued, ``"excluded"`` when
     the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
     is 0; on a continuation the caller enters post-fix), ``"empty"`` when no row was offered and
     none is named by a ruling (the caller settles), or ``"faulted"`` when a disposition-
@@ -5210,11 +5155,11 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
             prior = rec.get("fixBatchExcludedByDischarge") or 0
             _record_round(state, "fixBatchExcludedByDischarge", prior + excluded_by_discharge)
         why = ("discharged-finding exclusion" if not spent_keys else
-               "the once-per-episode out-of-scope rule (%d finding(s) already offered to a fixer)"
+               "the once-per-episode out-of-scope rule (%d finding(s) already offered for a fix)"
                % len(spent_keys))
         if batch_index == 0:
             _decision(state, "fix-batch-excluded",
-                      "fix batch emptied by %s — without fixer dispatch" % why)
+                      "fix batch emptied by %s — no fixes to apply" % why)
             _resolve_empty_fix_batch_convergence(state, config)
         else:
             _decision(state, "fix-batch-excluded",
@@ -5225,12 +5170,24 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     state["_fixBatch"] = filtered[:cap]
     state["_fixQueue"] = filtered[cap:]
     state["_fixBatchIndex"] = batch_index
-    state["step"] = P_FIXER
+    if not keep_step_start:
+        state["_fixStepHead"] = _fix_step_head(config)
+        state.pop("_prBodyAtStep", None)
+    state["step"] = P_APPLY_FIXES
     return "queued"
 
 
-def _offered_fixer_rows(state, extra_rows=None):
-    """Current fixer slice plus queue, then any extra rows (guidance-lifted) not already present."""
+def _fix_step_head(config):
+    """The head the apply-fixes step starts at: HEAD of the configured repository, else None."""
+    repo_root = config.get("repoRoot") if isinstance(config, dict) else None
+    if not _nonempty_str(repo_root):
+        return None
+    head = store_core.run_git(repo_root, "rev-parse", "HEAD")
+    return head if _nonempty_str(head) else None
+
+
+def _offered_fix_rows(state, extra_rows=None):
+    """Current fix slice plus queue, then any extra rows (guidance-lifted) not already present."""
     offered = []
     seen = set()
     for row in list(state.get("_fixBatch") or []) + list(state.get("_fixQueue") or []):
@@ -5255,14 +5212,14 @@ def _offered_fixer_rows(state, extra_rows=None):
 
 
 def _sync_pending_after_ruling_reconcile(state):
-    """Drop or refresh a stored fixer pending whose payload no longer matches the reconciled slice."""
+    """Drop or refresh a stored apply-fixes pending whose payload no longer matches the reconciled slice."""
     pending = state.get("pending")
-    fixer_pending = isinstance(pending, dict) and pending.get("phase") == P_FIXER
-    if state.get("terminal") or state.get("step") != P_FIXER:
-        if fixer_pending:
+    fix_pending = isinstance(pending, dict) and pending.get("phase") == P_APPLY_FIXES
+    if state.get("terminal") or state.get("step") != P_APPLY_FIXES:
+        if fix_pending:
             state["pending"] = None
         return
-    if not fixer_pending:
+    if not fix_pending:
         return
     payload = dict(pending.get("payload") or {})
     payload["batch"] = list(state.get("_fixBatch") or [])
@@ -5271,18 +5228,18 @@ def _sync_pending_after_ruling_reconcile(state):
     state["pending"] = updated
 
 
-def _reconcile_fixer_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
+def _reconcile_fix_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
     """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling."""
-    if state.get("step") != P_FIXER:
+    if state.get("step") != P_APPLY_FIXES:
         return None
-    offered = _offered_fixer_rows(state, extra_rows)
+    offered = _offered_fix_rows(state, extra_rows)
     if not offered:
         return None
     batch_index = state.get("_fixBatchIndex") or 0
     status = _queue_fix_batch(
-        state, config, offered, reset_accumulator=False, batch_index=batch_index)
+        state, config, offered, reset_accumulator=False, batch_index=batch_index,
+        keep_step_start=True)
     if status == "excluded" and batch_index >= 1 and not state.get("terminal"):
-        state.pop("_escalatedRung", None)
         state.pop("_fixQueue", None)
         state.pop("_fixBatchIndex", None)
         _enter_post_fix(state, config, session_dir=session_dir)
@@ -5340,7 +5297,7 @@ def _accumulated_findings(state):
 
 
 def _read_supplied_head_diff(artifact):
-    """Read the post-fix diff a `dispatch-fixer` artifact supplies, keeping presence apart from
+    """Read the post-fix diff an `apply-fixes` artifact supplies, keeping presence apart from
     content. Returns (present, text, source, readable). A key holding None is absent. Inline
     `headDiff` (the empty string included) wins over `headDiffPath`; the path must be absolute and
     readable text, and an empty file is present with text "". A present value the driver cannot read
@@ -5400,18 +5357,182 @@ def _nonempty_str(value):
     return isinstance(value, str) and bool(value)
 
 
-def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir=None,
-                panel_diff_seam=None):
-    """Record the fixer's result; the fix-batch COMPOSITION stays orchestrator-side (the artifact),
-    the driver sequences + records. In a run with a repository the post-fix head diff is DERIVED
+FIX_REFUSED_REASON = "fold-refused"
+FIX_WITHOUT_TEST = "fix-without-break-it-test"
+FIX_FINDING_UNKNOWN = "fix-finding-unknown"
+UNFIXED_FINDING_UNKNOWN = "unfixed-finding-unknown"
+FIX_NO_BINDING = "no-binding"
+FIX_COMMIT_UNKNOWN = "commit-unknown"
+FIX_COMMIT_NOT_IN_STEP = "commit-not-in-step"
+FIX_TEST_MISSING = "test-missing"
+FIX_TEST_BYTES_DIFFER = "test-bytes-differ"
+FIX_NO_FIX_CHANGE = "no-fix-change"
+FIX_UNVERIFIABLE = "unverifiable"
+
+
+def _slice_finding_resolver(slice_):
+    """``{value: finding key}`` for the slice: each row's identity key and its staged id name it."""
+    names = {}
+    for row in slice_ if isinstance(slice_, list) else []:
+        key = _finding_identity_key(row) if isinstance(row, dict) else None
+        if not key:
+            continue
+        names[key] = key
+    for row in slice_ if isinstance(slice_, list) else []:
+        key = _finding_identity_key(row) if isinstance(row, dict) else None
+        rid = row.get("id") if key else None
+        if isinstance(rid, str) and rid:
+            names.setdefault(rid, key)
+    return names
+
+
+def _report_bindings(artifact):
+    """The ``{"finding", "commit"}`` entries of the report's ``fixes`` — the session's own binding of
+    a fixed finding to the commit that holds its fix."""
+    fixes = artifact.get("fixes") if isinstance(artifact, dict) else None
+    return [entry for entry in fixes if isinstance(entry, dict) and "finding" in entry
+            and "commit" in entry] if isinstance(fixes, list) else []
+
+
+def _git_bytes(repo_root, *args):
+    """The stdout bytes of ``git -C repo_root args``, or None when git fails or cannot run."""
+    try:
+        proc = subprocess.run(["git", "-C", repo_root, *args], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def _git_fix_commit_facts(config, step_head, commits, test_paths):
+    """``{commit: {"reachable", "inStep", "paths", "files", "startFiles"}}`` read from git at the
+    session's repository for each commit it names. A commit git does not know has no entry."""
+    repo_root = config.get("repoRoot")
+    facts = {}
+    for commit in commits:
+        resolved = _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % commit)
+        if resolved is None:
+            continue
+        sha = resolved.decode("utf-8", errors="replace").strip()
+        names = _git_bytes(repo_root, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r",
+                           "-z", sha)
+        facts[commit] = {
+            "reachable": _git_bytes(repo_root, "merge-base", "--is-ancestor", sha, "HEAD") is not None,
+            "inStep": _git_bytes(repo_root, "merge-base", "--is-ancestor", sha, step_head) is not None,
+            "paths": ([p for p in names.decode("utf-8", errors="replace").split("\0") if p]
+                      if names is not None else []),
+            "files": {p: _git_bytes(repo_root, "cat-file", "blob", "%s:%s" % (sha, p))
+                      for p in test_paths},
+            "startFiles": {p: _git_bytes(repo_root, "cat-file", "blob", "%s:%s" % (step_head, p))
+                           for p in test_paths},
+        }
+    return facts
+
+
+def _fix_commit_test_fault(facts, block):
+    """The reason a commit does not carry the fix with its test (None when it does). The commit must
+    be reachable from HEAD and not from the step's start head, hold the block's bytes at the block's
+    path (added or changed by the commit, or already there at the start head and left unchanged), and
+    change at least one path besides the test."""
+    if not isinstance(facts, dict) or facts.get("reachable") is not True:
+        return FIX_COMMIT_UNKNOWN
+    if facts.get("inStep") is not False:
+        return FIX_COMMIT_NOT_IN_STEP
+    path = block["path"]
+    wanted = block["content"].encode("utf-8")
+    changed = [p for p in facts.get("paths") or [] if isinstance(p, str)]
+    at_commit = (facts.get("files") or {}).get(path)
+    if path in changed:
+        have = at_commit
+    else:
+        start = facts.get("startFiles") or {}
+        have = start.get(path) if path in start else at_commit
+    if have is None:
+        return FIX_TEST_MISSING
+    # axis: the test is at the block's path with the block's bytes exactly — see bite-proof record c1l9a_wo3_apply_fixes
+    if have != wanted:
+        return FIX_TEST_BYTES_DIFFER
+    # axis: the commit changes something besides the test, so a test committed alone is no fix — see bite-proof record c1l9a_wo3_apply_fixes
+    if not any(p != path for p in changed):
+        return FIX_NO_FIX_CHANGE
+    return None
+
+
+def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
+    """``(detail, commits)`` for an apply-fixes report: ``detail`` names why the report cannot fold
+    (None when it can) and ``commits`` are the verified ``{"finding", "commit"}`` bindings.
+
+    Each finding of the slice that carries a break-it test and is not listed in ``unfixed`` needs a
+    binding to a commit that carries its fix together with the test, checked against git (or the
+    ``commit_seam`` a run without a repository supplies). A report with no commit and no such
+    finding passes: a PR-body-only slice commits nothing."""
+    slice_ = state.get("_fixBatch") or []
+    names = _slice_finding_resolver(slice_)
+    bindings = _report_bindings(artifact)
+    unfixed = [e for e in (artifact.get("unfixed") or []) if isinstance(e, dict)]
+    for entry in unfixed:
+        if entry.get("finding") not in names:
+            return "%s:%s" % (UNFIXED_FINDING_UNKNOWN, entry.get("finding")), []
+    for entry in bindings:
+        if entry.get("finding") not in names:
+            return "%s:%s" % (FIX_FINDING_UNKNOWN, entry.get("finding")), []
+    left = {names[entry["finding"]] for entry in unfixed}
+    bound = {}
+    for entry in bindings:
+        bound.setdefault(names[entry["finding"]], []).append(entry.get("commit"))
+    owed = []
+    for row in slice_:
+        block, _kind = break_it.carried_block(row)
+        key = _finding_identity_key(row) if isinstance(row, dict) else None
+        if block is not None and key and key not in left:
+            owed.append((key, block))
+    named = [c for key, _block in owed for c in bound.get(key, []) if isinstance(c, str) and c]
+    facts = None
+    if named:
+        test_paths = sorted({block["path"] for _key, block in owed})
+        if commit_seam is not None:
+            facts = commit_seam(sorted(set(named)), test_paths)
+        elif _nonempty_str(config.get("repoRoot")) and _nonempty_str(config.get("baseRef")) \
+                and _nonempty_str(state.get("_fixStepHead")):
+            facts = _git_fix_commit_facts(config, state["_fixStepHead"], sorted(set(named)),
+                                          test_paths)
+    commits = []
+    for key, block in owed:
+        candidates = [c for c in bound.get(key, []) if isinstance(c, str) and c]
+        # axis: a finding that carries a break-it test and is not left unfixed owes a binding — see bite-proof record c1l9a_wo3_apply_fixes
+        if not candidates:
+            return "%s:%s:%s" % (FIX_WITHOUT_TEST, key, FIX_NO_BINDING), []
+        if not isinstance(facts, dict):
+            return "%s:%s:%s" % (FIX_WITHOUT_TEST, key, FIX_UNVERIFIABLE), []
+        faults = [_fix_commit_test_fault(facts.get(c), block) for c in candidates]
+        if all(fault is not None for fault in faults):
+            return "%s:%s:%s" % (FIX_WITHOUT_TEST, key, faults[0]), []
+        commits.append({"finding": key, "commit": candidates[faults.index(None)]})
+    return None, commits
+
+
+def _staged_pr_body_sha256(session_dir):
+    """The sha256 of the staged PR body, or None when there is no staged file."""
+    try:
+        with open(pr_body_stage.paths(session_dir)["staged"], "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _fold_apply_fixes(state, config, artifact, changed_subjects_seam=None, session_dir=None,
+                      panel_diff_seam=None, fix_commits=None):
+    """Record the build session's own fix report; the fix-batch COMPOSITION stays orchestrator-side
+    (the artifact), the driver sequences + records. What was committed is read from git by the
+    submit chokepoint (`fix_commits` are the bindings it verified), never from the report's own
+    word. In a run with a repository the post-fix head diff is DERIVED
     from git (`git diff <baseRef>...<fix-fold head>`) and is never text the artifact supplied: a
     supplied `headDiff` / absolute `headDiffPath` is a cross-check only, so a difference parks
     `head-diff-mismatch` and a derivation git cannot make beside a supplied diff parks
     `head-diff-unverifiable`. A derivation that fails with nothing supplied is an unknown surface
     (full panel). A run with no repository takes the supplied diff as `_resolve_head_diff` reads it.
     The changed policy subjects the #174 confirmation re-arm consumes are SCRIPT-DERIVED here — from
-    the reviewed-vs-head diff through the accumulated findings (#157/#158), NEVER the fixer's
-    self-report. The derivation is an injectable seam symmetrical with reviewer/fixer/verify:
+    the reviewed-vs-head diff through the accumulated findings (#157/#158), NEVER the session's
+    self-report. The derivation is an injectable seam symmetrical with reviewer/fix step/verify:
     run_loop may inject a scripted replay (the eval harness); the library default + the CLI path
     wire the real git derivation. Unknown/unparseable surface → None → the run-everything rule."""
     index = state.get("_fixBatchIndex") or 0
@@ -5486,40 +5607,40 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state.setdefault("_coverage", []).extend(d for d in cds if isinstance(d, dict))
     rec = state.get("rounds", {}).get(str(state["round"]), {})
     prior_fix = rec.get("fix") if isinstance(rec, dict) else None
-    # The refusals the fixer met ride in the round's `fix` dict only when there are some, so a round
-    # with none records what it always did. The list is validated before the fold: by the payload
-    # contract on the landed path and by the submit guard on a hand submission.
-    refusals = artifact.get("refusals") if isinstance(artifact.get("refusals"), list) else []
+    fixes = list(artifact.get("fixes") or [])
+    unfixed = [e for e in (artifact.get("unfixed") or []) if isinstance(e, dict)]
+    commits = list(fix_commits or [])
     if index >= 1 and isinstance(prior_fix, dict):
-        fixes = list(prior_fix.get("fixes") or []) + list(artifact.get("fixes") or [])
-        escalated = bool(prior_fix.get("escalated")) or bool(
-            artifact.get("escalated") or state.get("_escalatedRung"))
-        fix_rec = {"fixes": fixes, "escalated": escalated}
-        prior_refusals = prior_fix.get("refusals")
-        refusals = (list(prior_refusals) if isinstance(prior_refusals, list) else []) + list(refusals)
-    else:
-        fix_rec = {"fixes": artifact.get("fixes") or [],
-                   "escalated": bool(artifact.get("escalated") or state.get("_escalatedRung"))}
-    if refusals:
-        fix_rec["refusals"] = refusals
+        fixes = list(prior_fix.get("fixes") or []) + fixes
+        unfixed = list(prior_fix.get("unfixed") or []) + unfixed
+        commits = list(prior_fix.get("commits") or []) + commits
+    fix_rec = {"fixes": fixes, "commits": commits}
+    if unfixed:
+        fix_rec["unfixed"] = unfixed
     _record_round(state, "fix", fix_rec)
     _record_round_append(state, "fixBatches",
                          {"index": index, "size": len(slice_),
                           "fixes": len(artifact.get("fixes") or [])})
-    # A `fixes` entry is the orchestrator's git-derived record and names no finding, so the keys of
-    # the findings this slice handed the fixer ride beside it: the later-panel credit reads them.
+    # A `fixes` entry is the session's own note and may name no finding, so the keys of the findings
+    # this slice handed it, less those it reports unfixed, ride beside it: the later-panel credit
+    # reads them.
     reported_keys = list(rec.get("fixReportedKeys") or []) if index >= 1 and isinstance(rec, dict) else []
     if artifact.get("fixes"):
-        reported_keys += [k for k in (_finding_identity_key(f) for f in slice_ if isinstance(f, dict)) if k]
+        names = _slice_finding_resolver(slice_)
+        left = {names[e.get("finding")] for e in (artifact.get("unfixed") or [])
+                if isinstance(e, dict) and e.get("finding") in names}
+        reported_keys += [k for k in (_finding_identity_key(f) for f in slice_ if isinstance(f, dict))
+                          if k and k not in left]
     _record_round(state, "fixReportedKeys", reported_keys)
     _record_round(state, "fixerVendor", config.get("fixerVendor"))
     if session_dir:
-        pr_body_after = pr_body_stage.collect_fixer_copy(session_dir, state["round"])
-        if pr_body_after:
+        pr_body_after = _staged_pr_body_sha256(session_dir)
+        pr_body_before = state.get("_prBodyAtStep")
+        if pr_body_after is not None and pr_body_after != pr_body_before:
             prior_pr_body = (state["rounds"].get(str(state["round"])) or {}).get("prBodyFix")
+            earlier = prior_pr_body.get("before") if isinstance(prior_pr_body, dict) else None
             _record_round(state, "prBodyFix",
-                          {"before": prior_pr_body.get("before")
-                           if isinstance(prior_pr_body, dict) else None,
+                          {"before": earlier if earlier else pr_body_before,
                            "after": pr_body_after})
         if fold_head_err:
             _record_round(state, "fixFoldHeadRefused", fold_head_err)
@@ -5530,6 +5651,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
         state.pop("_fixBatchIndex", None)
         _park_cannot_certify(state, park_detail)
         return
+    state.pop("_prBodyAtStep", None)
     queue = state.get("_fixQueue") or []
     if queue:
         cap = _fix_batch_cap(config)
@@ -5544,7 +5666,7 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None, session_dir
             return
         if status == "faulted":
             return
-    state.pop("_escalatedRung", None)
+    state.pop("_fixStepHead", None)
     state.pop("_fixQueue", None)
     state.pop("_fixBatchIndex", None)
     _enter_post_fix(state, config, session_dir=session_dir, panel_diff_seam=panel_diff_seam)
@@ -7107,6 +7229,38 @@ RETIRED_JUDGMENT_FIELD = "_judgmentFindings"
 RETIRED_STALL_FIELDS = ("_stallChoices", "_stallTargets")
 
 
+# The step an earlier build of this driver dispatched a separate fixer on. A saved state at it is
+# moved to `apply-fixes` before any command acts on it (`_migrate_fixer_step`), so it is never
+# classified as a retired owner gate.
+RETIRED_FIXER_PHASE = "dispatch-fixer"
+
+
+def _migrate_fixer_step(session_dir, state):
+    """Move a saved, unfinished state whose step, or pending action or phase, is the retired fixer
+    dispatch to `apply-fixes`, whatever its generation. Returns ``(True, old attempt)`` when it
+    moved (the caller persists the state), else ``(False, None)``.
+
+    The pending action is cleared, the step is set, and the step's start head is the head the old
+    order was emitted at (the orders anchor's `headSha`), else the current head. The next `next`
+    emits `apply-fixes` at a fresh attempt; whatever the old phase left on disk is never read."""
+    if not isinstance(state, dict) or state.get("terminal"):
+        return False, None
+    pending = state.get("pending")
+    old = pending if isinstance(pending, dict) else {}
+    if RETIRED_FIXER_PHASE not in (state.get("step"), old.get("action"), old.get("phase")):
+        return False, None
+    attempt = old.get("attempt") if type(old.get("attempt")) is int else None
+    rnd = old.get("round") if type(old.get("round")) is int else state.get("round")
+    anchor = (_orders_anchor(state, session_dir, rnd, RETIRED_FIXER_PHASE, attempt)
+              if attempt is not None else None)
+    head = anchor.get("headSha") if isinstance(anchor, dict) else None
+    state["pending"] = None
+    state["step"] = P_APPLY_FIXES
+    state["_fixStepHead"] = head if _nonempty_str(head) else _fix_step_head(state.get("config"))
+    state.pop("_escalatedRung", None)
+    return True, attempt
+
+
 def _step_is_retired(state):
     """True when the state's step, or the action and phase it has pending, is not one of
     `round_phases.ALL_PHASES`. Only a session of an earlier generation can hold one."""
@@ -7244,21 +7398,10 @@ def _stalled_open_targets(state, breaker):
 # ---- stall self-recovery + menu -------------------------------------------------------------
 
 def _commit_stall_self_recovery(state, config, breaker):
-    """One-shot guard + escalation record — single owner for both (#1107)."""
+    """One-shot guard + record — single owner for both (#1107)."""
     state["selfRecovered"] = True
-    fixer_vendor = config.get("fixerVendor")
-    rung = model_registry.escalate(
-        fixer_vendor, _SELF_RECOVERY_FIXER_MODEL, _SELF_RECOVERY_FIXER_EFFORT)
-    if rung is not None:
-        # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
-        # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record
-        # honest (escalated:false), never a null-rung mislabeled escalated:true (#608 review).
-        state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
-    _decision(state, "self-recovery",
-              "audit-stall — one invisible self-recovery (%s)"
-              % ("fixer escalated to %r" % (rung,) if rung is not None
-                 else "no escalation rung available — fixer unchanged, escalated:false"))
-    _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
+    _decision(state, "self-recovery", "audit-stall — one invisible self-recovery")
+    _record_round(state, "selfRecovery", {"reason": breaker.get("detail")})
 
 
 def _union_open_blockers(*groups):
@@ -7366,8 +7509,8 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
 
 
 def _handle_stall(state, config, breaker):
-    """audit-stall → ONE invisible self-recovery (fixer re-dispatched one rung up via
-    model_registry.escalate and/or another vendor, once, journaled). Still stalled → the PR is
+    """audit-stall → ONE invisible self-recovery (the build session applies a recomposed fix batch,
+    once, journaled). Still stalled → the PR is
     handed back (`fix-keeps-failing`); nothing is put to the owner mid-review. A stall found in the
     cap round runs no recovery: a recovered fix would be audited in a round the cap refuses, so the
     PR is handed back `round-cap` at once, with no fix leg."""
@@ -8086,7 +8229,7 @@ def _run_seam(seams, action, payload, state, config):
                 "collectionManifest": manifest}
     if action == P_VERIFY:
         return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
-    if action == P_FIXER:
+    if action == P_APPLY_FIXES:
         return seams["fix_step"](payload.get("batch"), state["round"], payload)
     return {}
 
@@ -8312,13 +8455,25 @@ def run_loop(seams, config=None):
                         state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
                             action, selected, reported))
                     return _driver_receipt(state)
+            commits = None
+            if action == P_APPLY_FIXES:
+                # the same check the submit chokepoint makes, with the commit facts from the
+                # `fix_commits` seam when the run has no repository
+                detail, commits = _apply_fixes_commit_fault(
+                    state, state["config"], artifact if isinstance(artifact, dict) else {},
+                    commit_seam=seams.get("fix_commits"))
+                if detail is not None:
+                    _park_cannot_certify(state, "%s: %s" % (FIX_REFUSED_REASON, detail))
+                    return _driver_receipt(state)
             try:
                 _fold(state, state["config"], action, artifact, seams.get("changed_subjects"),
                       verified_head_resolution=_verified_head_at_fold(None, state),
-                      panel_diff_seam=seams.get("panel_diff"))
+                      panel_diff_seam=seams.get("panel_diff"), fix_commits=commits)
             except DispositionLedgerOwnerRefusal as refusal:
                 _park_cannot_certify(state, refusal.reason)
                 return _driver_receipt(state)
+            if state.get("step") == P_APPLY_FIXES and seams.get("fix_step_head"):
+                state["_fixStepHead"] = seams["fix_step_head"]()
             _persist_round_records(state, state["config"])
             # a delta round routes scoped candidates through verifiers; when that path is armed the
             # synthesis fold must re-settle the delta rather than the round-1 path.
@@ -8378,7 +8533,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return {"ok": False, "reason": "session-id-unmintable", "detail": mint_reason}
         _bootstrap_review_session_marker(session_dir)
         try:
-            state = new_state(config_overrides)
+            state = new_state(_with_build_session_vendor(config_overrides))
         except MaxRoundsRefusal as refusal:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
                                           "attempt": None, "outcome": "refused-max-rounds",
@@ -8433,6 +8588,16 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         refusal = _disposition_ledger_owner_refusal(session_dir, state, pend, "next")
         if refusal is not None:
             return refusal
+        if pend.get("phase") == P_APPLY_FIXES:
+            # The step's files are derived from the state, so a re-emit rewrites any a ruling's
+            # failed commit left stale.
+            try:
+                _apply_fixes_payload_fields(session_dir, state, pend.get("round"),
+                                            pend.get("attempt"))
+            except ValueError as exc:
+                return _refuse_cmd(session_dir, "next", "order-render-refused", phase=P_APPLY_FIXES,
+                                   rnd=pend.get("round"), attempt=pend.get("attempt"),
+                                   detail=str(exc))
         return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
@@ -8453,6 +8618,12 @@ def _cmd_next_locked(session_dir, config_overrides=None):
     refusal = _disposition_ledger_owner_refusal(session_dir, state, pending, "next")
     if refusal is not None:
         return refusal
+    if pending["phase"] == P_APPLY_FIXES:
+        try:
+            _stage_apply_fixes_step(session_dir, state, pending)
+        except ValueError as exc:
+            return _refuse_cmd(session_dir, "next", "order-render-refused", phase=pending["phase"],
+                               rnd=pending.get("round"), attempt=attempt, detail=str(exc))
     state["pending"] = pending
     phase = pending.get("phase")
     if isinstance(phase, str) and phase.startswith("dispatch-"):
@@ -8484,6 +8655,20 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         if fail:
             return _receipt_fault_response(fail)
     return _next_response(session_dir, state, pending, "next")
+
+
+def _stage_apply_fixes_step(session_dir, state, pending):
+    """Make the apply-fixes step ready for the build session as `next` emits it: stage the PR body
+    when the session reviews a PR, snapshot the staged copy so the fold can tell whether the session
+    changed it, and add the step's file and landing paths to the pending payload."""
+    cfg = state.get("config") or {}
+    if session_mode.resolve(_session_meta(session_dir), cfg)["mode"] != session_mode.MODE_BRANCH:
+        pr_body_stage.stage(session_dir)
+    snapshot = _staged_pr_body_sha256(session_dir)
+    if snapshot is not None:
+        state["_prBodyAtStep"] = snapshot
+    fields = _apply_fixes_payload_fields(session_dir, state, pending["round"], pending["attempt"])
+    pending["payload"] = dict(pending.get("payload") or {}, **fields)
 
 
 def _receipt_fault_response(detail):
@@ -8583,7 +8768,8 @@ def _ensure_landing_folders(session_dir, pending):
     if isinstance(rnd, bool) or not isinstance(rnd, int):
         return
     phase = pending.get("phase")
-    if isinstance(phase, str) and (phase.startswith("dispatch-") or phase == P_VERIFY):
+    if isinstance(phase, str) and (phase.startswith("dispatch-")
+                                   or phase in (P_VERIFY, P_APPLY_FIXES)):
         os.makedirs(round_records.landing_dir(session_dir, rnd, phase), exist_ok=True)
     payload = pending.get("payload")
     verify = payload.get("verify") if isinstance(payload, dict) else None
@@ -8780,61 +8966,7 @@ def _validate_ruling_entries(doc):
     return parsed, provenance, None
 
 
-def _fix_batch_file_sha256(session_dir, rnd, state):
-    try:
-        path = _ensure_fix_batch_file(session_dir, rnd, state)
-    except ValueError:
-        raise ValueError("order-render-refused:fix-batch-unreadable")
-    try:
-        with open(path, "rb") as fh:
-            return round_records.sha256_text(fh.read().decode("utf-8"))
-    except OSError:
-        raise ValueError("order-render-refused:fix-batch-unreadable")
-
-
-def _late_ruling_fixer_decision(session_dir, state, pending, fixer_not_dispatched):
-    """(decision, refusal) — whether a ruling arriving after a fixer order was emitted re-renders it.
-
-    The order is re-rendered only when the caller says the fixer was not dispatched AND the driver
-    sees no pickup evidence for the pending attempt: exactly a store, landing or bare-payload file
-    for a fixer slot, or commits past the order's emission head (the two checks of the
-    `fixer-committed-unlanded` chokepoint). Every other case leaves the order as it is."""
-    rnd = pending.get("round")
-    attempt = pending.get("attempt")
-    if not fixer_not_dispatched:
-        return {"reshape": False, "reason": "dispatch-not-ruled-out"}, None
-    roster, roster_refusal = _roster_of(session_dir, state, RULE_CMD, P_FIXER, rnd, attempt)
-    if roster_refusal is not None:
-        return None, roster_refusal
-    for seat_key, occurrence in round_records.roster_slots(roster):
-        try:
-            skey = round_records.storage_key(seat_key, occurrence)
-            slot_paths = (round_records.store_path(session_dir, rnd, P_FIXER, skey, attempt),
-                          round_records.landing_path(session_dir, rnd, P_FIXER, skey, attempt),
-                          round_records.bare_payload_path(session_dir, rnd, P_FIXER, skey, attempt))
-        except ValueError:
-            # a slot whose paths cannot be named cannot be shown unlanded: leave the order alone
-            return {"reshape": False, "reason": "fixer-landed"}, None
-        if any(os.path.lexists(path) for path in slot_paths):
-            return {"reshape": False, "reason": "fixer-landed"}, None
-    commits = _fixer_unlanded_commits(state, session_dir, rnd, attempt)
-    if commits:
-        return {"reshape": False, "reason": "fixer-committed"}, None
-    # None = git could not tell; the caller's assertion plus no landing is enough, so it never blocks
-    return {"reshape": True, "reason": "reshaped",
-            "commitCheck": "clean" if commits == [] else "unreadable"}, None
-
-
-def _restore_fix_batch_file(session_dir, rnd, original_state):
-    """Put fix-batch.json back to what the unchanged state renders, after a refused reshape; a
-    failure of the restore itself never masks the refusal that called it."""
-    try:
-        _ensure_fix_batch_file(session_dir, rnd, original_state)
-    except Exception:  # noqa: BLE001 — best-effort restore; the caller's refusal stands
-        pass
-
-
-def cmd_rule(session_dir, ruling_file, by, fixer_not_dispatched=False):
+def cmd_rule(session_dir, ruling_file, by):
     try:
         with round_records.session_lock(session_dir):
             upgrade = _upgrade_gate(session_dir, RULE_CMD)
@@ -8843,18 +8975,16 @@ def cmd_rule(session_dir, ruling_file, by, fixer_not_dispatched=False):
             refusal = _commit_recover_or_refuse(session_dir, RULE_CMD)
             if refusal is not None:
                 return refusal
-            return _cmd_rule_locked(session_dir, ruling_file, by,
-                                    fixer_not_dispatched=fixer_not_dispatched)
+            return _cmd_rule_locked(session_dir, ruling_file, by)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, RULE_CMD, held)
 
 
-def _cmd_rule_locked(session_dir, ruling_file, by, fixer_not_dispatched=False):
+def _cmd_rule_locked(session_dir, ruling_file, by):
     ok, state = load_state(session_dir)
     if not ok or state is None:
         detail = state if not ok else "no state"
         return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE, detail=detail)
-    original_state = copy.deepcopy(state)
     if state.get("terminal"):
         return _refuse_cmd(session_dir, RULE_CMD, RULING_SESSION_TERMINAL)
     doc, file_sha, load_reason = _load_ruling_file(ruling_file)
@@ -8891,24 +9021,8 @@ def _cmd_rule_locked(session_dir, ruling_file, by, fixer_not_dispatched=False):
                 return _refuse_cmd(session_dir, RULE_CMD, RULING_CRITICAL_OUT_OF_SCOPE,
                                    id=entry["id"])
     # Timing never refuses a ruling: it is recorded whenever it arrives and binds the next fix of its
-    # finding. A fixer attempt whose orders are out is left alone (never stopped, never reshaped),
-    # unless the caller says it was not dispatched (--fixer-not-dispatched) and the driver sees no
-    # pickup evidence: then the batch is re-sliced and the order re-emitted at the next attempt.
-    emitted = (isinstance(pending, dict) and pending.get("phase") == P_FIXER
-               and _journal_has_orders_emitted(session_dir, pending.get("round"), P_FIXER,
-                                               pending.get("attempt")))
-    reshape = False
-    fixer_order = None
-    commit_check = None
-    if emitted:
-        decision, decision_refusal = _late_ruling_fixer_decision(
-            session_dir, state, pending, fixer_not_dispatched)
-        if decision_refusal is not None:
-            return decision_refusal
-        reshape = decision["reshape"]
-        commit_check = decision.get("commitCheck")
-        fixer_order = {"reshaped": reshape, "attempt": pending.get("attempt"),
-                       "reason": decision["reason"]}
+    # finding. While the apply-fixes step is pending the batch is re-sliced and its batch and
+    # guidance files rewritten, so the next `next` hands the build session the current direction.
     cfg = state.get("config") or {}
     round_rulings = []
     restored_rows = []
@@ -8982,85 +9096,47 @@ def _cmd_rule_locked(session_dir, ruling_file, by, fixer_not_dispatched=False):
         _decision(state, "ruling-recorded",
                   "ruling %s on %s (%s)" % (entry["ruling"], entry["id"], entry["reason"]))
     _append_round_rulings(state, round_rulings)
-    if not emitted or reshape:
-        _reconcile_fixer_queue_after_rulings(
-            state, cfg, extra_rows=restored_rows, session_dir=session_dir)
-    if not emitted and state.get("step") == P_FIXER:
-        pending_render_check = state.get("pending")
-        rnd_render = None
-        if isinstance(pending_render_check, dict):
-            rnd_render = pending_render_check.get("round")
-        if rnd_render is None:
-            rnd_render = state.get("round")
+    _reconcile_fix_queue_after_rulings(
+        state, cfg, extra_rows=restored_rows, session_dir=session_dir)
+    pending_now = state.get("pending")
+    if (state.get("step") == P_APPLY_FIXES and not state.get("terminal")
+            and isinstance(pending_now, dict) and pending_now.get("phase") == P_APPLY_FIXES):
+        # The guidance render is checked, and the step's files rewritten, here; a commit that then
+        # fails leaves them stale only until the next `next` rewrites them from the state.
         try:
-            _gate_guidance_block(_gate_guidance_entries(state, rnd_render))
+            fields = _apply_fixes_payload_fields(session_dir, state, pending_now.get("round"),
+                                                 pending_now.get("attempt"))
         except ValueError as exc:
-            phase_r = (pending_render_check.get("phase")
-                       if isinstance(pending_render_check, dict) else P_FIXER)
-            rnd_r = (pending_render_check.get("round")
-                     if isinstance(pending_render_check, dict) else rnd_render)
-            attempt_r = (pending_render_check.get("attempt")
-                         if isinstance(pending_render_check, dict) else None)
             return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
-                               phase=phase_r, rnd=rnd_r, attempt=attempt_r, detail=str(exc))
-    journal_fields = {"phase": phase, "round": rnd, "attempt": attempt,
-                      "rulingFileSha256": file_sha, "count": len(parsed)}
-    if reshape:
-        journal_fields["supersededAttempt"] = attempt
-    journal_entry = _journal_entry_for_commit(
-        session_dir, RULE_CMD, "ruling-recorded", **journal_fields)
-    emit_committed = False
-    # axis: a ruling on an undispatched, unpicked-up fixer order re-renders it at the next attempt — see bite-proof record wo_a_2137_late_ruling_rerender
-    if reshape:
-        fixer_order = {"reshaped": True, "attempt": None, "supersededAttempt": attempt,
-                       "reason": "batch-emptied", "commitCheck": commit_check}
-        pending_now = state.get("pending")
-        if (isinstance(pending_now, dict) and pending_now.get("phase") == P_FIXER
-                and not state.get("terminal")):
-            new_attempt = max(attempt + 1, _next_dispatch_attempt(session_dir, rnd, P_FIXER, state))
-            pending_now["attempt"] = new_attempt
-            roster, roster_refusal = _roster_of(session_dir, state, RULE_CMD, P_FIXER, rnd,
-                                                new_attempt)
-            if roster_refusal is not None:
-                return roster_refusal
-            try:
-                _emit_orders_manifest(session_dir, state, rnd, P_FIXER, new_attempt, roster,
-                                      journal_cmd=RULE_CMD, pending_payload=pending_now.get("payload"),
-                                      seat_map=_effective_seat_map(state),
-                                      extra_journal_entries=(journal_entry,))
-            except round_commit.CommitRefused as exc:
-                _restore_fix_batch_file(session_dir, rnd, original_state)
-                return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
-                                                rnd=rnd, attempt=attempt)
-            except AuditorUnseatable as exc:
-                _restore_fix_batch_file(session_dir, rnd, original_state)
-                return _refuse_cmd(session_dir, RULE_CMD, AUDITOR_UNSEATABLE_CAUSE, phase=phase,
-                                   rnd=rnd, attempt=attempt, liveVendors=exc.live_vendors,
-                                   fixerVendor=exc.fixer_vendor, detail=exc.detail)
-            except ValueError as exc:
-                _restore_fix_batch_file(session_dir, rnd, original_state)
-                return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused", phase=phase,
-                                   rnd=rnd, attempt=attempt, detail=str(exc))
-            emit_committed = True
-            fixer_order = {"reshaped": True, "attempt": new_attempt, "supersededAttempt": attempt,
-                           "reason": "reshaped", "commitCheck": commit_check}
-    if not emit_committed:
+                               phase=pending_now.get("phase"), rnd=pending_now.get("round"),
+                               attempt=pending_now.get("attempt"), detail=str(exc))
+        payload = dict(pending_now.get("payload") or {})
+        payload.update(fields)
+        state["pending"] = dict(pending_now, payload=payload)
+    elif state.get("step") == P_APPLY_FIXES and not state.get("terminal"):
         try:
-            c = round_commit.begin(session_dir, "rule-record")
-            _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
-            journal_path = os.path.join(session_dir, JOURNAL_FILE)
-            c.add_journal_append(journal_path, journal_entry)
-            c.run()
-        except round_commit.CommitRefused as exc:
-            return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
-                                            rnd=rnd, attempt=attempt)
+            _gate_guidance_block(_gate_guidance_entries(state, state.get("round")))
+        except ValueError as exc:
+            return _refuse_cmd(session_dir, RULE_CMD, "order-render-refused",
+                               phase=P_APPLY_FIXES, rnd=state.get("round"), attempt=None,
+                               detail=str(exc))
+    journal_entry = _journal_entry_for_commit(
+        session_dir, RULE_CMD, "ruling-recorded", phase=phase, round=rnd, attempt=attempt,
+        rulingFileSha256=file_sha, count=len(parsed))
+    try:
+        c = round_commit.begin(session_dir, "rule-record")
+        _stage_state(c, session_dir, _canonical(state).encode("utf-8"))
+        journal_path = os.path.join(session_dir, JOURNAL_FILE)
+        c.add_journal_append(journal_path, journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, RULE_CMD, exc, phase=phase,
+                                        rnd=rnd, attempt=attempt)
     response = {"ok": True, "recorded": len(parsed), "rulingFileSha256": file_sha}
     pending_after = state.get("pending")
     if (isinstance(pending_after, dict) and pending_after.get("action")
             and not state.get("terminal")):
         response.update(_next_response(session_dir, state, pending_after, RULE_CMD))
-    if fixer_order is not None:
-        response["fixerOrder"] = fixer_order
     return response
 
 
@@ -9514,7 +9590,7 @@ def _ci_verify_run_refusal(session_dir, state, artifact, resolution):
 
 
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-               _durable_record=None, fixer_transcript=None, _landed_payload_sha256=None):
+               _durable_record=None, _landed_payload_sha256=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
     advance. Stale/mismatched → rejected {ok: false} (exit 0). An exact duplicate of an
     already-accepted submit → idempotent {ok: true, duplicate: true}.
@@ -9567,8 +9643,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             if refusal is not None:
                 return refusal
             prep = _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact,
-                                       _via_advance=_via_advance,
-                                       fixer_transcript=fixer_transcript)
+                                       _via_advance=_via_advance)
             if not prep.get("_fold_ready"):
                 return prep
             state = prep["state"]
@@ -9614,7 +9689,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                             if k not in ("verifierSeatVendors", "verifierSeatProvenance")}
             try:
                 _fold(state, state["config"], phase, artifact, session_dir=session_dir,
-                      verified_head_resolution=resolution)
+                      verified_head_resolution=resolution, fix_commits=prep.get("fix_commits"))
             except DispositionLedgerOwnerRefusal:
                 _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                               "round": round_no, "attempt": attempt,
@@ -9630,11 +9705,8 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 rr_path = records_payload["path"]
                 rr_bytes = review_memory.records_bytes(records_payload["records"])
                 round_records_sidecar = (rr_path, rr_bytes)
-            check_fields = ({"refusalCheck": prep["refusal_check"]}
-                            if prep.get("refusal_check") else {})
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
-                                                      phase=phase, round=round_no, attempt=attempt,
-                                                      **check_fields)
+                                                      phase=phase, round=round_no, attempt=attempt)
             orphan_journal = None
             orphan_seats = prep.get("orphan_seats_found")
             if isinstance(orphan_seats, list) and orphan_seats:
@@ -9698,8 +9770,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
         return _lock_held_refusal(session_dir, "submit", held)
 
 
-def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-                        fixer_transcript=None):
+def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
     ok, loaded = load_state(session_dir)
     if not ok:
         fault_reason, fault, _detail = _state_load_fault(session_dir)
@@ -9906,30 +9977,23 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "staged-id-unresolvable"})
             return {"ok": False, "reason": fault}
-    if phase == P_FIXER and isinstance(artifact, dict) and "refusals" in artifact:
-        # A hand submission never reaches the payload contract, so the refusals list is checked
-        # here, before the pending step is consumed.
-        fault = command_refusals.refusals_fault(artifact["refusals"])
+    fix_commits = None
+    if phase == P_APPLY_FIXES:
+        # A hand submission never reaches the payload contract, so the report's shape is checked
+        # here, and what it claims is committed is checked against git, before the pending step is
+        # consumed: a refusal leaves the step pending for a corrected resubmit.
+        fault = _adapters().orchestrator_payload_fault(phase, artifact)
         if fault:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
-                                          "outcome": "fixer-refusals-malformed"})
-            return {"ok": False, "reason": "`refusals` — " + fault}
-    refusal_check = None
-    if phase == P_FIXER and not _via_advance:
-        # No landing exists on a hand submit, so there is nothing for `correct-fixer-refusals` to
-        # correct: the advisor lists the refusals in the artifact and resubmits.
-        refusal_check, check_refusal = _fixer_refusal_check(
-            session_dir, artifact, fixer_transcript, correctable=False)
-        if check_refusal is not None:
-            reason = check_refusal.pop("reason")
-            if reason == FIXER_REFUSALS_UNREPORTED:
-                check_refusal["detail"] = ("list these refusals in the artifact's `refusals` and "
-                                           "resubmit")
+                                          "outcome": "apply-fixes-shape"})
+            return {"ok": False, "reason": fault}
+        detail, fix_commits = _apply_fixes_commit_fault(state, state["config"], artifact)
+        if detail is not None:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
-                                          "outcome": reason})
-            return {"ok": False, "reason": reason, **check_refusal}
+                                          "outcome": FIX_REFUSED_REASON, "detail": detail})
+            return {"ok": False, "reason": FIX_REFUSED_REASON, "detail": detail}
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a
     # HAND submit silently discards recorded seats and can certify an incomplete panel while
@@ -9978,7 +10042,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         # `advance` from here on. Only stamped on v3 state — a v2 state's dict is never touched.
         state["_submitUsed"] = True
     return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash,
-            "orphan_seats_found": orphan_seats_found, "refusal_check": refusal_check}
+            "orphan_seats_found": orphan_seats_found, "fix_commits": fix_commits}
 
 
 def _write_receipt(session_dir, state):
@@ -10307,8 +10371,24 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
     refusal = _repair_state_if_damaged(session_dir, cmd)
     if refusal is not None:
         return refusal
+    _migrate_saved_fixer_step(session_dir, cmd)
     _hand_back_retired_gate(session_dir, cmd)
     return None
+
+
+def _migrate_saved_fixer_step(session_dir, cmd):
+    """Persist `_migrate_fixer_step` over the saved state and journal it once. A state that cannot
+    be read, or that is not at the retired fixer step, is left for the command's own load to answer.
+    The caller holds the session lock."""
+    ok, state = load_state(session_dir)
+    if not ok or not isinstance(state, dict):
+        return
+    moved, attempt = _migrate_fixer_step(session_dir, state)
+    if not moved:
+        return
+    save_state(session_dir, state)
+    _journal_append(session_dir, {"cmd": cmd, "phase": RETIRED_FIXER_PHASE, "round": state["round"],
+                                  "attempt": attempt, "outcome": "fix-step-migrated"})
 
 
 def _hand_back_retired_gate(session_dir, cmd):
@@ -10478,24 +10558,6 @@ def _journal_entry_for_commit(session_dir, cmd, outcome, **fields):
 def _commit_refused_response(session_dir, cmd, exc, phase=None, rnd=None, attempt=None, **extra):
     return _refuse_cmd(session_dir, cmd, exc.reason, fault=FAULT_INTERNAL, detail=exc.detail,
                        phase=phase, rnd=rnd, attempt=attempt, **extra)
-
-
-def _envelope_with_head_diff(session_dir, envelope, content, rnd, phase, seat_key, attempt,
-                             occurrence):
-    diff_path = round_records.head_diff_store_path(session_dir, rnd, phase, seat_key, attempt,
-                                                   occurrence)
-    payload = dict(envelope.get("payload") or {})
-    payload["headDiffStorePath"] = diff_path
-    final = dict(envelope)
-    final["landedPayloadSha256"] = envelope.get("payloadSha256")
-    final["payload"] = payload
-    final["payloadSha256"] = round_records.payload_sha256(payload)
-    if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
-        # Recompute envelopeSha256 so the stored envelope stays self-consistent after the
-        # payload rewrite; otherwise validate_landing rejects it as envelope-torn.
-        final["envelopeSha256"] = round_records.envelope_sha256(payload,
-                                                                final.get("executionEvidence"))
-    return diff_path, content.encode("utf-8"), final, final["payloadSha256"]
 
 
 def _state_load_fault(session_dir):
@@ -10763,12 +10825,10 @@ CHANNEL_FILE = session_contract.CHANNEL_FILE
 CHANNEL_STDOUT = session_contract.CHANNEL_STDOUT
 
 # Phases whose seats an orchestrator dispatches through `dispatch-review` — a READ-ONLY sandbox on
-# an external engine. `dispatch-fixer` is deliberately absent: it is a foreground in-place writer,
-# never a `dispatch-review` consumer, and its vendor is UNKNOWN by default (#608), so folding an
-# absent vendor to the stdout contract there would rewrite a deliberate default rather than close a
-# forfeit. DERIVED from `round_orders.ORDER_PHASES` (not hand-typed) so a phase added there and
-# forgotten here cannot silently fold an unresolved vendor to the WRITE contract (#1035).
-_READ_ONLY_CHANNEL_PHASES = frozenset(round_orders.ORDER_PHASES) - {P_FIXER}
+# an external engine: every order phase. DERIVED from `round_orders.ORDER_PHASES` (not hand-typed)
+# so a phase added there and forgotten here cannot silently fold an unresolved vendor to the WRITE
+# contract (#1035).
+_READ_ONLY_CHANNEL_PHASES = frozenset(round_orders.ORDER_PHASES)
 
 
 VENDOR_SOURCE_CONFIGURED = "configured"
@@ -11007,8 +11067,7 @@ def _journal_transport_fields(envelope):
         return {}
     phase = envelope.get("phase")
     provenance = envelope.get("provenance")
-    if (phase == P_FIXER
-            or provenance == round_records.PROVENANCE_ORCHESTRATOR_FULFILLED):
+    if provenance == round_records.PROVENANCE_ORCHESTRATOR_FULFILLED:
         return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_ORCHESTRATOR}
     if provenance == round_records.PROVENANCE_HAND_LANDED:
         return {session_contract.SEAT_TRANSPORT_KEY: session_contract.SEAT_TRANSPORT_HAND_LANDED}
@@ -11024,8 +11083,6 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
         return _seat_dispatch_row(state, seat_key, seat_map=seat_map)
     cfg = config if isinstance(config, dict) else {}
     payload = pending_payload if isinstance(pending_payload, dict) else {}
-    if phase == P_FIXER:
-        return {"vendor": cfg.get("fixerVendor"), "model": None, "engine": None}
     if phase == P_AUDITS:
         targets = payload.get("targets")
         if not isinstance(targets, list):
@@ -11053,27 +11110,6 @@ def _seat_transport_fault(row, seat_key):
     if vendor in model_registry.vendors():
         return None
     return "unknown-vendor:%s:%s" % (seat_key, vendor)
-
-
-def _profile_path_for_orders(repo_root):
-    """Resolved project profile path for fixer orders — never a hand-typed layout guess."""
-    try:
-        # Deliberate fail-open: the profile path is prose for fixer orders (a cost/context
-        # hint), not a governance decision — resolve_profile_path swallows read failures to
-        # None rather than refusing the order. Governance uses effective_tiers_for_gate.
-        path = model_tier_overrides.resolve_profile_path(repo_root)
-    except calibration_resolve.UnresolvableRootError as exc:
-        refusal = core_md.gate_refusal_line(
-            core_md.gate_refusal(exc.reason, str(exc.root)))
-        return "(Project profile refused — %s)" % refusal
-    if isinstance(path, str) and path.strip():
-        return path
-    return "(Project profile not resolved for this project)"
-
-
-def _shell_quote_path(path):
-    """Shell-safe quoted path for commands the fixer order tells the seat to run."""
-    return shlex.quote(path if isinstance(path, str) and path else "")
 
 
 def _panel_dimension_label(seat_key):
@@ -11110,16 +11146,6 @@ def _shipped_resource_refusal(placeholders):
     return None
 
 
-def _order_profile_path_is_file(value):
-    """True when PROFILE_PATH names a resolved absolute file, not prose refusal/unresolved text."""
-    if not isinstance(value, str) or not value.strip():
-        return False
-    stripped = value.strip()
-    if stripped.startswith("("):
-        return False
-    return os.path.isabs(stripped)
-
-
 def _emitted_path_is_file(emitted):
     """True when ``emitted`` names an existing file — a raw driver-generated path, never shell-parsed."""
     if not isinstance(emitted, str) or not emitted:
@@ -11134,8 +11160,6 @@ def _readable_file_input_refusal(placeholders):
     for name in ORDER_READABLE_FILE_INPUTS:
         emitted = placeholders.get(name)
         if emitted is None:
-            continue
-        if name == "PROFILE_PATH" and not _order_profile_path_is_file(emitted):
             continue
         if name == "PRIOR_COMMENTS_PATH":
             if not emitted or (isinstance(emitted, str) and emitted.strip().startswith("(")):
@@ -11169,9 +11193,7 @@ ORDER_READABLE_FILE_INPUTS = frozenset({
     "HUNKS_PATH",
     "VERIFIED_FINDINGS_PATH",
     "HELD_FINDINGS_PATH",
-    "FIX_BATCH_PATH",
     "PRIOR_COMMENTS_PATH",
-    "PROFILE_PATH",
 })
 ORDER_SHIPPED_RESOURCE_INPUTS = frozenset({
     "RUBRIC_PATH",
@@ -11201,16 +11223,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "CLAUDE_MD_PATH",
     "LAYER_PATH",
     "VERIFICATION_ROOT",
-    "CWD",
-    "REPO_ROOT",
-    "VERIFY_BUDGET",
-    "ROUND",
     "TARGET_ID",
-    "GATE_GUIDANCE",
-    "FIX_BATCH_SHA256",
-    "FIXER_STEP_5_BLOCK",
-    "FIXER_ESCALATION_BLOCK",
-    "FILE_WRITE_RULE",
     "PR_BODY_LINE",
 })
 
@@ -11381,20 +11394,6 @@ def unread_surface(state, diff_text, read_lists):
 FIX_BATCH_HISTORY_FIELDS = ("priorAudit", "gateRuling")
 
 
-def _fixer_verify_budget(batch, cfg):
-    """Scoped verify prose for one fix-batch slice — never the project's full verify command."""
-    files = sorted({row.get("file") for row in (batch or [])
-                    if isinstance(row, dict) and isinstance(row.get("file"), str)})
-    files_str = ", ".join(files) if files else "(none named)"
-    full = cfg.get("verifyCommand") or "none"
-    return ("Scoped verify budget for this batch — target files: %s. "
-            "Run the tests that reference those files (select by reading the test files' own text "
-            "for the target path, never by test-file name) plus the project's static validators, "
-            "at most once each. The project's full verify command is NOT yours to run inside this "
-            "attempt — the orchestrator runs it once after the round's fixes land: %s"
-            % (files_str, full))
-
-
 def _materialized_fix_batch_rows(state):
     batch = state.get("_fixBatch")
     if not isinstance(batch, list):
@@ -11448,7 +11447,7 @@ def _fix_batch_sha256_from_state(state):
 
 
 def _ensure_fix_batch_file(session_dir, rnd, state):
-    """Materialize fix-batch.json from state for fixer orders.
+    """Materialize fix-batch.json from state for the apply-fixes step.
 
     Sibling parity with ``_ensure_round_diff`` and ``_ensure_round_head_diff``: unknown input
     (absent, ``None``, or wrong type) refuses before any path computation or write. A known
@@ -11456,6 +11455,40 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
     """
     path = _fix_batch_path_for_round(session_dir, rnd, state)
     return _ensure_bytes_at_path(session_dir, path, _fix_batch_canonical_bytes(state))
+
+
+def _fix_guidance_path_for_round(session_dir, rnd, state):
+    """The guidance file beside the slice's fix batch, named the way the batch file is."""
+    rdir = round_records.round_dir(session_dir, rnd)
+    batch_index = state.get("_fixBatchIndex") or 0
+    if batch_index >= 1:
+        return os.path.join(rdir, "fix-guidance.%d.md" % batch_index)
+    return os.path.join(rdir, "fix-guidance.md")
+
+
+def _apply_fixes_payload_fields(session_dir, state, rnd, attempt):
+    """Write the apply-fixes step's batch and guidance files from the state and return the payload
+    fields that name them, with the step's landing path and the staged PR body path.
+
+    Raises ``ValueError("order-render-refused:...")`` when the guidance cannot be rendered, the
+    refusal channel `_cmd_next_locked` and `cmd_rule` both catch."""
+    fields = {"fixBatchPath": _ensure_fix_batch_file(session_dir, rnd, state)}
+    guidance = _gate_guidance_block(_gate_guidance_entries(state, rnd))
+    guidance_path = _fix_guidance_path_for_round(session_dir, rnd, state)
+    if guidance == _GATE_GUIDANCE_NO_GUIDANCE:
+        if os.path.lexists(guidance_path):
+            os.unlink(guidance_path)
+        fields["guidancePath"] = None
+    else:
+        fields["guidancePath"] = _ensure_bytes_at_path(
+            session_dir, guidance_path, (guidance + "\n").encode("utf-8"))
+    fields["landingPath"] = round_records.bare_payload_path(
+        session_dir, rnd, P_APPLY_FIXES, round_records.storage_key(payload_contracts.SEAT_APPLY_FIXES),
+        attempt)
+    staged = pr_body_stage.paths(session_dir)["staged"]
+    if os.path.isfile(staged):
+        fields["prBodyPath"] = staged
+    return fields
 
 
 # Round-relative paths the driver materializes for order templates — production reads this registry.
@@ -11591,19 +11624,8 @@ def _pr_body_line(phase, session_dir, rnd, state, meta, cfg, materialize_shared_
         staged = pr_body_stage.stage(session_dir)
         if not staged.get("ok") or not staged.get("staged"):
             return no_staged(staged.get("reason") or "not staged")
-    if phase == P_AUDITS:
-        return ("the staged copy %s, to be read against the original %s"
-                % (paths["staged"], paths["original"]))
-    copy_path = pr_body_stage.fixer_copy_path(session_dir, rnd)
-    if materialize_shared_inputs:
-        before = pr_body_stage.seed_fixer_copy(session_dir, rnd)
-        if before is None:
-            return no_staged(pr_body_stage.REASON_NOT_STAGED)
-        if isinstance(state, dict) and ("rounds" in state or "round" in state):
-            existing = (state["rounds"].get(str(rnd)) or {}).get("prBodyFix")
-            if not (isinstance(existing, dict) and existing.get("before")):
-                _record_round(state, "prBodyFix", {"before": before, "after": None})
-    return copy_path
+    return ("the staged copy %s, to be read against the original %s"
+            % (paths["staged"], paths["original"]))
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
@@ -11757,52 +11779,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "scoped-findings.json"),
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
-        }
-    elif phase == P_FIXER:
-        if materialize_shared_inputs:
-            fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
-        else:
-            fix_batch_path = _fix_batch_path_for_round(session_dir, rnd, state)
-        # Match _ensure_fix_batch_file: _fixBatch wins over fixBatch so guidance and sidecar agree.
-        fix_batch = state.get("_fixBatch")
-        if not isinstance(fix_batch, list):
-            fix_batch = state.get("fixBatch")
-        if not isinstance(fix_batch, list):
-            fix_batch = []
-        guidance_entries = _gate_guidance_entries(state, rnd)
-        render_only = (
-            isinstance(state, dict) and "rounds" not in state and "round" not in state
-        )
-        if not render_only:
-            fold_titles = {e.get("title") for e in guidance_entries}
-            unaccounted = []
-            for idx, row in enumerate(fix_batch):
-                if not isinstance(row, dict):
-                    continue
-                row_guidance = row.get(GATE_GUIDANCE_RECORD_KEY)
-                if not isinstance(row_guidance, str) or not row_guidance.strip():
-                    continue
-                row_title = row.get("title")
-                if not guidance_entries or row_title not in fold_titles:
-                    unaccounted.append({"index": idx, "title": row_title})
-            if unaccounted:
-                _record_round(state, _GATE_GUIDANCE_ROW_CARRIED_CHANNEL, unaccounted)
-        if materialize_shared_inputs:
-            batch_sha = _fix_batch_file_sha256(session_dir, rnd, state)
-        else:
-            batch_sha = _fix_batch_sha256_from_state(state)
-        ph = {
-            "FIX_BATCH_PATH": fix_batch_path,
-            "FIX_BATCH_SHA256": batch_sha,
-            "PROFILE_PATH": _profile_path_for_orders(repo_root),
-            "RUBRIC_PATH": rubric_path,
-            "CWD": repo_root,
-            "REPO_ROOT": _shell_quote_path(repo_root),
-            "VERIFY_BUDGET": _fixer_verify_budget(fix_batch, cfg),
-            "ROUND": str(rnd),
-            "GATE_GUIDANCE": _gate_guidance_block(guidance_entries),
-            "PR_BODY_LINE": _pr_body_line(phase, session_dir, rnd, state, meta, cfg,
-                                          materialize_shared_inputs),
         }
     return ph
 
@@ -12140,29 +12116,6 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
-        # Order lint (#1339): the rendered fixer order is the one driver-authored order an engine
-        # acts on; an unfilled placeholder (order-placeholder-unfilled), a dangling path
-        # (order-path-unresolved), or two result contracts named at once
-        # (order-result-shape-ambiguous) refuses the emission here and never reaches a dispatch.
-        # Quoted-data blocks (owner-gate guidance, verify command, ratified residuals) are elided
-        # from the lint text so paths, braces, or result-shape words in owner prose never refuse
-        # the emission; only the first occurrence of each block is elided when it appears more
-        # than once.
-        # Plugin-relative citations resolve via the plugin root as well as the repo root.
-        # Deterministic half only — a driver-rendered order has no author for the semantic seat
-        # to send a finding back to.
-        if phase == P_FIXER:
-            lint_text = _order_lint_text(order_text, context)
-            lint = order_lint.check_text(
-                lint_text, repo_root, alt_roots=(_plugin_resource_root(),), kind="fixer",
-                allow_payload_contract=context.get("host_seat") is True,
-                create_items=_fixer_create_items(pending.get("batch") or []))
-            if not lint.get("ok"):
-                first = (lint.get("findings") or [{}])[0]
-                token = first.get("token") or "unknown"
-                detail = first.get("detail") or ""
-                raise ValueError("order-render-refused:%s:order-lint:%s" % (
-                    skey, token + (":" + detail if detail else "")))
         order_sha = round_records.sha256_text(order_text)
         order_hashes[skey] = order_sha
         seats[skey] = {
@@ -12244,17 +12197,6 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     return anchor
 
 
-FIXER_COMMITTED_UNLANDED = "fixer-committed-unlanded"
-FIXER_COMMITS_LISTED = 20
-FIXER_REFUSALS_UNREPORTED = "fixer-refusals-unreported"
-FIXER_TRANSCRIPT_UNREADABLE = "fixer-transcript-unreadable"
-FIXER_REFUSALS_CORRECTED_OUTCOME = "fixer-refusals-corrected"
-FIXER_REFUSALS_FILE_PLACEHOLDER = "<refusals.json>"
-FIXER_TRANSCRIPT_HELP = ("path to the fixer subagent's transcript (JSONL); a refusal it shows "
-                         "that the fixer's payload `refusals` leaves out refuses the ingest")
-REFUSAL_CHECK_CHECKED = "checked"
-REFUSAL_CHECK_UNOBSERVED = "unobserved"
-
 # --- the durable per-seat records ---------------------------------------------------------------
 
 def _slot_label(seat_key, occurrence):
@@ -12267,8 +12209,7 @@ def _slot_label(seat_key, occurrence):
     return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
 
 
-def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, attempt,
-                                fixer_transcript=None):
+def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, attempt):
     """Shell-ready per-slot supersede command — matches round-driver.md invocation spelling.
 
     Round and phase are not separately addressable on this CLI; ``--attempt`` is the fence
@@ -12278,32 +12219,15 @@ def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, at
            "--occurrence %d --attempt %d --supersede --expect-sha256 %s"
            % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
               occurrence, attempt, shlex.quote(cas_token)))
-    if fixer_transcript:
-        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
     return cmd
 
 
-def _record_result_cmd(session_dir, seat_key, occurrence, attempt, fixer_transcript=None):
+def _record_result_cmd(session_dir, seat_key, occurrence, attempt):
     """Shell-ready first-ingest `record-result` for one slot (no stored record to supersede yet)."""
     driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
     cmd = ("python3 -B %s record-result --session-dir %s --seat %s --occurrence %d --attempt %d"
            % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
               occurrence, attempt))
-    if fixer_transcript:
-        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
-    return cmd
-
-
-def _correct_fixer_refusals_cmd(session_dir, attempt, fixer_transcript=None):
-    """Shell-ready `correct-fixer-refusals` for this session. The refusals file is the advisor's to
-    write (a JSON list of the fixer's refusal entries), so it stays a named placeholder."""
-    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
-    cmd = ("python3 -B %s correct-fixer-refusals --session-dir %s --refusals-file %s"
-           % (shlex.quote(driver_path), shlex.quote(session_dir), FIXER_REFUSALS_FILE_PLACEHOLDER))
-    if isinstance(attempt, int) and not isinstance(attempt, bool):
-        cmd += " --attempt %d" % attempt
-    if fixer_transcript:
-        cmd += " --fixer-transcript %s" % shlex.quote(fixer_transcript)
     return cmd
 
 
@@ -12467,204 +12391,6 @@ def _preflight_payload_fault(phase, envelope, seat_key):
                                      record_boundary=True)
 
 
-def _fixer_head_diff_landing(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
-    """(payload, head_diff_path) for a landed `dispatch-fixer` envelope, or (None, None)."""
-    try:
-        lpath = round_records.landing_path(
-            session_dir, rnd, phase, round_records.storage_key(seat_key, occurrence), attempt)
-    except ValueError:
-        return None, None
-    envelope, err = round_records.read_json(lpath)
-    if err is not None or not isinstance(envelope, dict):
-        return None, None
-    payload = envelope.get("payload")
-    if not isinstance(payload, dict):
-        return None, None
-    return payload, payload.get("headDiffPath")
-
-
-def _fixer_unlanded_commits(state, session_dir, rnd, attempt):
-    """The SHAs (oldest first, at most FIXER_COMMITS_LISTED) of commits the session's repo holds
-    after the fixer order's emission head, or None when that cannot be told.
-
-    None covers every case where git gave no answer — no emission head recorded, no repo root, git
-    unavailable or declining — and an empty list is git answering "no commits since". The caller
-    treats both as "no evidence of a commit" and keeps its existing refusal, so a git failure can
-    never turn into a pass."""
-    emission_head = _anchor_cited_head(state, session_dir, rnd, P_FIXER, attempt)
-    if not isinstance(emission_head, str) or not emission_head:
-        return None
-    repo_root = _resolve_repo_root(session_dir, state)
-    if not repo_root:
-        return None
-    result = store_core.run_git_result(repo_root, "rev-list", "--reverse",
-                                       "%s..HEAD" % emission_head)
-    if result.status != store_core.GIT_OK or result.out is None:
-        return None
-    return [sha for sha in result.out.splitlines() if sha.strip()][:FIXER_COMMITS_LISTED]
-
-
-def _fixer_slot_unlanded_refusal(session_dir, state, cmd, phase, rnd, attempt, seat_key,
-                                 occurrence=0):
-    """The `fixer-committed-unlanded` refusal for a fixer slot that has neither a landing nor a
-    stored record while the repo holds commits past the order's emission head; else None.
-
-    THE chokepoint of invariant A: every path that would read the slot as missing calls this. The
-    driver does not recover the fix from git — which findings a commit addresses is the fixer's
-    claim, not something git records — so it names the advisor's action instead."""
-    if phase != P_FIXER:
-        return None
-    try:
-        skey = round_records.storage_key(seat_key, occurrence)
-        spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
-        lpath = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
-        bare_path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
-    except ValueError:
-        return None
-    if any(os.path.lexists(path) for path in (spath, lpath, bare_path)):
-        return None
-    commits = _fixer_unlanded_commits(state, session_dir, rnd, attempt)
-    if not commits:
-        return None
-    return _refuse_cmd(
-        session_dir, cmd, FIXER_COMMITTED_UNLANDED, phase=phase, rnd=rnd, attempt=attempt,
-        seat=_slot_label(seat_key, occurrence), commits=commits,
-        detail=("the fixer committed but wrote no landing; its commit stays; re-dispatch the same "
-                "fixer order so it writes only its landing (or record the fix by hand-submit), "
-                "then record-result — the driver does not recover the fix from git, because which "
-                "findings a commit addresses is the fixer's claim, not something git records."))
-
-
-def _fixer_refusal_check(session_dir, payload, transcript_path, attempt=None, correctable=True):
-    """(refusalCheck value, refusal fields or None) for a fixer payload against a transcript.
-
-    THE chokepoint of invariant B. No transcript means nobody looked: `unobserved`, never a pass
-    that reads like "looked, found none". A transcript fault refuses and never degrades to
-    `unobserved`. A refusal the transcript shows and the payload's `refusals` leaves out refuses
-    `fixer-refusals-unreported` carrying the list and (when a landing exists to correct) the exact
-    `correct-fixer-refusals` command. The refusal fields hold `reason` plus the extras."""
-    if transcript_path is None:
-        return REFUSAL_CHECK_UNOBSERVED, None
-    observed, fault = observed_refusals.read_transcript(transcript_path)
-    if fault:
-        return None, {"reason": FIXER_TRANSCRIPT_UNREADABLE, "detail": fault}
-    reported = payload.get("refusals") if isinstance(payload, dict) else None
-    missing = observed_refusals.unreported(observed, reported or [])
-    if missing:
-        fields = {"reason": FIXER_REFUSALS_UNREPORTED, "unreported": missing}
-        if correctable:
-            fields["correction"] = _correct_fixer_refusals_cmd(session_dir, attempt,
-                                                               transcript_path)
-        return None, fields
-    return REFUSAL_CHECK_CHECKED, None
-
-
-def _fixer_envelope_refusal_check(session_dir, envelope, transcript_path, attempt):
-    """`_fixer_refusal_check` over a normalized landing envelope. Only a seat-result envelope
-    carries a fixer payload to check; any other schema is `unobserved` (nothing claimed)."""
-    if (not isinstance(envelope, dict)
-            or envelope.get("schema") not in round_records.SEAT_RESULT_SCHEMAS):
-        return REFUSAL_CHECK_UNOBSERVED, None
-    return _fixer_refusal_check(session_dir, envelope.get("payload"), transcript_path, attempt)
-
-
-def _read_head_diff(path):
-    """(content, reason). A non-absolute or unreadable `headDiffPath` is `head-diff-unreadable` —
-    refused at RECORD time, not degraded at fold time. `_resolve_head_diff` would otherwise
-    dereference a caller-controlled path long after the payload hash was taken, so the bytes the
-    fold reads would not be the bytes the record attests."""
-    if not isinstance(path, str) or not path or not os.path.isabs(path):
-        return None, "head-diff-unreadable"
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read(), None
-    except OSError:
-        return None, "head-diff-unreadable"
-
-
-def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence=0,
-                     journal_entry=None, cited_head=None):
-    """Copy the fixer's head diff into the STORE beside its envelope and stamp the immutable copy's
-    path into the stored payload.
-
-    Blob and envelope are published in one commit so a crash cannot leave them disagreeing."""
-    skey = round_records.storage_key(seat_key, occurrence)
-    spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
-    envelope, err = round_records.read_json(spath)
-    if err is not None or not isinstance(envelope, dict):
-        diff_path = round_records.head_diff_store_path(session_dir, rnd, phase, seat_key, attempt,
-                                                       occurrence)
-        round_commit.atomic_write_bytes(diff_path, content.encode("utf-8"))
-        return diff_path, None
-    diff_path, diff_bytes, final, payload_sha = _envelope_with_head_diff(
-        session_dir, envelope, content, rnd, phase, seat_key, attempt, occurrence)
-    final = round_records.envelope_bind_cited_head_source(
-        final, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR)
-    try:
-        c = round_commit.begin(session_dir, "head-diff-bind")
-        c.add_replace_file(diff_path, diff_bytes)
-        c.add_replace_file(spath, round_records.canonical(final).encode("utf-8"))
-        if journal_entry is not None:
-            journal_entry.update(round_records.recorded_row_fields(
-                final, cited_head, round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR))
-            c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
-        c.run()
-    except round_commit.CommitRefused as exc:
-        raise exc
-    return diff_path, payload_sha
-
-
-def _fixer_head_diff_needs_repair(stored):
-    """True when a stored fixer envelope references a head diff that is not durably copied yet."""
-    if not isinstance(stored, dict):
-        return False
-    payload = stored.get("payload")
-    if not isinstance(payload, dict):
-        return False
-    if payload.get("headDiffPath") is None:
-        return False
-    store_path_val = payload.get("headDiffStorePath")
-    if not isinstance(store_path_val, str) or not store_path_val:
-        return True
-    return not os.path.exists(store_path_val)
-
-
-def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence, cmd=None,
-                            expect_round=None, expect_phase=None, cited_head=None):
-    """Repair a fixer store record whose head-diff blob was not yet bound.
-
-    Returns (payload_sha, detail) where detail is None, a refusal token string, or a
-    ``CommitRefused`` when the commit failed."""
-    skey = round_records.storage_key(seat_key, occurrence)
-    spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
-    stored, err = round_records.read_json(spath)
-    if err is not None or not isinstance(stored, dict):
-        return None, None
-    if not _fixer_head_diff_needs_repair(stored):
-        return stored.get("payloadSha256"), None
-    payload = stored.get("payload") if isinstance(stored.get("payload"), dict) else {}
-    head_path = payload.get("headDiffPath")
-    content, why = _read_head_diff(head_path)
-    if why is not None:
-        return None, why
-    journal_entry = None
-    if cmd is not None:
-        transport_fields = _journal_transport_fields(stored)
-        journal_entry = _journal_entry_for_commit(
-            session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-            seat=seat_key, occurrence=occurrence, headDiffRepaired=True,
-            **transport_fields,
-            **_journal_addressing_fields(expect_round, expect_phase),
-            **_journal_identity_fields(phase, seat_key, occurrence, attempt))
-    try:
-        _path, payload_sha = _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content,
-                                              occurrence, journal_entry=journal_entry,
-                                              cited_head=cited_head)
-    except round_commit.CommitRefused as exc:
-        return None, exc
-    return payload_sha, None
-
-
 def _round_phase_addressing_supplied(expect_round, expect_phase):
     """True when the caller supplied both round/phase addressing echoes from ``next``."""
     return expect_round is not None and expect_phase is not None
@@ -12712,14 +12438,13 @@ def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
 
 def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, expect_sha256=None,
                       sweep=False, occurrence=0, expect_round=None, expect_phase=None,
-                      evidence_run_dir=None, fixer_transcript=None):
+                      evidence_run_dir=None):
     """Ingest ONE landed seat envelope (or, with `sweep`, every unclaimed landing) into the durable
     store, and journal the outcome carrying its `payloadSha256`.
 
     The ingestion itself — the attempt fence, the torn-write detector, the supersede CAS, the
     manifest anchor — is `round_records`'; this layer supplies the roster (`round_adapters`), the
-    emission-time anchor, the per-field payload validation, the fixer's head-diff durability, and
-    the journal.
+    emission-time anchor, the per-field payload validation, and the journal.
 
     `occurrence` addresses WHICH roster slot of a repeated seat key this envelope is (default 0 —
     the only slot a key that appears once has). Two distinct audit targets can legitimately share
@@ -12738,8 +12463,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
                                              sweep=sweep, occurrence=occurrence,
                                              expect_round=expect_round,
                                              expect_phase=expect_phase,
-                                             evidence_run_dir=evidence_run_dir,
-                                             fixer_transcript=fixer_transcript)
+                                             evidence_run_dir=evidence_run_dir)
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-result", held)
 
@@ -12783,9 +12507,6 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
     run_kind = record.get("runKind")
     if run_kind == engine_dispatch.RUN_KIND_WRITE:
         if not session_contract.execution_only_admissible_for_phase(phase):
-            return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
-    elif run_kind == engine_dispatch.RUN_KIND_REVIEW:
-        if phase == P_FIXER:
             return None, "evidence-run-kind-mismatch", {"runKind": run_kind, "phase": phase}, None
     envelope_payload = envelope.get("payload")
     payload_adopted = False
@@ -12869,8 +12590,7 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
 
 def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
                               expect_sha256=None, sweep=False, occurrence=0,
-                              expect_round=None, expect_phase=None, evidence_run_dir=None,
-                              fixer_transcript=None):
+                              expect_round=None, expect_phase=None, evidence_run_dir=None):
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -12970,8 +12690,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                            detail=detail, recovery=recovery)
     if sweep:
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
-                             anchor, expect_round=expect_round, expect_phase=expect_phase,
-                             fixer_transcript=fixer_transcript)
+                             anchor, expect_round=expect_round, expect_phase=expect_phase)
 
     seat_schema = _seat_result_schema(state)
     if seat_schema is None:
@@ -12981,18 +12700,12 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     # Validate BEFORE storing: a refusal must leave nothing behind.
     landing_replace_path = None
     assembled = None
-    refusal_fields = {}
     cited_head = _anchor_cited_head(state, session_dir, rnd, phase, cur_attempt)
     cited_head_source = round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
     if isinstance(seat, str) and seat in roster:
         envelope, _lerr, landing_replace_path = _read_landing_envelope(
             session_dir, rnd, phase, seat, cur_attempt, occurrence)
         if _lerr is not None:
-            if _lerr == "landing-missing":
-                unlanded = _fixer_slot_unlanded_refusal(session_dir, state, "record-result", phase,
-                                                        rnd, cur_attempt, seat, occurrence)
-                if unlanded is not None:
-                    return unlanded
             return _refuse_cmd(session_dir, "record-result", _lerr, phase=phase, rnd=rnd,
                                attempt=cur_attempt, seat=_slot_label(seat, occurrence))
         if (seat_schema == round_records.SEAT_RESULT_SCHEMA_V2 and isinstance(envelope, dict)
@@ -13010,24 +12723,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
                                rnd=rnd, attempt=cur_attempt, seat=seat, detail=fault)
-        head_content = None
-        if phase == P_FIXER:
-            payload, head_path = _fixer_head_diff_landing(session_dir, rnd, phase, seat,
-                                                          cur_attempt, occurrence)
-            if head_path is not None:
-                head_content, why = _read_head_diff(head_path)
-                if why is not None:
-                    return _refuse_cmd(session_dir, "record-result", why, phase=phase, rnd=rnd,
-                                       attempt=cur_attempt, seat=seat, headDiffPath=head_path)
-            refusal_check, check_refusal = _fixer_envelope_refusal_check(
-                session_dir, preflight_envelope, fixer_transcript, cur_attempt)
-            if check_refusal is not None:
-                return _refuse_cmd(session_dir, "record-result", check_refusal.pop("reason"),
-                                   phase=phase, rnd=rnd, attempt=cur_attempt,
-                                   seat=_slot_label(seat, occurrence), **check_refusal)
-            refusal_fields = {"refusalCheck": refusal_check}
-    else:
-        head_content = None
     # axis: a record-result over a damaged journal is refused before it stores a seat record
     if isinstance(phase, str) and phase.startswith("dispatch-") and _journal_damaged(session_dir):
         return _refuse_journal_damaged(
@@ -13045,12 +12740,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
                            detail=landing_refusal.get("message") or landing_refusal.get("storePath"))
     envelope = round_records.envelope_bind_cited_head_source(plan["envelope"], cited_head_source)
     payload_sha = plan["payloadSha256"]
-    head_store_path = None
-    head_diff_bytes = None
-    if head_content is not None:
-        head_store_path, head_diff_bytes, envelope, payload_sha = _envelope_with_head_diff(
-            session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
-        envelope = round_records.envelope_bind_cited_head_source(envelope, cited_head_source)
     row_cited_head = cited_head
     if cited_head_source == round_records.CITED_HEAD_SOURCE_RUNNER_VIEW:
         row_cited_head = assembled["headSha"]
@@ -13059,8 +12748,7 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
         seat=seat, occurrence=occurrence,
         **round_records.recorded_row_fields(envelope, row_cited_head, cited_head_source),
         **_journal_transport_fields(envelope),
-        superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
-        **refusal_fields,
+        superseded=bool(plan["superseded"]),
         **_journal_addressing_fields(expect_round, expect_phase),
         **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     try:
@@ -13072,8 +12760,6 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
             c.add_replace_file(landing_replace_path,
                                 round_records.canonical(stamped).encode("utf-8"))
         c.add_replace_file(plan["storePath"], round_records.canonical(envelope).encode("utf-8"))
-        if head_store_path is not None:
-            c.add_replace_file(head_store_path, head_diff_bytes)
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
@@ -13084,46 +12770,18 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
             "occurrence": occurrence, "payloadSha256": payload_sha,
             "casToken": cas_token,
             "superseded": bool(plan["superseded"]),
-            "storePath": plan["storePath"], "headDiffStorePath": head_store_path}
+            "storePath": plan["storePath"]}
 
 
 def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
-                  expect_round=None, expect_phase=None, fixer_transcript=None):
+                  expect_round=None, expect_phase=None):
     """Ingest every unclaimed landing for the pending phase. Idempotent by construction (a seat
     already stored comes back `already-stored`); ANY refusal in the sweep refuses the whole call,
     with the refusing seat's own reason — a landing nobody could ingest is never skipped in
     silence."""
-    for seat_key, occurrence in round_records.roster_slots(roster):
-        if phase != P_FIXER:
-            continue
-        try:
-            spath = round_records.store_path(session_dir, rnd, phase,
-                                             round_records.storage_key(seat_key, occurrence),
-                                             attempt)
-        except ValueError:
-            continue
-        if not os.path.exists(spath):
-            continue
-        stored, _lerr = round_records.read_json(spath)
-        if not _fixer_head_diff_needs_repair(stored):
-            continue
-        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
-        rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt,
-                                                   occurrence, cmd=cmd,
-                                                   expect_round=expect_round,
-                                                   expect_phase=expect_phase,
-                                                   cited_head=cited_head)
-        if detail == "head-diff-unreadable":
-            payload = stored.get("payload") if isinstance(stored, dict) else {}
-            return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd, attempt=attempt,
-                               seat=seat_key, headDiffPath=payload.get("headDiffPath"))
-        if isinstance(detail, round_commit.CommitRefused):
-            return _commit_refused_response(session_dir, cmd, detail, phase=phase, rnd=rnd,
-                                          attempt=attempt, seat=seat_key)
     # axis: a sweep over a damaged journal is refused before it ingests any landing
     if isinstance(phase, str) and phase.startswith("dispatch-") and _journal_damaged(session_dir):
         return _refuse_journal_damaged(session_dir, cmd, phase=phase, rnd=rnd, attempt=attempt)
-    refusal_checks = {}
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
@@ -13137,21 +12795,6 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
             bare_path = None
         has_landing = os.path.exists(lpath) or (
             bare_path is not None and os.path.exists(bare_path))
-        if not has_landing and not os.path.exists(spath):
-            unlanded = _fixer_slot_unlanded_refusal(session_dir, state, cmd, phase, rnd, attempt,
-                                                    seat_key, occurrence)
-            if unlanded is not None:
-                return unlanded
-        if phase == P_FIXER and os.path.exists(spath) and fixer_transcript is not None:
-            # A slot recorded earlier without a transcript is still cross-checked when this call
-            # supplies one: an omitted refusal the transcript shows is never folded as clean.
-            stored_env, _serr = round_records.read_json(spath)
-            _stored_check, stored_refusal = _fixer_envelope_refusal_check(
-                session_dir, stored_env, fixer_transcript, attempt)
-            if stored_refusal is not None:
-                return _refuse_cmd(session_dir, cmd, stored_refusal.pop("reason"), phase=phase,
-                                   rnd=rnd, attempt=attempt, seat=_slot_label(seat_key, occurrence),
-                                   **stored_refusal)
         if not has_landing or os.path.exists(spath):
             continue
         envelope, _lerr, _ = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
@@ -13160,14 +12803,6 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
                                attempt=attempt, seat=seat_key, detail=fault)
-        if phase == P_FIXER:
-            refusal_check, check_refusal = _fixer_envelope_refusal_check(
-                session_dir, envelope, fixer_transcript, attempt)
-            if check_refusal is not None:
-                return _refuse_cmd(session_dir, cmd, check_refusal.pop("reason"), phase=phase,
-                                   rnd=rnd, attempt=attempt, seat=_slot_label(seat_key, occurrence),
-                                   **check_refusal)
-            refusal_checks[(seat_key, occurrence)] = refusal_check
     seat_schema = _seat_result_schema(state)
     if seat_schema is None:
         return _refuse_cmd(session_dir, cmd, "state-version-unsupported", phase=phase, rnd=rnd,
@@ -13188,86 +12823,30 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor,
                                seat=_slot_label(result.get("seatKey"), occurrence),
                                detail=result.get("message"), recorded=recorded)
         if result.get("reason") == "already-stored":
-            if phase == P_FIXER:
-                stored, _stored_err = round_records.read_json(result.get("storePath"))
-                if _fixer_head_diff_needs_repair(stored):
-                    seat = result.get("seatKey")
-                    occurrence = result.get("occurrence") or 0
-                    cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
-                    rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat,
-                                                               attempt, occurrence, cmd=cmd,
-                                                               expect_round=expect_round,
-                                                               expect_phase=expect_phase,
-                                                               cited_head=cited_head)
-                    if detail == "head-diff-unreadable":
-                        payload = stored.get("payload") if isinstance(stored, dict) else {}
-                        return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd,
-                                           attempt=attempt, seat=seat,
-                                           headDiffPath=payload.get("headDiffPath"))
-                    if isinstance(detail, round_commit.CommitRefused):
-                        return _commit_refused_response(session_dir, cmd, detail, phase=phase,
-                                                      rnd=rnd, attempt=attempt, seat=seat)
-                    if rehashed:
-                        recorded.append(_slot_label(seat, occurrence))
             continue
         seat = result.get("seatKey")
-        payload_sha = result.get("payloadSha256")
-        stored = round_records.read_json(result.get("storePath"))[0]
-        head_diff_journaled = False
-        if phase == P_FIXER:
-            payload = stored.get("payload") if isinstance(stored, dict) else None
-            head_path = payload.get("headDiffPath") if isinstance(payload, dict) else None
-            if head_path is not None and not (isinstance(payload, dict)
-                                              and payload.get("headDiffStorePath")):
-                content, why = _read_head_diff(head_path)
-                if why is not None:
-                    return _refuse_cmd(session_dir, cmd, why, phase=phase, rnd=rnd,
-                                       attempt=attempt, seat=seat, headDiffPath=head_path)
-                journal_entry = _journal_entry_for_commit(
-                    session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                    seat=seat, occurrence=occurrence,
-                    refusalCheck=refusal_checks.get((seat, occurrence),
-                                                    REFUSAL_CHECK_UNOBSERVED),
-                    **_journal_transport_fields(stored),
-                    **_journal_addressing_fields(expect_round, expect_phase),
-                    **_journal_identity_fields(phase, seat, occurrence, attempt))
-                cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
-                try:
-                    _unused, rehashed = _store_head_diff(session_dir, rnd, phase, seat, attempt,
-                                                         content, occurrence,
-                                                         journal_entry=journal_entry,
-                                                         cited_head=cited_head)
-                except round_commit.CommitRefused as exc:
-                    return _commit_refused_response(session_dir, cmd, exc, phase=phase, rnd=rnd,
-                                                  attempt=attempt, seat=seat)
-                payload_sha = rehashed or payload_sha
-                head_diff_journaled = True
-        if not head_diff_journaled:
-            skey = round_records.storage_key(seat, occurrence)
-            spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
-            stored_envelope, read_err = round_records.read_json(spath)
-            if read_err is not None or not isinstance(stored_envelope, dict):
-                return _refuse_cmd(session_dir, cmd, "recorded-row-store-unreadable",
-                                   fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
-                                   seat=seat, storePath=spath)
-            cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
-            try:
-                cited_head_source = round_records.stored_cited_head_source(stored_envelope)
-            except round_records.IncompleteRevisionIdentity as exc:
-                return _refuse_cmd(session_dir, cmd, "recorded-row-incomplete",
-                                   fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
-                                   seat=seat, storePath=spath,
-                                   detail=", ".join(exc.missing))
-            revision_fields = round_records.recorded_row_fields(
-                stored_envelope, cited_head, cited_head_source)
-            revision_fields.update(_journal_transport_fields(stored_envelope))
-            if phase == P_FIXER:
-                revision_fields["refusalCheck"] = refusal_checks.get((seat, occurrence),
-                                                                     REFUSAL_CHECK_UNOBSERVED)
-            _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                           seat=seat, occurrence=occurrence, **revision_fields,
-                           **_journal_addressing_fields(expect_round, expect_phase),
-                           **_journal_identity_fields(phase, seat, occurrence, attempt))
+        skey = round_records.storage_key(seat, occurrence)
+        spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+        stored_envelope, read_err = round_records.read_json(spath)
+        if read_err is not None or not isinstance(stored_envelope, dict):
+            return _refuse_cmd(session_dir, cmd, "recorded-row-store-unreadable",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               seat=seat, storePath=spath)
+        cited_head = _anchor_cited_head(state, session_dir, rnd, phase, attempt)
+        try:
+            cited_head_source = round_records.stored_cited_head_source(stored_envelope)
+        except round_records.IncompleteRevisionIdentity as exc:
+            return _refuse_cmd(session_dir, cmd, "recorded-row-incomplete",
+                               fault=FAULT_INTERNAL, phase=phase, rnd=rnd, attempt=attempt,
+                               seat=seat, storePath=spath,
+                               detail=", ".join(exc.missing))
+        revision_fields = round_records.recorded_row_fields(
+            stored_envelope, cited_head, cited_head_source)
+        revision_fields.update(_journal_transport_fields(stored_envelope))
+        _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
+                       seat=seat, occurrence=occurrence, **revision_fields,
+                       **_journal_addressing_fields(expect_round, expect_phase),
+                       **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
     if stale_strays:
         first = stale_strays[0]
@@ -13354,10 +12933,6 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
                                   "that does not exist" % (seat, slots, occurrence))
-    unlanded = _fixer_slot_unlanded_refusal(session_dir, state, "record-missing", phase, rnd,
-                                            cur_attempt, seat, occurrence)
-    if unlanded is not None:
-        return unlanded
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
     cfg = state.get("config") or {}
     repo_root = cfg.get("repoRoot") or os.getcwd()
@@ -13417,149 +12992,9 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
             "occurrence": occurrence, "missingReason": reason, "storePath": out.get("storePath")}
 
 
-def cmd_correct_fixer_refusals(session_dir, refusals_file, fixer_transcript=None, attempt=None,
-                               occurrence=0):
-    """The sanctioned correction for a landed fixer payload whose `refusals` leaves out a refusal:
-    replace ONLY that field in the landing, journal it, and name the command that resumes.
-
-    Writes nothing on any refusal. Run from the session's own repo — a correction from another
-    worktree could be about a different session's fix, so the caller's repo root must equal the
-    session's RECORDED one (no cwd fallback, which would make the guard pass trivially)."""
-    cmd = "correct-fixer-refusals"
-    try:
-        with round_records.session_lock(session_dir):
-            upgrade = _upgrade_gate(session_dir, cmd)
-            if upgrade is not None:
-                return upgrade
-            refusal = _commit_recover_or_refuse(session_dir, cmd)
-            if refusal is not None:
-                return refusal
-            return _cmd_correct_fixer_refusals_locked(session_dir, refusals_file, fixer_transcript,
-                                                      attempt, occurrence)
-    except round_records.SessionLockHeld as held:
-        return _lock_held_refusal(session_dir, cmd, held)
-
-
-def _cmd_correct_fixer_refusals_locked(session_dir, refusals_file, fixer_transcript, attempt,
-                                       occurrence):
-    cmd = "correct-fixer-refusals"
-    state, refusal = _load_driver_state(session_dir, cmd)
-    if refusal is not None:
-        return refusal
-    phase, rnd, cur_attempt, refusal = _pending_of(session_dir, state, cmd)
-    if refusal is not None:
-        return refusal
-    if phase != P_FIXER:
-        return _refuse_cmd(session_dir, cmd, "correction-not-fixer-phase", phase=phase, rnd=rnd,
-                           attempt=cur_attempt)
-    if attempt is not None and attempt != cur_attempt:
-        return _refuse_cmd(session_dir, cmd, "attempt-not-pending", phase=phase, rnd=rnd,
-                           attempt=attempt, pendingAttempt=cur_attempt)
-    recorded_root = _session_meta(session_dir).get("repoRoot")
-    if not isinstance(recorded_root, str) or not recorded_root:
-        return _refuse_cmd(session_dir, cmd, "correction-session-repo-unknown", phase=phase,
-                           rnd=rnd, attempt=cur_attempt)
-    try:
-        caller_root = store_core.repo_root(os.getcwd())
-    except store_core.RepoRootUnavailable:
-        caller_root = None
-    caller_root = os.path.realpath(caller_root) if caller_root else None
-    session_root = os.path.realpath(recorded_root)
-    if caller_root != session_root:
-        return _refuse_cmd(session_dir, cmd, "correction-outside-session-repo", phase=phase,
-                           rnd=rnd, attempt=cur_attempt, callerRepoRoot=caller_root,
-                           sessionRepoRoot=session_root,
-                           detail="run this from the session's own repo (%s), not %s"
-                                  % (session_root, caller_root))
-    try:
-        with open(refusals_file, encoding="utf-8") as fh:
-            new_refusals = json.load(fh)
-        fault = command_refusals.refusals_fault(new_refusals)
-    except (OSError, ValueError) as exc:
-        fault = "refusals file unreadable: %s" % exc
-    if fault:
-        return _refuse_cmd(session_dir, cmd, "correction-refusals-invalid", phase=phase, rnd=rnd,
-                           attempt=cur_attempt, detail=fault)
-    _check, check_refusal = _fixer_refusal_check(session_dir, {"refusals": new_refusals},
-                                                 fixer_transcript, cur_attempt, correctable=False)
-    if check_refusal is not None:
-        return _refuse_cmd(session_dir, cmd, check_refusal.pop("reason"), phase=phase, rnd=rnd,
-                           attempt=cur_attempt, **check_refusal)
-    roster, refusal = _roster_of(session_dir, state, cmd, phase, rnd, cur_attempt)
-    if refusal is not None:
-        return refusal
-    seat = roster[0]
-    envelope, lerr, replace_path = _read_landing_envelope(session_dir, rnd, phase, seat,
-                                                          cur_attempt, occurrence)
-    if lerr is not None:
-        return _refuse_cmd(session_dir, cmd, lerr, phase=phase, rnd=rnd, attempt=cur_attempt,
-                           seat=_slot_label(seat, occurrence))
-    skey = round_records.storage_key(seat, occurrence)
-    if replace_path is None:
-        target = round_records.bare_payload_path(session_dir, rnd, phase, skey, cur_attempt)
-        payload = round_records.read_json(target)[0]
-        final = None
-    else:
-        target = replace_path
-        final = round_records.read_json(target)[0]
-        payload = final.get("payload") if isinstance(final, dict) else None
-    if not isinstance(payload, dict) or (
-            final is not None and final.get("schema") not in round_records.SEAT_RESULT_SCHEMAS):
-        return _refuse_cmd(session_dir, cmd, "correction-landing-not-payload", phase=phase,
-                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence))
-    if final is not None:
-        # A correction must not legitimize unrelated damage: the landing's own declared hashes
-        # are checked BEFORE they are recomputed over the corrected payload.
-        declared_payload_sha = round_records.payload_sha256(payload)
-        if declared_payload_sha != final.get("payloadSha256"):
-            return _refuse_cmd(session_dir, cmd, "landing-torn", phase=phase, rnd=rnd,
-                               attempt=cur_attempt, seat=_slot_label(seat, occurrence),
-                               computed=declared_payload_sha, declared=final.get("payloadSha256"),
-                               landingPath=target)
-        if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
-            computed_env_sha = round_records.envelope_sha256(
-                payload, final.get("executionEvidence"))
-            if computed_env_sha != final.get("envelopeSha256"):
-                return _refuse_cmd(session_dir, cmd, "envelope-torn", phase=phase, rnd=rnd,
-                                   attempt=cur_attempt, seat=_slot_label(seat, occurrence),
-                                   computed=computed_env_sha, declared=final.get("envelopeSha256"),
-                                   landingPath=target)
-    new_payload = dict(payload, refusals=new_refusals)
-    if final is None:
-        new_bytes = round_records.canonical(new_payload).encode("utf-8")
-    else:
-        final = dict(final, payload=new_payload,
-                     payloadSha256=round_records.payload_sha256(new_payload))
-        if final.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
-            final["envelopeSha256"] = round_records.envelope_sha256(
-                new_payload, final.get("executionEvidence"))
-        new_bytes = round_records.canonical(final).encode("utf-8")
-    entry = _journal_entry_for_commit(
-        session_dir, cmd, FIXER_REFUSALS_CORRECTED_OUTCOME, phase=phase, round=rnd,
-        attempt=cur_attempt, seat=seat, occurrence=occurrence,
-        beforeSha256=round_records.payload_sha256(payload),
-        afterSha256=round_records.payload_sha256(new_payload))
-    try:
-        c = round_commit.begin(session_dir, "fixer-refusals-correct")
-        c.add_replace_file(target, new_bytes)
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), entry)
-        c.run()
-    except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, cmd, exc, phase=phase, rnd=rnd,
-                                        attempt=cur_attempt)
-    spath = round_records.store_path(session_dir, rnd, phase, skey, cur_attempt)
-    token = round_records.envelope_cas_token(round_records.read_json(spath)[0])
-    if token:
-        nxt = _record_result_recovery_cmd(session_dir, seat, occurrence, token, cur_attempt,
-                                          fixer_transcript)
-    else:
-        nxt = _record_result_cmd(session_dir, seat, occurrence, cur_attempt, fixer_transcript)
-    return {"ok": True, "landingPath": target, "next": nxt}
-
-
 # --- advance -------------------------------------------------------------------------------------
 
-def cmd_advance(session_dir, break_lock=False, git=None, fixer_transcript=None):
+def cmd_advance(session_dir, break_lock=False, git=None):
     """Fold the pending phase off its DURABLE records and emit the next action.
 
     The order is the contract: lock → recover → reconcile → sweep → completeness → assemble → fold
@@ -13586,8 +13021,7 @@ def cmd_advance(session_dir, break_lock=False, git=None, fixer_transcript=None):
             state, refusal = _load_driver_state(session_dir, "advance")
             if refusal is not None:
                 return refusal
-            return _advance_locked(session_dir, state, git=git, broke=broke,
-                                   fixer_transcript=fixer_transcript)
+            return _advance_locked(session_dir, state, git=git, broke=broke)
     except round_records.SessionLockHeld as held:
         return _refuse_cmd(session_dir, "advance", "advance-locked",
                            holder={"pid": held.pid, "createdAt": held.created_at})
@@ -14020,6 +13454,10 @@ def _advance_fold_failure(session_dir, folded, phase, rnd, attempt):
         return _refuse_cmd(session_dir, "advance", "receipt-fault", fault=FAULT_INTERNAL,
                            detail=folded.get("detail"), phase=phase, rnd=rnd, attempt=attempt,
                            **extra)
+    if reason == FIX_REFUSED_REASON:
+        # the chokepoint's own refusal of an apply-fixes report names why in its detail
+        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
+                           attempt=attempt, detail=folded.get("detail"), **extra)
     return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                        attempt=attempt, detail=reason, **extra)
 
@@ -14296,7 +13734,7 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     return response
 
 
-def _advance_locked(session_dir, state, git=None, broke=None, *, fixer_transcript=None):
+def _advance_locked(session_dir, state, git=None, broke=None):
     config = state.get("config") or {}
     if state.get("terminal"):
         # Idempotent on an EXISTING terminal: re-verify the on-disk receipt through the same gate
@@ -14344,8 +13782,7 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, fixer_transcrip
         # phase that is otherwise complete.
         if slot is None or entry.get("attempt") != attempt:
             continue
-        out = cmd_record_result(session_dir, slot[0], attempt=attempt, occurrence=slot[1],
-                                fixer_transcript=fixer_transcript)
+        out = cmd_record_result(session_dir, slot[0], attempt=attempt, occurrence=slot[1])
         if not out.get("ok"):
             return out
     for entry in rec.get("reappend") or []:
@@ -14392,8 +13829,7 @@ def _advance_locked(session_dir, state, git=None, broke=None, *, fixer_transcrip
                                   "carries" % ", ".join(seats))
 
     # 2. sweep-ingest whatever landed without a `record-result`.
-    swept = _sweep_record(session_dir, state, "advance", phase, rnd, attempt, roster, anchor,
-                          fixer_transcript=fixer_transcript)
+    swept = _sweep_record(session_dir, state, "advance", phase, rnd, attempt, roster, anchor)
     if not swept.get("ok"):
         return swept
 
@@ -14976,11 +14412,6 @@ def build_parser():
                                    "('[\"codex\",\"cursor\"]') OR a comma-separated string "
                                    "('codex,cursor'). Unparseable / unknown / on non-fresh state "
                                    "→ fails loud (nonzero), never a silent default")
-    cli_contract.add_argument(pn, "--fixer-vendor", contract="free-text", default=None,
-                              help="the ACTUAL fix-implementer vendor (fresh state only): the "
-                                   "auditor is seated as a DIFFERENT vendor, so a wrong value "
-                                   "labels a self-audit independent. Unknown vendor / on non-fresh "
-                                   "state → fails loud (nonzero), never a silent default")
     cli_contract.add_argument(pn, "--verify-command", contract="free-text", default=None)
     cli_contract.add_argument(pn, "--break-it-interpreter", contract="free-text", default=None,
                               help="the Python launcher break-it runs use (fresh state only): "
@@ -15026,8 +14457,6 @@ def build_parser():
     cli_contract.add_argument(ps, "--state-hash", contract="free-text", default=None)
     cli_contract.add_argument(ps, "--artifact", contract="free-text", required=True,
                               help="path to the artifact JSON")
-    cli_contract.add_argument(ps, "--fixer-transcript", contract="free-text", default=None,
-                              help=FIXER_TRANSCRIPT_HELP)
 
     pr = sub.add_parser("record-result")
     cli_contract.add_argument(pr, "--session-dir", contract="existing-directory", required=True)
@@ -15049,8 +14478,6 @@ def build_parser():
                               dest="evidence_run_dir",
                               help="runner run directory whose journal supplies execution evidence "
                                    "for a dispatch-observed landing under state schema v5")
-    cli_contract.add_argument(pr, "--fixer-transcript", contract="free-text", default=None,
-                              help=FIXER_TRANSCRIPT_HELP)
 
     pm = sub.add_parser("record-missing")
     cli_contract.add_argument(pm, "--session-dir", contract="existing-directory", required=True)
@@ -15070,23 +14497,12 @@ def build_parser():
     pa = sub.add_parser("advance")
     cli_contract.add_argument(pa, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pa, "--break-lock", contract="boolean-flag")
-    cli_contract.add_argument(pa, "--fixer-transcript", contract="free-text", default=None,
-                              help=FIXER_TRANSCRIPT_HELP)
 
     prv = sub.add_parser("run-verify")
     cli_contract.add_argument(prv, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(prv, "--timeout", contract="integer", default=3600, type=int,
                               help="seconds the verify command may run before it lands `timeout` "
                                    "(default 3600)")
-
-    pcf = sub.add_parser("correct-fixer-refusals")
-    cli_contract.add_argument(pcf, "--session-dir", contract="existing-directory", required=True)
-    cli_contract.add_argument(pcf, "--refusals-file", contract="free-text", required=True,
-                              help="path to a JSON list: the fixer's complete refusal entries")
-    cli_contract.add_argument(pcf, "--fixer-transcript", contract="free-text", default=None,
-                              help=FIXER_TRANSCRIPT_HELP)
-    cli_contract.add_argument(pcf, "--attempt", contract="integer", default=None, type=int)
-    cli_contract.add_argument(pcf, "--occurrence", contract="integer", default=0, type=int)
 
     pt = sub.add_parser("attest")
     cli_contract.add_argument(pt, "--session-dir", contract="existing-directory", required=True)
@@ -15105,11 +14521,6 @@ def build_parser():
     cli_contract.add_argument(pru, "--ruling-file", contract="free-text", required=True,
                               dest="ruling_file")
     cli_contract.add_argument(pru, "--by", contract="free-text", required=True)
-    cli_contract.add_argument(pru, "--fixer-not-dispatched", contract="boolean-flag",
-                              dest="fixer_not_dispatched",
-                              help="the pending fixer order was never dispatched: a ruling then "
-                                   "re-renders it at the next attempt, unless the driver sees the "
-                                   "fixer already landed or committed")
 
     pbc = sub.add_parser(BREAK_IT_CHANGE_CMD)
     cli_contract.add_argument(pbc, "--session-dir", contract="existing-directory", required=True)
@@ -15194,21 +14605,6 @@ def _dispatch(args):
                                              "value": args.vendors}) + "\n")
                 return 1
             overrides["vendors"] = vendors
-        if args.fixer_vendor is not None:
-            # The fixer vendor is read ONCE at new_state and drives the independent-auditor seating —
-            # an unknown vendor or a later `next` on existing state that silently ignored it would
-            # mislabel a self-audit independent. Reject loudly, same discipline as `--vendors` (#507).
-            fixer = args.fixer_vendor.strip()
-            if fixer not in model_registry.VENDORS:
-                sys.stdout.write(json.dumps({"ok": False, "reason": "fixer-vendor-unknown",
-                                             "value": args.fixer_vendor}) + "\n")
-                return 1
-            st_ok, st = load_state(args.session_dir)
-            if not (st_ok and st is None):
-                sys.stdout.write(json.dumps({"ok": False, "reason": "fixer-vendor-not-fresh-state",
-                                             "value": args.fixer_vendor}) + "\n")
-                return 1
-            overrides["fixerVendor"] = fixer
         if args.seat_map is not None:
             # Same fresh-state-only discipline as `--vendors`: the seat map is read ONCE at
             # new_state, so accepting it on existing state would silently ignore it (#723).
@@ -15359,28 +14755,21 @@ def _dispatch(args):
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
                                 sweep=args.sweep, occurrence=args.occurrence,
                                 expect_round=args.round, expect_phase=args.phase,
-                                evidence_run_dir=args.evidence_run_dir,
-                                fixer_transcript=args.fixer_transcript)
+                                evidence_run_dir=args.evidence_run_dir)
     elif args.cmd == "record-missing":
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
                                  evidence_path=args.evidence, occurrence=args.occurrence,
                                  expect_round=args.round, expect_phase=args.phase)
     elif args.cmd == "advance":
-        out = cmd_advance(args.session_dir, break_lock=args.break_lock,
-                          fixer_transcript=args.fixer_transcript)
+        out = cmd_advance(args.session_dir, break_lock=args.break_lock)
     elif args.cmd == "run-verify":
         out = cmd_run_verify(args.session_dir, timeout=args.timeout)
-    elif args.cmd == "correct-fixer-refusals":
-        out = cmd_correct_fixer_refusals(args.session_dir, args.refusals_file,
-                                         fixer_transcript=args.fixer_transcript,
-                                         attempt=args.attempt, occurrence=args.occurrence)
     elif args.cmd == "attest":
         out = cmd_attest(args.session_dir, args.failure, args.note)
     elif args.cmd == "checkpoint":
         out = cmd_checkpoint(args.session_dir, args.stop_reason)
     elif args.cmd == "rule":
-        out = cmd_rule(args.session_dir, args.ruling_file, args.by,
-                       fixer_not_dispatched=args.fixer_not_dispatched)
+        out = cmd_rule(args.session_dir, args.ruling_file, args.by)
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     elif args.cmd == BREAK_IT_CHANGE_CMD:
@@ -15399,8 +14788,7 @@ def _dispatch(args):
             out = {"ok": False, "reason": "unreadable artifact: %s" % exc}
             sys.stdout.write(json.dumps(out) + "\n")
             return 0
-        out = cmd_submit(args.session_dir, args.phase, args.attempt, args.state_hash, artifact,
-                         fixer_transcript=args.fixer_transcript)
+        out = cmd_submit(args.session_dir, args.phase, args.attempt, args.state_hash, artifact)
     sys.stdout.write(json.dumps(out) + "\n")
     # A terminal receipt integrity fault fails LOUD: nonzero exit, the same fail-loud family as
     # journal-fault-unrecordable (a masked-by-replay receipt fault must never look like a clean exit).

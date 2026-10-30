@@ -800,7 +800,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     original = _original_maker_families(state, min(fixed)) if fixed else baseline
     if fam and fam not in original and any(isinstance(r, dict) and "fix" in r for r in rounds.values()) \
             and not any(isinstance(m, dict) and m.get("family") == fam for m in makers):
-        makers.append({"family": fam, "source": "review loop fixer",
+        makers.append({"family": fam, "source": "build session's fixes",
                        **({"fromStep": 2 * min(fixed) + 1} if fixed else {})})
     for family in sorted(baseline):
         if not any(isinstance(m, dict) and m.get("family") == family for m in makers):

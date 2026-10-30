@@ -51,7 +51,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import command_refusals  # noqa: E402
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
 import order_contract  # noqa: E402
@@ -68,7 +67,6 @@ ORDER_PHASES = (
     round_phases.P_GAPSWEEP,
     round_phases.P_SECOND_TEST,
     round_phases.P_AUDITS,
-    round_phases.P_FIXER,
     round_phases.P_SCOPED,
 )
 
@@ -116,18 +114,9 @@ REVIEW_SEAT_RULE = (
     "verify command."
 )
 
-FIXER_SEAT_RULE = (
-    "You run only the commands this order names, plus the file reads and searches that inspect "
-    "its inputs and the sources you fix, and the staging your commit needs. You run none of the "
-    "project's own files, scripts or tests beyond those, and the full verify command stays the "
-    "driver's."
-)
-
-
 def seat_rule_block(phase: str) -> str:
-    """The standing-rule block for ``phase``'s order: the fixer's rule or the review seats'."""
-    rule = FIXER_SEAT_RULE if phase == round_phases.P_FIXER else REVIEW_SEAT_RULE
-    return SEAT_RULE_HEADING + "\n\n" + rule
+    """The standing-rule block for ``phase``'s order: the review seats' rule."""
+    return SEAT_RULE_HEADING + "\n\n" + REVIEW_SEAT_RULE
 
 
 def order_template_path(phase: str, root: str | None = None) -> str:
@@ -421,7 +410,7 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
             "- Payload landing path: %s" % landing,
         ])
     else:
-        if phase in (round_phases.P_PANEL, round_phases.P_FIXER):
+        if phase == round_phases.P_PANEL:
             lines.extend([_RESULT_CHANNEL_NEUTRAL_DELIVERY])
         else:
             stdout_example, reason = _stdout_payload_example(phase)
@@ -507,52 +496,6 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     return _test_role_derived_placeholders(ph)
 
 
-# The fixer reports no diff (#2109): the driver derives the post-fix diff from git against the
-# review's pinned base, which the fixer is not told, and parks `head-diff-mismatch` on any supplied
-# diff that differs, so leaving both keys out is the only report that can never stop the round.
-FIXER_NO_HEAD_DIFF_RULE = (
-    "Leave `headDiff` and `headDiffPath` out of your result, on every ending. The orchestrator "
-    "derives the post-fix diff from git itself (the whole branch against the review's pinned "
-    "base, not your commit alone) and only checks a supplied diff against it, so a supplied "
-    "diff that differs, your own commit's diff included, stops the round as head-diff-mismatch."
-)
-
-
-def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
-    ph = dict(context.get("placeholders") or {})
-    ph["FILE_WRITE_RULE"] = command_refusals.FILE_WRITE_RULE
-    host_seat = context.get("host_seat") is True
-    if host_seat:
-        ph["FIXER_STEP_5_BLOCK"] = (
-            "5. Land last, every time: write your payload landing, per the Payload contract "
-            "section below, as the LAST thing you write, on every ending — after the step-4 "
-            "commit when you made one, and anyway (with no commit) when you stopped on "
-            "CHECK_FAILED, escalated, or had nothing to commit. Step 3's \"never commit broken "
-            "code\" still wins: the landing never licenses a commit. A committed fix with no "
-            "landing is read as an unlanded fix. " + FIXER_NO_HEAD_DIFF_RULE
-        )
-        ph["FIXER_ESCALATION_BLOCK"] = (
-            "Report it for owner escalation (see Payload contract) with the id and why."
-        )
-    else:
-        ph["FIXER_STEP_5_BLOCK"] = (
-            "5. Report back per the result contract the runner appends at dispatch — "
-            "not a graded shape in this order. The orchestrator derives the `fixes` "
-            "record from git; you are not asked to emit it. Land last, every time: your "
-            "result on the runner's declared result channel is the last thing you deliver, "
-            "on every ending — after the step-4 commit when you made one, and anyway when "
-            "you stopped without one. Step 3's \"never commit broken code\" still wins. "
-            + FIXER_NO_HEAD_DIFF_RULE
-        )
-        ph["FIXER_ESCALATION_BLOCK"] = (
-            "Report it for owner escalation via the runner's native write-result contract "
-            "the runner appends at dispatch: set `signal` to `needs_context`, name the "
-            "finding id and why in `report`, and write the graded JSON object to the "
-            "result file when the contract names one."
-        )
-    return ph
-
-
 def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
@@ -594,8 +537,6 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     if phase == round_phases.P_PANEL:
         ph = _panel_derived_placeholders(context)
-    elif phase == round_phases.P_FIXER:
-        ph = _fixer_derived_placeholders(context)
     elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
                    round_phases.P_GAPSWEEP, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
         ph = _channel_derived_placeholders(phase, context)
@@ -638,13 +579,10 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
                   _format_residual_block(context).rstrip(),
                   format_threat_model_block(context).rstrip(),
                   format_rulings_block(context).rstrip()]
-        if phase == round_phases.P_FIXER:
-            blocks.append("## Refused or denied commands\n\n" + command_refusals.ORDER_TEXT)
-        if phase != round_phases.P_FIXER or context.get("host_seat"):
-            contract_block, creason = _format_payload_contract(phase)
-            if creason:
-                return _refuse(creason)
-            blocks.append(contract_block.rstrip())
+        contract_block, creason = _format_payload_contract(phase)
+        if creason:
+            return _refuse(creason)
+        blocks.append(contract_block.rstrip())
         landing_block, lreason = _format_landing_block(context, phase)
         if lreason:
             return _refuse(lreason)

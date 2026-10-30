@@ -15,10 +15,10 @@ P_SCOPED = round_panel_contract.P_SCOPED_FINDER_PHASE
 P_GAPSWEEP = "dispatch-gap-sweep"
 P_SECOND_TEST = "dispatch-second-test"
 P_VERIFY = "run-verify"
-P_FIXER = "dispatch-fixer"
+P_APPLY_FIXES = "apply-fixes"
 P_TERMINAL = "terminal"
 
-# Default cap on findings per dispatch-fixer order (#1272 round economy).
+# Default cap on findings one apply-fixes step carries.
 FIX_BATCH_CAP_DEFAULT = 4
 
 # The round cap: a review session never begins a round after it, and no session this driver mints
@@ -26,7 +26,7 @@ FIX_BATCH_CAP_DEFAULT = 4
 ROUND_CAP = 4
 
 ALL_PHASES = (
-    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_FIXER,
+    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_APPLY_FIXES,
     P_TERMINAL, P_SECOND_TEST,
 )
 

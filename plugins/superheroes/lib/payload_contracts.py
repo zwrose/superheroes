@@ -14,7 +14,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import audits  # noqa: E402
-import command_refusals  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import round_phases  # noqa: E402
 
@@ -26,17 +25,17 @@ P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
-P_FIXER = round_phases.P_FIXER
+P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 
 ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_SECOND_TEST, P_AUDITS,
-                  P_SCOPED, P_VERIFY, P_FIXER)
+                  P_SCOPED, P_VERIFY, P_APPLY_FIXES)
 
 SEAT_SYNTHESIS = "synthesis"
 SEAT_GAPSWEEP = "gap-sweep"
 SEAT_SECOND_TEST = "second-test"
 SEAT_SCOPED = "scoped-finder"
 SEAT_VERIFY = "verify"
-SEAT_FIXER = "fixer"
+SEAT_APPLY_FIXES = "apply-fixes"
 
 # The one ruling whose claim is unusable without a new-issue payload. `audits` exposes the ENUM
 # (`AUDIT_RULINGS`, which this module validates against and never hand-copies) but no per-member
@@ -312,10 +311,6 @@ def _apply_predicate(pred, payload, seat_key, *, record_boundary=False):
                 if not isinstance(member, str) or not member:
                     return ("`%s`[%d].member_ids[%d] is %s, not a non-empty string"
                             % ("grouping", index, member_index, _type_name(member)))
-    elif name == "head-diff-store-path-driver-owned":
-        if record_boundary and "headDiffStorePath" in payload:
-            return ("`headDiffStorePath` is driver-owned — callers must supply `headDiffPath` only; "
-                    "the driver copies the diff into the store at record time")
     elif name == "verify-result":
         return round_phases.verify_result_fault(payload)
     elif name == "audit-id-matches-seat":
@@ -399,16 +394,11 @@ def _scoped_payload_fault(payload, seat_key):
     return _payload_fault_from_contract(payload, P_SCOPED, seat_key)
 
 
-def _fixer_payload_fault(payload, seat_key, record_boundary=False):
-    fault = _payload_fault_from_contract(payload, P_FIXER, seat_key,
-                                         record_boundary=record_boundary)
-    if fault:
-        return fault
-    if "refusals" in payload:
-        refusal_fault = command_refusals.refusals_fault(payload["refusals"])
-        if refusal_fault:
-            return "`refusals` — " + refusal_fault
-    return None
+def _apply_fixes_payload_fault(payload, seat_key):
+    """The build session's own report of the fixes it applied: `fixes` (its own notes, or a
+    `{finding, commit}` binding per fixed finding that carries a break-it test) and, optionally,
+    the findings it left unfixed with the reason."""
+    return _payload_fault_from_contract(payload, P_APPLY_FIXES, seat_key)
 
 
 def _verify_payload_fault(payload, seat_key):
@@ -439,7 +429,7 @@ _PAYLOAD_CHECKERS = {
     P_GAPSWEEP: _gap_sweep_payload_fault,
     P_SECOND_TEST: _second_test_payload_fault,
     P_SCOPED: _scoped_payload_fault,
-    P_FIXER: lambda payload, seat_key: _fixer_payload_fault(payload, seat_key),
+    P_APPLY_FIXES: _apply_fixes_payload_fault,
     P_VERIFY: _verify_payload_fault,
     P_AUDITS: _audits_payload_fault,
 }
@@ -555,34 +545,28 @@ _PAYLOAD_FIELD_BINDINGS = {
         },
         "predicates": [],
     },
-    P_FIXER: {
+    P_APPLY_FIXES: {
         "required": ["fixes"],
-        "optional": ["escalated", "headDiff", "headDiffPath", "coverageDecisions", "refusals"],
+        "optional": ["unfixed", "coverageDecisions", "headDiff", "headDiffPath"],
         "conditional": {},
         "enums": {},
         "types": {
             "fixes": "list",
-            "escalated": "boolean",
+            "unfixed": "list-of-objects",
+            "coverageDecisions": "list-of-objects",
             "headDiff": "string",
             "headDiffPath": "absolute-path",
-            "coverageDecisions": "list-of-objects",
-            "refusals": "list-of-objects",
         },
         "elements": {
-            "coverageDecisions": {"required": [], "optional": [], "types": {}, "enums": {}},
-            "refusals": {
-                "required": list(command_refusals.ENTRY_REQUIRED),
-                "optional": list(command_refusals.ENTRY_OPTIONAL),
-                "types": {"command": "non-empty-string", "next": "non-empty-string",
-                          "refusedBy": "string", "hook": "any", "route": "any"},
-                "enums": {"refusedBy": list(command_refusals.REFUSED_BY)},
+            "unfixed": {
+                "required": ["finding", "why"],
+                "optional": [],
+                "types": {"finding": "non-empty-string", "why": "non-empty-string"},
+                "enums": {},
             },
+            "coverageDecisions": {"required": [], "optional": [], "types": {}, "enums": {}},
         },
-        "predicates": [{
-            "name": "head-diff-store-path-driver-owned",
-            "fields": ["headDiffStorePath"],
-            "rule": "headDiffStorePath is driver-owned at record boundary",
-        }],
+        "predicates": [],
     },
     P_VERIFY: {
         "required": ["result"],
@@ -674,8 +658,6 @@ def payload_fault(phase, payload, seat_key, record_boundary=False):
     if not isinstance(payload, dict):
         return "payload is %s, not an object" % _type_name(payload)
     try:
-        if phase == P_FIXER:
-            return _fixer_payload_fault(payload, seat_key, record_boundary=record_boundary)
         return _PAYLOAD_CHECKERS[phase](payload, seat_key)
     except Exception as exc:  # noqa: BLE001 — a validator that raises must not crash the adapter
         return "payload-validator-error:%s:%s" % (_type_name(exc), exc)
