@@ -5477,8 +5477,9 @@ def _git_fix_commit_facts(config, step_head, commits, test_paths):
 def _fix_commit_test_fault(facts, block):
     """The reason a commit does not carry the fix with its test (None when it does). The commit must
     be reachable from HEAD and not from the step's start head, hold the block's bytes at the block's
-    path (added or changed by the commit, or already there at the start head and left unchanged), and
-    change at least one path besides the test."""
+    path (the bytes are read from the commit itself; a commit that leaves the test path unchanged is
+    a repair of a test already there at the start head), and change at least one path besides the
+    test."""
     if not isinstance(facts, dict) or facts.get("reachable") is not True:
         return FIX_COMMIT_UNKNOWN
     if facts.get("inStep") is not False:
@@ -5486,12 +5487,12 @@ def _fix_commit_test_fault(facts, block):
     path = block["path"]
     wanted = block["content"].encode("utf-8")
     changed = [p for p in facts.get("paths") or [] if isinstance(p, str)]
-    at_commit = (facts.get("files") or {}).get(path)
-    if path in changed:
-        have = at_commit
-    else:
-        start = facts.get("startFiles") or {}
-        have = start.get(path) if path in start else at_commit
+    have = (facts.get("files") or {}).get(path)
+    if have is not None and path not in changed:
+        # the repair exception: a source-only commit must follow a test that already stood at the start head
+        start = facts.get("startFiles")
+        if isinstance(start, dict) and start.get(path) is None:
+            return FIX_TEST_MISSING
     if have is None:
         return FIX_TEST_MISSING
     # axis: the test is at the block's path with the block's bytes exactly — see bite-proof record c1l9a_wo3_apply_fixes
