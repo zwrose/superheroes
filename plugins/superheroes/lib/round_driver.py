@@ -7308,6 +7308,17 @@ def _removal_anchor(head_anchors, here, replaced_header=False):
     return None
 
 
+def _merged_removal_anchor(head_anchors, here):
+    """The head line a body line removed together with its PR hunk's header anchors on when no header
+    replaced that one: the hunk merged into the one before it, so the head lines on both sides of ``here``
+    sit in one hunk and the removal anchors there (``_removal_anchor``). None when the hunk did not
+    survive: a header, or the end of the section, then follows ``here``."""
+    behind, ahead = head_anchors[:here], head_anchors[here:]
+    if behind and ahead and behind[-1][0] == ahead[0][0]:
+        return _removal_anchor(head_anchors, here)
+    return None
+
+
 def _fix_delta_groups(delta, head_numbers, head_anchors):
     """The groups of one file's fix delta (``_fixer_delta_lines``) that change more than the
     line numbers of the PR diff's own hunk headers, as ``(lines, head_lines)``: the group's lines,
@@ -7329,16 +7340,22 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
         head_lines, content = [], False
         # `header_gone`: a PR hunk header this group removed, not yet replaced; `waiting`: the removed body
         # lines of that hunk, which anchor in the hunk the replacing header opens
-        header_gone, waiting = False, 0
+        header_gone, waiting, waiting_at = False, 0, 0
         for ln in lines[1:]:
             mark, text = ln[0], ln[1:]
             if mark in (" ", "-") and text.startswith("@@"):
-                # an earlier removed header that nothing replaced was a hunk that did not survive
+                # an earlier removed header that nothing replaced was a hunk that did not survive, or merged
+                # into the hunk before it
+                anchor = _merged_removal_anchor(head_anchors, waiting_at) if header_gone and waiting else None
+                if anchor is not None:
+                    head_lines.append(anchor)
                 header_gone, waiting = mark == "-", 0
             if mark == "-":
                 content = content or not text.startswith("@@")
                 if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
                     if header_gone:
+                        if not waiting:
+                            waiting_at = min(max(index, 0), len(head_anchors))
                         waiting += 1
                         continue
                     # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk.
@@ -7359,6 +7376,10 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
                 if head_numbers[index] is not None and not text.startswith("@@"):
                     head_lines.append(head_numbers[index])
             index += 1
+        # axis: removals waiting on a header nothing replaced anchor in the surviving hunk the PR hunks merged into — see bite-proof record c1l11f_wo_b_break_it_baseline
+        anchor = _merged_removal_anchor(head_anchors, waiting_at) if header_gone and waiting else None
+        if anchor is not None:
+            head_lines.append(anchor)
         if content:
             kept.append((lines, head_lines))
     return kept

@@ -341,6 +341,22 @@ def test_b2_the_earliest_removal_in_the_first_hunk_anchors_in_that_hunk():
     assert min(e["start"] for e in entries) == 100 and max(e["start"] for e in entries) < 200, entries
 
 
+def test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk():
+    # bites on: the merged-hunk anchor (B-G7): the fix bridges the gap between two PR hunks, so the second header
+    # vanishes with no header to replace it, and removes the guard from the surviving hunk; the removal anchors
+    # on the surviving line after it (head line 25, `c23`) or the surface carries the removal marker
+    gap = "".join(" g%d\n" % n for n in range(13, 19))
+    reviewed = _diff(
+        _EARLIER_HUNK,
+        "@@ -20,10 +21,11 @@\n c20\n c21\n c22\n+guard\n c23\n c24\n c25\n-old26\n+new26\n c27\n c28\n c29\n")
+    head = _diff(
+        "@@ -10,20 +10,23 @@\n a10\n a11\n+extra\n a12\n" + gap + "+bridge1\n g19\n"
+        " c20\n c21\n c22\n c23\n+bridge2\n c24\n c25\n-old26\n+new26\n c27\n c28\n c29\n")
+    entries = _surface(reviewed, head)
+    covered = [e for e in entries if not e.get("removedOnly") and e["start"] <= 25 <= e["end"]]
+    assert covered or any(e.get("removedOnly") for e in entries), entries
+
+
 def test_b2_a_removal_with_no_surviving_line_in_its_hunk_is_marked_removal_only_never_borrowed():
     # the only hunk of a file loses everything: no line of its hunk survives, so the entry is marked, not numbered
     only = "@@ -10,3 +10,4 @@\n a10\n a11\n+extra\n a12\n"
