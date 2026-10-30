@@ -119,15 +119,10 @@ def _carried(state):
     return state["rounds"]["1"]["carried"]
 
 
-def _account_findings(s, state, panel_ran):
-    """The record account's findings for the finished session, each with an outcome. The hand-driven account writer reads
-    which reviewers ran from the panel rounds' seat status, so a returning round 1 that ran no panel has no whole account
-    to build here; its findings are read as the writer builds them (`review_record_session._findings`)."""
-    if panel_ran:
-        return TLR._every_finding_has_an_outcome(s.dir, state)["findings"]
-    findings = RS._findings(state)
-    assert findings and all(f.get("outcome") for f in findings), findings
-    return findings
+def _account_findings(s, state):
+    """The record account's findings for the finished session, each with an outcome: the whole account the writer builds,
+    for a returning session that ran no panel as for one that did."""
+    return TLR._every_finding_has_an_outcome(s.dir, state)["findings"]
 
 
 def _outcomes(findings, key):
@@ -162,23 +157,26 @@ def test_t1_a_carried_finding_a_later_commit_fixed_is_settled_fixed_and_the_reco
     assert row["disposition"] == "fixed" and row["dispositionRound"] == 1 and row["dispositionSeq"] > row["raisedSeq"], row
     assert _carried(state) == {"keys": [key], "discharged": [key], "sentBack": []}
     # the record account relists it once, under its stored key, as fixed; no undecided row is left
-    findings = _account_findings(s, state, panel_ran=read == "full")
+    findings = _account_findings(s, state)
     assert _outcomes(findings, key) == ["fixed"] and RR._finding_lines(findings) == []
-    if read != "full":
-        return  # no whole record to write from a hand-driven session that ran no panel (see `_account_findings`)
     fake = TRRS.Fake(head=s.head)
     out = RS.write_from_session(s.dir, TRRS.put_extras(tmp_path, TRRS.extras(ci="green")), s.repo.root, fake.readers())
     assert out["ok"], out
     record_written = RR.read(7, readers=fake.readers())
     stored = [f for f in record_written["findings"] if f["findingKey"] == key]
     assert [f["outcome"] for f in stored] == ["fixed"]
-    # No line of the status is about a finding. The record still reads not-reviewed, for one reason that is the fixture's: a
-    # session driven by hand submit journals no seat and holds no engine record, so each panel seat reads "did not run".
-    # Those four lines are all that is missing: no line is about the carried finding, and none is about any finding.
     missing = record_written["whatIsMissing"]
     assert not [line for line in missing if "finding" in line], missing
-    assert sorted(missing) == sorted("%s (round 1) did not run" % dim for dim in state["config"]["dimensions"]), missing
-    assert record_written["status"] == RR.NOT_REVIEWED
+    if read == "full":
+        # The record still reads not-reviewed, for one reason that is the fixture's: a session driven by hand submit journals
+        # no seat and holds no engine record, so each panel seat reads "did not run". Those four lines are all that is missing.
+        assert sorted(missing) == sorted("%s (round 1) did not run" % dim for dim in state["config"]["dimensions"]), missing
+        assert record_written["status"] == RR.NOT_REVIEWED
+    else:
+        # No panel ran, so none was planned: no seat reads "did not run", and the audit and the scoped finder at the
+        # session head read the record as reviewed.
+        assert not [line for line in missing if "did not run" in line], missing
+        assert record_written["status"] == RR.REVIEWED, missing
 
 
 def test_t1_the_carried_finding_is_undecided_until_the_audit_settles_it(tmp_path, monkeypatch):

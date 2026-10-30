@@ -43,14 +43,16 @@ def test_e1_a_light_record_over_the_cap_without_the_extra_audit_round_is_refused
     _refused(out, fake, "light", CAP + 1)
 
 
-def test_e2_a_light_record_takes_the_extra_audit_round_and_no_more(tmp_path):
-    out, fake = _write(tmp_path, "light", CAP + 1, extra=True)
+def test_e2_a_light_record_counts_at_most_the_cap_whether_or_not_it_ran_the_extra_audit_round(tmp_path):
+    # `rounds.count` already leaves the extra audit round out, so the cap is held to the count as it stands
+    out, fake = _write(tmp_path, "light", CAP, extra=True)
     _written(out, fake)
-    over, fake_over = _write(tmp_path, "light", CAP + 2, extra=True)
-    _refused(over, fake_over, "light", CAP + 2)
+    over, fake_over = _write(tmp_path, "light", CAP + 1, extra=True)
+    _refused(over, fake_over, "light", CAP + 1)
+    assert "the extra audit round is not counted" in over["detail"], over
 
 
-@pytest.mark.parametrize("count,extra,written", [(CAP + 1, False, False), (CAP + 1, True, True), (CAP + 2, True, False)])
+@pytest.mark.parametrize("count,extra,written", [(CAP + 1, False, False), (CAP, True, True), (CAP + 1, True, False)])
 def test_e3_the_micro_lane_follows_the_same_rule(tmp_path, count, extra, written):
     out, fake = _write(tmp_path, "micro", count, extra)
     if written:
