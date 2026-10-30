@@ -3,7 +3,7 @@
 
 1. [Specialist Dispatch Prompt Template](#specialist-dispatch-prompt-template)
 2. [Triage Subagent Prompt](#triage-subagent-prompt)
-3. [Fixer Subagent Prompt](#fixer-subagent-prompt)
+3. [Applying the fixes](#applying-the-fixes)
 4. [Verification Rules (for subagents)](#verification-rules-for-subagents)
 5. [Common Mistakes](#common-mistakes)
 6. [Break-it tests](#break-it-tests)
@@ -442,36 +442,17 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > the dispatch does not run, no engine is spawned, nothing is written, and the caller **parks loudly**
 > — never a soft failure, never a silent fall-open. `configure` does not offer the rule; the owner
 > pastes it by hand.
->
-> **Why the in-place fixer is not a `dispatch-write` consumer.** review-code's auto-fix path
-> deliberately runs in the checked-out branch of the **current checkout** (see
-> `skills/review-code/SKILL.md`'s auto-fix branch guard, which refuses to create a worktree for that
-> path). `dispatch-write` refuses a primary checkout (`cwd-primary-checkout`), so the in-place fixer
-> path is **unchanged** and is **not** a consumer of the write verb. Do not imply otherwise.
 
 > **External-engine dispatches — timeout is structural, an expired slot is `unreadable`.**
-> Every engine dispatch — the reviewer (read-only, above) AND the **fixer** (cursor, workspace-write) —
+> Every engine dispatch (the reviewer, read-only, above)
 > runs as a Bash tool call, so its timeout is already **structural, not prompted**: the plugin's
 > `PreToolUse(Bash)` floor (`hooks/bash_timeout.py`) injects a 600s `timeout` on any dispatch
 > that carries none, so a wedged engine CLI is bounded and killed instead of blocking the panel's
 > `wait` forever (a hang is **not** fail-open — CONVENTIONS `§7.5`). You do **not** compose a
 > per-dispatch watchdog. What this file owns is the **expiry contract**: treat a killed/timed-out
 > dispatch as an **expired slot** — its stdout is absent or partial, so `engine_adapter.parse_result`
-> returns `unreadable`. A timed-out **reviewer** then takes the existing re-run-on-the-host-model path;
-> a timed-out **fixer** commits no external write and the fix falls open to the host model. A hang becomes a
-> bounded cost, never a stuck loop. The orchestrator carries an engine fixer's reported `refusals` into the
-> `dispatch-fixer` submit, and never drops or rewrites them. The fixer creates and edits files only with the
-> host's Write and Edit tools, never a shell command that writes a file. The fixer never runs a formatter,
-> autofix or anything else that rewrites a committed break-it test, and it reports a commit hook that
-> rewrites one. The fixer's result lists every refusal it met, and when the orchestrator passes the fixer
-> subagent's transcript (`--fixer-transcript`; on Claude Code the file `agent-<agentId>.jsonl` under the
-> config dir's `projects/*/*/subagents/`, found by the agent id the subagent dispatch returns) a refusal the
-> transcript shows and the result leaves out refuses the record as `fixer-refusals-unreported`, corrected
-> only by `correct-fixer-refusals` run from the session's own repo root; the reader is best effort over a
-> closed list of Claude Code refusal messages, and with no transcript the record says
-> `refusalCheck: unobserved`. The fixer writes its landing last on every ending, and a fixer that committed
-> with no landing reads `fixer-committed-unlanded` (its commits listed): re-dispatch the order so it lands,
-> because the driver does not rebuild which findings a commit fixed from git.
+> returns `unreadable`. A timed-out **reviewer** then takes the existing re-run-on-the-host-model path.
+> A hang becomes a bounded cost, never a stuck loop.
 >
 > **Settled dispatch contract.** The reconciliation between this skill's dispatch
 > behaviour and the builder's native-shape rule is **closed** — not an open migration:
@@ -484,10 +465,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >    exemption); the runner cannot dispatch them. A build whose review seats ran through the runner
 >    or as claude native subagents under this skill **owes no native-shape limitation disclosure**
 >    for those seats.
-> 2. **The in-place fixer is a reasoned, permanent exemption — not unfinished work.** It deliberately
->    stays a foreground Bash dispatch bounded by the `PreToolUse(Bash)` structural floor; see **Why the
->    in-place fixer is not a `dispatch-write` consumer** above. Adopting the write verb there would
->    require changing the auto-fix path's checkout model, which is not on the table.
+> 2. **The fix step is not a dispatch.** The build session applies review fixes itself, in the
+>    checked-out branch of the current checkout, at the loop's `apply-fixes` step; no fixer is
+>    dispatched and no write verb takes part.
 > 3. **Two owners, one boundary — bounds vs channel.** This skill owns the **bounds** of the
 >    dispatches it launches — slice sizes (a short launch slice and continuations up to `--max-wait
 >    540`, never zero), structural timeout, retry ladder, and the standing rule that the caller
@@ -596,91 +576,60 @@ Write $SESSION_DIR/round-<N>/triage.json — every listed finding id exactly onc
 
 ---
 
-## Fixer Subagent Prompt
+## Applying the fixes
 
-**Moved.** The fixer subagent prompt template now ships as data and is rendered per round by
-`round_orders.render_order` on each `next` for `dispatch-fixer`. The orchestrator **dispatches the
-emitted order file** — do not hand-compose from a fenced template.
-A native (host-seat) fixer is dispatched with a short prompt that points at the emitted order file, the same pointer sentence `native_engine.LAUNCH_PROMPT` holds ("Read the file `<order path>` in full with the Read tool before doing anything else, then follow it exactly: it is your whole work order."), never the order re-emitted inline.
+When `next` returns `apply-fixes`, the build session fixes the batch itself, in its own working tree, as it fulfils `run-verify`. No fixer agent, fix order, order file, envelope stub, orders manifest, order lint or locked-down sandbox takes part. The payload's keys and the driver's checks are in `round-driver.md` § The `apply-fixes` step.
 
-The fixer's verify budget is **scoped** — its target files' referencing tests plus the static
-validators — never the project's full verify command; the orchestrator's `run-verify` is the
-round's one full run (§ Round economy in `round-driver.md`).
+**What the session does.**
 
-The authoritative template body lives at `rubric/orders/dispatch-fixer.md` under the plugin
-root. The fenced block below is illustrative only.
+1. Read the batch at `fixBatchPath` and, when `guidancePath` is not `null`, the guidance at `guidancePath`. For each finding, apply a fix in the working tree. The fix follows `CLAUDE.md` and the project profile; guidance for a finding wins over its suggestion.
+2. A finding whose `suggestion` is a `break-it-test v1` block carries a test. Write that file at the block's `path`, byte for byte, keep it, and commit it **in the same commit as the fix**. Never edit or weaken the test to make it pass, and never run a formatter or autofix over it.
+3. Run the scoped checks for what you changed: the tests that reference the changed files plus the project's static validators, at most once each. Never run the project's full verify command; the driver's `run-verify` gate runs it once after the fixes. Never commit code that fails them: fix the failure, or list the finding `unfixed` with the failing output as `why`.
+4. A finding that needs a judgment call you cannot make (several valid approaches, unclear intent) is not guessed at: list it `unfixed` with `why`.
+5. A finding about the PR body is fixed by editing the staged PR body at `prBodyPath`; that file is never committed. With no `prBodyPath`, list such a finding `unfixed`.
+6. Never push, merge or write to GitHub.
+7. When a run needs a throwaway test file, choose a path inside the working tree named with the prefix `autofix-probe-`, check on the filesystem (not with git) that the path does not exist, and delete only that file before you commit. If you cannot show the path is new, do not write there; report it instead. A probe file must never land in a fix commit.
 
-**The rendered fixer order is linted at emission.** `round_driver._emit_orders_manifest` runs `order_lint.check_text(…, kind="fixer")` over every rendered `dispatch-fixer` order and refuses the whole emission as `order-render-refused:<skey>:order-lint:<token>` on any finding — an unfilled placeholder, a cited slashed path that does not resolve under the repo root, or two result contracts named at once (`{"fixes"` beside a native typed shape); the fixer kind carries no command budget, so `order-budget-missing` never applies here. This is the deterministic half only; the semantic half (the read-only `order-linter` seat, `agents/order-linter.md`, with the prompt `rubric/orders/order-lint-semantic.md`) is the workhorse's step over orders it authors, and a driver-rendered order has no author to send a finding back to. Cite the module as `lib/order_lint.py` (plugin-relative, as this file's other citations are).
+**The report** is a JSON object with the keys `fixes`, `unfixed` and `coverageDecisions`, each a list:
 
-```
-You are the fixer for one round of an auto-fix code-review loop.
-
-## Input
-- Findings to fix: $SESSION_DIR/round-<N>/fix-batch.json (array; each has
-  id, severity, dimension, file, line, body, and suggestion)
-- Conventions: CLAUDE.md and the project profile (<PROFILE_PATH>);
-  severity/format from the base rubric (<absolute RUBRIC path>)
-- Work in the current branch's working tree at <cwd>
-- Repo root: <absolute REPO_ROOT>
-- Verify budget: <the scoped budget the driver renders — target files, referencing tests, static validators; the full command named as the orchestrator's>
-
-## Your job
-1. Apply a fix for EACH finding. Follow CLAUDE.md conventions and the profile's
-   canonical patterns. Never push/merge/deploy (those stay user-gated).
-2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
-3. Run the scoped verify budget above — the tests that reference your target files plus the
-   project's static validators, at most once each; never the project's full verify command (the
-   orchestrator runs that once after this round's fix batch lands, and a fixer attempt that runs it
-   forfeits on the attempt cap before its work is collected). If the budget's run fails, fix the
-   failure and retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
-   output — never commit broken code.
-   When you need to verify something by *running* it, choose a throwaway test file path inside
-   the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
-   identifiable. **Before writing it, check that the chosen path does not already exist** — a
-   **filesystem** existence check on the path (does a file exist there), not a git query: git
-   does not know about ignored or untracked-but-present files for this purpose, and this repo's
-   gitignored `docs/` holds real owner content a git-flavoured check would miss. A
-   crashed prior round can leave its own probe behind under a predictable name, and an
-   unrelated tracked file could occupy it too. If the name is already taken, pick a different
-   one (e.g. add a unique suffix, still carrying the `autofix-probe-` prefix) rather than
-   overwriting whatever is there. If you cannot
-   establish that your chosen path is new, do not write a probe there and do not delete
-   anything — report it instead. Once the path is confirmed new, write the file and run it
-   with the project's test-run family (e.g. `pytest` or the repo's test command); do not
-   improvise inline interpreter one-liners (the `-c` / `-e` flag forms). Before you commit,
-   delete **only the probe file you just wrote this round** — you know its name, because you
-   just named it and confirmed it was new. Do not sweep for other files matching the prefix,
-   and do not decide what to delete by reasoning from tracked or untracked status. A crashed
-   round may leave its own probe behind, and nothing sweeps it up: a stray `autofix-probe-*`
-   file can still be present in the working tree the orchestrator inspects when it verifies.
-   Delete the throwaway before step 4's commit — it must never land in the fix commit.
-4. Commit ALL changes in ONE commit (after the check passes):
-   `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
-5. Report back.
-
-## Escalation
-If a finding you were told to auto-fix actually requires a judgment call you
-cannot make (multiple valid approaches, ambiguous intent), do NOT guess.
-Report it under "escalated" with the id and why.
-
-## Report format
-- Status: DONE | CHECK_FAILED | ESCALATED
-- fixed: [ids]
-- escalated: [ { id, why } ]
-- newIssuesNoticed: [brief notes on anything seen but not fixed]
-- commit: <sha or "none">
-- checkOutput: <tail of the verify command, only if CHECK_FAILED>
+```json
+{
+  "fixes": [{"finding": "<the finding's key or staged id>", "commit": "<full sha>"}],
+  "unfixed": [{"finding": "<key or staged id>", "why": "<why it was not fixed>"}],
+  "coverageDecisions": []
+}
 ```
 
-The loop's fixers commit without the builder's size count, so the builder recounts the non-test lines after each fixer round (the size rule's count, `python3 -B <plugin root>/lib/size_count.py count --base <build base>`) and reports a crossing of the size rule's lines as it would for its own commit. The rule is in [review-discipline § Size](../../../rubric/review-discipline.md#size).
+- `fixes` — an entry binds a finding to the commit that fixed it. The binding is **required** for every finding that carries a break-it test; other entries may be plain notes. A commit may fix several findings.
+- `unfixed` — a finding you could not fix. It is not credited as fixed, and the next audit judges it.
+- `headDiff` / `headDiffPath` are optional cross-checks, as in `round-driver.md`.
+
+Fold it by hand with `submit` (hand path), or by writing it to the payload's `landingPath` and calling `advance` (durable-record path). Both paths are legal for this step on either kind of session, as for `run-verify`.
+
+**Refusals.** The driver derives what was committed from git, never from the report. A refusal leaves the step pending, with the same phase and attempt: fix what it names, then fold again.
+
+| Refusal | What to do |
+| --- | --- |
+| `fold-refused`, detail `fix-without-break-it-test:<finding key>:no-binding` | Add a `fixes` entry binding that finding to its commit, or list it `unfixed`. |
+| `…:commit-unknown` or `…:commit-not-in-step` | Bind the full sha of a commit made at this step: reachable from HEAD, not reachable from `startHead`. |
+| `…:test-missing` or `…:test-bytes-differ` | Write the test at the block's `path` with the block's bytes, and commit it with the fix. Do not edit the test to match the code. |
+| `…:no-fix-change` | The commit changed only the test. Commit the fix itself with it. |
+| `…:unverifiable` | The driver has no repository to check against. Fold from a session that runs in the repository. |
+| `fix-finding-unknown:<value>` | A `fixes` binding names a finding outside the batch. Remove or correct it. |
+| `unfixed-finding-unknown:<value>` | An `unfixed` entry names a finding outside the batch. Remove or correct it. |
+
+A step with no commit at all is not a refusal, and a PR-body-only fix makes none.
+
+**Size.** The session's own fix commits are counted like any commit it makes: the builder recounts the non-test lines after each fix round (the size rule's count, `python3 -B <plugin root>/lib/size_count.py count --base <build base>`) and reports a crossing of the size rule's lines. The rule is in [review-discipline § Size](../../../rubric/review-discipline.md#size).
 
 ### A ruling that arrives during a fix
 
 A ruling (`rule`, see `round-driver.md` § Owner and advisor rulings) is accepted whenever it arrives.
-A fixer already dispatched is never stopped to take it and folds its result as usual; the ruling
-binds the next fix of its finding, and when that fix went against it the next round sends the finding
-back. No finding below blocking joins a fix batch unless a ruling names it; those settle when the loop
-converges.
+One accepted while `apply-fixes` is pending rewrites that step's batch and guidance files, and the
+next `next` returns the current direction. One recorded after the session folded the step reaches the
+next round: it binds the next fix of its finding, and when that fix went against it the next round
+sends the finding back. No finding below blocking joins a fix batch unless a ruling names it; those
+settle when the loop converges.
 
 ---
 
@@ -732,9 +681,9 @@ On a full panel, the build session runs each break-it test the test role wrote o
 
 The run judges nothing. Its output is saved with the finding and handed to the verifier, and a passing run does not drop the finding. A test that passes, fails or could not run stays a finding.
 
-Break-it tests are of two kinds, and only the test role writes either. An attached test rides on a finding of any taxonomy that the test role can prove that way: the finding keeps its own taxonomy, `file:line` and scope, and its `suggestion` is a `break-it-test v1` block. An attached test is run, recorded, kept and checked like any other, and has no cap. A per-area test is its own finding (`taxonomy: break-it-test`); the cap of three per review counts only these. The build session never writes a break-it test. Its one edit to a reviewer's test is the small change: after the panel folds and before it dispatches the verifiers, for a run whose output shows the test itself failed to compile, parse or type-check, the session changes the test through `break-it-change` ([round-driver.md](round-driver.md#break-it-change)) and says why. The verb rewrites the finding's `suggestion` block with the changed content, so the changed test is the one the fixer writes and commits and the kept check reads. The changed test runs again in the working copy, both runs are recorded with the finding (the second carries the reason in `changedWhy`), and the review goes on to the verifier. A run that fails for any other reason is not changed.
+Break-it tests are of two kinds, and only the test role writes either. An attached test rides on a finding of any taxonomy that the test role can prove that way: the finding keeps its own taxonomy, `file:line` and scope, and its `suggestion` is a `break-it-test v1` block. An attached test is run, recorded, kept and checked like any other, and has no cap. A per-area test is its own finding (`taxonomy: break-it-test`); the cap of three per review counts only these. The build session never writes a break-it test. Its one edit to a reviewer's test is the small change: after the panel folds and before it dispatches the verifiers, for a run whose output shows the test itself failed to compile, parse or type-check, the session changes the test through `break-it-change` ([round-driver.md](round-driver.md#break-it-change)) and says why. The verb rewrites the finding's `suggestion` block with the changed content, so the changed test is the one the build session writes and commits at `apply-fixes` and the kept check reads. The changed test runs again in the working copy, both runs are recorded with the finding (the second carries the reason in `changedWhy`), and the review goes on to the verifier. A run that fails for any other reason is not changed.
 
-A run whose command exits 127 or whose output reports a missing command or module is recorded not-run (`command-not-found` / `module-not-found`), never failed or passed, even when the signature was printed early in a long output. The fixer keeps the test in the change. Before the loop certifies `converged`, it checks that each fixed break-it finding's test counts as kept and that it passes there (`breakItKept`); otherwise it parks with certification withheld. A break-it finding that the owner or advisor ruled out of scope through the `rule` verb, with who ruled and when, and that a round's audit then cleared (`discharged` or `discharged-but-new-issue`) is not required to be kept: its `breakItKept` row reads `ruled-out-of-scope` and the review record lists it as "ruled out of scope", while a ruling alone, a clearing audit alone, or an unattributed ruling still requires the test kept. The body match applies to break-it tests in these languages: Python, JavaScript and TypeScript. Such a test counts as kept when its fixture and assertions appear unchanged in a file the final diff carries, at its own path or any other, with formatting and the test's title free to differ and anything the check cannot compare read as not kept. A test in any other language must still be byte-identical at its own path. The test role never writes its test into the repository; it delivers each one in a finding. Which Python a break-it test runs under depends on one optional core.md calibration key, `breakItInterpreter`, a launcher command such as `scripts/pinned-python` or `uv run python`. When the key is set, a test whose program is `python` or `python3` runs as `<launcher> <args>`, and one whose program is `pytest` or `py.test` runs as `<launcher> -m pytest <args>`; any other program runs as written, and the verify command is not consulted. The launcher must pass a readiness probe, a one-line Python program, or the test is recorded not-run (`interpreter-unavailable`), never a failed test. A set value that is not a usable launcher records Python and pytest tests not-run (`interpreter-key-invalid`); it never falls back to the verify command. When the key is not set, the launcher is read from the verify command's text, and Python tests are recorded not-run (`interpreter-unresolved`) when none is found. A project whose verify command is `pytest -q`, `uv run pytest`, `make test`, `tox` or `poetry run pytest` names no launcher the driver can read, so it should set the key; otherwise its Python break-it tests do not run, and a review whose fixer fixes a break-it finding parks with certification withheld. `/superheroes:configure` sets it (view-and-tune's "Name the Python launcher for break-it tests").
+A run whose command exits 127 or whose output reports a missing command or module is recorded not-run (`command-not-found` / `module-not-found`), never failed or passed, even when the signature was printed early in a long output. The build session keeps the test in the change, in the same commit as the fix, and the driver checks that at the `apply-fixes` fold (§ Applying the fixes). Before the loop certifies `converged`, it checks that each fixed break-it finding's test counts as kept and that it passes there (`breakItKept`); otherwise it parks with certification withheld. A break-it finding that the owner or advisor ruled out of scope through the `rule` verb, with who ruled and when, and that a round's audit then cleared (`discharged` or `discharged-but-new-issue`) is not required to be kept: its `breakItKept` row reads `ruled-out-of-scope` and the review record lists it as "ruled out of scope", while a ruling alone, a clearing audit alone, or an unattributed ruling still requires the test kept. The body match applies to break-it tests in these languages: Python, JavaScript and TypeScript. Such a test counts as kept when its fixture and assertions appear unchanged in a file the final diff carries, at its own path or any other, with formatting and the test's title free to differ and anything the check cannot compare read as not kept. A test in any other language must still be byte-identical at its own path. The test role never writes its test into the repository; it delivers each one in a finding. Which Python a break-it test runs under depends on one optional core.md calibration key, `breakItInterpreter`, a launcher command such as `scripts/pinned-python` or `uv run python`. When the key is set, a test whose program is `python` or `python3` runs as `<launcher> <args>`, and one whose program is `pytest` or `py.test` runs as `<launcher> -m pytest <args>`; any other program runs as written, and the verify command is not consulted. The launcher must pass a readiness probe, a one-line Python program, or the test is recorded not-run (`interpreter-unavailable`), never a failed test. A set value that is not a usable launcher records Python and pytest tests not-run (`interpreter-key-invalid`); it never falls back to the verify command. When the key is not set, the launcher is read from the verify command's text, and Python tests are recorded not-run (`interpreter-unresolved`) when none is found. A project whose verify command is `pytest -q`, `uv run pytest`, `make test`, `tox` or `poetry run pytest` names no launcher the driver can read, so it should set the key; otherwise its Python break-it tests do not run, and a review that fixes a break-it finding parks with certification withheld. `/superheroes:configure` sets it (view-and-tune's "Name the Python launcher for break-it tests").
 
 ---
 
