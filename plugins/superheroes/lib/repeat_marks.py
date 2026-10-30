@@ -19,6 +19,7 @@ import session_contract
 import verification
 
 FIXED, SHOWN_WRONG = review_findings_schema.OUTCOMES[:2]
+RULING = review_findings_schema.OUTCOMES[4]
 _SETTLED = frozenset(review_findings_schema.OUTCOMES[2:])
 _GIT_TIMEOUT_SECONDS = 30
 MATCH_JUDGE = "judge"
@@ -45,8 +46,8 @@ def outcome_of(disposition, row=None):
         grade, why = row.get("grade"), row.get("refutedReason")
         if isinstance(grade, dict) and grade.get("verdict") == "wrong":
             return SHOWN_WRONG
-        return "left-for-owner" if isinstance(why, str) and why.startswith("author-justified") else None
-    return "ruling" if disposition == "out-of-scope" else disposition
+        return review_findings_schema.LEFT_FOR_OWNER if isinstance(why, str) and why.startswith("author-justified") else None
+    return RULING if disposition == "out-of-scope" else disposition
 
 
 def disposition_of(outcome):
