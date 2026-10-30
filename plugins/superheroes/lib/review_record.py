@@ -2393,13 +2393,20 @@ def _wrong_ungraded(findings, prior, verifier_closed):
         return _key(f) in verifier_closed and isinstance(grade, dict) and grade.get("verdict") == "wrong"
     shown = [(i, f) for i, f in enumerate(findings) if isinstance(f, dict) and f.get("outcome") == _SHOWN_WRONG]
     closed_here = {_key(f) for _, f in shown if verifier_closed_wrong(f)}
+    # axis: a chain of kept repeats passes link by link from a carried or verifier-closed root; a ring or a link to a missing finding never gains a root, so it stays refused — see bite-proof record c1l8_wo_b_record_repeats
+    passing = set(carried) | closed_here
+    grew = True
+    while grew:
+        grew = False
+        for _, f in shown:
+            via = _repeat_key(f)
+            if via is not None and via != _key(f) and via in passing and _key(f) not in passing:
+                passing.add(_key(f))
+                grew = True
     out = []
     for i, f in shown:
-        via = _repeat_key(f)
-        # axis: a kept repeat passes only through the one earlier finding it names, carried or closed in this account, never on its mark alone — see bite-proof record c1l8_wo_b_record_repeats
-        through = via is not None and via != _key(f) and (via in carried or via in closed_here)
         # axis: an outcome the earlier record already stored as shown-wrong is carried whatever this account's grade says — see bite-proof record c1l7_wo_a_verifier_grade
-        if not (verifier_closed_wrong(f) or _key(f) in carried or through):
+        if _key(f) not in passing:
             out.append(i)
     return out
 

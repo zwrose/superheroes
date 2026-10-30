@@ -2179,6 +2179,8 @@ def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope
         if val is not None:
             family[fname] = val
     _apply_disposition_family(entry, family)
+    # axis: a newer disposition supersedes a kept repeat's earlier outcome; repeatOf stays, and the kept path writes repeatKept again after this call — see bite-proof record c1l8_wo_b_record_repeats
+    entry.pop("repeatKept", None)
     entry[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
     if key in seen:
         ledger[seen[key]] = entry
@@ -2186,6 +2188,7 @@ def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope
         ledger.append(entry)
     if live is not None:
         _apply_disposition_family(live, family)
+        live.pop("repeatKept", None)
         live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
 
 
