@@ -7184,7 +7184,7 @@ def _finish_saved_previous_release(state):
     state["pending"] = None
     _hand_back_unknown_fix_surface(
         state, "a session saved by the previous release lacks the fix delta, the audit test facts or "
-               "the kept reviewer test this version needs")
+               "the kept reviewer test this version needs; start a fresh review of this PR")
     return True
 
 
