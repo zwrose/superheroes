@@ -25,7 +25,6 @@ REASON = "owner stopped the loop"
 GRADE = {"verdict": "confirmed", "reason": "reproduced on the changed code"}
 OTHER_GRADE = {"verdict": "plausible", "reason": "read, not reproduced"}
 REPEAT = {"findingKey": "a.py::t@L3", "id": "f-0", "fixHolds": True}
-STORED_REPEAT = dict(REPEAT, findingKey=rr._key({"findingKey": REPEAT["findingKey"]}))
 KIND = {"kind": "unchecked index", "places": [{"file": "b.py", "line": 4, "fixed": True}]}
 RUN_1 = {"test": "tests/test_a.py::test_t", "commit": "abc1234", "status": "ran", "exitCode": 1,
          "output": "AssertionError: boom", "reason": None, "changedWhy": None}
@@ -82,7 +81,7 @@ def test_e1_a_live_row_without_a_part_keeps_the_ledger_rows(tmp_path):
     # axis: a newer row never erases a finding part an older row held, for each of the four parts — see bite-proof record c1l1_wo_b_session_seam
     session = Session(tmp_path, findings=[LIVE], dispositionLedger=[ledger_row(**VALUES)]).seat("code-reviewer").save()
     (row,) = _account(session)["findings"]
-    assert {p: row[p] for p in PARTS} == dict(VALUES, repeatOf=STORED_REPEAT)
+    assert {p: row[p] for p in PARTS} == VALUES
 
 
 def test_e2_a_live_part_wins_over_the_ledger_rows(tmp_path):
@@ -90,7 +89,7 @@ def test_e2_a_live_part_wins_over_the_ledger_rows(tmp_path):
     session = Session(tmp_path, findings=[dict(LIVE, grade=OTHER_GRADE)],
                       dispositionLedger=[ledger_row(**VALUES)]).seat("code-reviewer").save()
     (row,) = _account(session)["findings"]
-    assert row["grade"] == OTHER_GRADE and row["repeatOf"] == STORED_REPEAT
+    assert row["grade"] == OTHER_GRADE and row["repeatOf"] == REPEAT
 
 
 def test_e3_a_part_neither_row_holds_is_absent_not_none(tmp_path):
@@ -303,7 +302,7 @@ def test_fill_the_earlier_grade_and_runs_survive_a_later_session_that_lacks_them
     second = _later(tmp_path, "b", dispositionLedger=[ledger_row(breakItRuns=[RUN_2], kindOfMistake=KIND)])
     assert send(tmp_path, second, fake)["ok"]
     (row,) = _record(fake)["findings"]
-    assert row["grade"] == GRADE and row["repeatOf"] == STORED_REPEAT and row["kindOfMistake"] == KIND
+    assert row["grade"] == GRADE and row["repeatOf"] == REPEAT and row["kindOfMistake"] == KIND
     assert row["breakItRuns"] == [RUN_1, RUN_2]
     fresh = _later(tmp_path, "c", dispositionLedger=[ledger_row(grade=OTHER_GRADE)])
     assert send(tmp_path, fresh, fake)["ok"]

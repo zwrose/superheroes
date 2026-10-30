@@ -133,13 +133,8 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
 
 After verification, dispatch **one** synthesis judge at `model: $SYNTH_MODEL` (`--role
 synthesis`) over the survivors only. Its job is to group findings that share the same root
-cause, not keep/drop. It also receives the round's refuted findings and the PR's earlier findings.
-It emits a JSON array of `{group_id, member_ids, repeatOf}` echoing the staged ids verbatim;
-`repeatOf` is an earlier finding's ref or null. Refuted ids may sit in a group only to carry a
-mark and are never merged. When only refuted findings remain and the PR has earlier findings,
-synthesis runs repeat-only. What a mark does is in
-[synthesis-pass.md § Repeats](synthesis-pass.md#repeats). Write the grouping to
-`$SESSION_DIR/round-<N>/grouping.json`.
+cause, not keep/drop. It emits a JSON array of `{group_id, member_ids}` echoing the staged
+ids verbatim. Write the grouping to `$SESSION_DIR/round-<N>/grouping.json`.
 
 The synthesis seat sits outside every maker family on a proven synthesis cell; when no vendor qualifies, no synthesis order is emitted and the findings are not grouped (each stays separate, nothing is dropped), which the receipt discloses.
 
@@ -161,12 +156,11 @@ print(json.dumps(verification.merge_and_rank(survivors, grouping)))
 " > "$SESSION_DIR/round-<N>/synthesized.json"
 ```
 
-The grouping must account for **every** staged survivor id **exactly once** and each refuted id at
-most once, under a **coverage guarantee**. When a **non-empty** grouping is submitted, each survivor
-id must appear in exactly one group's `member_ids`; a grouping that omits any staged id is
-**refused** with `staged-id-unresolvable` naming the omitted id — submit the grouping again with
-the missing ids as singleton groups. A `repeatOf` ref that names no earlier finding is refused at
-submit the same way. A submit with no `grouping` key is **refused** at submit. **`grouping: null`**
+The grouping must account for **every** staged survivor id **exactly once** under a **coverage
+guarantee**. When a **non-empty** grouping is submitted, each survivor id must appear in exactly
+one group's `member_ids`; a grouping that omits any staged id is **refused** with
+`staged-id-unresolvable` naming the omitted id — submit the grouping again with the missing ids as
+singleton groups. A submit with no `grouping` key is **refused** at submit. **`grouping: null`**
 or an **empty-list** grouping carries no coverage obligation:
 `verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors;
 **synthesis drops nothing** and synthesis failure never aborts the review. Merged groups combine

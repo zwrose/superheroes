@@ -15,7 +15,6 @@
 | --------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
 | `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, pinned base commit + base branch + fetch state, `repoRoot` (checkout path), verify story, focus notes       |
 | `$SESSION_DIR/prior-comments.json`                  | orchestrator   | PR-mode only: prior review comments + threads (for author justifications)                   |
-| `$SESSION_DIR/earlier-findings.json`                | orchestrator   | PR-mode only: the JSON `review_record.py read --pr <N>` prints (the PR's earlier findings, for repeat marks), written whatever its exit |
 | `$SESSION_DIR/round-<N>/diff.txt`                   | orchestrator   | Round `<N>` unified diff (`git diff <pinned baseRef>...HEAD`). **Never read by the main context.** |
 | `$SESSION_DIR/round-<N>/findings-architecture.json` | arch agent     | Architecture-reviewer findings array                                                        |
 | `$SESSION_DIR/round-<N>/findings-code.json`         | code agent     | Code-reviewer findings array                                                                |

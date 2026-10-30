@@ -500,10 +500,8 @@ _PAYLOAD_FIELD_BINDINGS = {
         "elements": {
             "grouping": {
                 "required": ["member_ids"],
-                # `repeatOf`: null or the order's ref of the earlier finding the group repeats. The shape
-                # is checked with the order's `earlier` list at the submit chokepoint, not here.
-                "optional": ["repeatOf"],
-                "types": {"member_ids": "list", "repeatOf": "any"},
+                "optional": [],
+                "types": {"member_ids": "list"},
                 "enums": {},
             },
         },

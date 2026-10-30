@@ -401,10 +401,6 @@ def _decide(own, by_key, rulings, exempt=None):
     rep = sc.resolve_merged_into_entry(own, by_key)
     if not isinstance(rep, dict):
         return None, STILL_OPEN, None
-    kept = rep.get("repeatKept")
-    # axis: a kept repeat reads the earlier finding's outcome and reason, whatever its own disposition says; a malformed mark is ignored — see bite-proof record c1l8_wo_b_record_repeats
-    if isinstance(kept, dict) and kept.get("outcome") in review_findings_schema.OUTCOMES and _text(kept.get("reason")):
-        return kept["outcome"], kept["reason"], rep
     disp, seq, raised = rep.get("disposition"), rep.get(sc.DISPOSITION_SEQ_FIELD), own.get(sc.RAISED_SEQ_FIELD)
     if disp not in sc.DISPOSITIONS or not (_int(seq) and _int(raised) and seq > raised):  # a stale disposition decides nothing
         return None, STILL_OPEN, rep
@@ -453,14 +449,6 @@ def _id(row, key):
     return rid if isinstance(rid, str) and rid and not verification.is_staged_id(rid) else key
 
 
-def _stored_repeat(mark):
-    """The repeat mark naming the earlier finding by its stored key, whether the ledger held a raw session key or an
-    opaque record key; `id` and `fixHolds` are copied as they are. A malformed mark is left for the writer to refuse."""
-    key = mark.get("findingKey") if isinstance(mark, dict) else None
-    # axis: the record names the earlier finding by its stored key, never the session's raw one — see bite-proof record c1l8_wo_b_record_repeats
-    return dict(mark, findingKey=review_record._key({"findingKey": key})) if isinstance(key, str) and key.strip() else mark
-
-
 def _finding_parts(row, older):
     """{part: value} for each finding part: the row's own when it has the key, else the older (ledger) row's, else absent.
     The break-it runs of both rows, when both hold a list, read older first, then the row's runs not already among them."""
@@ -468,7 +456,7 @@ def _finding_parts(row, older):
     for k in _FINDING_PARTS:
         for src in (row, older):
             if isinstance(src, dict) and k in src:
-                out[k] = _stored_repeat(src[k]) if k == "repeatOf" else src[k]
+                out[k] = src[k]
                 break
     mine, earlier = (src.get("breakItRuns") if isinstance(src, dict) else None for src in (row, older))
     if isinstance(mine, list) and isinstance(earlier, list):
@@ -526,7 +514,7 @@ def _findings_and_merges(state):
         dim = row.get("dimension")
         # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
         held = _finding_parts(row, by_key.get(key))
-        if outcome == _SHOWN_WRONG and "grade" in rep:  # a kept repeat may hold no grade: it keeps the one it has
+        if outcome == _SHOWN_WRONG:
             # axis: a finding closed as wrong carries the closing representative's wrong grade, never a merged member's own — see bite-proof record c1l7_wo_a_verifier_grade
             held["grade"] = rep["grade"]
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
@@ -906,7 +894,7 @@ def _fill(account, earlier):
             continue
         for part in ("grade", "repeatOf", "kindOfMistake"):
             if part not in f and part in old:
-                f[part] = _stored_repeat(old[part]) if part == "repeatOf" else old[part]
+                f[part] = old[part]
         # axis: the earlier record's break-it runs stay ahead of this session's new ones, none twice — see bite-proof record c1l1_wo_b_session_seam
         # a present non-list value is left as supplied, so the writer refuses it as review-account-invalid
         if isinstance(old.get("breakItRuns"), list) and isinstance(f.get("breakItRuns", []), list):

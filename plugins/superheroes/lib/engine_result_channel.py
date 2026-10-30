@@ -44,9 +44,6 @@ _STRICT_MODE_REFINEMENTS = {
         "type": "array",
         "items": {"type": "string"},
     },
-    ("grouping", "repeatOf"): {
-        "type": "string",
-    },
     ("ruling", "reason"): {
         "type": "string",
     },

@@ -1093,31 +1093,6 @@ def leftover_line(finding):
     return f"finding {_name(finding)} waits for the owner's decision"
 
 
-def _repeat_key(f):
-    """The stored key of the earlier finding `f` repeats, or None when it names none."""
-    mark = f.get("repeatOf") if isinstance(f, dict) else None
-    key = mark.get("findingKey") if isinstance(mark, dict) else None
-    return _key({"findingKey": key}) if isinstance(key, str) and key.strip() else None
-
-
-def repeat_held_elsewhere(f, findings):
-    """True when `f` is left for the owner and repeats another left-for-owner finding of the same record, which holds
-    the owner's one card. The one reader of that rule: the leftover line, the leftForOwner list and the sheet's card
-    all ask it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no
-    owner decision goes missing."""
-    left = {_key(g): g for g in findings if isinstance(g, dict) and g.get("outcome") == _LEFT_FOR_OWNER}
-    own, held = _key(f), _repeat_key(f)
-    if f.get("outcome") != _LEFT_FOR_OWNER or held is None or held == own or held not in left:
-        return False
-    seen = set()
-    while held is not None and held not in seen:  # a ring of repeats holds nothing: each keeps its card
-        if held == own:
-            return False
-        seen.add(held)
-        held = _repeat_key(left[held]) if held in left else None
-    return True
-
-
 REVIEWED = "reviewed"
 NOT_REVIEWED = "not-reviewed"
 AWAITS_OWNER = "awaits-owner"
@@ -1136,8 +1111,7 @@ def _finding_lines(findings):
             lines.append(f"finding {_name(f)} has no outcome")
         elif not f.get("reason"):
             lines.append(f"finding {_name(f)} has no reason")
-        # axis: a kept left-for-owner repeat adds no leftover line; the earlier finding holds the owner's card — see bite-proof record c1l8_wo_b_record_repeats
-        elif f["outcome"] == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, findings):
+        elif f["outcome"] == _LEFT_FOR_OWNER:
             lines.append(leftover_line(f))
     return lines
 
@@ -1194,8 +1168,7 @@ def _owner_only(rec, missing_lines):
     """True when the record reads not-reviewed, is not parked, and every missing line is a leftover line: with its leftovers it reads awaits-owner exactly when the same record without them reads reviewed."""
     if rec["status"] != NOT_REVIEWED or rec["parked"]:
         return False
-    leftovers = {leftover_line(f) for f in rec["findings"]
-                 if f.get("outcome") == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, rec["findings"])}
+    leftovers = {leftover_line(f) for f in rec["findings"] if f.get("outcome") == _LEFT_FOR_OWNER}
     # axis: a record is awaits-owner only when every missing line is a leftover finding
     if not missing_lines or not all(m in leftovers for m in missing_lines):
         return False
@@ -1407,9 +1380,7 @@ def build_record(account, readers, prior=None):
         # axis: a part shows in the record exactly when the account carries it — see bite-proof record c1l1_wo_a_record_seam
         **{k: a[k] for k in _ROUND_PARTS if k in a},
         "unreadFiles": unread, "rawOutputs": [],
-        # axis: a kept left-for-owner repeat is not listed again beside the earlier finding that holds it — see bite-proof record c1l8_wo_b_record_repeats
-        "leftForOwner": [_name(f) for f in findings
-                         if f.get("outcome") == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, findings)],
+        "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
         "missingReviews": missing,
         "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
         "cost": {"unit": "reviewer-minutes",
@@ -2356,26 +2327,19 @@ def _wrong_ungraded(findings, prior, verifier_closed):
     """The index of each account finding that reads shown-wrong with neither the driver's verifier grade nor a carry.
 
     A finding passes when its key is in `verifier_closed` (the session writer's set) and it carries a `wrong` grade, or
-    when the latest earlier record lists the same key as shown-wrong. A kept repeat passes through the earlier finding's
-    closure: its `repeatOf` names a key the earlier record lists as shown-wrong, or another finding of this account that
-    passes as verifier-closed. A malformed earlier list carries nothing."""
+    when the latest earlier record lists the same key as shown-wrong. A malformed earlier list carries nothing."""
     earlier = prior.get("findings") if isinstance(prior, dict) else None
     carried = {_key(i) for i in earlier if isinstance(i, dict) and i.get("outcome") == "shown-wrong"} \
         if isinstance(earlier, list) else set()
-
-    def verifier_closed_wrong(f):
+    out = []
+    for i, f in enumerate(findings):
+        if not (isinstance(f, dict) and f.get("outcome") == "shown-wrong"):
+            continue
         grade = f.get("grade")
         # axis: a shown-wrong finding is carried from the earlier record or verifier-closed with a wrong grade, never written bare — see bite-proof record c1l7_wo_a_verifier_grade
-        return _key(f) in verifier_closed and isinstance(grade, dict) and grade.get("verdict") == "wrong"
-    shown = [(i, f) for i, f in enumerate(findings) if isinstance(f, dict) and f.get("outcome") == "shown-wrong"]
-    closed_here = {_key(f) for _, f in shown if verifier_closed_wrong(f)}
-    out = []
-    for i, f in shown:
-        via = _repeat_key(f)
-        # axis: a kept repeat passes only through the one earlier finding it names, carried or closed in this account, never on its mark alone — see bite-proof record c1l8_wo_b_record_repeats
-        through = via is not None and via != _key(f) and (via in carried or via in closed_here)
+        closed = _key(f) in verifier_closed and isinstance(grade, dict) and grade.get("verdict") == "wrong"
         # axis: an outcome the earlier record already stored as shown-wrong is carried whatever this account's grade says — see bite-proof record c1l7_wo_a_verifier_grade
-        if not (verifier_closed_wrong(f) or _key(f) in carried or through):
+        if not (closed or _key(f) in carried):
             out.append(i)
     return out
 

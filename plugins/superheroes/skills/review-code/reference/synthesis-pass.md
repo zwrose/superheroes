@@ -6,7 +6,6 @@ Fail-closed synthesis fold (`loop_synthesis.py`) for the doc-loop acceptance pat
 - [The pass](#the-pass)
 - [Fallback — fail toward keeping everything](#fallback--fail-toward-keeping-everything)
 - [Surfacing — a dropped or demoted blocker is never silently gone](#surfacing--a-dropped-or-demoted-blocker-is-never-silently-gone)
-- [Repeats](#repeats)
 - [Cross-surface identity methodology + the interactive-doc exception (#430)](#cross-surface-identity-methodology--the-interactive-doc-exception-430)
 
 `loop_synthesis.py` is the fail-closed judgment fold that turns a synthesis judge's per-finding
@@ -17,7 +16,7 @@ TWO folds: `_fold_verifiers` stages ids and applies verdicts (`verification.stag
 `verification.apply_verdicts`), then `_fold_synthesis` groups same-root-cause survivors
 (`verification.merge_and_rank`) plus the author-justification post-filter. Any future eval surface
 that calls `loop_synthesis.consume` directly documents itself as such; it is never a `round_driver`
-callee. The [Repeats](#repeats) section governs the code loop's synthesis step (`_fold_synthesis`).
+callee.
 
 **Neither standalone `review-code` nor the native code panel runs this fold.** As of #506 the
 code auto-fix loop's keep/drop realness check — standalone `review-code` **and** the native
@@ -127,59 +126,6 @@ unsubstantiated (each with its reason) and — **distinctly, flagged for the own
 any `was_blocking_tagged` drop AND any `downgrades` entry (a reviewer had tagged it Critical/
 Important; synthesis then dropped it or demoted it below blocking). The loop may filter false
 positives or re-tier; it may never silently discard OR quietly demote a blocker.
-
-## Repeats
-
-On the code review loop, synthesis groups findings that share a root cause, and each group gets
-one fix. A group, or a finding the verifier refuted this round, may also be marked a repeat of one
-of the PR's earlier findings. The earlier findings are the ones this session decided in earlier
-rounds and the ones in the PR's latest earlier review record (the build session supplies the
-record with `--earlier-findings`; see
-[round-driver.md § next / submit protocol](round-driver.md#next--submit-protocol)). Exact identity
-always marks: a finding whose identity key matches an earlier finding's key is a repeat of that
-finding, whatever the seat said. The mark names the earlier finding in the record (`repeatOf`).
-
-A repeat is kept or treated as a new finding. A kept repeat takes the earlier finding's outcome,
-whatever this round's verdict was. The rules, in order:
-
-1. **A repeat of a fixed finding.** The verifier's grade of the repeat on the current code decides
-   whether the fix still holds. Graded `wrong`: the fix holds, and the repeat keeps `fixed`.
-   Any other grade, or none: it is a new finding.
-2. **A repeat of a finding closed as wrong.** When the code has changed since it was judged, the
-   verifier's fresh grade rules: `wrong` keeps the earlier outcome, anything else makes it a new
-   finding. When nothing has changed, it keeps the earlier outcome and the grade is not read.
-3. **Any other repeat** (`craft`, `left-for-owner`, `ruling`; a ledger `out-of-scope` row counts
-   as `ruling`) keeps its earlier outcome.
-4. **A repeat of a finding still open** (not yet decided) is a new finding.
-
-| Earlier outcome | Condition | Result | `fixHolds` |
-| --- | --- | --- | --- |
-| `fixed` | new grade `wrong` (the fix holds) | kept, outcome `fixed` | `true` |
-| `fixed` | any other grade, or none | new finding | `false` |
-| `shown-wrong` | code changed (or unknown) and new grade `wrong` | kept, outcome `shown-wrong` | `null` |
-| `shown-wrong` | code changed (or unknown) and any other grade, or none | new finding | `null` |
-| `shown-wrong` | code unchanged (the new grade is not read) | kept, outcome `shown-wrong` | `null` |
-| `craft`, `left-for-owner`, `ruling` | any | kept, that outcome | `null` |
-| none (the earlier finding is open) | any | new finding | `null` |
-
-The grade is the new finding's own verifier grade from this round: `confirmed`, `plausible`,
-`wrong`, or none. The code has changed when the git tree at the head the earlier finding was
-judged on differs from the tree at the head this round's verifier judged on; a head that cannot be
-read, or a comparison that cannot run, counts as changed. The earlier head is the review record's
-`finalCommit.sha` for a record finding, and the head the verifier orders of the round it was
-decided in cite for a session finding.
-
-A repeat that is not kept is a new finding. A survivor routes as usual, to the fix batch when it
-blocks. A finding the verifier refuted this round stays refuted with its own `wrong` grade, never
-goes to the fix, and gains only its `repeatOf` mark.
-
-A kept repeat never goes to the fix, never becomes an owner card, and is never dropped from the
-record. Its record entry shows the earlier outcome with a "repeat of …" reason. A kept
-`left-for-owner` repeat adds no second owner card: the earlier finding holds it. A refuted repeat
-of a fixed finding whose fix holds ends `fixed` and keeps its `wrong` grade.
-
-This section is the rule's one prose home; the module `repeat_marks` is its code home. Other docs
-link here.
 
 ## Cross-surface identity methodology + the interactive-doc exception (#430)
 

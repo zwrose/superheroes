@@ -1065,7 +1065,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     named, decisions = {}, {}
     for r in recs:
         for n, f in enumerate(r["findings"]):
-            if isinstance(f, dict) and f.get("outcome") == _LEFT and not review_record.repeat_held_elsewhere(f, r["findings"]):
+            if isinstance(f, dict) and f.get("outcome") == _LEFT:
                 keys = _lookups(kind, r["pr"], f)
                 for k in keys:
                     named[k] = named.get(k, 0) + 1
@@ -1108,8 +1108,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     cards, decided_for_you, places = [], [], []
     for r in recs:
         for n, f in enumerate(r["findings"]):
-            # axis: a kept left-for-owner repeat adds no card; the earlier finding holds it — see bite-proof record c1l8_wo_b_record_repeats
-            if f["outcome"] != _LEFT or review_record.repeat_held_elsewhere(f, r["findings"]):
+            if f["outcome"] != _LEFT:
                 continue
             if (r["pr"], n) in decisions:
                 det = decisions[(r["pr"], n)]
@@ -1178,8 +1177,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             lines.append(_fill(words["historyMissing"], name=m["name"],
                                goAhead=_fill(words["historyGoAhead"], goAhead=said) if said else words["historyNoGoAhead"]))
         gaps =(r.get("whatIsMissing") or []) if not review_record.cleared(r.get("status")) else []
-        owned = [review_record.leftover_line(f) for f in r["findings"]
-                 if f.get("outcome") == _LEFT and not review_record.repeat_held_elsewhere(f, r["findings"])]
+        owned = [review_record.leftover_line(f) for f in r["findings"] if f.get("outcome") == _LEFT]
         count, counted = sum(1 for m in gaps if m in owned), False
         for m in gaps:
             if m not in owned:
