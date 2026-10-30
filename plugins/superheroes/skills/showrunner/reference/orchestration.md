@@ -409,8 +409,12 @@ such a step to the owner first.
   asks for `get_session` on each, and asks the helper to post the raw results as one JSON array on
   the lane's issue in a fenced block, since a cloud session cannot message back. The advisor reads
   that comment through REST, saves the array to a file, and passes it with `--cloud-sessions-file`.
-  `list_sessions` rows carry no `environment_id`, so a page cannot prove a session gone: use
-  `get_session` per id. When a live lane never answers the fix order or the ask-to-push, the same
+  The posted copy is the helper's transcription of its tool output, not the output itself: before
+  launching on a row that clears a lane (archived or failed), have the helper read that session
+  again, or keep the unread refusal. Keep the refusal whenever the copy is in doubt.
+  A complete `list_sessions` page proves a session gone only when its rows carry `environment_id`
+  and meet the checks in § Adoption mechanics; when they do not, read each lane with
+  `get_session`. When a live lane never answers the fix order or the ask-to-push, the same
   helper archives it; an archive is reversible with `unarchive_session`. This is the advisor's own
   step: never hand a session read or this archive to the owner.
 - **Anything else** (reading a background session's permission mode, messaging or stopping a
@@ -508,8 +512,8 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   when it is one page read with no cursor and a limit that holds every session (`has_more: false`),
   its rows run newest-created first, and it holds a row of that lane's own cloud environment
   (`environment_id`) created at least 600 seconds after that lane started (the allowance covers
-  clock skew between the two machines); the rows the host lists carry no `environment_id`, so
-  read each lane with `get_session`.
+  clock skew between the two machines). When the rows carry no `environment_id`, the page proves
+  nothing: read each lane with `get_session`.
   The check counts a lane only when it could still write the adopted branch: a lane bound to the
   adopted branch by its premise (it names the same branch, or the same pull request number), and
   any other lane unless it handed back before the branch's first pull request opened with no fix

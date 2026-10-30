@@ -3207,7 +3207,11 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
                 continue
             reopened = False
             for relay in relays.get("records") or []:
-                if isinstance(relay, dict) and relay.get("session") == info["cloudSessionName"]:
+                # axis: a fix-order relay record whose target session is unreadable may have been sent to this lane, so it is matched against every handed-back lane
+                if isinstance(relay, dict) and (
+                    not isinstance(relay.get("session"), str)
+                    or relay.get("session") == info["cloudSessionName"]
+                ):
                     sent = _relay_sent_ts(relay.get("at"))
                     # axis: a fix order composed for the lane's session after the handback, or one whose send time does not parse, reopens the lane and it stays — see bite-proof record i2254_original_session
                     if sent is None or sent > handback:
