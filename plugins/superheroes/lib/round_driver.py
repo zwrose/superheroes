@@ -6809,7 +6809,13 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
                 if index < 0 or index >= len(head_numbers):
                     return None
                 content = content or not text.startswith("@@")
-                if head_numbers[index] is not None and not text.startswith("@@"):
+                if text.startswith("-") and not text.startswith("--- "):
+                    # A newly introduced deletion (`+-guard`) sits on no head line of its own: it anchors
+                    # on a line a finding can cite in its PR hunk, never on the line past the file's end.
+                    anchor = _removal_anchor(head_anchors, min(max(index, 0), len(head_anchors)))
+                    if anchor is not None:
+                        head_lines.append(anchor)
+                elif head_numbers[index] is not None and not text.startswith("@@"):
                     head_lines.append(head_numbers[index])
             index += 1
         if content:
@@ -6951,12 +6957,19 @@ def _audit_head(state, config):
 def _break_it_target_facts(state, config, finding, head):
     """The `breakIt` block of an audit target: the test role's test, the test committed at the audited
     head, the build session's reason for a change, and how the two compare (`audits.BREAK_IT_MATCHES`).
-    Fails closed: a committed test git cannot read is `missing`."""
+    Fails closed: a committed test git cannot read is `missing`, and a recorded change with no kept
+    original reads `changed-unexplained` (never `same`)."""
     block, _kind = break_it.carried_block(finding)
     path = block["path"] if block is not None else None
     current = block["content"] if block is not None else None
     kept = finding.get(REVIEWER_TEST_FIELD)
-    reviewer = kept if isinstance(kept, str) else current
+    if isinstance(kept, str):
+        reviewer = kept
+    elif _changed_why(finding) is not None:
+        # axis: a recorded change without the kept original is never read against its own rewritten text — it has no baseline
+        reviewer = None
+    else:
+        reviewer = current
     committed = None
     repo_root = config.get("repoRoot")
     if path is not None and _nonempty_str(repo_root) and _nonempty_str(head):
@@ -6968,6 +6981,8 @@ def _break_it_target_facts(state, config, finding, head):
     why = _changed_why(finding)
     if committed is None:
         match = audits.MATCH_MISSING
+    elif reviewer is None:
+        match = audits.MATCH_CHANGED_UNEXPLAINED
     elif committed == reviewer:
         match = audits.MATCH_SAME
     elif committed == current and why is not None:
@@ -7468,9 +7483,10 @@ def _after_audits(state, config):
     # back) SKIPS the scoped dispatch with a receipt-visible note, rather than dispatching a vacuous
     # scan that reviews nothing while looking conformant. The audits' own new-issue candidates still
     # route through the same fold (an empty-artifact `_fold_scoped`).
-    # A delta session saved before the fix delta was kept (its surface may be the old `{}`) is rebuilt
-    # first, so the skip decision below reads the rebuilt surface, or the PR is handed back.
-    if not _rebuild_saved_fix_delta(state):
+    # A delta round with no kept fix delta (a session saved by the previous release is handed back at
+    # load, never rebuilt) hands the PR back here rather than judging a surface it cannot trust.
+    if not isinstance(state.get("_fixDeltaDiff"), str):
+        _hand_back_unknown_fix_surface(state, "the round has no kept fix delta")
         return
     if state.get("_newSurface"):
         state["step"] = P_SCOPED
@@ -7488,28 +7504,6 @@ def _skip_empty_scoped_surface(state, config):
     _fold_scoped(state, config, {})
 
 
-def _rebuild_saved_fix_delta(state):
-    """True when the state may go on. A delta round's state without a string `_fixDeltaDiff` (a session
-    saved before the fix delta was kept) has both `_newSurface` and `_fixDeltaDiff` rebuilt from the
-    stamped baseline and the head diff; when that cannot be done the PR is handed back
-    (`fix-surface-unknown`) and False comes back. A finished state, the extra audit round (it runs no
-    scoped finder) and a state that has its fix delta are left as they are."""
-    if (not isinstance(state, dict) or state.get("terminal") or _is_extra_audit_round(state)
-            or isinstance(state.get("_fixDeltaDiff"), str)):
-        return True
-    baseline = state.get("deltaBaseline")
-    reviewed = baseline.get("diff") if isinstance(baseline, dict) else None
-    head = state.get("headDiff")
-    rebuilt = (_fix_delta_surface(state, reviewed, head)
-               if isinstance(reviewed, str) and isinstance(head, str) else None)
-    if rebuilt is None:
-        _hand_back_unknown_fix_surface(
-            state, "the fixes' own diff could not be rebuilt for a saved delta session")
-        return False
-    state["_newSurface"], state["_fixDeltaDiff"] = rebuilt
-    return True
-
-
 def _saved_delta_stretch(state):
     """True for a saved, unfinished state in round 2 or later that sits in a delta round's audit,
     post-audits verify or scoped stretch: the steps whose order or fold reads the round's fix delta."""
@@ -7523,30 +7517,40 @@ def _saved_delta_stretch(state):
             or (step == P_VERIFY and state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS))
 
 
-def _finish_saved_fix_delta(state):
-    """Rebuild, or hand back, a saved state in a delta round's stretch that lacks its fix delta
-    (`_rebuild_saved_fix_delta`). Returns None when the state needs nothing, else the journal outcome
-    (`fix-delta-hand-back` or `fix-delta-rebuilt`); the caller persists the state.
+def _holds_change_without_kept_original(state):
+    """True when any finding the state holds records a build-session test change (`_changed_why`) and
+    carries no kept `REVIEWER_TEST_FIELD`: the previous release did not keep the reviewer's original."""
+    for key in ("findings", "fixBatch", "_auditTargets"):
+        rows = state.get(key)
+        for finding in rows if isinstance(rows, list) else []:
+            if (isinstance(finding, dict) and _changed_why(finding) is not None
+                    and not isinstance(finding.get(REVIEWER_TEST_FIELD), str)):
+                return True
+    return False
 
-    A state waiting at the scoped step has its pending scoped payload refreshed from the rebuilt
-    surface; a rebuilt empty surface there is routed through `_skip_empty_scoped_surface`, the same
-    decision `_after_audits` makes, and the pending action is cleared."""
-    if (not _saved_delta_stretch(state) or _is_extra_audit_round(state)
-            or isinstance(state.get("_fixDeltaDiff"), str)):
-        return None
-    scoped = state.get("step") == P_SCOPED
-    if not _rebuild_saved_fix_delta(state):
-        state["pending"] = None
-        return "fix-delta-hand-back"
-    if scoped:
-        if not state.get("_newSurface"):
-            state["pending"] = None
-            _skip_empty_scoped_surface(state, state["config"])
-        else:
-            pending = state.get("pending")
-            if isinstance(pending, dict) and isinstance(pending.get("payload"), dict):
-                pending["payload"]["hunks"] = state["_newSurface"]
-    return "fix-delta-rebuilt"
+
+def _finish_saved_previous_release(state):
+    """Hand back a non-terminal session of a continuable earlier generation (saved by the previous
+    release) that lacks state this version added, instead of rebuilding it. Returns True when it
+    handed back; the caller persists the state and journals it.
+
+    A session is handed back, findings open, when it sits in a delta round's audit, post-audits verify
+    or scoped stretch (`_saved_delta_stretch`: no `_fixDeltaDiff`, no audit targets' `breakIt` facts),
+    or when any finding it holds records a test change with no kept original. A current-generation
+    session, and the extra audit round's stretch, are never touched by the stretch test."""
+    if (not isinstance(state, dict) or state.get("terminal")
+            or not _generation_is_continuable_earlier(state)):
+        return False
+    # axis: a stretch step of a continuable earlier generation is handed back before any scoped or audit order renders
+    in_stretch = _saved_delta_stretch(state) and not _is_extra_audit_round(state)
+    # axis: a recorded test change with no kept original is handed back, never certified on a guessed baseline
+    if not (in_stretch or _holds_change_without_kept_original(state)):
+        return False
+    state["pending"] = None
+    _hand_back_unknown_fix_surface(
+        state, "a session saved by the previous release lacks the fix delta, the audit test facts or "
+               "the kept reviewer test this version needs")
+    return True
 
 
 AUDIT_ORIGIN_FIELD = "originAuditId"
@@ -11107,10 +11111,11 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
     """None to carry on, or a refusal. The caller holds the session lock. Replays any sealed commit,
     repairs a damaged `loop-state.json` from its mirror, then hands back a session of an earlier
     generation that was waiting at a retired owner gate, then hands back a session of any generation that
-    was waiting at a panel in round 2 or later, then rebuilds the fix delta of a delta round saved
-    without one (or hands the PR back): the one shared call path every locked command takes
-    between its upgrade gate and its first state load, so no command reads such a session's retired
-    step or renders a scoped order without a fix delta."""
+    was waiting at a panel in round 2 or later, then hands back a session of a continuable earlier
+    generation saved in a delta round's stretch or holding a test change with no kept original: the
+    one shared call path every locked command takes between its upgrade gate and its first state
+    load, so no command reads such a session's retired step or renders a scoped or audit order
+    without the state this version added."""
     if sidecar_resolver_for is None:
         sidecar_resolver_for = _sidecar_resolver_for_recover_dispatch(session_dir)
     if sidecar_target is None:
@@ -11127,7 +11132,7 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
     _migrate_saved_fixer_step(session_dir, cmd)
     _hand_back_retired_gate(session_dir, cmd)
     _hand_back_retired_later_panel(session_dir, cmd)
-    _rebuild_saved_fix_delta_for_scoped_step(session_dir, cmd)
+    _hand_back_saved_previous_release(session_dir, cmd)
     return None
 
 
@@ -11178,20 +11183,20 @@ def _hand_back_retired_later_panel(session_dir, cmd):
                                   "outcome": "retired-gate-hand-back"})
 
 
-def _rebuild_saved_fix_delta_for_scoped_step(session_dir, cmd):
-    """Persist `_finish_saved_fix_delta` over the saved state and journal it once. A state that cannot
-    be read, or that needs no rebuild, is left for the command's own load to answer. The caller holds
-    the session lock."""
+def _hand_back_saved_previous_release(session_dir, cmd):
+    """Persist `_finish_saved_previous_release` over the saved state and journal it once. A state that
+    cannot be read, or that needs no hand-back, is left for the command's own load to answer. The
+    caller holds the session lock."""
     ok, state = load_state(session_dir)
     if not ok or not isinstance(state, dict):
         return
     held = state.get("step")
-    outcome = _finish_saved_fix_delta(state)
-    if outcome is None:
+    if not _finish_saved_previous_release(state):
         return
     save_state(session_dir, state)
     _journal_append(session_dir, {"cmd": cmd, "phase": held if isinstance(held, str) else None,
-                                  "round": state["round"], "attempt": 0, "outcome": outcome})
+                                  "round": state["round"], "attempt": 0,
+                                  "outcome": "previous-release-hand-back"})
 
 
 def _state_damage(session_dir):
