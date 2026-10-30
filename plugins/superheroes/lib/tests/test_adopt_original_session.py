@@ -973,6 +973,18 @@ def test_a_lane_bound_to_the_branch_whose_branch_is_gone_from_the_remote_proceed
     _proceeds(result, calls)
 
 
+def test_a_gone_branch_lane_whose_session_the_listing_shows_live_refuses_live(tmp_path, first_pr):
+    # axis: a gone-branch lane needs no listing, but a supplied listing that shows its session live still refuses, since the deleted ref does not stop its builder — see bite-proof record i2254_original_session
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_running.json"), branch=ADOPTED)
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert calls == []
+
+
 def test_a_lane_bound_to_the_branch_by_its_adopts_number_is_dropped_when_the_branch_is_gone(tmp_path, first_pr):
     # axis: a lane whose premise adopts the same pull request number is bound to the branch too (asked directly: a launch premise carrying `adopts` needs a stack)
     repo = _adopted_repo(tmp_path)

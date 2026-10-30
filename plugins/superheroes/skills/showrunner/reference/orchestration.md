@@ -526,8 +526,9 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   A handed-back lane had opened its own pull request before its handback, so a pull request on the
   adopted branch opened before then would itself be the branch's first; the lane's pull request was
   on another branch, and with no fix order since it writes only that branch. A bound lane whose
-  branch is gone from the remote does not count. A live builder could recreate a deleted branch by
-  pushing to it, a known limit of that rule. Every read the launcher makes for this fails closed:
+  branch is gone from the remote needs no session listing, but a listing you supply that shows its
+  session live still refuses `adopt-original-session-live`: a deleted branch does not stop its
+  builder. Every read the launcher makes for this fails closed:
   one that fails or is ambiguous keeps the lane in the check.
   `adopt-original-session-live` means a lane that could still write the branch has a session still
   listed live; `originalSessions` names each one, and the fix order goes to it.
