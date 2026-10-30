@@ -78,6 +78,22 @@ def test_a_a_carried_lost_test_finding_the_owner_ruled_out_of_scope_and_the_audi
     assert parked == []
 
 
+def test_a_an_exempt_carried_lost_test_finding_gets_its_ruled_out_of_scope_row_and_the_record_reports_the_ruling(parked):
+    row = _lost_row()
+    state = _state(row)
+    key = RD._finding_identity_key(row)
+    _rule(state, row)
+    _audit(state, row)
+    assert RD._break_it_kept_step(state, {}) is False
+    kept = [r for rec in state["rounds"].values() for r in rec.get("breakItKept") or []]
+    assert [(r["findingKey"], r["outcome"], r["ruledBy"], r["ruledAt"]) for r in kept] == [
+        (key, "ruled-out-of-scope", PROV["ruledBy"], PROV["ruledAt"])]
+    by_key, rulings, exempt = RS.decision_inputs(state)
+    assert key in exempt
+    outcome, reason, _rep = RS._decide(by_key[key], by_key, rulings, exempt)
+    assert "fixed and audited" not in (reason or ""), (outcome, reason)
+
+
 @pytest.mark.parametrize("case", ["unattributed", "half-attributed", "no-audit", "not-discharged-audit",
                                   "no-ruling", "guidance-ruling"])
 def test_b_a_lost_test_finding_without_the_whole_exemption_still_parks(parked, case):

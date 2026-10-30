@@ -150,6 +150,18 @@ def test_two_members_rebound_together_in_a_later_round_both_read_shared():
     assert all(SHARED in bullets[m] and ALONE not in bullets[m] for m in "ab")
 
 
+def test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone():
+    # the fold stores a binding for the test carrier `a` only; the plain sibling `b` rides in the round's fix report
+    state = _synthetic({1: [("a", "c1")], 2: [("a", "c2")]}, ["a", "b"])
+    state["rounds"]["1"]["fixReportedKeys"] = ["a", "b"]
+    state["rounds"]["2"]["fixReportedKeys"] = ["a"]
+    bullets = _synthetic_bullets(state)
+    assert ALONE in bullets["a"] and SHARED not in bullets["a"]
+    # a later round whose fix report still names the sibling is no solo repair
+    state["rounds"]["2"]["fixReportedKeys"] = ["a", "b"]
+    assert ALONE not in _synthetic_bullets(state)["a"]
+
+
 def test_three_members_two_rebound_together_later_read_shared_and_none_reads_alone():
     state = _synthetic({1: [("a", "c1"), ("b", "c1"), ("c", "c1")], 2: [("a", "c2"), ("b", "c2")]}, ["a", "b", "c"])
     bullets = _synthetic_bullets(state)

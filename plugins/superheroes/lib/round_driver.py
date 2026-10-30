@@ -9011,7 +9011,16 @@ def _break_it_kept_step(state, config):
                 return True
     # axis: a carried finding whose test was lost and never re-attached withholds certification, though no round-level run registers it — see bite-proof record c1l11b_wo_k_carried_lost_test
     # axis: a carried lost-test finding the owner ruled out of scope with an audit-cleared, attributed ruling owes no park; every other one still parks — see bite-proof record c1l11b_wo_k_carried_lost_test
-    lost = [key for key in _carried_test_lost_unresolved(state) if _break_it_ruled_exempt(state, key) is None]
+    lost, exempt_rows = [], []
+    for key in _carried_test_lost_unresolved(state):
+        ruled = _break_it_ruled_exempt(state, key)
+        if ruled is None:
+            lost.append(key)
+            continue
+        # axis: an exempt carried lost-test finding gets its ruled-out-of-scope row, so the record reports the owner's ruling and never "fixed and audited" — see bite-proof record c1l11b_wo_k_carried_lost_test
+        exempt_rows.append({"findingKey": key, "path": None, "outcome": "ruled-out-of-scope",
+                            "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
+                            "ruledAt": ruled["provenance"]["ruledAt"]})
     if lost:
         _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
         return True
@@ -9023,13 +9032,15 @@ def _break_it_kept_step(state, config):
                 latest[run["findingKey"]] = run
                 latest_round[run["findingKey"]] = _round_number(rkey)
     if not latest:
+        if exempt_rows:
+            _record_round(state, "breakItKept", exempt_rows)
         return False
     _, by_key, fault = _fixed_ledger_rows(state)
     if fault is not None:
         _park_cannot_certify(state, "break-it test not kept: disposition ledger fault (%s)" % fault)
         return True
     head = config.get(FIX_FOLD_HEAD_KEY) or config.get("headSha")
-    rows, failed = [], []
+    rows, failed = list(exempt_rows), []
     for key, run in latest.items():
         entry = by_key.get(key)
         disposition = entry.get("disposition") if isinstance(entry, dict) else None

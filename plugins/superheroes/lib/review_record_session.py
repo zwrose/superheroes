@@ -547,22 +547,37 @@ def _repaired_alone(state, key, members):
         return False
     mine = review_record._key({"findingKey": key})
     others = {review_record._key({"findingKey": m}) for m in members if isinstance(m, str) and m.strip()} - {mine}
+    reported = _fix_reported_by_round(state)
     shared_rounds, latest = [], None
     for n, bound in rounds:
         own = [c for k, c in bound if k == mine]
         if not own:
             continue
         with_others = {c for k, c in bound if k in others}
-        if any(c in with_others for c in own):
+        # axis: a plain sibling is bound only through the carrier, so the group's membership in the round's fix report counts as sharing too — see bite-proof record c1l11f_wo_c_fix_groups
+        reported_with = bool(reported.get(n, set()) & others)
+        if any(c in with_others for c in own) or reported_with:
             shared_rounds.append(n)
-        latest = (n, own[0], with_others)
+        latest = (n, own[0], with_others, reported_with)
     if latest is None:
         return False
-    n, commit, with_others = latest
+    n, commit, with_others, reported_with = latest
     # axis: a member reads repaired alone only when its latest binding follows a round that bound it with another member — see bite-proof record c1l11f_wo_c_fix_groups
     later = any(s < n for s in shared_rounds)
-    # axis: and only when that latest binding's commit binds no other member of the group in its round — see bite-proof record c1l11f_wo_c_fix_groups
-    return later and commit not in with_others
+    # axis: and only when that latest binding's commit binds no other member of the group in its round, and the round's fix report names none of them — see bite-proof record c1l11f_wo_c_fix_groups
+    return later and commit not in with_others and not reported_with
+
+
+def _fix_reported_by_round(state):
+    """``{round number: {stored keys of the findings that round's fix was handed and did not leave unfixed}}``; a round
+    without a readable ``fixReportedKeys`` list is absent."""
+    rounds = state.get("rounds")
+    out = {}
+    for n in (n for n in (rounds if isinstance(rounds, dict) else ()) if str(n).isdigit()):
+        keys = rounds[n].get("fixReportedKeys") if isinstance(rounds[n], dict) else None
+        if isinstance(keys, list):
+            out[int(n)] = {review_record._key({"findingKey": k}) for k in keys if isinstance(k, str) and k.strip()}
+    return out
 
 
 def _finding_parts(row, older):
