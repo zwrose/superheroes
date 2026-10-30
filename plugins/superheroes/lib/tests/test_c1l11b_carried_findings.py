@@ -154,6 +154,11 @@ def test_t1_a_carried_finding_a_later_commit_fixed_is_settled_fixed_and_the_reco
     assert seeded.get("raisedSeq") and seeded.get("raisedRound") == 1 and "disposition" not in seeded, seeded
     assert [t["id"] for t in first["payload"]["targets"]] == [key]
     assert first["payload"]["targets"][0]["fixHunks"], "the audit is given the hunk of the change over the finding's line"
+    if read == "full":
+        # the abandoned session's audit reads only the later fix (auditBase...head), never the original pull request's changes
+        delta = first["payload"]["targets"][0]["fixerDelta"]
+        assert "-+edited_b = 1" in delta and "++edited_b = 2" in delta, delta
+        assert not any("edited_a" in line for line in delta), delta
     n, seen = _run(s, _respond(audit="discharged"))
     assert n["action"] == RD.P_TERMINAL and n["payload"]["verdict"] == "converged", seen
     assert seen[:len(order)] == order and (RD.P_PANEL in [a for a, _ in seen]) == (read == "full"), seen
@@ -480,3 +485,77 @@ def test_c4_a_fresh_report_that_carries_a_break_it_test_keeps_it_when_merged_int
     [row] = RD._with_carried({"_carriedToVerify": [held]}, [fresh])
     assert row["suggestion"] == BREAK_IT_BLOCK and row[RD.break_it.RUN_FIELD] == run, row
     assert row["severity"] == "Important" and row[SC.FINDING_KEY_FIELD] == held[SC.FINDING_KEY_FIELD], row
+
+
+def test_c5_a_break_it_run_bound_to_the_fresh_key_is_rebound_to_the_carried_key_on_merge():
+    held = _finding(27)
+    fresh = _compiled(held, suggestion=BREAK_IT_BLOCK)
+    fresh_key = RD._finding_identity_key(fresh)
+    assert fresh_key != held[SC.FINDING_KEY_FIELD]
+    state = {"round": 1, "rounds": {"1": {"breakItRuns": [{"findingKey": fresh_key, "outcome": "failed"},
+                                                          {"findingKey": "other", "outcome": "failed"}]}},
+             "_carriedToVerify": [held]}
+    [row] = RD._with_carried(state, [fresh])
+    assert row[SC.FINDING_KEY_FIELD] == held[SC.FINDING_KEY_FIELD]
+    assert [r["findingKey"] for r in state["rounds"]["1"]["breakItRuns"]] == [held[SC.FINDING_KEY_FIELD], "other"]
+
+
+def test_c6_a_carried_finding_whose_record_shows_a_lost_break_it_test_is_never_audited_but_sent_back(tmp_path, monkeypatch):
+    run = {"test": "tests/test_x.py", "commit": "h", "status": "ran", "exitCode": 1, "output": "", "reason": None, "changedWhy": None}
+    finding = _finding(27, tradeoff=False, breakItRuns=[run])
+    key = finding[SC.FINDING_KEY_FIELD]
+    assert RD._carried_test_unrecoverable(finding) and not RD._carried_test_unrecoverable(_finding(27))
+    s = _session(tmp_path, monkeypatch, [finding])
+    first = s.next()
+    assert first["action"] == RD.P_SCOPED, first  # no audit target: a later source-only fix cannot discharge a lost test
+    assert _carried(s.state()) == {"keys": [key], "auditBase": s.reviewed, "discharged": [], "sentBack": [key]}
+
+
+def _lost_test_state(row):
+    return {"round": 2, "rounds": {"1": {}, "2": {}}, SC.DISPOSITION_LEDGER_KEY: [row], "config": {}}
+
+
+def test_c7_a_carried_finding_with_a_lost_break_it_test_is_marked_and_withholds_certification_once_fixed(monkeypatch):
+    run = {"test": "tests/test_x.py", "commit": "h", "status": "ran", "exitCode": 1, "output": "", "reason": None, "changedWhy": None}
+    earlier = {"findings": [dict(_finding(27, tradeoff=False, breakItRuns=[run]), outcome=None)]}
+    [row] = RD._carried_findings(earlier)
+    assert row[RD.CARRIED_TEST_LOST_FIELD] is True
+    plain = dict(_finding(27, tradeoff=False), outcome=None)
+    assert RD.CARRIED_TEST_LOST_FIELD not in RD._carried_findings({"findings": [plain]})[0]
+    fixed = dict(row, disposition="fixed")
+    assert RD._carried_test_lost_unresolved(_lost_test_state(fixed)) == [RD._finding_identity_key(fixed)]
+    # a reviewer who attaches the test again clears the obligation, and a finding not fixed owes nothing here
+    assert RD._carried_test_lost_unresolved(_lost_test_state(dict(fixed, suggestion=BREAK_IT_BLOCK))) == []
+    assert RD._carried_test_lost_unresolved(_lost_test_state(dict(row, disposition="refuted"))) == []
+    parked = []
+    monkeypatch.setattr(RD, "_park_cannot_certify", lambda state, detail: parked.append(detail))
+    assert RD._break_it_kept_step(_lost_test_state(fixed), {}) is True
+    assert parked and "was lost" in parked[0], parked
+
+
+def test_c8_the_lost_test_marker_survives_a_merge_the_fresh_higher_severity_report_wins():
+    run = {"test": "tests/test_x.py", "commit": "h", "status": "ran", "exitCode": 1, "output": "", "reason": None, "changedWhy": None}
+    earlier = {"findings": [dict(_finding(27, severity="Minor", tradeoff=False, breakItRuns=[run]), outcome=None)]}
+    [held] = RD._carried_findings(earlier)
+    assert held[RD.CARRIED_TEST_LOST_FIELD] is True
+    fresh = _compiled(held, severity="Important")
+    [row] = RD._with_carried({"_carriedToVerify": [held]}, [fresh])
+    assert row["severity"] == "Important" and row[RD.CARRIED_TEST_LOST_FIELD] is True, row
+    # a fresh report that attaches the test again clears the obligation
+    again = _compiled(held, severity="Important", suggestion=BREAK_IT_BLOCK)
+    again[RD.break_it.RUN_FIELD] = {"outcome": "failed", "reason": None, "exitCode": 1, "output": "", "path": "tests/test_x.py", "head": "h"}
+    [row] = RD._with_carried({"_carriedToVerify": [held]}, [again])
+    assert RD.CARRIED_TEST_LOST_FIELD not in row, row
+
+
+def test_c9_the_lost_test_marker_survives_the_ledger_row_being_replaced_on_a_re_raise():
+    run = {"test": "tests/test_x.py", "commit": "h", "status": "ran", "exitCode": 1, "output": "", "reason": None, "changedWhy": None}
+    earlier = {"findings": [dict(_finding(27, severity="Minor", tradeoff=False, breakItRuns=[run]), outcome=None)]}
+    [held] = RD._carried_findings(earlier)
+    key = RD._finding_identity_key(held)
+    state = {"round": 2, "rounds": {"1": {}, "2": {}}, "config": {}}
+    ledger = [dict(held, disposition="fixed")]
+    seen = {key: 0}
+    reraised = dict(_compiled(held, severity="Important"), **{SC.FINDING_KEY_FIELD: key})
+    entry = RD._seed_ledger_entry(state, ledger, seen, reraised, key, 2)
+    assert entry[RD.CARRIED_TEST_LOST_FIELD] is True and ledger[0][RD.CARRIED_TEST_LOST_FIELD] is True, entry
