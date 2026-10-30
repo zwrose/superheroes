@@ -115,7 +115,13 @@ class FakeGh:
             if self.view_raw is not None:
                 return SimpleNamespace(returncode=0, stdout=self.view_raw, stderr="")
             body = self.bodies.pop(0) if len(self.bodies) > 1 else self.bodies[0]
-            return SimpleNamespace(returncode=0, stdout=json.dumps({"body": body, "number": 42}), stderr="")
+            payload = {
+                "body": body,
+                "number": 42,
+                "base": {"ref": "main", "repo": {"default_branch": "main"}},
+                "head": {"sha": "a" * 40},
+            }
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload), stderr="")
         if key == USER:
             return SimpleNamespace(returncode=0, stdout="advisor\n", stderr="")
         if key[:2] == ("gh", "api") and key[2].startswith(COMMENTS[2].split("?")[0] + "?per_page=100&page="):
