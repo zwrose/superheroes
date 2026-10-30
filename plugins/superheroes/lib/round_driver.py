@@ -6325,11 +6325,25 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         if moved:
             # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
             second_run["headAfter"] = artifact.get("headShaAfter")
-        # axis: the record holds the first failure and the one re-run, both runs — see bite-proof record c1l9a_wo1_verify_rerun
-        _record_round_append(state, "rerunChecks", {"check": "verify", "runs": [first_run, second_run]})
         # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun
         moved_heads = _verify_rerun_heads_moved(first.get("head"), artifact, head, moved)
-        if result == "pass" and moved_heads is not None:
+        # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
+        trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
+        # The decision is made here, once; the review record reads it off the entry and never re-derives it.
+        if result != "pass":
+            rerun_decision = "failed"
+        elif moved_heads is not None:
+            rerun_decision = "head-moved"
+        elif len(trees) > 1:
+            rerun_decision = "tree-changed"
+        else:
+            rerun_decision = "went-on"
+        # axis: the record holds the first failure and the one re-run, both runs, and the driver's decision on them — see bite-proof record c1l9a_wo1_verify_rerun
+        entry = {"check": "verify", "runs": [first_run, second_run], "decision": rerun_decision}
+        if rerun_decision == "head-moved":
+            entry["heads"] = list(moved_heads)
+        _record_round_append(state, "rerunChecks", entry)
+        if rerun_decision == "head-moved":
             _set_terminal(state, "halted")
             state["certification"] = {
                 "shape": None,
@@ -6340,9 +6354,7 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                       "withheld" % moved_heads)
             state["step"] = P_TERMINAL
             return
-        # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
-        trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
-        if result == "pass" and len(trees) > 1:
+        if rerun_decision == "tree-changed":
             _set_terminal(state, "halted")
             state["certification"] = {
                 "shape": None,
@@ -13883,18 +13895,41 @@ def _verify_run_head(cwd):
 
 
 def _verify_run_tree(cwd):
-    """A digest of the tracked working-tree changes against HEAD in `cwd` (the empty diff digests
-    too), or None when it cannot be read. The verify command runs against the working tree, so a
-    retry at one head can still run on different contents."""
-    try:
-        done = subprocess.run(["git", "diff", "HEAD", "--binary", "--no-ext-diff"], cwd=cwd,
-                              stdin=subprocess.DEVNULL, capture_output=True,
-                              timeout=_VERIFY_HEAD_READ_SECONDS)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    if done.returncode != 0:
-        return None
-    return hashlib.sha256(done.stdout).hexdigest()
+    """A digest of the working-tree changes against HEAD in `cwd` (the empty diff digests too): the
+    tracked changes and the untracked files that are not ignored, each with its bytes. None when
+    any of it cannot be read. The verify command runs against the working tree, so a retry at one
+    head can still run on different contents. An untracked symlink digests as its link text and an
+    untracked directory entry (a nested repository) as a directory marker; ignored files are not
+    listed, so build output never counts."""
+    reads = (["git", "diff", "HEAD", "--binary", "--no-ext-diff"],
+             ["git", "ls-files", "--others", "--exclude-standard", "-z"])
+    outputs = []
+    for argv in reads:
+        try:
+            done = subprocess.run(argv, cwd=cwd, stdin=subprocess.DEVNULL, capture_output=True,
+                                  timeout=_VERIFY_HEAD_READ_SECONDS)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
+        if done.returncode != 0:
+            return None
+        outputs.append(done.stdout)
+    digest = hashlib.sha256(outputs[0])
+    for raw in sorted(p for p in outputs[1].split(b"\0") if p):
+        path = os.path.join(os.fsencode(cwd), raw)
+        digest.update(b"\0untracked\0" + raw + b"\0")
+        try:
+            if os.path.islink(path):
+                digest.update(b"link\0" + os.readlink(path))
+            elif os.path.isdir(path):
+                digest.update(b"dir\0")
+            else:
+                digest.update(b"file\0")
+                with open(path, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        digest.update(chunk)
+        except OSError:
+            return None
+    return digest.hexdigest()
 
 
 def _run_verify_execute(session_dir, claim, timeout, run):

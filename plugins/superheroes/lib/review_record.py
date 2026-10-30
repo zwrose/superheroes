@@ -100,6 +100,8 @@ _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registr
 # The words of the record's optional parts, their one home.
 GRADE_VERDICTS = ("confirmed", "plausible", "wrong")
 RUN_STATUSES = ("ran", "timed-out", "not-started")
+# What the driver decided about a verify re-run; the record reads it and never works it out again.
+RERUN_DECISIONS = ("went-on", "head-moved", "tree-changed", "failed")
 SOURCE_KINDS = ("reviewer", "sweep")
 # The optional account keys the record carries whole, when the account has them.
 _ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare", "provenCopies")
@@ -460,7 +462,15 @@ def _rerun_fault(c):
     if not (isinstance(c.get("runs"), list) and len(c["runs"]) == 2):
         return ".runs (needs exactly two)"
     fault = _items_fault(c["runs"], _run_fault)
-    return None if fault is None else f".runs{fault}"
+    if fault is not None:
+        return f".runs{fault}"
+    if "decision" in c and c["decision"] not in RERUN_DECISIONS:
+        return ".decision"
+    heads = c.get("heads")
+    if heads is not None and not (isinstance(heads, list) and len(heads) == 2
+                                  and all(_nb_or_none(h) for h in heads)):
+        return ".heads"
+    return None
 
 
 def _break_it_fault(x):
@@ -1809,38 +1819,43 @@ def _run_result(run):
     return "timed out" if run.get("status") == "timed-out" else "did not start"
 
 
-def _moved_heads(c):
-    """`(first_head, second_end_head)` when the first run's `head` and the second run's end head are both non-empty
-    strings and differ, else None. The second run's end head is its `headAfter` when that is a non-empty string,
-    else its `head`: a missing, null, empty or non-string head is unknown and never counts as moved."""
-    runs = c.get("runs") if isinstance(c, dict) else None
-    if not (isinstance(runs, list) and len(runs) == 2 and all(isinstance(run, dict) for run in runs)):
-        return None
-    first, second = runs[0].get("head"), runs[1].get("head")
-    # axis: the second run's end head is its headAfter when it moved during the run — see bite-proof record c1l9b_wod_head_after
-    after = runs[1].get("headAfter")
-    if isinstance(after, str) and after:
-        second = after
-    if not (isinstance(first, str) and first and isinstance(second, str) and second and first != second):
-        return None
-    return first, second
+def _decision(c):
+    """The driver's recorded decision on a verify re-run entry, or None when the entry has none (a record an
+    earlier version wrote) or a value that is not one of `RERUN_DECISIONS`. The record never works it out again."""
+    decision = c.get("decision") if isinstance(c, dict) else None
+    return decision if isinstance(decision, str) and decision in RERUN_DECISIONS else None
+
+
+def _head_word(head):
+    return head[:12] if isinstance(head, str) and head else "unknown"
+
+
+def _rerun_clause(c):
+    """What a re-run entry says beyond its two results, by the driver's decision: a re-run that did not go on
+    names why it was not on the same code; one that went on, failed, or has no decision says nothing here."""
+    decision = _decision(c)
+    if decision == "head-moved":
+        heads = c.get("heads")
+        heads = heads if isinstance(heads, list) and len(heads) == 2 else [None, None]
+        return f" — the second run was at a different head ({_head_word(heads[0])} then {_head_word(heads[1])})"
+    if decision == "tree-changed":
+        return " — the second run saw changed working-tree contents"
+    return ""
 
 
 def _rerun_line(checks, compact):
     if not checks:
         return None
-    # axis: a re-run across two different heads is never called unchanged code — see bite-proof record c1l9b_woc_rerun_heads
-    moved = [_moved_heads(c) for c in checks]
-    lead = "Re-run after one failure on unchanged code: "
+    # axis: a re-run is called unchanged code only when the driver's decision on it is that it went on — see bite-proof record c1l10b_wo3_verify_rerun_seam
+    unchanged = all(_decision(c) == "went-on" for c in checks)
+    lead = "Re-run after one failure on unchanged code: " if unchanged else "Re-run after one failure: "
     if compact:
-        lead = "Re-run after one failure: " if any(moved) else lead
         return f"{lead}{len(checks)} checks {LISTED}."
     return lead + "; ".join(
         f"round {c.get('round')} {_inline_code(str(c.get('check')))}: "
         + " then ".join(_run_result(run) for run in c.get("runs") or [])
-        + (f" — the second run was at a different head ({heads[0][:12]} then {heads[1][:12]}), not on unchanged code"
-           if heads else "")
-        for c, heads in zip(checks, moved))
+        + _rerun_clause(c)
+        for c in checks)
 
 
 def _roles(r):
