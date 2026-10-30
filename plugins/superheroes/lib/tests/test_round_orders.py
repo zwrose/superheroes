@@ -133,6 +133,20 @@ def _gapsweep_placeholders(channel="file"):
     }
 
 
+def _second_test_placeholders(channel="file"):
+    import round_driver as RD
+    return {
+        "HELD_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "second-test-held.json"),
+        "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "VERIFICATION_ROOT": _REPO,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
+        "ROLE_BRIEF_PATH": os.path.join(_PLUGIN_ROOT, "agents", "test-role.md"),
+        "BREAK_IT_GRAMMAR_TEXT": RD._break_it_grammar_text("test-role"),
+        "CHANNEL": channel,
+    }
+
+
 def _audits_placeholders(channel="file"):
     return {
         "TARGET_SUMMARY_PATH": os.path.join(_SESSION, "round-2", "audit-targets", "t0.json"),
@@ -193,6 +207,12 @@ _GOLDEN_CONTEXTS = {
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-gap-sweep",
                                   "gap-sweep.a0.payload.json"),
         placeholders=_gapsweep_placeholders(),
+    ),
+    RP.P_SECOND_TEST: lambda: _base_context(
+        host_seat=True,
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-second-test",
+                                  "second-test.a0.payload.json"),
+        placeholders=_second_test_placeholders(),
     ),
     RP.P_AUDITS: lambda: _base_context(
         host_seat=True,

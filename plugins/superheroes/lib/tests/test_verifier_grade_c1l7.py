@@ -151,7 +151,7 @@ def test_a_drop_without_its_grade_key_never_happens_for_a_non_dropped_finding():
     out = _apply({"id": "v0", "verdict": "PLAUSIBLE", "reason": "r"})
     assert out["drops"] == []
     assert set(out) == {"findings", "drops", "downgrades", "unmatched", "unverified", "ambiguous",
-                        "notExecuted"}
+                        "notExecuted", "held"}
 
 
 # ---- the driver fold --------------------------------------------------------------------------

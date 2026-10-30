@@ -93,6 +93,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "verifyPasses": dict_list,
     "verifierProvenance": dict_list,
     "synthesisUnseatable": dict_list,
+    "secondTestUnseatable": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
@@ -702,7 +703,13 @@ def build_degraded_prose(state, form, journal=None):
             degraded_out.append(
                 "synthesis-unseatable (round %s): no grouping seat outside the makers' families on a "
                 "proven cell — findings were not grouped (nothing dropped)" % rkey)
-        bik = declared.get("breakItKept")
+        stu = declared.get("secondTestUnseatable")
+        if stu:
+            degraded_out.append(
+                "second-test-unseatable (round %s): no second-test seat outside the makers' families on a "
+                "proven cell — %d held finding(s) were graded with the test they have (nothing dropped)"
+                % (rkey, sum(len(r.get("held") or []) for r in stu if isinstance(r, dict))))
+        bik =declared.get("breakItKept")
         if bik:
             # axis: a row the owner ruled out of scope and the audit cleared is not a test the final change failed to hold — see bite-proof record wo_a_2072_ruled_exempt
             not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required", "ruled-out-of-scope")]

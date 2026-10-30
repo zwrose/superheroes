@@ -1703,7 +1703,7 @@ def test_orchestrator_fulfilled_phase_census():
 
     seat_phases = {
         RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_AUDITS, RP.P_SCOPED, RP.P_GAPSWEEP,
-        RP.P_FIXER,
+        RP.P_SECOND_TEST, RP.P_FIXER,
     }
     orchestrator_phases = {RP.P_VERIFY}
     terminal_phases = {RP.P_TERMINAL}

@@ -346,7 +346,8 @@ def test_the_non_panel_helpers_require_the_phase():
 
 def test_every_non_panel_phase_maps_to_a_cell_role():
     assert RD._NONPANEL_PHASE_ROLE == {RD.P_VERIFIERS: "verifier", RD.P_GAPSWEEP: "reviewer-deep",
-                                       RD.P_SCOPED: "reviewer-deep", RD.P_SYNTHESIS: "synthesis"}
+                                       RD.P_SCOPED: "reviewer-deep", RD.P_SYNTHESIS: "synthesis",
+                                       RD.P_SECOND_TEST: "reviewer-deep"}
     assert set(RD._NONPANEL_PHASE_ROLE) == set(RD._NONPANEL_REVIEWER_PHASES) | {RD.P_SYNTHESIS}
 
 
