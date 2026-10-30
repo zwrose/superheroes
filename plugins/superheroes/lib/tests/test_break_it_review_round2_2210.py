@@ -8,6 +8,7 @@ G4 a ref another worktree changes during the run is left and listed in `refsLeft
 G5 a run whose line value the coercion rejects is unmatched (`droppedAtCompile`), never a crash.
 G7 a recorded `working-copy-restore-failed` run parks cannot-certify whatever the finding's disposition.
 """
+import copy
 import os
 import shlex
 import subprocess
@@ -173,6 +174,7 @@ def test_g2_the_changed_test_is_carried_onto_the_entry_and_its_disposition_famil
              "disposition": "refuted", "dispositionRound": 1, "refutedReason": "no defect"}
     other = {session_contract.FINDING_KEY_FIELD: "k2", "suggestion": "other", "disposition": "fixed"}
     state = _ledger_state(entry, other)
+    before_other = copy.deepcopy(other)
     record = {"outcome": "passed", "reason": None, "exitCode": 0, "output": "", "path": "a.py", "head": "h"}
     RD._carry_break_it_change_to_ledger(state, key, "new text", record, "the import was wrong")
     row = state[session_contract.DISPOSITION_LEDGER_KEY][0]
@@ -180,7 +182,7 @@ def test_g2_the_changed_test_is_carried_onto_the_entry_and_its_disposition_famil
     assert [r["changedWhy"] for r in row[break_it.RUNS_FIELD]] == ["the import was wrong"]
     assert {f: row[f] for f in ("disposition", "dispositionRound", "refutedReason")} == {
         "disposition": "refuted", "dispositionRound": 1, "refutedReason": "no defect"}
-    assert state[session_contract.DISPOSITION_LEDGER_KEY][1] == other
+    assert state[session_contract.DISPOSITION_LEDGER_KEY][1] == before_other
 
 
 def test_g2_a_state_with_no_entry_for_the_finding_is_left_as_it_was():
@@ -646,3 +648,28 @@ def test_g7_the_same_refuted_finding_with_only_a_passing_run_does_not_park():
     state = _kept_state({1: [_run_record("passed")]})
     assert RD._break_it_kept_step(state, state["config"]) is False
     assert state.get("terminal") is None
+
+
+# ---- round-1 review fixes: capped Nit binding and run history on archive ---------------------------------
+
+
+def test_a_run_binds_to_a_nit_a_summary_row_collapsed():
+    block = "break-it-test v1\npath: a.py\nrun: python a.py\n---\npass\n"
+    member = {"file": "a.py", "title": "x", "line": 3, "findingKey": "member-key", "suggestion": block}
+    summary = {"title": "+ 1 more Nits", "severity": "Nit", "file": None, "line": None,
+               "summaryEntry": True, "members": [member]}
+    out = RD._break_it_run_keys([{"file": "a.py", "title": "x", "line": 3}], [summary])
+    assert len(out) == 1 and out[0]["findingKey"] == "member-key"
+    assert not out[0].get("droppedAtCompile")
+
+
+def test_archiving_an_older_live_row_keeps_the_ledger_runs():
+    old, new = {"outcome": "failed", "n": 1}, {"outcome": "passed", "n": 2, "changedWhy": "fixed the test"}
+    key_field = session_contract.FINDING_KEY_FIELD
+    live = {key_field: "k1", "file": "a.py", "title": "t", break_it.RUNS_FIELD: [old]}
+    state = {session_contract.DISPOSITION_LEDGER_KEY: [
+        {key_field: "k1", "file": "a.py", "title": "t", break_it.RUNS_FIELD: [old, new]}],
+        "dispositionLedgerOwner": session_contract.DISPOSITION_LEDGER_OWNER_VALUE}
+    RD._archive_departures(state, [live])
+    row = state[session_contract.DISPOSITION_LEDGER_KEY][0]
+    assert row[break_it.RUNS_FIELD] == [old, new]

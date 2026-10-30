@@ -2517,6 +2517,19 @@ def _archive_departures(state, departing):
             raised = session_contract.RAISED_ROUND_FIELD
             if raised in prior and raised not in replacement:
                 replacement[raised] = prior[raised]
+            prior_runs = prior.get(break_it.RUNS_FIELD)
+            if isinstance(prior_runs, list):
+                # axis: a live row older than the ledger entry never overwrites the runs the ledger accumulated (changedWhy included)
+                live_runs = replacement.get(break_it.RUNS_FIELD)
+                merged = list(live_runs) if isinstance(live_runs, list) else []
+                extra = [run for run in prior_runs if run not in merged]
+                if extra:
+                    replacement[break_it.RUNS_FIELD] = merged + extra
+                    if isinstance(prior.get(break_it.RUN_FIELD), dict):
+                        replacement[break_it.RUN_FIELD] = prior[break_it.RUN_FIELD]
+                        # axis: the kept run stamp and the test text it ran come from the same ledger row
+                        if "suggestion" in prior:
+                            replacement["suggestion"] = prior["suggestion"]
         if key in seen:
             ledger[seen[key]] = replacement
         else:
@@ -3162,8 +3175,16 @@ def _break_it_run_keys(runs, compiled):
     proposal compile merged away is `supersededAtCompile` with no key; a run whose finding compile dropped is
     `droppedAtCompile` with no key."""
     by_anchor, by_identity = {}, {}
+    flat = []
     for f in compiled:
-        if isinstance(f, dict) and break_it.carries_test(f):
+        flat.append(f)
+        # axis: a Nit a summary row collapsed still carries its attached test, so its run binds to the member
+        members = f.get("members") if isinstance(f, dict) and f.get("summaryEntry") else None
+        if isinstance(members, list):
+            flat.extend(members)
+    for f in flat:
+        # axis: a finding whose file is not a string is never hashed into the lookup, so a run cannot bind to it and nothing raises
+        if isinstance(f, dict) and break_it.carries_test(f) and isinstance(f.get("file"), str):
             ident = (f.get("file"), normalize_title(str(f.get("title") or "")))
             # axis: compile keeps same-file, same-title findings at different lines apart, so a run binds to the full (file, title, line) anchor — see bite-proof record wo_a_2210_break_it_working_copy
             line_ok, line = _coerce_line(f.get("line"))
@@ -3174,7 +3195,10 @@ def _break_it_run_keys(runs, compiled):
     for run in runs:
         entry = dict(run)
         ident = (entry.get("file"), normalize_title(str(entry.get("title") or "")))
-        if "line" in entry:
+        if not isinstance(entry.get("file"), str):
+            # axis: a run whose file is not a string is never hashed into the lookup; it binds to nothing and reads droppedAtCompile
+            match = None
+        elif "line" in entry:
             # axis: a line the coercion rejects (a list, a dict) is never hashed into the lookup; the run stays unmatched and reads droppedAtCompile
             line_ok, line = _coerce_line(entry.get("line"))
             match = by_anchor.get(ident + (line,)) if line_ok else None
@@ -7235,9 +7259,10 @@ def _break_it_kept_step(state, config):
     check; a finding with any other disposition besides fixed or out-of-scope owes none either."""
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
-            # axis: a failed or not-run break-it run that compile dropped never reaches verification, so it withholds certification
+            # axis: a per-area (or kind-less) break-it run that compile dropped and that did not pass withholds certification; an attached test's dropped run stays recorded and parks nothing, as its dropped finding would without a test
             if (isinstance(run, dict) and run.get("droppedAtCompile") is True
-                    and run.get("outcome") != break_it.OUTCOME_PASSED):
+                    and run.get("outcome") != break_it.OUTCOME_PASSED
+                    and run.get("kind") != break_it.KIND_ATTACHED):
                 _park_cannot_certify(
                     state, "break-it run dropped at compile: %s (%s)"
                     % (run.get("path"), run.get("outcome")))
