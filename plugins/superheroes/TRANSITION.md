@@ -182,6 +182,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **A reviewer's `secondTest`.** A finding a reviewer seat returns never carries `secondTest` past compile: `mechanical_compile` strips it whatever its value. Only the driver's second-test step and its unseatable path mark a finding as having had its one more test.
 - **The cannot-certify park.** When the second-test seat's result fails vendor authentication, the park now keeps the round's work in the receipt: each held finding marked `unverified: true`, and each first-pass survivor. Before, the receipt listed neither.
 
+### Review: a stacked layer catches up at handback
+
+- **One lower-layer commit for the whole session.** A review session of a stacked PR (its base is not the default branch) reads the layer against the base commit it pinned at start. A move of the lower layer never stops or restarts the session, and the review driver no longer reads the lower branch.
+- **The catch-up.** Once the review loop ends and before the layer hands back, a layer whose lower layer has moved is brought current by a local `--no-ff` merge, verified on the caught-up head, and reviewed as a returning review of what the catch-up changed in its own lines. A catch-up that changed none of them is an empty returning round that carries the earlier review, and any finding still open is re-checked against the caught-up head. See [How a stack stays current](rubric/native-stacks.md#how-a-stack-stays-current).
+- **The handback check.** `python3 -B <plugin root>/lib/vet_slot.py handback --pr <n> --repo <owner/name>` refuses `stack-not-caught-up` while the PR's pushed head is behind its lower branch's current head, and `stack-lower-unreadable` when that head cannot be read. Without `--pr`, `handback --body-file <f>` runs no catch-up check.
+
 ## 0.47.0
 
 ### Before you upgrade

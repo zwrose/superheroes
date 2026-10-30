@@ -155,6 +155,11 @@ hyphenated as `follow-ups`, repeated, or malformed) is a write the advisor's slo
 too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs). Fix the body and
 re-run until it prints `"ok": true`; once your lane ends, nobody can.
 
+Before the ready marking, also run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/vet_slot.py" handback --pr <n>
+--repo <owner/name>` on the pushed PR. On a stacked layer it refuses `stack-not-caught-up`, naming the
+catch-up step (`rubric/native-stacks.md` § How a stack stays current), while the PR's pushed head is
+behind its lower layer's current head, or `stack-lower-unreadable` when that head cannot be read.
+
 When a PR closes or is superseded before its vet, carry its follow-ups into the superseding build
 record, each under the next unused FU number (in the marker too), with its origin as text:
 `- FU<n> [<class>] (from #N FU<m>) <text>`.

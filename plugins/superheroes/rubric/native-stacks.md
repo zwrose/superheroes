@@ -333,11 +333,18 @@ change is mechanically non-semantic: whitespace, pure formatting, a comment, or 
 leaves the rule unchanged. A changed hunk takes the merge train's existing union-fix floor whenever
 it changes **behavior-bearing content**: product code; a test's assertions or fixtures' expected
 values; or any prose that states a rule a session or a gate follows. When it is **not clear** which
-side a hunk falls on, it takes the reviewer floor. A layer is brought current with its lower layer
-before its review session starts. When the lower layer moves while a session is open, the review
-driver stops the session (`stack-lower-moved`); the build session writes that session's review
-record as abandoned, brings the layer current by merge, and starts a new session on the lower
-layer's current head. No finding comes from the lower layer's old head. The tax it removes is per-layer re-review on bring-currents whose content did not change.
+side a hunk falls on, it takes the reviewer floor. A layer is not brought current, by merge or rebase, while its review loop is open: a merge
+mid-review moves the head the review session anchored, and the session breaks with
+`view-head-anchor-mismatch`. A review session reads the layer against the lower-layer commit it
+pinned when it started, for its whole run, and a lower-layer move never stops or restarts it. Once
+the loop ends and before the layer hands back, when the lower layer has moved, the build session
+brings the layer current by a local `--no-ff` merge, runs the calibrated verify on the merged head,
+and reviews the catch-up with a returning review session, which reads only what the catch-up changed
+in the layer's own lines. A catch-up that changed none of them is an empty returning round that
+carries the earlier review, and any finding still open is re-checked against the caught-up head. No
+finding comes from the lower layer's code. The handback check (`lib/vet_slot.py handback --pr <n>
+--repo <owner/name>`) refuses `stack-not-caught-up` until the layer's pushed head holds the lower
+layer's current head. The tax it removes is per-layer re-review on bring-currents whose content did not change.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under
