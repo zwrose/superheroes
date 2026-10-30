@@ -1,4 +1,4 @@
-"""Re-dispatched fixer orders carry prior audit and gate rulings (#1272 WO-4)."""
+"""A re-set apply-fixes step carries prior audit and gate rulings (#1272 WO-4)."""
 import ast
 import json
 import os
@@ -6,22 +6,10 @@ import os
 import pytest
 
 import audits
-import round_phases as RP
 import round_records as RR
 import session_contract as SC
 
 import round_driver as RD
-
-
-def _minimal_paths(session_dir):
-    return {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
 
 
 def _guidance_disposition(fid, title, guidance, *, file="g.py", line=5):
@@ -74,17 +62,19 @@ def _specimen_state(tmp_path, rnd=3):
 
 
 def _fixer_render(tmp_path, state, rnd=None):
+    """The apply-fixes step's guidance prose (the no-guidance sentinel when it has no guidance file)
+    under the `GATE_GUIDANCE` key, and the batch file it names."""
     rnd = rnd if rnd is not None else state["round"]
     session_dir = str(tmp_path / "redispatch-session")
     os.makedirs(session_dir, exist_ok=True)
     _write_session_meta(session_dir, str(tmp_path))
-    paths = _minimal_paths(session_dir)
-    ph = RD._order_placeholders(
-        RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, rnd, paths, RD.CHANNEL_FILE,
-    )
-    fix_batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
-    with open(fix_batch_path, encoding="utf-8") as fh:
+    fields = RD._apply_fixes_payload_fields(session_dir, state, rnd, 0)
+    guidance = RD._GATE_GUIDANCE_NO_GUIDANCE
+    if fields["guidancePath"] is not None:
+        with open(fields["guidancePath"], encoding="utf-8") as fh:
+            guidance = fh.read()
+    ph = {"GATE_GUIDANCE": guidance}
+    with open(fields["fixBatchPath"], encoding="utf-8") as fh:
         fix_batch = json.loads(fh.read())
     return ph, fix_batch, session_dir
 

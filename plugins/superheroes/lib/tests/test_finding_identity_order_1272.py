@@ -419,7 +419,7 @@ def test_persisted_targets_without_marker_dedupe_by_content():
     state["auditRounds"] = [{"round": 2, "outcomes": []}]
     state["findings"] = []
     RD._settle_delta(state, state["config"])
-    assert state.get("step") == RD.P_FIXER
+    assert state.get("step") == RD.P_APPLY_FIXES
     fix_batch = state.get("_fixBatch") or []
     assert len(fix_batch) == 1
 

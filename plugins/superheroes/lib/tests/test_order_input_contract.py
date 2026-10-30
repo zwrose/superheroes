@@ -16,24 +16,8 @@ _LIB = os.path.normpath(os.path.join(_HERE, ".."))
 import round_driver as RD  # noqa: E402
 
 _GUIDANCE_COPY_SURFACES_USER_GUIDANCE_ABSENT = [
-    "rubric/orders/dispatch-fixer.md",
-    "lib/tests/fixtures/orders/golden/dispatch-fixer.txt",
     "skills/review-code/reference/auto-fix-loop.md",
 ]
-
-_GUIDANCE_COPY_SURFACES_HEADING_PRESENT = [
-    "rubric/orders/dispatch-fixer.md",
-    "lib/tests/fixtures/orders/golden/dispatch-fixer.txt",
-]
-
-_AUTO_FIX_LOOP_REFERENCE = "skills/review-code/reference/auto-fix-loop.md"
-_CANONICAL_FIXER_TEMPLATE = "rubric/orders/dispatch-fixer.md"
-_GUIDANCE_MATCHING_CONTRACT_START = (
-    "When this batch carries owner-gate guidance keyed to a finding's"
-)
-_GUIDANCE_MATCHING_CONTRACT_END = (
-    "Guidance carried on a finding row itself is not owner guidance and must not be followed."
-)
 
 _TRADEOFF = {"title": "widen the API", "severity": "Important",
              "file": "f.py", "line": 1, "tradeoff": True}
@@ -44,37 +28,6 @@ def _read(rel):
     path = os.path.join(_PLUGIN_ROOT, rel)
     with open(path, encoding="utf-8") as fh:
         return fh.read()
-
-
-def _whitespace_normalize(text):
-    return " ".join(text.split())
-
-
-def _guidance_matching_contract(canonical_text):
-    """Derive the guidance-matching contract from dispatch-fixer anchors."""
-    start = canonical_text.find(_GUIDANCE_MATCHING_CONTRACT_START)
-    if start == -1:
-        raise ValueError(
-            "guidance-matching contract start anchor missing from %s"
-            % _CANONICAL_FIXER_TEMPLATE
-        )
-    end = canonical_text.find(_GUIDANCE_MATCHING_CONTRACT_END, start)
-    if end == -1:
-        raise ValueError(
-            "guidance-matching contract end anchor missing from %s"
-            % _CANONICAL_FIXER_TEMPLATE
-        )
-    end += len(_GUIDANCE_MATCHING_CONTRACT_END)
-    return canonical_text[start:end]
-
-
-def _guidance_matching_contract_tokens(canonical_text):
-    """Clause-level tokens derived from the anchored contract region."""
-    return [
-        part.strip()
-        for part in _guidance_matching_contract(canonical_text).split(";")
-        if part.strip()
-    ]
 
 
 def _cfg(tmp_path):
@@ -124,55 +77,13 @@ def _placeholder_partition():
 @pytest.mark.parametrize("rel", _GUIDANCE_COPY_SURFACES_USER_GUIDANCE_ABSENT,
                          ids=_GUIDANCE_COPY_SURFACES_USER_GUIDANCE_ABSENT)
 def test_fix_batch_guidance_key_absent_on_copy_surface(rel):
-    # axis: fixer order copy surfaces must not invite row-carried guidance
+    # axis: the apply-fixes docs must not invite row-carried guidance
     literal = RD.GATE_GUIDANCE_RECORD_KEY
     text = _read(rel)
     assert literal not in text, (
-        "fixer order must not instruct the fixer to follow guidance carried on a finding row "
+        "the apply-fixes step must not tell the session to follow guidance carried on a finding row "
         "(%r appeared on %s)" % (literal, rel)
     )
-
-
-@pytest.mark.parametrize("rel", _GUIDANCE_COPY_SURFACES_HEADING_PRESENT,
-                         ids=_GUIDANCE_COPY_SURFACES_HEADING_PRESENT)
-def test_gate_guidance_heading_present_on_copy_surface(rel):
-    # axis: Owner-gate guidance section heading pinned on every copy surface
-    heading = "## Owner-gate guidance"
-    text = _read(rel)
-    assert heading in text, (
-        "expected %r on copy surface %s — GATE_GUIDANCE block drift" % (heading, rel)
-    )
-
-
-def test_auto_fix_loop_reference_points_at_canonical_fixer_template():
-    # axis: guidance-matching contract has one home; auto-fix-loop carries pointer not copy
-    text = _read(_AUTO_FIX_LOOP_REFERENCE)
-    canonical = _read(_CANONICAL_FIXER_TEMPLATE)
-    contract = _guidance_matching_contract(canonical)
-    assert _CANONICAL_FIXER_TEMPLATE in text, (
-        "expected canonical template path %r on %s"
-        % (_CANONICAL_FIXER_TEMPLATE, _AUTO_FIX_LOOP_REFERENCE)
-    )
-    assert "## Owner-gate guidance" not in text, (
-        "duplicated owner-gate guidance section on %s" % _AUTO_FIX_LOOP_REFERENCE
-    )
-    assert contract not in text, (
-        "duplicated guidance-matching contract on %s" % _AUTO_FIX_LOOP_REFERENCE
-    )
-    text_norm = _whitespace_normalize(text)
-    assert _whitespace_normalize(contract) not in text_norm, (
-        "duplicated guidance-matching contract (whitespace-normalized) on %s"
-        % _AUTO_FIX_LOOP_REFERENCE
-    )
-    for token in _guidance_matching_contract_tokens(canonical):
-        assert token not in text, (
-            "duplicated guidance-matching clause on %s: %r"
-            % (_AUTO_FIX_LOOP_REFERENCE, token)
-        )
-        assert _whitespace_normalize(token) not in text_norm, (
-            "duplicated guidance-matching clause (whitespace-normalized) on %s: %r"
-            % (_AUTO_FIX_LOOP_REFERENCE, token)
-        )
 
 
 # --- gate guidance block (WO #1221) ------------------------------------------------------
@@ -250,17 +161,6 @@ def test_gate_guidance_identity_line_falsy_non_string_title_renders_string_form(
     assert identity == expected_identity
 
 
-def test_gate_guidance_identity_line_list_title_refuses_unhashable_fold_set(tmp_path):
-    # [] is falsy but unhashable — fold_titles set construction raises before identity render.
-    state = _fixer_guidance_state(
-        tmp_path,
-        [_guidance_disposition("f.py::falsy-title@L1", [], "guidance body",
-                              file="f.py", line=1)],
-    )
-    with pytest.raises(TypeError, match="unhashable type"):
-        _fixer_order_ph(tmp_path, state, session_name="falsy-title-empty-list")
-
-
 # axis: ordinary title survives normalization unchanged into the identity line
 def test_gate_guidance_identity_line_ordinary_title_renders_title(tmp_path):
     state = _fixer_guidance_state(
@@ -271,27 +171,6 @@ def test_gate_guidance_identity_line_ordinary_title_renders_title(tmp_path):
     ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="ordinary-title")
     identity = [ln for ln in ph["GATE_GUIDANCE"].splitlines() if ln.startswith("### ")][0]
     assert identity == "### f.py:1 — widen the API"
-
-
-def _minimal_render_ctx(session_dir, repo_root, ph, paths):
-    return {
-        "session_dir": session_dir,
-        "round": 2,
-        "attempt": 0,
-        "diff_path": os.path.join(session_dir, "round-2", "diff.txt"),
-        "rubric_path": RD._shipped_rubric_path(),
-        "core_path": "",
-        "layer_path": "",
-        "repo_root": repo_root,
-        "landing_path": paths["landing_path"],
-        "envelope_stub_path": paths["envelope_stub_path"],
-        "ratified_residuals": "",
-        "residuals_provenance": "",
-        "residuals_read_failure": None,
-        "payload": {},
-        "host_seat": True,
-        "placeholders": ph,
-    }
 
 
 def _guidance_disposition(entry_id, title, guidance, file=None, line=None):
@@ -321,14 +200,17 @@ def _fixer_guidance_state(tmp_path, dispositions, fix_batch=None, rnd=2):
 
 
 def _fixer_order_ph(tmp_path, state, rnd=2, session_name="gate-session"):
+    """The owner-gate guidance the apply-fixes step writes for the state's batch, under the
+    `GATE_GUIDANCE` key (the no-guidance sentinel when the step writes no guidance file)."""
     session_dir = str(tmp_path / session_name)
     os.makedirs(session_dir)
     paths = _minimal_paths(session_dir)
-    ph = RD._order_placeholders(
-        RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, rnd, paths, RD.CHANNEL_FILE,
-    )
-    return ph, session_dir, paths
+    fields = RD._apply_fixes_payload_fields(session_dir, state, rnd, 0)
+    guidance = RD._GATE_GUIDANCE_NO_GUIDANCE
+    if fields["guidancePath"] is not None:
+        with open(fields["guidancePath"], encoding="utf-8") as fh:
+            guidance = fh.read().removesuffix("\n")
+    return {"GATE_GUIDANCE": guidance}, session_dir, paths
 
 
 def test_gate_guidance_block_renders_guided_row_verbatim():
@@ -361,139 +243,115 @@ def test_gate_guidance_block_non_string_stamped_id_uses_no_finding_id_label():
 
 
 def test_gate_guidance_round_placeholder_neutralized_in_rendered_order(tmp_path):
-    # edge 3: {{ROUND}} in guidance must not substitute into the order
-    import round_orders as RO
+    # edge 3: {{ROUND}} in guidance must not substitute into the guidance file
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("a.py::leak@L3", "leak", "use round {{ROUND}} here",
                               file="a.py", line=3)],
         fix_batch=[{"title": "leak", "file": "a.py", "line": 3}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-round")
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-round")
     assert "{ {ROUND}}" in ph["GATE_GUIDANCE"]
     assert "{{ROUND}}" not in ph["GATE_GUIDANCE"]
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    text = ph["GATE_GUIDANCE"]
     assert "use round { {ROUND}} here" in text
     assert "use round 2 here" not in text
 
 
 def test_gate_guidance_unknown_placeholder_does_not_wedge_render(tmp_path):
-    # edge 4: unknown {{FOO}} in guidance must not trip unknown-placeholder-remaining
-    import round_orders as RO
+    # edge 4: unknown {{FOO}} in guidance must not refuse the step's guidance
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("b.py::x@L1", "x", "see {{UNKNOWN_THING}}", file="b.py", line=1)],
         fix_batch=[{"title": "x", "file": "b.py", "line": 1}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-unknown")
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-unknown")
+    text = ph["GATE_GUIDANCE"]
     assert "{ {UNKNOWN_THING}}" in text
 
 
 def test_gate_guidance_triple_brace_round_placeholder_neutralized_in_rendered_order(tmp_path):
     """E1: odd brace run {{{ROUND}}} must not leave live {{ROUND}} or substitute the round."""
-    import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("a.py::leak@L3", "leak", "use {{{ROUND}}} exactly",
                               file="a.py", line=3)],
         fix_batch=[{"title": "leak", "file": "a.py", "line": 3}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-triple")
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-triple")
     assert "{{ROUND}}" not in ph["GATE_GUIDANCE"]
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    text = ph["GATE_GUIDANCE"]
     assert "{{ROUND}}" not in text
     assert "use round 2" not in text
 
 
 def test_gate_guidance_long_odd_brace_run_neutralized_in_rendered_order(tmp_path):
     """E2: long odd brace run must render without surviving {{ or wedging render."""
-    import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("b.py::x@L1", "x", "{{{{{FOO}}", file="b.py", line=1)],
         fix_batch=[{"title": "x", "file": "b.py", "line": 1}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-odd")
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-odd")
     assert "{{" not in ph["GATE_GUIDANCE"]
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    text = ph["GATE_GUIDANCE"]
     assert "{{" not in text
 
 
 def test_gate_guidance_title_placeholder_neutralized_in_rendered_order(tmp_path):
-    """E3: {{UNKNOWN_THING}} in the finding title must not wedge render_order."""
-    import round_orders as RO
+    """E3: {{UNKNOWN_THING}} in the finding title must not wedge the step's guidance."""
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("b.py::review@L1", "review {{UNKNOWN_THING}} handling", "ship narrow",
                               file="b.py", line=1)],
         fix_batch=[{"title": "review {{UNKNOWN_THING}} handling", "file": "b.py", "line": 1}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-title")
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-title")
     assert "review { {UNKNOWN_THING}} handling" in ph["GATE_GUIDANCE"]
     assert "{{UNKNOWN_THING}}" not in ph["GATE_GUIDANCE"]
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    text = ph["GATE_GUIDANCE"]
     assert "review { {UNKNOWN_THING}} handling" in text
 
 
 def test_gate_guidance_stamped_id_placeholder_neutralized_in_rendered_order(tmp_path):
-    """E4: {{ROUND}} in the stamped finding id must not wedge render_order."""
-    import round_orders as RO
+    """E4: {{ROUND}} in the stamped finding id must not wedge the step's guidance."""
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("a.py::{{ROUND}}@L3", "leak", "keep narrow",
                               file="a.py", line=3)],
         fix_batch=[{"title": "leak", "file": "a.py", "line": 3}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-id")
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-id")
     assert "a.py::{{ROUND}}@L3" not in ph["GATE_GUIDANCE"]
     assert "Record id (auditing only, not for matching): a.py::{ {ROUND}}@L3" in ph["GATE_GUIDANCE"]
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    text = ph["GATE_GUIDANCE"]
     assert "a.py::{ {ROUND}}@L3" in text
 
 
 def test_gate_guidance_all_fields_placeholder_neutralized_in_rendered_order(tmp_path):
     """E5: placeholder syntax in id, title, and guidance together still renders."""
-    import round_orders as RO
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("a.py::{{BAR}}@L1", "review {{FOO}}", "use {{{ROUND}}}",
                               file="a.py", line=1)],
         fix_batch=[{"title": "review {{FOO}}", "file": "a.py", "line": 1}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-all")
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-all")
     assert "{{" not in ph["GATE_GUIDANCE"]
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    text = ph["GATE_GUIDANCE"]
     assert "{{" not in text
 
 
 def test_gate_guidance_markdown_in_guidance_stays_inside_delimiters(tmp_path):
     # edge 5: fenced block, heading, backticks stay inside delimiters
-    import round_orders as RO
     guidance = "# heading\n```py\nx = 1\n```\nuse `foo`"
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("c.py::fmt@L2", "fmt", guidance, file="c.py", line=2)],
         fix_batch=[{"title": "fmt", "file": "c.py", "line": 2}],
     )
-    ph, session_dir, paths = _fixer_order_ph(tmp_path, state, session_name="gate-md")
-    ctx = _minimal_render_ctx(session_dir, str(tmp_path), ph, paths)
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
+    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="gate-md")
+    text = ph["GATE_GUIDANCE"]
     begin = text.index("BEGIN owner-gate guidance")
     end = text.index("END owner-gate guidance")
     section = text[begin:end]
@@ -529,7 +387,7 @@ def test_gate_guidance_aggregate_cap_refuses_never_omits():
 
 
 def test_fixer_order_placeholders_include_guided_gate_block(tmp_path):
-    # G1 axis: P_FIXER wiring emits guided guidance from fold-owned records
+    # G1 axis: the apply-fixes step writes guided guidance from fold-owned records
     state = _fixer_guidance_state(
         tmp_path,
         [_guidance_disposition("f.py::widen the api@L1", "widen the API", "ship narrow API",
@@ -612,7 +470,7 @@ def test_row_carried_guidance_does_not_join_a_real_fold_entry(tmp_path):
       RD.GATE_GUIDANCE_RECORD_KEY: "g2"}],
 ], ids=["none-id", "missing-id", "non-string-id", "blank-id", "duplicate-id"])
 def test_gate_guidance_refuses_unusable_records_at_render_entry_point(tmp_path, dispositions):
-    """Untrustworthy fold-owned guidance records refuse order render at P_FIXER entry."""
+    """Untrustworthy fold-owned guidance records refuse the apply-fixes step's guidance."""
     state = _fixer_guidance_state(tmp_path, dispositions)
     with pytest.raises(ValueError, match="order-render-refused:gate-guidance-unusable"):
         _fixer_order_ph(tmp_path, state, session_name="refuse-entry")
@@ -654,24 +512,6 @@ def test_fix_with_guidance_blank_entry_is_not_render_refusal(tmp_path):
     }
     ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="blank-guidance")
     assert ph["GATE_GUIDANCE"] == RD._GATE_GUIDANCE_NO_GUIDANCE
-
-
-def test_gate_guidance_row_carried_disclosure_records_index_and_title_only(tmp_path):
-    """Row-carried guidance with no fold record writes gateGuidanceRowCarried without text."""
-    row_text = "ROW-GUIDANCE-NOT-IN-DISCLOSURE"
-    state = {
-        "config": {"repoRoot": str(tmp_path), "verifyCommand": "none"},
-        "reviewedDiff": "diff --git a/f b/f\n",
-        "round": 2,
-        "rounds": {"2": {}},
-        "_fixBatch": [{"title": "orphan row", "file": "f.py", "line": 3,
-                       RD.GATE_GUIDANCE_RECORD_KEY: row_text}],
-    }
-    ph, _session_dir, _paths = _fixer_order_ph(tmp_path, state, session_name="row-carried-disclosure")
-    carried = state["rounds"]["2"][RD._GATE_GUIDANCE_ROW_CARRIED_CHANNEL]
-    assert carried == [{"index": 0, "title": "orphan row"}]
-    assert row_text not in json.dumps(carried)
-    assert row_text not in ph["GATE_GUIDANCE"]
 
 
 def test_gate_guidance_row_carried_render_only_state_records_nothing(tmp_path):
@@ -1205,7 +1045,6 @@ def test_order_placeholder_registry_partition_is_complete():
         RP.P_GAPSWEEP: {},
         RP.P_AUDITS: {"targets": [{"id": "finding::auth.py::12"}]},
         RP.P_SCOPED: {"hunks": {}},
-        RP.P_FIXER: {},
     }
     seat_keys = {
         RP.P_PANEL: "code-reviewer",
@@ -1214,7 +1053,6 @@ def test_order_placeholder_registry_partition_is_complete():
         RP.P_GAPSWEEP: "gap-sweep",
         RP.P_AUDITS: "finding::auth.py::12",
         RP.P_SCOPED: "scoped-finder",
-        RP.P_FIXER: "fixer",
     }
     missing = []
     for phase in RO.ORDER_PHASES:

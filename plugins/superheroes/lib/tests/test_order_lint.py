@@ -59,13 +59,6 @@ def _accepted_implementer_text():
     )
 
 
-def _accepted_fixer_text():
-    return (
-        "# Fix\n\n"
-        "Run `agents/implementer.md` for protocol.\n"
-    )
-
-
 # --- token tests (implementer) ---
 
 
@@ -162,25 +155,6 @@ def test_token_kind_unknown(tmp_path):
     assert _tokens(r) == [OL.TOKEN_KIND_UNKNOWN]
 
 
-# --- token tests (fixer) ---
-
-
-def test_fixer_skips_budget_token(tmp_path):
-    # axis: fixer kind skips the budget rule
-    repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
-    text = "# Fix\n\nRun `agents/implementer.md`.\n"
-    r = _record(OL.check_text(text, str(repo), kind="fixer"))
-    assert OL.TOKEN_BUDGET_MISSING not in _tokens(r)
-
-
-def test_fixer_placeholder_token(tmp_path):
-    # axis: fixer kind still catches unfilled placeholders
-    repo = _mk_repo(tmp_path)
-    text = "# Fix\n\nValue {bar}.\n"
-    r = _record(OL.check_text(text, str(repo), kind="fixer"))
-    assert OL.TOKEN_PLACEHOLDER_UNFILLED in _tokens(r)
-
-
 # --- accepted shape ---
 
 
@@ -188,14 +162,6 @@ def test_accepted_shape_implementer(tmp_path):
     # axis: valid implementer order with budget passes clean
     repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
     r = OL.check_text(_accepted_implementer_text(), str(repo), kind="implementer")
-    assert r["ok"] is True
-    assert r["findings"] == []
-
-
-def test_accepted_shape_fixer(tmp_path):
-    # axis: fixer kind skips the budget rule
-    repo = _mk_repo(tmp_path, [("agents/implementer.md", "# x\n")])
-    r = OL.check_text(_accepted_fixer_text(), str(repo), kind="fixer")
     assert r["ok"] is True
     assert r["findings"] == []
 
@@ -510,7 +476,7 @@ def test_stdout_protocol_matches_engine_adapter_and_payload_contracts():
     # axis: _STDOUT_PROTOCOL matches engine_adapter and payload_contracts
     import engine_adapter
     import payload_contracts
-    contract, reason = payload_contracts.payload_contract(payload_contracts.P_FIXER)
+    contract, reason = payload_contracts.payload_contract(payload_contracts.P_APPLY_FIXES)
     assert reason is None
     expected = (
         engine_adapter.WRITE_REPORT_SENTINEL,
@@ -724,13 +690,6 @@ def test_bare_test_path_is_not_a_command(tmp_path):
     text = _timeout_order("`test_y.py`, and read `pytest.ini`")
     r = OL.check_text(text, str(repo))
     assert r["warnings"] == []
-
-
-def test_fixer_kind_gets_no_timeout_warning(tmp_path):
-    # axis: the warning is implementer-only
-    repo = _mk_repo(tmp_path)
-    r = OL.check_text("# Fix\n\nRun `pytest -q`.\n", str(repo), kind="fixer")
-    assert r["ok"] is True and r["warnings"] == []
 
 
 def test_refusal_carries_empty_warnings():

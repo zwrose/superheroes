@@ -1,7 +1,7 @@
 """C1-L4: the owner gates are retired — nothing from the review reaches the owner mid-review.
 
 The round driver has no phase that presents anything to the owner: every phase is a `dispatch-*`
-phase, `run-verify` or `terminal`. Where the loop used to stop at the owner-judgment gate or the
+phase, `run-verify`, `apply-fixes` or `terminal`. Where the loop used to stop at the owner-judgment gate or the
 audit-stall menu it now keeps working or hands the PR back through the one `handed-back` verdict:
 
   - an audit stall that persists after the one recovery attempt → `fix-keeps-failing`;
@@ -40,7 +40,7 @@ _CHOICE = {"title": "widen the API", "severity": "Important", "consequence": TRD
            "file": "f.py", "line": 2, "tradeoff": True}
 _BUG_KEY = "f.py::bug@L1"
 _CHOICE_KEY = "f.py::widen the api@L2"
-_ALLOWED_ACTIONS = ("run-verify", "terminal")
+_ALLOWED_ACTIONS = ("run-verify", "apply-fixes", "terminal")
 
 
 def _is_allowed(action):
@@ -56,7 +56,7 @@ def _spy_actions(monkeypatch):
     def spy(state, config):
         step = orig(state, config)
         seen.append(step["action"])
-        if step["action"] == RD.P_FIXER:
+        if step["action"] == RD.P_APPLY_FIXES:
             fixer_orders.append(sum(1 for d in state["decisions"] if d["kind"] == "self-recovery"))
         return step
 
@@ -102,11 +102,11 @@ def _ledger(state):
 # --- T1: no phase puts anything to the owner ---------------------------------------------------
 
 def test_t1_every_phase_is_a_dispatch_or_run_verify_or_terminal():
-    # axis: the phase census — a phase that is none of dispatch-*, run-verify or terminal is a phase
+    # axis: the phase census — a phase that is none of dispatch-*, run-verify, apply-fixes or terminal is a phase
     # that presents to the owner — see bite-proof record c1l4_wo_a
     assert RP.ALL_PHASES, "the census enumerated no phase — it is inert"
     for phase in RP.ALL_PHASES:
-        assert _is_allowed(phase), "%r is not a dispatch-*, run-verify or terminal phase" % (phase,)
+        assert _is_allowed(phase), "%r is not a dispatch-*, run-verify, apply-fixes or terminal phase" % (phase,)
 
 
 def test_t1_a_loop_through_a_tradeoff_blocker_and_an_audit_stall_never_leaves_that_set(monkeypatch):
@@ -119,7 +119,7 @@ def test_t1_a_loop_through_a_tradeoff_blocker_and_an_audit_stall_never_leaves_th
     kinds = _kinds(state)
     assert "owner-choice-held" in kinds and "self-recovery" in kinds, kinds  # both paths were walked
     assert kinds[-1] == "fix-keeps-failing", kinds
-    assert RD.P_FIXER in seen and RD.P_AUDITS in seen
+    assert RD.P_APPLY_FIXES in seen and RD.P_AUDITS in seen
     assert [a for a in seen if not _is_allowed(a)] == []
 
 
@@ -156,7 +156,7 @@ def test_t3_a_round_one_with_only_an_owner_choice_blocker_is_handed_back_at_roun
     assert _kinds(state).count("owner-choice-held") == 1
     assert state["ownerChoiceHeld"] == [_CHOICE_KEY]
     assert sorted(state["rounds"]) == ["1"]
-    assert RD.P_FIXER not in seen and fixer_orders == []
+    assert RD.P_APPLY_FIXES not in seen and fixer_orders == []
     assert "widen the API" in state["certification"]["reason"]
 
 
@@ -189,7 +189,7 @@ def test_t5_a_held_finding_ruled_out_of_scope_before_the_fixer_step_lets_the_ses
     d = str(tmp_path)
     cfg = TRD._cfg()
     respond = TRD._responder(round1_findings=[dict(_BUG), dict(_CHOICE)], vendors=cfg["vendors"])
-    pending = TRD._drive_to_phase(d, cfg, respond, RD.P_FIXER)
+    pending = TRD._drive_to_phase(d, cfg, respond, RD.P_APPLY_FIXES)
     assert [row["title"] for row in pending["payload"]["batch"]] == ["bug"]  # the choice is held out
     ok, state = RD.load_state(d)
     assert ok and state["ownerChoiceHeld"] == [_CHOICE_KEY]

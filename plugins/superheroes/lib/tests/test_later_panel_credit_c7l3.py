@@ -1,7 +1,7 @@
 """C7 L3 (WO-3): a finding a fixer reported fixed, that a later COMPLETE full panel did not raise
 again, ends `fixed` — never a leftover — provided the fix report came after the finding's latest raise.
 
-Drives the real round driver: the fold functions (`_stage_findings`, `_fold_fixer`, `_fold_panel`) over
+Drives the real round driver: the fold functions (`_stage_findings`, `_fold_apply_fixes`, `_fold_panel`) over
 a staged state for each edge, and `run_loop` with scripted seams through to a terminal and
 `review_record_session.account_from_session` for the vet's case (a converged loop whose fix a later
 full panel confirmed, with no fix audit).
@@ -56,13 +56,12 @@ def _round_one_state(*findings):
     return state
 
 
-def _fix(state, *, fixes=True, escalated=False, batch=None):
-    """The round's fixer folds. No head diff comes back, so the next round is a full panel over the
-    git-derived diff (no fix audit sits between the fix and the panel)."""
+def _fix(state, *, fixes=True, batch=None):
+    """The round's apply-fixes report folds. No head diff comes back, so the next round is a full panel
+    over the git-derived diff (no fix audit sits between the fix and the panel)."""
     state["_fixBatch"] = [dict(f) for f in (batch if batch is not None else state["findings"])]
-    artifact = {"fixes": [{"file": "f.py", "summary": "guard restored"}] if fixes else [],
-                "escalated": escalated}
-    RD._fold_fixer(state, state["config"], artifact,
+    artifact = {"fixes": [{"file": "f.py", "summary": "guard restored"}] if fixes else []}
+    RD._fold_apply_fixes(state, state["config"], artifact,
                    changed_subjects_seam=lambda *args: ["Code"],
                    panel_diff_seam=lambda config, head: (TRD.DIFF, None))
 
@@ -127,7 +126,7 @@ def test_an_incomplete_panel_gives_no_credit():
 def test_a_first_round_panel_gives_no_credit():
     state = _round_one_state(_finding())
     # a fix report that names the finding, held at round 1: nothing earlier than round 1 exists
-    state["rounds"].setdefault("1", {})["fix"] = {"fixes": [{"file": "f.py"}], "escalated": False}
+    state["rounds"].setdefault("1", {})["fix"] = {"fixes": [{"file": "f.py"}]}
     state["rounds"]["1"]["fixReportedKeys"] = [_key()]
     _panel(state)
     assert state["round"] == 1
@@ -167,13 +166,6 @@ def test_a_fix_reported_after_the_latest_raise_is_credited_by_the_next_complete_
     _panel(state)
     assert _ledger(state)[_key()]["disposition"] == "fixed"
     assert _ledger(state)[_key()]["dispositionReceipt"] == dict(RECEIPT, panelRound=3)
-
-
-def test_an_escalated_fix_report_gives_no_credit():
-    state = _round_one_state(_finding())
-    _fix(state, escalated=True)
-    _panel(state)
-    assert "disposition" not in _ledger(state)[_key()]
 
 
 def test_a_fix_report_with_no_fixes_gives_no_credit():
@@ -234,8 +226,8 @@ _FIXER_FOLD_REFUSAL = "forced refusal at the fixer fold"
 
 
 def _called_from_fixer_fold(depth):
-    """True when the frame `depth` levels up from this helper is `_fold_fixer`."""
-    return sys._getframe(depth).f_code.co_name == "_fold_fixer"
+    """True when the frame `depth` levels up from this helper is `_fold_apply_fixes`."""
+    return sys._getframe(depth).f_code.co_name == "_fold_apply_fixes"
 
 
 def _fixed_without_audit_seams():
@@ -320,7 +312,7 @@ def test_a_reworded_reraise_at_the_same_location_withholds_the_credit():
     """The panel's own staging links the reword to the guided original, so the original is not
     credited fixed by a panel that raised it again under new wording (credit runs after staging)."""
     state = _round_one_state(_finding())
-    state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_FIXER,
+    state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_APPLY_FIXES,
                             "attempt": 0, "id": _key(), "findingKey": _key(),
                             "ruling": "guidance", "reason": "because", "by": "owner",
                             "file": "f.py", "line": 1, "guidance": "G1"}]
@@ -334,7 +326,7 @@ def _reword_linked_to_a_decided_original():
     """A round-2 state whose original is guided and fixed, and the compile of a panel that raises
     only a reword of it at the same file and line."""
     state = _round_one_state(_finding())
-    state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_FIXER,
+    state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_APPLY_FIXES,
                             "attempt": 0, "id": _key(), "findingKey": _key(),
                             "ruling": "guidance", "reason": "because", "by": "owner",
                             "file": "f.py", "line": 1, "guidance": "G1"}]
@@ -564,7 +556,7 @@ def test_a_guided_fix_audited_then_restaged_and_retried_is_credited_by_a_silent_
     def fix_step(batch, rnd, payload):
         if rnd == 1:  # guidance arrives while the first fix is out; that fix is audited
             state = box["state"]
-            state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_FIXER,
+            state["rulingsLog"] = [{"seq": RD._next_ruling_seq(state), "round": 1, "phase": RD.P_APPLY_FIXES,
                                     "attempt": 0, "id": _key(), "findingKey": _key(),
                                     "ruling": "guidance", "reason": "because", "by": "owner",
                                     "file": "f.py", "line": 1, "guidance": "G1"}]

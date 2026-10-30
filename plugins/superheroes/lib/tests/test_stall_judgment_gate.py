@@ -50,7 +50,7 @@ def test_stall_self_recovery_tradeoff_batch_is_held_not_fixed_and_handed_back():
     target = {"id": "%s@L1" % ident, "identity": ident, **dict(_TRADEOFF)}
     state, breaker = _stall_state_with_open_target(target, [ident])
     RD._handle_stall(state, state["config"], breaker)
-    assert state["step"] != RD.P_FIXER
+    assert state["step"] != RD.P_APPLY_FIXES
     assert "_fixBatch" not in state
     assert state["ownerChoiceHeld"] == [_TRADEOFF_KEY]
     assert state["terminal"] == "handed-back"
@@ -58,13 +58,13 @@ def test_stall_self_recovery_tradeoff_batch_is_held_not_fixed_and_handed_back():
 
 
 def test_stall_self_recovery_mechanical_batch_routes_to_fixer():
-    # axis: purely mechanical stall batch still routes to P_FIXER unchanged
+    # axis: purely mechanical stall batch still routes to P_APPLY_FIXES unchanged
     mech = _finding(title="null deref")
     ident = FI.finding_identity(mech)
     target = {"id": "%s@L1" % ident, "identity": ident, **dict(mech)}
     state, breaker = _stall_state_with_open_target(target, [ident])
     RD._handle_stall(state, state["config"], breaker)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert state.get("_fixBatch")
     assert "ownerChoiceHeld" not in state
 
@@ -92,6 +92,6 @@ def test_stall_union_admitted_tradeoff_target_is_held_and_the_mechanical_one_is_
     state["_auditOutcome"] = {"notDischarged": [stalled["id"], sibling["id"]], "discharged": []}
     breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [mech_ident]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert [r["title"] for r in state["_fixBatch"]] == ["null deref"]
     assert state["ownerChoiceHeld"] == [_TRADEOFF_KEY]
