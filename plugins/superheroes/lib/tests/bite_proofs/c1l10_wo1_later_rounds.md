@@ -9,6 +9,8 @@ Declared guarded elements (from the order): E1 the chokepoint test that no later
 | E1 | `round_driver.py` `_settle_delta_converged`, the direct call to `_terminal_converged` | a converged review that needed fixes ends in round 2 on the audit and scoped finder; no panel is scheduled in a round ≥ 2 | `test_i1_a_review_that_needed_fixes_ends_on_a_rounds_audit_and_scoped_finder` |
 | E2 | `round_driver.py` `_enter_delta_round`, the `_newSurface` / `_fixDeltaDiff` assignment from `_fix_delta_surface` | the scoped finder's surface and diff hold only the lines the fixes changed, never an untouched sibling hunk of a touched file | `test_i2_a_fix_that_touched_only_line_10_gives_the_scoped_finder_nothing_of_the_hunk_at_line_100` |
 
+Cap precedence (#2214, C1-L10a): a loaded state above its round cap is handed back `round-cap` by the cap guard, never as a retired later panel; `_finish_retired_later_panel` returns False on `_round_above_cap`. Proving test: `test_i4_a_round_two_panel_state_at_its_cap_is_retired_but_above_its_cap_hands_back_round_cap`, with `test_c1l4_cap.py::test_t6_a_loaded_state_edited_to_round_five_hands_back_on_the_next_next`.
+
 The other chokepoint tests of the file (the unknown-surface handbacks of I1, the proven-copy filter of I3, the saved-state handbacks of I4) were not separately neutralized in this order; they are the unproven part of this record.
 
 ---

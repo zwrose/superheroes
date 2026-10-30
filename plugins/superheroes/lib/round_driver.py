@@ -7215,6 +7215,18 @@ def _cap_blocks(state, config, next_round, refused_at):
     return True
 
 
+def _round_above_cap(state, config):
+    """True when a loaded state's round is above its cap, the one ordered extra audit round at
+    `cap + 1` excepted. The one home of the rule `_cap_blocks_loaded` hands back on and
+    `_finish_retired_later_panel` leaves to it."""
+    cap = _round_cap(config)
+    rnd = state["round"]
+    if not rnd > cap:
+        return False
+    # axis: a loaded state sits one past its cap only while the extra audit round it was ordered is the round it holds — see bite-proof record c1l4b_wo_a
+    return not (rnd == cap + 1 and _is_extra_audit_round(state))
+
+
 def _cap_blocks_loaded(state, config):
     """Persisted-state entry guard: a loaded non-terminal state already above its cap must hand back.
 
@@ -7222,13 +7234,10 @@ def _cap_blocks_loaded(state, config):
     terminal (including pending idempotent re-emit) is left unchanged. Returns True when it handed back."""
     if state.get("terminal"):
         return False
+    if not _round_above_cap(state, config):
+        return False
     cap = _round_cap(config)
     rnd = state["round"]
-    if not rnd > cap:
-        return False
-    # axis: a loaded state sits one past its cap only while the extra audit round it was ordered is the round it holds — see bite-proof record c1l4b_wo_a
-    if rnd == cap + 1 and _is_extra_audit_round(state):
-        return False
     detail = (
         "Round cap %s reached: round %s had already begun and is halted. The PR is handed back "
         "with its findings still open; certification is withheld. (refused at: resumed-state)"
@@ -7454,7 +7463,7 @@ def _finish_retired_later_panel(state):
 
     The step, or the action or phase the state has pending, names the panel; the pending action is
     cleared and `_hand_back` ends the review with every finding given an outcome. A finished state, and
-    a round-1 panel, are left as they are."""
+    a round-1 panel, and a state above its round cap (the cap guard hands that back), are left as they are."""
     if not isinstance(state, dict) or state.get("terminal"):
         return False
     pending = state.get("pending")
@@ -7462,6 +7471,9 @@ def _finish_retired_later_panel(state):
     if isinstance(pending, dict):
         held += [pending.get("action"), pending.get("phase")]
     rnd = state.get("round")
+    # axis: a state above its cap belongs to the cap guard (`round-cap`), not to this retirement
+    if _is_plain_int(rnd) and _round_above_cap(state, state.get("config")):
+        return False
     at_panel = P_PANEL in held and _is_plain_int(rnd) and rnd >= 2
     at_gate = state.get("_verifyThen") == RETIRED_VERIFY_THEN_PANEL
     if not (at_panel or at_gate):
