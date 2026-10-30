@@ -134,8 +134,8 @@ def test_a_newer_detective_intake_is_not_a_newer_launch():
 
 
 def test_a_header_quoted_mid_body_is_not_a_newer_launch():
-    quoting = _comment(101, "I saw the earlier comment:\n" + CB.INTAKE_HEADER + " Plugin 0.47.0. and a notice\n"
-                       + CB.SUPERSEDED_HEADER, _at(1))
+    # axis: a supersession notice counts only when the comment opens with the header — a comment that quotes a whole notice naming the builder's own launch id mid-body is no newer launch — see bite-proof record i2272_stand_down
+    quoting = _comment(101, "I saw the earlier comment:\n" + CB.superseded_notice_text(LAUNCH), _at(1))
     assert _superseded([quoting])["superseded"] is False
 
 

@@ -430,3 +430,29 @@ FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_launch_doctr
 **Restore:** the inverse edit put `_names_launch(comment["body"], launch_id)` back.
 
 **Green run:** `57 passed` for the file.
+
+## BP10 — a whole notice quoted mid-body is not a newer launch (`test_a_header_quoted_mid_body_is_not_a_newer_launch`)
+
+**Guarded element:** `cloud_builder.py` `_opens_with`, `text.lstrip().startswith(headers)` — axis: the comment quotes a complete supersession notice naming the builder's own launch id (`LAUNCH`) after other text, so only the header-at-start rule rejects it.
+
+**Neutralization:** `text.lstrip().startswith(headers)` became `any(h in text for h in headers)` (substring containment).
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_header_quoted_mid_body_is_not_a_newer_launch" -q -p no:randomly`
+
+**Red (final lines):**
+```
+E       assert True is False
+
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_stand_down.py:139: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_header_quoted_mid_body_is_not_a_newer_launch
+1 failed in 0.37s
+```
+
+**Restore:** the inverse edit put `text.lstrip().startswith(headers)` back; `git diff --stat -- plugins/superheroes/lib/cloud_builder.py` printed nothing.
+
+**Green (final lines):**
+```
+.                                                                        [100%]
+1 passed in 0.31s
+```

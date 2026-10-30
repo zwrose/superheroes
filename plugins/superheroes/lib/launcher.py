@@ -1353,8 +1353,11 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
-    # axis: the launch carries the stand-down stamp, so a later adoption can tell a lane that checks for a newer launch when it wakes from one launched before that check existed — see bite-proof record i2272_launcher
-    stamped["standDown"] = 1
+    # axis: only a workhorse launch carries the stand-down stamp, since only the builder's cloud reference checks for a newer launch when it wakes; a detective launch carries none, so a detective lane always needs the session read — see bite-proof record i2272_launcher
+    if premise.get("charter", "workhorse") == "workhorse":
+        stamped["standDown"] = 1
+    else:
+        stamped.pop("standDown", None)
     return {
         "ok": True,
         "reason": None,
@@ -3146,21 +3149,37 @@ def _supersession_notice_names(comments, launch_id):
     )
 
 
-def _limit_expired_refusal(reads):
-    """``(reason, detail)`` when the usage limit a passed original-session check relied on has reset, else None.
+def _limit_expired_refusal(reads, repo_root=None, env=None):
+    """``(reason, detail)`` when the usage limit a passed original-session check relied on has reset or been withdrawn, else None.
 
-    ``reads["resetsAt"]`` is the earliest reset time among the limited lanes the pass relied on; the
-    comparison with the clock is local, so it can run right before a spawn with no remote read.
+    ``reads["resetsAt"]`` is the earliest reset time among the limited lanes the pass relied on, and
+    ``reads["relied"]`` lists their ``(configDir, startedTs)`` pairs; both comparisons are local (the
+    clock and a local record read), so they can run right before a spawn with no remote read.
     """
     resets_at = reads.get("resetsAt")
+    now = _now_fn()
+    expired = {
+        "failedRead": "limit-expired", "remedy": _ADOPT_ORIGINAL_REMEDY_UNREAD,
+    }
     # axis: a limit authorization lasts until its reset time, so a spawn after the reset, past the remote lookups that followed the check, is refused unread — see bite-proof record i2272_launcher
-    if (
-        isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool)
-        and _now_fn() >= resets_at
-    ):
-        return _ADOPT_ORIGINAL_SESSION_UNREAD, {
-            "failedRead": "limit-expired", "remedy": _ADOPT_ORIGINAL_REMEDY_UNREAD,
-        }
+    if isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool) and now >= resets_at:
+        return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
+    relied = reads.get("relied") or []
+    if relied:
+        import cloud_recover
+        import cloud_relay
+
+        for cfg, started_ts in relied:
+            reading = cloud_relay.account_limit(repo_root, cfg, env=env, now=now)
+            # axis: a limit authorization also needs the limit to still hold when the spawn is next, so a reply that withdrew it during the remote lookups refuses the spawn unread — see bite-proof record i2272_launcher
+            if not (
+                isinstance(reading, dict) and reading.get("ok") is True
+                and reading.get("limited") is True
+                and cloud_recover._is_number(started_ts)
+                and cloud_recover._is_number(reading.get("recordedAt"))
+                and started_ts < reading["recordedAt"]
+            ):
+                return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
     return None
 
 
@@ -3210,6 +3229,7 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
     not show, refuses ``adopt-original-session-unread``.
     """
     reads.pop("resetsAt", None)
+    reads.pop("relied", None)
     if "adoptsBranch" not in stamped:
         return None
 
@@ -3368,6 +3388,9 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
             if not _supersession_notice_names(comments, launch_id):
                 continue
             limited.add(launch_id)
+            reads.setdefault("relied", []).append(
+                (candidates[launch_id]["configDir"], candidates[launch_id].get("startedTs"))
+            )
             if cloud_recover._is_number(reading.get("resetsAt")):
                 resets = reads.get("resetsAt")
                 reads["resetsAt"] = reading["resetsAt"] if resets is None else min(resets, reading["resetsAt"])
@@ -4196,7 +4219,7 @@ def launch_build(
             )
             return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
         # axis: the limit the check relied on is compared with the clock right before the cloud command, with no remote read, since the remote lookups above can outlive it — see bite-proof record i2272_launcher
-        expired = _limit_expired_refusal(limit_reads)
+        expired = _limit_expired_refusal(limit_reads, repo_root, env)
         if expired is not None:
             expired_reason, expired_detail = expired
             term = _terminalize(
@@ -4264,7 +4287,7 @@ def launch_build(
         )
         if recheck is None:
             # axis: the limit the check relied on is compared with the clock right before the spawn, with no remote read, since the check's own remote lookup can outlive it — see bite-proof record i2272_launcher
-            recheck = _limit_expired_refusal(limit_reads)
+            recheck = _limit_expired_refusal(limit_reads, repo_root, env)
         if recheck is not None:
             recheck_reason, recheck_detail = recheck
             term = _terminalize(

@@ -730,3 +730,54 @@ def test_an_adoption_launch_from_a_checkout_at_its_adopted_head_launches_in_the_
         premise=_valid_premise(repo, baseCommit=base, adoptsBranch=branch, adoptsHead=head),
     )
     _proceeds(result, calls)
+
+
+def test_a_detective_premise_is_not_stamped_with_the_stand_down(tmp_path):
+    # axis: only a workhorse launch carries the stand-down stamp — a detective launch carries none, since only the builder's cloud reference checks for a newer launch on waking — see bite-proof record i2272_launcher
+    repo = _cloud_repo(tmp_path)
+    detective = L.validate_premise(
+        _valid_premise(repo, charter="detective", budget="one hour"), repo,
+    )
+    assert detective["ok"] is True and "standDown" not in detective["premise"]
+    # a caller-supplied stamp never survives on a detective launch
+    forged = L.validate_premise(
+        _valid_premise(repo, charter="detective", budget="one hour", standDown=1), repo,
+    )
+    assert forged["ok"] is True and "standDown" not in forged["premise"]
+    builder = L.validate_premise(_valid_premise(repo, charter="workhorse"), repo)
+    assert builder["ok"] is True and builder["premise"]["standDown"] == 1
+
+
+def test_a_limited_detective_lane_still_needs_a_listing(tmp_path, account):
+    # axis: a detective lane carries no stand-down stamp, so a limit gives it no relief and it needs the session read — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(
+        repo, LANE_ID, stamped=False,
+        premise_extra={"adoptsBranch": ADOPTED, "charter": "detective", "budget": "one hour"},
+    )
+    account.limited_until()
+    reason, detail = _check(repo)
+    assert (reason, detail["failedRead"], detail["launchIds"]) == (
+        TOKEN_UNREAD, "listing-not-given", [LANE_ID],
+    )
+
+
+
+def test_a_limit_withdrawn_before_the_cloud_spawn_refuses_limit_expired(tmp_path, account):
+    # axis: the final local check re-reads the account for every lane whose limit relief the decision relied on, so a limit withdrawn after the check (a reply, a limit recorded before the lane started) refuses unread — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, LANE_ID, premise_extra={"adoptsBranch": ADOPTED})
+    account.limited_until()
+    pass_reads = account.answer
+
+    def withdrawn_after_first_pass(config_dir, now):
+        # the pre-reservation check and the second pass read it limited; every later read is the final re-read
+        if len(account.calls) <= 2:
+            return pass_reads(config_dir, now)
+        return dict(pass_reads(config_dir, now), limited=False)
+
+    account.answer = withdrawn_after_first_pass
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _assert_refused_cloud_lane(repo, result, TOKEN_UNREAD, "original-session")
+    assert result["failedRead"] == "limit-expired"
+    assert calls == []

@@ -532,3 +532,47 @@ FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_an_adopted_hea
 .                                                                        [100%]
 1 passed in 2.32s
 ```
+
+## (g) the final limit re-read — axis: the final local check re-reads the account for every lane whose limit relief the decision relied on
+
+**Guarded element:** `launcher.py` `_limit_expired_refusal`, the loop over `reads["relied"]` (the `(configDir, startedTs)` pairs `_original_session_pass` records for each lane it relieved) that calls `cloud_relay.account_limit` again and refuses `adopt-original-session-unread` with `failedRead` `limit-expired` unless each reads ok, limited and recorded after the lane started.
+
+**Neutralization:** `relied = reads.get("relied") or []` became `relied = []`.
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_launcher.py::test_a_limit_withdrawn_before_the_cloud_spawn_refuses_limit_expired plugins/superheroes/lib/tests/test_i2272_limit_cleared_during_comments_break_it.py -q -p no:randomly`
+
+**Red (final lines):**
+```
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_limit_cleared_during_comments_break_it.py:95: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_a_limit_withdrawn_before_the_cloud_spawn_refuses_limit_expired
+FAILED plugins/superheroes/lib/tests/test_i2272_limit_cleared_during_comments_break_it.py::test_limit_cleared_during_final_comments_read_prevents_cloud_spawn
+2 failed in 3.28s
+```
+
+**Restore:** `relied = reads.get("relied") or []` put back by the inverse edit.
+
+**Green (final lines):**
+```
+...                                                                      [100%]
+3 passed in 4.45s
+```
+(the same run with `test_a_detective_premise_is_not_stamped_with_the_stand_down`, restored together.)
+
+## (h) detective launches carry no stand-down stamp — axis: only a workhorse launch is stamped, so a detective lane always needs the session read
+
+**Guarded element:** `launcher.py` `validate_premise`, `if premise.get("charter", "workhorse") == "workhorse": stamped["standDown"] = 1` (else the key is dropped).
+
+**Neutralization:** the condition became `if True:`.
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_launcher.py::test_a_detective_premise_is_not_stamped_with_the_stand_down -q -p no:randomly`
+
+**Red (final lines):**
+```
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_launcher.py:741: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_a_detective_premise_is_not_stamped_with_the_stand_down
+1 failed in 2.18s
+```
+
+**Restore:** the condition put back; the combined run of the three tests of this entry and (g) printed `3 passed in 4.45s`.
