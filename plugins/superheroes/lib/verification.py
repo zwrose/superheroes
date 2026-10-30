@@ -475,7 +475,9 @@ def merge_and_rank(survivors, grouping=None):
             if len(members) > 1:
                 # axis: a finding that carries a break-it test (per-area or attached) carries it and its run
                 # records; merging it into a group would fold that away, so it leaves any multi-member group unmerged
-                for m in [m for m in members if break_it.carries_test(m)]:
+                # a carried finding marked `carriedTestLost` owes a test no round-level run registers; folding it
+                # into a representative would drop the marker the certification guard reads, so it stays unmerged too
+                for m in [m for m in members if break_it.carries_test(m) or m.get("carriedTestLost") is True]:
                     findings.append(dict(m))
                     members.remove(m)
                     merged_ids.remove(m["id"])
