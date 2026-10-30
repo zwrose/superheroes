@@ -2361,7 +2361,11 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
   `plugins/superheroes/lib/engine_adapter.py`, emitted as `permissions.allow` by
   `claude_write_sandbox_settings`. Workaround-marked (#1569). Cost: a rule list that tracks the
   harness's safety check, and a command a managed policy excludes from the sandbox that matches a
-  rule runs unprompted outside it.
+  rule runs unprompted outside it. Each family also carries two assignment-prefixed rules,
+  `Bash(*=* f *)` and `Bash(*=* f)` (#2275), so leading `NAME=value` assignments run; because the
+  leading `*` matches any characters, a command line that carries an `=` anywhere before a family's
+  name followed by a space or the line's end (e.g. `touch x=1 npx f`) also matches a rule. It still
+  runs inside the sandbox.
 - **Start date.** 2026-10-02.
 - **Condition.** Citation-based, 45 days: build records or vet receipts citing an implementer
   refusal "requires approval" on the claude write channel for a Python, pytest, echo, node toolchain
@@ -2456,7 +2460,10 @@ file, returns exactly that set.
   unstamped.)
 - `plugins/superheroes/lib/engine_adapter.py` — the claude write channel allows the Python, pytest,
   echo, node toolchain (npm, npx, node, pnpm, yarn) and `ps` command families by rule because the harness's sandbox auto-allow misses shapes its
-  safety check flags (`-X` on a Python call, `$?`). **delete-when:** `autoAllowBashIfSandboxed`
+  safety check flags (`-X` on a Python call, `$?`, leading `NAME=value` assignments), with an
+  assignment-prefixed pair of rules per family (`Bash(*=* f *)`, `Bash(*=* f)`) whose leading `*`
+  also matches a line that carries an `=` anywhere before the family's name (e.g.
+  `touch x=1 npx f`); it still runs inside the sandbox. **delete-when:** `autoAllowBashIfSandboxed`
   auto-approves every sandboxed command shape on the Claude Code version the channel runs.
 - `plugins/superheroes/lib/engine_dispatch.py` — the fold sweeps empty `.claude/.cc-writes`
   atomic-write staging dirs Claude Code creates in the worktree outside the sandbox. **delete-when:**
