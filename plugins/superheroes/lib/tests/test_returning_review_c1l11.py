@@ -385,6 +385,30 @@ def test_a_git_that_fails_the_ancestor_check_counts_as_not_an_ancestor(tmp_path)
     assert seen == [["merge-base", "--is-ancestor", "a" * 40, "c" * 40]]
 
 
+def test_an_abandoned_earlier_record_reads_full_even_with_a_covering_reviewer(tmp_path):
+    # axis: an abandoned session's record is never reusable review coverage
+    repo = Repo(tmp_path)
+    base, _, earlier = returning(repo)
+    repo.write("src/app.py", repo.read("src/app.py") + "extra = 1\n")
+    repo.commit("fix")
+    assert decide(repo, base, earlier)["read"] == "changed"
+    earlier["abandoned"] = {"reason": "closed early"}
+    got = decide(repo, base, earlier)
+    assert got["read"] == "full" and tokens(got) == [R.WHY_EARLIER_UNUSABLE]
+
+
+def test_a_binary_file_in_the_change_reads_full_rather_than_counting_zero_lines(tmp_path):
+    # axis: an unsettled binary section has no line count and is never added as zero
+    repo = Repo(tmp_path)
+    base, _, earlier = returning(repo)
+    with open(os.path.join(repo.root, "src", "blob.bin"), "wb") as fh:
+        fh.write(b"\x00\x01binary\x00" * 50)
+    repo.commit("add binary")
+    got = decide(repo, base, earlier)
+    assert got["read"] == "full" and tokens(got)[-1] == R.WHY_DIFF_UNREADABLE
+    assert got["unsettled"] == [{"file": "src/blob.bin", "reason": "binary"}]
+
+
 @pytest.mark.parametrize("covers", [False, None, "true", 1])
 def test_an_earlier_review_that_did_not_cover_its_final_commit_reads_full(tmp_path, covers):
     repo = Repo(tmp_path)
