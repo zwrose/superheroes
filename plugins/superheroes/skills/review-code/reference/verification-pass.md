@@ -5,6 +5,7 @@ Per-finding verification for standalone review-code compile (#506).
 - [Where it runs](#where-it-runs)
 - [The verifier dispatch](#the-verifier-dispatch)
 - [Applying the verdicts](#applying-the-verdicts)
+- [The grade and the missed-path step](#the-grade-and-the-missed-path-step)
 - [Synthesis merge + rank](#synthesis-merge--rank)
 - [Evidence-or-silence + the advisory disposition](#evidence-or-silence--the-advisory-disposition)
 - [Fallback](#fallback)
@@ -109,13 +110,13 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
   `Cannot find module`, `Cannot find package`, `ModuleNotFoundError`, `No module named`, or the
   tokens `command-not-found` / `module-not-found`): that keeps the finding PLAUSIBLE at its
   pre-verification severity with `unverified: true`, its id in `unverified`, and an entry in
-  `notExecuted`.
+  `notExecuted`; the drop carries the grade wrong with that reason.
 - **CONFIRMED** — survivor stamped `verdict: "CONFIRMED"`; CONFIRMED evidence from the verdict
-  overwrites/sets the finding's `evidence` (the verification evidence).
-- **PLAUSIBLE** — survivor stamped `verdict: "PLAUSIBLE"`.
+  overwrites/sets the finding's `evidence` (the verification evidence), and the grade confirmed.
+- **PLAUSIBLE** — survivor stamped `verdict: "PLAUSIBLE"`, and the grade plausible.
 - **KEEP-ON-UNCERTAIN** — a missing verdict, malformed verdict, or REFUTED without a
   non-empty reason keeps the finding as **PLAUSIBLE** at its pre-verification severity — a
-  model's silence never drops a finding.
+  model's silence never drops a finding. It carries no grade.
 - **Severity normalize** — verdict `severity` applies when it is a valid tier; otherwise the
   finding's original severity stands.
 - **Downgrades** — a survivor re-tiered from blocking to non-blocking is recorded in
@@ -128,6 +129,40 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
 - **Ambiguous** — a finding id carried by more than one verdict is ambiguous: honor none of
   them (keep-on-uncertain, so a later REFUTED can't silently drop it) and surface the id in
   `ambiguous`.
+
+## The grade and the missed-path step
+
+Only the [verifier](../../../rubric/glossary.md#verifier) closes a finding as wrong. The fold
+gives every finding a verdict was honored for a `grade` — `{"verdict": "confirmed" | "plausible"
+| "wrong", "reason": …}` — on the finding and on its ledger row, and the review record shows it.
+A receiptless CONFIRMED, and a REFUTED resting on a check that did not execute, are graded
+plausible. A finding the verifier was silent on, or gave a malformed or ambiguous verdict, has no
+grade. A grade a reviewer put on its own finding is removed when findings are staged. The record
+reads `shown-wrong` only for a refuted finding that carries the verifier's wrong grade, or one an
+earlier record already listed as shown wrong; any other attempt to write `shown-wrong` is refused
+or leaves the finding open. The author-justification post-filter carries a finding to the owner,
+never to `shown-wrong`.
+
+**A passing test that missed its path.** For a finding whose break-it test passed on the unfixed
+code, the verdict also says `pathReached`. A test that reached the finding's path and still
+passed is evidence the finding does not hold: REFUTED, graded wrong, and sent to no fix. One that
+never reached the path (`pathReached: false`, with any verdict but an evidenced CONFIRMED) is
+held: it is not graded, dropped or grouped, and it is listed in the verify record's `held`. The
+driver then emits `dispatch-second-test`: a fresh run of the [test role](../../../rubric/glossary.md#test-role), seated outside every
+maker's family, gets the held findings, each with its first test, that test's output and the
+verifier's note, and writes one more test for each
+([the order](../../../rubric/orders/dispatch-second-test.md)). The build session runs each new
+test as it runs the first, in its own working copy at the unfixed head, and records the run with
+the finding and in the round's `breakItRuns`; the finding is marked `secondTest: true`. Then the
+held findings alone go back to the verifiers. On that pass `pathReached` is not acted on: a
+REFUTED closes the finding as wrong, and any other verdict keeps it, graded, as a judgment call
+when its test again missed the path. No third test is written. The findings kept in the first
+pass rejoin the second pass's survivors, freshly staged, before synthesis.
+
+A held finding never goes missing: when no reviewer outside the makers' families can be seated,
+no order is emitted, the round records `secondTestUnseatable`, and the held findings go straight
+to the second pass with no new test. A held finding the seat returns no test for goes to the
+second pass with its first test only, listed under the round's `secondTest.noTest`.
 
 ## Synthesis merge + rank
 
@@ -179,9 +214,10 @@ silently demoted.
 Use `synthesized.findings` as `compiled.findings`. Carry `verified.drops`, `verified.downgrades`,
 and `synthesized.merges` into the round record as appropriate.
 
-**Author-justification post-filter (PR mode, after merge_and_rank).** May drop only non-CONFIRMED
-findings with a substantive prior justification (quoted in the record); CONFIRMED survives stamped
-`challenge: "author-justified"`. Full rules: `round-driver.md`.
+**Author-justification post-filter (PR mode, after merge_and_rank).** May take off the fix path
+only non-CONFIRMED findings with a substantive prior justification (quoted in the record),
+carrying each to the owner (`left-for-owner` in the review record, never `shown-wrong`); CONFIRMED
+survives stamped `challenge: "author-justified"`. Full rules: `round-driver.md`.
 
 ## Evidence-or-silence + the advisory disposition
 
@@ -238,6 +274,8 @@ Nothing verified away silently:
 - **`notExecuted`** — a REFUTED that rested on a check that did not execute the code under test,
   kept as an unverified PLAUSIBLE finding, each entry `{id, file, title, reason}` with the reason
   `not-executed: <token>: <the verifier's reason>`; never a drop.
+- **`held`** — findings whose passing break-it test missed their path; each gets one more test
+  and is graded on the second pass, never dropped.
 - **`ambiguous`** — findings whose id carried conflicting duplicate verdicts; honored as none
   (keep-on-uncertain) and disclosed, never a silent last-write-wins drop.
 
