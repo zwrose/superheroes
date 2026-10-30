@@ -33,7 +33,8 @@ def test_round_driver_is_the_one_entrypoint():
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
     assert "import circuit_breaker" in src and "check_audit_breaker(" in src
-    assert "import review_round_policy" in src and "confirmation_followup(" in src
+    assert "import review_round_policy" in src and "confirmation_followup" not in src, \
+        "no later round runs a confirmation panel, so the driver calls no confirmation economics"
     assert "import verification" in src and "apply_verdicts(" in src
     assert "import audits" in src and "apply_audit_results(" in src
     # the reviewer re-dispatch budget rides its single home, never a local literal.

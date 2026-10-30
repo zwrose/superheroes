@@ -319,8 +319,8 @@ def test_t3_ceiling_gate_fail_on_post_fix_head_halts(tmp_path):
     assert state["rounds"]["2"]["verifyResult"] == "fail"
 
 
-# axis: unknown surface — verify then full panel in the new round
-def test_t4_unknown_surface_verify_then_panel(tmp_path, monkeypatch):
+# axis: unknown surface — the PR is handed back (`fix-surface-unknown`), no verify-then-panel
+def test_t4_unknown_surface_hands_the_pr_back(tmp_path, monkeypatch):
     repo, init_head = _init_ceiling_git_repo(tmp_path)
     _commit_in_repo(repo, "t4-head")
     d = str(tmp_path)
@@ -347,15 +347,13 @@ def test_t4_unknown_surface_verify_then_panel(tmp_path, monkeypatch):
                       {"fixes": [], "headDiff": bad_head, "changedSubjects": []})
     assert s["ok"], s
     n2 = RD.cmd_next(d)
-    assert n2["phase"] == RD.P_VERIFY
-    s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"], {"result": "pass"})
-    assert s2["ok"], s2
-    n3 = RD.cmd_next(d)
-    assert n3["phase"] == RD.P_PANEL
+    assert n2["phase"] == RD.P_TERMINAL
     ok, state = RD.load_state(d)
     assert ok
-    panel_round = str(state["round"])
-    assert state["rounds"][panel_round]["roundKind"] == "full-panel-unknown-surface"
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+    assert not any(r.get("roundKind") == "full-panel-unknown-surface"
+                   for r in state["rounds"].values())
 
 
 def _multi_file_diff(n):

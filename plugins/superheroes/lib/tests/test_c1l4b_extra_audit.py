@@ -768,6 +768,9 @@ def test_t9_a_loaded_state_above_its_cap_without_its_order_still_hands_back(tmp_
     state = _state(d)
     assert not state.get("terminal")
     state["round"] = rnd
+    # a later round has no panel to wait at (a saved one is retired on load), so the state waits at verify
+    state["step"] = RD.P_VERIFY
+    state["pending"] = None
     if extra is not None:
         state["extraAudit"] = extra
     RD.save_state(d, state)

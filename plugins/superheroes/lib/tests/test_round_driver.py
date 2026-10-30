@@ -1745,14 +1745,12 @@ def test_audit_stall_clears_on_clean_round_then_certifies_converged():
 
 
 # =============================================================================
-# confirmation economics: cap-parks-on-Critical, budget 2, re-arm
+# a delta round ends on its audit and scoped finder, never on a further panel
 # =============================================================================
 
-def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=None):
+def _delta_state_ready(findings=None, not_discharged=None):
     state = RD.new_state(_cfg(maxRounds=20))
-    state["confirmations"] = confirmations
-    state["surfacedSinceLastPanel"] = list(surfaced)
-    state["round"] = confirmations + 3
+    state["round"] = 3
     state["findings"] = list(findings or [])
     state["fullPanelRan"] = False
     nd = not_discharged or []
@@ -1764,35 +1762,30 @@ def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=No
     return state
 
 
-def test_critical_owed_at_the_confirmation_cap_hands_back_round_cap(tmp_path):
-    """A Critical still owed at the 2-panel confirmation cap hands the PR back (certification withheld)."""
-    state = _delta_state_ready(confirmations=RD.MAX_CONFIRMATIONS, surfaced=["Critical"])
-    RD._settle_delta(state, state["config"])
-    assert state["terminal"] == "handed-back"
-    assert any(d["kind"] == "round-cap" for d in state["decisions"])
-    assert state["certification"]["shape"] is None
-
-
-def test_non_critical_at_cap_certifies(tmp_path):
-    """A non-Critical at the cap resolves by scoped verify → certifies (audited-chain)."""
-    state = _delta_state_ready(confirmations=RD.MAX_CONFIRMATIONS, surfaced=["Important"])
+def test_a_delta_settle_with_every_audit_discharged_certifies_audited_chain(tmp_path):
+    """Re-pinned from the confirmation-cap tests: a delta round whose audits discharged and whose scoped
+    finder raised nothing certifies `audited-chain`, with no panel step and no confirmation follow-up."""
+    state = _delta_state_ready()
     RD._settle_delta(state, state["config"])
     assert state["terminal"] == "converged"
     assert state["certification"]["shape"] == "audited-chain"
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_critical_rearms_one_more_confirmation_under_budget(tmp_path):
-    """A Critical surfaced with confirmations under the cap re-arms one more FULL panel."""
-    state = _delta_state_ready(confirmations=0, surfaced=["Critical"])
+def test_a_critical_the_audit_did_not_discharge_never_schedules_a_panel(tmp_path):
+    """Re-pinned from the Critical re-arm test: an audit that discharged nothing for a Critical target
+    no longer owes a confirmation panel; the settle never steps to the panel."""
+    state = _delta_state_ready(not_discharged=["x"])
+    state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "x", "severity": "Critical"}]
     RD._settle_delta(state, state["config"])
-    assert state["terminal"] is None  # not certified — a confirmation is owed
-    assert state["step"] == RD.P_PANEL
-    assert any(dd["kind"] == "confirmation-rearm" for dd in state["decisions"])
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_confirmation_budget_two_respected_end_to_end(tmp_path):
-    """A Critical surfaced by a delta scoped-finder re-arms a full panel; a subsequent clean panel
-    certifies as full-panel-confirmed (one re-arm, budget not exceeded)."""
+def test_a_scoped_critical_is_fixed_and_audited_in_the_next_round_not_confirmed_by_a_panel(tmp_path):
+    """Re-pinned from the confirmation-budget test: a Critical the scoped finder raises in round 2 is
+    fixed and audited in a later round, and the review ends `audited-chain` with no panel after round 1."""
     scoped_state = {"fired": False}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -1812,8 +1805,9 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
     receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step),
                           _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
-    assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
-    assert any(x["kind"] == "confirmation" for x in receipt["rounds"])
+    assert receipt["certificationShape"] == "audited-chain-degraded"
+    assert not any(x["kind"] in ("confirmation", "full-panel-unknown-surface")
+                   for x in receipt["rounds"])
 
 
 # =============================================================================
@@ -1861,7 +1855,9 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
                 if rnd == 1 and dim == "code-reviewer" else []), auditor=auditor),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
     loop_receipt = RD.build_receipt(state)
-    assert refusal["verdict"] == "handed-back" and refusal["certificationShape"] is None
+    # The scoped finder, like the auditor, cannot be seated outside the fixer's family: the fixes' own
+    # diff has no reviewer, so the review is not certified (re-pinned: it used to hand back before it).
+    assert refusal["verdict"] == "cannot-certify" and refusal["certificationShape"] is None
     assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
                         for t in seen)
     assert state["independenceDegraded"] is True
@@ -1884,7 +1880,8 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude"))
+        auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude",
+                                    seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
     assert captured["targets"], "the auditor must have received the fix's audit targets"
     t = captured["targets"][0]
@@ -1911,7 +1908,8 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    assert result["verdict"] == "handed-back" and result["certificationShape"] is None
+    # re-pinned: the scoped finder over the fixes' own diff cannot be seated either, so the review parks
+    assert result["verdict"] == "cannot-certify" and result["certificationShape"] is None
     t = captured["targets"][0]
     assert t["independence"] == "unseatable" and "auditorVendor" not in t
 
@@ -1925,12 +1923,16 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
                  "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
 
-    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "codex",
-           "baseGuard": RD.BASE_GUARD_CHECKED}
+    # the build session (claude) and the codex fixer are both makers, so the scoped finder, which sits
+    # outside every maker's family, is seated on a third vendor and reports that one
+    cfg = {"leg": "code", "vendors": ["claude", "codex", "cursor"], "diff": DIFF, "fixerVendor": "codex",
+           "baseGuard": RD.BASE_GUARD_CHECKED,
+           "seatMap": _nonpanel_cell_proof(["claude", "codex", "cursor"])}
     receipt = RD.run_loop(_seams(
             reviewer=lambda dim, tier, rnd, ctx:
                 ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
-                 if rnd == 1 and dim == "code-reviewer" else []),
+                 if rnd == 1 and dim == "code-reviewer"
+                 else {"findings": [], "vendor": "cursor"} if dim == "scoped-finder" else []),
             auditor=auditor, fixer_vendor="codex"), cfg)
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
@@ -2049,7 +2051,8 @@ def test_verify_skip_with_no_command_still_advances(tmp_path):
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        verify_runner=lambda cmd, rnd: "none"), _cfg_cert(verifyCommand="none"))
+        verify_runner=lambda cmd, rnd: "none"),
+        _cfg_cert(verifyCommand="none", seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
 
 
@@ -2322,11 +2325,11 @@ def test_receipt_carries_audit_provenance_per_round(tmp_path):
     that ran fix audits records `auditProvenance: collection-manifest`, and validate_receipt accepts
     the field (build_receipt must project it, not leave it recorded in state only)."""
     d = str(tmp_path)
-    _drive_cli(d, _cfg(), _responder(
+    _drive_cli(d, _cfg(seatMap=_nonpanel_cell_proof(["claude", "codex"])), _responder(
         round1_findings=[{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]))
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
-    provs = [r.get("auditProvenance") for r in receipt["rounds"]]
+    provs =[r.get("auditProvenance") for r in receipt["rounds"]]
     assert "collection-manifest" in provs, provs
     ok, reason = RD.validate_receipt(receipt)
     assert ok, reason
@@ -2447,42 +2450,6 @@ def test_duplicate_terminating_submit_fault_carries_foldLanded(tmp_path):
     assert dup["ok"] is False
     assert dup["duplicate"] is True
     assert dup.get("foldLanded") is True
-
-
-def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
-    """#507 R2 residual-5: cross-cutting rework accumulates across MULTIPLE post-panel delta fixes.
-    Three delta fixes of one subject each cumulate to 3 distinct subjects → cross-cutting, even
-    though no single fix is broad (the latest-only read under-fired)."""
-    import review_round_policy as RRP
-    state = RD.new_state(_cfg())
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    assert state["_changedSubjectsSincePanel"] == []
-    for subj in (["Security"], ["Code"], ["Test"]):
-        state["round"] = 2
-        RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                       lambda r, h, a, _s=subj: _s)
-    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
-    assert RRP.is_cross_cutting(state["_changedSubjectsSincePanel"]) is True
-
-
-def test_panel_resets_accumulator_and_baseline_fix_excluded():
-    """A full panel resets the cross-cutting accumulator (a broad fix BEFORE it does not count as the
-    panel's rework), and a round-1 BASELINE fix never accumulates (it is not confirmation rework)."""
-    # a broad ROUND-1 baseline fix is excluded
-    state = RD.new_state(_cfg())
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    state["round"] = 1
-    RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                   lambda r, h, a: ["Code", "Security", "Test"])
-    assert state["_changedSubjectsSincePanel"] == []
-    # a broad delta fix accumulates, then a later panel resets it
-    state["round"] = 2
-    RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                   lambda r, h, a: ["Code", "Security", "Test"])
-    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
-    state["round"] = 3
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    assert state["_changedSubjectsSincePanel"] == []
 
 
 def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
@@ -2709,7 +2676,7 @@ def test_settle_delta_list_dimension_via_mechanical_compile(tmp_path):
     raw = [{"title": "hole", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
             "dimension": ["security", "perf"]}]
     compiled, _ = RD.mechanical_compile(raw, DIFF)
-    state = _delta_state_ready(confirmations=0, surfaced=[], findings=compiled)
+    state = _delta_state_ready(findings=compiled)
     RD._settle_delta(state, state["config"])
     record = (state.get("_records") or [])[-1]
     dim_map = record.get("dimensions") or {}
@@ -3423,8 +3390,8 @@ def test_fold_fixer_derives_subjects_from_git_not_self_report():
 
 def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
     """run_loop routes the derivation through the injected `changed_subjects` seam (the eval-harness
-    pattern). A seam that returns a cross-cutting set re-arms a confirmation even though the fixer's
-    self-report and the synthetic diff are narrow — proving the self-report is never consulted."""
+    pattern). The seam is consulted although the fixer's self-report is narrow, and a cross-cutting
+    set no longer re-arms a confirmation panel — none runs after round 1."""
     calls = []
 
     def changed_subjects(reviewed, head, accumulated):
@@ -3439,9 +3406,10 @@ def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
 
     seams = _seams(reviewer=reviewer)
     seams["changed_subjects"] = changed_subjects
-    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
+    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert calls  # the seam was invoked (the self-report was never consulted)
-    assert any(r.get("kind") == "confirmation" for r in receipt["rounds"])
+    assert not any(r.get("kind") == "confirmation" for r in receipt["rounds"])
+    assert receipt["verdict"] == "converged"
 
 
 # =============================================================================
@@ -4258,7 +4226,8 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude"))
+        auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude",
+                                    seatMap=_nonpanel_cell_proof(["codex", "cursor"])))
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
     assert t["fixerVendor"] == "claude"
@@ -6078,21 +6047,21 @@ def test_clean_rearm_forever_hands_back_at_a_cap_below_the_default(tmp_path):
     assert max(seams["_legRnds"]["verify"]) == 3
 
 
-def test_delta_at_cap_records_ledger_then_hands_back_on_advance():
-    """A verified delta round at the cap appends its ledger record, then the advance hands back."""
-    # axis: the cap round completes (delta ledger append) before the boundary refuses the next round
+def test_delta_at_cap_records_ledger_then_converges_with_no_round_past_the_cap():
+    """Re-pinned: a delta round at the cap whose audits discharged appends its ledger record and ends the
+    review on that round (no confirmation panel is owed, so no round past the cap is asked for)."""
+    # axis: the cap round completes (delta ledger append) and nothing asks for the round after it
     state = RD.new_state(_cfg(maxRounds=4))
     state["round"] = 4
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = ["Critical"]
     state["findings"] = []
     state["fullPanelRan"] = False
     state["auditRounds"] = [{"round": 3, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
     RD._settle_delta(state, state["config"])
     assert any(r.get("kind") == "delta" and r.get("round") == 4 for r in state["_records"])
-    assert state["terminal"] == "handed-back"
-    assert any(d["kind"] == "round-cap" for d in state["decisions"])
+    assert state["terminal"] == "converged"
+    assert state["certification"]["shape"].startswith("audited-chain")
+    assert not any(d["kind"] == "round-cap" for d in state["decisions"])
     assert state["round"] == 4
 
 
@@ -6172,7 +6141,7 @@ def test_loaded_state_above_cap_hands_back_on_cmd_next(tmp_path):
     state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
+    state["step"] = RD.P_VERIFY
     RD.save_state(d, state)
     n = RD.cmd_next(d)
     assert n["ok"]
@@ -6197,12 +6166,12 @@ def test_loaded_state_above_cap_hands_back_on_cmd_submit(tmp_path):
     state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
-    state["pending"] = {"action": RD.P_PANEL, "round": 5, "phase": RD.P_PANEL, "attempt": 0,
+    state["step"] = RD.P_VERIFY
+    state["pending"] = {"action": RD.P_VERIFY, "round": 5, "phase": RD.P_VERIFY, "attempt": 0,
                         "payload": {}}
     RD.save_state(d, state)
     h = RD.state_hash(state)
-    out = RD.cmd_submit(d, RD.P_PANEL, 0, h, {"seats": {}})
+    out = RD.cmd_submit(d, RD.P_VERIFY, 0, h, {"result": "pass"})
     assert out["ok"] is True
     assert out["nextStep"] == RD.P_TERMINAL
     ok, reloaded = RD.load_state(d)
@@ -6225,7 +6194,7 @@ def test_loaded_state_at_cap_runs_on_cmd_next(tmp_path):
     state["round"] = 4
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
+    state["step"] = RD.P_VERIFY
     RD.save_state(d, state)
     n = RD.cmd_next(d)
     assert n["ok"]
@@ -6370,7 +6339,7 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
         assert reason not in audit_emitted, reason
 
     # max-iterations — the audit breaker no longer emits it: the round cap is the driver's boundary.
-    # audit-stall — discharged targets leave no open work; self-recovery settles via confirmation.
+    # audit-stall — discharged targets leave no open work; self-recovery settles on this round's audit.
     state = _delta_settle_state_for_breaker(monkeypatch, {
         "halt": True, "reason": "audit-stall", "detail": "stalled",
         "stalledIdentities": ["x"],
@@ -6378,8 +6347,10 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
     state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
                                "file": "f.py", "line": 1}]
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_PANEL
+    # re-pinned: it used to step to a confirmation panel; no later round runs a panel now
+    assert state["step"] == RD.P_TERMINAL
     assert any(d["kind"] == "self-recovery" for d in state["decisions"])
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
     # round-ceiling — unreachable at _settle_delta; enforced on the round-advance boundary only.
     assert CB.ROUND_CEILING_REASON not in audit_emitted
@@ -6511,16 +6482,6 @@ def test_verify_fold_unresolved_head_post_audits_advances():
     assert "_verifyThen" not in state
 
 
-def test_verify_fold_unresolved_head_panel_parks_underivable():
-    state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
-    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
-    RD._fold_verify(state, state["config"], {"result": "pass"},
-                    resolution=(None, "fix-fold head: repo root unresolvable"))
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "head unresolved" in state["certification"]["reason"]
-
-
 def test_verify_fold_at_cap_hands_back_round_cap():
     for resolution in (("a" * 40, None), (None, "fix-fold head: repo root unresolvable")):
         state = _verify_fold_state(maxRounds=2)
@@ -6533,16 +6494,16 @@ def test_verify_fold_at_cap_hands_back_round_cap():
         assert any(dec["kind"] == "round-cap" for dec in state["decisions"])
 
 
-def test_verify_fold_legacy_position_unresolved_head_unknown_surface_parks_underivable():
-    """No continuation flag and no head: the delta round has no baseline, so it needs a full panel
-    over the head diff; with no head the derivation refuses and the session parks."""
+def test_verify_fold_legacy_position_unresolved_head_unknown_surface_hands_back():
+    """Re-pinned: no continuation flag and no head: the delta round has no baseline, so its fix surface
+    is unknown; the PR is handed back (`fix-surface-unknown`), never a panel over the head diff."""
     state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
     assert "_verifyThen" not in state
     RD._fold_verify(state, state["config"], {"result": "pass"},
                     resolution=(None, "fix-fold head: repo root unresolvable"))
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "head unresolved" in state["certification"]["reason"]
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_PANEL
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
 
 
 def test_verify_head_lookup_persists_the_session_head(tmp_path):

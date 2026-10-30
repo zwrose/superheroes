@@ -48,7 +48,7 @@
     "runs your test, exactly as you wrote it, in its own working copy"
   ],
   "dispatch-audits": [
-    "You are the fix auditor for one cleared-or-stalled finding target",
+    "You are the [fix auditor](../glossary.md#fix-auditor) for one cleared-or-stalled finding target",
     "When an independent runner-channel vendor is live, you are never the fixer's vendor",
     "Return exactly one audit result for this target",
     "Judge only this one target",
@@ -56,7 +56,7 @@
     "Transport keys use the per-location target identifier"
   ],
   "dispatch-scoped-finder": [
-    "You are the scoped finder for a delta review round",
+    "You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round",
     "only flag code in `+` or `-` lines within those\nhunks",
     "You are reviewing CHANGES MADE BY THIS FIX",
     "`file:line` citation required",
