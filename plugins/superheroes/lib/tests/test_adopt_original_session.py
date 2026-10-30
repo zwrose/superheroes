@@ -963,15 +963,27 @@ def test_a_reoutcome_handback_is_timed_from_the_reoutcome(tmp_path, first_pr, mo
         assert result["launchIds"] == [LANE_ID]
 
 
-def test_the_first_pr_is_read_once_for_every_lane_that_reaches_the_timing_test(tmp_path, first_pr):
-    # axis: the first-pull-request read happens at most once per check, whatever the number of lanes
+def test_the_first_pr_is_read_once_for_every_lane_that_reaches_the_timing_test(tmp_path, first_pr, monkeypatch):
+    # axis: the first-pull-request read happens at most once per original-session check, whatever the number of
+    # lanes; the pre-spawn re-check is a second check and reads fresh, so a launch reads once per check
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo, "lane-a")
     _seed_lane(repo, "lane-b", session_id="session_01FixtureLaneB000000000", title="issue-656-fixturelane00000b")
     reads = first_pr(time.time() + 3600)
+    checks = []
+    real_check = L._original_session_refusal
+
+    def counting_check(*args, **kwargs):
+        checks.append(len(reads))
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(L, "_original_session_refusal", counting_check)
     result, calls = _adopt(repo, tmp_path)
     _proceeds(result, calls)
-    assert len(reads) == 1
+    assert checks, "the launch ran no original-session check"
+    # each check began with `checks[i]` reads behind it; every check added exactly one
+    assert checks == list(range(len(checks)))
+    assert len(reads) == len(checks)
 
 
 def test_a_lane_bound_to_the_branch_whose_branch_is_gone_from_the_remote_refuses_unread(tmp_path, first_pr):
