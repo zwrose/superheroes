@@ -6337,16 +6337,16 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     _record_round(state, "verifyResult", result)
     head, head_source, moved = _verify_execution_head(artifact, verified_head)
     restored = state.get("_restoredHead")
-    # axis: the gate after a restore counts only a run at the restored head — a result taken at another head halts, see bite-proof record c1l10b_wo2_test_restore
-    if restored is not None and head is not None and head != restored:
+    # axis: the gate after a restore counts only a run at the restored head that held still — a result taken at another head, or one whose head moved during the run, halts, see bite-proof record c1l10b_wo2_test_restore
+    if restored is not None and (moved or (head is not None and head != restored)):
+        how = ("HEAD moved during the run (from %s to %s)" % (artifact.get("headSha"), artifact.get("headShaAfter"))
+               if moved else "ran at %s, not the restored head %s" % (head, restored))
         _set_terminal(state, "halted")
         state["certification"] = {
             "shape": None,
-            "reason": ("verify ran at %s, not the restored head %s — halt, certification withheld"
-                       % (head, restored))}
+            "reason": "verify %s — halt, certification withheld" % how}
         _decision(state, "verify-unresolved",
-                  "verify result ran at head %s, not the restored head %s — fail closed, "
-                  "certification withheld" % (head, restored))
+                  "verify result: %s — fail closed, certification withheld" % how)
         state["step"] = P_TERMINAL
         return
     first = state.pop("_verifyRerun", None)

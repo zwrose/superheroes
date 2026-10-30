@@ -446,3 +446,39 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 .                                                                        [100%]
 1 passed, 72 deselected in 52.20s
 ```
+
+### W7-E2 — the gate after a restore refuses a run that moved HEAD during the run
+
+**guarded element:** the `moved or` half of the guard in `_fold_verify` (`round_driver.py`, line 6341: `if restored is not None and (moved or (head is not None and head != restored)):`). Axis: while `_restoredHead` is set, a passing verify that starts at the restored head but ends at another commit (`headSha` is the restored head, `headShaAfter` a different full commit id) halts with `verify-unresolved`, certification withheld, step `P_TERMINAL`, the detail naming that HEAD moved during the run. Detector: `test_the_gate_after_a_restore_refuses_a_run_that_moved_head_during_the_run` in `plugins/superheroes/lib/tests/test_c1l10b_test_restore.py` (case `head-moved-during-the-run` bites; case `head-held-still`, whose `headShaAfter` equals the restored head, stays green with and without the guard half and pins that a run that held still is still accepted).
+
+**neutralization** (`round_driver.py`, `_fold_verify`): the guard no longer fires on `moved`.
+```diff
+-    if restored is not None and (moved or (head is not None and head != restored)):
++    if restored is not None and ((head is not None and head != restored)):
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo7-pyc -m pytest plugins/superheroes/lib/tests/test_c1l10b_test_restore.py -q -p no:cacheprovider -k refuses_a_run_that_moved_head --tb=line` (the `--tb=line` flag was added to the order's command form to keep the capture short, as the earlier entries in this file do)
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert (None == 'halted')
+/home/user/sh-2264/plugins/superheroes/lib/tests/test_c1l10b_test_restore.py:1120: AssertionError: assert (None == 'halted')
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l10b_test_restore.py::test_the_gate_after_a_restore_refuses_a_run_that_moved_head_during_the_run[head-moved-during-the-run]
+1 failed, 1 passed, 73 deselected in 2.04s
+```
+
+**restore:** the inverse edit, back to `    if restored is not None and (moved or (head is not None and head != restored)):`.
+
+**restore receipt:** `grep -n "if restored is not None and" plugins/superheroes/lib/round_driver.py` finds:
+```
+6341:    if restored is not None and (moved or (head is not None and head != restored)):
+```
+
+**raw green:** same command as the raw red.
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+..                                                                       [100%]
+2 passed, 73 deselected in 2.52s
+```

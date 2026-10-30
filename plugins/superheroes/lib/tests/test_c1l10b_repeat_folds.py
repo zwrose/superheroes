@@ -49,6 +49,12 @@ def test_2a_a_chain_of_kept_repeats_passes_link_by_link_to_a_verifier_closed_roo
     assert rr._wrong_ungraded([a, b, c], None, closed(a)) == []
 
 
+def test_2a_reverse_a_chain_listed_child_first_still_passes_link_by_link_to_the_root():
+    # axis: the chain closure repeats until nothing changes — a single forward pass admits only the links listed after their parent
+    a, b, c = chain()
+    assert rr._wrong_ungraded([c, b, a], None, closed(a)) == []
+
+
 def test_2b_a_ring_of_kept_repeats_gains_no_root_and_is_refused():
     a = wrong("a-1", title="one", reason="not a bug")
     b = finding("a-2", title="two", outcome="shown-wrong", reason="r")
@@ -79,6 +85,16 @@ def test_2d_the_writer_takes_the_whole_chain_of_kept_repeats(tmp_path):
     a, b, c = chain()
     fake = Fake()
     out = write(tmp_path, fake, [a, b, c], verifier_closed=closed(a))
+    assert out["ok"], out
+    rows = {f["id"]: f for f in rr.read(7, readers=fake.readers())["findings"]}
+    assert [rows[i]["outcome"] for i in ("a-1", "a-2", "a-3")] == ["shown-wrong"] * 3
+    assert rows["a-3"]["repeatOf"]["findingKey"] == rr._key(b)
+
+
+def test_2d_reverse_the_writer_takes_the_whole_chain_listed_child_first(tmp_path):
+    a, b, c = chain()
+    fake = Fake()
+    out = write(tmp_path, fake, [c, b, a], verifier_closed=closed(a))
     assert out["ok"], out
     rows = {f["id"]: f for f in rr.read(7, readers=fake.readers())["findings"]}
     assert [rows[i]["outcome"] for i in ("a-1", "a-2", "a-3")] == ["shown-wrong"] * 3

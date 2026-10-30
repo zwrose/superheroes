@@ -1104,6 +1104,28 @@ def test_the_gate_after_a_restore_counts_only_a_run_at_the_restored_head(tmp_pat
         assert not w.state.get("terminal") and "_restoredHead" not in w.state
 
 
+@pytest.mark.parametrize("moves,halts", [pytest.param(True, True, id="head-moved-during-the-run"),
+                                         pytest.param(False, False, id="head-held-still")])
+def test_the_gate_after_a_restore_refuses_a_run_that_moved_head_during_the_run(tmp_path, moves, halts):
+    # axis: the gate after a restore counts only a run that held still at the restored head — a pass that starts there and ends at another commit halts
+    w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore goes straight to the gate
+    w.audit()
+    w.restore()
+    restored = w.state["_restoredHead"]
+    later = _commit(w.root, "moved on during the run")
+    assert later != restored
+    artifact = {"result": "pass", "headSha": restored, "headShaAfter": later if moves else restored}
+    w.fold(RD.P_VERIFY, artifact, verified_head_resolution=(None, None))
+    if halts:
+        assert w.state["terminal"] == "halted" and w.state["step"] == RD.P_TERMINAL
+        assert w.state["decisions"][-1]["kind"] == "verify-unresolved"
+        assert "moved during the run" in w.state["decisions"][-1]["detail"]
+        assert w.state["certification"]["shape"] is None
+        assert "moved during the run" in w.state["certification"]["reason"]
+    else:
+        assert not w.state.get("terminal") and "_restoredHead" not in w.state
+
+
 def test_two_failing_runs_at_the_restored_head_halt_and_never_fall_back_to_an_earlier_pass(tmp_path):
     # axis: the post-restore gate is decided by its own runs — a first failure re-runs once, a second one halts
     w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore goes straight to the gate
