@@ -25,6 +25,7 @@ _ALLOWED_WRITER_FUNCTIONS = frozenset({
     "_record_grade",  # fold-time: its only callers are in _fold_verifiers; writes the verifier's grade, never a disposition
     "_clear_grade",  # fold-time: its only caller is _fold_verifiers; drops a stale verifier grade, never a disposition
     "_record_repeat",  # fold-time: its only caller is _apply_repeat_marks, from _fold_synthesis; writes repeatOf / repeatKept, never a disposition
+    "_seed_carried",  # first-next seeding: its only caller is _seed_returning_round; writes each carried finding as a raised row, never a disposition
 })
 _ALLOWED_LEDGER_KEY_FUNCTIONS = frozenset({_WRITER_NAME})
 _SESSION_CONTRACT_BASENAME = "session_contract.py"
