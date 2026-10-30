@@ -185,16 +185,18 @@ def test_e3_an_earlier_record_on_another_final_commit_refuses(tmp_path, monkeypa
 
 # --- E4: the earlier review did not finish, or was abandoned --------------------------------------------------------------------
 
-@pytest.mark.parametrize("edit", [lambda rec: rec.update(status="not-reviewed"),
-                                  lambda rec: rec.update(abandoned={"reason": "the loop was closed before it ended"})],
-                         ids=["not-reviewed", "abandoned"])
-def test_e4_an_earlier_review_that_is_not_finished_or_was_abandoned_refuses(tmp_path, monkeypatch, edit):
+@pytest.mark.parametrize("edit,prefix", [
+    (lambda rec: rec.update(status="not-reviewed"), "the earlier review does not stand for this head (earlier-review-incomplete:"),
+    (lambda rec: rec.update(abandoned={"reason": "the loop was closed before it ended"}),
+     "the earlier review does not stand for this head (earlier-record-unusable:"),
+], ids=["not-reviewed", "abandoned"])
+def test_e4_an_earlier_review_that_is_not_finished_or_was_abandoned_refuses(tmp_path, monkeypatch, edit, prefix):
     s = _empty_session(tmp_path, monkeypatch)
     fake = TRRS.Fake(head=s.head)
     _post_earlier(fake, s, edit=edit)
     out = _send(tmp_path, s, fake)
     assert out["ok"] is False and out["reason"] == RS.UNSUPPORTED, out
-    assert out["detail"].startswith("the earlier review does not stand for this head (earlier-review-incomplete:"), out
+    assert out["detail"].startswith(prefix), out
     assert fake.writes == []
 
 
@@ -252,7 +254,7 @@ def test_e6_positive_control_the_same_account_over_a_catch_up_merge_is_carried(t
 
 @pytest.mark.parametrize("edit,over,why", [
     (lambda rec: rec.update(status="not-reviewed"), {}, "the earlier review does not stand for this head (earlier-review-incomplete:"),
-    (lambda rec: rec.update(abandoned={"reason": "closed early"}), {}, "the earlier review does not stand for this head (earlier-review-incomplete:"),
+    (lambda rec: rec.update(abandoned={"reason": "closed early"}), {}, "the earlier review does not stand for this head (earlier-record-unusable:"),
     (_open_finding, {"findings": [OPEN]}, "an earlier finding is still open"),
 ], ids=["not-reviewed", "abandoned", "unsettled"])
 def test_e7_a_carried_account_over_an_earlier_record_that_does_not_qualify_demotes_every_row(tmp_path, monkeypatch, edit, over, why):
