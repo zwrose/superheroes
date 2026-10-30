@@ -87,8 +87,36 @@ def test_probe_runs_exactly_the_ps_group_listing():
     run = _runner()
     assert process_group_listing_works(run) is True
     argv, kwargs = run.calls[0]
-    assert argv == ["ps", "-g", str(os.getpgid(0)), "-o", "state="]
+    assert argv[:2] == ["ps", "-g"] and argv[3:] == ["-o", "state="]
+    assert argv[2].isdigit() and argv[2] != str(os.getpgid(0))
     assert kwargs == {"capture_output": True, "text": True, "timeout": 5}
+
+
+# axis: probe target - the probed group is a controlled child's own session (start_new_session), not the test process's group, and the child is reaped; catches the pgid-is-not-sid assumption and a leaked child.
+def test_probe_targets_a_new_session_child_and_reaps_it():
+    seen = []
+
+    def run(argv, **kwargs):
+        pid = int(argv[2])
+        seen.append(pid)
+        assert os.getsid(pid) == pid == os.getpgid(pid)
+        return _Done(0, "S\n")
+    assert process_group_listing_works(run) is True
+    with pytest.raises(ProcessLookupError):
+        os.kill(seen[0], 0)
+
+
+# axis: real guard under a non-session-leader process group (no sandbox marker) - a healthy host passes even when pytest's pgid differs from its sid; catches probing our own pgid.
+def test_real_guard_passes_when_pgid_differs_from_sid(tmp_path):
+    test_file = tmp_path / "test_child_pgid.py"
+    test_file.write_text("import pytest\n\n\n@pytest.mark.process_listing\ndef test_marked():\n    pass\n")
+    env = {k: v for k, v in os.environ.items() if k != SANDBOX_MARKER_ENV}
+    env["PYTHONPATH"] = _TESTS_DIR
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "proc_namespace", "-p", "no:cacheprovider", "-q",
+         "-c", os.devnull, "--rootdir", str(tmp_path), str(test_file)],
+        cwd=str(tmp_path), env=env, capture_output=True, text=True, check=False, process_group=0)
+    assert done.returncode == 0, done.stdout + done.stderr
 
 
 # axis: probe verdict (this test and the next three) - only exit 0 with non-empty output is working (E1, E2); catches a non-zero exit, empty output, or a raised exception being read as working.

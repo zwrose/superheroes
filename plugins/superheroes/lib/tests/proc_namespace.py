@@ -72,14 +72,31 @@ def require_own_proc_namespace(readlink=os.readlink, getpid=os.getpid, environ=N
 
 
 def process_group_listing_works(run=subprocess.run):
-    """True when `ps -g <our pgid> -o state=` (the call engine_dispatch._process_group_alive makes) exits 0
-    with output. Any exception, a non-zero exit, or empty output is not working: False."""
+    """True when `ps -g <pgid> -o state=` (the call engine_dispatch._process_group_alive makes) exits 0
+    with output for a controlled child. The child is started with start_new_session=True so its session id
+    and process-group id coincide: on Linux numeric `ps -g` selects a session, so probing this process's own
+    pgid would return no rows under a job-control shell. Any exception, a non-zero exit, or empty output is
+    not working: False."""
+    child = None
     try:
-        done = run(["ps", "-g", str(os.getpgid(0)), "-o", "state="],
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, start_new_session=True)
+        done = run(["ps", "-g", str(child.pid), "-o", "state="],
                    capture_output=True, text=True, timeout=5)
         return done.returncode == 0 and bool(done.stdout)
     except Exception:
         return False
+    finally:
+        if child is not None:
+            try:
+                child.kill()
+            except Exception:
+                pass
+            try:
+                child.wait(timeout=5)
+            except Exception:
+                pass
 
 
 def process_listing_skip_allowed(environ=None, probe=None):
