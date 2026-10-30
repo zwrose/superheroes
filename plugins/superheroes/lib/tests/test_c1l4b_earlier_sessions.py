@@ -191,7 +191,7 @@ def test_g3_a_generation_six_session_runs_its_stored_cap_round_and_begins_no_rou
     base = TRD._responder(round1_findings=[], vendors=TRD._cfg()["vendors"])
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             seq["n"] += 1
             return {"fixes": [], "headDiff": TRD._headf_ns(seq["n"]), "changedSubjects": ["Code"]}
         return base(phase, payload, rnd)

@@ -49,14 +49,14 @@ def _hand_session(tmp_path, status, **state):
 
 
 def _refuse_derivation_at_the_fixer_fold(monkeypatch):
-    """The fixer fold's git derivation refuses, so the fold takes the unknown path (a full second panel) and the
+    """The apply-fixes fold's git derivation refuses, so the fold takes the unknown path (a full second panel) and the
     unknown path's own derivation at the verified head runs for real. Both driver copies a fixture reaches are patched."""
     for mod in (RD, _TRD.RD):
         real = mod._derive_panel_diff_at_head
 
         def derive(config, head_sha, real=real):
-            if sys._getframe(1).f_code.co_name == "_fold_fixer":
-                return None, "forced refusal at the fixer fold"
+            if sys._getframe(1).f_code.co_name == "_fold_apply_fixes":
+                return None, "forced refusal at the apply-fixes fold"
             return real(config, head_sha)
 
         monkeypatch.setattr(mod, "_derive_panel_diff_at_head", derive)
@@ -77,7 +77,7 @@ def _hand_submit_two_panels(base, monkeypatch):
     answer = _responder(round1_findings=first, scoped=worse)
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             _commit_file(repo, "f.py", "fixed head %d\n" % rnd, "fixer commit")
             return {"fixes": [{"file": "f.py"}], "changedSubjects": ["Code"]}
         return answer(phase, payload, rnd)

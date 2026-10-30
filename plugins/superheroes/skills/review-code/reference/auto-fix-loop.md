@@ -600,11 +600,11 @@ When `next` returns `apply-fixes`, the build session fixes the batch itself, in 
 }
 ```
 
-- `fixes` — an entry binds a finding to the commit that fixed it. The binding is **required** for every finding that carries a break-it test; other entries may be plain notes. A commit may fix several findings.
+- `fixes` — an entry binds a finding to the commit that fixed it. The binding is **required** for every finding that carries a break-it test; other entries may be plain notes. A commit may fix several findings. An object entry with a `finding` key or a `commit` key must give both as non-empty strings.
 - `unfixed` — `{finding, why}`, both non-empty strings, for a finding you could not fix. It is not credited as fixed, and the next audit judges it.
 - `headDiff` / `headDiffPath` are optional cross-checks, as in `round-driver.md`.
 
-Fold it by hand with `submit` (hand path), or by writing it to the payload's `landingPath` and calling `advance` (durable-record path). Both paths are legal for this step on either kind of session, as for `run-verify`.
+Fold it on the path the session already uses, as for every other phase: a hand `submit` on a hand-path session, or writing it to the payload's `landingPath` and calling `advance` on a durable-record session. A session that has used one path refuses the other (`advance-submit-interleaved`).
 
 **Refusals.** The driver derives what was committed from git, never from the report. A refusal leaves the step pending, with the same phase and attempt: fix what it names, then fold again.
 
@@ -616,6 +616,7 @@ Fold it by hand with `submit` (hand path), or by writing it to the payload's `la
 | `…:test-missing` or `…:test-bytes-differ` | Write the test at the block's `path` with the block's bytes, and commit it with the fix. Do not edit the test to match the code. |
 | `…:no-fix-change` | The commit changed only the test. Commit the fix itself with it. |
 | `…:unverifiable` | The driver could not read git: the session has no repository root, base reference or step start head. Fold from a session that runs in the repository. |
+| `fix-binding-malformed:<index>` | The `fixes` entry at that position (from 0) has a `finding` or a `commit` key without both being non-empty strings. Give both as non-empty strings, or drop the key to make it a note. |
 | `fix-finding-unknown:<value>` | A `fixes` binding names a finding outside the batch. Remove or correct it. |
 | `unfixed-finding-unknown:<value>` | An `unfixed` entry names a finding outside the batch. Remove or correct it. |
 

@@ -12,6 +12,8 @@ E8 a finding listed `unfixed` owes no test and is not credited.
 E9 a binding or an `unfixed` entry naming a finding outside the slice refuses.
 E10 a slice with no commit and no test-carrying finding folds, and a changed staged PR body is recorded.
 E11 a run with no repository owes the commit facts to the `fix_commits` seam.
+A `fixes` object with a malformed binding is refused `fix-binding-malformed:<index>`; the stored binding names the
+resolved full sha — see bite-proof record c1l9a_wo8_review1.
 E13 a ruling while the step is pending rewrites its batch and guidance files.
 E14 `next --fixer-vendor` is no flag. E15 the fixer's vendor is the build session's family's.
 """
@@ -379,6 +381,46 @@ def test_e9_a_finding_outside_the_slice_refuses(tmp_path, artifact_for, token):
     fx.assert_refused_pending(artifact_for(fx.keys()[0]), token)
 
 
+# ---- a malformed binding is refused, never a crash ------------------------------------------------------------
+
+@pytest.mark.parametrize("entry_for, index", [
+    (lambda key: {"finding": [key], "commit": "abc1234"}, 1),
+    (lambda key: {"finding": "", "commit": "abc1234"}, 1),
+    (lambda key: {"finding": key, "commit": 7}, 1),
+    (lambda key: {"finding": key, "commit": ""}, 1),
+    (lambda key: {"commit": "abc1234"}, 1),
+    (lambda key: {"finding": key}, 1),
+])
+def test_a_fixes_object_with_a_malformed_binding_is_refused_with_its_index(tmp_path, entry_for, index):
+    fx = Fixture(tmp_path)
+    fx.reach()
+    key = fx.keys()[0]
+    fx.assert_refused_pending({"fixes": ["a note", entry_for(key)]}, "fix-binding-malformed:%d" % index)
+
+
+def test_plain_notes_and_objects_with_neither_key_still_fold_beside_a_binding(tmp_path):
+    fx = Fixture(tmp_path)
+    fx.reach()
+    key = fx.keys()[0]
+    sha = fx.commit_fix()
+    out = fx.submit({"fixes": ["a note", {"note": "no binding keys"}, {"finding": key, "commit": sha}]})
+    assert out["ok"] is True, out
+    assert fx.state()["rounds"]["1"]["fix"]["commits"] == [{"finding": key, "commit": sha}]
+
+
+# ---- the stored binding names the resolved commit ------------------------------------------------------------
+
+def test_a_binding_given_as_head_records_the_full_resolved_sha(tmp_path):
+    fx = Fixture(tmp_path)
+    fx.reach()
+    key = fx.keys()[0]
+    sha = fx.commit_fix()
+    assert len(sha) == 40
+    out = fx.submit(_bound(key, "HEAD"))
+    assert out["ok"] is True, out
+    assert fx.state()["rounds"]["1"]["fix"]["commits"] == [{"finding": key, "commit": sha}]
+
+
 # ---- E10 -----------------------------------------------------------------------------------------------------
 
 def test_e10_a_pr_body_only_slice_folds_with_no_commit_and_records_the_changed_body(tmp_path):
@@ -443,6 +485,19 @@ def test_e11_without_a_repository_the_seam_supplies_the_commit_facts():
     seams = _loop_seams(box, lambda key: {"fixes": [{"finding": key, "commit": "abc1234"}]}, fix_commits=facts)
     _receipt, state = TRD._run_loop_capturing_state(seams, TRD._cfg())
     assert state["rounds"]["1"]["fix"]["commits"] == [{"finding": box["key"], "commit": "abc1234"}]
+
+
+def test_e11_a_seam_entry_that_carries_a_sha_records_it_in_place_of_the_supplied_value():
+    box = {}
+    full = "c" * 40
+
+    def facts(commits, test_paths):
+        return {"abc1234": {"sha": full, "reachable": True, "inStep": False, "paths": [CHARGE_PATH, TEST_PATH],
+                            "files": {TEST_PATH: _TEST_FAILING.encode("utf-8")}}}
+
+    seams = _loop_seams(box, lambda key: {"fixes": [{"finding": key, "commit": "abc1234"}]}, fix_commits=facts)
+    _receipt, state = TRD._run_loop_capturing_state(seams, TRD._cfg())
+    assert state["rounds"]["1"]["fix"]["commits"] == [{"finding": box["key"], "commit": full}]
 
 
 def test_e11_without_a_repository_the_seam_can_refuse_the_commit():
