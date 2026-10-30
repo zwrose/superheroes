@@ -6901,6 +6901,19 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                   "certification withheld" % restored)
         state["step"] = P_TERMINAL
         return
+    # axis: after a restore a first pass whose head moved during the run halts, never advances — see bite-proof record c1l11f_wo_e_verify_after_restore
+    if restored is not None and first is None and moved and result == "pass":
+        _set_terminal(state, "halted")
+        ran, ended = artifact.get("headSha"), artifact.get("headShaAfter")
+        state["certification"] = {
+            "shape": None,
+            "reason": ("verify ran from head %s and ended at head %s, not the restored head %s — halt, "
+                       "certification withheld" % (ran, ended, restored))}
+        _decision(state, "verify-unresolved",
+                  "verify result moved from head %s to %s during the run, not the restored head %s — "
+                  "fail closed, certification withheld" % (ran, ended, restored))
+        state["step"] = P_TERMINAL
+        return
     # axis: a first fail does not halt — the gate is pending again once, and the second result decides — see bite-proof record c1l9a_wo1_verify_rerun
     if first is None:
         if result == "fail" and not moved and artifact.get("via") != "ci-exact-head":
@@ -7310,15 +7323,17 @@ def _removal_anchor(head_anchors, here, replaced_header=False):
 
 def _merged_removal_anchor(head_anchors, here, preceded=False):
     """The head line a body line removed together with its PR hunk's header anchors on when no header
-    replaced that one: the hunk merged into the one before it, so the head lines on both sides of ``here``
-    sit in one hunk and the removal anchors there (``_removal_anchor``). At the end of the section nothing
-    follows ``here``: the removal anchors on the surviving line before it only when ``preceded`` (a body line
-    of the same hunk survived ahead of it in the group). None when the hunk did not survive: a header, or the
-    end of the section with no surviving body line of the hunk, then follows ``here``."""
+    replaced that one. The seam: when a body line of the merged hunk survived before the removal
+    (``preceded``), the removal anchors on the nearest anchorable line there within that hunk
+    (``_removal_anchor``), whatever follows it: a header, the end of the section, or a line of another hunk.
+    When nothing of the hunk survived before it, the removal anchors only when the head lines on both sides
+    of ``here`` sit in one hunk (the hunk merged into the one before it). Otherwise None: the hunk did not
+    survive, so the entry is marked removal-only and never borrows another hunk's line."""
     behind, ahead = head_anchors[:here], head_anchors[here:]
-    if behind and ahead and behind[-1][0] == ahead[0][0]:
+    # axis: a body line of the hunk survived before the removal, so it anchors on that line whatever follows — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if behind and preceded:
         return _removal_anchor(head_anchors, here)
-    if behind and not ahead and preceded:
+    if behind and ahead and behind[-1][0] == ahead[0][0]:
         return _removal_anchor(head_anchors, here)
     return None
 
@@ -7599,7 +7614,13 @@ def _break_it_target_facts(state, config, finding, head):
     The reviewer's version is the latest test a test-role seat wrote for the finding (`reviewerTest` when
     held, else the carried block); a committed test equals a version when its bytes do or when
     ``break_it_body.locate`` finds it in the final diff up to formatting and title, at its path or
-    relocated. Fails closed: a committed test git cannot read is `missing`."""
+    relocated. The audit judges the one copy ``break_it.check_kept`` will run: the carried block's test
+    (after a restore, ``_restored_run_record`` takes the record's bytes from that same block), held at the
+    recorded path or found in the final diff; that copy is `same` as the reviewer's version, `changed-explained`
+    with a reason recorded after the baseline, else `changed-unexplained`. A reviewer's copy elsewhere is
+    never credited for a different test. With no such copy the file at the recorded path is compared with
+    the reviewer's version alone. Fails closed: with no copy at all, or a committed test git cannot read,
+    the match is `missing`."""
     block, _kind = break_it.carried_block(finding)
     path = block["path"] if block is not None else None
     current = block["content"] if block is not None else None
@@ -7625,29 +7646,28 @@ def _break_it_target_facts(state, config, finding, head):
             return committed, path
         return _locate_in_final_diff(config, head, version, path, diff_files, command)
 
-    # axis: the reviewer's version matches the committed test up to formatting, title and relocation, not by exact bytes alone — see bite-proof record c1l11f_wo_b_break_it_baseline
-    here = None
-    if committed is not None and why is not None and not (committed == reviewer):
-        # axis: a test at the recorded path that is the explained version (exact or body-equivalent at its own path) is judged before any relocated copy of the reviewer's, so the audit judges the test the final kept check runs — see bite-proof record c1l11f_wo_b_break_it_baseline
-        found_here = held_as(current)
-        if found_here is not None and found_here[1] == path:
-            here = found_here
-    hit = here if here is not None else held_as(reviewer)
-    if here is not None:
-        match = audits.MATCH_CHANGED_EXPLAINED
-    elif hit is not None:
+    # axis: the audit resolves the copy the final kept check runs first (the file at the recorded path when it holds the latest run's test, else that test found in the final diff, as break_it.check_kept reads it) and classifies that one copy, so a reviewer's copy elsewhere is never credited for a different test — see bite-proof record c1l11f_wo_b_break_it_baseline
+    copy = held_as(current)
+    run_copy = copy is not None
+    if copy is None and committed is not None:
+        # no copy of the run's test: the file at the recorded path is judged against the reviewer's version alone
+        copy = committed, path
+    # axis: the reviewer's version matches the copy up to formatting, title and relocation, not by exact bytes alone — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if copy is None:
+        match = audits.MATCH_MISSING
+    elif copy[0] == reviewer or (run_copy and current == reviewer):
         match = audits.MATCH_SAME
-    else:
+    elif run_copy and why is not None:
         # axis: the explained version matches up to the same equivalence, and only with a reason recorded after the baseline — see bite-proof record c1l11f_wo_b_break_it_baseline
-        hit = held_as(current) if why is not None else None
-        if hit is not None:
-            match = audits.MATCH_CHANGED_EXPLAINED
-        else:
-            match = audits.MATCH_MISSING if committed is None else audits.MATCH_CHANGED_UNEXPLAINED
-    facts = {"path": path, "reviewerTest": reviewer, "committedTest": committed if hit is None else hit[0],
+        match = audits.MATCH_CHANGED_EXPLAINED
+    else:
+        as_reviewer = held_as(reviewer)
+        match = (audits.MATCH_SAME if as_reviewer is not None and as_reviewer[1] == copy[1]
+                 else audits.MATCH_CHANGED_UNEXPLAINED)
+    facts = {"path": path, "reviewerTest": reviewer, "committedTest": copy[0] if copy is not None else committed,
              "changedWhy": why, "match": match}
-    if hit is not None and hit[1] != path:
-        facts["committedPath"] = hit[1]
+    if copy is not None and copy[1] != path:
+        facts["committedPath"] = copy[1]
     return facts
 
 

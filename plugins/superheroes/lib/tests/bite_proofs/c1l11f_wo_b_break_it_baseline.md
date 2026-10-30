@@ -461,3 +461,128 @@ FAILED plugins/superheroes/lib/tests/test_c1l10_audit_checks.py::test_k1_the_sub
 ....                                                                     [100%]
 4 passed in 4.64s
 ```
+
+---
+
+# WO-G addendum (build #2279, C1-L11f seam fixes after the capped review)
+
+**Provenance:** implementer WO-G, order id `wo-g`, in the worktree `/home/user/wt-2279`, head at dispatch `a722e5f5`. Two guards: G1-a in `_merged_removal_anchor` and G2-a in `_break_it_target_facts`, proved by `test_c1l11f_wo_b_break_it_baseline.py`. Each was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`). Every run is `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-wo-g -m pytest "<node id>" -q -p no:cacheprovider`. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. Nothing is redacted: no secrets, tokens or URLs appear (the `/tmp/claude-0/...` paths are pytest temp directories). Every capture is under 32 KiB.
+
+Supersession, disclosed: G2-a rewrote the classification in `_break_it_target_facts`, so the literal lines the B-G1 and B-G2 entries above neutralize (`hit = held_as(reviewer)`, `hit = held_as(current) if why is not None else None`) no longer exist. Their axes (the reviewer's version and the explained version match up to formatting, title and relocation; only a reason recorded after the baseline explains) are now carried by the `axis:` comments above `if copy is None:` and `elif run_copy and why is not None:` in `_break_it_target_facts`, and their nodes (`test_b1_an_unchanged_reviewer_test_only_reformatted_is_same`, `test_b1_an_explained_correction_later_only_reformatted_is_changed_explained`) pass on the new code; they were not re-neutralized: **unproven** at the new lines.
+
+| ID | Guarded element | Axis | Proving node |
+|---|---|---|---|
+| G1-a | `_merged_removal_anchor`, `if behind and preceded:` (`round_driver.py:7334`) | when a body line of the merged hunk survived before a removed line, the removal anchors on that line whatever follows it (a header, the end of the section, or another hunk) | `test_b2_a_guard_removed_just_before_a_following_pr_hunk_anchors_on_the_line_before_it` |
+| G2-a | `_break_it_target_facts`, `copy = held_as(current)` (`round_driver.py:7650`) | the audit resolves the copy `break_it.check_kept` will run (the latest run's test) first and classifies that one copy; a reviewer's copy elsewhere is never credited for a different test | `test_b1_a_relocated_explained_replacement_is_judged_before_a_reviewer_copy_elsewhere` |
+
+## G1-a
+
+**Red before the fix (labelled incomplete):** the new node was first run against the unchanged source as part of the whole file, with the output piped through `tail -40`, so only the last 40 lines survive; the summary line read `1 failed, 24 passed in 8.25s` and the failure was `AssertionError: [{'start': 14, 'end': 21, 'text': '@@ -2,26 +2,33 @@ ...` with `assert ([] or False)` (the same failure as the neutralized red below). The neutralized run below is the complete red output.
+
+**Neutralization:** `    if behind and preceded:` became `    if behind and not ahead and preceded:` (the pre-fix condition).
+
+**Raw red** (`test_b2_a_guard_removed_just_before_a_following_pr_hunk_anchors_on_the_line_before_it`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_b2_a_guard_removed_just_before_a_following_pr_hunk_anchors_on_the_line_before_it _
+
+    def test_b2_a_guard_removed_just_before_a_following_pr_hunk_anchors_on_the_line_before_it():
+        # bites on: the preceded-removal anchor (G1-a, round 8): the second guard is the merged hunk's last line and
+        # another PR hunk follows it, whose header only renumbers; the removal still anchors on the surviving line
+        # before it (head line 33, `c29`) or the surface carries the removal marker
+        gap = "".join(" g%d\n" % n for n in range(13, 19))
+        third = "@@ -100,7 +{start},8 @@\n c100\n c101\n c102\n+added\n c103\n c104\n c105\n c106\n"
+        reviewed = _diff(
+            _EARLIER_HUNK,
+            "@@ -20,10 +21,12 @@\n c20\n c21\n c22\n+guard\n c23\n c24\n c25\n-old26\n+new26\n c27\n c28\n c29\n+guard2\n",
+            third.format(start=103))
+        head = _diff(
+            "@@ -10,20 +10,24 @@\n a10\n a11\n+extra\n a12\n" + gap + "+bridge1\n g19\n"
+            " c20\n c21\n c22\n c23\n+bridge2\n c24\n+bridge3\n c25\n-old26\n+new26\n c27\n c28\n c29\n",
+            third.format(start=104))
+        entries = _surface(reviewed, head)
+        covered = [e for e in entries if not e.get("removedOnly") and e["start"] <= 33 <= e["end"]]
+>       assert covered or any(e.get("removedOnly") for e in entries), entries
+E       AssertionError: [{'start': 14, 'end': 21, 'text': '@@ -2,26 +2,33 @@
+E          index 1..2 100644
+E          --- a/f.py
+E          +++ b/f.py
+E         -@@ -10,3 +10,4 @@...n -old26
+E          +new26
+E           c27
+E           c28
+E           c29
+E         -+guard2
+E         -@@ -100,7 +103,8 @@
+E         +@@ -100,7 +104,8 @@
+E           c100
+E           c101
+E           c102'}]
+E       assert ([] or False)
+E        +  where False = any(<generator object test_b2_a_guard_removed_just_before_a_following_pr_hunk_anchors_on_the_line_before_it.<locals>.<genexpr> at 0x7fe657a006c0>)
+
+/home/user/wt-2279/plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py:436: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py::test_b2_a_guard_removed_just_before_a_following_pr_hunk_anchors_on_the_line_before_it
+1 failed in 2.09s
+```
+
+**Restore** (the inverse Edit): `    if behind and not ahead and preceded:` back to `    if behind and preceded:`. **Restore receipt:** `grep -n "if behind and preceded" round_driver.py` prints `7334:    if behind and preceded:`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 2.00s
+```
+
+## G2-a
+
+**Red before the fix (stand-in, disclosed):** the fix to `_break_it_target_facts` was written before the new node, so the red below is not a run against the byte-unchanged source; it is the run against the fix with the pre-fix ordering reinstated (the reviewer's copy credited before the kept copy), which is the behaviour G2-a replaces.
+
+**Neutralization:** `    copy = held_as(current)` became `    copy = held_as(reviewer) or held_as(current)`.
+
+**Raw red** (`test_b1_a_relocated_explained_replacement_is_judged_before_a_reviewer_copy_elsewhere`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_b1_a_relocated_explained_replacement_is_judged_before_a_reviewer_copy_elsewhere _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-121/test_b1_a_relocated_explained_0')
+
+    def test_b1_a_relocated_explained_replacement_is_judged_before_a_reviewer_copy_elsewhere(tmp_path):
+        # bites on: the resolve-the-kept-copy-first step (G2-a): the recorded path is gone, the replacement the build
+        # session explained sits at OTHER_PATH and the reviewer's original at a third file; the final kept check runs
+        # the replacement (the latest run's content), so that is the copy the audit judges, never the original
+        third = "tests/test_charge_original.py"
+        facts = _facts(tmp_path, {OTHER_PATH: FIXED_TEST, third: ROLE_TEST}, _explained())
+>       assert facts["match"] == "changed-explained", facts
+E       AssertionError: {'path': 'tests/test_charge.py', 'reviewerTest': 'def test_charge():
+E             assert charge(2) == 2
+E         ', 'committedTest': 'def test_charge():
+E             assert charge(2) == 2
+E         ', 'changedWhy': 'the first draft was missing an import', ...}
+E       assert 'same' == 'changed-explained'
+E         
+E         - changed-explained
+E         + same
+
+/home/user/wt-2279/plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py:165: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py::test_b1_a_relocated_explained_replacement_is_judged_before_a_reviewer_copy_elsewhere
+1 failed in 2.96s
+```
+
+**Restore** (the inverse Edit): `    copy = held_as(reviewer) or held_as(current)` back to `    copy = held_as(current)`. **Restore receipt:** `grep -n "copy = held_as(current)" round_driver.py` prints `7650:    copy = held_as(current)`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 2.95s
+```
+
+Not separately neutralized (unproven): the `copy = committed, path` fallback when no copy of the latest run's test exists (pinned by `test_b1_a_real_content_change_of_the_reviewers_test_is_changed_unexplained`, and by `test_b1_a_relocated_replacement_with_no_reason_is_not_credited_as_the_reviewers_original` for the no-reason edge, passing); the `run_copy and current == reviewer` leg that keeps a relocated unchanged test `same`.

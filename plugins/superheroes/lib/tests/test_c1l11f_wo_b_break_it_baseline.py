@@ -156,6 +156,34 @@ def test_b1_an_explained_test_at_its_path_is_judged_before_a_relocated_reviewer_
     assert facts["committedTest"] == WEAKER_TEST and "committedPath" not in facts
 
 
+def test_b1_a_relocated_explained_replacement_is_judged_before_a_reviewer_copy_elsewhere(tmp_path):
+    # bites on: the resolve-the-kept-copy-first step (G2-a): the recorded path is gone, the replacement the build
+    # session explained sits at OTHER_PATH and the reviewer's original at a third file; the final kept check runs
+    # the replacement (the latest run's content), so that is the copy the audit judges, never the original
+    third = "tests/test_charge_original.py"
+    facts = _facts(tmp_path, {OTHER_PATH: FIXED_TEST, third: ROLE_TEST}, _explained())
+    assert facts["match"] == "changed-explained", facts
+    assert facts["committedTest"] == FIXED_TEST and facts["committedPath"] == OTHER_PATH, facts
+
+
+def test_b1_a_relocated_replacement_with_no_reason_is_not_credited_as_the_reviewers_original(tmp_path):
+    # no reason recorded: the replacement the kept check runs is changed-unexplained, and the reviewer's copy
+    # elsewhere is not credited for it
+    third = "tests/test_charge_original.py"
+    finding = C10._finding(content=FIXED_TEST, reviewer_test=ROLE_TEST)
+    facts = _facts(tmp_path, {OTHER_PATH: FIXED_TEST, third: ROLE_TEST}, finding)
+    assert facts["match"] == "changed-unexplained", facts
+    assert facts["committedTest"] == FIXED_TEST and facts["committedPath"] == OTHER_PATH, facts
+
+
+def test_b1_the_replacement_the_kept_check_finds_elsewhere_is_judged_over_the_original_at_the_path(tmp_path):
+    # the file at the recorded path is the reviewer's original, whose bytes differ from the latest run's, so
+    # `break_it.check_kept` falls to the body search and runs the relocated replacement: that is the judged copy
+    facts = _facts(tmp_path, {TEST_PATH: ROLE_TEST, OTHER_PATH: FIXED_TEST}, _explained())
+    assert facts["match"] == "changed-explained", facts
+    assert facts["committedTest"] == FIXED_TEST and facts["committedPath"] == OTHER_PATH, facts
+
+
 def test_b1_an_explained_version_with_no_reason_is_changed_unexplained(tmp_path):
     finding = C10._finding(content=FIXED_TEST, reviewer_test=ROLE_TEST)
     assert _facts(tmp_path, {TEST_PATH: FIXED_TEST_REFORMATTED}, finding)["match"] == "changed-unexplained"
@@ -384,6 +412,25 @@ def test_b2_a_guard_removed_at_the_end_of_the_merged_hunk_anchors_on_the_line_be
     head = _diff(
         "@@ -10,20 +10,24 @@\n a10\n a11\n+extra\n a12\n" + gap + "+bridge1\n g19\n"
         " c20\n c21\n c22\n c23\n+bridge2\n c24\n+bridge3\n c25\n-old26\n+new26\n c27\n c28\n c29\n")
+    entries = _surface(reviewed, head)
+    covered = [e for e in entries if not e.get("removedOnly") and e["start"] <= 33 <= e["end"]]
+    assert covered or any(e.get("removedOnly") for e in entries), entries
+
+
+def test_b2_a_guard_removed_just_before_a_following_pr_hunk_anchors_on_the_line_before_it():
+    # bites on: the preceded-removal anchor (G1-a, round 8): the second guard is the merged hunk's last line and
+    # another PR hunk follows it, whose header only renumbers; the removal still anchors on the surviving line
+    # before it (head line 33, `c29`) or the surface carries the removal marker
+    gap = "".join(" g%d\n" % n for n in range(13, 19))
+    third = "@@ -100,7 +{start},8 @@\n c100\n c101\n c102\n+added\n c103\n c104\n c105\n c106\n"
+    reviewed = _diff(
+        _EARLIER_HUNK,
+        "@@ -20,10 +21,12 @@\n c20\n c21\n c22\n+guard\n c23\n c24\n c25\n-old26\n+new26\n c27\n c28\n c29\n+guard2\n",
+        third.format(start=103))
+    head = _diff(
+        "@@ -10,20 +10,24 @@\n a10\n a11\n+extra\n a12\n" + gap + "+bridge1\n g19\n"
+        " c20\n c21\n c22\n c23\n+bridge2\n c24\n+bridge3\n c25\n-old26\n+new26\n c27\n c28\n c29\n",
+        third.format(start=104))
     entries = _surface(reviewed, head)
     covered = [e for e in entries if not e.get("removedOnly") and e["start"] <= 33 <= e["end"]]
     assert covered or any(e.get("removedOnly") for e in entries), entries

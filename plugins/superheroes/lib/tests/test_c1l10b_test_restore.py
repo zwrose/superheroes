@@ -414,6 +414,36 @@ def test_t2_a_retry_pass_whose_head_moved_while_running_halts_through_the_run_lo
     assert entry["decision"] == "head-moved" and entry["heads"] == [runs[1], moved_to]
 
 
+def test_t2_a_first_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback(tmp_path):
+    # axis: the seam's after-head reaches the fold, so a first passing run after a restore that straddled a head change never advances — see bite-proof record c1l11f_wo_e_verify_after_restore
+    w = World(tmp_path, cap=2)
+    moved_to = "f" * 40
+    runs = []
+
+    def fix_step(batch, rnd, payload):
+        assert payload.get("restoreOnly"), "the run must halt at the verify gate, before any settle fix"
+        w.write(TEST_PATH, payload["restores"][0]["content"])
+        _commit(w.root, "restore")
+        return {"fixes": []}
+
+    def verify(command, rnd):
+        head = _git(w.root, "rev-parse", "HEAD").strip()
+        runs.append(head)
+        return {"result": "pass", "headSha": head, "headShaAfter": moved_to}
+
+    seams = TRD._seams(auditor=lambda targets, rnd: w.audit_artifact()["results"], fix_step=fix_step,
+                       reviewer=lambda dim, tier, rnd, ctx: {"findings": [], "vendor": "codex"},
+                       verify_runner=verify)
+    seams["panel_diff"] = lambda config, head: (TRD.DIFF, None)
+    _receipt, state = w.run_loop(seams)
+    assert len(runs) == 1
+    assert state["terminal"] == "halted", (state["terminal"], state.get("certification"))
+    assert state["certification"]["shape"] is None
+    assert state["decisions"][-1]["kind"] == "verify-unresolved"
+    assert runs[0] in state["decisions"][-1]["detail"] and moved_to in state["decisions"][-1]["detail"]
+    assert "round-cap" not in _decisions(state)
+
+
 # --- T3 ------------------------------------------------------------------------------------------------------------
 
 def test_t3_the_test_reviewer_gets_exactly_one_correction_over_the_session(tmp_path):

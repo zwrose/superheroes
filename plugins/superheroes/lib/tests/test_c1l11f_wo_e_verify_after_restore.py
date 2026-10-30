@@ -171,6 +171,38 @@ def test_e2_a_skip_with_no_verify_command_and_no_known_head_after_a_restore_keep
 
 
 # =============================================================================================
+# E4: a first pass after a restore whose head moved during the run halts
+# =============================================================================================
+
+def test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads():
+    # axis: the gate after a restore halts on a first pass whose head moved during the run (a pending retry keeps the rerun path's head-moved record) — see bite-proof record c1l11f_wo_e_verify_after_restore
+    state = _restored_state()
+    _fold(state, _artifact("pass", head=H1, after=H2))
+
+    assert state["terminal"] == "halted" and state["step"] == RD.P_TERMINAL
+    assert state["certification"]["shape"] is None
+    assert H1 in state["certification"]["reason"] and H2 in state["certification"]["reason"]
+    decision = state["decisions"][-1]
+    assert decision["kind"] == "verify-unresolved" and H1 in decision["detail"] and H2 in decision["detail"]
+    assert "verifyVia" not in state["rounds"]["1"]
+
+
+def test_e4_a_first_failure_that_moved_head_while_running_after_a_restore_keeps_the_fail_path():
+    state = _restored_state()
+    _fold(state, _artifact("fail", head=H1, after=H2))
+
+    assert state["terminal"] == "halted" and _kinds(state)[-1] == "verify-fail"
+    assert "_verifyRerun" not in state
+
+
+def test_e4_without_a_restore_a_first_pass_that_moved_head_behaves_as_today():
+    state = _state()
+    _fold(state, _artifact("pass", head=H1, after=H2))
+
+    assert not state.get("terminal")
+
+
+# =============================================================================================
 # the in-process verify seam may report its head
 # =============================================================================================
 

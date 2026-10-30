@@ -240,3 +240,82 @@ FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py::t
 - E-G4: the `non-empty` and `str` legs of the `headSha` test and the dict-without-`result` path are pinned by `test_seam_a_head_that_is_not_a_non_empty_string_is_ignored` and `test_seam_a_dict_with_no_result_has_no_result_and_fails_closed_as_unresolved` passing, but were not run under a neutralization; they are **unproven** as separate guards.
 - E-G2: the `result == "pass"` leg (a fail with an unknown head goes the rerun path; a skip keeps today's advance) is pinned by `test_e2_a_fail_with_no_known_head...` and `test_e2_a_skip_with_no_verify_command...` passing, not by a neutralization: **unproven**. The second `if first is not None:` (the rerun append before the unknown-head halt, line 6885) is pinned by `test_e2_a_retry_pass_with_no_known_head_after_a_restore_records_both_runs_then_halts` but was not neutralized: **unproven**.
 - E-G1: `force_head_moved` inside `_verify_rerun_entry` (the `heads` and `decision` of the restore-gate entry) is covered by the same test's `entry["decision"]`/`entry["heads"]` assertions but was not neutralized separately: **unproven** as its own guard.
+
+---
+
+# WO-G addendum (build #2279, C1-L11f seam fix after the capped review)
+
+**Provenance:** implementer WO-G, order id `wo-g`, in the worktree `/home/user/wt-2279`, head at dispatch `a722e5f5`. One guard, G3-a, in `_fold_verify`, proved by `test_c1l11f_wo_e_verify_after_restore.py::test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads` (the fold) and `test_c1l10b_test_restore.py::test_t2_a_first_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback` (the `run_loop` callback). Neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`). Captures are the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. Nothing is redacted.
+
+| ID | Guarded element | Axis | Proving node |
+|---|---|---|---|
+| G3-a | `_fold_verify`, `if restored is not None and first is None and moved and result == "pass":` (`round_driver.py:6905`) | after a restore a first passing run whose head moved during the run halts with certification withheld and a `verify-unresolved` decision naming both heads; a pending retry keeps the rerun path's `head-moved` record | the two nodes above |
+
+## G3-a
+
+**Red before the fix** (both new nodes run against the unchanged `_fold_verify`, the two files in one invocation; whole output):
+
+```
+............F.......F                                                    [100%]
+=================================== FAILURES ===================================
+_ test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads _
+
+    def test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads():
+        # axis: the gate after a restore halts on a result whose head moved during the run, whether or not a retry is pending — see bite-proof record c1l11f_wo_e_verify_after_restore
+        state = _restored_state()
+        _fold(state, _artifact("pass", head=H1, after=H2))
+    
+>       assert state["terminal"] == "halted" and state["step"] == RD.P_TERMINAL
+E       AssertionError: assert (None == 'halted')
+
+/home/user/wt-2279/plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py:182: AssertionError
+_ test_t2_a_first_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback _
+
+(traceback through run_loop elided here: about 3 KiB; it ends in the fix_step callback)
+
+E       AssertionError: the run must halt at the verify gate, before any settle fix
+E       assert None
+E        +  where None = <built-in method get of dict object at 0x7f70bdc7bc80>('restoreOnly')
+
+/home/user/wt-2279/plugins/superheroes/lib/tests/test_c1l10b_test_restore.py:424: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py::test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads
+FAILED plugins/superheroes/lib/tests/test_c1l10b_test_restore.py::test_t2_a_first_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback
+2 failed, 19 passed in 2.51s
+```
+
+(Disclosure: the middle of the second failure, its `run_loop` call stack and the `fix_step` source lines the runner echoed, is replaced by the one parenthetical line; the rest is verbatim. The loop advanced past the verify gate into a settle fix, which is the defect. The axis comment on the first node was reworded afterwards, as the node's pending-retry wording was inexact.)
+
+**Neutralization:** `    if restored is not None and first is None and moved and result == "pass":` became `    if False and restored is not None and first is None and moved and result == "pass":`.
+
+**Raw red** (`test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads _
+
+    def test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads():
+        # axis: the gate after a restore halts on a result whose head moved during the run, whether or not a retry is pending — see bite-proof record c1l11f_wo_e_verify_after_restore
+        state = _restored_state()
+        _fold(state, _artifact("pass", head=H1, after=H2))
+    
+>       assert state["terminal"] == "halted" and state["step"] == RD.P_TERMINAL
+E       AssertionError: assert (None == 'halted')
+
+/home/user/wt-2279/plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py:182: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py::test_e4_a_first_pass_that_moved_head_while_running_after_a_restore_halts_naming_both_heads
+1 failed in 0.90s
+```
+
+**Restore** (the inverse Edit): `if False and restored is not None and first is None and moved and result == "pass":` back to `if restored is not None and first is None and moved and result == "pass":`. **Restore receipt:** `grep -n "if restored is not None and first is None and moved" round_driver.py` prints `6905:    if restored is not None and first is None and moved and result == "pass":`.
+
+**Raw green** (the same node, and then both files after the fix, `93 passed in 18.59s`, whose output was `........................................................................ [ 77%]` / `.....................                                                    [100%]`):
+
+```
+.                                                                        [100%]
+1 passed in 0.95s
+```
+
+Not separately neutralized (unproven): the `first is None` leg (a pending retry keeps the rerun path) is pinned by `test_e1_a_retry_at_the_restored_head_that_moved_during_the_run_halts_on_the_rerun_path` passing; the `result == "pass"` leg (a moved `fail` keeps the fail path) by `test_e4_a_first_failure_that_moved_head_while_running_after_a_restore_keeps_the_fail_path` passing; the `restored is not None` leg by `test_e4_without_a_restore_a_first_pass_that_moved_head_behaves_as_today` passing. None was run under a neutralization.
