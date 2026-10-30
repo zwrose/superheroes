@@ -155,7 +155,10 @@ def test_3a_an_owner_ruling_after_a_kept_repeat_leaves_no_mark_on_the_row_or_the
 @BUILDS
 def test_3b_the_record_reads_the_attributed_ruling_not_the_outcome_the_repeat_kept(tmp_path, build):
     loaded, row, _ = _ruled(tmp_path, build)
-    outcome, _rep = rs.row_decision(row, rs.decision_inputs(loaded))
+    # the reader matches a row by identity against the map `decision_inputs` builds, so read the map's own row
+    inputs = rs.decision_inputs(loaded)
+    own_row = inputs[0][TRM.SC.finding_identity_key(row)]
+    outcome, _rep = rs.row_decision(own_row, inputs)
     assert outcome == "ruling", outcome
 
 
