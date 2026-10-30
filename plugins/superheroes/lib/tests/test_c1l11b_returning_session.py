@@ -171,14 +171,23 @@ def test_t1_a_forty_line_fix_runs_no_panel_and_the_scoped_finder_reads_only_the_
     fix_delta = inputs[os.path.join("round-1", "fix-delta.diff")]
     for i in range(40):
         assert "value_fix_%d = %d" % (i, i) in fix_delta
-    # ... and nothing of what was already reviewed: no other file, no line of app.py beyond the hunk's own context
-    assert "src/util.py" not in json.dumps(inputs) and "value_util_" not in json.dumps(inputs)
-    for earlier_line in ("value_app_10 ", "value_app_50 ", "value_app_90 "):
-        assert not any(earlier_line in text for text in inputs.values()), earlier_line
-    [order] = [text for name, text in inputs.items()
-               if name.startswith(os.path.join("round-1", "orders", RD.P_SCOPED)) and name.endswith(".md")]
-    assert "The fixes' own diff" in order and os.path.join(s.dir, "round-1", "fix-delta.diff") in order
+    [order_name] = [name for name in inputs
+                    if name.startswith(os.path.join("round-1", "orders", RD.P_SCOPED)) and name.endswith(".md")]
+    order = inputs[order_name]
+    hunks_name, fix_delta_name = os.path.join("round-1", RD.ORDER_SIDECAR_SCOPED_HUNKS_FILE), os.path.join("round-1", "fix-delta.diff")
+    # the scoped finder's seat inputs: the three files its order names (the hunks file and the fix-delta diff it fills
+    # into its input lines, and the order itself). `diff.txt` (the whole change) is bookkeeping, not an input.
+    assert os.path.join(s.dir, hunks_name) in order and os.path.join(s.dir, fix_delta_name) in order
+    assert "The fixes' own diff" in order
     assert "head.diff" not in order and "diff.txt" not in order and "{{" not in order  # the whole change is no seat's input
+    seat_inputs = {name: inputs[name] for name in (hunks_name, fix_delta_name, order_name)}
+    # positive control: the scan reads the file the fix touched, so a leak of the untouched util module would show
+    assert "src/app.py" in seat_inputs[hunks_name] and "src/app.py" in seat_inputs[fix_delta_name]
+    # ... and nothing of what was already reviewed: no other file, no line of app.py beyond the hunk's own context
+    for name, text in seat_inputs.items():
+        assert "src/util.py" not in text and "value_util_" not in text, name
+    for earlier_line in ("value_app_10 ", "value_app_50 ", "value_app_90 "):
+        assert not any(earlier_line in text for text in seat_inputs.values()), earlier_line
 
 
 def test_t1_a_returning_round_that_finds_nothing_converges_on_its_scoped_finder_with_no_panel(tmp_path, monkeypatch):

@@ -1519,21 +1519,13 @@ def _returning_overrides(session_dir, overrides):
     return out
 
 
-def _returning_decision_row(state, returning):
-    """The decision row for round 1's returning decision. Its kind is not in ``decision_kinds.DECISION_KINDS`` (that
-    file is outside this change), so the row is written here and not through ``_decision``."""
-    state["decisions"].append({
-        "round": state["round"], "kind": RETURNING_DECISION_KIND,
-        "detail": "returning review reads %s%s: %s" % (
-            returning.get("read"),
-            " since %s" % returning["lastReviewed"] if returning.get("lastReviewed") else "",
-            "; ".join(returning.get("why") or [])),
-    })
-
-
 def _record_returning(state, returning):
     _record_round(state, "returning", {k: returning.get(k) for k in RETURNING_RECORD_FIELDS})
-    _returning_decision_row(state, returning)
+    _decision(state, RETURNING_DECISION_KIND,
+              "returning review reads %s%s: %s" % (
+                  returning.get("read"),
+                  " since %s" % returning["lastReviewed"] if returning.get("lastReviewed") else "",
+                  "; ".join(returning.get("why") or [])))
 
 
 def _returning_surface(state, cfg):
