@@ -3058,6 +3058,13 @@ def _evaluate_tick(
         stale_cloud_launches = [
             entry for entry in stale_cloud_launches if entry["launchId"] not in limited_lanes
         ]
+        # axis: a reopened lane its comments show closed is no longer watched, so no limited account reports it either; an account left with no lane is dropped — see bite-proof record i2272_account_limit.md
+        limited_accounts = [
+            dict(account, launchIds=kept)
+            for account in limited_accounts
+            for kept in ([lid for lid in account["launchIds"] if lid not in closed],)
+            if kept
+        ]
         stale_live_launches = stale_live_launches + stale_cloud_launches
         # bite-axis: CLOUD ENDING — a cloud lane's ending comment joins the lane-terminal
         # set before the event is built, so it is reported and seen by alsoObserved.

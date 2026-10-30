@@ -39,7 +39,7 @@ from test_cloud_recover_parked import PARK, _pushed_at  # noqa: E402
 LANE = "issue-17-x"
 WO = "wo/17-wo1"
 CFG = "/cfg/acct"
-FOUR = ["id", "session_status", "status_bucket", "archived"]
+FOUR = ["id", "title", "session_status", "status_bucket", "archived"]  # five fields; the name is kept for the bite-proof records
 
 
 def _reading(*, limited=True, ok=True, recorded_ago=3600, resets_in=1800):
@@ -460,7 +460,7 @@ def test_4_the_helper_read_names_the_four_fields_the_takeover_check_reads_and_no
     prompt = got["prompt"]
     for name in FOUR:
         assert name in prompt
-    for other in ("title", "usage", "cost", "model", "environment_id"):
+    for other in ("usage", "cost", "model", "environment_id"):
         assert other not in prompt
     for fragment in ("get_session", "session_abc", "session_d-e_f", "one JSON array in a fenced json block",
                      "issue #17 of " + REPO, "nothing else", "Change, archive or message no session"):

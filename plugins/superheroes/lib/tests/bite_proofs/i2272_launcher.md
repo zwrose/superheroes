@@ -14,6 +14,39 @@ there carried credentials and is replaced by `<redacted proxy URL>`, and the res
 `...`. All other captures are raw, with only the leading `warning: The UV_NATIVE_TLS ...` line of every run dropped
 (it is the interpreter wrapper's deprecation notice, identical in all sixteen runs).
 
+## (g) an adoption passes from a checkout at its adopted head or at its base — axis: the either-commit rule
+
+**Guarded element:** `launcher.py` `_cloud_start_refusal`, the line
+`if head != base and _cloud_checkout_refusal(repo_root, base, env) is None:` (the `# axis:` comment above it).
+
+**Neutralization:** deleted that line and its `return None`, so an adoption is checked against its adopted head alone.
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_launcher.py::test_an_adoption_checkout_at_its_base_passes_the_checkout_check -q -p no:randomly`
+
+**Red:**
+```
+F                                                                        [100%]
+    def test_an_adoption_checkout_at_its_base_passes_the_checkout_check(tmp_path):
+        repo, base, head, branch = _adoption_checkout(tmp_path)
+        _git(repo, "checkout", "-q", "-B", branch, base)
+        _git(repo, "push", "-q", "-f", "origin", "HEAD:refs/heads/%s" % branch)
+        stamped = _stamped(base, adoptsBranch=branch, adoptsHead=head)
+>       assert L._cloud_start_refusal(repo, stamped, dict(os.environ)) is None
+E       AssertionError: assert ('launch-cloud-checkout-off-base', {...}) is None
+FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_an_adoption_checkout_at_its_base_passes_the_checkout_check
+1 failed in 3.72s
+```
+
+**Restore:** re-inserted the deleted two lines.
+
+**Green:** the node passes again (the scoped run of the launcher, adoption and checkout tests passed).
+
+## (h) the checkout is the last read before the cloud command — axis: the original-session re-check runs first
+
+**Guarded element:** `launcher.py` `launch_build`, the cloud path runs `_original_session_refusal` before `_cloud_start_refusal`.
+
+**Detector:** `plugins/superheroes/lib/tests/test_i2272_checkout_during_session_read_break_it.py::test_checkout_movement_during_final_session_read_prevents_cloud_spawn`, which failed with the two checks in the old order (`assert result["ok"] is False`, actual `ok: True`) and passes with the re-check first.
+
 ## (a) `limited is True` — axis: a limit that has passed gives no relief
 
 **Guarded element:** `launcher.py` `_original_session_pass`, the line `and reading.get("limited") is True` in the

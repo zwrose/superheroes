@@ -2848,23 +2848,34 @@ def _cloud_start_refusal(repo_root, stamped, env):
     The base-on-remote refusals come first, with their tokens and their local fallback
     unchanged; then the checkout check, whose refusals carry the checkout's facts in ``extra``.
     An adoption (``adoptsBranch`` with an ``adoptsHead`` that is a full sha) launches from a
-    checkout at its adopted head, since its base is an ancestor of that head; any other launch
-    needs a checkout at its ``baseCommit``. ``extra`` keeps ``baseCommit`` and says which it was
-    checked against.
+    checkout at its adopted head or at its ``baseCommit`` (the base is an ancestor of that head);
+    any other launch needs a checkout at its ``baseCommit``. ``extra`` keeps ``baseCommit`` and
+    says which it was checked against; an adoption refused at both carries the adopted head's
+    reason and detail.
     """
     reason = _cloud_base_refusal(repo_root, stamped, env)
     if reason is not None:
         return reason, {}
     head = stamped.get("adoptsHead")
-    # axis: an adoption is checked against its adopted head and every other launch against its base — see bite-proof record i2272_launcher
+    base = stamped["baseCommit"]
+    # axis: an adoption passes from a checkout at its adopted head or at its base, each checked whole, and refuses with the adopted head's reason only when both refuse; every other launch is checked against its base alone — see bite-proof record i2272_launcher
     adopting = "adoptsBranch" in stamped and isinstance(head, str) and bool(_HEX40.match(head))
-    target = head if adopting else stamped["baseCommit"]
-    refusal = _cloud_checkout_refusal(repo_root, target, env)
+    if not adopting:
+        refusal = _cloud_checkout_refusal(repo_root, base, env)
+        if refusal is None:
+            return None
+        refusal_reason, detail = refusal
+        detail["baseCommit"] = base
+        detail["checkedAgainst"] = "baseCommit"
+        return refusal_reason, detail
+    refusal = _cloud_checkout_refusal(repo_root, head, env)
     if refusal is None:
         return None
+    if head != base and _cloud_checkout_refusal(repo_root, base, env) is None:
+        return None
     refusal_reason, detail = refusal
-    detail["baseCommit"] = stamped["baseCommit"]
-    detail["checkedAgainst"] = "adoptsHead" if adopting else "baseCommit"
+    detail["baseCommit"] = base
+    detail["checkedAgainst"] = "adoptsHead and baseCommit"
     return refusal_reason, detail
 
 
@@ -4077,15 +4088,6 @@ def launch_build(
             "effortSource": compose_result["effortSource"],
             "warnings": warnings,
         }
-        # axis: reservation may have waited on the ledger lock, so the base is re-checked
-        # right before the command; a base the remote lost terminalizes the unstarted lane.
-        drift = _cloud_start_refusal(repo_root, stamped, env)
-        if drift is not None:
-            drift_reason, drift_extra = drift
-            term = _terminalize(
-                repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
-            )
-            return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
         # axis: the original-session check ran before the remote reads, the reservation and local setup, so a usage limit it read can have expired; it is read again right before the cloud command, and a refusal terminalizes the unstarted lane — see bite-proof record i2272_launcher
         recheck = _original_session_refusal(repo_root, issue, stamped, cloud_sessions_file, env)
         if recheck is not None:
@@ -4094,6 +4096,16 @@ def launch_build(
                 repo_root, launch_id, False, recheck_reason, stage="original-session", env=env,
             )
             return _post_reserve_fail(_terminalization_reason(term, recheck_reason), **recheck_detail)
+        # axis: reservation may have waited on the ledger lock, so the base is re-checked
+        # right before the command; a base the remote lost terminalizes the unstarted lane.
+        # The checkout is the last read before the command, after the slow original-session lookup, so a checkout that moved during that lookup is seen — see bite-proof record i2272_launcher
+        drift = _cloud_start_refusal(repo_root, stamped, env)
+        if drift is not None:
+            drift_reason, drift_extra = drift
+            term = _terminalize(
+                repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
         cloud_result = _run_cloud_spawn(
             repo_root,
             launch_id,

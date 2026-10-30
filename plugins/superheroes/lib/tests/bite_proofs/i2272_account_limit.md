@@ -376,4 +376,20 @@ FAILED plugins/superheroes/lib/tests/test_i2272_account_limit.py::test_ignoring_
 
 ---
 
+## BP10 — a closed fix-order lane is not reported account-limited (`test_wave_watch_fix_order.py::test_row2_a_closed_lane_on_a_limited_account_is_not_reported_account_limited`)
+
+**Neutralization:** in `wave_watch.py` `_evaluate_tick`, the limited-accounts filter `if lid not in closed` changed to `if lid not in ()`.
+
+**Red:**
+```
+>       assert ww.run(repo, _BATCH, gh_run=gh)["event"] == ww.EVENT_TIMER
+E       AssertionError: assert 'account-limited' == 'timer'
+FAILED plugins/superheroes/lib/tests/test_wave_watch_fix_order.py::test_row2_a_closed_lane_on_a_limited_account_is_not_reported_account_limited
+1 failed in 0.99s
+```
+
+**Restore:** inverse edit; the node passes.
+
+---
+
 All nine neutralizations were restored; the final scoped run after the last restore (989 passed, 3 skipped) is in the dispatch return.

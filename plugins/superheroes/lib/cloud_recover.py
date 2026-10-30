@@ -54,7 +54,7 @@ _PUSH_SOURCES = ("push", "commit")
 _PARK_KINDS = ("stop", "park")
 _PLACES = ("cloud", "local")
 _LAUNCHER_STAMPED = ("placeCall", "standingExclusions", "standDown")
-HELPER_READ_FIELDS = ("id", "session_status", "status_bucket", "archived")
+HELPER_READ_FIELDS = ("id", "title", "session_status", "status_bucket", "archived")
 _SESSION_ID_RE = re.compile(r"session_[A-Za-z0-9_-]+")
 
 

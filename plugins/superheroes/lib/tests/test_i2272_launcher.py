@@ -542,9 +542,30 @@ def test_an_adoption_checkout_off_its_adopted_head_refuses_and_says_which_it_che
         repo, _stamped(base, adoptsBranch=branch, adoptsHead=head), dict(os.environ),
     )
     assert reason == OFF_BASE
-    assert detail["checkedAgainst"] == "adoptsHead"
+    assert detail["checkedAgainst"] == "adoptsHead and baseCommit"
     assert detail["baseCommit"] == base
     assert detail["checkoutHead"] == base
+
+
+def test_an_adoption_checkout_at_its_base_passes_the_checkout_check(tmp_path):
+    # axis: an adoption passes from a checkout at its adopted head or at its base, each checked whole — see bite-proof record i2272_launcher
+    repo, base, head, branch = _adoption_checkout(tmp_path)
+    _git(repo, "checkout", "-q", "-B", branch, base)
+    _git(repo, "push", "-q", "-f", "origin", "HEAD:refs/heads/%s" % branch)
+    stamped = _stamped(base, adoptsBranch=branch, adoptsHead=head)
+    assert L._cloud_start_refusal(repo, stamped, dict(os.environ)) is None
+
+
+def test_an_adoption_checkout_at_neither_commit_refuses_with_the_adopted_head_reason(tmp_path):
+    # axis: an adoption refuses only when both the adopted head and the base refuse, and names both in checkedAgainst — see bite-proof record i2272_launcher
+    repo, base, head, branch = _adoption_checkout(tmp_path)
+    other = _commit(repo, "elsewhere.txt")
+    reason, detail = L._cloud_start_refusal(
+        repo, _stamped(base, adoptsBranch=branch, adoptsHead=head), dict(os.environ),
+    )
+    assert reason == OFF_BASE
+    assert "adoptsHead" in detail["checkedAgainst"] and "baseCommit" in detail["checkedAgainst"]
+    assert detail["checkoutHead"] == other
 
 
 def test_an_adoption_launch_from_a_checkout_at_its_adopted_head_launches_in_the_cloud(tmp_path):
