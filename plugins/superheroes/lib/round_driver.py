@@ -7532,7 +7532,7 @@ def _final_diff_files(repo_root, base, head):
     return files
 
 
-def _locate_in_final_diff(config, head, content, path, cache):
+def _locate_in_final_diff(config, head, content, path, cache, command=None):
     """``(text, where)``: the file of the final diff that holds the break-it test ``content`` (the file at
     ``path``) unchanged up to formatting and its title, once, as ``break_it.check_kept`` reads it
     (``break_it_body.locate``), and where it sits; None when it is not so found. Fails closed: a language
@@ -7553,7 +7553,33 @@ def _locate_in_final_diff(config, head, content, path, cache):
     # axis: a test found away from its path (relocated within the final diff) is credited as at its path, only where locate finds it whole and once — see bite-proof record c1l11f_wo_b_break_it_baseline
     if found["status"] != "found" or not isinstance(files.get(found["path"]), str):
         return None
+    # axis: a renamed or relocated test is credited only where break_it.check_kept would accept it (the same collection, option-token and direct-runner guards, and a mappable command), so the audit never reads `same` for a test the convergence check parks as binding-conflict — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if (found["titles"] or found["path"] != path) and not _retention_guards_hold(
+            repo_root, head, path, found, command):
+        return None
     return files[found["path"]], found["path"]
+
+
+def _retention_guards_hold(repo_root, head, path, found, command):
+    """True when ``break_it._body_search`` would accept the located test ``found`` (``break_it_body.locate``'s
+    ``found`` result) for the recorded ``path`` and run ``command``: no pytest or JS collection override at
+    ``head`` for a renamed test, no option token and a direct runner for a JS/TS test, and a command that maps
+    onto the new path and titles. Fails closed: an unreadable git or a missing command is False."""
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering), and so is this one's
+    from break_it_body import js_collected, pytest_collected
+    if not _nonempty_str(command):
+        return False
+    try:
+        if found["titles"] and pytest_collected(path) and break_it._collection_overrides(repo_root, head):
+            return False
+        if found["titles"] and js_collected(path) and (
+                break_it._js_collection_overrides(repo_root, head) or break_it._carries_option_token(command)):
+            return False
+        if js_collected(path) and not break_it._calls_runner_directly(command):
+            return False
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return break_it._rewrite_command(command, path, found["path"], found["titles"])[1] is None
 
 
 def _break_it_target_facts(state, config, finding, head):
@@ -7566,7 +7592,8 @@ def _break_it_target_facts(state, config, finding, head):
     block, _kind = break_it.carried_block(finding)
     path = block["path"] if block is not None else None
     current = block["content"] if block is not None else None
-    kept = finding.get(REVIEWER_TEST_FIELD)
+    command = block["run"] if block is not None else None
+    kept =finding.get(REVIEWER_TEST_FIELD)
     reviewer = kept if isinstance(kept, str) else current
     committed = None
     repo_root = config.get("repoRoot")
@@ -7585,7 +7612,7 @@ def _break_it_target_facts(state, config, finding, head):
             return None
         if committed is not None and committed == version:
             return committed, path
-        return _locate_in_final_diff(config, head, version, path, diff_files)
+        return _locate_in_final_diff(config, head, version, path, diff_files, command)
 
     # axis: the reviewer's version matches the committed test up to formatting, title and relocation, not by exact bytes alone — see bite-proof record c1l11f_wo_b_break_it_baseline
     hit = held_as(reviewer)
