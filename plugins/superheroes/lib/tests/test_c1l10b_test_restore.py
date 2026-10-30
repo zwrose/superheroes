@@ -999,7 +999,9 @@ def test_t9_a_carried_block_that_cannot_be_read_keeps_today_s_expectation_and_pa
 def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reuses_the_landed_pass(
         tmp_path, monkeypatch, adapters):
     # axis: the post-restore verify takes a fresh slot — the concurrent slot's earlier pass is not the gate's result
-    w = World(tmp_path)
+    # No seat map: no reviewer outside the makers' families can be seated, so the correction is not offered and the
+    # restore goes straight to the gate (asserted below through the `break-it-correction-unseatable` decision).
+    w = World(tmp_path, seat_map=False)
     w.cfg["verifyCommand"] = "make test"
     d = TA._session(tmp_path, name="durable", verifyCommand="make test")
     state = TA._state(d)
@@ -1022,6 +1024,8 @@ def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reus
     w.audit()
     w.restore()
     restored = w.head()
+    assert "break-it-correction-unseatable" in _decisions(w.state), _decisions(w.state)
+    assert "break-it-correction-offered" not in _decisions(w.state)
     assert w.state["step"] == RD.P_VERIFY and w.state["_restoredHead"] == restored
     RD.save_state(d, w.state)
     nxt = RD.cmd_next(d)
@@ -1038,7 +1042,7 @@ def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reus
 def test_the_gate_after_a_restore_never_shares_a_slot_with_a_run_verify_still_in_progress(
         tmp_path, monkeypatch, adapters):
     # axis: the post-restore verify skips a slot an in-progress run-verify claims, and the old runner cannot publish into the new one
-    w = World(tmp_path)
+    w = World(tmp_path, seat_map=False)  # no correction is offered (see the test above), so the restore reaches the gate
     w.cfg["verifyCommand"] = "make test"
     d = TA._session(tmp_path, name="claimed", verifyCommand="make test")
     state = TA._state(d)
@@ -1064,6 +1068,7 @@ def test_the_gate_after_a_restore_never_shares_a_slot_with_a_run_verify_still_in
     w.audit()
     w.restore()
     restored = w.head()
+    assert w.state["step"] == RD.P_VERIFY and w.state["_restoredHead"] == restored
     RD.save_state(d, w.state)
     nxt = RD.cmd_next(d)
     assert nxt["ok"] and nxt["phase"] == RD.P_VERIFY, nxt
@@ -1097,6 +1102,21 @@ def test_the_gate_after_a_restore_counts_only_a_run_at_the_restored_head(tmp_pat
         assert w.state["decisions"][-1]["kind"] == "verify-unresolved"
     else:
         assert not w.state.get("terminal") and "_restoredHead" not in w.state
+
+
+def test_two_failing_runs_at_the_restored_head_halt_and_never_fall_back_to_an_earlier_pass(tmp_path):
+    # axis: the post-restore gate is decided by its own runs — a first failure re-runs once, a second one halts
+    w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore goes straight to the gate
+    w.audit()
+    w.restore()
+    restored = w.state["_restoredHead"]
+    failing = {"result": "fail", "headSha": restored}
+    w.fold(RD.P_VERIFY, failing, verified_head_resolution=(None, None))
+    assert not w.state.get("terminal") and "verify-rerun" in _decisions(w.state)
+    assert w.state["_restoredHead"] == restored
+    w.fold(RD.P_VERIFY, failing, verified_head_resolution=(None, None))
+    assert w.state["terminal"] == "halted" and w.state["step"] == RD.P_TERMINAL
+    assert _decisions(w.state)[-1] == "verify-fail"
 
 
 def test_a_used_correction_stays_used_when_the_finding_is_raised_again(tmp_path):
