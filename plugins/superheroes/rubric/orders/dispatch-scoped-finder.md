@@ -3,7 +3,7 @@ driver computed from the fixes' own diff (on a returning PR's round 1, what chan
 
 ## Input
 - Scoped hunks (the only files/lines to review): {{HUNKS_PATH}}
-- The fixes' own diff (on a returning PR's round 1, what changed since the last reviewed commit) — read cited hunks here; nothing else of the change: {{FIX_DIFF_PATH}}
+- The fixes' own diff (read cited hunks here; nothing else of the change): {{FIX_DIFF_PATH}}
 - Base rubric (severity, verification rules, panel output format): {{RUBRIC_PATH}}
 - Core calibration (threat model, canonical patterns): {{CORE_PATH}}
 - Review-crew layer (scope exclusions, focus hints, conventions): {{LAYER_PATH}}
