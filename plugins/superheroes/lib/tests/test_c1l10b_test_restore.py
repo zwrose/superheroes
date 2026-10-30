@@ -114,6 +114,9 @@ class World:
         self.state["fixBatch"] = [self.finding]
         self.state["findings"] = [copy.deepcopy(self.finding)]
         self.state["_auditTargets"] = RD._audit_targets(self.state, self.cfg, {})
+        # a real delta round carries its fixes' own diff (set by the post-fix fold); empty here, so the scoped finder is skipped
+        self.state["_newSurface"] = {}
+        self.state["_fixDeltaDiff"] = ""
         self.state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
         self.state["step"] = RD.P_AUDITS
 
@@ -484,6 +487,21 @@ def test_t4_the_sync_writes_the_ledger_row_and_the_live_finding_and_leaves_other
     RD._sync_reviewer_test(bare, key, CORRECTED_TEST)
     assert RD.new_state({}).get(RD.session_contract.DISPOSITION_LEDGER_KEY) == bare.get(
         RD.session_contract.DISPOSITION_LEDGER_KEY)
+
+
+def test_t4_equal_fix_batch_and_audit_target_rows_are_both_rewritten():
+    state = RD.new_state({})
+    mine = C1._finding(content=FIXED_TEST, reviewer_test=ROLE_TEST, changed_why=WHY)
+    key = RD._finding_key_of(mine)
+    batch_row, target_row = copy.deepcopy(mine), copy.deepcopy(mine)
+    assert batch_row == target_row and batch_row is not target_row
+    state["fixBatch"] = [batch_row]
+    state["_auditTargets"] = [target_row]
+    RD._sync_reviewer_test(state, key, CORRECTED_TEST, correction={"round": 2, "used": True, "outcome": "corrected"})
+    for row in (batch_row, target_row):
+        assert row[RD.REVIEWER_TEST_FIELD] == CORRECTED_TEST
+        assert break_it.carried_block(row)[0]["content"] == CORRECTED_TEST
+        assert row[RD.TEST_CORRECTION_FIELD]["used"] is True
 
 
 def test_t4_an_audit_target_row_carries_the_reviewers_version_and_the_correction(tmp_path):

@@ -72,6 +72,8 @@ _SHA_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
 _UNCLEAR_PREFIXES = (lane_call.WHY_NOT_SET, lane_call.WHY_UNMATCHABLE, lane_call.WHY_NO_PATHS)
 _MISSING_RECORD = "review-record-missing"
 _FINISHED_STATUSES = ("reviewed", "awaits-owner")
+# Axis: a user's submodule settings (diff.ignoreSubmodules, diff.submodule) never hide or reshape a gitlink update.
+_DIFF_ARGS = (*review_diff_bytes.REVIEW_DIFF_ARGS, "--ignore-submodules=none", "--submodule=short")
 
 
 def _is_sha(value):
@@ -219,6 +221,9 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     last_reviewed = final.get("sha") if isinstance(final, dict) else None
     if not isinstance(earlier, dict) or earlier.get("ok") is not True or not _is_sha(last_reviewed):
         return _full(result, WHY_EARLIER_UNUSABLE, "the earlier review record is not an ok record with a final commit")
+    # Axis: an abandoned session's record never counts as reviewed coverage, whatever its final commit and reviewers say.
+    if earlier.get("abandoned"):
+        return _full(result, WHY_EARLIER_UNUSABLE, "the earlier review session was abandoned, so its record covers nothing")
     result["lastReviewed"] = last_reviewed
     run = git if git is not None else _production_git(repo_root)
 
@@ -244,7 +249,7 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     # 5. the changed files
     if not _is_sha(base):
         return _full(result, WHY_DIFF_UNREADABLE, "the base is not a full commit sha")
-    diff_args = list(review_diff_bytes.REVIEW_DIFF_ARGS)
+    diff_args = list(_DIFF_ARGS)
     code_a, reviewed_text = run(["diff", *diff_args, "%s...%s" % (base, last_reviewed)])
     code_b, current_text = run(["diff", *diff_args, "%s...%s" % (base, head)])
     sources = {}
@@ -284,7 +289,10 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     countable = counted["countable"]
     left = [row for row in counted["files"] if row["why"] == "unsettled"]
     if result["unsettled"]:
-        countable += sum(row["lines"] for row in left)
+        # Axis: a binary section has no line count (git reports none), so it is never counted as zero lines.
+        if any(item.get("reason") == "binary" for item in result["unsettled"]):
+            return _full(result, WHY_DIFF_UNREADABLE, "a changed file is binary to git, so its lines cannot be counted")
+        countable +=sum(row["lines"] for row in left)
         result["why"].append(_line(WHY_UNSETTLED, "%d file(s) the counter could not settle are counted by their lines" % len(result["unsettled"])))
     result["countable"] = countable
     if countable > countable_lines.COUNTABLE_LINES_BAR:
@@ -331,7 +339,7 @@ def _read_earlier(path):
 
 def _cli_proven(repo_root, base, head, proof):
     code, current = _production_git(repo_root)(
-        ["diff", *review_diff_bytes.REVIEW_DIFF_ARGS, "%s...%s" % (base, head)])
+        ["diff", *_DIFF_ARGS, "%s...%s" % (base, head)])
     if code != 0:
         return []
     proven, _ = countable_lines.proven_copies(current, repo_root, proof, head=head)

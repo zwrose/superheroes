@@ -443,6 +443,18 @@ def test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a
         "fix-group-no-shared-commit:%s" % u.gid, [])
 
 
+@pytest.mark.parametrize("tests", [(True, False), (False, True)])
+def test_a_plain_member_bound_to_head_naming_the_shared_commit_folds(tests):
+    u = _unit(tests=tests)
+    s = "a" * 40
+    carrier, plain = (u.ka, u.kb) if tests[0] else (u.kb, u.ka)
+    facts = dict(_facts(BOTH_TESTS_AND_CODE), sha=s)
+    detail, commits = _check(u, [(carrier, s), (plain, "HEAD")], {s: facts, "HEAD": facts})
+    assert detail is None
+    assert {c["finding"] for c in commits} == {carrier}
+    assert all(c["commit"] == s for c in commits)
+
+
 def test_a_commit_that_holds_every_members_test_and_nothing_else_refuses_no_shared_commit():
     u = _unit()
     tests_only = _facts([A_PATH, B_PATH])
