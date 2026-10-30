@@ -45,7 +45,7 @@ APPROVED_SCRIPTS = frozenset((
     "calibration_resolve.py", "size_count.py", "order_lint.py", "dispatch_guard.py",
 ))
 ROUND_DRIVER_VERBS = frozenset((
-    "next", "submit", "record-result", "record-missing", "advance", "correct-fixer-refusals",
+    "next", "submit", "record-result", "record-missing", "advance",
     "attest", "checkpoint",
 ))
 COMMAND_FLAGS = ("verify-command", "break-it-interpreter", "records-path")
