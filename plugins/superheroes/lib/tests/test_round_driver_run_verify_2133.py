@@ -148,9 +148,15 @@ def test_a_passing_command_lands_pass_and_advance_folds_it(tmp_path, adapters):
     assert os.path.dirname(out["outputPath"]) == _landing_dir(d)
     assert os.path.basename(out["outputPath"]).startswith("_verify-output.a0.")
     assert out["outputPath"].endswith(".log")
-    assert payload == {"result": "pass", "exitCode": 0,
-                       "outputSha256": hashlib.sha256(captured).hexdigest(),
-                       "outputPath": out["outputPath"], "command": COMMAND, "ranBy": "round-driver"}
+    expected = {"result": "pass", "exitCode": 0,
+                "outputSha256": hashlib.sha256(captured).hexdigest(),
+                "outputPath": out["outputPath"], "command": COMMAND, "ranBy": "round-driver"}
+    # the verb also records the head the command ran at, whenever its repo root is a git checkout
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=os.getcwd(), capture_output=True,
+                          text=True, timeout=30)
+    if head.returncode == 0:
+        expected["headSha"] = head.stdout.strip()
+    assert payload == expected
     # the payload's extra keys do not trip the shape guard: a recognised `result` is all it asks
     assert RP.verify_result_fault(payload) is None
     assert out["payloadSha256"] == RR.payload_sha256(payload)

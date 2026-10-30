@@ -372,13 +372,18 @@ def test_verify_assembles_the_result_token(tmp_path):
     def build(n, state):
         # `command` is consumed now: the fold records it as the round's `verifyVia`
         hand = {"result": "pass", "command": "pytest -q"}
-        payload = {"result": "pass", "command": "pytest -q", "exit": 0, "outputSha256": "ab" * 32}
+        payload = {"result": "pass", "command": "pytest -q", "exit": 0, "outputSha256": "ab" * 32,
+                   "exitCode": 0, "outputPath": "/tmp/out.log", "headSha": "a" * 40,
+                   "headShaAfter": "b" * 40}
         return hand, [_result_env(RA.SEAT_VERIFY, payload)], {}
 
     artifact, _hand = _assert_fold_equivalent(tmp_path, RD.P_VERIFY, build)
     assert artifact["result"] == "pass"
     # The extras the fold tolerates ride along; only `result` is consumed.
     assert artifact["command"] == "pytest -q" and artifact["exit"] == 0
+    # The verb's own fields ride too, so the fold sees the heads and the output the run left.
+    assert artifact["exitCode"] == 0 and artifact["outputPath"] == "/tmp/out.log"
+    assert artifact["headSha"] == "a" * 40 and artifact["headShaAfter"] == "b" * 40
 
 
 def test_audits_assembles_results_and_a_trusted_collection_manifest(tmp_path):
@@ -1199,6 +1204,13 @@ def test_payload_contract_optional_keys_match_checker(phase):
     assert RA.payload_fault(phase, base, seat_key) is None
     for field in contract.get("optional") or []:
         payload = dict(base)
+        if field == "exitCode":
+            # declared `any`: the verb writes null for a run with no exit code, so no value is a wrong
+            # type — the field is accepted as an integer and as null
+            for value in (0, 1, None):
+                payload[field] = value
+                assert RA.payload_fault(phase, payload, seat_key) is None, value
+            continue
         if field == "findings":
             payload[field] = "not-a-list"
         elif field in ("confidence", "tier", "reason", "command", "headDiff", "headDiffPath",
