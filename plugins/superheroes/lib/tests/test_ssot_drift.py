@@ -1368,6 +1368,8 @@ _EXPECTED_RAW_MODE_READS = {
         'if mode_resolved["mode"] == session_mode.MODE_BRANCH:',
         # the apply-fixes step stages the PR body only in PR mode; the mode is read off the single resolver's own result
         'if session_mode.resolve(_session_meta(session_dir), cfg)["mode"] != session_mode.MODE_BRANCH:',
+        # the returning-review decision is made only for a pull request's session; the mode is read off the single resolver's own result
+        'if session_mode.resolve(_session_meta(session_dir), overrides)["mode"] != session_mode.MODE_PR:',
         '"MODE": mode_resolved["mode"],',
     },
     "lib/review_base_guard.py": {
