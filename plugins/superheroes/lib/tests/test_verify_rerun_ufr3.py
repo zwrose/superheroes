@@ -188,6 +188,21 @@ def test_edge4_a_re_run_that_straddled_a_head_change_halts():
     assert len(_runs(state)) == 2
 
 
+def test_edge4_a_re_run_that_straddled_a_head_change_records_where_it_ended():
+    # axis: a re-run whose own head moved records where it ended — see bite-proof record c1l9b_wod_head_after
+    state = _state()
+    _fold(state, _artifact("fail", head=H1))
+    _fold(state, _artifact("pass", head=H1, after=H2))
+
+    _halted_with(
+        state,
+        "verify re-run ran at a different head (%s then %s) — halt, certification withheld" % (H1, H2),
+        "verify-rerun-head-moved")
+    first, second = _runs(state)
+    assert second["head"] == H1 and second["headAfter"] == H2
+    assert "headAfter" not in first
+
+
 def test_edge5_a_first_run_whose_own_head_moved_gets_no_re_run_and_halts():
     state = _state()
     _fold(state, _artifact("fail", head=H1, after=H2))
@@ -309,6 +324,26 @@ def test_edge10_an_unknown_head_on_one_side_does_not_halt_and_the_second_result_
     assert (first["headSource"], second["headSource"]) == ("unknown", "run")
 
 
+def test_edge10_a_passing_re_run_at_a_head_after_an_unknown_first_head_does_not_halt():
+    state = _state()
+    _fold(state, _artifact("fail", head=None), fold_head=None)
+    _fold(state, _artifact("pass", head=H2), fold_head=H2)
+
+    assert not state.get("terminal")
+    assert state["step"] == RD.P_SCOPED
+    assert "verify-rerun-head-moved" not in _kinds(state)
+
+
+def test_edge10_a_passing_re_run_with_no_head_after_a_known_first_head_does_not_halt():
+    state = _state()
+    _fold(state, _artifact("fail", head=H1), fold_head=H1)
+    _fold(state, _artifact("pass", head=None), fold_head=None)
+
+    assert not state.get("terminal")
+    assert state["step"] == RD.P_SCOPED
+    assert "verify-rerun-head-moved" not in _kinds(state)
+
+
 def test_a_run_without_its_own_head_takes_the_head_resolved_at_the_fold():
     state = _state()
     _fold(state, _artifact("fail", head=None), fold_head=H1)
@@ -423,3 +458,50 @@ def test_the_real_verb_re_runs_a_flaky_gate_and_the_round_goes_on(tmp_path, adap
     assert first_run["head"] == head == second_run["head"]
     assert (first_run["headSource"], second_run["headSource"]) == ("run", "run")
     assert len(end["rounds"]["1"]["rerunChecks"]) == 1
+
+
+def test_the_real_verb_records_a_head_that_moves_while_the_re_run_executes_and_advance_halts(
+        tmp_path, adapters):
+    repo = tmp_path / "moving-repo"
+    repo.mkdir()
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "first")
+    h1 = _git(repo, "rev-parse", "HEAD")
+
+    d = TA._session(tmp_path)
+    TA._at_run_verify(tmp_path, d)
+    state = TA._state(d)
+    state["config"]["verifyCommand"] = COMMAND
+    state["config"]["repoRoot"] = str(repo)
+    RD.save_state(d, state)
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 1, b"fail\n", None)
+        _git(repo, "commit", "-q", "--allow-empty", "-m", "moved during the verify run")
+        return subprocess.CompletedProcess(argv, 0, b"pass\n", None)
+
+    first = RD.cmd_run_verify(d, run=fake_run)
+    assert first["ok"] is True and first["result"] == "fail", first
+    out = TA._advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert not TA._state(d).get("terminal")
+
+    second = RD.cmd_run_verify(d, run=fake_run)
+    assert second["ok"] is True and second["result"] == "pass" and second["attempt"] == 1, second
+    h2 = _git(repo, "rev-parse", "HEAD")
+    assert h2 != h1
+    landed, err = RR.read_json(second["landingPath"])
+    assert err is None, err
+    assert landed["headSha"] == h1 and landed["headShaAfter"] == h2
+
+    out = TA._advance(d, tmp_path)
+    assert out["ok"] is True, out
+    end = TA._state(d)
+    assert end["terminal"] == "halted"
+    assert end["decisions"][-1]["kind"] == "verify-rerun-head-moved"

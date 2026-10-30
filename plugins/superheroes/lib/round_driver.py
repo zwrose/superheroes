@@ -5408,6 +5408,7 @@ def _nonempty_str(value):
 FIX_REFUSED_REASON = "fold-refused"
 FIX_WITHOUT_TEST = "fix-without-break-it-test"
 FIX_FINDING_UNKNOWN = "fix-finding-unknown"
+FIX_BINDING_MALFORMED = "fix-binding-malformed"
 UNFIXED_FINDING_UNKNOWN = "unfixed-finding-unknown"
 FIX_NO_BINDING = "no-binding"
 FIX_COMMIT_UNKNOWN = "commit-unknown"
@@ -5442,6 +5443,18 @@ def _report_bindings(artifact):
             and "commit" in entry] if isinstance(fixes, list) else []
 
 
+def _malformed_binding_index(artifact):
+    """The position in ``fixes`` of the first object that names a ``finding`` or a ``commit`` without
+    both being non-empty strings (None when there is none). Plain notes and objects with neither key
+    are not bindings."""
+    fixes = artifact.get("fixes") if isinstance(artifact, dict) else None
+    for index, entry in enumerate(fixes if isinstance(fixes, list) else []):
+        if isinstance(entry, dict) and ("finding" in entry or "commit" in entry) and not (
+                _nonempty_str(entry.get("finding")) and _nonempty_str(entry.get("commit"))):
+            return index
+    return None
+
+
 def _git_bytes(repo_root, *args):
     """The stdout bytes of ``git -C repo_root args``, or None when git fails or cannot run."""
     try:
@@ -5452,8 +5465,8 @@ def _git_bytes(repo_root, *args):
 
 
 def _git_fix_commit_facts(config, step_head, commits, test_paths):
-    """``{commit: {"reachable", "inStep", "paths", "files", "startFiles"}}`` read from git at the
-    session's repository for each commit it names. A commit git does not know has no entry."""
+    """``{commit: {"sha", "reachable", "inStep", "paths", "files", "startFiles"}}`` read from git at
+    the session's repository for each commit it names. A commit git does not know has no entry."""
     repo_root = config.get("repoRoot")
     facts = {}
     for commit in commits:
@@ -5464,6 +5477,7 @@ def _git_fix_commit_facts(config, step_head, commits, test_paths):
         names = _git_bytes(repo_root, "diff-tree", "--root", "--no-commit-id", "--name-only", "-r",
                            "-z", sha)
         facts[commit] = {
+            "sha": sha,
             "reachable": _git_bytes(repo_root, "merge-base", "--is-ancestor", sha, "HEAD") is not None,
             "inStep": _git_bytes(repo_root, "merge-base", "--is-ancestor", sha, step_head) is not None,
             "paths": ([p for p in names.decode("utf-8", errors="replace").split("\0") if p]
@@ -5479,8 +5493,9 @@ def _git_fix_commit_facts(config, step_head, commits, test_paths):
 def _fix_commit_test_fault(facts, block):
     """The reason a commit does not carry the fix with its test (None when it does). The commit must
     be reachable from HEAD and not from the step's start head, hold the block's bytes at the block's
-    path (added or changed by the commit, or already there at the start head and left unchanged), and
-    change at least one path besides the test."""
+    path (the bytes are read from the commit itself; a commit that leaves the test path unchanged is
+    a repair of a test already there at the start head), and change at least one path besides the
+    test."""
     if not isinstance(facts, dict) or facts.get("reachable") is not True:
         return FIX_COMMIT_UNKNOWN
     if facts.get("inStep") is not False:
@@ -5488,12 +5503,12 @@ def _fix_commit_test_fault(facts, block):
     path = block["path"]
     wanted = block["content"].encode("utf-8")
     changed = [p for p in facts.get("paths") or [] if isinstance(p, str)]
-    at_commit = (facts.get("files") or {}).get(path)
-    if path in changed:
-        have = at_commit
-    else:
-        start = facts.get("startFiles") or {}
-        have = start.get(path) if path in start else at_commit
+    have = (facts.get("files") or {}).get(path)
+    if have is not None and path not in changed:
+        # the repair exception: a source-only commit must follow a test that already stood at the start head
+        start = facts.get("startFiles")
+        if isinstance(start, dict) and start.get(path) is None:
+            return FIX_TEST_MISSING
     if have is None:
         return FIX_TEST_MISSING
     # axis: the test is at the block's path with the block's bytes exactly — see bite-proof record c1l9a_wo3_apply_fixes
@@ -5512,7 +5527,14 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
     Each finding of the slice that carries a break-it test and is not listed in ``unfixed`` needs a
     binding to a commit that carries its fix together with the test, checked against git (or the
     ``commit_seam`` a run without a repository supplies). A report with no commit and no such
-    finding passes: a PR-body-only slice commits nothing."""
+    finding passes: a PR-body-only slice commits nothing. A ``fixes`` object that names a
+    ``finding`` or a ``commit`` must give both as non-empty strings, else it is refused before any
+    lookup. Each verified binding records the resolved full sha: git's own, or the seam entry's
+    ``sha`` (the supplied value when the entry has none)."""
+    malformed = _malformed_binding_index(artifact)
+    # axis: a binding with a non-string or empty finding or commit is refused before any lookup — see bite-proof record c1l9a_wo8_review1
+    if malformed is not None:
+        return "%s:%d" % (FIX_BINDING_MALFORMED, malformed), []
     slice_ = state.get("_fixBatch") or []
     names = _slice_finding_resolver(slice_)
     bindings = _report_bindings(artifact)
@@ -5554,7 +5576,10 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
         faults = [_fix_commit_test_fault(facts.get(c), block) for c in candidates]
         if all(fault is not None for fault in faults):
             return "%s:%s:%s" % (FIX_WITHOUT_TEST, key, faults[0]), []
-        commits.append({"finding": key, "commit": candidates[faults.index(None)]})
+        chosen = candidates[faults.index(None)]
+        # axis: the stored binding names the resolved sha, never the expression as given — see bite-proof record c1l9a_wo8_review1
+        resolved = (facts.get(chosen) or {}).get("sha")
+        commits.append({"finding": key, "commit": resolved if _nonempty_str(resolved) else chosen})
     return None, commits
 
 
@@ -6114,6 +6139,9 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         first_run = dict(first.get("run") or {}, head=first.get("head"),
                          headSource=first.get("headSource"))
         second_run = dict(second, head=head, headSource=head_source)
+        if moved:
+            # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
+            second_run["headAfter"] = artifact.get("headShaAfter")
         # axis: the record holds the first failure and the one re-run, both runs — see bite-proof record c1l9a_wo1_verify_rerun
         _record_round_append(state, "rerunChecks", {"check": "verify", "runs": [first_run, second_run]})
         # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun

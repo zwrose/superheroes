@@ -327,13 +327,15 @@ def test_a_ruling_on_a_batch_row_while_apply_fixes_is_pending_rewrites_the_batch
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
          "followUp": _follow_up()}]))
+    # the bytes `rule` left, read before anything else can rewrite the file from state
+    with open(batch_path, "rb") as fh:
+        left_by_rule = fh.read()
     assert out.get("ok") is True, out
+    assert key_b.encode("utf-8") not in left_by_rule
     after = _state(session_dir)
     assert after["pending"]["attempt"] == pend["attempt"]
     assert RD._ensure_fix_batch_file(session_dir, rnd, after) == batch_path
     assert after["pending"]["payload"]["fixBatchPath"] == batch_path
-    with open(batch_path, encoding="utf-8") as fh:
-        assert key_b not in fh.read()
 
 
 def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
