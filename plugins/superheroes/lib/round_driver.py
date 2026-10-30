@@ -859,7 +859,8 @@ def _merge_same_finding(existing, incoming):
                 if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
     if len(carriers) == 1:
         # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins
-        for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD, REVIEWER_TEST_FIELD):
+        for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD, REVIEWER_TEST_FIELD,
+                      TEST_CORRECTION_FIELD):
             if field in carriers[0]:
                 merged[field] = carriers[0][field]
             else:
@@ -2899,8 +2900,13 @@ def _advance(state, config):
         payload = {"verifiedFindings": state.get("findings") or [],
                    "fullDiff": True}
     elif step == P_SECOND_TEST:
-        payload = {"findings": [_second_test_entry(row) for row in state.get("_secondTestHeld") or []
-                                if isinstance(row, dict)]}
+        correction = state.get(TEST_CORRECTION_PENDING_FIELD)
+        if isinstance(correction, dict):
+            payload = _correction_payload(correction)
+        else:
+            payload = {"findings": [_second_test_entry(row)
+                                    for row in state.get("_secondTestHeld") or []
+                                    if isinstance(row, dict)]}
     elif step == P_AUDITS:
         payload = {"targets": state.get("_auditTargets") or []}
         if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
@@ -2910,8 +2916,15 @@ def _advance(state, config):
         payload = {"hunks": state.get("_newSurface") or {}, "tier": DEEP}
     elif step == P_VERIFY:
         payload = {"command": _verify_command(config)}
+        if state.get("_restoredHead") is not None:
+            # a restore changed the head: the gate runs again on it, never on a result taken before
+            payload["restoredHead"] = state["_restoredHead"]
     elif step == P_APPLY_FIXES:
-        payload = {"batch": state.get("_fixBatch") or [], "startHead": state.get("_fixStepHead")}
+        restore = state.get(TEST_RESTORE_FIELD)
+        if isinstance(restore, dict):
+            payload = dict(_restore_payload(restore), startHead=state.get("_fixStepHead"))
+        else:
+            payload = {"batch": state.get("_fixBatch") or [], "startHead": state.get("_fixStepHead")}
     return {"action": step, "round": rnd, "phase": step, "payload": payload}
 
 
@@ -3006,7 +3019,10 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_GAPSWEEP:
         _fold_gapsweep(state, config, artifact)
     elif phase == P_SECOND_TEST:
-        _fold_second_test(state, config, artifact, session_dir=session_dir)
+        if isinstance(state.get(TEST_CORRECTION_PENDING_FIELD), dict):
+            _fold_test_correction(state, config, artifact)
+        else:
+            _fold_second_test(state, config, artifact, session_dir=session_dir)
     elif phase == P_AUDITS:
         _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
@@ -3015,8 +3031,13 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
         _fold_verify(state, config, artifact, resolution=verified_head_resolution,
                      panel_diff_seam=panel_diff_seam)
     elif phase == P_APPLY_FIXES:
-        _fold_apply_fixes(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
-                          panel_diff_seam=panel_diff_seam, fix_commits=fix_commits)
+        if isinstance(state.get(TEST_RESTORE_FIELD), dict):
+            # a restore-only step is no fix: the entry point's check rides in `fix_commits`
+            _fold_test_restore(state, config, artifact, session_dir=session_dir,
+                               check=fix_commits.get("restoreCheck") if isinstance(fix_commits, dict) else None)
+        else:
+            _fold_apply_fixes(state, config, artifact, changed_subjects_seam, session_dir=session_dir,
+                              panel_diff_seam=panel_diff_seam, fix_commits=fix_commits)
     return state
 
 
@@ -5143,8 +5164,8 @@ def _sync_pending_after_ruling_reconcile(state):
 
 def _reconcile_fix_queue_after_rulings(state, config, extra_rows=None, session_dir=None):
     """Re-slice `_fixBatch`/`_fixQueue` through the ruling filter after a committed ruling."""
-    if state.get("step") != P_APPLY_FIXES:
-        return None
+    if state.get("step") != P_APPLY_FIXES or isinstance(state.get(TEST_RESTORE_FIELD), dict):
+        return None  # a restore-only step has no fix batch to re-slice
     offered = _offered_fix_rows(state, extra_rows)
     if not offered:
         return None
@@ -5443,6 +5464,302 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
         resolved = (facts.get(chosen) or {}).get("sha")
         commits.append({"finding": key, "commit": resolved if _nonempty_str(resolved) else chosen})
     return None, commits
+
+
+# ---- the restore of the test reviewer's break-it test --------------------------------------------
+# After an audit lists a target in `testMismatch`, the loop puts the test reviewer's version back
+# before anything else can halt it: a restore-only `apply-fixes` step (the driver-owned
+# `_testRestore`), then, for a weakened test, the one correction the test reviewer is offered.
+
+TEST_RESTORE_FIELD = "_testRestore"
+TEST_CORRECTION_PENDING_FIELD = "_testCorrection"
+TEST_CORRECTION_FIELD = "testCorrection"
+RESTORE_FAILED_KIND = "break-it-restore-failed"
+RESTORE_REPORT_SHAPE = "restore-report-shape"
+RESTORE_NOT_PENDING = "restore-not-pending"
+RESTORE_UNVERIFIABLE = "unverifiable"
+RESTORE_COMMIT = "HEAD"
+
+
+def _restore_commit_fault(state, config, artifact, commit_seam=None):
+    """``(detail, sha)`` for a restore-only report: ``detail`` names why it cannot stand (None when it
+    can) and ``sha`` is the head it was checked at. The one check the submit chokepoint, ``run_loop``
+    and the restore fold share, selected by the driver-owned pending restore.
+
+    A restore report takes no ``unfixed`` and no fix bindings. Every ``restores`` path must hold
+    exactly its ``content`` bytes at the head, read from git (or from the ``commit_seam`` a run
+    without a repository supplies), and that head must be reachable and new since the step started."""
+    pending = state.get(TEST_RESTORE_FIELD)
+    items = pending.get("items") if isinstance(pending, dict) else None
+    if not isinstance(items, list) or not items:
+        return RESTORE_NOT_PENDING, None
+    artifact = artifact if isinstance(artifact, dict) else {}
+    if artifact.get("unfixed") or _report_bindings(artifact) \
+            or _malformed_binding_index(artifact) is not None:
+        return "%s: a restore report carries no unfixed finding and no fix binding" % RESTORE_REPORT_SHAPE, None
+    paths = sorted({item["path"] for item in items})
+    facts = None
+    if commit_seam is not None:
+        facts = commit_seam([RESTORE_COMMIT], paths)
+    elif _nonempty_str(config.get("repoRoot")) and _nonempty_str(state.get("_fixStepHead")):
+        facts = _git_fix_commit_facts(config, state["_fixStepHead"], [RESTORE_COMMIT], paths)
+    entry = facts.get(RESTORE_COMMIT) if isinstance(facts, dict) else None
+    if not isinstance(entry, dict):
+        return RESTORE_UNVERIFIABLE, None
+    if entry.get("reachable") is not True:
+        return FIX_COMMIT_UNKNOWN, None
+    # axis: a restore that adds no commit since the step started restored nothing
+    if entry.get("inStep") is not False:
+        return FIX_COMMIT_NOT_IN_STEP, None
+    files = entry.get("files") if isinstance(entry.get("files"), dict) else {}
+    for item in items:
+        have = files.get(item["path"])
+        if have is None:
+            return "%s:%s" % (item["path"], FIX_TEST_MISSING), None
+        # axis: every restored path holds the test reviewer's bytes exactly — see bite-proof record c1l10b_wo2_test_restore
+        if have != item["content"].encode("utf-8"):
+            return "%s:%s" % (item["path"], FIX_TEST_BYTES_DIFFER), None
+    sha = entry.get("sha")
+    return None, sha if _nonempty_str(sha) else ""
+
+
+def _reviewer_test_rows(state, key):
+    """Every row that holds the finding ``key``'s carried break-it test: its ledger row, its live
+    finding, and the fix-batch and audit-target rows built from it."""
+    rows = []
+    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
+    if isinstance(ledger, list):
+        held = _ledger_index_by_key(ledger).get(key)
+        if held is not None:
+            rows.append(ledger[held])
+    live = _live_finding_by_key(state, key)
+    if live is not None:
+        rows.append(live)
+    for field in ("fixBatch", "_fixBatch", "_fixQueue", "_auditTargets"):
+        for row in state.get(field) or []:
+            if isinstance(row, dict) and _finding_identity_key(row) == key and row not in rows:
+                rows.append(row)
+    return rows
+
+
+def _sync_reviewer_test(state, key, content, correction=None):
+    """The one home for the test reviewer's version of a finding's test. ``content`` (None leaves the
+    test alone) is written into the carried block's body (its ``path`` and ``run`` kept, so its
+    sha256 follows) and into ``reviewerTest``, on the ledger row and the live finding and on the
+    fix-batch and audit-target rows built from them, so a later audit compares against it.
+    ``correction`` is the finding's ``testCorrection`` record. Every restore and every correction
+    goes through here."""
+    for row in _reviewer_test_rows(state, key):
+        if content is not None:
+            # axis: the carried block holds the test reviewer's bytes, so the next audit compares against them — see bite-proof record c1l10b_wo2_test_restore
+            block, _kind = break_it.carried_block(row)
+            if block is not None:
+                row["suggestion"] = _break_it_block_text(block, content)
+            row[REVIEWER_TEST_FIELD] = content
+        if correction is not None:
+            row[TEST_CORRECTION_FIELD] = copy.deepcopy(correction)
+
+
+def _correction_used(state, key):
+    """True when the finding's one correction has been offered and used."""
+    for row in _reviewer_test_rows(state, key):
+        held = row.get(TEST_CORRECTION_FIELD)
+        if isinstance(held, dict) and held.get("used") is True:
+            return True
+    return False
+
+
+def _restore_items(state, targets_by_id, ids, results):
+    """``(items, fault)``: one restore per mismatched target, ``content`` the test reviewer's version.
+    A target with no readable block or no string version cannot be restored: ``fault`` names it."""
+    why_by_id = {}
+    for result in results:
+        match = result.get("testMatch") if isinstance(result, dict) else None
+        if isinstance(match, dict) and isinstance(result.get("id"), str):
+            why_by_id.setdefault(result["id"], match.get("why"))
+    outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+    audit_by_id = {a.get("id"): a for a in outcome.get("audits") or [] if isinstance(a, dict)}
+    items = []
+    for tid in ids:
+        target = targets_by_id.get(tid)
+        facts = target.get("breakIt") if isinstance(target, dict) else None
+        facts = facts if isinstance(facts, dict) else {}
+        path, content = facts.get("path"), facts.get("reviewerTest")
+        if not (_nonempty_str(path) and isinstance(content, str)):
+            return [], ("%s carries no readable break-it block or no test reviewer version to restore"
+                        % tid)
+        match = audit_by_id.get(tid, {}).get("testMatch")
+        weakened = isinstance(match, dict) and match.get("answer") == "weakened"
+        items.append({"findingKey": tid, "path": path, "content": content,
+                      "sha256": _sha256(content), "weakened": weakened,
+                      "committedTest": facts.get("committedTest"),
+                      "changedWhy": facts.get("changedWhy"), "why": why_by_id.get(tid)})
+    return items, None
+
+
+def _begin_test_restore(state, config, ids, targets_by_id, results):
+    """Enter the restore: a restore-only `apply-fixes` step for every mismatched target, or a hand back
+    naming the one that cannot be restored. The continuation the fold would have taken is remembered."""
+    items, fault = _restore_items(state, targets_by_id, ids, results)
+    if fault is not None:
+        _hand_back(state, RESTORE_FAILED_KIND,
+                   "The test reviewer's break-it test could not be restored (%s). The PR is handed "
+                   "back with its findings still open; certification is withheld." % fault, cap=False)
+        return
+    state[TEST_RESTORE_FIELD] = {
+        "stage": "restore", "items": items,
+        "then": (VERIFY_THEN_POST_AUDITS if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS
+                 else "after-audits")}
+    _enter_restore_step(state, config)
+
+
+def _enter_restore_step(state, config):
+    """Set the restore-only `apply-fixes` step: it starts at the head the repository has now."""
+    state["_fixStepHead"] = _fix_step_head(config)
+    state["step"] = P_APPLY_FIXES
+
+
+def _restore_payload(pending):
+    """The restore-only `apply-fixes` payload the build session is handed."""
+    return {"restoreOnly": True,
+            "restores": [{"findingKey": item["findingKey"], "path": item["path"],
+                          "content": item["content"], "sha256": item["sha256"]}
+                         for item in pending.get("items") or []]}
+
+
+def _finish_test_restore(state, head):
+    """The restore is done: the round's verify gate runs on the new head, then the audit continuation."""
+    state.pop(TEST_RESTORE_FIELD, None)
+    state.pop(TEST_CORRECTION_PENDING_FIELD, None)
+    state.pop("_fixStepHead", None)
+    state["_restoredHead"] = head
+    state["_verifyThen"] = VERIFY_THEN_POST_AUDITS
+    state["step"] = P_VERIFY
+
+
+def _fold_test_restore(state, config, artifact, session_dir=None, check=None):
+    """Fold a restore-only report. ``check`` is the ``(detail, sha)`` the entry point took from
+    `_restore_commit_fault`; a fold that was handed none takes it itself. A fault hands the PR back
+    (`break-it-restore-failed`); a restore is no fix: it is not in the fix batch, not audited, not credited."""
+    pending = state.get(TEST_RESTORE_FIELD)
+    detail, head = check if check is not None else _restore_commit_fault(state, config, artifact)
+    items = pending.get("items") or []
+    state.pop(TEST_RESTORE_FIELD, None)
+    state.pop("_fixStepHead", None)
+    paths = ", ".join(sorted({item["path"] for item in items}))
+    if detail is not None:
+        _hand_back(state, RESTORE_FAILED_KIND,
+                   "The test reviewer's break-it test could not be restored at %s (%s). The PR is "
+                   "handed back with its findings still open; certification is withheld."
+                   % (paths, detail), cap=False)
+        return
+    corrected = pending.get("stage") == "corrected"
+    keys = ", ".join(item["findingKey"] for item in items)
+    for item in items:
+        _sync_reviewer_test(state, item["findingKey"], item["content"])
+        _record_round_append(state, "testRestore", {
+            "findingKey": item["findingKey"], "path": item["path"],
+            "source": "corrected" if corrected else "reviewer", "restoredHead": head})
+    if corrected:
+        _decision(state, "break-it-correction-landed",
+                  "the test reviewer's corrected break-it test is committed: %s" % keys)
+        _finish_test_restore(state, head)
+        return
+    _decision(state, "break-it-test-restored",
+              "the test reviewer's break-it test is committed again, so the weakened or changed "
+              "version is gone: %s" % keys)
+    _offer_test_correction(state, session_dir, items, head)
+
+
+def _offer_test_correction(state, session_dir, items, head):
+    """Offer the test reviewer its one correction for each restored target whose test the auditor judged
+    weakened and whose correction is unused. With no seat to seat, nothing is offered and nothing is used."""
+    offerable = [item for item in items
+                 if item.get("weakened") and not _correction_used(state, item["findingKey"])]
+    if not offerable:
+        _finish_test_restore(state, head)
+        return
+    keys = ", ".join(item["findingKey"] for item in offerable)
+    # axis: a correction with no seat to seat is not offered, so it is not used — see bite-proof record c1l10b_wo2_test_restore
+    if _nonpanel_unseatable(state, session_dir, P_SECOND_TEST):
+        for item in offerable:
+            _record_round_append(state, "testCorrection",
+                                 {"findingKey": item["findingKey"], "outcome": "unseatable"})
+        _decision(state, "break-it-correction-unseatable",
+                  "no test reviewer outside the makers' families can be seated, so the correction was "
+                  "not offered: %s" % keys)
+        _finish_test_restore(state, head)
+        return
+    state[TEST_CORRECTION_PENDING_FIELD] = {
+        "restoredHead": head,
+        "items": [{"findingKey": item["findingKey"], "path": item["path"],
+                   "reviewerTest": item["content"], "committedTest": item["committedTest"],
+                   "changedWhy": item["changedWhy"], "why": item["why"]} for item in offerable]}
+    _decision(state, "break-it-correction-offered",
+              "the test reviewer is offered one correction of a test the auditor judged weakened: %s"
+              % keys)
+    state["step"] = P_SECOND_TEST
+
+
+def _correction_payload(pending):
+    """The second-test seat's correction payload: per finding, its id and the inputs of the correction."""
+    return {"correction": True,
+            "findings": [dict(item, id=item["findingKey"]) for item in pending.get("items") or []]}
+
+
+def _fold_test_correction(state, config, artifact):
+    """The correction seat's result. A result for the item at the same `path` whose `suggestion` is a
+    block that was not redacted is the corrected test: a second restore-only step commits it. Anything
+    else is no correction and the restored test stands. Either way the finding's correction is used."""
+    pending = state.pop(TEST_CORRECTION_PENDING_FIELD)
+    results = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
+    by_id, duplicated = {}, set()
+    for result in results:
+        rid = result.get("id") if isinstance(result, dict) else None
+        if not isinstance(rid, str):
+            continue
+        if rid in by_id:
+            duplicated.add(rid)
+        by_id[rid] = result
+    landed, none = [], []
+    for item in pending["items"]:
+        key = item["findingKey"]
+        result = by_id.get(key)
+        block = break_it.carried_block(result)[0] if result is not None else None
+        if key in duplicated:
+            reason = "duplicate-id"
+        elif result is None:
+            reason = "no-result"
+        elif block is None:
+            reason = "no-block"
+        elif block["path"] != item["path"]:
+            reason = "other-path"
+        elif result.get(break_it.REDACTED_FIELD) is True:
+            reason = "redacted"
+        elif block["content"] == item["reviewerTest"]:
+            reason = "unchanged"
+        else:
+            reason = None
+        outcome = "corrected" if reason is None else "none"
+        _sync_reviewer_test(state, key, None,
+                            correction={"round": state["round"], "used": True, "outcome": outcome})
+        entry = {"findingKey": key, "outcome": outcome}
+        if reason is not None:
+            entry["reason"] = reason
+            none.append(key)
+        else:
+            landed.append({"findingKey": key, "path": item["path"], "content": block["content"],
+                           "sha256": _sha256(block["content"]), "weakened": False})
+        _record_round_append(state, "testCorrection", entry)
+    if none:
+        _decision(state, "break-it-correction-none",
+                  "the test reviewer returned no correction, so its restored test stands: %s"
+                  % ", ".join(none))
+    if not landed:
+        _finish_test_restore(state, pending.get("restoredHead"))
+        return
+    state[TEST_RESTORE_FIELD] = {"stage": "corrected", "items": landed, "then": VERIFY_THEN_POST_AUDITS}
+    _enter_restore_step(state, config)
 
 
 def _staged_pr_body_sha256(session_dir):
@@ -6073,6 +6390,7 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         # axis: the receipt and review record name which verify stood behind the pass — see bite-proof record wo_b_2072_ci_verify
         _record_round(state, "verifyVia", _verify_via_row(config, artifact))
     then = state.pop("_verifyThen", None)
+    state.pop("_restoredHead", None)
     if then == VERIFY_THEN_POST_AUDITS:
         _after_audits(state, config)
         return
@@ -6670,7 +6988,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             row["ownerRuling"] = owner_ruling
         if break_it.carries_test(f):
             # axis: a re-queued target that carries a break-it test must still hand the next fixer its exact test block, body and run records
-            for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD):
+            # axis: the test reviewer's version and the finding's correction ride the target into the next fix batch — see bite-proof record c1l10b_wo2_test_restore
+            for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD,
+                            REVIEWER_TEST_FIELD, TEST_CORRECTION_FIELD):
                 if f.get(carried) is not None:
                     row[carried] = f[carried]
             # axis: the audit compares the test committed at the audited head with the test role's version
@@ -7015,6 +7335,11 @@ def _fold_audits(state, config, artifact, session_dir=None):
         _decision(state, "not-discharged", aid)
     for aid in riders_open:
         _decision(state, "spawned-audit-not-discharged", aid)
+    # axis: the audit fold enters the restore before any continuation or halt can run — see bite-proof record c1l10b_wo2_test_restore
+    restorable = [tid for tid in mismatch_ids if tid not in rider_ids]
+    if restorable:
+        _begin_test_restore(state, config, restorable, targets_by_id, results)
+        return
     if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
         state["step"] = P_VERIFY
         return
@@ -8637,7 +8962,13 @@ def run_loop(seams, config=None):
                             action, selected, reported))
                     return _driver_receipt(state)
             commits = None
-            if action == P_APPLY_FIXES:
+            if action == P_APPLY_FIXES and isinstance(state.get(TEST_RESTORE_FIELD), dict):
+                # the restore's check, the one the submit chokepoint makes; a fault hands the PR back
+                # in the fold, so the library never parks with the weakened test committed
+                commits = {"restoreCheck": _restore_commit_fault(
+                    state, state["config"], artifact if isinstance(artifact, dict) else {},
+                    commit_seam=seams.get("fix_commits"))}
+            elif action == P_APPLY_FIXES:
                 # the same check the submit chokepoint makes, with the commit facts from the
                 # `fix_commits` seam when the run has no repository
                 detail, commits = _apply_fixes_commit_fault(
@@ -8843,6 +9174,11 @@ def _stage_apply_fixes_step(session_dir, state, pending):
     when the session reviews a PR, snapshot the staged copy so the fold can tell whether the session
     changed it, and add the step's file and landing paths to the pending payload."""
     cfg = state.get("config") or {}
+    if isinstance(state.get(TEST_RESTORE_FIELD), dict):
+        # a restore-only step changes no PR body
+        fields = _apply_fixes_payload_fields(session_dir, state, pending["round"], pending["attempt"])
+        pending["payload"] = dict(pending.get("payload") or {}, **fields)
+        return
     if session_mode.resolve(_session_meta(session_dir), cfg)["mode"] != session_mode.MODE_BRANCH:
         pr_body_stage.stage(session_dir)
     snapshot = _staged_pr_body_sha256(session_dir)
@@ -10173,7 +10509,15 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "apply-fixes-shape"})
             return {"ok": False, "reason": fault}
-        detail, fix_commits = _apply_fixes_commit_fault(state, state["config"], artifact)
+        if isinstance(state.get(TEST_RESTORE_FIELD), dict):
+            # a restore-only step: the shared restore check decides. A report of the wrong shape is
+            # refused with the step pending; any other fault is handed back by the fold.
+            check = _restore_commit_fault(state, state["config"], artifact)
+            fix_commits, detail = {"restoreCheck": check}, check[0]
+            if detail is not None and not detail.startswith(RESTORE_REPORT_SHAPE):
+                detail = None
+        else:
+            detail, fix_commits = _apply_fixes_commit_fault(state, state["config"], artifact)
         if detail is not None:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
@@ -11386,6 +11730,7 @@ ORDER_SIDECAR_AUDIT_TARGETS_DIR = "audit-targets"
 ORDER_SIDECAR_SCOPED_HUNKS_FILE = "scoped-hunks.json"
 ORDER_SIDECAR_VERIFIED_FILE = "verified.json"
 ORDER_SIDECAR_HELD_FILE = "second-test-held.json"
+ORDER_SIDECAR_CORRECTION_FILE = "second-test-correction.json"
 
 # Readable file inputs cited in emitted orders — existence guarded at emit (registry #723).
 ORDER_READABLE_FILE_INPUTS = frozenset({
@@ -11397,6 +11742,7 @@ ORDER_READABLE_FILE_INPUTS = frozenset({
     "HUNKS_PATH",
     "VERIFIED_FINDINGS_PATH",
     "HELD_FINDINGS_PATH",
+    "CORRECTION_INPUTS_PATH",
     "PRIOR_COMMENTS_PATH",
 })
 ORDER_SHIPPED_RESOURCE_INPUTS = frozenset({
@@ -11452,6 +11798,10 @@ def _order_held_sidecar_path(rdir):
     return os.path.join(rdir, ORDER_SIDECAR_HELD_FILE)
 
 
+def _order_correction_sidecar_path(rdir):
+    return os.path.join(rdir, ORDER_SIDECAR_CORRECTION_FILE)
+
+
 def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
     """[(path, bytes)] sidecars named in orders, derived from the phase payload."""
     writes = []
@@ -11494,8 +11844,14 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
         findings = payload.get("findings")
         if not isinstance(findings, list):
             findings = []
-        path = _order_held_sidecar_path(rdir)
-        writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
+        if payload.get("correction") is True:
+            # the correction's inputs: the restored test, the build session's version and reason, the auditor's why
+            path = _order_correction_sidecar_path(rdir)
+            writes.append((path, round_records.canonical(
+                {"correction": True, "findings": findings}).encode("utf-8")))
+        else:
+            path = _order_held_sidecar_path(rdir)
+            writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
     return writes
 
 
@@ -11688,6 +12044,11 @@ def _apply_fixes_payload_fields(session_dir, state, rnd, attempt):
     Raises ``ValueError("order-render-refused:...")`` when the guidance cannot be rendered, the
     refusal channel `_cmd_next_locked` and `cmd_rule` both catch. The guidance renders before
     either file is written, so a refusal leaves both files as they were (c1l9a_wo7_render_first)."""
+    if isinstance(state.get(TEST_RESTORE_FIELD), dict):
+        # a restore-only step has no batch and no guidance: it carries the files to write
+        return {"landingPath": round_records.bare_payload_path(
+            session_dir, rnd, P_APPLY_FIXES,
+            round_records.storage_key(payload_contracts.SEAT_APPLY_FIXES), attempt)}
     guidance = _gate_guidance_block(_gate_guidance_entries(state, rnd))
     fields = {"fixBatchPath": _ensure_fix_batch_file(session_dir, rnd, state)}
     guidance_path = _fix_guidance_path_for_round(session_dir, rnd, state)
@@ -11949,7 +12310,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     elif phase == P_SECOND_TEST:
         _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         ph = {
-            "HELD_FINDINGS_PATH": _order_held_sidecar_path(rdir),
             "DIFF_PATH": diff_path,
             "RUBRIC_PATH": rubric_path,
             "VERIFICATION_ROOT": repo_root,
@@ -11958,6 +12318,11 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
         }
+        # the correction form is a second template; its inputs are the correction sidecar
+        if payload.get("correction") is True:
+            ph["CORRECTION_INPUTS_PATH"] = _order_correction_sidecar_path(rdir)
+        else:
+            ph["HELD_FINDINGS_PATH"] = _order_held_sidecar_path(rdir)
     elif phase == P_AUDITS:
         targets = payload.get("targets")
         if not isinstance(targets, list):

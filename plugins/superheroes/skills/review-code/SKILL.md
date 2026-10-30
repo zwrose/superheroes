@@ -205,7 +205,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
 - **Path:** the auto-fix loop (`round_driver.py` next/submit until terminal)
 - **What happens after dispatch (default loop):** obey `next`/`submit` — panel/verify/synthesis → apply-fixes → verify gate → delta audits/scoped finder → terminal with certification + receipt. The build session applies the fixes itself at `apply-fixes`; no fixer agent or external engine writes a review fix.
 
-Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` baseline; rounds 2+ are **delta rounds** (fix audits + scoped finder), and no later round runs a panel; a changed surface the driver cannot work out hands the PR back. A review that needed fixes ends on a round's audit and scoped finder. Obey `round_driver.py` `next`/`submit`; never tier, skip, or exit by eye. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/round-driver.md`.
+Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` baseline; rounds 2+ are **delta rounds** (fix audits + scoped finder), and no later round runs a panel; a changed surface the driver cannot work out hands the PR back. A review that needed fixes ends on a round's audit and scoped finder. When an audit finds a break-it test missing, changed without a reason or weakened, the driver first sets a restore-only `apply-fixes` step that puts the test role's version back, then offers the test role one correction of a weakened test; the weakened version is never kept. Obey `round_driver.py` `next`/`submit`; never tier, skip, or exit by eye. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/round-driver.md`.
 
 ### 3. Dispatch Specialists in Parallel
 
