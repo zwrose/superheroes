@@ -1650,6 +1650,7 @@ def test_event_precedence_order():
         ww.EVENT_LANE_BLOCKED,
         ww.EVENT_BUILDER_EXITED,
         ww.EVENT_BUILDER_NOTE,
+        ww.EVENT_ACCOUNT_LIMITED,
         ww.EVENT_STACK_STATE_CHANGED,
         ww.EVENT_PR_SET_CHANGED,
         ww.EVENT_LANE_STALE,
