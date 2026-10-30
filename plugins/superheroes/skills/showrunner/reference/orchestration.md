@@ -400,10 +400,11 @@ such a step to the owner first.
 - **Reading or archiving a builders'-account session** goes to a one-off cloud helper session on
   that account. Start it as the launcher starts a cloud lane:
 
-      CLAUDE_CONFIG_DIR=<the builders' config dir> claude --cloud "<prompt>" --settings '{"remote":{"defaultEnvironmentId":"<a cloud environment of that account>"}}' --model haiku --permission-mode auto --disallowedTools AskUserQuestion -n <name>
+      CLAUDE_CONFIG_DIR=<the builders' config dir> claude --cloud "<prompt>" --settings '{"remote":{"defaultEnvironmentId":"<a cloud environment of that account>"}}' --model haiku --permission-mode auto --disallowedTools <each tool in engine_adapter.CLOUD_DISALLOWED_TOOLS> -n <name>
 
   That is the flag set `engine_adapter.claude_cloud_builder_argv` builds (`--cloud`, `--settings`,
-  `--model`, `--permission-mode auto`, `--disallowedTools AskUserQuestion`, then `-n` last); the
+  `--model`, `--permission-mode auto`, `--disallowedTools` with the tools
+  `engine_adapter.CLOUD_DISALLOWED_TOOLS` names (the question tool), then `-n` last); the
   last two keep the unattended helper from stopping on a permission or question prompt. The command needs a pseudo-terminal, for example
   `script -q /dev/null …` on macOS. A cloud session's tools include `get_session`, `list_sessions`
   and `archive_session`; a background helper has none of them. The prompt names the session ids,
