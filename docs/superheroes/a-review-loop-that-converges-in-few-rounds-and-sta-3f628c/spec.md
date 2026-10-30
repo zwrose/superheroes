@@ -490,9 +490,16 @@ plainly that code review needs one. (source: Canon 2026-10-26-5692f27d-11)
     2026-10-26-5692f27d-11)
 
 **UFR-8.** If a review is already running when its project adopts a release carrying this work,
-then that review shall finish under the old rules. (source: framing; craft, for your veto)
-  - *Acceptance:* Given an in-flight review at adoption, when it ends, then its record is complete
-    under the rules it started with. (source: craft, for your veto)
+then that review shall finish under the old rules where its saved state allows, and otherwise shall
+be handed back with a message to start a fresh review. (source: framing; amended 2026-10-30, owner
+ruling "438 a")
+  - *Acceptance:* Given an in-flight review at adoption whose saved state the new rules can finish,
+    when it ends, then its record is complete under the rules it started with. (source: craft, for
+    your veto)
+  - *Acceptance:* Given an in-flight review at adoption whose saved state the new rules cannot
+    finish, when the session next runs, then it is handed back with a message to start a fresh
+    review, its findings stay open, and no verdict is certified from it. (source: owner ruling
+    "438 a", 2026-10-30)
 
 ## Non-functional requirements
 
@@ -602,6 +609,16 @@ The approved requirements and shipped rules below change under this spec. The ad
   written" the same day; Canon 2026-10-30-0b372f49-1. Sections touched: frontmatter (`updated`);
   Significant unhappy paths (UFR-2 and its acceptances); Amendments. Coverage map re-checked the
   same day: UFR-2's two acceptances are each allocated once, to C1-L11e.
+- **2026-10-30 (owner-stamped, substantive):** UFR-8 no longer promises that every review running
+  at adoption finishes under the old rules: one whose saved state the new rules cannot finish is
+  handed back with a message to start a fresh review, its findings staying open. Why: C1-L10a
+  (PR #2265) first rebuilt an old session's saved state under the new rules, and three review rounds
+  kept finding gaps in that rebuild; the hand-back replaced it, and vet 738 found the spec still said
+  the opposite. The owner's ruling: "438 a" on collector #695 item 438, 2026-10-30 (record
+  https://github.com/zwrose/superheroes/issues/695#issuecomment-6529574799); Canon
+  2026-10-30-0b372f49-2. Sections touched: Significant unhappy paths (UFR-8, its statement and a
+  second acceptance); Amendments. Coverage map re-checked the same day: UFR-8's new acceptance is
+  allocated to C1-L10a, which built it.
 
 ## Coverage
 

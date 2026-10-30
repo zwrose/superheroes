@@ -7,11 +7,11 @@ gives it, or, for the spec's Definition of done, by the epic's closure. Drafted 
 after the approval.
 
 **What counts as one criterion.** Each acceptance bullet of an FR or UFR is one criterion, at the
-spec's own bullet granularity: 74 bullets across FR-1 to FR-54 and UFR-1 to UFR-8. Every FR and UFR
+spec's own bullet granularity: 76 bullets across FR-1 to FR-54 and UFR-1 to UFR-8. Every FR and UFR
 carries at least one acceptance bullet, so no statement is counted on its own; an FR's statement is
 owned by the child that owns its bullets. Each of the three non-functional lines (No silent loss,
 Independence, No target number) is one criterion. Each of the two Definition of done bullets is one
-criterion, owned by the epic's closure. That makes 79 criteria. The table has 80 rows, because one
+criterion, owned by the epic's closure. That makes 81 criteria. The table has 82 rows, because one
 bullet is split at its own sentences into two rows (declared below).
 
 **Children and layers.** C1, the core loop, is a native stack of thirteen layers (C1-L1 to C1-L13);
@@ -143,6 +143,7 @@ that reads it.
 | UFR-6 | 1 | GWT | Given a dropped run, when the review resumes or restarts, then every earlier finding is in the record with… | **C1** (C1-L1) |
 | UFR-7 | 1 | GWT | Given a project with no verify command, when setup runs, then the owner reads that code review is not… | **C1** (C1-L3) |
 | UFR-8 | 1 | GWT | Given an in-flight review at adoption, when it ends, then its record is complete under the rules it… | **C1** (C1-L4) |
+| UFR-8 | 2 | GWT | Given an in-flight review at adoption whose saved state the new rules cannot finish, it is handed back to start a fresh review… | **C1** (C1-L10a) |
 | NFR | No silent loss | NFR | nothing a reviewer finds is dropped from the review record. Every finding ends with a recorded outcome or… | **C1** (C1-L1) |
 | NFR | Independence | NFR | every reviewer, verifier, auditor and search description comes from a different model family than every… | **C1** (C1-L5) |
 | NFR | No target number | NFR | the measure is read as a trend at each gardening pass; this work sets no target for rounds, tokens or… | **C1** (C1-L13) |
