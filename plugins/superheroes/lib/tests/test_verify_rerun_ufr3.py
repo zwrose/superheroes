@@ -423,3 +423,50 @@ def test_the_real_verb_re_runs_a_flaky_gate_and_the_round_goes_on(tmp_path, adap
     assert first_run["head"] == head == second_run["head"]
     assert (first_run["headSource"], second_run["headSource"]) == ("run", "run")
     assert len(end["rounds"]["1"]["rerunChecks"]) == 1
+
+
+def test_the_real_verb_records_a_head_that_moves_while_the_re_run_executes_and_advance_halts(
+        tmp_path, adapters):
+    repo = tmp_path / "moving-repo"
+    repo.mkdir()
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "init", "-q")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "first")
+    h1 = _git(repo, "rev-parse", "HEAD")
+
+    d = TA._session(tmp_path)
+    TA._at_run_verify(tmp_path, d)
+    state = TA._state(d)
+    state["config"]["verifyCommand"] = COMMAND
+    state["config"]["repoRoot"] = str(repo)
+    RD.save_state(d, state)
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        if len(calls) == 1:
+            return subprocess.CompletedProcess(argv, 1, b"fail\n", None)
+        _git(repo, "commit", "-q", "--allow-empty", "-m", "moved during the verify run")
+        return subprocess.CompletedProcess(argv, 0, b"pass\n", None)
+
+    first = RD.cmd_run_verify(d, run=fake_run)
+    assert first["ok"] is True and first["result"] == "fail", first
+    out = TA._advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert not TA._state(d).get("terminal")
+
+    second = RD.cmd_run_verify(d, run=fake_run)
+    assert second["ok"] is True and second["result"] == "pass" and second["attempt"] == 1, second
+    h2 = _git(repo, "rev-parse", "HEAD")
+    assert h2 != h1
+    landed, err = RR.read_json(second["landingPath"])
+    assert err is None, err
+    assert landed["headSha"] == h1 and landed["headShaAfter"] == h2
+
+    out = TA._advance(d, tmp_path)
+    assert out["ok"] is True, out
+    end = TA._state(d)
+    assert end["terminal"] == "halted"
+    assert end["decisions"][-1]["kind"] == "verify-rerun-head-moved"
