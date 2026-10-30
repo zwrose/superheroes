@@ -6526,28 +6526,23 @@ def test_verify_fold_unresolved_head_post_audits_advances():
     assert "_verifyThen" not in state
 
 
-def test_a_saved_delta_session_without_a_fix_delta_rebuilds_it_from_its_baseline():
+def test_after_audits_with_no_fix_delta_hands_back_and_never_rebuilds():
+    # axis: a delta round with no string `_fixDeltaDiff` hands back even when a baseline and head diff could rebuild one
     state = _verify_fold_state()
     state["_newSurface"] = {"f.py": [1]}
     state["deltaBaseline"] = {"round": 1, "diff": _R2B_REVIEWED}
     state["headDiff"] = _R2B_HEAD_MF
     RD._after_audits(state, state["config"])
-    assert state["step"] == RD.P_SCOPED
-    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
-    assert state["_fixDeltaDiff"].startswith("diff --git a/f.py b/f.py")
-
-
-def test_a_saved_delta_session_whose_fix_delta_cannot_be_rebuilt_is_handed_back():
-    state = _verify_fold_state()
-    state["_newSurface"] = {"f.py": [1]}
-    RD._after_audits(state, state["config"])
     assert state["terminal"] == "handed-back"
     assert state["step"] != RD.P_SCOPED
+    assert "_fixDeltaDiff" not in state
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
 
 
 def _saved_delta_session(tmp_path, *, step, pending, surface, baseline=True, **over):
-    """A real session directory holding a delta round's state saved by an earlier build: round 2 at
-    ``step``, a scoped surface, no `_fixDeltaDiff`, and (by default) a baseline and head diff to rebuild from."""
+    """A real session directory holding a delta round's state saved by the previous release (session
+    generation 6): round 2 at ``step``, a scoped surface, no `_fixDeltaDiff`."""
+    over.setdefault("sessionGeneration", 6)
     d = str(tmp_path / "session")
     os.makedirs(d)
     checkout = str(tmp_path / "checkout")
@@ -6571,82 +6566,74 @@ def _saved_delta_session(tmp_path, *, step, pending, surface, baseline=True, **o
     return d
 
 
-@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "scoped-pending"])
-def test_a_saved_scoped_session_without_a_fix_delta_is_rebuilt_before_any_order_renders(tmp_path, pending):
-    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=pending,
-                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
+_STRETCH_STEPS = [
+    pytest.param({"step": RD.P_AUDITS}, id="audits"),
+    pytest.param({"step": RD.P_VERIFY, "_verifyThen": RD.VERIFY_THEN_POST_AUDITS}, id="post-audits-verify"),
+    pytest.param({"step": RD.P_SCOPED}, id="scoped"),
+]
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "pending"])
+@pytest.mark.parametrize("held", _STRETCH_STEPS)
+def test_a_generation_6_session_saved_in_the_delta_stretch_is_handed_back_before_any_order(tmp_path, held, pending):
+    # axis: each step of the audit / post-audits verify / scoped stretch of a generation-6 session hands back on the next command
+    held = dict(held)
+    d = _saved_delta_session(tmp_path, step=held.pop("step"), pending=pending,
+                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]}, **held)
     answer = RD.cmd_next(d)
-    assert answer["ok"] and answer["phase"] == RD.P_SCOPED and answer["round"] == 2, answer
+    assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
     ok, state = RD.load_state(d)
-    assert ok and isinstance(state["_fixDeltaDiff"], str)
-    assert state["_fixDeltaDiff"].startswith("diff --git a/f.py b/f.py")
-    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
-    assert RD._ensure_round_fix_delta(d, 2, state)  # the scoped order's fix-delta input renders
-    assert [row["outcome"] for row in RD.read_journal(d) if row.get("outcome") == "fix-delta-rebuilt"] \
-        == ["fix-delta-rebuilt"]
+    assert state["terminal"] == "handed-back" and state["pending"]["action"] == RD.P_TERMINAL
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+    assert "_fixDeltaDiff" not in state
+    assert [row["outcome"] for row in RD.read_journal(d)
+            if row.get("outcome") == "previous-release-hand-back"] == ["previous-release-hand-back"]
 
 
-def test_a_rebuilt_scoped_dispatch_is_reissued_at_a_greater_attempt_than_the_one_it_dropped(tmp_path):
-    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=True,
-                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
-    answer = RD.cmd_next(d)
-    assert answer["ok"] and answer["phase"] == RD.P_SCOPED, answer
-    superseded = [row for row in RD.read_journal(d) if row.get("supersededAttempt") == 1]
-    assert superseded and superseded[0]["phase"] == RD.P_SCOPED and superseded[0]["round"] == 2
-    assert RD._max_used_attempt(d, 2, RD.P_SCOPED) >= 1
-    ok, state = RD.load_state(d)
-    assert ok and state["pending"]["attempt"] >= 2, state["pending"]
-
-
-def test_a_saved_audit_target_with_a_test_change_and_no_recoverable_original_is_handed_back():
+def _changed_test_finding(*, kept):
     finding = {"title": "Retry charges twice", "file": "tests/test_charge.py", "line": 1,
                "severity": "Important", "taxonomy": "break-it-test",
                "suggestion": RD._break_it_block_text({"path": "tests/test_charge.py", "run": "pytest"},
                                                      "def test_x():\n    assert True\n"),
-               "runs": [], RD.break_it.RUNS_FIELD: [{"test": "tests/test_charge.py",
-                                                      "changedWhy": "the draft missed an import"}]}
+               RD.break_it.RUNS_FIELD: [{"test": "tests/test_charge.py",
+                                         "changedWhy": "the draft missed an import"}]}
+    if kept:
+        finding[RD.REVIEWER_TEST_FIELD] = "def test_x():\n    assert False\n"
+    return finding
+
+
+def test_a_generation_6_session_holding_a_changed_test_with_no_kept_original_is_handed_back():
+    # axis: a recorded change with no kept REVIEWER_TEST_FIELD hands back at any step, outside the delta stretch too
     state = _verify_fold_state()
-    state.update(round=2, step=RD.P_AUDITS, pending=None, _auditTargets=[finding])
-    state["config"]["repoRoot"] = None
-    assert RD._finish_saved_fix_delta(state) == "fix-delta-hand-back"
-    assert state["terminal"] == "handed-back"
-    assert "breakIt" not in finding
+    state.update(sessionGeneration=6, round=1, step=RD.P_APPLY_FIXES, pending=None,
+                 findings=[_changed_test_finding(kept=False)])
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["terminal"] == "handed-back" and state["pending"] is None
     assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
 
 
-@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "scoped-pending"])
-def test_a_saved_scoped_session_with_no_usable_baseline_is_handed_back(tmp_path, pending):
-    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=pending, baseline=False,
-                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
-    answer = RD.cmd_next(d)
-    assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
-    ok, state = RD.load_state(d)
-    assert state["terminal"] == "handed-back" and state["step"] != RD.P_SCOPED
-    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
-    assert [row for row in RD.read_journal(d) if row.get("outcome") == "fix-delta-hand-back"]
-
-
-def test_a_saved_audit_session_with_an_empty_old_surface_is_rebuilt_not_folded_empty():
+def test_a_generation_6_session_whose_changed_test_keeps_its_original_is_left_alone():
+    # axis: a generation-6 session outside the stretch with every changed test's original kept is not handed back
     state = _verify_fold_state()
-    state["_newSurface"] = {}
-    state["deltaBaseline"] = {"round": 1, "diff": _R2B_REVIEWED}
-    state["headDiff"] = _R2B_HEAD_MF
-    RD._after_audits(state, state["config"])
-    assert state["step"] == RD.P_SCOPED
-    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
-    assert isinstance(state["_fixDeltaDiff"], str)
-    assert "scopedFinder" not in state["rounds"]["1"]
-
-
-def test_a_state_that_has_its_fix_delta_is_untouched_by_the_rebuild():
-    state = _verify_fold_state()
-    state.update(round=2, step=RD.P_SCOPED, pending=None, _fixDeltaDiff="diff --git a/f.py b/f.py\n",
-                 _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
-                 deltaBaseline={"round": 2, "diff": _R2B_REVIEWED}, headDiff=_R2B_HEAD_MF)
+    state.update(sessionGeneration=6, round=1, step=RD.P_APPLY_FIXES, pending=None,
+                 findings=[_changed_test_finding(kept=True)])
     before = json.dumps(state, sort_keys=True)
-    assert RD._rebuild_saved_fix_delta(state) is True
-    assert RD._finish_saved_fix_delta(state) is None
+    assert RD._finish_saved_previous_release(state) is False
     assert json.dumps(state, sort_keys=True) == before
+
+
+def test_a_current_generation_session_with_the_fields_is_untouched_by_the_hand_back():
+    # axis: only a continuable earlier generation is handed back — a current-generation stretch or changed test is never touched
+    for fields in ({"step": RD.P_SCOPED, "_fixDeltaDiff": "diff --git a/f.py b/f.py\n",
+                    "findings": [_changed_test_finding(kept=True)]},
+                   {"step": RD.P_AUDITS, "findings": [_changed_test_finding(kept=False)]}):
+        state = _verify_fold_state()
+        state.update(round=2, pending=None, _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
+                     **fields)
+        assert state["sessionGeneration"] == RD.SESSION_GENERATION
+        before = json.dumps(state, sort_keys=True)
+        assert RD._finish_saved_previous_release(state) is False
+        assert json.dumps(state, sort_keys=True) == before
 
 
 # A PR hunk whose `+b` the fix deleted: the deletion anchors on the `+a` of its own hunk, not on the second hunk.
