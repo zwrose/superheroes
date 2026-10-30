@@ -136,7 +136,8 @@ def responder(findings=(), apply_fixes=None, verify="pass"):
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                                 "auditorVendor": t.get("auditorVendor")} for t in payload.get("targets", [])],
+                                 "auditorVendor": t.get("auditorVendor"), "checks": TRD.audit_checks()}
+                                for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor") for t in payload.get("targets", [])}}
         if phase == RD.P_APPLY_FIXES:
             return apply_fixes(payload)

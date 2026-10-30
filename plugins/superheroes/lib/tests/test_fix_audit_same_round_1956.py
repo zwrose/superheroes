@@ -49,7 +49,8 @@ def _target(round_findings=("m",), reported=("r2:a",), **extra):
 
 
 def _fold(result, allowed=(), target=None, **kw):
-    body = {"id": "a", "ruling": "discharged", "reason": "the fix resolves it"}
+    body = {"id": "a", "ruling": "discharged", "reason": "the fix resolves it",
+            "checks": TRD.audit_checks()}
     body.update(result)
     return AU.apply_audit_results([target or _target()], [body], change_allowed_ids=allowed, **kw)
 
@@ -231,7 +232,8 @@ def test_the_submit_guard_refuses_a_malformed_claim(field, value):
     # axis: the submit guard refuses a claim the fold would call malformed, by the same predicate
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/fix_audit_same_round_1956.md
     targets = [{"id": "a"}]
-    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed"}]}
+    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed",
+                       "checks": TRD.audit_checks()}]}
     assert RD.audit_results_fault(ok, targets) is None
     for fine in (None, [], ["m"]):
         ok["results"][0][field] = fine
@@ -306,7 +308,7 @@ def test_a_fixes_claim_naming_an_owner_skipped_finding_is_refused_at_the_fold():
     _decide(state, _key("Stale comment", 9), "out-of-scope", 1)
     (target,) = _targets(state)
     body = {"id": target["id"], "ruling": "discharged", "reason": "ok", "unnamedChange": UNNAMED,
-            "unnamedChangeFixes": [_key("Stale comment", 9)]}
+            "unnamedChangeFixes": [_key("Stale comment", 9)], "checks": TRD.audit_checks()}
     out = AU.apply_audit_results(
         [target], [body], expected_auditors={target["id"]: "codex"},
         collection_manifest={target["id"]: "codex"})
@@ -396,7 +398,8 @@ def _same_round_loop(captured_state, claims_by_round, extra=()):
         out = []
         for t in targets or []:
             result = {"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": TRD.audit_checks()}
             if rnd in claims_by_round:
                 result["unnamedChange"] = UNNAMED
                 result.update(claims_by_round[rnd](t))

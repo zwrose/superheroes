@@ -96,6 +96,8 @@ def _valid_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -127,6 +129,8 @@ def _valid_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -146,11 +150,15 @@ def _valid_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
             "readParts": None,
             "investigated": investigated,
         }
     contract, _ = PC.payload_contract(PC.P_AUDITS)
-    ruling = {"id": "audit-seat", "ruling": contract["enums"]["ruling"][0], "reason": "grounds"}
+    ruling = {"id": "audit-seat", "ruling": contract["enums"]["ruling"][0], "reason": "grounds",
+              "checks": {name: {"answer": "yes", "why": "checked"}
+                         for name in ("right", "brokeNothing", "testWouldFail")}}
     for opt in contract.get("optional") or ():
         ruling[opt] = None
     return {
@@ -796,6 +804,8 @@ def _malformed_ruling_branch_with_spurious_findings_list():
         "id": "audit-seat",
         "ruling": ruling_val,
         "reason": "grounds",
+        "checks": {name: {"answer": "yes", "why": "checked"}
+                   for name in ("right", "brokeNothing", "testWouldFail")},
     }
 
 

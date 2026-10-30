@@ -83,6 +83,10 @@ def _lib_run(monkeypatch, engine, synthesis, verifier_vendor, findings=None, **c
     reported = _A_FINDING if findings is None else findings
 
     def reviewer(dim, tier, rnd, ctx):
+        # the fix changed a file, so the scoped finder runs: it is seated on the engine's own vendor
+        # (the cell proof in `_cfg` leaves it seatable), and reports the vendor it ran on
+        if dim == "scoped-finder":
+            return {"findings": [], "vendor": engine}
         return [dict(f) for f in reported] if rnd == 1 and dim == "code-reviewer" else []
 
     def verifier(clusters, rnd):

@@ -362,6 +362,7 @@ def test_record_result_refuses_view_head_anchor_mismatch_without_side_effects(tm
         "ruling": "discharged",
         "reason": "re-read the hunk; the defect is gone",
         "auditorVendor": "codex",
+        "checks": _TSP._TRD.audit_checks(),
     }
     state = _state(session_dir)
     _TDI._dispatch_observed_land(session_dir, state, pend, seat, ruling_payload)
@@ -398,6 +399,7 @@ def test_record_result_review_run_carries_runner_view_cited_head(tmp_path):
         "ruling": "discharged",
         "reason": "re-read the hunk; the defect is gone",
         "auditorVendor": "codex",
+        "checks": _TSP._TRD.audit_checks(),
     }
     state = _state(session_dir)
     _TDI._dispatch_observed_land(session_dir, state, pend, seat, ruling_payload)

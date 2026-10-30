@@ -207,7 +207,9 @@ def test_apply_audit_results_copies_target_finding_key_marker():
               "title": "gap", "severity": "Minor"}
     unmarked = {"id": "v2", "file": "h.py", "line": 3, "title": "plain", "severity": "Minor"}
     targets = [marked, silent, unmarked]
-    results = [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}]
+    checks = {name: {"answer": "yes", "why": "checked"} for name in audits.CHECK_NAMES}
+    results = [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex",
+                "checks": checks}]
     kwargs = {"expected_auditors": {"v0": "codex"}, "collection_manifest": {"v0": "codex"}}
     out = audits.apply_audit_results(
         targets, results, carry_fields=(SC.FINDING_KEY_FIELD,), **kwargs,

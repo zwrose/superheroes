@@ -176,6 +176,46 @@ def test_edge4_a_re_run_at_another_head_halts_with_both_runs_recorded():
     assert (first["head"], second["head"]) == (H1, H2)
 
 
+def test_a_passing_re_run_on_changed_working_tree_contents_halts():
+    state = _state()
+    first = _artifact("fail")
+    first["treeSha"] = "a" * 64
+    second = _artifact("pass")
+    second["treeSha"] = "b" * 64
+    _fold(state, first)
+    _fold(state, second)
+
+    _halted_with(
+        state, "verify re-run ran on changed working-tree contents — halt, certification withheld",
+        "verify-rerun-tree-changed")
+
+
+def test_a_passing_re_run_whose_tree_changed_while_it_ran_halts():
+    state = _state()
+    first = _artifact("fail")
+    first["treeSha"] = "a" * 64
+    second = _artifact("pass")
+    second["treeSha"] = "a" * 64
+    second["treeShaAfter"] = "b" * 64
+    _fold(state, first)
+    _fold(state, second)
+
+    assert state["terminal"] == "halted"
+    assert _kinds(state)[-1] == "verify-rerun-tree-changed"
+
+
+def test_a_passing_re_run_on_the_same_working_tree_contents_goes_on():
+    state = _state()
+    first = _artifact("fail")
+    first["treeSha"] = "a" * 64
+    second = _artifact("pass")
+    second["treeSha"] = "a" * 64
+    _fold(state, first)
+    _fold(state, second)
+
+    assert not state.get("terminal")
+
+
 def test_edge4_a_re_run_that_straddled_a_head_change_halts():
     state = _state()
     _fold(state, _artifact("fail", head=H1))

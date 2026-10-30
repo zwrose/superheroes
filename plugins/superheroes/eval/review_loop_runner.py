@@ -464,7 +464,9 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
         # selected independent auditor vendor so the discharge clears the provenance gate.
         return [
             {"id": t["id"], "ruling": "discharged", "reason": "fixture discharge",
-             "evidence": "fixture", "auditorVendor": t.get("auditorVendor")}
+             "evidence": "fixture", "auditorVendor": t.get("auditorVendor"),
+             "checks": {name: {"answer": "yes", "why": "fixture check"}
+                        for name in ("right", "brokeNothing", "testWouldFail")}}
             for t in (targets or [])
         ]
 

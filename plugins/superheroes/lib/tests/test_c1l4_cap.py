@@ -120,10 +120,12 @@ def _failing_fix_seams(findings, extra_scoped=None, fail_titles=None):
         out = []
         for t in targets or []:
             if fail_titles is None or t.get("title") in fail_titles:
-                out.append({"id": t["id"], "ruling": "not-discharged", "reason": "broken"})
+                out.append({"id": t["id"], "ruling": "not-discharged", "reason": "broken",
+                            "checks": TRD.audit_checks(right="no")})
             else:
                 out.append({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                            "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")})
+                            "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                            "checks": TRD.audit_checks()})
         return out
 
     return TRD._seams(reviewer=reviewer, verifier=plausible, fix_step=fix_step, auditor=auditor,

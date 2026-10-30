@@ -51,7 +51,7 @@ def _audit_artifact(payload, extra_round, extra, fail_titles):
     results = []
     for t in payload.get("targets", []):
         failing = extra == "not-discharged" if extra_round else t.get("title") in fail_titles
-        row = {"id": t["id"], "auditorVendor": t.get("auditorVendor")}
+        row = {"id": t["id"], "auditorVendor": t.get("auditorVendor"), "checks": TRD.audit_checks()}
         if failing:
             row.update(ruling="not-discharged", reason="still broken")
         elif extra_round and extra == "new-issue":

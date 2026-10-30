@@ -149,6 +149,8 @@ JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RULE_CMD = session_contract.RULE_CMD
 EXTRA_AUDIT_CMD = "extra-audit"
 BREAK_IT_CHANGE_CMD = "break-it-change"
+# The test role's original block content, kept on a finding when `break-it-change` first rewrites it.
+REVIEWER_TEST_FIELD = "reviewerTest"
 RULING_KINDS =frozenset(("out-of-scope", "guidance"))
 RULING_FILE_UNREADABLE = "ruling-file-unreadable"
 RULING_FILE_SHAPE = "ruling-file-shape"
@@ -857,7 +859,7 @@ def _merge_same_finding(existing, incoming):
                 if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
     if len(carriers) == 1:
         # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins
-        for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD):
+        for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD, REVIEWER_TEST_FIELD):
             if field in carriers[0]:
                 merged[field] = carriers[0][field]
             else:
@@ -5630,13 +5632,14 @@ def verify_result_fault(artifact):
     return round_phases.verify_result_fault(artifact)
 
 
-def _audit_result_entry_fault(entry, index, target_ids):
+def _audit_result_entry_fault(entry, index, target_ids, targets_by_id=None):
     """The shape fault (a reason string) in ONE audit-result entry, or None.
 
     `target_ids` is the driver's own set of audit-target ids — a result keyed to an id outside it
     can never match a target, so it is the audit-side twin of the #845 seat mis-key. An EMPTY set
     means the driver has no targets to key against, so no id is judged (mirroring the seat-key
-    guard's empty-key rule) — never a false refusal.
+    guard's empty-key rule) — never a false refusal. `targets_by_id` maps each id to its target, so
+    the three checks (and the test comparison) are judged against the target the result answers.
 
     axis: REFUSAL of a ruling the fold cannot honor as written — not whether the ruling is correct.
     Each branch below bites on one distinct way an entry fails to express a usable answer.
@@ -5694,6 +5697,12 @@ def _audit_result_entry_fault(entry, index, target_ids):
             detail += ("; the artifact carries `newIssue` (singular) — the driver consumes "
                        "`newIssues`, a LIST")
         return detail
+    # axis: that EVERY result, whatever its ruling, answers the three checks (and the test comparison
+    # where the committed break-it test was changed) — `audits.audit_checks_fault`, the fold's own judge
+    checks_fault = audits.audit_checks_fault(entry, (targets_by_id or {}).get(rid))
+    if checks_fault is not None:
+        return ("%s is refused: %s; expected `checks` with `right`, `brokeNothing` and `testWouldFail`, "
+                "each {\"answer\": \"yes\" or \"no\", \"why\": <reason>}" % (where, checks_fault))
     return None
 
 
@@ -5787,8 +5796,10 @@ def audit_results_fault(artifact, targets):
                 "phase/attempt/state-hash with a corrected artifact" % type(results).__name__)
     target_ids = {t.get("id") for t in targets if isinstance(t, dict)
                   and isinstance(t.get("id"), str)} if isinstance(targets, list) else set()
+    targets_by_id = {t.get("id"): t for t in targets if isinstance(t, dict)
+                     and isinstance(t.get("id"), str)} if isinstance(targets, list) else {}
     for index, entry in enumerate(results):
-        fault = _audit_result_entry_fault(entry, index, target_ids)
+        fault = _audit_result_entry_fault(entry, index, target_ids, targets_by_id)
         if fault:
             return "%s; resubmit the same phase/attempt/state-hash with a corrected artifact" % fault
     return None
@@ -5949,6 +5960,13 @@ def _verify_rerun_heads_moved(first_head, artifact, head, moved):
     return None
 
 
+def _verify_artifact_trees(artifact):
+    """The working-tree digests a verify run read (before and, when it moved, after); unknown
+    sides are left out."""
+    return [t for t in (artifact.get("treeSha"), artifact.get("treeShaAfter"))
+            if isinstance(t, str) and t]
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -5972,7 +5990,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     if first is None:
         if result == "fail" and not moved and artifact.get("via") != "ci-exact-head":
             state["_verifyRerun"] = {"run": _verify_run_row(artifact), "head": head,
-                                     "headSource": head_source}
+                                     "headSource": head_source,
+                                     "trees": _verify_artifact_trees(artifact)}
             _decision(state, "verify-rerun",
                       "verify gate failed once at head %s — re-running the same check once"
                       % (head or "unknown"))
@@ -5998,6 +6017,19 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
             _decision(state, "verify-rerun-head-moved",
                       "verify re-run ran at a different head (%s then %s) — halt, certification "
                       "withheld" % moved_heads)
+            state["step"] = P_TERMINAL
+            return
+        # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
+        trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
+        if result == "pass" and len(trees) > 1:
+            _set_terminal(state, "halted")
+            state["certification"] = {
+                "shape": None,
+                "reason": "verify re-run ran on changed working-tree contents — halt, "
+                          "certification withheld"}
+            _decision(state, "verify-rerun-tree-changed",
+                      "verify re-run ran on changed working-tree contents — halt, certification "
+                      "withheld")
             state["step"] = P_TERMINAL
             return
     if result == "fail":
@@ -6460,6 +6492,61 @@ def _reported_unnamed_changes(state):
     return reported
 
 
+def _changed_why(finding):
+    """The build session's reason for changing the finding's break-it test: the latest non-blank
+    `changedWhy` on its run list, else None."""
+    runs = finding.get(break_it.RUNS_FIELD)
+    for run in reversed(runs if isinstance(runs, list) else []):
+        why = run.get("changedWhy") if isinstance(run, dict) else None
+        if isinstance(why, str) and why.strip():
+            return why.strip()
+    return None
+
+
+def _audit_head(state, config):
+    """The post-fix head the round audits: the fix round's recorded `fixFoldHead`, else the head the
+    repository names now; None when neither can be read."""
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    current = state.get("round")
+    for rnd in (current - 1, current) if isinstance(current, int) else ():
+        record = rounds.get(str(rnd))
+        head = record.get("fixFoldHead") if isinstance(record, dict) else None
+        if _nonempty_str(head):
+            return head
+    repo_root = config.get("repoRoot")
+    return _resolve_head_commit(repo_root) if _nonempty_str(repo_root) else None
+
+
+def _break_it_target_facts(state, config, finding, head):
+    """The `breakIt` block of an audit target: the test role's test, the test committed at the audited
+    head, the build session's reason for a change, and how the two compare (`audits.BREAK_IT_MATCHES`).
+    Fails closed: a committed test git cannot read is `missing`."""
+    block, _kind = break_it.carried_block(finding)
+    path = block["path"] if block is not None else None
+    current = block["content"] if block is not None else None
+    kept = finding.get(REVIEWER_TEST_FIELD)
+    reviewer = kept if isinstance(kept, str) else current
+    committed = None
+    repo_root = config.get("repoRoot")
+    if path is not None and _nonempty_str(repo_root) and _nonempty_str(head):
+        raw = _git_bytes(repo_root, "cat-file", "blob", "%s:%s" % (head, path))
+        try:
+            committed = raw.decode("utf-8") if raw is not None else None
+        except UnicodeDecodeError:
+            committed = None
+    why = _changed_why(finding)
+    if committed is None:
+        match = audits.MATCH_MISSING
+    elif committed == reviewer:
+        match = audits.MATCH_SAME
+    elif committed == current and why is not None:
+        match = audits.MATCH_CHANGED_EXPLAINED
+    else:
+        match = audits.MATCH_CHANGED_UNEXPLAINED
+    return {"path": path, "reviewerTest": reviewer, "committedTest": committed,
+            "changedWhy": why, "match": match}
+
+
 def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
@@ -6528,6 +6615,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             round_findings.append(_round_finding_entry(
                 child, content, _carried_owner_ruling(_row_decision(state, effective, ledger_by_key, child))))
     reported_changes = _reported_unnamed_changes(state)
+    audited_head = {}
 
     def target_row(f, tid):
         """One audit target row — a batch finding's and a rider's alike, so the two never drift."""
@@ -6581,6 +6669,10 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD):
                 if f.get(carried) is not None:
                     row[carried] = f[carried]
+            # axis: the audit compares the test committed at the audited head with the test role's version
+            if "head" not in audited_head:
+                audited_head["head"] = _audit_head(state, config)
+            row["breakIt"] = _break_it_target_facts(state, config, f, audited_head["head"])
         if auditor_vendor is not None:
             row["auditorVendor"] = auditor_vendor
         return row
@@ -6804,6 +6896,12 @@ def _fold_audits(state, config, artifact, session_dir=None):
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
         for a in outcome["audits"] if a.get("id") not in rider_ids]}
     state["auditRounds"].append(audit_round)
+    mismatch_ids = list(outcome.get("testMismatch") or [])
+    if mismatch_ids:
+        _record_round(state, "testMismatch", mismatch_ids)
+        _decision(state, "break-it-test-mismatch",
+                  "the committed break-it test is not the test role's version, or weakens it, so the "
+                  "fix is not discharged: %s" % ", ".join(mismatch_ids))
     for pid in outcome.get("unauthenticated", []):
         audit_reason = None
         audit_cause = None
@@ -9280,6 +9378,10 @@ def _rewrite_break_it_copy(copy_, text, record, why):
     runs = copy_.get(break_it.RUNS_FIELD)
     runs = list(runs) if isinstance(runs, list) else []
     runs.append(break_it.record_run(dict(record, file=copy_.get("file")), changed_why=why))
+    # axis: the first change keeps the test role's version; a later change never replaces it
+    original, _kind = break_it.carried_block(copy_)
+    if original is not None and not isinstance(copy_.get(REVIEWER_TEST_FIELD), str):
+        copy_[REVIEWER_TEST_FIELD] = original["content"]
     copy_["suggestion"] = text
     copy_[break_it.RUN_FIELD] = record
     copy_[break_it.RUNS_FIELD] = runs
@@ -13397,6 +13499,21 @@ def _verify_run_head(cwd):
     return head if _usable_verify_head(head) else None
 
 
+def _verify_run_tree(cwd):
+    """A digest of the tracked working-tree changes against HEAD in `cwd` (the empty diff digests
+    too), or None when it cannot be read. The verify command runs against the working tree, so a
+    retry at one head can still run on different contents."""
+    try:
+        done = subprocess.run(["git", "diff", "HEAD", "--binary", "--no-ext-diff"], cwd=cwd,
+                              stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=_VERIFY_HEAD_READ_SECONDS)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return hashlib.sha256(done.stdout).hexdigest()
+
+
 def _run_verify_execute(session_dir, claim, timeout, run):
     """Run the bound verify command outside the lock. Returns (payload, refusal)."""
     rnd, attempt = claim["slot"]
@@ -13406,6 +13523,7 @@ def _run_verify_execute(session_dir, claim, timeout, run):
     cwd = _gate_policy_repo_root(claim["config"])
     exit_code = None
     head_before = _verify_run_head(cwd)
+    tree_before = _verify_run_tree(cwd)
     try:
         done = run([claim["bash"], "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
@@ -13441,6 +13559,11 @@ def _run_verify_execute(session_dir, claim, timeout, run):
     head_after = _verify_run_head(cwd) if head_before is not None else None
     if head_after is not None and head_after != head_before:
         payload["headShaAfter"] = head_after
+    if tree_before is not None:
+        payload["treeSha"] = tree_before
+        tree_after = _verify_run_tree(cwd)
+        if tree_after is not None and tree_after != tree_before:
+            payload["treeShaAfter"] = tree_after
     return payload, None
 
 
