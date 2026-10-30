@@ -517,6 +517,54 @@ def _fix_commit_of(state, key):
     return None
 
 
+def _fix_bindings_by_round(state):
+    """``[(round number, [(finding's stored key, commit)])]`` in round order, or None when a round's fix bindings are
+    present but unreadable."""
+    rounds = state.get("rounds")
+    if not isinstance(rounds, dict):
+        return None
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        fix = rounds[n].get("fix") if isinstance(rounds[n], dict) else ()
+        if fix is None:
+            continue
+        commits = fix.get("commits") if isinstance(fix, dict) else ()
+        if commits is None:
+            continue
+        if not isinstance(commits, list) or not all(isinstance(b, dict) for b in commits):
+            return None
+        out.append((int(n), [(review_record._key({"findingKey": b["finding"]}), b["commit"]) for b in commits
+                             if isinstance(b.get("finding"), str) and b["finding"].strip() and _text(b.get("commit"))]))
+    return out
+
+
+def _repaired_alone(state, key, members):
+    """True when ``key``'s latest fix binding is in a later round than a round whose commit bound it with another of
+    the group's ``members`` (stored keys), and that latest binding's commit binds no other member in its round.
+    Derived from the ordered per-round bindings, never from comparing latest commits; unreadable rounds read False."""
+    rounds = _fix_bindings_by_round(state)
+    if rounds is None or not isinstance(members, list):
+        return False
+    mine = review_record._key({"findingKey": key})
+    others = {review_record._key({"findingKey": m}) for m in members if isinstance(m, str) and m.strip()} - {mine}
+    shared_rounds, latest = [], None
+    for n, bound in rounds:
+        own = [c for k, c in bound if k == mine]
+        if not own:
+            continue
+        with_others = {c for k, c in bound if k in others}
+        if any(c in with_others for c in own):
+            shared_rounds.append(n)
+        latest = (n, own[0], with_others)
+    if latest is None:
+        return False
+    n, commit, with_others = latest
+    # axis: a member reads repaired alone only when its latest binding follows a round that bound it with another member — see bite-proof record c1l11f_wo_c_fix_groups
+    later = any(s < n for s in shared_rounds)
+    # axis: and only when that latest binding's commit binds no other member of the group in its round — see bite-proof record c1l11f_wo_c_fix_groups
+    return later and commit not in with_others
+
+
 def _finding_parts(row, older):
     """{part: value} for each finding part: the row's own when it has the key, else the older (ledger) row's, else absent.
     The break-it runs of both rows, when both hold a list, read older first, then the row's runs not already among them."""
@@ -567,6 +615,8 @@ def _findings_and_merges(state):
         held = _finding_parts(row, by_key.get(key))
         if isinstance(held.get("fixGroup"), dict) and _fix_commit_of(state, key):
             held["fixGroup"] = dict(held["fixGroup"], commit=_fix_commit_of(state, key))
+            if _repaired_alone(state, key, held["fixGroup"].get("members")):
+                held["fixGroup"]["repairedAlone"] = True
         if outcome == _SHOWN_WRONG and "grade" in rep:  # a kept repeat may hold no grade: it keeps the one it has
             # axis: a finding closed as wrong carries the closing representative's wrong grade, never a merged member's own — see bite-proof record c1l7_wo_a_verifier_grade
             held["grade"] = rep["grade"]

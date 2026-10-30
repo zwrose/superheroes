@@ -96,3 +96,193 @@ the `UV_NATIVE_TLS` deprecation warning and the `bringing up nodes...` lines are
 ## Green
 
 All ten restored: `47 passed`, exit 0.
+
+---
+
+## Review-fix guards E11–E15 (appended by build #2279, C1-L11f, WO-C)
+
+The five review-loop fixes of PR #2270 in `round_driver.py` (`42ae1a8b`, `67a51f15`, `50db579a`, `ea737d76`, `5b0f8054`)
+carry `# axis:` comments citing this record (all but `42ae1a8b`'s line, which has none), yet E1–E10 above did not cover them.
+Their original red/green receipts sit in PR #2270's build record: "`42ae1a8b`, the plain-member binding check neutralized: `2
+failed` (`…whether_or_not_each_carries_a_test[tests1]`, `[tests2]`) / green `116 passed`; `67a51f15`, `named = named +
+plain_named` dropped: `2 failed` (`test_a_plain_member_bound_to_head_naming_the_shared_commit_folds[tests0]`, `[tests1]`) /
+green `119 passed`; `50db579a`, the batch closure emptied: `3 failed` (the ruled, guidance-restored and delta-settle
+entry-path tests) / green `123 passed`; `ea737d76`, `_hold_owner_choice` on pulled siblings dropped: `2 failed` (the two
+`tradeoff` sibling tests) / green `125 passed`; `5b0f8054`, `_attach_row_rulings` over the composed batch dropped: `1 failed`
+(`test_a_pulled_sibling_carries_the_guidance_a_finding_merged_into_it_was_already_sent_under`) / green `126 passed`."
+That is the provenance; the receipts below are a re-run on the tree of build #2279 (head `4f350065` plus WO-C's uncommitted
+work), by the WO-C implementer, in `/home/user/wt-2279-c`. Each neutralization was one targeted edit through the edit tool in
+`round_driver.py`, undone by the inverse edit; no `git checkout`, `restore`, `reset` or `stash` was run. After each restore
+`git diff --stat plugins/superheroes/lib/round_driver.py` printed nothing and the restored line was found by `grep -n`
+(quoted per entry). Every run was
+`timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-wo-c -m pytest <node ids> -q -p no:cacheprovider --tb=short`
+over the named nodes of `plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py`; the captures are the runner's output
+apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. The counts differ from PR #2270's because these
+runs are narrowed to the named nodes, not the three test files. Nothing is redacted.
+
+### E11 — a plain member's bound commit must be the shared one (`round_driver._shared_fix_commit`, `42ae1a8b`)
+
+- neutralization: `if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key in plain_keys if bound.get(key)):` became `if False:`.
+- detector: `test_fix_groups_c1l11c.py::test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test` (its `[tests1]` and `[tests2]` cases).
+- red (taken in a second dispatch, with a literal command, `--tb=short`, only the `UV_NATIVE_TLS` warning line left out):
+```
+.FF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests1] _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:442: in test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test
+    assert _check(u, [(u.ka, "c1"), (u.kb, "c2")], {"c1": passing, "c2": passing}) == (
+E   AssertionError: assert (None, [{'fin...mmit': 'c1'}]) == ('fix-group-n...1dcc4f29', [])
+E     
+E     At index 0 diff: None != 'fix-group-no-shared-commit:fg-fa811dcc4f29'
+E     Use -v to get more diff
+_ test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests2] _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:442: in test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test
+    assert _check(u, [(u.ka, "c1"), (u.kb, "c2")], {"c1": passing, "c2": passing}) == (
+E   AssertionError: assert (None, [{'fin...mmit': 'c2'}]) == ('fix-group-n...1dcc4f29', [])
+E     
+E     At index 0 diff: None != 'fix-group-no-shared-commit:fg-fa811dcc4f29'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests1]
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test[tests2]
+2 failed, 1 passed in 2.20s
+```
+  This matches PR #2270's original red for this element (`2 failed`, `[tests1]` and `[tests2]`). The first dispatch's red
+  run was refused by the harness's command check (a shell variable in the command); it was not retried in another form.
+- restore: the inverse edit (`if False:` back to the `if not all(…)` line); `git diff --stat -- plugins/superheroes/lib/round_driver.py`
+  printed nothing, and `grep -n` printed
+  `5858:        if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key in plain_keys if bound.get(key)):`.
+- green (the restored tree):
+```
+...                                                                      [100%]
+3 passed in 2.14s
+```
+
+### E12 — a plain member's bound commit is resolved with the carriers' (`round_driver._apply_fixes_commit_fault`, `67a51f15`)
+
+- neutralization: `named = named + plain_named` became `named = named`.
+- detector: `test_fix_groups_c1l11c.py::test_a_plain_member_bound_to_head_naming_the_shared_commit_folds`.
+- red:
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+___ test_a_plain_member_bound_to_head_naming_the_shared_commit_folds[tests0] ___
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:453: in test_a_plain_member_bound_to_head_naming_the_shared_commit_folds
+    assert detail is None
+E   AssertionError: assert 'fix-group-no-shared-commit:fg-fa811dcc4f29' is None
+___ test_a_plain_member_bound_to_head_naming_the_shared_commit_folds[tests1] ___
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:453: in test_a_plain_member_bound_to_head_naming_the_shared_commit_folds
+    assert detail is None
+E   AssertionError: assert 'fix-group-no-shared-commit:fg-fa811dcc4f29' is None
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_a_plain_member_bound_to_head_naming_the_shared_commit_folds[tests0]
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_a_plain_member_bound_to_head_naming_the_shared_commit_folds[tests1]
+2 failed in 2.14s
+```
+- restore receipt: `git diff --stat` over `round_driver.py` printed nothing; `grep -n` printed `5916:    named = named + plain_named`.
+- green:
+```
+..                                                                       [100%]
+2 passed in 2.19s
+```
+
+### E13 — every composed batch is closed over its fix groups (`round_driver._queue_fix_batch`, `50db579a`)
+
+- neutralization: in `siblings = [dict(r) for r in _close_batch_over_fix_groups(state, [], filtered)`, the call became `[]`: `siblings = [dict(r) for r in []`.
+- detector: `test_fix_groups_c1l11c.py::test_an_owner_ruling_that_adds_a_group_member_brings_its_sibling_into_the_batch`, `::test_a_guidance_restored_member_offered_beside_no_sibling_brings_its_sibling_into_the_batch` and `::test_a_delta_settle_offering_the_important_member_brings_its_minor_sibling_into_the_batch`.
+- red:
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_an_owner_ruling_that_adds_a_group_member_brings_its_sibling_into_the_batch _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:587: in test_an_owner_ruling_that_adds_a_group_member_brings_its_sibling_into_the_batch
+    assert sorted(RD._finding_identity_key(r) for r in u.state["_fixBatch"]) == sorted([u.ka, u.kb])
+E   AssertionError: assert ['tests/test_...:member 0@L1'] == ['tests/test_...:member 0@L1']
+E     
+E     At index 0 diff: 'tests/test_charge_once.py::member 0@L1' != 'tests/test_charge_amount.py::member 1@L1'
+E     Right contains one more item: 'tests/test_charge_once.py::member 0@L1'
+E     Use -v to get more diff
+_ test_a_guidance_restored_member_offered_beside_no_sibling_brings_its_sibling_into_the_batch _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:596: in test_a_guidance_restored_member_offered_beside_no_sibling_brings_its_sibling_into_the_batch
+    assert sorted(RD._finding_identity_key(r) for r in u.state["_fixBatch"]) == sorted([u.ka, u.kb])
+E   AssertionError: assert ['tests/test_...:member 0@L1'] == ['tests/test_...:member 0@L1']
+E     
+E     At index 0 diff: 'tests/test_charge_once.py::member 0@L1' != 'tests/test_charge_amount.py::member 1@L1'
+E     Right contains one more item: 'tests/test_charge_once.py::member 0@L1'
+E     Use -v to get more diff
+_ test_a_delta_settle_offering_the_important_member_brings_its_minor_sibling_into_the_batch _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:605: in test_a_delta_settle_offering_the_important_member_brings_its_minor_sibling_into_the_batch
+    assert sorted(RD._finding_identity_key(r) for r in state["_fixBatch"]) == sorted([u.ka, u.kb])
+E   AssertionError: assert ['tests/test_...:member 0@L1'] == ['tests/test_...:member 0@L1']
+E     
+E     At index 0 diff: 'tests/test_charge_once.py::member 0@L1' != 'tests/test_charge_amount.py::member 1@L1'
+E     Right contains one more item: 'tests/test_charge_once.py::member 0@L1'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_an_owner_ruling_that_adds_a_group_member_brings_its_sibling_into_the_batch
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_a_guidance_restored_member_offered_beside_no_sibling_brings_its_sibling_into_the_batch
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_a_delta_settle_offering_the_important_member_brings_its_minor_sibling_into_the_batch
+3 failed in 2.42s
+```
+- restore receipt: `git diff --stat` over `round_driver.py` printed nothing; `grep -n` printed `5493:    siblings = [dict(r) for r in _close_batch_over_fix_groups(state, [], filtered)`.
+- green:
+```
+...                                                                      [100%]
+3 passed in 2.01s
+```
+
+### E14 — a pulled sibling goes through the owner-choice hold (`round_driver._close_batch_over_fix_groups`, `ea737d76`)
+
+- neutralization: `return closed + (_hold_owner_choice(state, pulled) if pulled else [])` became `return closed + pulled`.
+- detector: `test_fix_groups_c1l11c.py::test_a_tradeoff_minor_sibling_pulled_by_the_closure_is_held_for_the_owner_not_admitted` and `::test_a_tradeoff_sibling_pulled_by_the_queue_closure_is_held_for_the_owner_not_admitted`.
+- red:
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_a_tradeoff_minor_sibling_pulled_by_the_closure_is_held_for_the_owner_not_admitted _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:621: in test_a_tradeoff_minor_sibling_pulled_by_the_closure_is_held_for_the_owner_not_admitted
+    assert u.state["ownerChoiceHeld"] == [u.kb]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'ownerChoiceHeld'
+_ test_a_tradeoff_sibling_pulled_by_the_queue_closure_is_held_for_the_owner_not_admitted _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:630: in test_a_tradeoff_sibling_pulled_by_the_queue_closure_is_held_for_the_owner_not_admitted
+    assert u.state["ownerChoiceHeld"] == [u.kb]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'ownerChoiceHeld'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_a_tradeoff_minor_sibling_pulled_by_the_closure_is_held_for_the_owner_not_admitted
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_a_tradeoff_sibling_pulled_by_the_queue_closure_is_held_for_the_owner_not_admitted
+2 failed in 2.32s
+```
+- restore receipt: `git diff --stat` over `round_driver.py` printed nothing; `grep -n` printed `4473:    return closed + (_hold_owner_choice(state, pulled) if pulled else [])`.
+- green:
+```
+..                                                                       [100%]
+2 passed in 2.20s
+```
+
+### E15 — a pulled sibling gets the inherited-ruling attachment (`round_driver._queue_fix_batch`, `5b0f8054`)
+
+- neutralization: `_attach_row_rulings(state, filtered, _live_ruling_by_key(state), _sibling_ledger)` became `pass`.
+- detector: `test_fix_groups_c1l11c.py::test_a_pulled_sibling_carries_the_guidance_a_finding_merged_into_it_was_already_sent_under`.
+- red:
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_pulled_sibling_carries_the_guidance_a_finding_merged_into_it_was_already_sent_under _
+/home/user/wt-2279-c/plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py:648: in test_a_pulled_sibling_carries_the_guidance_a_finding_merged_into_it_was_already_sent_under
+    assert (batch[u.kb].get("ruledBy"), batch[u.kb].get("ruledBySeq")) == (km, seq)
+E   AssertionError: assert (None, None) == ('tests/test_...ibling@L1', 1)
+E     
+E     At index 0 diff: None != 'tests/test_charge_amount.py::merged into the sibling@L1'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_fix_groups_c1l11c.py::test_a_pulled_sibling_carries_the_guidance_a_finding_merged_into_it_was_already_sent_under
+1 failed in 2.09s
+```
+- restore receipt: `git diff --stat` over `round_driver.py` printed nothing; `grep -n` printed `5507:            _attach_row_rulings(state, filtered, _live_ruling_by_key(state), _sibling_ledger)`.
+- green:
+```
+.                                                                        [100%]
+1 passed in 1.98s
+```

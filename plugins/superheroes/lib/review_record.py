@@ -668,7 +668,10 @@ def _fix_group_fault(g):
     members = g.get("members")
     if not isinstance(members, list) or len(members) < 2 or not all(_nb(m) for m in members):
         return ".members"
-    return None if _nb_or_none(g.get("commit")) else ".commit"
+    if not _nb_or_none(g.get("commit")):
+        return ".commit"
+    # axis: `repairedAlone` is present only as the value true — see bite-proof record c1l11f_wo_c_fix_groups
+    return ".repairedAlone" if "repairedAlone" in g and g["repairedAlone"] is not True else None
 
 
 def _validate(a):
@@ -2095,7 +2098,10 @@ def _finding_bullet(f):
     if runs:
         bullet += f" · break-it: {len(runs)} run(s) ({', '.join(_run_result(run) for run in runs)})"
     if isinstance(group, dict) and isinstance(group.get("members"), list):
-        bullet += f" · one fix shared with {len(group['members']) - 1} other finding(s) (group {group.get('id')})"
+        if group.get("repairedAlone") is True:
+            bullet += f" · repaired alone after the group's shared fix (group {group.get('id')})"
+        else:
+            bullet += f" · one fix shared with {len(group['members']) - 1} other finding(s) (group {group.get('id')})"
     if isinstance(kind, dict):
         bullet += f" · kind of mistake: {kind.get('kind')}"
         places = kind.get("places") or []
