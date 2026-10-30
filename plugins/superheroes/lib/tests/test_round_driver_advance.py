@@ -1768,16 +1768,28 @@ def test_orchestrator_fulfilled_recorded_journal_carries_stored_envelope_revisio
 
 def test_orchestrator_fulfilled_fold_writes_record_and_receipt_on_a_terminal_verify(
         tmp_path, adapters):
-    """A verify `fail` folds to a terminal halt: `round-receipt.json` AND the seat record land."""
+    """A verify `fail` that fails again on its re-run folds to a terminal halt: `round-receipt.json`
+    AND the seat record of the second run land. The first `fail` re-pends the gate (UFR-3)."""
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
+    first = _land_verify_via_verb(d, exit_code=3)
+    assert first["result"] == "fail"
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out.get("terminal") is None, out
+    mid = _state(d)
+    assert not mid.get("terminal")
+    assert mid["step"] == RD.P_VERIFY
+    assert "verify-rerun" in [dec["kind"] for dec in mid["decisions"]]
+    assert (_pending(d)["phase"], _pending(d)["attempt"]) == (RD.P_VERIFY, 1)
+
     landed = _land_verify_via_verb(d, exit_code=3)
     assert landed["result"] == "fail"
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out.get("terminal") == "halted", out
     assert os.path.exists(os.path.join(d, RD.RECEIPT_FILE))
-    record, err = RR.read_json(_verify_store_path(d))
+    record, err = RR.read_json(_verify_store_path(d, attempt=1))
     assert err is None, err
     assert record["payload"] == landed
 
