@@ -7308,21 +7308,25 @@ def _removal_anchor(head_anchors, here, replaced_header=False):
     return None
 
 
-def _merged_removal_anchor(head_anchors, here):
+def _merged_removal_anchor(head_anchors, here, preceded=False):
     """The head line a body line removed together with its PR hunk's header anchors on when no header
     replaced that one: the hunk merged into the one before it, so the head lines on both sides of ``here``
-    sit in one hunk and the removal anchors there (``_removal_anchor``). None when the hunk did not
-    survive: a header, or the end of the section, then follows ``here``."""
+    sit in one hunk and the removal anchors there (``_removal_anchor``). At the end of the section nothing
+    follows ``here``: the removal anchors on the surviving line before it only when ``preceded`` (a body line
+    of the same hunk survived ahead of it in the group). None when the hunk did not survive: a header, or the
+    end of the section with no surviving body line of the hunk, then follows ``here``."""
     behind, ahead = head_anchors[:here], head_anchors[here:]
     if behind and ahead and behind[-1][0] == ahead[0][0]:
+        return _removal_anchor(head_anchors, here)
+    if behind and not ahead and preceded:
         return _removal_anchor(head_anchors, here)
     return None
 
 
 def _merged_removal_anchors(head_anchors, positions):
-    """The head lines every pending removal position in ``positions`` anchors on (``_merged_removal_anchor``),
-    in order; a position whose hunk did not survive anchors on none."""
-    found = (_merged_removal_anchor(head_anchors, here) for here in positions)
+    """The head lines every pending removal in ``positions`` (``(position, preceded)`` pairs) anchors on
+    (``_merged_removal_anchor``), in order; a removal whose hunk did not survive anchors on none."""
+    found = (_merged_removal_anchor(head_anchors, here, preceded) for here, preceded in positions)
     return [anchor for anchor in found if anchor is not None]
 
 
@@ -7347,8 +7351,9 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
         head_lines, content = [], False
         # `header_gone`: a PR hunk header this group removed, not yet replaced; `waiting`: the removed body
         # lines of that hunk, which anchor in the hunk the replacing header opens
-        # `waiting_at`: the head position of every one of those removed lines, none dropped
-        header_gone, waiting, waiting_at = False, 0, []
+        # `waiting_at`: the head position of every one of those removed lines, none dropped, each with whether
+        # a body line of that hunk survived ahead of it; `survived`: such a line has been seen
+        header_gone, waiting, waiting_at, survived = False, 0, [], False
         for ln in lines[1:]:
             mark, text = ln[0], ln[1:]
             if mark in (" ", "-") and text.startswith("@@"):
@@ -7356,12 +7361,14 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
                 # into the hunk before it
                 if header_gone:
                     head_lines.extend(_merged_removal_anchors(head_anchors, waiting_at))
-                header_gone, waiting, waiting_at = mark == "-", 0, []
+                header_gone, waiting, waiting_at, survived = mark == "-", 0, [], False
+            elif header_gone and mark in (" ", "+"):
+                survived = True
             if mark == "-":
                 content = content or not text.startswith("@@")
                 if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
                     if header_gone:
-                        waiting_at.append(min(max(index, 0), len(head_anchors)))
+                        waiting_at.append((min(max(index, 0), len(head_anchors)), survived))
                         waiting += 1
                         continue
                     # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk.
@@ -7378,7 +7385,9 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
                     anchor = _removal_anchor(head_anchors, index, replaced_header=True) if waiting else None
                     if anchor is not None:
                         head_lines.append(anchor)
-                    header_gone, waiting, waiting_at = False, 0, []
+                    header_gone, waiting, waiting_at, survived = False, 0, [], False
+                elif header_gone:
+                    survived = True
                 if head_numbers[index] is not None and not text.startswith("@@"):
                     head_lines.append(head_numbers[index])
             index += 1
@@ -7535,8 +7544,12 @@ def _final_diff_files(repo_root, base, head):
     """``{path: text}`` for the files the final diff (``base...head``) carries that a break-it body search
     reads, collected by ``break_it.final_diff_candidates`` (the one collection ``break_it._body_search`` also
     reads; a text git cannot decode is None); None when git cannot list or read them, so the search is not made."""
+    def audit_git(root, *args):
+        # the audit's own git run, as `_git_bytes` makes it: a 30-second timeout and the inherited environment
+        return subprocess.run(["git", "-C", root, *args], capture_output=True, timeout=30)
+
     try:
-        candidates, failure = break_it.final_diff_candidates(repo_root, base, head)
+        candidates, failure = break_it.final_diff_candidates(repo_root, base, head, git=audit_git)
     except (OSError, subprocess.SubprocessError):
         return None
     return None if failure else dict(candidates)

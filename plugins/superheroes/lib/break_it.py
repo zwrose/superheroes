@@ -1831,29 +1831,32 @@ def retention_command(repo_root, head, record_path, record_command, found):
     return _rewrite_command(record_command, record_path, found["path"], found["titles"])
 
 
-def final_diff_candidates(repo_root, base, head):
+def final_diff_candidates(repo_root, base, head, git=None):
     """``(candidates, failure)``: the one definition of which files of the final diff (``base...head``) a break-it
     body search reads, shared by ``_body_search`` and the loop's audit. ``candidates`` is ``[(path, text)]`` for each
     file of a supported suffix, a safe path and a regular blob at ``head`` (a text git cannot decode is None);
     ``failure`` is None, else the ``KEPT_UNRESOLVED`` reason of the git read that failed (``candidates`` is then
-    None). A git that cannot run raises OSError or TimeoutExpired, which each caller reports in its own way."""
+    None). A git that cannot run raises OSError or TimeoutExpired, which each caller reports in its own way.
+    ``git`` is the caller's git runner, ``git(repo_root, *args)`` returning a CompletedProcess of bytes; None runs
+    this module's ``_git``, so each caller keeps its own timeout and environment."""
     # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
     from break_it_body import supported_suffixes
     suffixes = supported_suffixes()
-    diff = _git(repo_root, "diff", "--name-only", "-z", base + "..." + head)
+    run_git = git or _git
+    diff = run_git(repo_root, "diff", "--name-only", "-z", base + "..." + head)
     if diff.returncode != 0:
         return None, "diff-failed"
     candidates = []
     for name in diff.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
         if not name or posixpath.splitext(name.lower())[1] not in suffixes or _path_unsafe(name):
             continue
-        tree = _git(repo_root, "ls-tree", "-z", head, "--", name)
+        tree = run_git(repo_root, "ls-tree", "-z", head, "--", name)
         if tree.returncode != 0:
             return None, "ls-tree-failed"
         meta = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
         if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
             continue
-        blob = _git(repo_root, "cat-file", "blob", meta[2])
+        blob = run_git(repo_root, "cat-file", "blob", meta[2])
         if blob.returncode != 0:
             return None, "cat-file-failed"
         try:
