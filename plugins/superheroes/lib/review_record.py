@@ -713,6 +713,8 @@ def _validate(a):
     if "carriedReview" in a:
         chk(isinstance(carried_review, dict) and set(carried_review) == {"lastReviewed", "why"}
             and _full_sha(carried_review["lastReviewed"]) and _nb(carried_review["why"]), "carriedReview")
+    # axis: a carried account names the session's pinned review base as a full sha for the carry check, never the residual-lookup baseRef — see bite-proof record c1l11d_wo_c_fold
+    chk("carriedReview" not in a or _full_sha(a.get("carryBase")), "carryBase")
     from_shas = {r["carriedFrom"] for r in a["reviewers"] if "carriedFrom" in r}
     # axis: a carried row and the account's carriedReview name each other and the same commit, never one without the other — see bite-proof record c1l11d_wo_a_carried_review
     chk(bool(from_shas) == ("carriedReview" in a)
@@ -1512,7 +1514,7 @@ def build_record(account, readers, prior=None, history=()):
     # A carried row is decided by the writer's own reading of the latest earlier record and of git, once per record.
     carried_from = a["carriedReview"]["lastReviewed"] if "carriedReview" in a else None
     source = carry_source(prior, carried_from, a["sessionId"], history) if carried_from else prior
-    carry = (carry_refusal(source, carried_from, a.get("repoRoot"), a.get("baseRef"), fc["sha"],
+    carry = (carry_refusal(source, carried_from, a.get("repoRoot"), a.get("carryBase"), fc["sha"],
                            # axis: the carry check hears only the copies git still proves at the final commit; the account's word is never taken — see bite-proof record c1l11d_wo_a_carried_review
                            revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("baseRef"), fc["sha"]),
                            rd["returning_decide"],

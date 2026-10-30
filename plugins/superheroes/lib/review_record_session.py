@@ -922,6 +922,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {})}
     if carry is not None:
         account["_carry"] = carry  # private: `write_from_session` settles it and strips it before the account is dumped
+        # axis: the carry check reads the session's pinned review base (the driver's full sha), never extras.baseRef, which may be a symbolic ref — see bite-proof record c1l11d_wo_c_fold
+        account["carryBase"] = cfg["baseRef"] if review_record._full_sha(cfg.get("baseRef")) else None
     return account
 
 
@@ -990,7 +992,9 @@ def _carry_review(account, last_reviewed, extras, repo_root, readers):
     # a rewrite of this session's own carried record is judged against the record that one carried from
     source = review_record.carry_source(prior, last_reviewed, account.get("sessionId"),
                                         review_record.read_history(account["pr"], repo, readers))
-    why = review_record.carry_refusal(source, last_reviewed, repo_root, account["baseRef"], account["finalCommit"],
+    if not review_record._full_sha(account.get("carryBase")):
+        raise Refusal(UNSUPPORTED, "the session's pinned review base is not a full commit sha, so the carry cannot be checked")
+    why = review_record.carry_refusal(source, last_reviewed, repo_root, account["carryBase"], account["finalCommit"],
                                       account.get("provenCopies") or [], rd["returning_decide"],
                                       lambda sha: review_record._ci(rd, repo, sha, repo_root)["state"])
     if why is not None:

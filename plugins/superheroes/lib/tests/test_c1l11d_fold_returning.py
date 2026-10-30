@@ -373,3 +373,36 @@ def test_c7_the_production_reader_reads_the_writers_ci_state_and_answers_none_on
 
     monkeypatch.setattr(RR, "_ci", boom)
     assert R.production_ci_state("/r")("a" * 40) is None
+
+
+# --- a relocated edit is never hidden by the stripped coordinates -------------------------------------------------------
+
+def _two_blocks():
+    """Two identical blocks under the same function header, far enough apart that their hunks never merge."""
+    block = "def f():\n" + "    x = 0\n" * 9
+    return block + "pad = 1\n" * 20 + block
+
+
+def _edit_block(text, nth):
+    """``text`` with the fifth line of block ``nth`` (0 or 1) changed."""
+    lines = text.splitlines(keepends=True)
+    lines[5 + nth * 30] = "    x = 1\n"
+    return "".join(lines)
+
+
+def test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed(tmp_path):
+    # axis: stripped coordinates may say "unchanged" only when a three-way merge of the file reproduces the head — see bite-proof record c1l11d_wo_c_fold
+    repo = TR.Repo(tmp_path)
+    base_text = _two_blocks()
+    base = repo.main_commit(SHARED, base_text)
+    repo.merge_main()
+    _, reviewed, earlier = TR.returning(repo, first={SHARED: _edit_block(base_text, 0)})
+    repo.write(SHARED, _edit_block(base_text, 1))  # the edit reverted in the first block, applied in the second
+    repo.commit("move the edit")
+    head = repo.git("rev-parse", "HEAD")
+    raw_reviewed = R._sections_by_file(repo.git("diff", *R._DIFF_ARGS, "%s...%s" % (base, reviewed)))[SHARED]
+    raw_head = R._sections_by_file(repo.git("diff", *R._DIFF_ARGS, "%s...%s" % (base, head)))[SHARED]
+    # the fixture is the hazard: the stripped sections are equal, the raw ones are not
+    assert raw_reviewed != raw_head and R._own_change(raw_reviewed) == R._own_change(raw_head)
+    got = TR.decide(repo, base, earlier)
+    assert got["changedFiles"] == [SHARED], got

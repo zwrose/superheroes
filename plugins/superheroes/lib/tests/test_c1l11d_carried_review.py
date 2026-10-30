@@ -115,7 +115,8 @@ def _latest(fake):
 def _carried_account(s, **over):
     """A hand-built account for the record writer: every reviewer row carried from the last reviewed commit."""
     row = dict(ROW, commit=s.reviewed, step=None, carriedFrom=s.reviewed)
-    return _acct(s, **{"sessionId": "session-2", "finalCommit": s.head, "baseRef": s.cfg["baseRef"], "reviewers": [row],
+    return _acct(s, **{"sessionId": "session-2", "finalCommit": s.head, "baseRef": s.cfg["baseRef"],
+                       "carryBase": s.cfg["baseRef"], "reviewers": [row],
                        "carriedReview": {"lastReviewed": s.reviewed, "why": WHY}, **over})
 
 
@@ -278,6 +279,33 @@ def test_e6_positive_control_the_same_account_over_a_catch_up_merge_is_carried(t
     out = _write(tmp_path, s, fake, _carried_account(s))
     assert out["ok"] is True and out["status"] == "reviewed", out
     assert _row_states(_latest(fake)) == [("reported-by-session", True)]
+
+
+def test_a_symbolic_extras_base_ref_still_writes_a_carried_record_that_reads_reviewed(tmp_path, monkeypatch):
+    # axis: the carry check reads the session's pinned base sha, never extras.baseRef — see bite-proof record c1l11d_wo_c_fold
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    out = _send(tmp_path, s, fake, baseRef="main")
+    assert out["ok"] is True and out["status"] == "reviewed", out
+    rec = _latest(fake)
+    assert rec["status"] == "reviewed" and _row_states(rec) == [("reported-by-session", True)], rec["reviewers"]
+
+
+@pytest.mark.parametrize("carry_base", [None, "main", "abc123"], ids=["absent", "symbolic", "short"])
+def test_a_carried_account_without_a_full_sha_carry_base_is_refused(tmp_path, monkeypatch, carry_base):
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    before = list(fake.comments)
+    account = _carried_account(s)
+    if carry_base is None:
+        del account["carryBase"]
+    else:
+        account["carryBase"] = carry_base
+    out = _write(tmp_path, s, fake, account)
+    assert out["ok"] is False and out["reason"] == "review-account-invalid", out
+    assert fake.writes == [] and fake.comments == before
 
 
 def test_a_carried_row_over_an_earlier_engine_record_run_drops_its_measured_cost(tmp_path, monkeypatch):

@@ -185,6 +185,29 @@ def _own_change(section_text):
     return "".join(out)
 
 
+def _merge_reproduces_head(run, base, last_reviewed, head, path):
+    """True only when git proves the pull request's own lines in ``path`` did not change since ``last_reviewed``:
+    a three-way merge of the file (ours = the last reviewed commit's blob, ancestor = the blob at the merge base of
+    the last reviewed commit and the base, theirs = the base's blob) equals the head's file byte for byte. A file
+    missing from one side, a conflict, a non-zero exit, a binary file or any git failure is False."""
+    code, text = run(["merge-base", last_reviewed, base])
+    fork = text.strip()
+    if code != 0 or not _is_sha(fork):
+        return False
+    blobs = []
+    for rev in (last_reviewed, fork, base, head):
+        code, text = run(["rev-parse", "--verify", "--quiet", "%s:%s" % (rev, path)])
+        blob = text.strip()
+        if code != 0 or not _is_sha(blob):
+            return False
+        blobs.append(blob)
+    code, merged = run(["merge-file", "-p", "--object-id", *blobs[:3]])
+    if code != 0:
+        return False
+    code, expected = run(["cat-file", "blob", blobs[3]])
+    return code == 0 and merged == expected
+
+
 def _covers_final_commit(earlier):
     reviewers = earlier.get("reviewers")
     if not isinstance(reviewers, list):
@@ -344,8 +367,11 @@ def _decide(result, repo_root, base, head, earlier, proven, git, ci_state=None):
         return _full(result, WHY_DIFF_UNREADABLE, "git could not produce the diff of the earlier review or of the head against the base")
     proven_files = _proven_files(proven)
     # Axis: a file is changed when its own change differs, never for an index line or a hunk header's line numbers — see bite-proof record c1l11d_wo_c_fold
+    # axis: stripped coordinates may say "unchanged" only when a three-way merge of the file reproduces the head byte for byte, so an edit moved between identical blocks is a changed file — see bite-proof record c1l11d_wo_c_fold
     files = sorted(f for f in set(reviewed) | set(current)
-                   if _own_change(reviewed.get(f, "")) != _own_change(current.get(f, "")))
+                   if _own_change(reviewed.get(f, "")) != _own_change(current.get(f, ""))
+                   or (reviewed.get(f, "") != current.get(f, "")
+                       and not _merge_reproduces_head(run, base, last_reviewed, head, f)))
     # Axis: a proven copy is never a changed file, so it is neither read, counted nor matched against a risk area.
     files = [f for f in files if f not in proven_files]
     if ci_pending:
