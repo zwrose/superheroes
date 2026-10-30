@@ -4071,8 +4071,9 @@ def _apply_repeat_marks(state, plan):
         _record_round(state, "repeatMatching", plan["matching"])
         if plan["reason"]:
             _record_round(state, "repeatMatchingReason", plan["reason"])
-    if rows:
-        _record_round(state, "repeatMarks", rows)
+    # axis: a second synthesis wave of one round appends its marks, never replaces the first wave's — see bite-proof record c1l10b_wo1_repeat_folds
+    for row in rows:
+        _record_round_append(state, "repeatMarks", row)
 
 
 def _fold_synthesis(state, config, artifact, session_dir=None, exact_only=None):

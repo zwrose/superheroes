@@ -53,7 +53,8 @@ def decide(outcome, grade_verdict, changed):
     if outcome == SHOWN_WRONG:
         if callable(changed):
             changed = changed()
-        if changed and grade_verdict != "wrong":
+        # axis: an unknown change reads as a change, so the repeat is kept only on a wrong grade — see bite-proof record c1l10b_wo1_repeat_folds
+        if (changed is None or changed) and grade_verdict != "wrong":
             return False, None
         return True, None
     if isinstance(outcome, str) and outcome in _SETTLED:
