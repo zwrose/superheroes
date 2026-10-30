@@ -357,6 +357,22 @@ def test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_mer
     assert covered or any(e.get("removedOnly") for e in entries), entries
 
 
+def test_b2_every_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk():
+    # bites on: every pending removal position resolves when hunks merge (B-G7): a second guard removed from the
+    # merged hunk, just before `c29`, anchors on head line 32 (`c29`) as well as the first guard on `c23` (25)
+    gap = "".join(" g%d\n" % n for n in range(13, 19))
+    reviewed = _diff(
+        _EARLIER_HUNK,
+        "@@ -20,10 +21,12 @@\n c20\n c21\n c22\n+guard\n c23\n c24\n c25\n-old26\n+new26\n c27\n c28\n+guard2\n c29\n")
+    head = _diff(
+        "@@ -10,20 +10,23 @@\n a10\n a11\n+extra\n a12\n" + gap + "+bridge1\n g19\n"
+        " c20\n c21\n c22\n c23\n+bridge2\n c24\n c25\n-old26\n+new26\n c27\n c28\n c29\n")
+    entries = _surface(reviewed, head)
+    assert not any(e.get("removedOnly") for e in entries), entries
+    for line in (25, 32):
+        assert any(e["start"] <= line <= e["end"] for e in entries), (line, entries)
+
+
 def test_b2_a_removal_with_no_surviving_line_in_its_hunk_is_marked_removal_only_never_borrowed():
     # the only hunk of a file loses everything: no line of its hunk survives, so the entry is marked, not numbered
     only = "@@ -10,3 +10,4 @@\n a10\n a11\n+extra\n a12\n"

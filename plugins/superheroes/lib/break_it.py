@@ -1831,6 +1831,39 @@ def retention_command(repo_root, head, record_path, record_command, found):
     return _rewrite_command(record_command, record_path, found["path"], found["titles"])
 
 
+def final_diff_candidates(repo_root, base, head):
+    """``(candidates, failure)``: the one definition of which files of the final diff (``base...head``) a break-it
+    body search reads, shared by ``_body_search`` and the loop's audit. ``candidates`` is ``[(path, text)]`` for each
+    file of a supported suffix, a safe path and a regular blob at ``head`` (a text git cannot decode is None);
+    ``failure`` is None, else the ``KEPT_UNRESOLVED`` reason of the git read that failed (``candidates`` is then
+    None). A git that cannot run raises OSError or TimeoutExpired, which each caller reports in its own way."""
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
+    from break_it_body import supported_suffixes
+    suffixes = supported_suffixes()
+    diff = _git(repo_root, "diff", "--name-only", "-z", base + "..." + head)
+    if diff.returncode != 0:
+        return None, "diff-failed"
+    candidates = []
+    for name in diff.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        if not name or posixpath.splitext(name.lower())[1] not in suffixes or _path_unsafe(name):
+            continue
+        tree = _git(repo_root, "ls-tree", "-z", head, "--", name)
+        if tree.returncode != 0:
+            return None, "ls-tree-failed"
+        meta = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
+        if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
+            continue
+        blob = _git(repo_root, "cat-file", "blob", meta[2])
+        if blob.returncode != 0:
+            return None, "cat-file-failed"
+        try:
+            text = blob.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            text = None
+        candidates.append((name, text))
+    return candidates, None
+
+
 def _body_search(repo_root, base, head, record, today, res, runner, interpreter, scratch=None):
     """The body search behind the three rows that read the test missing or changed: ``today`` unless the test is
     found, unchanged up to formatting and its title, once among the files the final diff carries."""
@@ -1840,29 +1873,11 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter,
     if posixpath.splitext(record["path"].lower())[1] not in suffixes:
         return today
     try:
-        diff = _git(repo_root, "diff", "--name-only", "-z", base + "..." + head)
-        if diff.returncode != 0:
-            return res(KEPT_UNRESOLVED, "diff-failed")
-        candidates = []
-        for name in diff.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
-            if not name or posixpath.splitext(name.lower())[1] not in suffixes or _path_unsafe(name):
-                continue
-            tree = _git(repo_root, "ls-tree", "-z", head, "--", name)
-            if tree.returncode != 0:
-                return res(KEPT_UNRESOLVED, "ls-tree-failed")
-            meta = tree.stdout.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
-            if len(meta) != 3 or meta[0] not in _REGULAR_MODES or meta[1] != "blob":
-                continue
-            blob = _git(repo_root, "cat-file", "blob", meta[2])
-            if blob.returncode != 0:
-                return res(KEPT_UNRESOLVED, "cat-file-failed")
-            try:
-                text = blob.stdout.decode("utf-8")
-            except UnicodeDecodeError:
-                text = None
-            candidates.append((name, text))
+        candidates, failure = final_diff_candidates(repo_root, base, head)
     except (OSError, subprocess.TimeoutExpired):
         return res(KEPT_UNRESOLVED, "git-failed")
+    if failure:
+        return res(KEPT_UNRESOLVED, failure)
     found = locate(record["content"], record["path"], candidates)
     if found["status"] in ("unsupported", "none"):
         return today

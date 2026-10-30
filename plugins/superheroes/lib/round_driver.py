@@ -7319,6 +7319,13 @@ def _merged_removal_anchor(head_anchors, here):
     return None
 
 
+def _merged_removal_anchors(head_anchors, positions):
+    """The head lines every pending removal position in ``positions`` anchors on (``_merged_removal_anchor``),
+    in order; a position whose hunk did not survive anchors on none."""
+    found = (_merged_removal_anchor(head_anchors, here) for here in positions)
+    return [anchor for anchor in found if anchor is not None]
+
+
 def _fix_delta_groups(delta, head_numbers, head_anchors):
     """The groups of one file's fix delta (``_fixer_delta_lines``) that change more than the
     line numbers of the PR diff's own hunk headers, as ``(lines, head_lines)``: the group's lines,
@@ -7340,22 +7347,21 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
         head_lines, content = [], False
         # `header_gone`: a PR hunk header this group removed, not yet replaced; `waiting`: the removed body
         # lines of that hunk, which anchor in the hunk the replacing header opens
-        header_gone, waiting, waiting_at = False, 0, 0
+        # `waiting_at`: the head position of every one of those removed lines, none dropped
+        header_gone, waiting, waiting_at = False, 0, []
         for ln in lines[1:]:
             mark, text = ln[0], ln[1:]
             if mark in (" ", "-") and text.startswith("@@"):
                 # an earlier removed header that nothing replaced was a hunk that did not survive, or merged
                 # into the hunk before it
-                anchor = _merged_removal_anchor(head_anchors, waiting_at) if header_gone and waiting else None
-                if anchor is not None:
-                    head_lines.append(anchor)
-                header_gone, waiting = mark == "-", 0
+                if header_gone:
+                    head_lines.extend(_merged_removal_anchors(head_anchors, waiting_at))
+                header_gone, waiting, waiting_at = mark == "-", 0, []
             if mark == "-":
                 content = content or not text.startswith("@@")
                 if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
                     if header_gone:
-                        if not waiting:
-                            waiting_at = min(max(index, 0), len(head_anchors))
+                        waiting_at.append(min(max(index, 0), len(head_anchors)))
                         waiting += 1
                         continue
                     # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk.
@@ -7372,14 +7378,13 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
                     anchor = _removal_anchor(head_anchors, index, replaced_header=True) if waiting else None
                     if anchor is not None:
                         head_lines.append(anchor)
-                    header_gone, waiting = False, 0
+                    header_gone, waiting, waiting_at = False, 0, []
                 if head_numbers[index] is not None and not text.startswith("@@"):
                     head_lines.append(head_numbers[index])
             index += 1
         # axis: removals waiting on a header nothing replaced anchor in the surviving hunk the PR hunks merged into — see bite-proof record c1l11f_wo_b_break_it_baseline
-        anchor = _merged_removal_anchor(head_anchors, waiting_at) if header_gone and waiting else None
-        if anchor is not None:
-            head_lines.append(anchor)
+        if header_gone:
+            head_lines.extend(_merged_removal_anchors(head_anchors, waiting_at))
         if content:
             kept.append((lines, head_lines))
     return kept
@@ -7528,32 +7533,13 @@ def _audit_head(state, config):
 
 def _final_diff_files(repo_root, base, head):
     """``{path: text}`` for the files the final diff (``base...head``) carries that a break-it body search
-    reads, collected as ``break_it._body_search`` collects its candidates (a text git cannot decode is
-    None); None when git cannot list or read them, so the search is not made."""
-    # imported late: break_it's import closure is pinned (test_payload_contracts_layering), and so is this one's
-    from break_it_body import supported_suffixes
-    suffixes = supported_suffixes()
-    listed = _git_bytes(repo_root, "diff", "--name-only", "-z", base + "..." + head)
-    if listed is None:
+    reads, collected by ``break_it.final_diff_candidates`` (the one collection ``break_it._body_search`` also
+    reads; a text git cannot decode is None); None when git cannot list or read them, so the search is not made."""
+    try:
+        candidates, failure = break_it.final_diff_candidates(repo_root, base, head)
+    except (OSError, subprocess.SubprocessError):
         return None
-    files = {}
-    for name in listed.decode("utf-8", errors="surrogateescape").split("\0"):
-        if not name or os.path.splitext(name.lower())[1] not in suffixes or break_it._path_unsafe(name):
-            continue
-        tree = _git_bytes(repo_root, "ls-tree", "-z", head, "--", name)
-        if tree is None:
-            return None
-        meta = tree.decode("utf-8", errors="replace").split("\0", 1)[0].partition("\t")[0].split()
-        if len(meta) != 3 or meta[0] not in break_it._REGULAR_MODES or meta[1] != "blob":
-            continue
-        blob = _git_bytes(repo_root, "cat-file", "blob", meta[2])
-        if blob is None:
-            return None
-        try:
-            files[name] = blob.decode("utf-8")
-        except UnicodeDecodeError:
-            files[name] = None
-    return files
+    return None if failure else dict(candidates)
 
 
 def _locate_in_final_diff(config, head, content, path, cache, command=None):
