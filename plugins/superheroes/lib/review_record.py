@@ -1278,6 +1278,11 @@ def cleared(status):
     return status == REVIEWED
 
 
+def unfinished(status):
+    """The status a record has when something it needs is missing, `awaits-owner` excluded; the readers outside this file ask this instead of spelling the status."""
+    return status == NOT_REVIEWED
+
+
 def _finding_lines(findings):
     lines = []
     for f in findings:

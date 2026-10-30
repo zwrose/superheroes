@@ -229,7 +229,9 @@ def _ci_pending_only(earlier, last_reviewed):
     """True when ``earlier`` did not finish for one reason only: CI was pending on its final commit when it was
     written. It is a ``not-reviewed`` record that is not abandoned, whose ``ci`` is pending on ``last_reviewed``,
     and whose ``whatIsMissing`` is the one line the record writer words for that."""
-    if earlier.get("status") != "not-reviewed" or "abandoned" in earlier:
+    import review_record
+    # axis: only the writer's not-reviewed status, never abandoned, is let through unfinished — see bite-proof record c1l11d_wo_c_fold
+    if not review_record.unfinished(earlier.get("status")) or "abandoned" in earlier:
         return False
     ci = earlier.get("ci")
     if not (isinstance(ci, dict) and ci.get("state") == "pending" and ci.get("sha") == last_reviewed):

@@ -239,6 +239,14 @@ def test_c6_a_gap_other_than_ci_pending_on_the_final_commit_reads_full(tmp_path,
     assert got["changedFiles"] == [] and got["countable"] is None and reader.asked == []
 
 
+def test_c6_an_unknown_status_with_the_ci_pending_gap_reads_full(tmp_path):
+    repo, base, reviewed, _ = _with_fix(tmp_path)
+    reader = Reader({reviewed: "green", repo.git("rev-parse", "HEAD"): "green"})
+    got = TR.decide(repo, base, _pending(reviewed, status="future-status"), ci_state=reader)
+    assert got["read"] == "full" and TR.tokens(got) == [R.WHY_INCOMPLETE], got
+    assert got["changedFiles"] == [] and got["countable"] is None and reader.asked == []
+
+
 def test_c6_an_abandoned_record_reads_full_whatever_ci_says(tmp_path):
     repo, base, reviewed, _ = _with_fix(tmp_path)
     got = TR.decide(repo, base, _pending(reviewed, abandoned={"reason": "closed"}), ci_state=lambda sha: "green")
