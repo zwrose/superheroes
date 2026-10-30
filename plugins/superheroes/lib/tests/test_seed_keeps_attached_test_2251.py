@@ -61,3 +61,15 @@ def test_k3_a_re_raise_carrying_its_own_test_keeps_its_own_block():
     held = _finding(suggestion=BLOCK)
     entry = _seeded_twice(held, _finding(suggestion=OTHER))
     assert entry["suggestion"] == OTHER
+
+
+def test_k4_a_fresh_test_after_a_recorded_change_becomes_its_own_baseline():
+    # bites on: the held changedWhy surviving without a reviewer baseline, reading changed-unexplained
+    run = {"test": "tests/test_a.py", "commit": "abc1234", "status": "ran", "exitCode": 1,
+           "changedWhy": "the original asserted the wrong thing"}
+    held = _finding(suggestion=BLOCK, **{break_it.RUNS_FIELD: [run]})
+    entry = _seeded_twice(held, _finding(suggestion=OTHER))
+    assert entry["suggestion"] == OTHER
+    assert entry[RD.REVIEWER_TEST_FIELD] == break_it.carried_block(entry)[0]["content"]
+    assert RD._changed_why(entry) is None
+    assert len(entry[break_it.RUNS_FIELD]) == 1

@@ -1607,6 +1607,16 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         for held_field in ("suggestion", break_it.RUN_FIELD, REVIEWER_TEST_FIELD):
             if existing.get(held_field) is not None:
                 entry[held_field] = existing[held_field]
+    fresh_block, _fresh_kind = break_it.carried_block(entry)
+    if (isinstance(existing, dict) and break_it.carries_test(existing) and fresh_block is not None
+            and break_it.carried_block(existing)[0] != fresh_block):
+        # axis: a finding raised again with a fresh test block takes that block as its baseline; a change reason recorded against the old test version does not carry onto it
+        entry[REVIEWER_TEST_FIELD] = fresh_block["content"]
+        runs = entry.get(break_it.RUNS_FIELD)
+        if isinstance(runs, list):
+            entry[break_it.RUNS_FIELD] = [
+                {k: v for k, v in run.items() if k != "changedWhy"} if isinstance(run, dict) else run
+                for run in runs]
     if key in seen:
         ledger[seen[key]] = entry
     else:
