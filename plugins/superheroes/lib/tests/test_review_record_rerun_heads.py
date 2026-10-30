@@ -45,6 +45,20 @@ def test_1_moved_heads_add_the_suffix_and_the_compact_lead_drops_unchanged_code(
     assert "on unchanged code" not in compact
 
 
+def test_1b_a_second_run_that_ended_at_another_head_adds_the_suffix():
+    # axis: the second run's end head is its headAfter when it moved during the run
+    runs = [run(code=1, head=H1, headSource="run"), run(code=0, head=H1, headSource="run", headAfter=H2)]
+    full, compact = rerun_lines([check(round=2, check="pytest -q tests/x.py", runs=runs)])
+    assert full == TODAY_FULL + SUFFIX
+    assert compact == "Re-run after one failure: 1 checks (listed in the full record)."
+
+
+def test_1c_a_second_run_whose_head_after_equals_the_first_head_renders_todays_text():
+    runs = [run(code=1, head=H1, headSource="run"), run(code=0, head=H1, headSource="run", headAfter=H1)]
+    full, compact = rerun_lines([check(round=2, check="pytest -q tests/x.py", runs=runs)])
+    assert (full, compact) == (TODAY_FULL, TODAY_COMPACT)
+
+
 def test_2_equal_heads_render_exactly_todays_text():
     full, compact = rerun_lines([verify_check(H1, H1)])
     assert (full, compact) == (TODAY_FULL, TODAY_COMPACT)

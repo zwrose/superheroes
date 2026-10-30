@@ -188,6 +188,21 @@ def test_edge4_a_re_run_that_straddled_a_head_change_halts():
     assert len(_runs(state)) == 2
 
 
+def test_edge4_a_re_run_that_straddled_a_head_change_records_where_it_ended():
+    # axis: a re-run whose own head moved records where it ended — see bite-proof record c1l9b_wod_head_after
+    state = _state()
+    _fold(state, _artifact("fail", head=H1))
+    _fold(state, _artifact("pass", head=H1, after=H2))
+
+    _halted_with(
+        state,
+        "verify re-run ran at a different head (%s then %s) — halt, certification withheld" % (H1, H2),
+        "verify-rerun-head-moved")
+    first, second = _runs(state)
+    assert second["head"] == H1 and second["headAfter"] == H2
+    assert "headAfter" not in first
+
+
 def test_edge5_a_first_run_whose_own_head_moved_gets_no_re_run_and_halts():
     state = _state()
     _fold(state, _artifact("fail", head=H1, after=H2))
@@ -307,6 +322,26 @@ def test_edge10_an_unknown_head_on_one_side_does_not_halt_and_the_second_result_
     _halted_with(state, FAIL_REASON, "verify-fail")
     first, second = _runs(state)
     assert (first["headSource"], second["headSource"]) == ("unknown", "run")
+
+
+def test_edge10_a_passing_re_run_at_a_head_after_an_unknown_first_head_does_not_halt():
+    state = _state()
+    _fold(state, _artifact("fail", head=None), fold_head=None)
+    _fold(state, _artifact("pass", head=H2), fold_head=H2)
+
+    assert not state.get("terminal")
+    assert state["step"] == RD.P_SCOPED
+    assert "verify-rerun-head-moved" not in _kinds(state)
+
+
+def test_edge10_a_passing_re_run_with_no_head_after_a_known_first_head_does_not_halt():
+    state = _state()
+    _fold(state, _artifact("fail", head=H1), fold_head=H1)
+    _fold(state, _artifact("pass", head=None), fold_head=None)
+
+    assert not state.get("terminal")
+    assert state["step"] == RD.P_SCOPED
+    assert "verify-rerun-head-moved" not in _kinds(state)
 
 
 def test_a_run_without_its_own_head_takes_the_head_resolved_at_the_fold():

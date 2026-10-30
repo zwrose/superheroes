@@ -1810,12 +1810,17 @@ def _run_result(run):
 
 
 def _moved_heads(c):
-    """`(first_head, second_head)` when both runs of a re-run entry carry a non-empty string `head` and the two
-    differ, else None: a missing, null, empty or non-string head is unknown and never counts as moved."""
+    """`(first_head, second_end_head)` when the first run's `head` and the second run's end head are both non-empty
+    strings and differ, else None. The second run's end head is its `headAfter` when that is a non-empty string,
+    else its `head`: a missing, null, empty or non-string head is unknown and never counts as moved."""
     runs = c.get("runs") if isinstance(c, dict) else None
     if not (isinstance(runs, list) and len(runs) == 2 and all(isinstance(run, dict) for run in runs)):
         return None
     first, second = runs[0].get("head"), runs[1].get("head")
+    # axis: the second run's end head is its headAfter when it moved during the run — see bite-proof record c1l9b_wod_head_after
+    after = runs[1].get("headAfter")
+    if isinstance(after, str) and after:
+        second = after
     if not (isinstance(first, str) and first and isinstance(second, str) and second and first != second):
         return None
     return first, second
