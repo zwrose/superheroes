@@ -6,8 +6,8 @@ I1  a fresh PR-mode session whose earlier record makes the decider answer `chang
     round: no panel, and the scoped finder reads only the change since the last reviewed commit;
 I2  every other fresh session (no earlier record, a `full` answer for any reason, a decision that could not be
     made) runs today's round 1 unchanged: a fault never reads `changed`;
-I3  the decider answers `full` (`earlier-review-incomplete`) for an earlier record that was abandoned or is not
-    `reviewed` / `awaits-owner`;
+I3  the decider answers `full` for an earlier record that was abandoned (`earlier-record-unusable`, C1-L11a's step)
+    or is not `reviewed` / `awaits-owner` (`earlier-review-incomplete`);
 I4  a proven copy is in no returning-round input: not counted, not on the surface, not in any order, and its
     section (a binary one too) never reaches a diff parser;
 I5  the decision is made once, at fresh state, and stored.
@@ -424,16 +424,16 @@ def test_t6_e5_a_baseline_diff_git_cannot_produce_runs_the_panel(tmp_path, monke
     assert returning["read"] == "full" and returning["why"][-1].startswith(RD.RETURNING_BASELINE_UNREADABLE), returning
 
 
-@pytest.mark.parametrize("damage", [
-    {"abandoned": {"reason": "the loop was closed before it ended"}},
-    {"status": "not-reviewed"},
+@pytest.mark.parametrize("damage,token", [
+    ({"abandoned": {"reason": "the loop was closed before it ended"}}, R.WHY_EARLIER_UNUSABLE),  # C1-L11a's step answers first
+    ({"status": "not-reviewed"}, R.WHY_INCOMPLETE),
 ], ids=["abandoned", "not-reviewed"])
-def test_t6_e6_an_earlier_review_that_was_abandoned_or_never_reviewed_runs_the_panel(tmp_path, monkeypatch, damage):
+def test_t6_e6_an_earlier_review_that_was_abandoned_or_never_reviewed_runs_the_panel(tmp_path, monkeypatch, damage, token):
     s = Session(tmp_path, monkeypatch, change=_append("src/shared.py", "extra = 1\n"))
     s.write_earlier(dict(s.record, **damage))
     _answer, state = _round_one_is_the_panel(s)
     returning = state["config"]["returning"]
-    assert returning["read"] == "full" and returning["why"][0].startswith(R.WHY_INCOMPLETE), returning
+    assert returning["read"] == "full" and returning["why"][0].startswith(token), returning
 
 
 def test_t6_e7_a_loaded_state_never_decides_again(tmp_path, monkeypatch):
@@ -471,14 +471,14 @@ def test_the_driver_hands_the_decider_the_sessions_proven_copies_and_the_pinned_
 
 # --- T7 (I3): the decider reads full for an earlier review that did not finish -----------------------------------------
 
-@pytest.mark.parametrize("damage,read", [
-    ({"abandoned": {"reason": "closed"}}, "full"),
-    ({"status": "not-reviewed"}, "full"),
-    ({"status": None}, "full"),
-    ({"status": "reviewed"}, "changed"),
-    ({"status": "awaits-owner"}, "changed"),
+@pytest.mark.parametrize("damage,read,token", [
+    ({"abandoned": {"reason": "closed"}}, "full", R.WHY_EARLIER_UNUSABLE),  # C1-L11a's step answers first
+    ({"status": "not-reviewed"}, "full", R.WHY_INCOMPLETE),
+    ({"status": None}, "full", R.WHY_INCOMPLETE),
+    ({"status": "reviewed"}, "changed", R.WHY_CHANGED_ONLY),
+    ({"status": "awaits-owner"}, "changed", R.WHY_CHANGED_ONLY),
 ], ids=["abandoned", "not-reviewed", "no-status", "reviewed", "awaits-owner"])
-def test_t7_an_earlier_review_that_did_not_finish_reads_full_even_when_a_reviewer_covers_its_final_commit(tmp_path, damage, read):
+def test_t7_an_earlier_review_that_did_not_finish_reads_full_even_when_a_reviewer_covers_its_final_commit(tmp_path, damage, read, token):
     repo = TR.Repo(tmp_path)
     base, _, earlier = TR.returning(repo)
     assert earlier["reviewers"][0]["coversFinalCommit"] is True
@@ -487,8 +487,7 @@ def test_t7_an_earlier_review_that_did_not_finish_reads_full_even_when_a_reviewe
     record = {k: v for k, v in dict(earlier, **damage).items() if v is not None}
     got = TR.decide(repo, base, record)
     assert got["read"] == read, got["why"]
+    assert TR.tokens(got) == [token]
     if read == "full":
-        assert TR.tokens(got) == [R.WHY_INCOMPLETE] and got["changedFiles"] == [] and got["countable"] is None
-    else:
-        assert TR.tokens(got) == [R.WHY_CHANGED_ONLY]
+        assert got["changedFiles"] == [] and got["countable"] is None
     assert R.WHY_INCOMPLETE in R.WHY_TOKENS

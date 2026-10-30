@@ -1519,15 +1519,34 @@ def _returning_overrides(session_dir, overrides):
                           why=list(stored["why"]) + ["%s: git could not produce the diff of the earlier review" % RETURNING_BASELINE_UNREADABLE])
         else:
             out["returningBaselineDiff"] = baseline
-    elif carried and returning_review._is_sha(stored.get("lastReviewed")):
-        # a full read that still named the last reviewed commit: the carried findings are audited against the change since it
-        baseline = _returning_baseline_diff(repo_root, base, stored["lastReviewed"])
-        if baseline is not None:
-            out["returningBaselineDiff"] = baseline
+    elif carried:
+        # a full read: the carried findings are audited against the change since the commit the earlier session ended on
+        audit_base = _carried_audit_base(stored, earlier)
+        if audit_base is not None:
+            baseline = _returning_baseline_diff(repo_root, base, audit_base)
+            if baseline is not None:
+                out["returningBaselineDiff"] = baseline
+                out["returningAuditBase"] = audit_base
     if carried:
         out["returningCarried"] = carried
     out["returning"] = stored
     return out
+
+
+def _carried_audit_base(stored, earlier):
+    """The commit a full read audits its carried findings against, or None (nothing is audited; they go to the verifier).
+    The decision's own ``lastReviewed`` when it names one; else, for an abandoned ok record, the record's own final commit.
+    That fallback is no coverage claim (the decision stays ``full`` and keeps its ``lastReviewed``): it only says which
+    lines changed since the findings were raised."""
+    if returning_review._is_sha(stored.get("lastReviewed")):
+        return stored["lastReviewed"]
+    # axis: a finding carried from an abandoned session is still audited against the change since that session's final commit — see bite-proof record c1l11b_wo_k_abandoned_carried_audit
+    if isinstance(earlier, dict) and earlier.get("ok") is True and earlier.get("abandoned"):
+        final = earlier.get("finalCommit")
+        sha = final.get("sha") if isinstance(final, dict) else None
+        if returning_review._is_sha(sha):
+            return sha
+    return None
 
 
 def _carried_findings(earlier):
@@ -1543,6 +1562,8 @@ def _carried_findings(earlier):
         held.add(entry["key"])
         row = {k: v for k, v in finding.items() if k not in ("outcome", "reason")}
         row[session_contract.FINDING_KEY_FIELD] = entry["key"]
+        # axis: a row read back from a record written before `tradeoff` was persisted is held for the owner, never autonomously fixed — see bite-proof record c1l11b_wo_k_legacy_tradeoff
+        row.setdefault("tradeoff", True)
         out.append(row)
     return out
 
@@ -1605,7 +1626,7 @@ def _seed_carried(state, cfg, returning):
         return False
     state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = session_contract.DISPOSITION_LEDGER_OWNER_VALUE
     audited, baseline, head_diff, hunks = {}, None, None, {}
-    if returning_review._is_sha(returning.get("lastReviewed")):
+    if returning_review._is_sha(cfg.get("returningAuditBase") or returning.get("lastReviewed")):
         baseline, head_diff = _returning_diffs(state, cfg)
     usable = [f for f in rows.values() if isinstance(f.get("file"), str) and f["file"] and _coerce_line(f.get("line"))[0]]
     if baseline is not None and usable:
@@ -1617,7 +1638,7 @@ def _seed_carried(state, cfg, returning):
                 and _fixer_delta_lines(baseline, head_diff, finding["file"], finding.get("line"))):
             audited[key] = finding
     state["_carriedToVerify"] = [f for key, f in rows.items() if key not in audited]
-    _record_round(state, "carried", {"keys": list(rows), "discharged": [], "sentBack": [_finding_identity_key(f) for f in state["_carriedToVerify"]]})
+    _record_round(state, "carried", {"keys": list(rows), "auditBase": (cfg.get("returningAuditBase") or returning.get("lastReviewed")) if baseline is not None else None, "discharged": [], "sentBack": [_finding_identity_key(f) for f in state["_carriedToVerify"]]})
     if not audited:
         return False
     state["_carriedAudited"] = audited
@@ -1677,6 +1698,7 @@ def _seed_returning_round(state, cfg):
     # axis: the driver acts on a changed decision — round 1 is a returning round with no panel — see bite-proof record c1l11b_wo_d1_returning_session
     if returning.get("read") != returning_review.READ_CHANGED:
         cfg.pop("returningBaselineDiff", None)
+        cfg.pop("returningAuditBase", None)
         if audits_due:  # a full read audits the carried findings first, then runs the panel round 1 always ran
             state["_auditFirst"] = True
             state["step"] = P_AUDITS
@@ -5415,6 +5437,20 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if filtered:
         filtered, spent_keys = _drop_spent_out_of_scope_rows(state, filtered)
     filtered = _resolve_ruled_batch(state, filtered)
+    # axis: every composed batch is closed over its fix groups here, whichever path built it, a sibling never offered riding through the same exclusions — see bite-proof record c1l11c_wo1_fix_groups
+    offered_keys = {_finding_identity_key(r) for r in rows if isinstance(r, dict)}
+    kept_keys = {_finding_identity_key(r) for r in filtered if isinstance(r, dict)}
+    siblings = [dict(r) for r in _close_batch_over_fix_groups(state, [], filtered)
+                if isinstance(r, dict) and _finding_identity_key(r) not in kept_keys
+                and _finding_identity_key(r) not in offered_keys]
+    if siblings:
+        siblings, sibling_fault = _filter_excluded_discharged_fixes(state, siblings)
+        if sibling_fault is not None:
+            _park_cannot_certify(state, sibling_fault.detail)
+            return "faulted"
+        if siblings:
+            siblings, _spent = _drop_spent_out_of_scope_rows(state, siblings)
+        filtered += siblings
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:
@@ -9684,7 +9720,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             overrides = _with_build_session_vendor(config_overrides) or {}
             # the decision is taken here, once, and stored in the config: a caller cannot supply it
             overrides = dict({k: v for k, v in overrides.items()
-                              if k not in ("returning", "returningBaselineDiff", "returningCarried")},
+                              if k not in ("returning", "returningBaselineDiff", "returningCarried", "returningAuditBase")},
                              **_returning_overrides(session_dir, overrides))
             state = new_state(overrides or None)
         except MaxRoundsRefusal as refusal:
