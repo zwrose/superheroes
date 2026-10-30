@@ -6671,10 +6671,11 @@ def test_a_generation_6_session_outside_both_hand_back_cases_still_finishes():
 
 
 def test_a_current_generation_session_with_the_fields_is_untouched_by_the_hand_back():
-    # axis: only a continuable earlier generation is handed back — a current-generation stretch or changed test is never touched
+    # axis: a current-generation stretch whose fields are all present is never touched
     for fields in ({"step": RD.P_SCOPED, "_fixDeltaDiff": "diff --git a/f.py b/f.py\n",
                     "findings": [_changed_test_finding(kept=True)]},
-                   {"step": RD.P_AUDITS, "findings": [_changed_test_finding(kept=False)]}):
+                   {"step": RD.P_AUDITS, "_fixDeltaDiff": "diff --git a/f.py b/f.py\n",
+                    "findings": [_changed_test_finding(kept=True)]}):
         state = _verify_fold_state()
         state.update(round=2, pending=None, _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
                      **fields)
@@ -6682,6 +6683,29 @@ def test_a_current_generation_session_with_the_fields_is_untouched_by_the_hand_b
         before = json.dumps(state, sort_keys=True)
         assert RD._finish_saved_previous_release(state) is False
         assert json.dumps(state, sort_keys=True) == before
+
+
+def test_a_generation_7_session_saved_without_the_kept_original_is_handed_back():
+    # axis: a pre-change generation-7 session holding a changed test with no kept original is handed back, never certified
+    state = _verify_fold_state()
+    state.update(round=2, step=RD.P_AUDITS, pending=None, findings=[_changed_test_finding(kept=False)])
+    assert state["sessionGeneration"] == RD.SESSION_GENERATION
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def test_a_generation_7_extra_audit_whose_target_lacks_break_it_facts_is_handed_back():
+    # axis: an extra audit round's target that carries a test but no breakIt facts is handed back, not settled
+    target = _changed_test_finding(kept=True)
+    state = _verify_fold_state()
+    state.update(round=3, step=RD.P_AUDITS, pending=None, extraAudit={"round": 3}, _auditTargets=[target])
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["terminal"] == "handed-back"
+    state = _verify_fold_state()
+    state.update(round=3, step=RD.P_AUDITS, pending=None, extraAudit={"round": 3},
+                 _auditTargets=[dict(target, breakIt={"match": "same"})])
+    assert RD._finish_saved_previous_release(state) is False
 
 
 # A PR hunk whose `+b` the fix deleted: the deletion anchors on the `+a` of its own hunk, not on the second hunk.

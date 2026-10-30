@@ -6668,6 +6668,18 @@ def _break_it_target_facts(state, config, finding, head):
         match = audits.MATCH_CHANGED_EXPLAINED
     else:
         match = audits.MATCH_CHANGED_UNEXPLAINED
+    # axis: a test that differs from the reviewer's original only in formatting or title, or that moved, is the same test — the kept check's own body rule decides, never an exact-text compare
+    if (match in (audits.MATCH_MISSING, audits.MATCH_CHANGED_UNEXPLAINED) and isinstance(reviewer, str)
+            and block is not None and _nonempty_str(repo_root) and _nonempty_str(head)
+            and _nonempty_str(config.get("baseRef"))):
+        kept = break_it.check_kept(
+            repo_root, config.get("baseRef"), head,
+            {"path": path, "command": block["run"], "content": reviewer,
+             "sha256": hashlib.sha256(reviewer.encode("utf-8")).hexdigest()},
+            runner=lambda *_args, **_kwargs: {"outcome": break_it.OUTCOME_PASSED})
+        if kept.get("outcome") == break_it.KEPT and kept.get("reason") == "body-match":
+            match = audits.MATCH_SAME
+            committed = reviewer
     return {"path": path, "reviewerTest": reviewer, "committedTest": committed,
             "changedWhy": why, "match": match}
 
@@ -7196,6 +7208,11 @@ def _saved_delta_stretch_lacks_facts(state):
     test but no `breakIt` comparison facts. A state this version computed itself holds both."""
     if not isinstance(state.get("_fixDeltaDiff"), str):
         return True
+    return _audit_targets_lack_break_it_facts(state)
+
+
+def _audit_targets_lack_break_it_facts(state):
+    """True when an audit target carries a break-it test but no `breakIt` comparison facts."""
     targets = state.get("_auditTargets")
     for row in targets if isinstance(targets, list) else []:
         if isinstance(row, dict) and break_it.carries_test(row) and not isinstance(row.get("breakIt"), dict):
@@ -7228,14 +7245,19 @@ def _finish_saved_previous_release(state):
     or scoped stretch (`_saved_delta_stretch`: no `_fixDeltaDiff`, no audit targets' `breakIt` facts),
     or when any finding it holds records a test change with no kept original. A current-generation
     session, and the extra audit round's stretch, are never touched by the stretch test."""
-    if (not isinstance(state, dict) or state.get("terminal")
-            or not _generation_is_continuable_earlier(state)):
+    if not isinstance(state, dict) or state.get("terminal"):
+        return False
+    earlier = _generation_is_continuable_earlier(state)
+    # axis: a generation-7 session saved before the kept-original field and the audit facts existed holds the same gaps, so the missing-original and extra-audit-facts checks cover the current generation too
+    if not (earlier or _generation_is_current(state)):
         return False
     # axis: a stretch step of a continuable earlier generation is handed back before any scoped or audit order renders
-    in_stretch = (_saved_delta_stretch(state) and not _is_extra_audit_round(state)
+    in_stretch = (earlier and _saved_delta_stretch(state) and not _is_extra_audit_round(state)
                   and _saved_delta_stretch_lacks_facts(state))
+    extra_lacks = (_is_extra_audit_round(state) and state.get("step") == P_AUDITS
+                   and _audit_targets_lack_break_it_facts(state))
     # axis: a recorded test change with no kept original is handed back, never certified on a guessed baseline
-    if not (in_stretch or _holds_change_without_kept_original(state)):
+    if not (in_stretch or extra_lacks or _holds_change_without_kept_original(state)):
         return False
     state["pending"] = None
     _hand_back_unknown_fix_surface(
