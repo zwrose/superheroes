@@ -971,7 +971,7 @@ Three other refusals exist. A `fixes` object that has a `finding` key or a `comm
 
 ### The verify gate runs once more after one failure
 
-At every `run-verify` gate, the first `fail` does not halt. The driver records that run and sets the same gate again at the next attempt, and the second result decides: a `pass` goes on as a first-time pass does, and any other result halts as it does without a re-run. A re-run that passes but ran at a different head than the first run halts, with decision `verify-rerun-head-moved`; a head unknown on either side is not a difference.
+At every `run-verify` gate, the first `fail` does not halt. The driver records that run and sets the same gate again at the next attempt, and the second result decides: a `pass` goes on as a first-time pass does, and any other result halts as it does without a re-run. A re-run that passes but ran at a different head than the first run halts, with decision `verify-rerun-head-moved`; a head unknown on either side is not a difference. A re-run that passes on different tracked working-tree contents than the first run saw halts the same way, with decision `verify-rerun-tree-changed`.
 
 - Only `fail` starts a re-run, once per gate. A `timeout`, a skip or an unknown result halts as before, and so does a first `fail` whose own run straddled a head change (`headShaAfter` differs from `headSha`).
 - Both runs are recorded on the round as one `rerunChecks` entry, `{"check": "verify", "runs": [<run>, <run>]}`. Each run carries `status` (`ran`, `timed-out` or `not-started`), `exitCode`, `output` (the tail of the run's output), `reason`, `head` and `headSource`. The review record shows them.
