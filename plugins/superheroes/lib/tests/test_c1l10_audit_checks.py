@@ -394,6 +394,17 @@ def test_k5_a_missing_or_unexplained_test_blocks_whatever_the_result_says(match,
     assert entry["testMatch"] == {"match": match, "answer": None, "blocking": True}
 
 
+@pytest.mark.parametrize("match", ["missing", "changed-unexplained", "changed-explained"])
+def test_k5_a_test_mismatch_keeps_the_new_issues_the_result_reported(match):
+    # axis: the veto of the parent's discharge never drops the auditor's separate findings
+    given = {"newIssues": [{"title": "leak", "file": "f.py", "line": 2}]}
+    if match == "changed-explained":
+        given["testMatch"] = {"answer": "weakened", "why": "the assertion no longer checks the charge"}
+    outcome = _fold([_result(ruling="discharged-but-new-issue", **given)], [_target(match)])
+    assert outcome["notDischarged"] == ["t0"] and outcome["testMismatch"] == ["t0"]
+    assert [i["title"] for i in outcome["newIssues"]] == ["leak"]
+
+
 def test_k5_a_blocked_test_is_blocked_even_when_the_result_omits_its_checks():
     outcome = _fold([_result(checks=None)], [_target("missing")])
     assert outcome["testMismatch"] == ["t0"] and outcome["malformed"] == []

@@ -217,6 +217,7 @@ def test_L3_fold_audits_stamps_fixed_on_discharged_only():
     open_id = RD._finding_key_of(open_f)
     RD._set_findings(state, [discharged_f, open_f])
     state["_newSurface"] = True
+    state["_fixDeltaDiff"] = "diff --git a/f.py b/f.py\n"
     auditor = state["_auditTargets"][0]["auditorVendor"]
     manifest = {discharged_id: auditor, open_id: auditor}
     RD._fold_audits(state, state["config"], {

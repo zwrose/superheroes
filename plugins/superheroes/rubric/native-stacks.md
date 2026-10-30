@@ -336,9 +336,8 @@ values; or any prose that states a rule a session or a gate follows. When it is 
 side a hunk falls on, it takes the reviewer floor. A layer is brought current with its lower layer
 before its review session starts. When the lower layer moves while a session is open, the review
 driver stops the session (`stack-lower-moved`); the build session writes that session's review
-record as abandoned, brings the layer current by merge, and starts a new session, which reviews
-only what changed since the last reviewed commit. No finding comes from the lower layer's old
-head. The tax it removes is per-layer re-review on bring-currents whose content did not change.
+record as abandoned, brings the layer current by merge, and starts a new session on the lower
+layer's current head. No finding comes from the lower layer's old head. The tax it removes is per-layer re-review on bring-currents whose content did not change.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under

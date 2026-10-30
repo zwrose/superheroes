@@ -1821,14 +1821,26 @@ def test_a_scoped_critical_is_fixed_and_audited_in_the_next_round_not_confirmed_
         return []
 
     counter = {"n": 0}
+    fixed, audited = {}, {}
 
     def fix_step(batch, rnd, payload):
         counter["n"] += 1
+        fixed[rnd] = [b.get("title") for b in batch]
         return {"fixes": [], "headDiff": _headf_ns(counter["n"]), "changedSubjects": ["Code"]}
 
-    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step),
+    def auditor(targets, rnd):
+        audited[rnd] = [t.get("title") for t in (targets or [])]
+        return [dict({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": audit_checks()}, **audit_test_match(t))
+                for t in (targets or [])]
+
+    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor),
                           _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
+    assert counter["n"] == 2
+    assert "bug" in fixed[1] and "hole" in fixed[2]
+    assert "hole" in audited[3]
     assert receipt["certificationShape"] == "audited-chain-degraded"
     assert not any(x["kind"] in ("confirmation", "full-panel-unknown-surface")
                    for x in receipt["rounds"])
@@ -6506,11 +6518,42 @@ def test_verify_fold_unresolved_head_post_audits_advances():
     state = _verify_fold_state()
     state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
     state["_newSurface"] = {"f.py": [1]}
+    state["_fixDeltaDiff"] = "diff --git a/f.py b/f.py\n"
     RD._fold_verify(state, state["config"], {"result": "pass"},
                     resolution=(None, "fix-fold head: repo root unresolvable"))
     assert not state.get("terminal")
     assert state["step"] == RD.P_SCOPED
     assert "_verifyThen" not in state
+
+
+def test_a_saved_delta_session_without_a_fix_delta_rebuilds_it_from_its_baseline():
+    state = _verify_fold_state()
+    state["_newSurface"] = {"f.py": [1]}
+    state["deltaBaseline"] = {"round": 1, "diff": _R2B_REVIEWED}
+    state["headDiff"] = _R2B_HEAD_MF
+    RD._after_audits(state, state["config"])
+    assert state["step"] == RD.P_SCOPED
+    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
+    assert state["_fixDeltaDiff"].startswith("diff --git a/f.py b/f.py")
+
+
+def test_a_saved_delta_session_whose_fix_delta_cannot_be_rebuilt_is_handed_back():
+    state = _verify_fold_state()
+    state["_newSurface"] = {"f.py": [1]}
+    RD._after_audits(state, state["config"])
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_SCOPED
+
+
+def test_a_fix_that_only_removes_a_pr_addition_keeps_a_head_anchor_for_the_deletion():
+    reviewed = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                "@@ -10,0 +10,2 @@\n+a\n+b\n"
+                "@@ -100,1 +102,1 @@\n-x\n+y\n")
+    head = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+            "@@ -10,0 +10,1 @@\n+a\n"
+            "@@ -100,1 +101,1 @@\n-x\n+y\n")
+    surface, _text = RD._fix_delta_surface(RD.new_state(_cfg()), reviewed, head)
+    assert surface["f.py"] and all(h["start"] > 0 for h in surface["f.py"]), surface
 
 
 def test_verify_fold_at_cap_hands_back_round_cap():

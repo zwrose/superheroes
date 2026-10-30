@@ -161,8 +161,12 @@ def test_a_forty_line_fix_after_one_review_reads_only_the_fix(tmp_path):
 # --- FR-45: over the bar ----------------------------------------------------------------------
 
 
-def test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_reads_changed(tmp_path):
+@pytest.mark.parametrize("unsettled", [False, True], ids=["settled", "unsettled-lines"])
+def test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_reads_changed(tmp_path, monkeypatch, unsettled):
     # axis: the over-bar comparison; one line over the bar reading changed
+    # axis: the lines of a file the counter cannot settle are added to the count; an unsettled file counted as nothing
+    if unsettled:
+        monkeypatch.setattr(countable_lines, "_attribute_flags", lambda *args, **kwargs: None)
     repo = Repo(tmp_path)
     base, _, earlier = returning(repo)
     repo.write("src/big.py", numbered("big", 1000))
@@ -174,6 +178,10 @@ def test_a_later_change_of_1001_countable_lines_reads_full_and_exactly_1000_read
     over = decide(repo, base, earlier)
     assert over["read"] == "full" and over["countable"] == 1001
     assert tokens(over)[-1] == R.WHY_OVER_BAR and over["changedFiles"] == ["src/big.py"]
+    expected = [{"file": "src/big.py", "reason": "attribute-unreadable"}] if unsettled else []
+    assert over["unsettled"] == expected and exact["unsettled"] == expected
+    assert any(w.startswith(R.WHY_UNSETTLED) for w in over["why"]) is unsettled
+    assert any(w.startswith(R.WHY_UNSETTLED) for w in exact["why"]) is unsettled
 
 
 # --- FR-45: a new risk area -------------------------------------------------------------------
@@ -260,6 +268,32 @@ def test_a_proven_copy_of_2000_lines_beside_a_10_line_edit_counts_only_the_edit(
     got = decide(repo, base, earlier, proven=_proven(repo, base, _proof_for(repo, "vendor/lib.py")))
     assert got["read"] == "changed" and got["countable"] == 10
     assert got["changedFiles"] == ["src/app.py"] and "vendor/lib.py" not in got["deltaDiff"]
+
+
+def test_a_proven_copy_that_an_earlier_rename_came_from_is_never_passed_on(tmp_path, monkeypatch):
+    # axis: the proven-copy filter over the final path list; a proven copy coming back as a rename's source path
+    repo = Repo(tmp_path)
+    repo.main_commit("vendor/lib.py", numbered("lib", 40))
+    repo.merge_main()
+    os.remove(os.path.join(repo.root, "vendor", "lib.py"))
+    base, reviewed, earlier = returning(repo, first={"src/app.py": numbered("lib", 40)})
+    reviewed_diff = repo.git("diff", *review_diff_bytes.REVIEW_DIFF_ARGS, "%s...%s" % (base, reviewed))
+    assert "rename from vendor/lib.py" in reviewed_diff and "rename to src/app.py" in reviewed_diff
+    repo.write("vendor/lib.py", numbered("newlib", 40))
+    repo.write("src/app.py", repo.read("src/app.py") + numbered("edit", 3))
+    repo.commit("restore the vendor file with new bytes and edit the src file")
+    seen = []
+    real_call = R.lane_call.call
+
+    def recording_call(cwd, paths, *args, **kwargs):
+        seen.append(list(paths))
+        return real_call(cwd, paths, *args, **kwargs)
+
+    monkeypatch.setattr(R.lane_call, "call", recording_call)
+    got = decide(repo, base, earlier, proven=_proven(repo, base, _proof_for(repo, "vendor/lib.py")))
+    assert got["read"] == "changed" and got["countable"] == 3
+    assert got["changedFiles"] == ["src/app.py"] and "vendor/lib.py" not in got["deltaDiff"]
+    assert seen == [["src/app.py"]]
 
 
 # --- the incremental count --------------------------------------------------------------------
