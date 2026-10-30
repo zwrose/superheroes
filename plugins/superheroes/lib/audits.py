@@ -470,6 +470,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                         reason=("break-it test %s: the committed test at %s is not the test role's "
                                 "version (or the build session's explained change of it)"
                                 % (match, (f.get("breakIt") or {}).get("path"))))
+            if ruling == "discharged-but-new-issue":
+                new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
             audits.append(base)
             continue
         # Every result answers the three checks, whatever its ruling; a result that does not is
@@ -491,6 +493,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                     not_discharged.append(fid)
                 base.update(ruling="not-discharged",
                             reason="break-it test weakened: %s" % test_match["why"].strip())
+                if ruling == "discharged-but-new-issue":
+                    new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
                 audits.append(base)
                 continue
         # A clearing ruling stands only when all three checks are answered `yes`.

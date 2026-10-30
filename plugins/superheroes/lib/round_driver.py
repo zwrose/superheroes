@@ -6379,6 +6379,15 @@ def _fix_delta_groups(delta, head_numbers):
             mark, text = ln[0], ln[1:]
             if mark == "-":
                 content = content or not text.startswith("@@")
+                if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
+                    # A removed hunk-body line anchors on the head line that follows it, else the
+                    # last head line before it (a removal at the end of the file's diff section).
+                    here = max(index, 0)
+                    anchor = next((n for n in head_numbers[here:] if n is not None), None)
+                    if anchor is None:
+                        anchor = next((n for n in reversed(head_numbers[:here]) if n is not None), None)
+                    if anchor is not None:
+                        head_lines.append(anchor)
                 continue
             if mark == "+":
                 if index < 0 or index >= len(head_numbers):
@@ -7031,6 +7040,23 @@ def _after_audits(state, config):
     # scan that reviews nothing while looking conformant. The audits' own new-issue candidates still
     # route through the same fold (an empty-artifact `_fold_scoped`).
     if state.get("_newSurface"):
+        # A delta session saved before the fix delta was kept has a surface but no `_fixDeltaDiff`:
+        # rebuild both from the stamped baseline and the head diff, or hand the PR back.
+        if not isinstance(state.get("_fixDeltaDiff"), str):
+            baseline = state.get("deltaBaseline")
+            reviewed = baseline.get("diff") if isinstance(baseline, dict) else None
+            head = state.get("headDiff")
+            rebuilt = (_fix_delta_surface(state, reviewed, head)
+                       if isinstance(reviewed, str) and isinstance(head, str) else None)
+            if rebuilt is None:
+                _hand_back_unknown_fix_surface(
+                    state, "the fixes' own diff could not be rebuilt for a saved delta session")
+                return
+            state["_newSurface"], state["_fixDeltaDiff"] = rebuilt
+            if not state["_newSurface"]:
+                _record_round(state, "scopedFinder", "skipped-empty-surface")
+                _fold_scoped(state, config, {})
+                return
         state["step"] = P_SCOPED
         return
     _record_round(state, "scopedFinder", "skipped-empty-surface")

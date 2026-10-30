@@ -48,6 +48,7 @@ def _state(**cfg_over):
     state["step"] = RD.P_VERIFY
     state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
     state["_newSurface"] = {"f.py": [1]}
+    state["_fixDeltaDiff"] = "diff --git a/f.py b/f.py\n"
     return state
 
 
