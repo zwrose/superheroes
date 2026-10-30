@@ -6545,15 +6545,136 @@ def test_a_saved_delta_session_whose_fix_delta_cannot_be_rebuilt_is_handed_back(
     assert state["step"] != RD.P_SCOPED
 
 
-def test_a_fix_that_only_removes_a_pr_addition_keeps_a_head_anchor_for_the_deletion():
-    reviewed = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
-                "@@ -10,0 +10,2 @@\n+a\n+b\n"
-                "@@ -100,1 +102,1 @@\n-x\n+y\n")
-    head = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
-            "@@ -10,0 +10,1 @@\n+a\n"
-            "@@ -100,1 +101,1 @@\n-x\n+y\n")
+def _saved_delta_session(tmp_path, *, step, pending, surface, baseline=True, **over):
+    """A real session directory holding a delta round's state saved by an earlier build: round 2 at
+    ``step``, a scoped surface, no `_fixDeltaDiff`, and (by default) a baseline and head diff to rebuild from."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout = str(tmp_path / "checkout")
+    enter_checkout(checkout)
+    _seed_repo_root_if_missing(d, checkout)
+    first = RD.cmd_next(d, _cfg(maxRounds=4))
+    assert first["ok"] and first["action"] == RD.P_PANEL, first
+    ok, state = RD.load_state(d)
+    assert ok and isinstance(state, dict), state
+    state.update(round=2, step=step, _newSurface=surface, **over)
+    state["rounds"].setdefault("2", {})
+    state.pop("_fixDeltaDiff", None)
+    if baseline:
+        state["deltaBaseline"] = {"round": 2, "diff": _R2B_REVIEWED}
+        state["headDiff"] = _R2B_HEAD_MF
+    else:
+        state["deltaBaseline"] = None
+    state["pending"] = ({"action": step, "round": 2, "phase": step, "attempt": 1,
+                         "payload": {"hunks": surface, "tier": RD.DEEP}} if pending else None)
+    RD.save_state(d, state)
+    return d
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "scoped-pending"])
+def test_a_saved_scoped_session_without_a_fix_delta_is_rebuilt_before_any_order_renders(tmp_path, pending):
+    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=pending,
+                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
+    answer = RD.cmd_next(d)
+    assert answer["ok"] and answer["phase"] == RD.P_SCOPED and answer["round"] == 2, answer
+    ok, state = RD.load_state(d)
+    assert ok and isinstance(state["_fixDeltaDiff"], str)
+    assert state["_fixDeltaDiff"].startswith("diff --git a/f.py b/f.py")
+    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
+    assert RD._ensure_round_fix_delta(d, 2, state)  # the scoped order's fix-delta input renders
+    assert [row["outcome"] for row in RD.read_journal(d) if row.get("outcome") == "fix-delta-rebuilt"] \
+        == ["fix-delta-rebuilt"]
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "scoped-pending"])
+def test_a_saved_scoped_session_with_no_usable_baseline_is_handed_back(tmp_path, pending):
+    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=pending, baseline=False,
+                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
+    answer = RD.cmd_next(d)
+    assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
+    ok, state = RD.load_state(d)
+    assert state["terminal"] == "handed-back" and state["step"] != RD.P_SCOPED
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+    assert [row for row in RD.read_journal(d) if row.get("outcome") == "fix-delta-hand-back"]
+
+
+def test_a_saved_audit_session_with_an_empty_old_surface_is_rebuilt_not_folded_empty():
+    state = _verify_fold_state()
+    state["_newSurface"] = {}
+    state["deltaBaseline"] = {"round": 1, "diff": _R2B_REVIEWED}
+    state["headDiff"] = _R2B_HEAD_MF
+    RD._after_audits(state, state["config"])
+    assert state["step"] == RD.P_SCOPED
+    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
+    assert isinstance(state["_fixDeltaDiff"], str)
+    assert "scopedFinder" not in state["rounds"]["1"]
+
+
+def test_a_state_that_has_its_fix_delta_is_untouched_by_the_rebuild():
+    state = _verify_fold_state()
+    state.update(round=2, step=RD.P_SCOPED, pending=None, _fixDeltaDiff="diff --git a/f.py b/f.py\n",
+                 _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
+                 deltaBaseline={"round": 2, "diff": _R2B_REVIEWED}, headDiff=_R2B_HEAD_MF)
+    before = json.dumps(state, sort_keys=True)
+    assert RD._rebuild_saved_fix_delta(state) is True
+    assert RD._finish_saved_fix_delta(state) is None
+    assert json.dumps(state, sort_keys=True) == before
+
+
+# A PR hunk whose `+b` the fix deleted: the deletion anchors on the `+a` of its own hunk, not on the second hunk.
+_DELETION_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                      "@@ -10,0 +10,2 @@\n+a\n+b\n"
+                      "@@ -100,1 +102,1 @@\n-x\n+y\n")
+_DELETION_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+                  "@@ -10,0 +10,1 @@\n+a\n"
+                  "@@ -100,1 +101,1 @@\n-x\n+y\n")
+# A hunk at the end of the file: the fix deleted `+guard`, so the surviving file ends at line 9.
+_EOF_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                 "@@ -7,4 +7,4 @@\n c7\n c8\n c9\n-x\n+guard\n")
+_EOF_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+             "@@ -7,4 +7,3 @@\n c7\n c8\n c9\n-x\n")
+# A hunk with nothing left but removals once the fix deleted its additions; a second hunk has citable lines.
+_REMOVALS_ONLY_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                           "@@ -10,2 +10,2 @@\n-x\n-y\n+a\n+b\n"
+                           "@@ -100,1 +98,1 @@\n-p\n+q\n")
+_REMOVALS_ONLY_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+                       "@@ -10,2 +10,0 @@\n-x\n-y\n"
+                       "@@ -100,1 +98,1 @@\n-p\n+q\n")
+_DELETION_CASES = [(_DELETION_REVIEWED, _DELETION_HEAD), (_EOF_REVIEWED, _EOF_HEAD),
+                   (_REMOVALS_ONLY_REVIEWED, _REMOVALS_ONLY_HEAD)]
+
+
+def _deletion_surface(reviewed, head):
     surface, _text = RD._fix_delta_surface(RD.new_state(_cfg()), reviewed, head)
-    assert surface["f.py"] and all(h["start"] > 0 for h in surface["f.py"]), surface
+    return surface
+
+
+def test_a_fix_that_only_removes_a_pr_addition_keeps_a_head_anchor_for_the_deletion():
+    surface = _deletion_surface(_DELETION_REVIEWED, _DELETION_HEAD)
+    assert _line_ranges(surface) == {"f.py": [(10, 10)]}, surface
+    assert 10 in RD.diff_scope.parse_diff_lines(_DELETION_HEAD)["f.py"]
+
+
+def test_a_deletion_at_the_end_of_the_file_anchors_on_a_line_the_head_diff_registers():
+    surface = _deletion_surface(_EOF_REVIEWED, _EOF_HEAD)
+    registered = RD.diff_scope.parse_diff_lines(_EOF_HEAD)["f.py"]
+    assert registered == {7, 8, 9}
+    anchors = {n for h in surface["f.py"] for n in (h["start"], h["end"])}
+    assert anchors and anchors <= registered, surface
+
+
+def test_a_deletion_in_a_hunk_with_no_citable_line_is_marked_not_numbered():
+    surface = _deletion_surface(_REMOVALS_ONLY_REVIEWED, _REMOVALS_ONLY_HEAD)
+    assert [(h["start"], h["end"], h.get("removedOnly")) for h in surface["f.py"]] == [(0, 0, True)], surface
+    assert "-+a" in surface["f.py"][0]["text"] and "-+b" in surface["f.py"][0]["text"]
+
+
+def test_every_line_number_a_fix_delta_surface_carries_is_one_the_head_diff_registers():
+    for reviewed, head in _DELETION_CASES:
+        registered = RD.diff_scope.parse_diff_lines(head)
+        for file, entries in _deletion_surface(reviewed, head).items():
+            for h in entries:
+                assert h["start"] == h["end"] == 0 or {h["start"], h["end"]} <= registered[file], (file, h)
 
 
 def test_verify_fold_at_cap_hands_back_round_cap():
