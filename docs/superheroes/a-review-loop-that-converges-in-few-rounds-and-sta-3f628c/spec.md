@@ -10,7 +10,7 @@ approved: "2026-10-27"
 gates: {review: passed}
 producedBy: "the-architect@0.46.2"
 created: "2026-10-27"
-updated: "2026-10-28"
+updated: "2026-10-30"
 ---
 # A review loop that converges in few rounds and stays simple
 
@@ -444,12 +444,19 @@ reviewers. (source: board · panel 6; craft, for your veto)
     review runs, then the record shows it as fixed and the PR can read as reviewed. (source: board
     · panel 6)
 
-**UFR-2.** If the layer below a stacked PR is ahead of what the upper layer was last brought current
-with, then the review session shall catch up to the lower layer's current head before it reviews.
-(source: board · panel 6; craft, for your veto)
-  - *Acceptance:* Given an upper layer whose lower layer moved, whether before or during the review
-    session, when it is reviewed, then no finding in its record comes from the lower layer's old
-    head. (source: board · panel 6)
+**UFR-2.** If the layer below a stacked PR moves before or during the upper layer's review
+session, then the session shall read the upper layer's change against one fixed commit of the lower
+layer for the whole session, and before the upper layer hands back it shall catch up to the lower
+layer's current head, re-run its checks there, and review only what that catch-up changed in the
+upper layer's own lines. A move of the lower layer never restarts the review session. (source:
+board · panel 6; amended by the owner, 2026-10-30)
+  - *Acceptance:* Given an upper layer whose lower layer moved before or during its review session,
+    when it hands back, then it is caught up to the lower layer's head as of handback, its checks
+    passed on that head, no finding in its record comes from the lower layer's code, and the
+    session was not restarted because of the move. (source: owner, 2026-10-30)
+  - *Acceptance:* Given a catch-up that changed none of the upper layer's own lines, when it is
+    reviewed, then the review reads nothing new, and any finding still open is re-checked against
+    the caught-up head. (source: owner, 2026-10-30)
 
 **UFR-3.** If a test run fails once on code the round did not change, then the review loop shall
 re-run the same check once and record both results. (source: board · panel 6; craft, for your
@@ -584,6 +591,17 @@ The approved requirements and shipped rules below change under this spec. The ad
   by this session now"); Canon 2026-10-28-0b372f49-1. Sections touched: frontmatter (`updated`);
   Round 1: big changes (FR-6, its statement and two new acceptances); Coverage (Invalid &
   malformed input); Amendments.
+- **2026-10-30 (owner-stamped, substantive):** UFR-2 is met at handback instead of by restarting
+  the review. The session reads the upper layer's change against one fixed commit of the lower layer
+  for the whole session; before handback the layer catches up to the lower layer's current head,
+  re-runs its checks there, and is reviewed for only what the catch-up changed in its own lines; a
+  move of the lower layer never restarts the session. A second acceptance covers a catch-up that
+  changes none of the layer's own lines. Why: as first built (C1-L11a, PR #2267), every move of a
+  lower layer abandoned and restarted each upper layer's review as a full review (vet 732). The
+  owner's ruling: "431 a" on collector #695 item 431, 2026-10-30, and this text "stamped as
+  written" the same day; Canon 2026-10-30-0b372f49-1. Sections touched: frontmatter (`updated`);
+  Significant unhappy paths (UFR-2 and its acceptances); Amendments. Coverage map re-checked the
+  same day: UFR-2's two acceptances are each allocated once, to C1-L11e.
 
 ## Coverage
 

@@ -135,7 +135,8 @@ that reads it.
 | FR-54 | 2 | rule | A false PR claim found after merge is logged by the act that finds it, the way a review escape is logged,… | **C1** (C1-L13) |
 | FR-54 | 3 | rule | For the seating condition, each pass records beside its judgment the numbers it read: the security and… | **C1** (C1-L13) |
 | UFR-1 | 1 | GWT | Given a carried finding with no outcome and a later fix for it, when the next review runs, then the record… | **C1** (C1-L11) |
-| UFR-2 | 1 | GWT | Given an upper layer whose lower layer moved, whether before or during the review session, when it is… | **C1** (C1-L11) |
+| UFR-2 | 1 | GWT | Given an upper layer whose lower layer moved before or during its review session, when it hands back,… | **C1** (C1-L11e; amendment #2) |
+| UFR-2 | 2 | GWT | Given a catch-up that changed none of the upper layer's own lines, when it is reviewed, then the review… | **C1** (C1-L11e; amendment #2) |
 | UFR-3 | 1 | GWT | Given one flaky failure, when the re-run passes, then the round goes on and the record shows both runs.… | **C1** (C1-L9) |
 | UFR-4 | 1 | GWT | Given a break-it test that fails to compile, when the build session fixes the compile error, then the… | **C1** (C1-L6) |
 | UFR-5 | 1 | GWT | Given a weakened test, when the auditor flags it, then the weakened version is never kept, and a… | **C1** (C1-L10) |
@@ -167,7 +168,7 @@ Two shipped rules outside that list also change, because the spec's requirements
 
 | Shipped rule | Where it lives today | Changed by |
 | --- | --- | --- |
-| A stack layer is not brought current while its review loop is open | `rubric/native-stacks.md` § How a stack stays current | C1-L11 (UFR-2: the review session catches up to a moved lower layer) |
+| A stack layer is not brought current while its review loop is open | `rubric/native-stacks.md` § How a stack stays current | C1-L11e (UFR-2, amendment #2: the rule holds during the session, and the layer catches up once at handback; C1-L11a's stop-and-restart wording is replaced) |
 | After handback, new surface or behaviour gets the full review loop again | `skills/workhorse/SKILL.md` § 12, its delta table | C1-L11 (FR-44, FR-45) |
 
 ## Spec sections that are not criteria but have a builder home
