@@ -13,6 +13,7 @@ import os
 import subprocess
 import time
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -852,14 +853,20 @@ def test_a_lane_that_parked_is_kept_whatever_the_first_pr_time(tmp_path, first_p
     _refused_unread(repo, result, calls, "listing-not-given")
 
 
-@pytest.mark.parametrize("first_offset, proceeds", [(3600, True), (-3600, False)], ids=["after", "before"])
-def test_a_reoutcome_handback_is_timed_from_the_reoutcome(tmp_path, first_pr, first_offset, proceeds):
+@pytest.mark.parametrize("first_offset, proceeds", [(3600, False), (7200 + 3600, True)], ids=["before", "after"])
+def test_a_reoutcome_handback_is_timed_from_the_reoutcome(tmp_path, first_pr, monkeypatch, first_offset, proceeds):
     # axis: a lane re-outcomed to handback is timed from the amendment, never from its first terminal record
     repo = _cloud_repo(tmp_path)
     _seed_lane(repo, outcome="park")
-    time.sleep(0.01)
-    assert ll.amend(repo, LANE_ID, "reoutcome", "handback", "re-read")["ok"]
-    first_pr(time.time() + first_offset)
+    t0 = next(
+        record["ts"] for record in ll.read(repo)["records"]
+        if record.get("event") == "outcome" and record.get("launchId") == LANE_ID
+    )
+    # The amendment is stamped by `time.time()` inside launch_ledger; pin it two hours after the park.
+    with monkeypatch.context() as patched:
+        patched.setattr(ll, "time", SimpleNamespace(**{**vars(time), "time": lambda: t0 + 7200}))
+        assert ll.amend(repo, LANE_ID, "reoutcome", "handback", "re-read")["ok"]
+    first_pr(t0 + first_offset)
     result, calls = _adopt(repo, tmp_path)
     if proceeds:
         _proceeds(result, calls)

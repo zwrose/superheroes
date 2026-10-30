@@ -409,9 +409,10 @@ such a step to the owner first.
   asks for `get_session` on each, and asks the helper to post the raw results as one JSON array on
   the lane's issue in a fenced block, since a cloud session cannot message back. The advisor reads
   that comment through REST, saves the array to a file, and passes it with `--cloud-sessions-file`.
-  The posted copy is the helper's transcription of its tool output, not the output itself: before
-  launching on a row that clears a lane (archived or failed), have the helper read that session
-  again, or keep the unread refusal. Keep the refusal whenever the copy is in doubt.
+  The posted copy is the helper's transcription of its tool output. A row that clears a lane
+  (archived or failed) counts only when a second helper read of that session, posted as its own
+  comment, shows the same `session_status`, `status_bucket` and `archived` values for it; on any
+  disagreement, or with no second read, keep the unread refusal.
   A complete `list_sessions` page proves a session gone only when its rows carry `environment_id`
   and meet the checks in § Adoption mechanics; when they do not, read each lane with
   `get_session`. When a live lane never answers the fix order or the ask-to-push, the same
