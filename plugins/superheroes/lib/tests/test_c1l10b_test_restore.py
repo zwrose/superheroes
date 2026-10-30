@@ -1119,6 +1119,62 @@ def test_two_failing_runs_at_the_restored_head_halt_and_never_fall_back_to_an_ea
     assert _decisions(w.state)[-1] == "verify-fail"
 
 
+def test_two_failing_runs_after_a_restore_halt_through_run_verify_and_advance_never_counting_the_landed_pass(
+        tmp_path, monkeypatch, adapters):
+    # axis: the durable post-restore gate — two failing run-verify landings, each advanced, halt; the earlier landed pass is never the result
+    w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore reaches the gate
+    w.cfg["verifyCommand"] = "make test"
+    d = TA._session(tmp_path, name="durable-fail", verifyCommand="make test")
+    state = TA._state(d)
+    for field in ("round", "rounds", "fixBatch", "findings", "_auditTargets", "_newSurface", "_fixDeltaDiff",
+                  "_verifyThen", "step"):
+        state[field] = w.state[field]
+    state["config"].update({k: v for k, v in w.cfg.items() if k != "verifyCommand"})
+    state["pending"] = None
+    RD.save_state(d, state)
+    monkeypatch.chdir(w.root)
+    out = RD.cmd_next(d)
+    assert out["ok"] and out["phase"] == RD.P_AUDITS, out
+    slot = out["payload"]["verify"]
+    first = RD.cmd_run_verify(d, run=TA._verb_run(0))
+    assert first["ok"] is True and first["result"] == "pass" and first["attempt"] == slot["attempt"], first
+    # the audits report a weakened test while that pass is landed and unaccepted; the restore is committed
+    w.state = TA._state(d)
+    w.state["pending"] = None
+    w.audit()
+    w.restore()
+    restored = w.head()
+    assert w.state["step"] == RD.P_VERIFY and w.state["_restoredHead"] == restored
+    RD.save_state(d, w.state)
+    nxt = RD.cmd_next(d)
+    assert nxt["ok"] and nxt["phase"] == RD.P_VERIFY and nxt["attempt"] != slot["attempt"], nxt
+    # the first failing run at the restored head lands in its own slot and is recorded as a re-run, not a halt
+    calls = []
+    fail1 = RD.cmd_run_verify(d, run=TA._verb_run(1, calls=calls))
+    assert fail1["ok"] is True and fail1["result"] == "fail" and len(calls) == 1, fail1
+    assert fail1["attempt"] == nxt["attempt"], fail1
+    landed1, err = RD.round_records.read_json(fail1["landingPath"])
+    assert err is None and landed1["headSha"] == restored and landed1["result"] == "fail"
+    out1 = TA._advance(d, tmp_path)
+    assert out1["ok"] is True and out1.get("terminal") is None, out1
+    mid = TA._state(d)
+    assert not mid.get("terminal") and mid["step"] == RD.P_VERIFY and mid["_restoredHead"] == restored
+    assert "verify-rerun" in _decisions(mid) and "verify-fail" not in _decisions(mid)
+    assert mid["rounds"][str(mid["round"])]["verifyResult"] == "fail"
+    # the re-run takes yet another slot, never the earlier landed pass's
+    pend = mid["pending"]
+    assert pend["phase"] == RD.P_VERIFY and pend["attempt"] not in (slot["attempt"], fail1["attempt"]), pend
+    # the second failing run at the restored head halts the round
+    fail2 = RD.cmd_run_verify(d, run=TA._verb_run(1))
+    assert fail2["ok"] is True and fail2["result"] == "fail" and fail2["attempt"] == pend["attempt"], fail2
+    out2 = TA._advance(d, tmp_path)
+    assert out2["ok"] is True and out2.get("terminal") == "halted", out2
+    end = TA._state(d)
+    assert end["terminal"] == "halted" and end["step"] == RD.P_TERMINAL
+    assert _decisions(end)[-1] == "verify-fail"
+    assert end["rounds"][str(end["round"])]["verifyResult"] == "fail"
+
+
 def test_a_used_correction_stays_used_when_the_finding_is_raised_again(tmp_path):
     # axis: the once-only guard also reads the round history, which a re-raised finding's fresh copies cannot reset
     w = World(tmp_path)

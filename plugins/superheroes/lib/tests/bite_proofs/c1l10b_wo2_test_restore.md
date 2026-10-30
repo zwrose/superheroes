@@ -405,3 +405,44 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 .                                                                        [100%]
 1 passed, 65 deselected in 1.20s
 ```
+
+### W7-E1 — the second failing post-restore run halts through the real run-verify and advance commands
+
+**guarded element:** the `if result == "fail":` halt in `_fold_verify` (`round_driver.py`, line 6411). Axis: on a durable session where a passing verify landed before the restore, the first failing run at the restored head is recorded as a re-run and the second halts the round (`verify-fail`), driven through `cmd_run_verify` and `cmd_advance`. Detector: `test_two_failing_runs_after_a_restore_halt_through_run_verify_and_advance_never_counting_the_landed_pass` in `plugins/superheroes/lib/tests/test_c1l10b_test_restore.py`.
+
+**neutralization** (`round_driver.py`, `_fold_verify`): the second failing run no longer takes the failure halt.
+```diff
+-    if result == "fail":
++    if result == "fail" and first is None:
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/w7-pyc -m pytest plugins/superheroes/lib/tests/test_c1l10b_test_restore.py -q -p no:cacheprovider -k two_failing_runs_after_a_restore` (assertion excerpt; the test body above it is elided)
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+>       assert _decisions(end)[-1] == "verify-fail"
+E       AssertionError: assert 'verify-unresolved' == 'verify-fail'
+E         
+E         - verify-fail
+E         + verify-unresolved
+
+plugins/superheroes/lib/tests/test_c1l10b_test_restore.py:1174: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l10b_test_restore.py::test_two_failing_runs_after_a_restore_halt_through_run_verify_and_advance_never_counting_the_landed_pass
+1 failed, 72 deselected in 4.01s
+```
+
+**restore:** the inverse edit, back to `    if result == "fail":`.
+
+**restore receipt:** `grep -n 'if result == "fail"' plugins/superheroes/lib/round_driver.py` finds:
+```
+6355:        if result == "fail" and not moved and artifact.get("via") != "ci-exact-head":
+6411:    if result == "fail":
+```
+
+**raw green:** same command as the raw red.
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 72 deselected in 52.20s
+```
