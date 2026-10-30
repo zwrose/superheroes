@@ -859,7 +859,7 @@ def _merge_same_finding(existing, incoming):
     carriers = [s for s in (existing, incoming)
                 if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
     if len(carriers) == 1:
-        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins
+        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins — see bite-proof record c1l11f_wo_e_verify_after_restore
         for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD, REVIEWER_TEST_FIELD,
                       TEST_CORRECTION_FIELD):
             if field in carriers[0]:
@@ -9502,7 +9502,14 @@ def _run_seam(seams, action, payload, state, config):
         return {"results": seams["auditor"](payload.get("targets"), state["round"]),
                 "collectionManifest": manifest}
     if action == P_VERIFY:
-        return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
+        ran = seams["verify_runner"](payload.get("command"), state["round"])
+        if not isinstance(ran, dict):
+            return {"result": ran}
+        artifact = {"result": ran.get("result")}
+        # axis: the in-process verify seam may report the head the run ran at, a non-empty string only — see bite-proof record c1l11f_wo_e_verify_after_restore
+        if isinstance(ran.get("headSha"), str) and ran["headSha"]:
+            artifact["headSha"] = ran["headSha"]
+        return artifact
     if action == P_APPLY_FIXES:
         return seams["fix_step"](payload.get("batch"), state["round"], payload)
     return {}

@@ -161,8 +161,11 @@ class World:
         _commit(self.root, message)
         self.fold(RD.P_APPLY_FIXES, {"fixes": []})
 
-    def verify(self):
-        self.fold(RD.P_VERIFY, {"result": "pass"}, verified_head_resolution=(None, None))
+    def verify(self, head=None):
+        artifact = {"result": "pass"}
+        if head is not None:
+            artifact["headSha"] = head
+        self.fold(RD.P_VERIFY, artifact, verified_head_resolution=(None, None))
 
     def correct(self, content):
         """The test reviewer's correction: a result for the item, then the second restore-only step."""
@@ -266,7 +269,7 @@ def test_t2_the_extra_audit_round_restores_then_verifies_then_hands_back_open(tm
     w.fold(RD.P_SECOND_TEST, {"findings": []})
     assert w.state["step"] == RD.P_VERIFY and w.state["_verifyThen"] == RD.VERIFY_THEN_POST_AUDITS
     assert w.step()["payload"]["restoredHead"] == w.head()
-    w.verify()
+    w.verify(head=w.head())
     assert w.state["terminal"] == "handed-back" and w.state["decisions"][-1]["kind"] == "extra-audit-open"
     assert w.committed() == ROLE_TEST
     kinds = _decisions(w.state)
@@ -338,7 +341,8 @@ def test_t2_a_round_at_the_cap_restores_then_hands_back_the_open_finding(tmp_pat
 
     def verify(command, rnd):
         order.append("verify")
-        return "pass"
+        # axis: the in-process verify seam reports the head the run ran at, which the restore gate counts — see bite-proof record c1l11f_wo_e_verify_after_restore
+        return {"result": "pass", "headSha": _git(w.root, "rev-parse", "HEAD").strip()}
 
     seams = TRD._seams(auditor=lambda targets, rnd: w.audit_artifact()["results"], fix_step=fix_step,
                        reviewer=reviewer, verify_runner=verify)
@@ -353,6 +357,30 @@ def test_t2_a_round_at_the_cap_restores_then_hands_back_the_open_finding(tmp_pat
     assert state["rounds"]["2"]["audits"][0]["ruling"] == "not-discharged"
     ledger, _fault = RD._disposition_ledger_by_key(state)
     assert (ledger.get(w.key) or {}).get("disposition") != "fixed"
+
+
+def test_t2_a_round_at_the_cap_restores_then_a_bare_pass_with_no_head_halts_with_certification_withheld(tmp_path):
+    # the in-process leg passes no head: a pass with no run head and no fold head after a restore never advances
+    w = World(tmp_path, cap=2)
+
+    def fix_step(batch, rnd, payload):
+        assert payload.get("restoreOnly"), "the run must halt at the verify gate, before any settle fix"
+        w.write(TEST_PATH, payload["restores"][0]["content"])
+        _commit(w.root, "restore")
+        return {"fixes": []}
+
+    def reviewer(dim, tier, rnd, ctx):
+        return {"findings": [], "vendor": "codex"}
+
+    # axis: a bare "pass" from the in-process verify seam carries no head, so the gate after a restore halts — see bite-proof record c1l11f_wo_e_verify_after_restore
+    seams = TRD._seams(auditor=lambda targets, rnd: w.audit_artifact()["results"], fix_step=fix_step,
+                       reviewer=reviewer, verify_runner=lambda command, rnd: "pass")
+    seams["panel_diff"] = lambda config, head: (TRD.DIFF, None)
+    _receipt, state = w.run_loop(seams)
+    assert state["terminal"] == "halted", (state["terminal"], state.get("certification"))
+    assert state["certification"]["shape"] is None and "unknown" in state["certification"]["reason"]
+    assert state["decisions"][-1]["kind"] == "verify-unresolved"
+    assert "round-cap" not in _decisions(state)
 
 
 # --- T3 ------------------------------------------------------------------------------------------------------------

@@ -115,7 +115,7 @@ def test_e2_a_pass_with_no_known_head_after_a_restore_halts_and_does_not_advance
     assert state["terminal"] == "halted" and state["step"] == RD.P_TERMINAL
     assert state["certification"]["shape"] is None and "unknown" in state["certification"]["reason"]
     decision = state["decisions"][-1]
-    assert decision["kind"] == "verify-unresolved" and "unknown" in decision["text"]
+    assert decision["kind"] == "verify-unresolved" and "unknown" in decision["detail"]
     assert "verifyVia" not in state["rounds"]["1"]
 
 
@@ -166,6 +166,38 @@ def test_e2_a_skip_with_no_verify_command_and_no_known_head_after_a_restore_keep
     _fold(state, {"result": "skipped"})
 
     assert not state.get("terminal") and "_restoredHead" not in state
+
+
+# =============================================================================================
+# the in-process verify seam may report its head
+# =============================================================================================
+
+def _seam_artifact(returned):
+    state = _state()
+    seams = {"verify_runner": lambda command, rnd: returned}
+    return RD._run_seam(seams, RD.P_VERIFY, {"command": "make test"}, state, state["config"])
+
+
+def test_seam_a_dict_return_gives_its_result_and_a_non_empty_string_head():
+    # axis: the in-process verify seam may report the head the run ran at, a non-empty string only — see bite-proof record c1l11f_wo_e_verify_after_restore
+    assert _seam_artifact({"result": "pass", "headSha": H1, "extra": "x"}) == {"result": "pass", "headSha": H1}
+
+
+def test_seam_a_bare_string_return_stays_result_only():
+    assert _seam_artifact("pass") == {"result": "pass"}
+
+
+def test_seam_a_head_that_is_not_a_non_empty_string_is_ignored():
+    for bad in ("", None, 7, ["a"]):
+        assert _seam_artifact({"result": "pass", "headSha": bad}) == {"result": "pass"}
+
+
+def test_seam_a_dict_with_no_result_has_no_result_and_fails_closed_as_unresolved():
+    artifact = _seam_artifact({"headSha": H1})
+    assert artifact.get("result") is None
+    state = _state()
+    _fold(state, artifact)
+    assert state["terminal"] == "halted" and _kinds(state)[-1] == "verify-unresolved"
 
 
 # =============================================================================================
