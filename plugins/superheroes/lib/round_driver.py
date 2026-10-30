@@ -859,7 +859,7 @@ def _merge_same_finding(existing, incoming):
     carriers = [s for s in (existing, incoming)
                 if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
     if len(carriers) == 1:
-        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins
+        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins — see bite-proof record c1l11f_wo_e_verify_after_restore
         for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD, REVIEWER_TEST_FIELD,
                       TEST_CORRECTION_FIELD):
             if field in carriers[0]:
@@ -6812,6 +6812,41 @@ def _verify_artifact_trees(artifact):
             if isinstance(t, str) and t]
 
 
+def _verify_rerun_entry(first, artifact, head, head_source, moved, force_head_moved=False):
+    """(entry, moved_heads) for the retry of a pending verify re-run: the `rerunChecks` entry holding both
+    runs and the driver's decision on them. `force_head_moved` is the restore gate's halt on a retry that
+    ran at another head: the decision is `head-moved` with the two heads whatever the result."""
+    second = _verify_run_row(artifact)
+    first_run = dict(first.get("run") or {}, head=first.get("head"),
+                     headSource=first.get("headSource"))
+    second_run = dict(second, head=head, headSource=head_source)
+    if moved:
+        # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
+        second_run["headAfter"] = artifact.get("headShaAfter")
+    # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun
+    moved_heads = _verify_rerun_heads_moved(first.get("head"), artifact, head, moved)
+    if force_head_moved and moved_heads is None:
+        moved_heads = (first.get("head"), head)
+    # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
+    trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
+    # The decision is made here, once; the review record reads it off the entry and never re-derives it.
+    if force_head_moved:
+        rerun_decision = "head-moved"
+    elif artifact.get("result") != "pass":
+        rerun_decision = "failed"
+    elif moved_heads is not None:
+        rerun_decision = "head-moved"
+    elif len(trees) > 1:
+        rerun_decision = "tree-changed"
+    else:
+        rerun_decision = "went-on"
+    # axis: the record holds the first failure and the one re-run, both runs, and the driver's decision on them — see bite-proof record c1l9a_wo1_verify_rerun
+    entry = {"check": "verify", "runs": [first_run, second_run], "decision": rerun_decision}
+    if rerun_decision == "head-moved":
+        entry["heads"] = list(moved_heads)
+    return entry, moved_heads
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -6831,8 +6866,13 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     _record_round(state, "verifyResult", result)
     head, head_source, moved = _verify_execution_head(artifact, verified_head)
     restored = state.get("_restoredHead")
+    first = state.pop("_verifyRerun", None)
     # axis: the gate after a restore counts only a run at the restored head — a result taken at another head halts, see bite-proof record c1l10b_wo2_test_restore
     if restored is not None and head is not None and head != restored:
+        if first is not None:
+            # axis: the rerun entry with both runs is recorded before the restore gate's halt — see bite-proof record c1l11f_wo_e_verify_after_restore
+            _record_round_append(state, "rerunChecks", _verify_rerun_entry(
+                first, artifact, head, head_source, moved, force_head_moved=True)[0])
         _set_terminal(state, "halted")
         state["certification"] = {
             "shape": None,
@@ -6843,7 +6883,21 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                   "certification withheld" % (head, restored))
         state["step"] = P_TERMINAL
         return
-    first = state.pop("_verifyRerun", None)
+    # axis: after a restore a pass whose head is unknown on both sides halts, never advances — see bite-proof record c1l11f_wo_e_verify_after_restore
+    if restored is not None and head is None and result == "pass":
+        if first is not None:
+            _record_round_append(state, "rerunChecks",
+                                 _verify_rerun_entry(first, artifact, head, head_source, moved)[0])
+        _set_terminal(state, "halted")
+        state["certification"] = {
+            "shape": None,
+            "reason": ("verify passed at an unknown head, not the restored head %s — halt, "
+                       "certification withheld" % restored)}
+        _decision(state, "verify-unresolved",
+                  "verify result passed at an unknown head, not the restored head %s — fail closed, "
+                  "certification withheld" % restored)
+        state["step"] = P_TERMINAL
+        return
     # axis: a first fail does not halt — the gate is pending again once, and the second result decides — see bite-proof record c1l9a_wo1_verify_rerun
     if first is None:
         if result == "fail" and not moved and artifact.get("via") != "ci-exact-head":
@@ -6855,30 +6909,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                       % (head or "unknown"))
             return
     else:
-        second = _verify_run_row(artifact)
-        first_run = dict(first.get("run") or {}, head=first.get("head"),
-                         headSource=first.get("headSource"))
-        second_run = dict(second, head=head, headSource=head_source)
-        if moved:
-            # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
-            second_run["headAfter"] = artifact.get("headShaAfter")
-        # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun
-        moved_heads = _verify_rerun_heads_moved(first.get("head"), artifact, head, moved)
-        # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
-        trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
-        # The decision is made here, once; the review record reads it off the entry and never re-derives it.
-        if result != "pass":
-            rerun_decision = "failed"
-        elif moved_heads is not None:
-            rerun_decision = "head-moved"
-        elif len(trees) > 1:
-            rerun_decision = "tree-changed"
-        else:
-            rerun_decision = "went-on"
-        # axis: the record holds the first failure and the one re-run, both runs, and the driver's decision on them — see bite-proof record c1l9a_wo1_verify_rerun
-        entry = {"check": "verify", "runs": [first_run, second_run], "decision": rerun_decision}
-        if rerun_decision == "head-moved":
-            entry["heads"] = list(moved_heads)
+        entry, moved_heads = _verify_rerun_entry(first, artifact, head, head_source, moved)
+        rerun_decision = entry["decision"]
         _record_round_append(state, "rerunChecks", entry)
         if rerun_decision == "head-moved":
             _set_terminal(state, "halted")
@@ -9571,7 +9603,14 @@ def _run_seam(seams, action, payload, state, config):
         return {"results": seams["auditor"](payload.get("targets"), state["round"]),
                 "collectionManifest": manifest}
     if action == P_VERIFY:
-        return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
+        ran = seams["verify_runner"](payload.get("command"), state["round"])
+        if not isinstance(ran, dict):
+            return {"result": ran}
+        artifact = {"result": ran.get("result")}
+        # axis: the in-process verify seam may report the head the run ran at, a non-empty string only — see bite-proof record c1l11f_wo_e_verify_after_restore
+        if isinstance(ran.get("headSha"), str) and ran["headSha"]:
+            artifact["headSha"] = ran["headSha"]
+        return artifact
     if action == P_APPLY_FIXES:
         return seams["fix_step"](payload.get("batch"), state["round"], payload)
     return {}
