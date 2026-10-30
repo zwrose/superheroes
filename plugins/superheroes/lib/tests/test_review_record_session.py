@@ -238,7 +238,7 @@ def test_the_fixers_family_joins_the_makers_and_the_session_marks_no_reviewer_in
     session = s.save()
     account = rs.account_from_session(session, extras(makers=[{"family": "other", "source": "the extras"}]))
     # bites on: the fixer's family missing from the makers, or the session marking independence (the record writer decides it)
-    assert account["makers"] == [{"family": "other", "source": "the extras"}, {"family": fam, "source": "review loop fixer", "fromStep": 3}]
+    assert account["makers"] == [{"family": "other", "source": "the extras"}, {"family": fam, "source": "build session's fixes", "fromStep": 3}]
     marks = {v["name"]: v.get("notIndependent") for v in account["reviewers"]}
     assert marks == {"code-reviewer (round 1)": None, "security-reviewer (round 1)": None}
     listed = rs.account_from_session(session, extras(makers=[{"family": fam, "source": "the extras"}]))
@@ -346,7 +346,7 @@ def _fixer_then_reviewer_account(tmp_path, review_round, original_makers=None):
 
 def test_a_reviewer_before_the_fix_is_judged_against_the_makers_it_faced(tmp_path):
     account, fake = _fixer_then_reviewer_account(tmp_path, 1, original_makers=["xai"])
-    fixer = next(m for m in account["makers"] if m["source"] == "review loop fixer")
+    fixer = next(m for m in account["makers"] if m["source"] == "build session's fixes")
     assert fixer["fromStep"] == 3 and account["reviewers"][0]["step"] == 2
     rec = rr.build_record(account, fake.readers())
     # bites on: a reviewer credited to an earlier commit demoted because its family later made a fix
@@ -379,7 +379,7 @@ def test_a_fixer_family_first_named_after_the_first_fix_keeps_its_delayed_start(
                              viewHeadSha=EARLIER), None)}
     account = rs.account_from_session(s.save(), extras(runDirs=["/run/n1"]), Fake(runs=runs).readers())
     # bites on: the cumulative union standing in for the original makers, dropping the fixer's fromStep entry
-    assert {"family": "anthropic", "source": "review loop fixer", "fromStep": 3} in account["makers"]
+    assert {"family": "anthropic", "source": "build session's fixes", "fromStep": 3} in account["makers"]
     assert not any(m["family"] == "anthropic" and "fromStep" not in m for m in account["makers"])
     assert {m["family"] for m in account["makers"]} == {"openai", "anthropic"}
 

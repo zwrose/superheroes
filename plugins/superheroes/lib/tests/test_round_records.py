@@ -2203,7 +2203,7 @@ def test_phase_name_constants_agree_across_modules():
         ("P_SCOPED", RP.P_SCOPED),
         ("P_GAPSWEEP", RP.P_GAPSWEEP),
         ("P_VERIFY", RP.P_VERIFY),
-        ("P_FIXER", RP.P_FIXER),
+        ("P_APPLY_FIXES", RP.P_APPLY_FIXES),
     )
     for attr, expected in shared:
         assert getattr(RD, attr) == expected == getattr(RA, attr)

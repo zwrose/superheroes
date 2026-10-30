@@ -231,6 +231,11 @@ class Round:
                     "verifierVendor": RD._nonpanel_selection(self.state(), self.dir, phase)[0]}
         if phase == RD.P_SECOND_TEST:
             return self.second_artifact(self.second_result(payload))
+        if phase == RD.P_APPLY_FIXES:
+            # this scaffold commits no fix, and a batch finding that carries a break-it test owes a commit
+            # binding unless it is reported unfixed
+            return {"fixes": [], "unfixed": [{"finding": _key(row), "why": "the scaffold applies no fix"}
+                                             for row in payload["batch"]]}
         return TRD._responder()(phase, payload, rnd)
 
     def second_artifact(self, findings):
@@ -280,7 +285,7 @@ def test_fr15_a_passing_test_that_reached_the_path_closes_the_finding_wrong(tmp_
     r = Round(tmp_path, first={_HELD["title"]: _REACHED})
     r.drive()
     state = r.state()
-    assert RD.P_SECOND_TEST not in r.seen and RD.P_FIXER not in r.seen, r.seen
+    assert RD.P_SECOND_TEST not in r.seen and RD.P_APPLY_FIXES not in r.seen, r.seen
     row = r.row(state=state)
     assert row["disposition"] == "refuted"
     assert row["grade"] == {"verdict": "wrong", "reason": _REACHED_REASON}
@@ -378,7 +383,7 @@ def test_fr17_a_refuted_verdict_in_pass_two_closes_the_finding_wrong(tmp_path):
     assert r.seen.count(RD.P_SECOND_TEST) == 1 and r.seen.count(RD.P_VERIFIERS) == 2, r.seen
     row = r.row(state=state)
     assert row["disposition"] == "refuted" and row["grade"] == {"verdict": "wrong", "reason": _SECOND_REASON}
-    assert state["terminal"] and RD.P_FIXER not in r.seen
+    assert state["terminal"] and RD.P_APPLY_FIXES not in r.seen
     assert [p["held"] for p in state["rounds"]["1"]["verifyPasses"]] == [1, 0]
 
 

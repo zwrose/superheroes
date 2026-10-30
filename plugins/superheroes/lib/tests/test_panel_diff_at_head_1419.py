@@ -103,12 +103,12 @@ def test_b1_fixer_without_head_diff_derives_git_and_audits(tmp_path):
     diff_round1 = diff_commit1
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_FIXER and rnd == 1:
+        if phase == RD.P_APPLY_FIXES and rnd == 1:
             _commit_file(repo, "f.py", "fixed head\n", "fixer commit")
             return {"fixes": [{"file": "f.py"}], "changedSubjects": ["Code"]}
         return _responder(round1_findings=_A_FINDING)(phase, payload, rnd)
 
-    n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
+    n = _drive_to_phase(d, cfg, respond, RD.P_APPLY_FIXES)
     fix_round = n["round"]
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       respond(n["phase"], n["payload"], n["round"]))
@@ -145,12 +145,12 @@ def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path, mon
     cfg = _cfg(verifyCommand="pytest -q", diff=diff_round1, repoRoot=repo, baseRef=base_sha)
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_FIXER and rnd == 1:
+        if phase == RD.P_APPLY_FIXES and rnd == 1:
             _commit_file(repo, "f.py", "fixed head\n", "fixer commit")
             return {"fixes": [{"file": "f.py"}], "changedSubjects": ["Code"]}
         return _responder(round1_findings=_A_FINDING)(phase, payload, rnd)
 
-    n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
+    n = _drive_to_phase(d, cfg, respond, RD.P_APPLY_FIXES)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       respond(n["phase"], n["payload"], n["round"]))
     assert s["ok"], s

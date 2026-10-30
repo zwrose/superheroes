@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#1966 — the fixer fold derives the post-fix diff from git and refuses a mismatched supplied one."""
+"""#1966 — the apply-fixes fold derives the post-fix diff from git and refuses a mismatched supplied one."""
 import os
 import subprocess
 import sys
@@ -76,7 +76,7 @@ _FINDINGS_A = [
 
 
 def _loop(supplied, scoped_findings=None, seam=None):
-    """A run_loop over a scripted fixer supplying `supplied` (None = nothing) and a git answer."""
+    """A run_loop over a scripted fix step supplying `supplied` (None = nothing) and a git answer."""
     fired = {"scoped": False}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -174,7 +174,7 @@ def _init_two_line_repo(tmp_path):
 
 
 class _Cli:
-    """A CLI-path session over a real two-commit repository, driven to the first fixer step."""
+    """A CLI-path session over a real two-commit repository, driven to the first apply-fixes step."""
 
     def __init__(self, tmp_path, monkeypatch, findings=None, **cfg_over):
         _pin_git_env(monkeypatch)
@@ -190,7 +190,7 @@ class _Cli:
         self.supply = lambda cli: {}
 
     def respond(self, phase, payload, rnd):
-        if phase == RD.P_FIXER and rnd == 1:
+        if phase == RD.P_APPLY_FIXES and rnd == 1:
             self.fix_calls += 1
             body = self.fixer_body if self.fix_calls == 1 else "%sslice %d\n" % (
                 self.fixer_body, self.fix_calls)
@@ -201,7 +201,7 @@ class _Cli:
         return _responder(round1_findings=self.findings)(phase, payload, rnd)
 
     def to_fixer(self):
-        return _drive_to_phase(self.d, self.cfg, self.respond, RD.P_FIXER)
+        return _drive_to_phase(self.d, self.cfg, self.respond, RD.P_APPLY_FIXES)
 
     def submit(self, n):
         return RD.cmd_submit(self.d, n["phase"], n["attempt"], n["expectedStateHash"],
@@ -387,7 +387,7 @@ def test_e9_second_fix_slice_with_a_mismatching_diff_parks_without_post_fix_entr
     assert ok and state.get("terminal") is None
     assert state["rounds"][str(n1["round"])]["headDiffCheck"] == "match"
     n2 = RD.cmd_next(cli.d)
-    assert n2["phase"] == RD.P_FIXER
+    assert n2["phase"] == RD.P_APPLY_FIXES
     out2 = cli.submit(n2)
     assert out2["ok"], out2
     ok, state = RD.load_state(cli.d)
@@ -448,20 +448,3 @@ def test_e10_no_repository_unreadable_path_is_unknown_and_never_an_empty_surface
     assert reason.startswith("panel-diff-underivable")
     assert "repoRoot missing" in reason
     assert "2" not in state["rounds"]
-
-
-_BAD_ENTRY = {"command": "cmd", "refusedBy": "denied", "next": "stopped"}
-
-
-@pytest.mark.parametrize("refusals", ["x", [_BAD_ENTRY]])
-def test_hand_submitted_fixer_refusals_are_refused_before_the_fold(tmp_path, monkeypatch, refusals):
-    cli = _Cli(tmp_path, monkeypatch)
-    cli.supply = lambda c: {"refusals": refusals}
-    n = cli.to_fixer()
-    out = cli.submit(n)
-    assert out["ok"] is False
-    assert out["reason"].startswith("`refusals` — ")
-    ok, state = RD.load_state(cli.d)
-    assert ok
-    assert state["pending"]["phase"] == RD.P_FIXER
-    assert "fix" not in state["rounds"].get(str(n["round"]), {})

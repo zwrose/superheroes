@@ -263,7 +263,7 @@ def test_C13_fix_fold_records_fix_fold_head(tmp_path, monkeypatch):
     head = "f" * 40
     monkeypatch.setattr(RD, "_resolve_fix_fold_head_sha", lambda _sd, _st: (head, None))
     state["_fixBatch"] = []
-    RD._fold_fixer(state, state["config"], {"fixes": []}, session_dir=str(tmp_path))
+    RD._fold_apply_fixes(state, state["config"], {"fixes": []}, session_dir=str(tmp_path))
     assert state["rounds"]["2"]["fixFoldHead"] == head
 
 

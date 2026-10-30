@@ -210,7 +210,7 @@ def test_fix_fold_records_post_fix_head_sha(tmp_path):
         }
     ]
     artifact = {"fixes": [{"file": "src/a.py"}], "headDiff": "diff"}
-    RD._fold_fixer(state, state["config"], artifact, session_dir=str(session_dir))
+    RD._fold_apply_fixes(state, state["config"], artifact, session_dir=str(session_dir))
 
     assert state["config"]["fixFoldHeadSha"] == post_fix_head
     with open(session_dir / round_records.META_FILE, encoding="utf-8") as fh:
