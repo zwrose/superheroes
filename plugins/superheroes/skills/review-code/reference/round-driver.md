@@ -48,6 +48,14 @@ round 1 as above. The first `next` takes the decision once and stores it as the 
 later `next` never takes it again. Round 1's record carries it as `returning`: `read`, `lastReviewed`,
 `countable`, `newAreas`, `why`. A proven copy is in no input of a returning round.
 
+An **empty returning round** — the change since the last reviewed commit is a catch-up merge or proven
+copies only, with no carried finding due an audit — converges with no reviewer run (`scopedFinder:
+skipped-empty-surface`). Its record carries the earlier record's covering reviewers, each marked
+`carried` with the commit it read, and says no reviewer ran in this round. That holds only when the
+writer, reading git itself, finds nothing changed since that commit and the earlier record is a finished,
+not abandoned review whose findings all have an outcome (see `review-record.md`); otherwise the record
+write refuses `review-session-unsupported`.
+
 Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
 keys of the previous round's fix batch>]}`. Round 1 records no `focus`. A review record from an
 earlier version may list a wider round with its reason; the driver no longer writes one.

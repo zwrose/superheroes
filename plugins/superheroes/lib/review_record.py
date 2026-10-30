@@ -48,6 +48,7 @@ import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
+import returning_review  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import round_phases  # noqa: E402
 import sanitized_view  # noqa: E402
@@ -364,8 +365,53 @@ def _readers(overrides):
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
             "changed_paths": changed_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
-            "owner_ruling_comment": _owner_ruling_comment,
+            "owner_ruling_comment": _owner_ruling_comment, "returning_decide": returning_review.decide,
             **(overrides or {})}
+
+
+# --- a carried review: an empty returning round's record reads the earlier review's reviewers ---
+
+_FULL_SHA = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+
+
+def _full_sha(value):
+    return isinstance(value, str) and _FULL_SHA.fullmatch(value) is not None
+
+
+def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=None):
+    """None when a record may carry `prior`'s reviewers for an empty returning round, else a short plain reason naming
+    the first leg that fails. The one home of the carry rule: the session writer and the record writer both ask it.
+
+    The legs, in order: `prior`'s final commit is `last_reviewed`; every finding of `prior` has an outcome; the
+    returning-review decider (`decide`, default `returning_review.decide`), asked afresh from git, answers `changed`
+    with no changed file (it also checks ancestry, a covering reviewer, a finished and not abandoned `prior`);
+    and a reviewer row of `prior` ran and covers its final commit. A fault in `decide` is a refusal."""
+    final = prior.get("finalCommit") if isinstance(prior, dict) else None
+    # axis: the earlier record's final commit must be the commit the session says it last reviewed — see bite-proof record c1l11d_wo_a_carried_review
+    if not (_full_sha(last_reviewed) and isinstance(final, dict) and final.get("sha") == last_reviewed):
+        return "the earlier record's final commit is not the last reviewed commit"
+    findings = prior.get("findings")
+    # axis: an earlier finding with no outcome stops the carry, so an unsettled finding never reads reviewed — see bite-proof record c1l11d_wo_a_carried_review
+    if not (isinstance(findings, list) and all(isinstance(f, dict) and f.get("outcome") is not None for f in findings)):
+        return "an earlier finding is still open"
+    try:
+        answer = (decide or returning_review.decide)(repo_root, base, head, dict(prior, ok=True), proven=proven)
+    except Exception as exc:  # noqa: BLE001 — fail closed: a decision that cannot be made carries nothing
+        return f"the change since the last reviewed commit could not be read ({type(exc).__name__})"
+    if not isinstance(answer, dict):
+        return "the change since the last reviewed commit could not be read"
+    # axis: the writer re-derives from git that the change since the last reviewed commit is empty; the account's word is never taken — see bite-proof record c1l11d_wo_a_carried_review
+    if answer.get("read") != returning_review.READ_CHANGED or answer.get("changedFiles") != []:
+        why = answer.get("why")
+        first = why[0] if isinstance(why, list) and why and isinstance(why[0], str) else None
+        return ("the earlier review does not stand for this head" + (f" ({first})" if first else "")
+                if answer.get("read") != returning_review.READ_CHANGED
+                else "the change since the last reviewed commit holds changed files")
+    rows = prior.get("reviewers")
+    if not (isinstance(rows, list) and any(isinstance(v, dict) and v.get("coversFinalCommit") is True
+                                           and v.get("ran") != RAN_NOT_RUN for v in rows)):
+        return "no reviewer of the earlier record ran and covers its final commit"
+    return None
 
 
 # --- the account ---
@@ -618,6 +664,15 @@ def _validate(a):
             chk(fault is None, f"reviewers[{i}].readParts{fault}")
         # axis: the not-run reason is no part of the account, on any reviewer row — see bite-proof record c1l2_wo2_not_run_retired
         chk(r.get("notRunReason") is None, f"reviewers[{i}].notRunReason")
+        chk("carriedFrom" not in r or _full_sha(r["carriedFrom"]), f"reviewers[{i}].carriedFrom")
+    carried_review = a.get("carriedReview")
+    if "carriedReview" in a:
+        chk(isinstance(carried_review, dict) and set(carried_review) == {"lastReviewed", "why"}
+            and _full_sha(carried_review["lastReviewed"]) and _nb(carried_review["why"]), "carriedReview")
+    from_shas = {r["carriedFrom"] for r in a["reviewers"] if "carriedFrom" in r}
+    # axis: a carried row and the account's carriedReview name each other and the same commit, never one without the other — see bite-proof record c1l11d_wo_a_carried_review
+    chk(bool(from_shas) == ("carriedReview" in a)
+        and (not from_shas or from_shas == {carried_review["lastReviewed"]}), "carriedReview (and reviewers[].carriedFrom)")
     makers = a.get("makers")
     chk(makers is None or isinstance(makers, list), "makers")
     for i, m in enumerate(makers or []):
@@ -1006,7 +1061,22 @@ def _own_word_ok(word):
     return isinstance(word, dict) and all(isinstance(word.get(k), str) and word[k].strip() for k in ("words", "where"))
 
 
-def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset()):
+def _carried_row(r, carry):
+    """(the earlier record's row for the account row `r`, None), or (None, why it is not carried). `carry` is
+    (carry_refusal's answer, the earlier record). Only the writer's own reading of the earlier record decides."""
+    why, prior = carry
+    if why is not None:
+        return None, why
+    for v in prior["reviewers"]:
+        # axis: a carried row takes a row of the earlier record with its name, vendor and model that ran and covers its final commit — see bite-proof record c1l11d_wo_a_carried_review
+        if isinstance(v, dict) and all(v.get(k) == r.get(k) for k in ("name", "vendor", "model")) \
+                and v.get("coversFinalCommit") is True and v.get("ran") in _RAN_STATES:
+            return v, None
+    return None, "no matching covering reviewer in the earlier record"
+
+
+def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset(),
+              carry=None):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
     if "readParts" in r:
@@ -1016,7 +1086,16 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
     named = isinstance(r.get("commit"), str) and bool(r["commit"])
     target = r["commit"] if named else head
     credited = None
-    if r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
+    if "carriedFrom" in r:
+        held, why = _carried_row(r, carry or ("no earlier record to carry", None))
+        if held is not None:
+            out.update(ran=held["ran"], family=held.get("family"), carried={"commit": r["carriedFrom"]})
+            named, target = True, r["carriedFrom"]
+        else:
+            out.update(ran="not-run", runNote=why)
+            if r["ran"]:
+                dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
+    elif r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
         out.update(ran="not-run", runNote="the run record is claimed by more than one reviewer")
         if r["ran"]:
             dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
@@ -1056,6 +1135,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
 
     def demote(note):
         out.pop("observation", None)
+        out.pop("carried", None)
         out.update(ran="not-run", runNote=note)
         if r["ran"]:
             dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
@@ -1088,7 +1168,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
             else:
                 demote("the reviewer is from a maker's family and no owner's word for this change lets it run")
     out["commit"] = target if named else None
-    out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and target == head
+    out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and (target == head or "carried" in out)
     if isinstance(r.get("ownerWord"), dict):
         out["ownerWord"] = r["ownerWord"]
     # axis: a row's cost is read from the engine record that credited it, never from the account; unmeasured is null, never zero — see bite-proof record c1l1_wo_a_record_seam
@@ -1380,8 +1460,12 @@ def build_record(account, readers, prior=None):
             dis.append({"fact": fact, "session": session, "code": code})
     dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
+    # A carried row is decided by the writer's own reading of the latest earlier record and of git, once per record.
+    carried_from = a["carriedReview"]["lastReviewed"] if "carriedReview" in a else None
+    carry = (carry_refusal(prior, carried_from, a.get("repoRoot"), a.get("baseRef"), fc["sha"],
+                           a.get("provenCopies") or [], rd["returning_decide"]), prior) if carried_from else None
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
-                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()))
+                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()), carry)
                  for r in a["reviewers"]]
     notes, missing, held = [], [], {}
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
@@ -1438,7 +1522,16 @@ def build_record(account, readers, prior=None):
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
-    ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
+    ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run" and "carried" not in v]
+    carried_names = [v["name"] for v in reviewers if "carried" in v]
+    if carried_names:
+        # the record says plainly that no reviewer ran in this round, and what it carries instead
+        kept = f"carried from the earlier review of {_short(carried_from)}: {', '.join(carried_names)}"
+        reviewers_line = (f"Reviewers that ran: {', '.join(ran_names)}; {kept}" if ran_names
+                          else f"Reviewers that ran: none in this round — {kept}")
+        carried_lines = [reviewers_line, a["carriedReview"]["why"]]
+    else:
+        carried_lines = ["Reviewers that ran: " + (", ".join(ran_names) or "none")]
     # An account that names no repository reads no changed files, so the list is unknown.
     paths = rd["changed_paths"](a["pr"], a["repo"]) if a.get("repoRoot") else None
     withheld = rd["withheld_paths"](a.get("repoRoot"), fc["sha"], paths) if isinstance(paths, list) else None
@@ -1463,8 +1556,7 @@ def build_record(account, readers, prior=None):
                  "tokens": sum(toks) if toks else None, "source": "engine records",
                  "notCounted": [v["name"] for v in reviewers if v["ran"] != "engine-record"]},
         "sessionDisagreements": dis,
-        "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
-                    "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
+        "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}", *carried_lines] + a["checked"],
         "previousRecord": None,
         "earlierRecordsNotChecked": [],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1717,7 +1809,10 @@ def _row_bullet(v, final_sha):
     """The bullet for one reviewer row that carries no round suffix."""
     label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
         v["ran"], "did not run")
-    if v["ran"] != "not-run" and v.get("commit") and v["commit"] != final_sha:
+    if v["ran"] != "not-run" and isinstance(v.get("carried"), dict):
+        # axis: a carried row says it was carried and from which commit, never that it ran — see bite-proof record c1l11d_wo_a_carried_review
+        label = f"carried from {_short(v['carried'].get('commit'))}"
+    elif v["ran"] != "not-run" and v.get("commit") and v["commit"] != final_sha:
         label += f" on {v['commit'][:7]}"
     word = v.get("ownerWord")
     read = _read_words([v])
@@ -2039,9 +2134,11 @@ def _summary(r, level):
     checked = list(r["checked"][:2])
     missing = r["whatIsMissing"]
     if compact:
-        ran = sum(1 for v in r["reviewers"] if v["ran"] != "not-run")
-        checked = checked[:1] + ([f"Reviewers that ran: {_plural(ran, 'reviewer', 'reviewers')} {LISTED}"]
-                                 if len(checked) > 1 else [])
+        ran = sum(1 for v in r["reviewers"] if v["ran"] != "not-run" and "carried" not in v)
+        carried = sum(1 for v in r["reviewers"] if "carried" in v)
+        ran_text = f"{_plural(ran, 'reviewer', 'reviewers')} {LISTED}" if ran or not carried else "none in this round"
+        kept_text = f"; {_plural(carried, 'reviewer', 'reviewers')} carried from the earlier review {LISTED}" if carried else ""
+        checked = checked[:1] + ([f"Reviewers that ran: {ran_text}{kept_text}"] if len(checked) > 1 else [])
         left_text = f"{_plural(len(missing), 'item', 'items')} {LISTED}" if missing else "nothing"
     else:
         left_text = "; ".join(missing) or "nothing"
