@@ -282,3 +282,11 @@ A [cloud lane](glossary.md#cloud-lane) has no local pid to probe, no session tra
 heartbeat, so none of the signals above applies to it. Its liveness is read from its activity on
 GitHub; the procedure is in the showrunner's
 [wave-watch reference](../skills/showrunner/reference/wave-watch.md#before-treating-lane-stale-as-a-wedge).
+
+A cloud lane stopped by its account's usage limit is recovered the way a local lane stopped by a
+limit is: recorded `died`, then adopted at once from its pushed work on the account the owner named
+for that case (the launcher's existing instance override), with no owner step. While the limit holds
+the session cannot run, so the limit reading (`cloud_relay.py limit`, read from the relay's own
+session record) is the stop evidence, as a dead process is for a local lane. At the reset the old
+session comes back, so it checks for a newer launch and stands down, and the advisor archives the
+superseded sessions through the cloud helper at the reset time it read.
