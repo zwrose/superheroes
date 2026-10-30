@@ -1230,9 +1230,9 @@ def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
     assert payload["certification"]["shape"] == "full-panel-confirmed"
 
 
-def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
-    """A malformed/quoted-path head diff → unknown surface → a FULL reviewer-deep panel (the
-    existing unknown→run-everything rule), not a scoped audit. Git's answer is the malformed text
+def test_unknown_delta_surface_hands_the_pr_back_and_runs_no_panel(tmp_path, monkeypatch):
+    """A malformed/quoted-path head diff → unknown surface → the PR is handed back
+    (`fix-surface-unknown`), not a scoped audit and not a panel. Git's answer is the malformed text
     too, so the supplied diff cross-checks as a match and the split meets the malformed diff."""
     from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
 
@@ -1276,10 +1276,11 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
         return {}
 
     payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
-    assert seen["panel_r2"] is True
-    assert payload["verdict"] == "converged"
+    assert seen["panel_r2"] is False
+    assert payload["verdict"] == "handed-back"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
+    assert receipt["decisions"][-1]["kind"] == "fix-surface-unknown", receipt["decisions"]
     first = receipt["rounds"][0]
     assert first["headDiffSource"] == "git", first
     assert first["headDiffCheck"] == "match", first
@@ -1300,10 +1301,18 @@ _R2B_HEAD_MF = ("diff --git a/f.py b/f.py\nindex 2..3 100644\n--- a/f.py\n+++ b/
                 "diff --git a/g.py b/g.py\nindex 0..1 100644\n--- a/g.py\n+++ b/g.py\n"
                 "@@ -0,0 +1,3 @@\n+alpha\n+beta\n+gamma\n")
 
+# The head-file lines the fix changed between _R2B_REVIEWED and _R2B_HEAD_MF: f.py line 2 (`+more` became
+# `+fixed`) and the new hunk at 50-51, and the three lines of the new file g.py.
+_R2B_FIX_LINES = {"f.py": [(2, 2), (50, 51)], "g.py": [(1, 3)]}
+
+
+def _line_ranges(hunks):
+    return {file: [(h["start"], h["end"]) for h in entries] for file, entries in hunks.items()}
+
 
 def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
-    """The dispatch-scoped-finder payload carries EXACTLY the split's computed `newSurface` hunks
-    (file → hunk ranges + text) — a multi-file surface must arrive intact, not empty (#507 WO-R2b:
+    """The dispatch-scoped-finder payload carries the fixes' own surface (file → the head lines the fixes
+    changed + the delta text) — a multi-file surface must arrive intact, not empty (#507 WO-R2b:
     the field-found defect was an empty `hunks: {}` payload despite a real computed surface)."""
     d = str(tmp_path)
     captured = {"payload": None}
@@ -1339,41 +1348,9 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
     hunks = captured["payload"]["hunks"]
-    # exactly the split's computed new surface — a non-empty, multi-file map.
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert expected and set(expected) == {"f.py", "g.py"}, expected
-    assert hunks == expected
-    assert sum(len(v) for v in hunks.values()) == 2
-
-
-def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
-    """A genuinely empty computed new surface (split `unknown: False`, no new hunks — the fix only
-    touched the audited lines) SKIPS the scoped-finder dispatch with a receipt-visible
-    `scopedFinder: skipped-empty-surface` note, never a vacuous scan over nothing (#507 WO-R2b)."""
-    d = str(tmp_path)
-    seen = {"scoped": False}
-
-    base = _responder(round1_findings=[
-        {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}])
-
-    def respond(phase, payload, rnd):
-        if phase == RD.P_SCOPED:
-            seen["scoped"] = True
-        return base(phase, payload, rnd)
-
-    payload = _drive_cli(d, _cfg(), respond)
-    assert payload["verdict"] == "converged"
-    assert seen["scoped"] is False, "the scoped finder was dispatched over an empty surface"
-    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
-        receipt = json.load(fh)
-    ok, reason = RD.validate_receipt(receipt)
-    assert ok, reason
-    # the skip is journaled receipt-visibly: as a decision AND on the delta round record.
-    kinds = [dc["kind"] for dc in receipt["decisions"]]
-    assert "scoped-finder-skipped" in kinds, kinds
-    delta_round = [r for r in receipt["rounds"] if r.get("scopedFinder")]
-    assert delta_round and delta_round[0]["scopedFinder"] == "skipped-empty-surface", receipt["rounds"]
+    # the fixes' own surface — a non-empty, multi-file map, the fixed line of the audited hunk included.
+    assert set(hunks) == {"f.py", "g.py"}, hunks
+    assert _line_ranges(hunks) == _R2B_FIX_LINES
 
 
 # =============================================================================
@@ -1427,9 +1404,7 @@ def test_fixer_head_diff_path_form_end_to_end(tmp_path):
     payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    assert _line_ranges(captured["payload"]["hunks"]) == _R2B_FIX_LINES
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "path" for r in receipt["rounds"]), receipt["rounds"]
@@ -1503,9 +1478,7 @@ def test_fixer_inline_head_diff_wins_over_path(tmp_path):
     assert payload["verdict"] == "converged"
     # inline won → the scoped finder fired over the inline diff's two-file surface.
     assert captured["payload"] is not None
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    assert _line_ranges(captured["payload"]["hunks"]) == _R2B_FIX_LINES
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "inline" for r in receipt["rounds"]), receipt["rounds"]
@@ -1519,7 +1492,8 @@ def test_run_loop_code_leg_end_to_end(tmp_path):
     receipt = RD.run_loop(_seams(reviewer=lambda dim, tier, rnd, ctx:
                                  ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE,
                                                  "file": "f.py", "line": 1}]}
-                                  if rnd == 1 and dim == "code-reviewer" else [])),
+                                  if rnd == 1 and dim == "code-reviewer" else []),
+                                 vendors=["claude", "codex"]),
                           _cfg_cert())
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] is not None
@@ -1626,7 +1600,7 @@ def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
                 for c in (clusters or []) for i in (c.get("ids") or [])]
 
     result, state = _run_loop_capturing_state(
-        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier),
+        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier, vendors=["claude", "codex"]),
         _cfg_cert(),
     )
     assert result["verdict"] != "cannot-certify"
@@ -1693,7 +1667,7 @@ def _persistent_not_discharged_seams(io=None):
         verifier=plaus_verifier,
         auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
                                       for t in (targets or [])],
-        fix_step=fix_step, io=io)
+        fix_step=fix_step, io=io, vendors=["claude", "codex"])
 
 
 def test_not_discharged_twice_self_recovers_once_then_is_handed_back(tmp_path):
@@ -1748,7 +1722,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         verifier=plaus_verifier,
         auditor=auditor,
         fix_step=fix_step,
-        io=io or {})
+        io=io or {}, vendors=["claude", "codex"])
     seams["_audit_calls"] = audit_calls
     seams["_fix_calls"] = counter
     return seams

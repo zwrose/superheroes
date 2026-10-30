@@ -13,8 +13,8 @@ layers over one core:
     idioms. `changed_subjects` derives the fix's changed policy subjects from git (the reviewed vs
     head diff), NEVER the session's self-report (#157/#158) — the library default + the CLI path wire
     the real derivation; the eval harness injects a scripted replay. `panel_diff` derives the
-    git head diff for unknown-surface full panels — the library default + the CLI path wire the
-    real git helper; run_loop may inject a scripted replay.
+    post-fix git head diff — the library default + the CLI path wire the real git helper; run_loop
+    may inject a scripted replay.
   - Layer 2 (`next`/`submit` CLI): the state machine BETWEEN orchestrator dispatches — `next`
     emits the one action to run, `submit` folds its artifact and advances.
 
@@ -22,8 +22,11 @@ Nothing from the review reaches the owner mid-review: every phase is a `dispatch
 `run-verify` or `terminal`. A tradeoff/product-choice blocker only the owner can settle is held out
 of the fix batch (`_hold_owner_choice`) and handed back open (`handed-back` /
 `owner-choice-open`) when the loop would otherwise converge over it; an audit stall that persists
-after the one recovery attempt hands the PR back too (`fix-keeps-failing`). `_hand_back` is the one
-writer of the `handed-back` verdict.
+after the one recovery attempt hands the PR back too (`fix-keeps-failing`), and so does a fix
+surface the driver cannot work out (`fix-surface-unknown`). Only round 1 runs a full panel: every
+later round runs the fix auditor over each fix and the scoped finder over the fixes' own diff, and
+a converged review that needed fixes ends on a round's audit and scoped finder. `_hand_back` is the
+one writer of the `handed-back` verdict.
 
 Like its decider siblings (audits / delta_surface / verification): DETERMINISTIC, stdlib-only,
 FAIL-CLOSED. Junk in → conservative out + disclosure; never certify on silence; a wrong
@@ -32,11 +35,9 @@ MORE review, a park, or a disclosed downgrade — never toward a silent clean. T
 in the pure deciders this module imports (`audits`, `verification`, `circuit_breaker`,
 `review_round_policy`, `delta_surface`, `model_registry`); the driver only SEQUENCES them and
 RECORDS what happened, and every terminal writes the driver receipt (`validate_receipt` guards
-its shape). The confirmation economics (`review_round_policy.confirmation_followup` /
-`is_cross_cutting`, MAX_CONFIRMATIONS=2), the reviewer re-dispatch budget
-(`loop_plan_common.REDISPATCH_BUDGET` — the single home), and receipt validation
-(`panel_tally._valid_final_receipt`, consumed bit-compatibly, never modified) are all reused,
-not re-implemented.
+its shape). The reviewer re-dispatch budget (`loop_plan_common.REDISPATCH_BUDGET` — the single
+home) and receipt validation (`panel_tally._valid_final_receipt`, consumed bit-compatibly, never
+modified) are reused, not re-implemented.
 """
 import argparse
 import copy
@@ -120,7 +121,6 @@ CHEAP = "reviewer"
 # stale seat is re-dispatched at most this many times before it is recorded terminal `missing`
 # with its findings carried as unverified. The code leg's read goes through the constant now.
 REDISPATCH_BUDGET = loop_plan_common.REDISPATCH_BUDGET
-MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
 # Fold-owned guidance record key inside judgmentDispositions entries.
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 # The verifier's grade on a finding; only `_fold_verifiers` writes it (`_seed_ledger_entry` strips a seat's).
@@ -144,7 +144,6 @@ SCHEMA_VERSION = 2
 STATE_FILE = session_contract.STATE_FILE
 MIRROR_FILE = session_contract.MIRROR_FILE
 MIRROR_SCHEMA = "loop-state-mirror/1"
-FULL_PANEL_NOT_RERAISED = session_contract.FULL_PANEL_NOT_RERAISED
 JOURNAL_FILE = session_contract.JOURNAL_FILE
 JOURNAL_FAULT_FILE = session_contract.JOURNAL_FAULT_FILE
 RULE_CMD = session_contract.RULE_CMD
@@ -1295,10 +1294,8 @@ def _fix_batch_cap(config):
 
 
 VERIFY_THEN_CAP = "cap"
-VERIFY_THEN_PANEL = "full-panel"
 VERIFY_THEN_POST_AUDITS = "post-audits"
 DELTA_BASELINE_ABSENT = "delta-baseline-absent"
-PANEL_DIFF_UNDERIVABLE_CAUSE = "panel-diff-underivable"
 HEAD_DIFF_MISMATCH_CAUSE = "head-diff-mismatch"
 HEAD_DIFF_UNVERIFIABLE_CAUSE = "head-diff-unverifiable"
 
@@ -1354,7 +1351,6 @@ def new_state(config=None):
         "findings": [],
         "decisions": [],
         "auditRounds": [],
-        "confirmations": 0,
         "selfRecovered": False,
         # A single live vendor is degraded only when no live vendor is family-independent of the
         # declared fixer; duplicate vendor entries never count twice toward the two-vendor pool.
@@ -1375,11 +1371,6 @@ def new_state(config=None):
         # incomplete, cleared only when a COMPLETE panel re-establishes coverage. A converge resting
         # on it is withheld (silence never certifies — #507 R2 residual-1).
         "_incompletePanel": False,
-        # The UNION of policy subjects the fix touched since the last full panel — the cross-cutting
-        # re-arm reads THIS accumulation, not a single round's delta, so rework that spreads across
-        # MULTIPLE post-confirmation fixes still trips the bar (#507 R2 residual-5). None = an unknown
-        # surface since the panel (fail toward one more confirmation).
-        "_changedSubjectsSincePanel": [],
         "terminal": None,
         "certification": None,
         # #507 WO-D: the in-memory review-record ledger (one record per REVIEW round) the
@@ -2772,7 +2763,7 @@ def _annotate_challenged(coverage, findings):
 def _append_review_record(state, rnd, kind, dim_map, findings):
     """Append (or replace) this round's in-memory review record for the challenged-coverage /
     recurrence breaker. The record carries the round's compiled findings, a per-dimension run map
-    (so `_round_reviewed` / `_confirmation_qualifies` read it), the challenged-annotated coverage
+    (so `_round_reviewed` reads it), the challenged-annotated coverage
     accumulated so far, and the recurrence-derived generalize grace (recurrent_classes over PRIOR
     records + coverage — the same current=compiled / prior=record split tally_round_decider uses)."""
     findings = [
@@ -2989,9 +2980,9 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     (the eval harness replays the fixture's subjects); the CLI submit path passes None so the fold
     wires the real git derivation. It is inert for every other phase.
 
-    `panel_diff_seam` is threaded to verify and apply-fixes folds (unknown-surface full panels):
-    run_loop passes the injected seam; the CLI submit path passes None so those folds wire the real
-    git derivation. It is inert for every other phase.
+    `panel_diff_seam` is threaded to the verify and apply-fixes folds: run_loop passes the injected
+    seam; the CLI submit path passes None so those folds wire the real git derivation. It is inert
+    for every other phase.
 
     `verified_head_resolution` is inert for every phase but ``P_VERIFY``. `fix_commits` is inert
     for every phase but ``P_APPLY_FIXES``: the bindings the submit chokepoint verified against git."""
@@ -3024,7 +3015,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     return state
 
 
-# ---- round-1 / full-panel legs --------------------------------------------------------------
+# ---- round-1 panel legs ---------------------------------------------------------------------
 
 _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
@@ -3205,116 +3196,6 @@ def _break_it_run_keys(runs, compiled):
     return out
 
 
-def _panel_raised_keys(compiled):
-    """Identity keys of every finding a panel took in, including each Nit a summary row collapsed."""
-    raised = set()
-    for finding in compiled if isinstance(compiled, list) else ():
-        if not isinstance(finding, dict):
-            continue
-        key = _finding_identity_key(finding)
-        if key:
-            raised.add(key)
-        members = finding.get("members") if finding.get("summaryEntry") else None
-        for member in members if isinstance(members, list) else ():
-            member_key = _finding_identity_key(member) if isinstance(member, dict) else None
-            if member_key:
-                raised.add(member_key)
-    return raised
-
-
-def _rounds_with_fix_report(state):
-    """{round: keys} for each earlier round whose build session reported fixes and recorded the
-    identity keys of the findings it fixed (`fixReportedKeys`)."""
-    reported = {}
-    rounds = state.get("rounds")
-    for round_text, rec in (rounds.items() if isinstance(rounds, dict) else ()):
-        fix = rec.get("fix") if isinstance(rec, dict) else None
-        keys = rec.get("fixReportedKeys") if isinstance(rec, dict) else None
-        if (not isinstance(fix, dict) or not fix.get("fixes")
-                or not isinstance(keys, list) or not str(round_text).isdigit()):
-            continue
-        reported[int(round_text)] = {k for k in keys if isinstance(k, str) and k}
-    return reported
-
-
-def _credit_fixes_not_reraised(state, compiled, panel_raw=()):
-    """A finding the build session reported fixed, that this complete full panel did not raise again, is
-    `fixed` — provided the fix report came after the finding's latest raise. Called before the
-    panel's findings are staged, so the end-of-loop settle never counts it a leftover. A finding
-    that already has a current disposition (one no ruling reopened), was merged into another, or
-    holds an out-of-scope ruling is left as it is. A finding the panel raised but compilation
-    dropped (`panel_raw`), and a finding whose merged-in group has any member raised, count as
-    raised: silence is the only credit. Crediting a finding supersedes the reopening markers of its
-    ruling closure."""
-    ledger_by_key, fault = _disposition_ledger_by_key(state)
-    if fault is not None:
-        return
-    # Link this panel's rewordings the way its staging (which runs after) will, on a scratch copy:
-    # a reword of a fixed finding raises its group, so the original is not credited by a panel that
-    # raised it again. The credit step never writes lineage or decisions; staging owns them.
-    ledger_rows, _ = session_contract.read_disposition_ledger(state)
-    scratch = copy.deepcopy(state)
-    panel_rows = [f for f in compiled if isinstance(f, dict)] if isinstance(compiled, list) else []
-    panel_rows += [f for f in panel_raw if isinstance(f, dict)] if isinstance(panel_raw, (list, tuple)) else []
-    carry = _LineageCarry(scratch, panel_rows, ledger_rows)
-    carry.revoke_ambiguous(scratch)
-    for finding in panel_rows:
-        key = _finding_identity_key(finding)
-        if key:
-            carry.apply(scratch, finding, key)
-    # The raised closure: every key this panel raised (compiled or compile-dropped), grown until
-    # nothing is new by each key's merged-into representative, every ledger member merged into it, and every member of its lineage group.
-    raised_now = _panel_raised_keys(panel_rows)
-    ledger_reps = {}
-    for entry_key, entry in ledger_by_key.items():
-        rep = session_contract.resolve_merged_into_entry(entry, ledger_by_key)
-        ledger_reps[entry_key] = _finding_identity_key(rep) if isinstance(rep, dict) else entry_key
-    merged_members = {}
-    for entry_key, rep_key in ledger_reps.items():
-        merged_members.setdefault(rep_key, set()).add(entry_key)
-    pending = set(raised_now)
-    while pending:
-        key = pending.pop()
-        grown = set(_lineage_group(scratch, key))
-        if key in ledger_reps:
-            grown.add(ledger_reps[key])
-        grown |= merged_members.get(key, set())
-        for new_key in grown - raised_now:
-            raised_now.add(new_key)
-            pending.add(new_key)
-    reported = _rounds_with_fix_report(state)
-    if not reported:
-        return
-    receipt = {"kind": FULL_PANEL_NOT_RERAISED, "panelRound": state["round"]}
-    superseded = set()
-    for key, entry in list(ledger_by_key.items()):
-        if (not isinstance(entry, dict) or key in raised_now or ledger_reps.get(key) in raised_now
-                or entry.get(session_contract.MERGED_INTO_FIELD)
-                or entry.get("disposition") == "out-of-scope"
-                or (_disposition_is_current(entry) and not _restaged_after(state, key, entry))):
-            continue
-        raised_round = entry.get(session_contract.RAISED_ROUND_FIELD)
-        if isinstance(raised_round, bool) or not isinstance(raised_round, int):
-            continue
-        floor = raised_round
-        if _restaged_after(state, key, entry):
-            # a reopened finding is credited only on a report from its retry (the reopening round or later); none recorded fails closed
-            floor = (state.get("restagedInRound") or {}).get(key)
-            if not _is_plain_int(floor):
-                continue
-        # axis: a fix report made before the finding's latest raise says nothing about the raise after it — see bite-proof record c7l3_wo3_driver
-        if any(floor <= fix_round < state["round"] and key in keys
-               for fix_round, keys in reported.items()):
-            _record_disposition(state, key, "fixed", state["round"], dispositionReceipt=receipt)
-            superseded |= _ruling_closure(state, ledger_by_key, key) - raised_now
-    # The fresh `fixed` is what a ruling's reopening marker was waiting for, on the key and its closure.
-    # Popped after the loop so one credit never changes what a later key in the same pass reads.
-    reopened = state.get("restagedAfterDispositionSeq")
-    for member in superseded if reopened else ():
-        reopened.pop(member, None)
-        (state.get("restagedInRound") or {}).pop(member, None)
-
-
 def _fold_panel(state, config, artifact, session_dir=None):
     """Fold a full reviewer-deep panel. `artifact` maps dimension → {findings, receiptMissing?,
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
@@ -3418,17 +3299,6 @@ def _fold_panel(state, config, artifact, session_dir=None):
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_PASSED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
-    # A full reviewer-deep panel that runs COMPLETE in a DELTA round (round ≥ 2) is a qualifying
-    # confirmation panel: it consumes one of the two-panel budget (the #174 bar). An INCOMPLETE panel
-    # (a missing seat) does NOT qualify — it neither counts a confirmation nor resets/reseeds the
-    # surfaced-since tracker, so the owed confirmation stays owed rather than being discharged on a
-    # coverage gap. A complete panel resets the tracker and reseeds it from its OWN blocking findings
-    # so a Critical it surfaces re-arms another confirmation (#174 requirement 2).
-    if state["round"] >= 2 and not incomplete:
-        state["confirmations"] = state.get("confirmations", 0) + 1
-        state["surfacedSinceLastPanel"] = [
-            "Critical" if circuit_breaker.is_critical(f.get("severity")) else "Important"
-            for f in _blocking(compiled)]
     _record_round(state, "seatStatus", seat_status)
     _panel_dims = _panel_dimensions(config)
     _expected = len(_panel_dims)
@@ -3491,20 +3361,15 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # (#507 R2 residual-1). A scoped delta round leaves it untouched, so a round-1 gap never silently
     # clears on a delta finish.
     state["_incompletePanel"] = incomplete
-    # A full panel re-establishes the review baseline: reset the cross-cutting-rework accumulator so a
-    # broad fix BEFORE this panel does not count as the panel's rework, and the union runs from this
-    # panel forward across every later fix (#507 R2 residual-5).
-    state["_changedSubjectsSincePanel"] = []
-    # In-memory review record for the challenged-coverage / recurrence breaker: a round-1 panel is
-    # `baseline`, a re-armed / resumed full panel (round ≥ 2) is a `confirmation` (its per-dim run
-    # map lets _confirmation_qualifies judge whether it can anchor certification).
-    kind = "baseline" if state["round"] <= 1 else "confirmation"
+    # In-memory review record for the challenged-coverage / recurrence breaker: only round 1 runs a
+    # full panel, so its record is the `baseline`.
+    kind = "baseline"
     dim_map = {}
     for dim in _panel_dimensions(config):
         seat = seats.get(dim) if isinstance(seats, dict) else None
         s_findings = []
         # A missing seat defaults to LOW confidence, never high — an absent lens must never lend a
-        # high-confidence run to `_confirmation_qualifies`.
+        # high-confidence run to the record.
         confidence = "low" if seat_status.get(dim) == "missing" else "high"
         tier = DEEP
         if isinstance(seat, dict):
@@ -3517,12 +3382,6 @@ def _fold_panel(state, config, artifact, session_dir=None):
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
     _append_review_record(state, state["round"], kind, dim_map, compiled)
-    # axis: only a complete panel can confirm a fix by silence — an incomplete one may simply not have looked — see bite-proof record c7l3_wo3_driver
-    # Silence also needs the full-confidence reviewer-deep panel `_confirmation_qualifies` demands.
-    if (state["round"] >= 2 and not incomplete
-            and review_loop_plan._confirmation_qualifies(
-                next(r for r in state["_records"] if r.get("round") == state["round"]))):
-        _credit_fixes_not_reraised(state, compiled, kept)
     _stage_findings(state, compiled)
     state["step"] = P_VERIFIERS
 
@@ -4771,8 +4630,8 @@ def _after_findings_settled(state, config):
     leg when there is a blocking finding, else to the terminal decision (round 1 clean = certify).
 
     ONE definition (no post-def override): a delta round routes its scoped/gap candidates through
-    verify+synthesis, so when the delta settle is armed it must re-settle the delta (audit breaker +
-    #174 confirmation re-arm) rather than the round-1 fix/terminal path. Either way the gap/verify
+    verify+synthesis, so when the delta settle is armed it must re-settle the delta (audit breaker)
+    rather than the round-1 fix/terminal path. Either way the gap/verify
     carry is merged back first."""
     # merge any gap-sweep / verify carry back in.
     if state.get("_verifiedCarry") is not None:
@@ -5298,8 +5157,7 @@ def _reconcile_fix_queue_after_rulings(state, config, extra_rows=None, session_d
 def _subjects_for_dimension(dimension):
     """Policy subjects mentioned by a compiled finding's dimension label — a single label
     ('Security') or a merged one ('Security + Code'). Reuses review_round_policy's mapping so the
-    driver derives subjects the one way the confirmation economics read them (never a second
-    mapping)."""
+    driver derives subjects the one way the review record reads them (never a second mapping)."""
     out = set()
     if not isinstance(dimension, str):
         return out
@@ -5330,9 +5188,8 @@ def derive_changed_subjects(reviewed_diff_text, head_diff_text, accumulated_find
 def _accumulated_findings(state):
     """The attribution surface the git-derived changed-subjects mapping reads: the UNION of every
     round's compiled findings (the in-memory record ledger) plus this round's settled findings.
-    Attributing rework through the accumulated history — not only the deciding round — is what lets
-    a confirmation panel's own surfaced findings attribute the post-panel rework files, so the
-    cross-cutting-rework re-arm is not structurally inert."""
+    Attributing rework through the accumulated history — not only the deciding round — lets a
+    later round's fix files be attributed to a subject an earlier round's reviewer cited."""
     out = []
     for rec in state.get("_records") or []:
         for f in rec.get("findings") or []:
@@ -5368,8 +5225,7 @@ def _read_supplied_head_diff(artifact):
 def _resolve_head_diff(artifact):
     """The supplied post-fix head diff as a run with no repository takes it: inline `headDiff` wins;
     else an absolute readable non-empty `headDiffPath`; anything else is an UNKNOWN surface, never an
-    empty diff, so the caller escalates to a full panel (the fail-closed unknown→run-everything
-    rule). Returns (head_or_None, source) where source is 'inline'|'path'|'unknown'."""
+    empty diff, so the next round hands the PR back (`fix-surface-unknown`). Returns (head_or_None, source) where source is 'inline'|'path'|'unknown'."""
     present, text, source, readable = _read_supplied_head_diff(artifact)
     if present and source == "inline":
         return text, "inline"
@@ -5602,12 +5458,13 @@ def _fold_apply_fixes(state, config, artifact, changed_subjects_seam=None, sessi
     supplied `headDiff` / absolute `headDiffPath` is a cross-check only, so a difference parks
     `head-diff-mismatch` and a derivation git cannot make beside a supplied diff parks
     `head-diff-unverifiable`. A derivation that fails with nothing supplied is an unknown surface
-    (full panel). A run with no repository takes the supplied diff as `_resolve_head_diff` reads it.
-    The changed policy subjects the #174 confirmation re-arm consumes are SCRIPT-DERIVED here — from
+    (the next round hands the PR back as `fix-surface-unknown`). A run with no repository takes the
+    supplied diff as `_resolve_head_diff` reads it.
+    The changed policy subjects the review record carries are SCRIPT-DERIVED here — from
     the reviewed-vs-head diff through the accumulated findings (#157/#158), NEVER the session's
     self-report. The derivation is an injectable seam symmetrical with reviewer/fix step/verify:
     run_loop may inject a scripted replay (the eval harness); the library default + the CLI path
-    wire the real git derivation. Unknown/unparseable surface → None → the run-everything rule."""
+    wire the real git derivation. An unknown/unparseable surface derives None."""
     index = state.get("_fixBatchIndex") or 0
     slice_ = state.get("_fixBatch") or []
     if index == 0:
@@ -5659,20 +5516,6 @@ def _fold_apply_fixes(state, config, artifact, changed_subjects_seam=None, sessi
     derive = changed_subjects_seam or derive_changed_subjects
     state["_changedSubjects"] = derive(
         state.get("reviewedDiff"), state.get("headDiff"), _accumulated_findings(state))
-    # Accumulate the changed subjects since the last full panel so the #174 cross-cutting re-arm sees
-    # rework that spreads across MULTIPLE post-confirmation fixes, not just this round's single-pair
-    # delta (#507 R2 residual-5). ONLY delta/confirmation-round fixes (round ≥ 2) count as the
-    # confirmation's rework — the round-1 BASELINE fix that resolves the initial review is not "rework
-    # since the panel" (a broad baseline fix must not force a confirmation). An unknown surface (None)
-    # makes the accumulation sticky-unknown (fail toward one more confirmation) until a panel resets it.
-    subjects = state.get("_changedSubjects")
-    if state["round"] >= 2:
-        if subjects is None:
-            state["_changedSubjectsSincePanel"] = None
-        elif state.get("_changedSubjectsSincePanel") is not None:
-            acc = set(state.get("_changedSubjectsSincePanel") or [])
-            acc |= {s for s in subjects if isinstance(s, str)}
-            state["_changedSubjectsSincePanel"] = sorted(acc)
     # Accumulate the fix's coverage decisions so the challenged-coverage breaker can see a decision
     # recorded on a principle a later round re-raises (annotateChallengedCoverage input).
     cds = artifact.get("coverageDecisions")
@@ -6197,19 +6040,12 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     if then == VERIFY_THEN_POST_AUDITS:
         _after_audits(state, config)
         return
-    if then == VERIFY_THEN_PANEL:
-        if not _refresh_panel_diff_at_verified_head(
-                state, config, verified_head, panel_diff_seam=panel_diff_seam):
-            return
-        state["step"] = P_PANEL
-        return
     # VERIFY_THEN_CAP, and the legacy position (a gate pending with no flag): the round advance is
     # here — past the cap it hands back `round-cap`; otherwise it enters the delta round.
     if not _advance_round(state, config, reason="post-verify-advance"):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
-    _enter_delta_round(
-        state, config, panel_diff_seam=panel_diff_seam, panel_head=verified_head)
+    _enter_delta_round(state, config)
 
 
 def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
@@ -6222,27 +6058,17 @@ def _enter_post_fix(state, config, session_dir=None, panel_diff_seam=None):
         state["_verifyThen"] = VERIFY_THEN_CAP
         state["step"] = P_VERIFY
         return
-    rec = state.get("rounds", {}).get(str(state["round"]), {})
-    panel_head = rec.get("fixFoldHead") if isinstance(rec, dict) else None
-    if not isinstance(panel_head, str) or not panel_head:
-        if session_dir is None:
-            panel_head = config.get(FIX_FOLD_HEAD_KEY) if isinstance(config, dict) else None
-            if not isinstance(panel_head, str) or not panel_head:
-                panel_head = None
-        else:
-            panel_head = None
     if not _advance_round(state, config, reason="post-fix-advance"):
         return
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     state["_postFixEntry"] = True
-    _enter_delta_round(
-        state, config, panel_diff_seam=panel_diff_seam, panel_head=panel_head)
+    _enter_delta_round(state, config)
 
 
 # ---- delta rounds (2+) ----------------------------------------------------------------------
 
 def _derive_panel_diff_at_head(config, head_sha):
-    """Derive ``git diff <baseRef>...<head_sha>`` at ``config.repoRoot`` for unknown-surface panels.
+    """Derive ``git diff <baseRef>...<head_sha>`` at ``config.repoRoot``: the post-fix head diff.
 
     Returns ``(diff_text, None)`` on success or ``(None, detail)`` when derivation must refuse."""
     repo_root = config.get("repoRoot")
@@ -6294,62 +6120,20 @@ def _derive_panel_diff_at_head(config, head_sha):
     return diff_text, None
 
 
-def _refresh_panel_diff_at_verified_head(state, config, verified_head, panel_diff_seam=None):
-    """Re-derive unknown-surface panel diff at verify fold time (``VERIFY_THEN_PANEL``).
-
-    Binds ``reviewedDiff`` to ``git diff <base>...<verified_head>`` by construction or parks
-    ``panel-diff-underivable``."""
-    derive = panel_diff_seam or _derive_panel_diff_at_head
-    diff_text, refuse_detail = derive(config, verified_head)
-    if refuse_detail is not None:
-        _park_cannot_certify(
-            state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
-        return False
-    state["headDiff"] = diff_text
-    state["reviewedDiff"] = diff_text
-    # axis: the lane basis is re-asked at every full panel scheduled over a new head — see bite-proof record wo_a_1797_roster
-    return not _reevaluate_lane_dimensions(state, config, diff_text)
-
-
-def _schedule_full_panel_unknown(state, config, detail, panel_head, panel_diff_seam=None):
-    """The fail-closed unknown→run-everything rule: an unresolvable delta surface schedules a FULL
-    reviewer-deep panel over the git-derived head diff, never a stale reviewed diff or a silently-
-    scoped round. When head diff cannot be derived, parks ``cannot-certify`` instead."""
-    derive = panel_diff_seam or _derive_panel_diff_at_head
-    diff_text, refuse_detail = derive(config, panel_head)
-    if refuse_detail is not None:
-        _park_cannot_certify(
-            state, "%s: %s" % (PANEL_DIFF_UNDERIVABLE_CAUSE, refuse_detail))
-        return False
-    state["headDiff"] = diff_text
-    state["reviewedDiff"] = diff_text
-    if _reevaluate_lane_dimensions(state, config, diff_text):
-        return False
-    _record_round(state, "panelDiffSource", "git-derived")
-    _decision(state, "unknown-surface", detail)
-    _record_round(state, "roundKind", "full-panel-unknown-surface")
-    _record_round(state, "focus", {"on": "wider", "why": detail})
-    state["fullPanelRan"] = False
-    state["step"] = P_PANEL
-    return True
-
-
-def _after_unknown_surface_panel(
-        state, config, detail, post_fix, panel_head, panel_diff_seam=None):
-    """Schedule a full unknown-surface panel when derivable; honor post-fix verify-then-panel.
-
-    The extra audit round composes no panel: a surface it cannot derive hands the PR back open."""
+def _hand_back_unknown_fix_surface(state, detail):
+    """The fail-closed answer to a fix surface the driver cannot work out: the PR is handed back with
+    its findings still open, never a panel and never an empty scoped round. The extra audit round
+    keeps its own handback."""
     if _is_extra_audit_round(state):
         _hand_back(state, "extra-audit-open",
                    "the extra audit round could not derive the surface of the cap round's fixes "
                    "(%s) and runs no panel; the fixes stay unaudited" % detail, cap=True)
         return
-    if not _schedule_full_panel_unknown(
-            state, config, detail, panel_head, panel_diff_seam=panel_diff_seam):
-        return
-    if post_fix:
-        state["_verifyThen"] = VERIFY_THEN_PANEL
-        state["step"] = P_VERIFY
+    _hand_back(state, "fix-surface-unknown",
+               "The driver could not work out what this round's fixes changed (%s), so the fixes "
+               "cannot be audited and the new code they touched cannot be searched. The PR is "
+               "handed back with its findings still open; certification is withheld." % detail,
+               cap=False)
 
 
 def _fix_batch_keys(state):
@@ -6364,61 +6148,57 @@ def _fix_batch_keys(state):
 
 
 def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
-    """Rounds 2+: split_fix_surface(reviewed, head, fixBatch). unknown → schedule a FULL panel
-    (the existing unknown→run-everything rule). Else audit the fixed findings + scoped-find the new
-    surface."""
+    """Rounds 2+: split_fix_surface(reviewed, head, fixBatch). Audit the fixed findings and scoped-find
+    the fixes' own diff. A surface the driver cannot work out hands the PR back (`fix-surface-unknown`);
+    no later round runs a panel. ``panel_diff_seam`` and ``panel_head`` are accepted and unused, so
+    callers written before that need not change."""
     post_fix = bool(state.pop("_postFixEntry", False))
     if not state.get("_headDiffUnknown"):
         if _reevaluate_lane_dimensions(state, config, state.get("headDiff")):
             return
     # An unresolvable post-fix head diff (a missing/unreadable `headDiffPath`, no inline diff) is an
-    # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). This is
-    # the honest recovery for the field defect: a lost head diff now runs a full panel, not a vacuous
-    # scoped scan over nothing.
+    # unknown surface BEFORE the split runs — never fold it through as an empty diff (#507). The PR is
+    # handed back, not scanned over nothing.
     if state.pop("_headDiffUnknown", False):
-        _after_unknown_surface_panel(
-            state, config,
-            "post-fix head diff unresolvable (source %r) — full reviewer-deep panel"
-            % state.get("_headDiffSource"),
-            post_fix, panel_head, panel_diff_seam=panel_diff_seam)
+        _hand_back_unknown_fix_surface(
+            state, "post-fix head diff unresolvable (source %r)" % state.get("_headDiffSource"))
         return
     baseline = state.get("deltaBaseline")
     if not isinstance(baseline, dict):
         cause = "no baseline record" if baseline is None else "baseline is not a record"
-        _after_unknown_surface_panel(
-            state, config, "%s: %s" % (DELTA_BASELINE_ABSENT, cause), post_fix,
-            panel_head, panel_diff_seam=panel_diff_seam)
+        _hand_back_unknown_fix_surface(state, "%s: %s" % (DELTA_BASELINE_ABSENT, cause))
         return
     stamped_round = baseline.get("round")
     current_round = state["round"]
     if (not isinstance(stamped_round, int) or isinstance(stamped_round, bool)
             or stamped_round != current_round):
-        _after_unknown_surface_panel(
-            state, config,
-            "%s: baseline stamped round %s, current round %s"
-            % (DELTA_BASELINE_ABSENT, stamped_round, current_round),
-            post_fix, panel_head, panel_diff_seam=panel_diff_seam)
+        _hand_back_unknown_fix_surface(
+            state, "%s: baseline stamped round %s, current round %s"
+            % (DELTA_BASELINE_ABSENT, stamped_round, current_round))
         return
     reviewed = baseline.get("diff")
     if not isinstance(reviewed, str):
-        _after_unknown_surface_panel(
-            state, config, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT, post_fix,
-            panel_head, panel_diff_seam=panel_diff_seam)
+        _hand_back_unknown_fix_surface(
+            state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
         return
     split = delta_surface.split_fix_surface(
         reviewed, state.get("headDiff"), state.get("fixBatch") or [])
     if split.get("unknown"):
-        _after_unknown_surface_panel(
-            state, config, "delta surface unknown — full reviewer-deep panel", post_fix,
-            panel_head, panel_diff_seam=panel_diff_seam)
+        _hand_back_unknown_fix_surface(state, "delta surface unknown")
+        return
+    # The scoped finder reads the fixes' own diff and nothing else of the change; a delta that cannot
+    # be worked out for some file leaves the whole round's surface unknown, never silently empty.
+    fix_delta = _fix_delta_surface(state, reviewed, state.get("headDiff"))
+    if fix_delta is None:
+        _hand_back_unknown_fix_surface(state, "the fixes' own diff could not be computed for every file")
         return
     # a delta (scoped) round is NOT a full panel — reset the flag so a scoped certifying finish is
-    # `audited-chain`, not `full-panel-confirmed`. A re-armed confirmation panel re-sets it True.
+    # `audited-chain`, not `full-panel-confirmed`.
     state["fullPanelRan"] = False
     state["_auditTargets"] = _audit_targets(
         state, config, split.get("auditTargets") or {},
         reviewed_diff=reviewed)
-    state["_newSurface"] = split.get("newSurface") or {}
+    state["_newSurface"], state["_fixDeltaDiff"] = fix_delta
     _record_round(state, "roundKind", "delta")
     _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
     if post_fix:
@@ -6509,17 +6289,126 @@ def _diff_files(diff_text):
     return files
 
 
-def _attempt_fixer_delta(reviewed_diff, head_diff):
+def _attempt_fixer_delta(reviewed_diff, head_diff, leave_out=()):
     """The whole fixer attempt's delta: the fix's own diff (reviewed head -> fixed head) over every
-    file the attempt changed, not only a finding's location."""
+    file the attempt changed, not only a finding's location. A file in ``leave_out`` (a proven copy)
+    has no section in it."""
     delta = []
     for file in _diff_files(reviewed_diff) + [f for f in _diff_files(head_diff)
                                               if f not in _diff_files(reviewed_diff)]:
+        if file in leave_out:
+            continue
         lines = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
         if lines:
             delta.append("diff --git a/%s b/%s" % (file, file))
             delta.extend(lines)
     return delta
+
+
+_FIX_DELTA_GROUP_HEADER = re.compile(r"^@@ -\d+,\d+ \+(\d+),(\d+) @@$")
+
+
+def _head_line_numbers(section):
+    """Per line of one file's diff section, the head-file line it sits on, else None (a header line, or a
+    line before the first hunk). A line the diff removes sits on the head line that follows it."""
+    numbers, following = [], None
+    for ln in section:
+        hunk = delta_surface._HUNK.match(ln)
+        if hunk:
+            following = int(hunk.group(1))
+            numbers.append(None)
+        elif following is None or ln.startswith("\\"):
+            numbers.append(None)
+        else:
+            numbers.append(following)
+            if not ln.startswith("-"):
+                following += 1
+    return numbers
+
+
+def _fix_delta_groups(delta, head_numbers):
+    """The groups of one file's fix delta (``_fixer_delta_lines``) that change more than the
+    line numbers of the PR diff's own hunk headers, as ``(lines, head_lines)``: the group's lines,
+    header first, and the head-file lines its changed lines sit on. None when a group cannot be read."""
+    groups, current = [], None
+    for ln in delta:
+        if _FIX_DELTA_GROUP_HEADER.match(ln):
+            current = [ln]
+            groups.append(current)
+        elif current is not None and ln[:1] in (" ", "-", "+"):
+            current.append(ln)
+        else:
+            return None
+    kept = []
+    for lines in groups:
+        index = int(_FIX_DELTA_GROUP_HEADER.match(lines[0]).group(1)) - 1
+        head_lines, content = [], False
+        for ln in lines[1:]:
+            mark, text = ln[0], ln[1:]
+            if mark == "-":
+                content = content or not text.startswith("@@")
+                continue
+            if mark == "+":
+                if index < 0 or index >= len(head_numbers):
+                    return None
+                content = content or not text.startswith("@@")
+                if head_numbers[index] is not None and not text.startswith("@@"):
+                    head_lines.append(head_numbers[index])
+            index += 1
+        if content:
+            kept.append((lines, head_lines))
+    return kept
+
+
+def _fix_delta_surface(state, reviewed_diff, head_diff):
+    """``(surface, text)`` for the round's own fix delta, or None when it cannot be worked out.
+
+    ``surface`` is the scoped finder's hunks, ``{file: [{start, end, text}]}``: for each file whose
+    section differs between the reviewed (pre-fix) diff and the post-fix head diff, the head-file lines
+    its changed lines sit on, one entry per group of changes, and for a file the fix removed the
+    removal marker ``delta_surface.split_fix_surface`` uses. ``text`` is the same delta as a diff, each
+    file under its ``diff --git`` line. A proven copy, which every seat's files leave out, is in neither."""
+    reviewed_hunks = delta_surface.parse_hunks(reviewed_diff)
+    head_hunks = delta_surface.parse_hunks(head_diff)
+    if reviewed_hunks is None or head_hunks is None:
+        return None
+    left_out = set(_left_out_files(state))
+    surface, text = {}, []
+    for file in _diff_files(reviewed_diff) + [f for f in _diff_files(head_diff)
+                                              if f not in _diff_files(reviewed_diff)]:
+        if file in left_out:
+            continue
+        before, after = _diff_section(reviewed_diff, file), _diff_section(head_diff, file)
+        if before == after:
+            continue
+        delta = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
+        groups = _fix_delta_groups(delta, _head_line_numbers(after))
+        if groups is None:
+            return None
+        if not groups:
+            continue
+        text.append("diff --git a/%s b/%s" % (file, file))
+        for lines, _head_lines in groups:
+            text.extend(lines)
+        if not head_hunks.get(file) and reviewed_hunks.get(file):
+            surface[file] = [{"start": 0, "end": 0, "removed": True,
+                              "text": "@@ file removed between the reviewed and head diffs @@"}]
+            continue
+        surface[file] = [{"start": start, "end": end, "text": "\n".join(lines)}
+                         for lines, head_lines in groups for start, end in _line_runs(head_lines)]
+    return surface, "".join(ln + "\n" for ln in text)
+
+
+def _line_runs(numbers, gap=3):
+    """``[[start, end], ...]`` over the sorted distinct ``numbers``, a run kept whole while its next line
+    is within ``gap`` lines of its last; ``[[0, 0]]`` when there are none (a change with no head line)."""
+    runs = []
+    for number in sorted(set(numbers)):
+        if runs and number - runs[-1][1] <= gap:
+            runs[-1][1] = number
+        else:
+            runs.append([number, number])
+    return runs or [[0, 0]]
 
 
 def _carried_owner_ruling(decision):
@@ -6591,7 +6480,11 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     history = _finding_history(state)
     # The attempt's whole delta and the batch's findings in compact form ride every target, so the
     # auditor attributes a change to any finding of the batch before calling it unnamed.
-    attempt_delta = (_attempt_fixer_delta(reviewed_diff, state.get("headDiff"))
+    # A proven copy is no seat's input: it is in neither the fix hunks nor the delta.
+    left_out = set(_left_out_files(state))
+    audit_targets_map = {file: hunks for file, hunks in (audit_targets_map or {}).items()
+                         if file not in left_out}
+    attempt_delta = (_attempt_fixer_delta(reviewed_diff, state.get("headDiff"), left_out)
                      if reviewed_diff is not None else None)
     batch_findings = []
     for bf in state.get("fixBatch") or []:
@@ -7032,18 +6925,19 @@ def _after_audits(state, config):
     if _is_extra_audit_round(state):
         _settle_extra_audit(state, config)
         return
-    # Scoped-finder routing (#507 WO-R2b). Dispatch the scoped new-finding scan ONLY when the delta
-    # split computed a NON-EMPTY new surface (`_newSurface`, set by `_enter_delta_round`). A
-    # genuinely empty new surface (`unknown` was False — an unknown surface never reaches audits, it
-    # routes to a full panel) SKIPS the scoped dispatch with a receipt-visible note, rather than
-    # dispatching a vacuous scan that reviews nothing while looking conformant. The audits' own
-    # new-issue candidates still route through the same fold (an empty-artifact `_fold_scoped`).
+    # Scoped-finder routing (#507 WO-R2b). Dispatch the scoped new-finding scan whenever the round's
+    # fix delta left a NON-EMPTY surface (`_newSurface`, set by `_enter_delta_round`: the head-side
+    # lines the fixes changed in every file that is not a proven copy). A genuinely empty surface (the
+    # fixes touched only proven copies — an unknown surface never reaches audits, it hands the PR
+    # back) SKIPS the scoped dispatch with a receipt-visible note, rather than dispatching a vacuous
+    # scan that reviews nothing while looking conformant. The audits' own new-issue candidates still
+    # route through the same fold (an empty-artifact `_fold_scoped`).
     if state.get("_newSurface"):
         state["step"] = P_SCOPED
         return
     _record_round(state, "scopedFinder", "skipped-empty-surface")
     _decision(state, "scoped-finder-skipped",
-              "scopedFinder: skipped-empty-surface — the delta split computed an empty new "
+              "scopedFinder: skipped-empty-surface — the fixes' own diff left an empty "
               "surface; the scoped new-finding scan was skipped (audit new-issues still routed)")
     _fold_scoped(state, config, {})
 
@@ -7118,7 +7012,7 @@ def _fold_scoped(state, config, artifact):
         _stage_findings(state, compiled)
         state["step"] = P_VERIFIERS
         # after verify+synthesis, _after_findings_settled runs; but for delta rounds we need the
-        # audit-breaker + confirmation re-arm, handled in _settle_delta.
+        # audit-breaker, handled in _settle_delta.
         state["_settleDelta"] = True
         return
     _set_findings(state, [])
@@ -7127,7 +7021,7 @@ def _fold_scoped(state, config, artifact):
 
 def _settle_delta(state, config):
     """Delta-round terminal logic: audit-keyed breaker → self-recovery → hand back; open-work →
-    fix leg; else the converged decision (with the #174 confirmation re-arm)."""
+    fix leg; else the converged decision."""
     state.pop("_settleDelta", None)
     state.pop("_postAudit", None)
     outcome = state.get("_auditOutcome") or {"notDischarged": [], "discharged": []}
@@ -7151,16 +7045,6 @@ def _settle_delta(state, config):
         return
     breaker = circuit_breaker.check_audit_breaker(state["auditRounds"])
     new_blocking = _blocking(state.get("findings") or [])
-
-    # track the severities surfaced THIS delta round since the last qualifying panel (for the #174
-    # re-arm). Derived from the compiled findings, never the fixer's self-report.
-    if new_blocking:
-        state.setdefault("surfacedSinceLastPanel", []).extend(
-            "Critical" if circuit_breaker.is_critical(f.get("severity")) else "Important"
-            for f in new_blocking)
-    for aid in outcome.get("notDischarged", []):
-        if _batch_severity_is_critical(state, aid):
-            state.setdefault("surfacedSinceLastPanel", []).append("Critical")
 
     if breaker.get("halt") and breaker.get("reason") == "audit-stall":
         _handle_stall(state, config, breaker)
@@ -7210,43 +7094,8 @@ def _settle_delta(state, config):
 
 def _settle_delta_converged(state, config):
     """Converged candidate tail shared by `_settle_delta` and stall self-recovery when no open work
-    remains — confirmation economics, then terminal converged or re-arm."""
-    surfaced = list(state.get("surfacedSinceLastPanel") or [])
-    cross = (review_round_policy.is_cross_cutting(state.get("_changedSubjects"))
-             or review_round_policy.is_cross_cutting(state.get("_changedSubjectsSincePanel")))
-    followup = review_round_policy.confirmation_followup(
-        surfaced, state.get("confirmations", 0), cross,
-        max_confirmations=MAX_CONFIRMATIONS)
-    _record_round(state, "confirmationFollowup", followup)
-    if followup.get("park"):
-        _hand_back(state, "round-cap", followup.get("reason"), cap=True)
-        return
-    if followup.get("rearm"):
-        _decision(state, "confirmation-rearm", followup.get("reason"))
-        if not _advance_round(state, config, reason="confirmation-rearm"):
-            return
-        state["fullPanelRan"] = False
-        _record_round(state, "roundKind", "confirmation")
-        _record_round(state, "focus", {"on": "wider", "why": followup.get("reason")})
-        state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
-        state["step"] = P_PANEL
-        return
-    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
-
-
-def _batch_severity_is_critical(state, target_id):
-    """True when `target_id` names a Critical audit target. `notDischarged` carries target ids
-    (per-location, possibly occurrence-suffixed), so look up severity on `_auditTargets` first;
-    fall back to line-less fixBatch scan only for a pre-change session whose targets lack a match."""
-    for t in state.get("_auditTargets") or []:
-        if isinstance(t, dict) and t.get("id") == target_id \
-                and circuit_breaker.is_critical(t.get("severity")):
-            return True
-    for f in state.get("fixBatch") or []:
-        if isinstance(f, dict) and finding_identity(f) == target_id \
-                and circuit_breaker.is_critical(f.get("severity")):
-            return True
-    return False
+    remains: the review ends on this round's audit and scoped finder, never on a further panel."""
+    _terminal_converged(state, config, full_panel=False)
 
 
 def _cap_blocks(state, config, next_round, refused_at):
@@ -7320,7 +7169,7 @@ def _begin_extra_audit_round(state, config):
     `extra-audit` verb, which has put `extraAudit` in the state first. The round audits the cap
     round's fix batch and nothing else: it enters the audit derivation a delta round uses, with no
     post-audit verify, and an unknown surface or a lane that would need a panel hands the PR back
-    open (`_after_unknown_surface_panel`, `_reevaluate_lane_dimensions`)."""
+    open (`_hand_back_unknown_fix_surface`, `_reevaluate_lane_dimensions`)."""
     next_round = _round_cap(config) + 1
     state["round"] = next_round
     state["deltaBaseline"] = {"round": next_round, "diff": state.get("reviewedDiff")}
@@ -7339,7 +7188,7 @@ def _begin_extra_audit_round(state, config):
 def _settle_extra_audit(state, config):
     """The extra audit round's end: its audits folded, and nothing else runs after them.
 
-    No scoped finder, gap sweep, fixer, confirmation re-arm, stall recovery or verify follows. When
+    No scoped finder, gap sweep, fixer, stall recovery or verify follows. When
     every audit target discharged and the audits raised no new issue, the one convergence chokepoint
     decides; otherwise the PR is handed back open. The terminal settle seeds and settles an audit's
     pending new issues; nothing searches them."""
@@ -7492,6 +7341,41 @@ def _finish_retired_gate_step(state):
                    "The review was waiting at a step this version no longer has (%r), and it could "
                    "not be classified. The PR is handed back with its findings still open; "
                    "certification is withheld." % (state.get("step"),), cap=False)
+    return True
+
+
+# The `_verifyThen` flag an earlier build of this driver set on the verify gate that was to be followed
+# by a full panel in a later round.
+RETIRED_VERIFY_THEN_PANEL = "full-panel"
+
+
+def _finish_retired_later_panel(state):
+    """Hand back a saved, unfinished session of any generation the driver continues that was waiting at a
+    panel in round 2 or later, or at the verify gate that was to be followed by one. Later rounds run no
+    panel, so nothing may emit or fold it. Returns True when it handed back; the caller persists the state.
+
+    The step, or the action or phase the state has pending, names the panel; the pending action is
+    cleared and `_hand_back` ends the review with every finding given an outcome. A finished state, and
+    a round-1 panel, are left as they are."""
+    if not isinstance(state, dict) or state.get("terminal"):
+        return False
+    pending = state.get("pending")
+    held = [state.get("step")]
+    if isinstance(pending, dict):
+        held += [pending.get("action"), pending.get("phase")]
+    rnd = state.get("round")
+    at_panel = P_PANEL in held and _is_plain_int(rnd) and rnd >= 2
+    at_gate = state.get("_verifyThen") == RETIRED_VERIFY_THEN_PANEL
+    if not (at_panel or at_gate):
+        return False
+    state["pending"] = None
+    state.pop("_verifyThen", None)
+    where = ("a full panel in round %s" % rnd if at_panel
+             else "the verify gate that was to be followed by a full panel")
+    _hand_back(state, "later-round-panel-retired",
+               "The review was waiting at %s, which this version no longer runs: every round after "
+               "the first checks only the fixes. The PR is handed back with its findings still open; "
+               "certification is withheld." % where, cap=False)
     return True
 
 
@@ -7672,10 +7556,9 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
     else:
         open_set = _resolve_open_audit_targets(state)
         # Empty resolution: no audit has ever produced targets in this session, so there is
-        # nothing for a confirmation round to confirm — re-arming would loop a panel over an
-        # empty set. Resolved/unresolvable paths keep full confirmation economics via
-        # _settle_delta_converged. Certification shape is carried from state["fullPanelRan"],
-        # never asserted here: this branch cannot manufacture a full-panel claim (pinned by
+        # nothing to audit. Resolved/unresolvable paths settle through _settle_delta_converged.
+        # Certification shape is carried from state["fullPanelRan"], never asserted here: this
+        # branch cannot manufacture a full-panel claim (pinned by
         # test_empty_resolution_converge_never_claims_an_unrun_panel).
         if open_set.kind == "empty":
             _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
@@ -7815,8 +7698,9 @@ def _break_it_kept_step(state, config):
 
 def _terminal_converged(state, config, full_panel, note=None):
     """Certify: last round's fixes all discharged + verify pass. Shape is full-panel-confirmed (a
-    qualifying full confirmation panel ran) or audited-chain (scoped certifying finish, no final
-    full panel — say so). Degraded independence appends -degraded.
+    round-1 panel converged with no fixes) or audited-chain (a review that needed fixes ends on a
+    round's audit and scoped finder, with no final panel — say so). Degraded independence appends
+    -degraded.
 
     A converge over ANY owner-skipped judgment blocker (one an earlier version recorded) is CLEAN
     EXCEPT FOR SKIPPED — never a plain success (the exit_skipped invariant): the certification
@@ -10550,9 +10434,10 @@ def _upgrade_gate_unlocked(session_dir, cmd):
 def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_resolver_for=None):
     """None to carry on, or a refusal. The caller holds the session lock. Replays any sealed commit,
     repairs a damaged `loop-state.json` from its mirror, then hands back a session of an earlier
-    generation that was waiting at a retired owner gate: the one shared call path every locked
-    command takes between its upgrade gate and its first state load, so no command reads such a
-    session's retired step."""
+    generation that was waiting at a retired owner gate, then hands back a session of any generation that
+    was waiting at a panel in round 2 or later: the one shared call path every locked command takes
+    between its upgrade gate and its first state load, so no command reads such a session's retired
+    step."""
     if sidecar_resolver_for is None:
         sidecar_resolver_for = _sidecar_resolver_for_recover_dispatch(session_dir)
     if sidecar_target is None:
@@ -10568,6 +10453,7 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None, sidecar_res
         return refusal
     _migrate_saved_fixer_step(session_dir, cmd)
     _hand_back_retired_gate(session_dir, cmd)
+    _hand_back_retired_later_panel(session_dir, cmd)
     return None
 
 
@@ -10595,6 +10481,22 @@ def _hand_back_retired_gate(session_dir, cmd):
         return
     retired = state.get("step")
     if not _finish_retired_gate_step(state):
+        return
+    save_state(session_dir, state)
+    _journal_append(session_dir, {"cmd": cmd, "phase": retired if isinstance(retired, str) else None,
+                                  "round": state["round"], "attempt": 0,
+                                  "outcome": "retired-gate-hand-back"})
+
+
+def _hand_back_retired_later_panel(session_dir, cmd):
+    """Persist `_finish_retired_later_panel` over the saved state and journal it once. A state that
+    cannot be read, or that needs no hand-back, is left for the command's own load to answer. The
+    caller holds the session lock."""
+    ok, state = load_state(session_dir)
+    if not ok or not isinstance(state, dict):
+        return
+    retired = state.get("step")
+    if not _finish_retired_later_panel(state):
         return
     save_state(session_dir, state)
     _journal_append(session_dir, {"cmd": cmd, "phase": retired if isinstance(retired, str) else None,
@@ -11383,6 +11285,7 @@ ORDER_SIDECAR_HELD_FILE = "second-test-held.json"
 ORDER_READABLE_FILE_INPUTS = frozenset({
     "DIFF_PATH",
     "HEAD_DIFF_PATH",
+    "FIX_DIFF_PATH",
     "CLUSTER_FINDINGS_PATH",
     "TARGET_SUMMARY_PATH",
     "HUNKS_PATH",
@@ -11555,6 +11458,17 @@ def _ensure_round_head_diff(session_dir, rnd, state):
     return _ensure_bytes_at_path(session_dir, os.path.join(rdir, "reviewer-head.diff"), view.encode("utf-8"))
 
 
+def _ensure_round_fix_delta(session_dir, rnd, state):
+    """Write `round-<N>/fix-delta.diff` — the round's own fix delta, the change between the reviewed (pre-fix)
+    diff and the post-fix head diff, each file under its `diff --git` line and no proven copy in it — from
+    state when absent or untrusted, and return its path: the only diff the scoped finder is given."""
+    text = state.get("_fixDeltaDiff")
+    if not isinstance(text, str):
+        raise ValueError("order-render-refused:fix-delta-unavailable")
+    path = os.path.join(round_records.round_dir(session_dir, rnd), "fix-delta.diff")
+    return _ensure_bytes_at_path(session_dir, path, text.encode("utf-8"))
+
+
 LEAVE_OUT_FILE = "reviewer-leave-out.json"
 
 
@@ -11691,6 +11605,7 @@ def _apply_fixes_payload_fields(session_dir, state, rnd, attempt):
 ROUND_MATERIALIZER_REGISTRY = {
     "round_diff": _ensure_round_diff,
     "round_head_diff": _ensure_round_head_diff,
+    "round_fix_delta": _ensure_round_fix_delta,
     "fix_batch": _ensure_fix_batch_file,
 }
 
@@ -11964,10 +11879,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             hunks = {}
         _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         hunks_path = _order_scoped_hunks_sidecar_path(rdir)
-        head_diff_path = ROUND_MATERIALIZER_REGISTRY["round_head_diff"](session_dir, rnd, state)
+        fix_diff_path = ROUND_MATERIALIZER_REGISTRY["round_fix_delta"](session_dir, rnd, state)
         ph = {
             "HUNKS_PATH": hunks_path,
-            "HEAD_DIFF_PATH": head_diff_path,
+            "FIX_DIFF_PATH": fix_diff_path,
             "RUBRIC_PATH": rubric_path,
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,

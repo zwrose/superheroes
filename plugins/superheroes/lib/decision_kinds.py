@@ -27,7 +27,9 @@ DECISION_KINDS = (
     "fix-batch-ruled",
     "fix-batch-split",
     "fix-keeps-failing",
+    "fix-surface-unknown",
     LANE_EXPANDED_RECOMPOSE,
+    "later-round-panel-retired",
     "not-discharged",
     "out-of-scope-fix-spent",
     "owner-choice-held",
@@ -112,6 +114,8 @@ _TERMINAL_CAUSE_TABLE = {
     ("handed-back", "fix-keeps-failing"): {"kind": "loop", "reason": "fixer-cycle"},
     ("handed-back", "owner-choice-open"): {"kind": "non-loop", "reason": "open-findings"},
     ("handed-back", "extra-audit-open"): {"kind": "non-loop", "reason": "open-findings"},
+    ("handed-back", "fix-surface-unknown"): {"kind": "non-loop", "reason": "open-findings"},
+    ("handed-back", "later-round-panel-retired"): {"kind": "non-loop", "reason": "open-findings"},
     # read-only, for sessions an earlier version finished (the driver never writes held or stalled again)
     ("held", "stall-choice"): {"kind": "loop", "reason": "latch"},
     ("stalled", "stall-choice"): {"kind": "loop", "reason": "latch"},

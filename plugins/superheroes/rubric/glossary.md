@@ -452,6 +452,14 @@ reached the path its finding describes, a fresh run of the [test role](#test-rol
 more test, and then the verifier decides; no third test is written. The pass is in
 [the verification pass reference](../skills/review-code/reference/verification-pass.md).
 
+### Fix auditor
+
+The reviewer that, in every round after the first, checks each fix the build session applied: that it is right, that it broke nothing next to it, and that a test would fail if it were wrong. It also checks that the fix's committed [break-it test](#break-it-test) is the one the [test role](#test-role) wrote. It is from a different model family than every [maker](#maker). The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md).
+
+### Scoped finder
+
+The reviewer that, in every round after the first, looks for new problems only in the code the fixes touched, never in the rest of the change. It is given the fixes' own diff and nothing else of the change, and a copy proven identical to its source is left out of it. What it raises is graded by the [verifier](#verifier) like a first-round finding. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md).
+
 ### Extra audit round
 
 The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
