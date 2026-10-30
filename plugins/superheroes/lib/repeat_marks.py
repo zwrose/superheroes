@@ -19,6 +19,7 @@ import session_contract
 import verification
 
 FIXED, SHOWN_WRONG = review_findings_schema.OUTCOMES[:2]
+RULING = review_findings_schema.OUTCOMES[4]
 _SETTLED = frozenset(review_findings_schema.OUTCOMES[2:])
 _GIT_TIMEOUT_SECONDS = 30
 MATCH_JUDGE = "judge"
@@ -45,8 +46,8 @@ def outcome_of(disposition, row=None):
         grade, why = row.get("grade"), row.get("refutedReason")
         if isinstance(grade, dict) and grade.get("verdict") == "wrong":
             return SHOWN_WRONG
-        return "left-for-owner" if isinstance(why, str) and why.startswith("author-justified") else None
-    return "ruling" if disposition == "out-of-scope" else disposition
+        return review_findings_schema.LEFT_FOR_OWNER if isinstance(why, str) and why.startswith("author-justified") else None
+    return RULING if disposition == "out-of-scope" else disposition
 
 
 def disposition_of(outcome):
@@ -71,7 +72,7 @@ def decide(outcome, grade_verdict, changed):
         if changed and grade_verdict != "wrong":
             return False, None
         return True, None
-    if outcome in _SETTLED:
+    if isinstance(outcome, str) and outcome in _SETTLED:
         return True, None
     return False, None
 
@@ -146,7 +147,7 @@ def record_entry(finding, head):
     if not isinstance(finding, dict):
         return None
     outcome = finding.get("outcome")
-    outcome = outcome if outcome in review_findings_schema.OUTCOME_SET else None
+    outcome = outcome if isinstance(outcome, str) and outcome in review_findings_schema.OUTCOME_SET else None
     key = finding.get(session_contract.FINDING_KEY_FIELD)
     if not _text(key):
         if not (_text(finding.get("file")) and _text(finding.get("title"))):

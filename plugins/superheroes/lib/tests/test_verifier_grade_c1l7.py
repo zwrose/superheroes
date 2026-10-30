@@ -334,6 +334,34 @@ def test_a_keyless_survivor_keeps_its_grade_on_the_copy_and_writes_no_ledger_row
     assert state[SC.DISPOSITION_LEDGER_KEY] == before
 
 
+def test_a_reraised_finding_the_next_verifier_is_silent_on_loses_the_stale_wrong_grade():
+    state = RD.new_state(_fold_cfg())
+    finding = dict(_REFUTED, verdict="PLAUSIBLE")
+    compiled, _ = RD.mechanical_compile([finding], None)
+    RD._stage_findings(state, compiled)
+    key = SC.finding_identity_key(compiled[0])
+    # the first verifier pass refuted it and graded it wrong
+    RD._record_grade(state, key, {"verdict": "wrong", "reason": _REFUTED_REASON})
+    RD._record_disposition(state, key, "refuted", state["round"], refutedReason=_REFUTED_REASON)
+    # a same-round gap sweep re-raises it: the closing grade is carried over on the ledger row
+    RD._stage_findings(state, [dict(c) for c in compiled])
+    assert _ledger(state)[key]["grade"]["verdict"] == "wrong"
+    # the next verifier is silent on it
+    RD._fold_verifiers(state, state["config"], {"verdicts": []})
+    assert [SC.finding_identity_key(f) for f in state["_verified"]] == [key]
+    assert "grade" not in _ledger(state)[key]
+    # a substantive author comment then justifies it: the record must not read it shown-wrong
+    state["config"]["priorComments"] = [
+        {"file": finding["file"], "line": finding["line"],
+         "body": "intentional pattern for performance " + ("x" * 40)}]
+    RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "g0",
+                                                               "member_ids": [state["_verified"][0]["id"]]}]})
+    row = _ledger(state)[key]
+    assert row["disposition"] == "refuted"
+    assert row["refutedReason"].startswith("author-justified: ")
+    assert "grade" not in row
+
+
 def test_the_author_justification_post_filter_refutes_with_no_grade():
     finding = {"file": "aj.py", "line": 2, "title": "style", "severity": "Important",
                "verdict": "PLAUSIBLE", "consequence": _CONSEQUENCE}

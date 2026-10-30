@@ -2277,6 +2277,22 @@ def _record_grade(state, key, grade):
         live[GRADE_FIELD] = dict(grade)
 
 
+def _clear_grade(state, key):
+    """Drop a grade from the finding's ledger entry and its live finding. A finding the current
+    verification left ungraded must not keep a grade an earlier raise earned."""
+    if not isinstance(key, str) or not key:
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    if key in seen and isinstance(ledger[seen[key]], dict) and GRADE_FIELD in ledger[seen[key]]:
+        entry = dict(ledger[seen[key]])
+        entry.pop(GRADE_FIELD, None)
+        ledger[seen[key]] = entry
+    live = _live_finding_by_key(state, key)
+    if live is not None:
+        live.pop(GRADE_FIELD, None)
+
+
 def _clear_out_of_scope_disposition(state, key):
     """Drop a live out-of-scope disposition family; rulingsLog retains the history."""
     _record_disposition(state, key, None, 0, clear_out_of_scope=True)
@@ -3908,11 +3924,15 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     })
     for survivor in survivors:
         grade = survivor.get(GRADE_FIELD)
-        if isinstance(grade, dict):
-            # A survivor whose staged id resolves to no keyed finding keeps the grade on its copy only.
-            staged_finding, fault = _resolve_staged_finding(staged, survivor.get("id"))
-            if not fault and isinstance(staged_finding, dict):
-                _record_grade(state, _finding_identity_key(staged_finding), grade)
+        # A survivor whose staged id resolves to no keyed finding keeps the grade on its copy only.
+        staged_finding, fault = _resolve_staged_finding(staged, survivor.get("id"))
+        if not fault and isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
+            if isinstance(grade, dict):
+                _record_grade(state, key, grade)
+            else:
+                # axis: a survivor this fold left ungraded drops the grade an earlier raise left on its ledger row, so a re-raised finding is never closed shown-wrong on a stale grade
+                _clear_grade(state, key)
     refuted = []
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
