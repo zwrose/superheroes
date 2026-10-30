@@ -1099,6 +1099,42 @@ def test_t3b_a_judge_named_repeat_kept_as_shown_wrong_is_marked_and_kept_by_exac
     assert written["shown wrong one"]["outcome"] == "shown-wrong"
 
 
+def test_t3c_a_judge_named_confirmed_repeat_of_a_shown_wrong_finding_on_changed_code_is_a_new_finding(tmp_path):
+    # FR-21: a confirmed repeat of a finding closed as wrong, raised on changed code, is treated as a new finding
+    shown_wrong, fixme = _driven("shown wrong one", 1), _driven("fix me", 2)
+    reworded, fixme_too = _driven("shown wrong one, reworded", 1), _driven("fix me too", 2)
+    scripted = {2: [reworded, fixme_too]}
+
+    def synth(rnd, payload):
+        if rnd == 1:  # the head moves once, to a commit that changes the tree, between the judgment and the finding raised again
+            with open(os.path.join(r.checkout, "changed.txt"), "w", encoding="utf-8") as fh:
+                fh.write("the tree changes here\n")
+            _git(r.checkout, "add", "-A")
+            _git(r.checkout, "commit", "-q", "-m", "change the tree")
+        if rnd == 2:  # the judge names the reworded finding a repeat of the shown-wrong one, e1
+            ref = {e["title"]: e["ref"] for e in payload["earlier"]}["shown wrong one"]
+            ids = {f["title"]: f["id"] for f in payload["findings"]}
+            return [_group(ids["shown wrong one, reworded"], ref=ref, group_id="a"),
+                    _group(ids["fix me too"], group_id="b")]
+        return None
+
+    r = _Rounds(tmp_path, [shown_wrong, fixme], lambda rnd, state: scripted.get(rnd, []),
+                verdicts={(1, "shown wrong one"): C1L7._SECOND_REFUTED}, synth=synth)
+    r.drive()
+    state = r.state()
+    judged, raised_again = RD._verifier_head(state, r.dir, 1), RD._verifier_head(state, r.dir, 2)
+    assert judged and raised_again and judged != raised_again, "premise: the head moved between the two verifier judgments"
+    assert RM.code_changed(r.checkout, judged, raised_again) is True, "premise: the two verifier heads' trees differ"
+    (named,) = state["rounds"]["2"]["repeatMarks"]
+    assert (named["source"], named["grade"]["verdict"]) == ("judge", "confirmed"), named
+    assert named["repeatOf"]["findingKey"] == _key(shown_wrong)
+    assert named["kept"] is False, named
+    # routed as a new finding: the reworded finding is not kept as shown-wrong
+    row = _row(state, reworded)
+    assert "repeatKept" not in row and row["disposition"] == "fixed", row
+    assert r.fixer_runs() == 2 and state["terminal"], r.seen
+
+
 def test_d1_a_confirmed_repeat_of_a_fixed_finding_keeps_its_mark_through_its_fix_and_the_archive(tmp_path):
     bug, fresh = _driven("bug one", 1), _driven("fresh one", 2)
     scripted = {2: [fresh], 3: [bug]}  # round 3's scan raises the finding the round-2 audit decided fixed

@@ -47,6 +47,17 @@
     "Never change the repository, and never claim a run you did not make",
     "runs your test, exactly as you wrote it, in its own working copy"
   ],
+  "dispatch-second-test-correction": [
+    "You are a fresh run of the test reviewer",
+    "so your test has been put back and committed again as you wrote it",
+    "You have one chance to\ncorrect it",
+    "It is a replacement for your test, not a weaker one",
+    "return the item with no block in `suggestion`",
+    "The correction is final: no further correction is offered for this finding",
+    "Return only the items you were given, each once, by its staged `id`",
+    "Never change the repository, and never claim a run you did not make",
+    "commits your corrected test, exactly as you wrote it, in its own working copy"
+  ],
   "dispatch-audits": [
     "You are the [fix auditor](../glossary.md#fix-auditor) for one cleared-or-stalled finding target",
     "When an independent runner-channel vendor is live, you are never the fixer's vendor",
