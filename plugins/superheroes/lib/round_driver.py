@@ -1601,6 +1601,12 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
                 if run not in merged:
                     merged.append(run)
             entry[break_it.RUNS_FIELD] = merged
+    if (isinstance(existing, dict) and break_it.carries_test(existing)
+            and not break_it.carries_test(entry)):
+        # axis: a finding raised again without its test keeps the test block, run stamp and reviewer original it held, so the next audit still compares the test
+        for held_field in ("suggestion", break_it.RUN_FIELD, REVIEWER_TEST_FIELD):
+            if existing.get(held_field) is not None:
+                entry[held_field] = existing[held_field]
     if key in seen:
         ledger[seen[key]] = entry
     else:
