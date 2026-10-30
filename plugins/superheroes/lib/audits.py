@@ -455,6 +455,16 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                     echo_mismatch.append(fid)
                 base["echoMismatch"] = {"echo": echo, "manifest": manifest_vendor}
 
+        # The new issues a result that got this far raised stay whatever its verdict: a `not-discharged`
+        # result keeps them as a `discharged-but-new-issue` one does, once the manifest authenticates it
+        # (or the target is not provenance-enforced). Results refused before here (unauthenticated,
+        # ambiguous, unmatched, unknown ruling) and those `audit_checks_fault` refuses drop them.
+        keeps_new_issues = ruling == "discharged-but-new-issue" or (
+            ruling == "not-discharged"
+            and (not provenance_enforced
+                 or (bool(expected_auditor) and isinstance(collection_manifest, dict) and fid is not None
+                     and collection_manifest.get(fid) == expected_auditor)))
+
         # The committed break-it test is judged after provenance and before any ruling arm. A test that
         # is missing, or changed with no explanation, is not the test role's version: the fix is
         # blocked whatever the result says.
@@ -470,7 +480,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                         reason=("break-it test %s: the committed test at %s is not the test role's "
                                 "version (or the build session's explained change of it)"
                                 % (match, (f.get("breakIt") or {}).get("path"))))
-            if ruling == "discharged-but-new-issue":
+            # axis: a blocking test mismatch keeps the new issues a not-discharged result raised — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
+            if keeps_new_issues:
                 new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
             audits.append(base)
             continue
@@ -493,7 +504,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                     not_discharged.append(fid)
                 base.update(ruling="not-discharged",
                             reason="break-it test weakened: %s" % test_match["why"].strip())
-                if ruling == "discharged-but-new-issue":
+                # axis: a weakened-test return keeps the new issues a not-discharged result raised — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
+                if keeps_new_issues:
                     new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
                 audits.append(base)
                 continue
@@ -622,6 +634,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 # the recorded reason (priorAudit.reason), so it knows what to undo.
                 kept_reason += " Unnamed change: " + unnamed_text
             base.update(ruling="not-discharged", reason=kept_reason)
+            # axis: a not-discharged arm keeps the new issues its result raised, as a cleared audit's are kept — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
+            if keeps_new_issues:
+                new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
             audits.append(base)
             if fid is not None:
                 not_discharged.append(fid)

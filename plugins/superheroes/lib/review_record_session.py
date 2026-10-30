@@ -706,8 +706,9 @@ def _passed_break_it(rounds):
 
 
 def _audit_candidates(payload):
-    """The new-issue candidates a stored fix-audit result claims: only a `discharged-but-new-issue` ruling carries them."""
-    if not (isinstance(payload, dict) and payload.get("ruling") == "discharged-but-new-issue"):
+    """The new-issue candidates a stored fix-audit result claims: a `discharged-but-new-issue` or a `not-discharged` ruling carries them."""
+    # axis: a stored not-discharged result's new issues are recovered with a cleared audit's — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
+    if not (isinstance(payload, dict) and payload.get("ruling") in ("discharged-but-new-issue", "not-discharged")):
         return []
     raised = payload.get("newIssues")
     return [c for c in raised if isinstance(c, dict)] if isinstance(raised, list) else []
