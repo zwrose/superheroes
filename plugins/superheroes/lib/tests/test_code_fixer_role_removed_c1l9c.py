@@ -78,10 +78,28 @@ def test_observed_refusals_module_is_gone():
     assert importlib.util.find_spec("observed_refusals") is None
 
 
-def test_eval_harness_has_no_fixer_vendor_override():
+def test_eval_harness_ignores_a_fixture_fixer_vendor(tmp_path):
+    # "claude" is a value the removed validator used to refuse; the key must now have no effect, so
+    # the run completes and the composed seat map's author family stays the build-session vendor's
     assert not hasattr(review_loop_runner, "_validate_fixer_vendor_override")
     assert not hasattr(review_loop_runner, "_EVAL_FIXER_VENDOR")
     assert review_loop_runner._EVAL_BUILD_SESSION_VENDOR == "cursor"
+    fixture = {
+        "name": "fixer-vendor-ignored",
+        "fixerVendor": "claude",
+        "reviewerSet": ["security-reviewer"],
+        "reviewerEvents": [{"round": 1, "reviewer": "security-reviewer", "findings": [],
+                            "usageTotal": 1}],
+        "fixEvents": [],
+        "maxRounds": 1,
+    }
+    observed = review_loop_runner.run_fixture(fixture, run_dir=str(tmp_path))
+    assert observed["terminal"] != "unexpected-driver-return", observed["terminal"]
+    seat_map = observed["_driverReceipt"]["seatMap"]
+    expected_family = model_registry.family_for(
+        "implementer", review_loop_runner._EVAL_BUILD_SESSION_VENDOR)
+    assert expected_family != model_registry.family_for("implementer", "claude")
+    assert seat_map["authorFamily"] == expected_family
 
 
 # axis: G4 — a lookup that used the code-fixer role answers exactly as before through `implementer`.

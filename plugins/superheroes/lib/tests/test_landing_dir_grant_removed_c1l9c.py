@@ -162,3 +162,50 @@ def test_no_grant_open_spawns_the_journaled_argv_without_add_dir(tmp_path, monke
     # list is the roots plus the /tmp grants, nothing else
     assert allow_write[:len(write_roots)] == write_roots
     assert allow_write[len(write_roots):] == _expected_tmp_roots()
+
+
+# --- an older plugin's grant-carrying run is refused at its next spawn, not resumed --------------
+# The pre-removal adapter (`git show a1391bbe:plugins/superheroes/lib/engine_adapter.py`) wrote
+# `claudeWriteSandbox.landingDir`, put `--add-dir <landing>` just before `--settings` in the argv,
+# and appended the landing dir to the settings' `allowWrite` after the tmp and extra-write roots.
+# The updated adapter rebuilds the argv without either, so the stored and rebuilt argvs differ.
+
+
+def _rewrite_as_older_grant_run(run_dir, landing):
+    records, _ = ED._journal_read(run_dir)
+    with open(ED._journal_path(run_dir), "w", encoding="utf-8") as fh:
+        for rec in records:
+            if rec.get("kind") == "run-opened":
+                rec["claudeWriteSandbox"]["landingDir"] = landing
+                argv = list(rec["argv"])
+                at = argv.index("--settings")
+                settings = json.loads(argv[at + 1])
+                settings["sandbox"]["filesystem"]["allowWrite"].append(landing)
+                argv[at + 1] = json.dumps(settings, sort_keys=True, separators=(",", ":"))
+                argv[at:at] = ["--add-dir", landing]
+                rec["argv"] = argv
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+
+
+def test_older_grant_run_is_refused_at_its_next_spawn_not_resumed(tmp_path, monkeypatch):
+    _ensure_claude_config_dir(tmp_path, monkeypatch)
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "older-grant-run")
+    seat = _implementer_claude_seat()
+    # a fresh no-grant open with max_wait=0 journals the run and stops before any spawn
+    opened_fake = _ClaudeStdoutWriteFakeRunner([])
+    _dispatch_write(tmp_path, opened_fake, cwd=wt, run_dir=run_dir, seat=seat, max_wait=0)
+    assert opened_fake.calls == []
+    landing = record_paths.landing_dir(str(tmp_path / "review-seat"), 1, "p")
+    _rewrite_as_older_grant_run(run_dir, landing)
+    older = _write_opened_record(run_dir)
+    assert older["claudeWriteSandbox"]["landingDir"] == landing
+    assert older["argv"][older["argv"].index("--add-dir") + 1] == landing
+    assert older["argv"].index("--add-dir") + 2 == older["argv"].index("--settings")
+
+    fake = _ClaudeStdoutWriteFakeRunner([_claude_write_runner()])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=seat, max_wait=120)
+    assert fake.calls == []                      # E1: no engine is spawned
+    assert res["ok"] is False                    # E2: a structured refusal, not a traceback
+    assert "spawn argv does not match resolvedInputs snapshot" in res["detail"]
+    assert "re-open the run with a fresh dispatch" in res["detail"]
