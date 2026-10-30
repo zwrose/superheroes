@@ -1630,12 +1630,29 @@ def _seed_carried(state, cfg, returning):
 def _with_carried(state, compiled):
     """``compiled`` and the findings held past the compile step (`_seed_carried`'s sent-back carried findings, the audits'
     new issues on a full read), once each: a compiled finding that the stored key of a held one names is that finding,
-    and the held row, with its stored key, stays."""
+    so the two merge into one row (`_merge_same_finding`: the fresh report's severity, consequence and attached test
+    survive) that keeps the held row's stored key and raised round."""
     held = [h for h in state.pop("_carriedToVerify", None) or [] if isinstance(h, dict)]
     if not held:
         return compiled
-    keys = {repeat_marks.opaque_key(h) for h in held}
-    return [c for c in compiled if repeat_marks.opaque_key(c) not in keys] + held
+    first = {}  # opaque key -> the first held row with it: the one a compiled finding of that key merges into
+    for h in held:
+        first.setdefault(repeat_marks.opaque_key(h), h)
+    rows, rest = {id(h): h for h in held}, []
+    for c in compiled:
+        h = first.get(repeat_marks.opaque_key(c))
+        if h is None:
+            rest.append(c)
+            continue
+        # axis: a fresh report that matches a carried finding is merged into it and its evidence survives, under the carried key — see bite-proof record c1l11b_wo_h_carried_merge
+        merged = _merge_same_finding(rows[id(h)], c)
+        for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
+            if field in h:
+                merged[field] = h[field]
+            else:
+                merged.pop(field, None)
+        rows[id(h)] = merged
+    return rest + [rows[id(h)] for h in held]
 
 
 def _seed_returning_round(state, cfg):
