@@ -104,13 +104,14 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
 `verification.apply_verdicts(findings, verdicts)` enforces the fail-closed contract:
 
 - **REFUTED with reason** — the finding is dropped; the drop is recorded with
-  `{id, file, title, reason, was_blocking_tagged}` (`was_blocking_tagged` preserved when the
-  reviewer tagged it Critical/Important), **unless** its reason or evidence shows a check that
-  did not execute the code under test (`command not found`, exit 127, `ERR_MODULE_NOT_FOUND`,
-  `Cannot find module`, `Cannot find package`, `ModuleNotFoundError`, `No module named`, or the
-  tokens `command-not-found` / `module-not-found`): that keeps the finding PLAUSIBLE at its
+  `{id, file, title, reason, was_blocking_tagged}` and the grade wrong with that reason
+  (`was_blocking_tagged` preserved when the reviewer tagged it Critical/Important), **unless**
+  its reason or evidence shows a check that did not execute the code under test
+  (`command not found`, exit 127, `ERR_MODULE_NOT_FOUND`, `Cannot find module`,
+  `Cannot find package`, `ModuleNotFoundError`, `No module named`, or the tokens
+  `command-not-found` / `module-not-found`): that keeps the finding PLAUSIBLE at its
   pre-verification severity with `unverified: true`, its id in `unverified`, and an entry in
-  `notExecuted`; the drop carries the grade wrong with that reason.
+  `notExecuted`.
 - **CONFIRMED** — survivor stamped `verdict: "CONFIRMED"`; CONFIRMED evidence from the verdict
   overwrites/sets the finding's `evidence` (the verification evidence), and the grade confirmed.
 - **PLAUSIBLE** — survivor stamped `verdict: "PLAUSIBLE"`, and the grade plausible.
