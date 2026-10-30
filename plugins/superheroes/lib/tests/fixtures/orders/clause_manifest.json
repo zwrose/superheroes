@@ -49,6 +49,15 @@
     "Do NOT decide the run's outcome or re-run panel seats",
     "Never one whole-file read"
   ],
+  "dispatch-second-test": [
+    "You are a fresh run of the test reviewer",
+    "Write one more test for each finding",
+    "This is the finding's last test: no further test is written after it",
+    "return the finding with no block in",
+    "Return only the items you were given, each once, by its staged `id`",
+    "Never change the repository, and never claim a run you did not make",
+    "runs your test, exactly as you wrote it, in its own working copy"
+  ],
   "dispatch-audits": [
     "You are the fix auditor for one cleared-or-stalled finding target",
     "When an independent runner-channel vendor is live, you are never the fixer's vendor",

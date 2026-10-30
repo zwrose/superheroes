@@ -156,6 +156,7 @@ RUN_KIND_BY_PHASE = {
     AUDITS_PHASE: RUN_KIND_REVIEW,
     "dispatch-scoped-finder": RUN_KIND_REVIEW,
     "dispatch-gap-sweep": RUN_KIND_REVIEW,
+    "dispatch-second-test": RUN_KIND_REVIEW,
     FIXER_PHASE: RUN_KIND_WRITE,
 }
 
