@@ -11517,9 +11517,10 @@ def _apply_fixes_payload_fields(session_dir, state, rnd, attempt):
     fields that name them, with the step's landing path and the staged PR body path.
 
     Raises ``ValueError("order-render-refused:...")`` when the guidance cannot be rendered, the
-    refusal channel `_cmd_next_locked` and `cmd_rule` both catch."""
-    fields = {"fixBatchPath": _ensure_fix_batch_file(session_dir, rnd, state)}
+    refusal channel `_cmd_next_locked` and `cmd_rule` both catch. The guidance renders before
+    either file is written, so a refusal leaves both files as they were (c1l9a_wo7_render_first)."""
     guidance = _gate_guidance_block(_gate_guidance_entries(state, rnd))
+    fields = {"fixBatchPath": _ensure_fix_batch_file(session_dir, rnd, state)}
     guidance_path = _fix_guidance_path_for_round(session_dir, rnd, state)
     if guidance == _GATE_GUIDANCE_NO_GUIDANCE:
         if os.path.lexists(guidance_path):
@@ -11890,10 +11891,6 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "landing_path": paths["landing_path"],
         "envelope_stub_path": paths["envelope_stub_path"],
         "ratified_residuals": residuals,
-        # Quoted data for the order lint (see `_order_lint_text`): the owner's own verify command,
-        # read from the session config — the one source now that the fixer template quotes it
-        # inside the scoped verify budget rather than through a placeholder of its own.
-        "verify_command": cfg.get("verifyCommand"),
         "residuals_provenance": prov,
         "residuals_read_failure": res_failure,
         "threat_model": threat_model,

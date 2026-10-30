@@ -229,7 +229,7 @@ def test_g1_g3_the_driver_fold_grades_every_judged_finding_and_keeps_the_refuted
     _assert_grade(verified[keys["plausible"]]["grade"], "plausible", "could not run it")
 
     # The refuted finding is in no fix batch: synthesis folded only the survivors into the findings.
-    after_synthesis = snapshots[RD.P_FIXER]
+    after_synthesis = snapshots[RD.P_APPLY_FIXES]
     live = {SC.finding_identity_key(f) for f in after_synthesis["findings"]}
     assert keys["refuted"] not in live
     assert live == {keys["confirmed"], keys["plausible"]}

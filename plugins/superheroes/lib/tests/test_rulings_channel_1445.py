@@ -395,6 +395,43 @@ def test_a_render_refusal_while_apply_fixes_is_pending_leaves_loop_state_byte_id
     assert _state_bytes(session_dir) == state_before
 
 
+def test_a_render_refusal_while_apply_fixes_is_pending_leaves_the_batch_file_and_state_untouched(tmp_path):
+    """axis: a ruling that would change the pending step's batch, given with guidance the render
+    refuses, answers `order-render-refused` and writes nothing: `fix-batch.json` and loop-state.json
+    keep their bytes (c1l9a_wo7_render_first)."""
+    f_a = _blocking_finding("cap A", 2)
+    f_b = _blocking_finding("cap B", 3)
+    f_b["severity"] = "Minor"
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="e4-render-first", fixBatchCap=2)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_APPLY_FIXES)
+    state = _state(session_dir)
+    rnd = state["round"]
+    batch = state.get("_fixBatch") or []
+    assert len(batch) == 2
+    row_a, row_b = batch
+    chunk = "z" * RD.GATE_GUIDANCE_ROW_BYTE_CAP
+    state.setdefault("rounds", {}).setdefault(str(rnd), {})["judgmentDispositions"] = [
+        {"disposition": "fix-with-guidance", "id": "gate-%d" % i,
+         RD.GATE_GUIDANCE_RECORD_KEY: chunk, "title": "t", "file": "f.py", "line": i}
+        for i in range(6)]
+    RD.save_state(session_dir, state)
+    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
+    with open(batch_path, "rb") as fh:
+        batch_bytes_before = fh.read()
+    state_before = _state_bytes(session_dir)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B", "followUp": _follow_up()},
+        {"id": id_a, "ruling": "guidance", "reason": "cap", "guidance": "must appear whole"}]))
+    assert out.get("ok") is False
+    assert out.get("reason") == "order-render-refused"
+    assert "ruling-guidance-omitted" in str(out.get("detail", ""))
+    with open(batch_path, "rb") as fh:
+        assert fh.read() == batch_bytes_before
+    assert _state_bytes(session_dir) == state_before
+
+
 def test_edge6_two_rule_calls_append(tmp_path):
     session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
