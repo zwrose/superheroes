@@ -217,6 +217,9 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     last_reviewed = final.get("sha") if isinstance(final, dict) else None
     if not isinstance(earlier, dict) or earlier.get("ok") is not True or not _is_sha(last_reviewed):
         return _full(result, WHY_EARLIER_UNUSABLE, "the earlier review record is not an ok record with a final commit")
+    # Axis: an abandoned session's record never counts as reviewed coverage, whatever its final commit and reviewers say.
+    if earlier.get("abandoned"):
+        return _full(result, WHY_EARLIER_UNUSABLE, "the earlier review session was abandoned, so its record covers nothing")
     result["lastReviewed"] = last_reviewed
     run = git if git is not None else _production_git(repo_root)
 
@@ -276,7 +279,10 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     countable = counted["countable"]
     left = [row for row in counted["files"] if row["why"] == "unsettled"]
     if result["unsettled"]:
-        countable += sum(row["lines"] for row in left)
+        # Axis: a binary section has no line count (git reports none), so it is never counted as zero lines.
+        if any(item.get("reason") == "binary" for item in result["unsettled"]):
+            return _full(result, WHY_DIFF_UNREADABLE, "a changed file is binary to git, so its lines cannot be counted")
+        countable +=sum(row["lines"] for row in left)
         result["why"].append(_line(WHY_UNSETTLED, "%d file(s) the counter could not settle are counted by their lines" % len(result["unsettled"])))
     result["countable"] = countable
     if countable > countable_lines.COUNTABLE_LINES_BAR:
