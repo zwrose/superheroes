@@ -990,7 +990,8 @@ def _carry_review(account, last_reviewed, extras, repo_root, readers):
     source = review_record.carry_source(prior, last_reviewed, account.get("sessionId"),
                                         review_record.read_history(account["pr"], repo, readers))
     why = review_record.carry_refusal(source, last_reviewed, repo_root, account["baseRef"], account["finalCommit"],
-                                      account.get("provenCopies") or [], rd["returning_decide"])
+                                      account.get("provenCopies") or [], rd["returning_decide"],
+                                      lambda sha: review_record._ci(rd, repo, sha, repo_root)["state"])
     if why is not None:
         raise Refusal(UNSUPPORTED, why)
     account["carriedReview"] = {"lastReviewed": last_reviewed, "why": CARRIED_WHY % last_reviewed[:7]}

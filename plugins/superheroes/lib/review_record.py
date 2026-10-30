@@ -378,14 +378,16 @@ def _full_sha(value):
     return isinstance(value, str) and _FULL_SHA.fullmatch(value) is not None
 
 
-def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=None):
+def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=None, ci_state=None):
     """None when a record may carry `prior`'s reviewers for an empty returning round, else a short plain reason naming
     the first leg that fails. The one home of the carry rule: the session writer and the record writer both ask it.
 
     The legs, in order: `prior`'s final commit is `last_reviewed`; every finding of `prior` has an outcome; the
     returning-review decider (`decide`, default `returning_review.decide`), asked afresh from git, answers `changed`
     with no changed file (it also checks ancestry, a covering reviewer, a finished and not abandoned `prior`);
-    and a reviewer row of `prior` ran and covers its final commit. A fault in `decide` is a refusal."""
+    and a reviewer row of `prior` ran and covers its final commit. A fault in `decide` is a refusal. `ci_state`
+    (`sha -> CI's state`), when given, is passed to `decide` as its CI reader, so a `prior` written with CI pending
+    can count as finished."""
     final = prior.get("finalCommit") if isinstance(prior, dict) else None
     # axis: the earlier record's final commit must be the commit the session says it last reviewed — see bite-proof record c1l11d_wo_a_carried_review
     if not (_full_sha(last_reviewed) and isinstance(final, dict) and final.get("sha") == last_reviewed):
@@ -395,7 +397,9 @@ def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=No
     if not (isinstance(findings, list) and all(isinstance(f, dict) and f.get("outcome") is not None for f in findings)):
         return "an earlier finding is still open"
     try:
-        answer = (decide or returning_review.decide)(repo_root, base, head, dict(prior, ok=True), proven=proven)
+        # axis: the carry check hands the decider the writer's CI reader, as a keyword and only when it has one — see bite-proof record c1l11d_wo_c_fold
+        reader = {"ci_state": ci_state} if ci_state is not None else {}
+        answer = (decide or returning_review.decide)(repo_root, base, head, dict(prior, ok=True), proven=proven, **reader)
     except Exception as exc:  # noqa: BLE001 — fail closed: a decision that cannot be made carries nothing
         return f"the change since the last reviewed commit could not be read ({type(exc).__name__})"
     if not isinstance(answer, dict):
@@ -1484,7 +1488,8 @@ def build_record(account, readers, prior=None, history=()):
     carried_from = a["carriedReview"]["lastReviewed"] if "carriedReview" in a else None
     source = carry_source(prior, carried_from, a["sessionId"], history) if carried_from else prior
     carry = (carry_refusal(source, carried_from, a.get("repoRoot"), a.get("baseRef"), fc["sha"],
-                           a.get("provenCopies") or [], rd["returning_decide"]), source) if carried_from else None
+                           a.get("provenCopies") or [], rd["returning_decide"],
+                           lambda sha: _ci(rd, a["repo"], sha, a.get("repoRoot"))["state"]), source) if carried_from else None
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
                            _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()), carry)
                  for r in a["reviewers"]]
