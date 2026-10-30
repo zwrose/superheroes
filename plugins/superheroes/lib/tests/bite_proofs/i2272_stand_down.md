@@ -8,37 +8,37 @@ Each capture drops pytest's first output line, `warning: The UV_NATIVE_TLS envir
 launcher's own noise. Each neutralization was undone by the inverse edit (never `git checkout`, `git restore`, `git reset` or
 `git stash`). No secrets or private URLs appear in any capture.
 
-## BP1 — the "later than own" comparison (`test_same_created_at_with_a_smaller_id_is_not_superseded`)
+## BP1 — the "later than the builder's start" comparison (`test_a_notice_created_in_the_start_second_does_not_supersede`)
 
-**Guarded element:** `cloud_builder.py` `superseded`, the `newer` filter's `(created, cid) > own[0]` — axis: a launch is newer only when it
-is later than the own intake, or the same second with a larger id.
+**Guarded element:** `cloud_builder.py` `superseded`, the `newer` filter's `created > started_at` — axis: a newer launch is shown only by a
+supersession notice created strictly later than the builder's own start time (`--started`, UTC ISO), never by an intake comment's order.
 
-**Neutralization:** `(created, cid) > own[0]` became `created >= own[0][0]` (`>=` with no id tie-break).
+**Neutralization:** `created > started_at` became `created >= started_at` (`>=`).
 
 **Command:**
 ```
-scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_same_created_at_with_a_smaller_id_is_not_superseded" -q -p no:randomly
+scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_notice_created_in_the_start_second_does_not_supersede" -q -p no:randomly
 ```
 
 **Red run:**
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-___________ test_same_created_at_with_a_smaller_id_is_not_superseded ___________
+_________ test_a_notice_created_in_the_start_second_does_not_supersede _________
 
-    def test_same_created_at_with_a_smaller_id_is_not_superseded():
->       assert _superseded([_intake(OWN, 0), _intake(OWN - 1, 0)])["superseded"] is False
+    def test_a_notice_created_in_the_start_second_does_not_supersede():
+>       assert _superseded([_notice(101, 2)], started=_at(2))["superseded"] is False
 E       assert True is False
 
-/home/user/wt-2272-wo4/plugins/superheroes/lib/tests/test_i2272_stand_down.py:126: AssertionError
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_stand_down.py:114: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_same_created_at_with_a_smaller_id_is_not_superseded
-1 failed in 0.42s
+FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_notice_created_in_the_start_second_does_not_supersede
+1 failed in 0.37s
 ```
 
-**Restore:** the inverse edit put `(created, cid) > own[0]` back.
+**Restore:** the inverse edit put `created > started_at` back.
 
-**Restore receipt:** `grep -n "(created, cid) > own"` printed `649:             if (created, cid) > own[0] and cid != own_intake_id`.
+**Restore receipt:** `grep -n "created > started_at"` printed `647:             if created > started_at and _opens_with(comment.get("body"), SUPERSEDED_HEADER)]`.
 
 **Green run:**
 ```
@@ -69,13 +69,13 @@ _____________ test_a_header_quoted_mid_body_is_not_a_newer_launch ______________
     def test_a_header_quoted_mid_body_is_not_a_newer_launch():
         quoting = _comment(101, "I saw the earlier comment:\n" + CB.INTAKE_HEADER + " Plugin 0.47.0. and a notice\n"
                            + CB.SUPERSEDED_HEADER, _at(1))
->       assert _superseded([_intake(OWN, 0), quoting])["superseded"] is False
+>       assert _superseded([quoting])["superseded"] is False
 E       assert True is False
 
-/home/user/wt-2272-wo4/plugins/superheroes/lib/tests/test_i2272_stand_down.py:112: AssertionError
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_stand_down.py:130: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_header_quoted_mid_body_is_not_a_newer_launch
-1 failed in 2.08s
+1 failed in 0.29s
 ```
 
 **Restore:** the inverse edit put `text.lstrip().startswith(headers)` back.
@@ -96,6 +96,7 @@ FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_header_quo
 refusal, never an issue with no comments.
 
 **Neutralization:** `return {"ok": False, "reason": "comments-unreadable"}` became `comments = []` (a failed read treated as no comments).
+The red run below is from that neutralization against the start-time reader.
 
 **Command:**
 ```
@@ -109,18 +110,21 @@ F                                                                        [100%]
 __________________ test_comments_not_read_whole_is_a_refusal ___________________
 
     def test_comments_not_read_whole_is_a_refusal():
->       assert _superseded([_intake(OWN, 0), _intake(101, 1)], fail=True) == {"ok": False, "reason": "comments-unreadable"}
-E       AssertionError: assert {'ok': False,...ke-not-found'} == {'ok': False,...s-unreadable'}
+>       assert _superseded([_notice(101, 1)], fail=True) == {"ok": False, "reason": "comments-unreadable"}
+E       AssertionError: assert {'ok': True, ...omment': None} == {'ok': False,...s-unreadable'}
 E         
-E         Omitting 1 identical items, use -vv to show
 E         Differing items:
-E         {'reason': 'own-intake-not-found'} != {'reason': 'comments-unreadable'}
+E         {'ok': True} != {'ok': False}
+E         Left contains 3 more items:
+E         {'comment': None, 'newerLaunch': None, 'superseded': False}
+E         Right contains 1 more item:
+E         {'reason': 'comments-unreadable'}
 E         Use -v to get more diff
 
-/home/user/wt-2272-wo4/plugins/superheroes/lib/tests/test_i2272_stand_down.py:131: AssertionError
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_stand_down.py:140: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_comments_not_read_whole_is_a_refusal
-1 failed in 0.25s
+1 failed in 0.22s
 ```
 
 **Restore:** the inverse edit put `return {"ok": False, "reason": "comments-unreadable"}` back.
@@ -179,43 +183,63 @@ FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_the_stand_do
 
 ---
 
-## BP5 — the supersession notice counts as a newer launch (`test_a_notice_later_than_the_own_intake_supersedes_and_is_named`)
+## BP5 — only the supersession notice shows a newer launch (`test_a_notice_later_than_the_start_supersedes_and_stand_down_names_it`, `test_a_delayed_own_intake_posted_after_the_notice_does_not_reverse_the_supersession`)
 
-**Guarded element:** `cloud_builder.py` `superseded`, the `newer` filter's `_opens_with(comment.get("body"), INTAKE_HEADER, SUPERSEDED_HEADER)` —
-axis: the advisor's notice, posted before a successor on any machine, stops an earlier builder that wakes.
+**Guarded element:** `cloud_builder.py` `superseded`, the `newer` filter's `_opens_with(comment.get("body"), SUPERSEDED_HEADER)` —
+axis: the advisor's notice, posted before a successor on any machine, stops an earlier builder that wakes; an intake comment, which a
+delayed post can land in any order, never shows a newer launch.
 
-**Neutralization:** `INTAKE_HEADER, SUPERSEDED_HEADER` became `INTAKE_HEADER` (the notice dropped from the filter).
+**Neutralization A:** `SUPERSEDED_HEADER` became `INTAKE_HEADER` (the notice dropped from the filter, intakes counted instead).
+**Neutralization B:** `SUPERSEDED_HEADER` became `INTAKE_HEADER, SUPERSEDED_HEADER` (intakes counted beside the notice).
 
-**Command:**
+**Command A:**
 ```
-scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_notice_later_than_the_own_intake_supersedes_and_is_named" -q -p no:randomly
+scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_notice_later_than_the_start_supersedes_and_stand_down_names_it" -q -p no:randomly
 ```
 
-**Red run:**
+**Red run A:**
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
-_______ test_a_notice_later_than_the_own_intake_supersedes_and_is_named ________
+____ test_a_notice_later_than_the_start_supersedes_and_stand_down_names_it _____
 
-    def test_a_notice_later_than_the_own_intake_supersedes_and_is_named():
-        result = _superseded([_intake(OWN, 0), _notice(101, 2)])
->       assert result["superseded"] is True
-E       assert False is True
+    def test_a_notice_later_than_the_start_supersedes_and_stand_down_names_it():
+        result = _superseded([_intake(100, 0), _notice(101, 1)])
+>       assert result["ok"] is True and result["superseded"] is True
+E       assert (True is True and False is True)
 
-/home/user/wt-2272-wo4/plugins/superheroes/lib/tests/test_i2272_stand_down.py:195: AssertionError
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_stand_down.py:70: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_notice_later_than_the_own_intake_supersedes_and_is_named
-1 failed in 0.31s
+FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_notice_later_than_the_start_supersedes_and_stand_down_names_it
+1 failed in 0.23s
 ```
 
-**Restore:** the inverse edit put `INTAKE_HEADER, SUPERSEDED_HEADER` back.
+**Command B:**
+```
+scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_delayed_own_intake_posted_after_the_notice_does_not_reverse_the_supersession" -q -p no:randomly
+```
 
-**Restore receipt:** `sed -n 647,651p` printed `and _opens_with(comment.get("body"), INTAKE_HEADER, SUPERSEDED_HEADER)]` as the filter's last line.
+**Red run B:**
+```
+    def test_a_delayed_own_intake_posted_after_the_notice_does_not_reverse_the_supersession():
+        comments = [_notice(100, 1), _intake(101, 2), _intake(102, 3)]
+        result = _superseded(comments)
+>       assert result["superseded"] is True and result["newerLaunch"]["commentId"] == 100
+E       assert (True is True and 102 == 100)
+
+/home/user/wt-2272/plugins/superheroes/lib/tests/test_i2272_stand_down.py:94: AssertionError
+FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_a_delayed_own_intake_posted_after_the_notice_does_not_reverse_the_supersession
+1 failed in 20.54s
+```
+
+**Restore:** the inverse edit put `_opens_with(comment.get("body"), SUPERSEDED_HEADER)` back after each.
+
+**Restore receipt:** `sed -n 645,647p` printed the axis comment, `    newer = [...` and `             if created > started_at and _opens_with(comment.get("body"), SUPERSEDED_HEADER)]`.
 
 **Green run:**
 ```
 .                                                                        [100%]
-1 passed in 0.34s
+1 passed in 0.35s
 ```
 
 ---

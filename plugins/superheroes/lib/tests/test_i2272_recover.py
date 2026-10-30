@@ -343,6 +343,34 @@ def test_3b2_a_work_order_branch_strictly_ahead_of_the_lanes_branch_refuses(w, m
     _refused(w, _runner(w, pulls={LANE: [5]}))
 
 
+@pytest.mark.parametrize("later", [
+    {"limited": False},                        # the reset passed after the assess
+    {"ok": False},                             # the limit can no longer be read
+    {"recorded_ago": 9000},                    # the limit on record predates the lane's start
+])
+def test_3c_an_account_limit_stop_expires_before_the_successor_reads_any_pushed_work(w, monkeypatch, later):
+    _stopped(w, monkeypatch, premise=_no_stack(w))
+    _limit(monkeypatch, _reading(**later))
+    calls = []
+
+    def run(argv, **kw):
+        calls.append(list(argv))
+        raise AssertionError("no remote read may happen once the stop evidence expired")
+
+    got = CR.successor(w.root, "l1", repo=REPO, run=run, never_pushed_evidence="checked the remote")
+    assert got == {"ok": False, "reason": "stop-evidence-expired"} and calls == []
+    assert _state(w)["superseded"] == {}
+
+
+def test_3c_an_account_limit_stop_that_still_holds_is_adopted_and_the_limit_is_reread(w, monkeypatch):
+    _commit_branch(w, LANE, w.base, "a")
+    _stopped(w, monkeypatch, premise=_no_stack(w))
+    calls = _limit(monkeypatch, _reading())
+    got = CR.successor(w.root, "l1", repo=REPO, run=_runner(w, pulls={LANE: [5]}))
+    assert got["ok"] is True and got["branch"] == LANE
+    assert [(c["repo_root"], c["config_dir"]) for c in calls] == [(w.root, CFG)]
+
+
 def test_3b2_ahead_refuses_even_when_the_premise_names_the_lanes_branch(w, monkeypatch):
     head = _commit_branch(w, LANE, w.base, "a")
     _commit_branch(w, WO, head, "b")

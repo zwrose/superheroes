@@ -31,9 +31,9 @@ preflight, review and park.
                           the handback, stop or park comment, headed with its fixed first line
   cloud_builder.py pass-state
                           the placed reviewer sign-in's state, and whether this is a cloud session
-  cloud_builder.py superseded --repo O/N --issue N --own-intake-id ID
-                          whether a newer launch took the issue over since this builder's own intake
-                          comment; on `superseded: true` the result's `comment` is the stand-down to post
+  cloud_builder.py superseded --repo O/N --issue N --started T
+                          whether a newer launch took the issue over since this builder started (T, UTC
+                          ISO); on `superseded: true` the result's `comment` is the stand-down to post
   cloud_builder.py superseded-notice --launch-id L
                           the notice the advisor posts on the issue before it launches a successor
 
@@ -599,7 +599,7 @@ def terminal_kind(body):
 def stand_down_text(url):
     """The comment a superseded builder posts when it wakes: it names the newer launch's comment and says
     the session pushed nothing after waking."""
-    return (STAND_DOWN_HEADER + "\n\nA newer launch took this issue over (its intake: " + url + "). "
+    return (STAND_DOWN_HEADER + "\n\nA newer launch took this issue over (its supersession notice: " + url + "). "
             "This session stopped when it woke: it pushed nothing after waking and will push nothing more.")
 
 
@@ -622,14 +622,16 @@ def _positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def superseded(repo, issue, own_intake_id, *, env=None, run=None):
-    """Whether a newer launch took the issue over since the builder's own intake comment: a later cloud intake
-    comment, or a later supersession notice. `newerLaunch` names the newest such comment. A refusal is a result,
-    never a raise."""
-    # axis: every input is judged before any read, so no GitHub call runs on an argument the verb never checked — see bite-proof record i2272_stand_down
-    if not (isinstance(repo, str) and _REPO_RE.match(repo) and _positive_int(issue) and _positive_int(own_intake_id)):
-        return {"ok": False, "reason": "input-invalid"}
+def superseded(repo, issue, started, *, env=None, run=None):
+    """Whether a newer launch took the issue over since the builder started: a supersession notice created
+    later than `started` (the builder's own start time, UTC ISO). Intake comments never order launches: a
+    delayed intake post must not reverse which builder is superseded. `newerLaunch` names the newest such
+    notice. A refusal is a result, never a raise."""
     cloud_recover = _sibling("cloud_recover")
+    started_at = cloud_recover._epoch(started)
+    # axis: every input is judged before any read, so no GitHub call runs on an argument the verb never checked — see bite-proof record i2272_stand_down
+    if not (isinstance(repo, str) and _REPO_RE.match(repo) and _positive_int(issue) and started_at is not None):
+        return {"ok": False, "reason": "input-invalid"}
     # the contract reads from `since - 1`, so 1 asks for every comment from epoch 0 on
     comments = cloud_recover._issue_comments(repo, issue, 1, _env(env), run)
     # axis: the comments are read whole, or no newer launch is ruled out — a failed read is a refusal, never an empty issue — see bite-proof record i2272_stand_down
@@ -640,14 +642,9 @@ def superseded(repo, issue, own_intake_id, *, env=None, run=None):
         created = cloud_recover._epoch(comment.get("created_at"))
         if created is not None and _positive_int(comment.get("id")):
             stamped.append((created, comment["id"], comment))
-    own = [(created, cid) for created, cid, comment in stamped
-           if cid == own_intake_id and _opens_with(comment.get("body"), INTAKE_HEADER)]
-    if not own:
-        return {"ok": False, "reason": "own-intake-not-found"}
-    # axis: a launch is newer only when it is later than the own intake, or the same second with a larger id — see bite-proof record i2272_stand_down
+    # axis: a newer launch is shown only by a supersession notice created later than the builder's start, never by an intake comment — see bite-proof record i2272_stand_down
     newer = [(created, cid, comment) for created, cid, comment in stamped
-             if (created, cid) > own[0] and cid != own_intake_id
-             and _opens_with(comment.get("body"), INTAKE_HEADER, SUPERSEDED_HEADER)]
+             if created > started_at and _opens_with(comment.get("body"), SUPERSEDED_HEADER)]
     if not newer:
         return {"ok": True, "superseded": False, "newerLaunch": None, "comment": None}
     _, cid, comment = max(newer, key=lambda t: (t[0], t[1]))
@@ -714,8 +711,7 @@ def _build_parser():
     verb("handover", "--head")
     verb("terminal", "--kind", "--text-file", **{"--kind": {"choices": ["handback", "stop", "park"]}})
     verb("pass-state")
-    verb("superseded", "--repo", "--issue", "--own-intake-id",
-         **{"--issue": {"type": int}, "--own-intake-id": {"type": int}})
+    verb("superseded", "--repo", "--issue", "--started", **{"--issue": {"type": int}})
     verb("superseded-notice", "--launch-id")
     return parser
 
@@ -761,7 +757,7 @@ def _dispatch(args):
             return {"ok": False, "reason": "text-unreadable"}
         return terminal_text(args.kind, text)
     if args.verb == "superseded":
-        return superseded(args.repo, args.issue, args.own_intake_id)
+        return superseded(args.repo, args.issue, args.started)
     if args.verb == "superseded-notice":
         comment = superseded_notice_text(args.launch_id)
         if comment is None:

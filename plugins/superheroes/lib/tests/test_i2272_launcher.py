@@ -29,7 +29,7 @@ from test_adopt_original_session import (  # noqa: F401  (first_pr is a fixture)
     _fixture,
     _proceeds,
     _refused_unread,
-    _seed_lane,
+    _seed_lane as _seed_base_lane,
     _write_listing,
     first_pr,
 )
@@ -51,6 +51,15 @@ LANE_B_TITLE = "issue-656-fixturelane00000b"
 RECORDED_AT = LANE_STARTED_TS + 3600
 RESETS_AT = LANE_STARTED_TS + 10800
 NOW = LANE_STARTED_TS + 7200
+
+
+def _seed_lane(repo, launch_id=LANE_ID, *, stamped=True, premise_extra=None, **kw):
+    """The earlier cloud lane of test_adopt_original_session, its reserved premise carrying the launcher's
+    `standDown: 1` stamp unless `stamped` is False (a lane launched before the stand-down check existed)."""
+    extra = dict(premise_extra or {})
+    if stamped:
+        extra["standDown"] = 1
+    _seed_base_lane(repo, launch_id, premise_extra=extra, **kw)
 
 
 class _Account:
@@ -150,6 +159,47 @@ def test_a_limit_recorded_at_the_instant_a_lane_started_does_not_relieve_it(tmp_
     assert (reason, detail["failedRead"], detail["launchIds"]) == (
         TOKEN_UNREAD, "listing-not-given", [LANE_ID],
     )
+
+
+def test_a_limited_lane_whose_premise_lacks_the_stand_down_stamp_still_needs_a_listing(tmp_path, account):
+    # axis: a lane launched before the stand-down check existed cannot stand down on waking, so the limit gives it no relief; a stamped lane beside it is still relieved — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    bound = {"adoptsBranch": ADOPTED}
+    _seed_lane(repo, LANE_ID, premise_extra=bound)
+    _seed_lane(
+        repo, LANE_B, session_id=LANE_B_SESSION, title=LANE_B_TITLE, outcome="park",
+        premise_extra=bound, stamped=False,
+    )
+    account.limited_until()
+    reason, detail = _check(repo)
+    assert (reason, detail["failedRead"], detail["launchIds"]) == (
+        TOKEN_UNREAD, "listing-not-given", [LANE_B],
+    )
+
+
+@pytest.mark.parametrize("stamp", [0, 2, True, "1", None])
+def test_only_a_stand_down_stamp_of_one_relieves_a_limited_lane(tmp_path, account, stamp):
+    # axis: the stamp is the integer 1 exactly — a bool, a string or another number is no stamp — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, LANE_ID, stamped=False, premise_extra={"adoptsBranch": ADOPTED, "standDown": stamp})
+    account.limited_until()
+    reason, detail = _check(repo)
+    assert (reason, detail["failedRead"], detail["launchIds"]) == (
+        TOKEN_UNREAD, "listing-not-given", [LANE_ID],
+    )
+
+
+def test_recovery_strips_the_stand_down_stamp_from_a_successor_premise():
+    import cloud_recover
+    assert "standDown" in cloud_recover._LAUNCHER_STAMPED
+
+
+def test_orchestration_says_an_older_lane_still_needs_the_session_read():
+    path = os.path.join(os.path.dirname(L.__file__), "..", "skills", "showrunner", "reference", "orchestration.md")
+    with open(path, encoding="utf-8") as fh:
+        text = " ".join(fh.read().split())
+    assert ("A lane launched before the stand-down check existed (its reserved premise lacks the launcher's "
+            "`standDown` stamp) still needs the session read, limit or not.") in text
 
 
 @pytest.mark.parametrize("reading", [

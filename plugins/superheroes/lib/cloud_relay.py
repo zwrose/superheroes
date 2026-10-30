@@ -249,8 +249,10 @@ def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
 
 
 # The verdicts after which the text may have reached the builder: a send that was made, or that no result
-# contradicts. `relay-send-failed` is absent: nothing reached the builder.
-_MAY_HAVE_REACHED = ("relay-silent", "relay-text-mismatch", "relay-send-unconfirmed")
+# contradicts. `account-limited` is a silent relay on a limited account: the message was handed to the relay and
+# may still be processed after the reset, so the lane stays watched. `relay-send-failed` is absent: nothing
+# reached the builder.
+_MAY_HAVE_REACHED = ("relay-silent", "account-limited", "relay-text-mismatch", "relay-send-unconfirmed")
 
 
 def _readable_pending_entry(entry):

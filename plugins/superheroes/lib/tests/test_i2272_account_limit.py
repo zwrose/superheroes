@@ -300,7 +300,7 @@ def test_a_silent_relay_with_no_limit_on_record_is_silent(world):
     assert out["reason"] == "relay-silent"
 
 
-def test_an_account_limited_fix_order_is_not_listed_as_may_have_reached(world):
+def test_an_account_limited_fix_order_is_listed_as_may_have_reached(world):
     msg = _composed(world)
     path = _state_file(world)
     state = json.load(open(path))
@@ -308,7 +308,9 @@ def test_an_account_limited_fix_order_is_not_listed_as_may_have_reached(world):
     json.dump(state, open(path, "w"))
     _write_record(world, [json.loads(LIMIT_LINE)])
     assert _check_at(world, msg["msgId"], BEFORE_RESET)["reason"] == "account-limited"
-    assert cr.fix_orders(world.repo, env=world.env) == {"ok": True, "records": []}
+    # the relay may still process the message after the reset, so the lane stays watched
+    held = cr.fix_orders(world.repo, env=world.env)
+    assert [r["msgId"] for r in held["records"]] == [msg["msgId"]]
     listed = cr.fix_orders(world.repo, env=world.env, include_unchecked=True)
     assert [r["msgId"] for r in listed["records"]] == [msg["msgId"]]
     # the same message read relay-silent (the limit has reset) may have reached the builder

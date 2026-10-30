@@ -1353,6 +1353,8 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
+    # axis: the launch carries the stand-down stamp, so a later adoption can tell a lane that checks for a newer launch when it wakes from one launched before that check existed — see bite-proof record i2272_launcher
+    stamped["standDown"] = 1
     return {
         "ok": True,
         "reason": None,
@@ -3163,10 +3165,10 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
     branch = stamped["adoptsBranch"]
     limited = set()
     relays = None  # the relay history is local and read afresh by every pass
+    premises = {
+        r.get("launchId"): r.get("premise") for r in got["records"] if r.get("event") == "reserved"
+    }
     if isinstance(branch, str) and branch:
-        premises = {
-            r.get("launchId"): r.get("premise") for r in got["records"] if r.get("event") == "reserved"
-        }
         adopted_pr = stamped.get("adopts")
         kept = {}
 
@@ -3260,9 +3262,12 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
             readings[cfg] = cloud_relay.account_limit(repo_root, cfg, env=env, now=_now_fn())
         reading = readings[cfg]
         started_ts = info.get("startedTs")
-        # axis: a lane is limited only while its account reads limited, with the limit recorded after the lane started; a limit that has passed, one recorded before the lane started, a lane with no started time and an account with no reading leave the lane needing a listing — see bite-proof record i2272_launcher
+        lane_premise = premises.get(launch_id)
+        stand_down = lane_premise.get("standDown") if isinstance(lane_premise, dict) else None
+        # axis: a lane is limited only while its account reads limited, with the limit recorded after the lane started, and only when its reserved premise carries the launcher's standDown stamp, since a lane launched before the stand-down check existed cannot stand down on waking; a limit that has passed, one recorded before the lane started, a lane with no started time, an account with no reading and an unstamped lane leave the lane needing a listing — see bite-proof record i2272_launcher
         if (
-            isinstance(reading, dict) and reading.get("ok") is True
+            isinstance(stand_down, int) and not isinstance(stand_down, bool) and stand_down == 1
+            and isinstance(reading, dict) and reading.get("ok") is True
             and reading.get("limited") is True
             and cloud_recover._is_number(started_ts)
             and cloud_recover._is_number(reading.get("recordedAt"))

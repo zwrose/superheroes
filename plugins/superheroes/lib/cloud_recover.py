@@ -53,7 +53,7 @@ _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\
 _PUSH_SOURCES = ("push", "commit")
 _PARK_KINDS = ("stop", "park")
 _PLACES = ("cloud", "local")
-_LAUNCHER_STAMPED = ("placeCall", "standingExclusions")
+_LAUNCHER_STAMPED = ("placeCall", "standingExclusions", "standDown")
 HELPER_READ_FIELDS = ("id", "session_status", "status_bucket", "archived")
 _SESSION_ID_RE = re.compile(r"session_[A-Za-z0-9_-]+")
 
@@ -665,6 +665,10 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     # axis: a lane terminalized without an assess that returned stopped never gets a successor
     if assessed.get("verdict") != "stopped":
         return _refusal("lane-not-assessed-stopped")
+    # axis: an account-limit stop authorization expires when the limit stops holding, so a reset after the assess never relaunches beside a builder that may push again — read before any pushed work is read
+    if (assessed.get("evidence") == "account-limited"
+            and _limit_reading(repo_root, info, info.get("startedTs", info.get("reservedTs")), env, None) is None):
+        return _refusal("stop-evidence-expired")
     premise, refused = _own_premise(reserved)
     if refused:
         return refused
