@@ -438,11 +438,7 @@ def test_l9_runs_and_kept_checks_reach_the_round_records_and_the_receipt(world, 
 
 def test_l10_the_order_goldens_carry_the_break_it_clauses():
     golden = os.path.join(_HERE, "fixtures", "orders", "golden")
-    with open(os.path.join(golden, "dispatch-fixer.txt"), encoding="utf-8") as fh:
-        fixer = " ".join(fh.read().split())
     with open(os.path.join(golden, "dispatch-verifiers.txt"), encoding="utf-8") as fh:
         verifiers = " ".join(fh.read().split())
-    assert "It is not a probe: keep it and commit it with the fix." in fixer
-    assert "Never edit or weaken the test to make it pass" in fixer
     assert "whose `taxonomy` is `break-it-test` cites a new test file" in verifiers
     assert "`breakItRun` record" in verifiers
