@@ -4,7 +4,9 @@
 Consumers: the showrunner vet's owner-half write (``write``), the merged or
 closed-PR follow-ups sweep (``check``), and the workhorse's ready-PR step
 (``handback``: the same body read ``write`` and ``check`` run first, over a body file or
-an open PR, with no receipt, so a builder fixes a bad marker while its lane is live). The writer compares two machine-readable
+an open PR, with no receipt, so a builder fixes a bad marker while its lane is live; over an open PR
+it also refuses ``stack-not-caught-up`` or ``stack-lower-unreadable`` for a stacked PR whose head
+does not hold its lower branch's current head). The writer compares two machine-readable
 marker lists and reads no other prose: the build record's
 ``<!-- superheroes:followups FU1 FU2 -->`` marker (or ``none``) and the latest vet
 receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
@@ -29,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -41,6 +44,8 @@ import pr_body_regions  # noqa: E402
 GH_TIMEOUT = 120
 RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
 PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
+REASON_STACK_NOT_CAUGHT_UP = "stack-not-caught-up"
+REASON_STACK_LOWER_UNREADABLE = "stack-lower-unreadable"
 FOLLOWUPS_MARKER_NAME = "followups"
 DISPOSITIONS_MARKER_NAME = "dispositions"
 VERBS = ("write", "check", "handback")
@@ -55,6 +60,7 @@ OWNER_COMMAND_ADVICE = ("a command the owner is asked to run that names a databa
                         " (bash <path>) rather than paste its lines")
 
 _REPO_RE = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+_HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 _KEYCHAIN_RE = re.compile(
     r"""(?<![\w-])['"]?security['"]?\s+['"]?find-(?:generic|internet)-password['"]?(?![\w-])""")
 _INLINE_CODE_RE = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)")
@@ -438,9 +444,16 @@ def _gh_json(run, argv, what):
         raise _Refusal("read-failed", "%s: bad JSON: %s" % (what, exc))
 
 
-def _read_body(run, pr, repo):
+def _read_pr(run, pr, repo):
+    """The one REST read of the PR: the payload, a dict."""
     payload = _gh_json(run, ["gh", "api", "repos/%s/pulls/%d" % (repo, pr)], "PR body")
-    if not isinstance(payload, dict) or "body" not in payload:
+    if not isinstance(payload, dict):
+        raise _Refusal("read-failed", "PR body: body is not a string")
+    return payload
+
+
+def _body_of(payload):
+    if "body" not in payload:
         raise _Refusal("read-failed", "PR body: body is not a string")
     body = payload["body"]
     # axis: a REST null body is an empty body, not a malformed one
@@ -449,6 +462,65 @@ def _read_body(run, pr, repo):
     if not isinstance(body, str):
         raise _Refusal("read-failed", "PR body: body is not a string")
     return body
+
+
+def _read_body(run, pr, repo):
+    return _body_of(_read_pr(run, pr, repo))
+
+
+def check_caught_up(run, repo, payload):
+    """Refuse a ready marking of a stacked PR whose published head does not hold its lower branch's
+    current head. None when the PR is caught up or is not stacked (its base is the default branch,
+    and no further gh call is made). ``payload`` is the PR's REST payload."""
+    def unreadable(detail):
+        return _Refusal(REASON_STACK_LOWER_UNREADABLE, detail)
+
+    base = payload.get("base") if isinstance(payload, dict) else None
+    head = payload.get("head") if isinstance(payload, dict) else None
+    base_repo = base.get("repo") if isinstance(base, dict) else None
+    # axis: a PR payload lacking base, base.repo or head as objects refuses stack-lower-unreadable — see bite-proof record c1l11e_wo_a_catch_up
+    if not (isinstance(base, dict) and isinstance(base_repo, dict) and isinstance(head, dict)):
+        raise unreadable("the PR payload lacks base, base.repo or head as objects; its lower layer"
+                         " cannot be read")
+    base_ref = base.get("ref")
+    default_branch = base_repo.get("default_branch")
+    # axis: a base ref or default branch that is not a non-empty string refuses stack-lower-unreadable — see bite-proof record c1l11e_wo_a_catch_up
+    if not (isinstance(base_ref, str) and base_ref.strip()
+            and isinstance(default_branch, str) and default_branch.strip()):
+        raise unreadable("the PR payload's base.ref or base.repo.default_branch is not a non-empty"
+                         " string")
+    head_sha = head.get("sha")
+    # axis: a head sha that is not 40 hex characters refuses stack-lower-unreadable — see bite-proof record c1l11e_wo_a_catch_up
+    if not (isinstance(head_sha, str) and _HEAD_SHA_RE.match(head_sha)):
+        raise unreadable("the PR payload's head.sha is not 40 hex characters: %r" % (head_sha,))
+    # axis: a PR on the default branch is not stacked: no refusal and no compare read — see bite-proof record c1l11e_wo_a_catch_up
+    if base_ref == default_branch:
+        return None
+    what = "compare %s...%s" % (base_ref, head_sha[:12])
+    argv = ["gh", "api", "repos/%s/compare/%s...%s" % (repo, urllib.parse.quote(base_ref, safe="/"),
+                                                       head_sha)]
+    # axis: a compare read that fails, times out, raises OSError or prints bad JSON refuses stack-lower-unreadable, original detail kept — see bite-proof record c1l11e_wo_a_catch_up
+    try:
+        compare = _gh_json(run, argv, what)
+    except _Refusal as exc:
+        raise unreadable(exc.detail)
+    # axis: a compare read that is not an object refuses stack-lower-unreadable — see bite-proof record c1l11e_wo_a_catch_up
+    if not isinstance(compare, dict):
+        raise unreadable("%s: the compare read is not an object" % what)
+    behind = compare.get("behind_by")
+    # axis: a behind_by that is missing, not an int, a bool or negative refuses stack-lower-unreadable — see bite-proof record c1l11e_wo_a_catch_up
+    if not isinstance(behind, int) or isinstance(behind, bool) or behind < 0:
+        raise unreadable("%s: behind_by is not a count: %r" % (what, behind))
+    # axis: a head behind its lower branch refuses stack-not-caught-up — see bite-proof record c1l11e_wo_a_catch_up
+    if behind > 0:
+        raise _Refusal(
+            REASON_STACK_NOT_CAUGHT_UP,
+            "the PR head %s is %d commit(s) behind its lower branch %s; catch the layer up: merge %s"
+            " into the layer with a local --no-ff merge and push it, run the calibrated verify on"
+            " the merged head, review the catch-up with a returning review-code session"
+            " (rubric/native-stacks.md, How a stack stays current), then run handback again"
+            % (head_sha[:12], behind, base_ref, base_ref))
+    return None
 
 
 def _read_comments(run, pr, repo):
@@ -502,9 +574,11 @@ def run_verb(verb, pr, repo, slot_file=None, run=None, body_file=None):
 def _run_verb(verb, pr, repo, slot_file, run):
     if not shutil.which("gh"):
         raise _Refusal("read-failed", "gh not on PATH")
-    body = _read_body(run, pr, repo)
+    payload = _read_pr(run, pr, repo)
     if verb == "handback":
-        return check_handback(body)
+        check_caught_up(run, repo, payload)
+        return check_handback(_body_of(payload))
+    body = _body_of(payload)
     analyze_body(body)
     slot_text = None
     if verb == "write":
