@@ -355,6 +355,32 @@ def test_e7_a_repair_round_with_the_test_already_at_the_start_head_folds_a_sourc
     assert fx.state()["rounds"]["1"]["fix"]["commits"] == [{"finding": key, "commit": sha}]
 
 
+def test_e7_a_source_only_commit_after_a_separate_test_commit_in_the_step_refuses(tmp_path):
+    fx = Fixture(tmp_path)
+    fx.reach()
+    key = fx.keys()[0]
+    # the step's start head is unchanged: the test lands in its own commit, then the fix in another
+    fx.commit_fix(code=None, message="the test alone")
+    sha = fx.commit_fix(test_content=None)
+    assert git(fx.repo, "show", "--name-only", "--format=", sha) == CHARGE_PATH
+    fx.assert_refused_pending(_bound(key, sha), "%s:%s:test-missing" % (NO_TEST, key))
+
+
+def test_e7_a_source_only_commit_refuses_when_the_start_head_holds_other_test_bytes(tmp_path):
+    fx = Fixture(tmp_path)
+    fx.reach()
+    key = fx.keys()[0]
+    start = fx.commit_fix(code=None, test_content=_TEST_OTHER_BYTES, message="a different test")
+    state = fx.state()
+    state["_fixStepHead"] = start
+    RD.save_state(str(fx.session), state)
+    fx.pending = RD.cmd_next(str(fx.session))
+    # the block's bytes arrive in a commit of their own, and the fix in a source-only commit after it
+    fx.commit_fix(code=None, message="the block's test")
+    sha = fx.commit_fix(test_content=None)
+    fx.assert_refused_pending(_bound(key, sha), "%s:%s:test-missing" % (NO_TEST, key))
+
+
 # ---- E8 / E9 -------------------------------------------------------------------------------------------------
 
 def test_e8_a_finding_listed_unfixed_owes_no_test_and_is_not_credited(tmp_path):
@@ -379,6 +405,28 @@ def test_e9_a_finding_outside_the_slice_refuses(tmp_path, artifact_for, token):
     fx = Fixture(tmp_path)
     fx.reach()
     fx.assert_refused_pending(artifact_for(fx.keys()[0]), token)
+
+
+def test_e9_a_staged_id_shared_by_two_findings_names_neither_and_the_full_key_still_does(tmp_path):
+    # staged ids restart in each verifier wave, so a slice that mixes waves can hold one id twice
+    fx = Fixture(tmp_path)
+    fx.reach()
+    state = fx.state()
+    first = dict(state["_fixBatch"][0], id="v0")
+    second = dict(first, title="A second finding from a later wave", line=3, suggestion=None,
+                  findingKey="%s::a second finding from a later wave@L3" % CHARGE_PATH)
+    state["_fixBatch"] = [first, second]
+    keys = [RD._finding_identity_key(first), RD._finding_identity_key(second)]
+    assert keys[0] != keys[1]
+    names = RD._slice_finding_resolver(state["_fixBatch"])
+    assert "v0" not in names and names[keys[0]] == keys[0] and names[keys[1]] == keys[1]
+    for artifact in ({"fixes": [{"finding": "v0", "commit": "a" * 40}]},
+                     {"fixes": ["x"], "unfixed": [{"finding": "v0", "why": "w"}]}):
+        detail, commits = RD._apply_fixes_commit_fault(state, fx.config, artifact)
+        assert detail == "finding-id-ambiguous:v0" and commits == []
+    detail, _commits = RD._apply_fixes_commit_fault(
+        state, fx.config, {"fixes": ["x"], "unfixed": [{"finding": keys[0], "why": "w"}]})
+    assert detail is None
 
 
 # ---- a malformed binding is refused, never a crash ------------------------------------------------------------

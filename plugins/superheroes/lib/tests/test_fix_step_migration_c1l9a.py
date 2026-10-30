@@ -102,6 +102,21 @@ def test_e12_a_current_generation_state_at_the_fixer_step_is_migrated_the_same_w
     assert state["pending"]["phase"] == RD.P_APPLY_FIXES and state["_fixStepHead"] == anchor["headSha"]
 
 
+def test_e12_the_build_session_becomes_the_fix_maker_when_the_old_fixer_differs_from_the_host(tmp_path):
+    session_dir, before, _anchor = _migrated_session(tmp_path)
+    state = _state(session_dir)
+    state["config"]["fixerVendor"] = "claude"
+    state["config"]["seatMap"] = {"hostFamily": "openai"}
+    state["seatMapReceipts"] = []
+    state.pop("seatMap", None)
+    host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
+    assert host_vendor not in (None, "claude")
+    RD.save_state(session_dir, state)
+    RD.cmd_next(session_dir)
+    assert len(_rows(session_dir, MIGRATED)) == 1
+    assert _state(session_dir)["config"]["fixerVendor"] == host_vendor
+
+
 def test_e12_a_second_command_migrates_nothing_again(tmp_path):
     session_dir, _before, _anchor = _migrated_session(tmp_path)
     first = RD.cmd_next(session_dir)

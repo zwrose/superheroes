@@ -5408,6 +5408,7 @@ FIX_WITHOUT_TEST = "fix-without-break-it-test"
 FIX_FINDING_UNKNOWN = "fix-finding-unknown"
 FIX_BINDING_MALFORMED = "fix-binding-malformed"
 UNFIXED_FINDING_UNKNOWN = "unfixed-finding-unknown"
+FINDING_ID_AMBIGUOUS = "finding-id-ambiguous"
 FIX_NO_BINDING = "no-binding"
 FIX_COMMIT_UNKNOWN = "commit-unknown"
 FIX_COMMIT_NOT_IN_STEP = "commit-not-in-step"
@@ -5417,19 +5418,30 @@ FIX_NO_FIX_CHANGE = "no-fix-change"
 FIX_UNVERIFIABLE = "unverifiable"
 
 
-def _slice_finding_resolver(slice_):
-    """``{value: finding key}`` for the slice: each row's identity key and its staged id name it."""
-    names = {}
-    for row in slice_ if isinstance(slice_, list) else []:
-        key = _finding_identity_key(row) if isinstance(row, dict) else None
-        if not key:
-            continue
-        names[key] = key
+def _slice_staged_ids(slice_):
+    """``{staged id: {finding keys}}`` for the slice. Staged ids restart in each verifier wave, so a
+    slice that mixes waves can hold two findings under one id."""
+    staged = {}
     for row in slice_ if isinstance(slice_, list) else []:
         key = _finding_identity_key(row) if isinstance(row, dict) else None
         rid = row.get("id") if key else None
         if isinstance(rid, str) and rid:
-            names.setdefault(rid, key)
+            staged.setdefault(rid, set()).add(key)
+    return staged
+
+
+def _slice_finding_resolver(slice_):
+    """``{value: finding key}`` for the slice: each row's identity key names it, and so does its staged
+    id when that id names exactly one finding of the slice. An id shared by two findings names
+    neither: the report must give the full finding key."""
+    names = {}
+    for row in slice_ if isinstance(slice_, list) else []:
+        key = _finding_identity_key(row) if isinstance(row, dict) else None
+        if key:
+            names[key] = key
+    for rid, keys in _slice_staged_ids(slice_).items():
+        if len(keys) == 1:
+            names.setdefault(rid, next(iter(keys)))
     return names
 
 
@@ -5503,9 +5515,10 @@ def _fix_commit_test_fault(facts, block):
     changed = [p for p in facts.get("paths") or [] if isinstance(p, str)]
     have = (facts.get("files") or {}).get(path)
     if have is not None and path not in changed:
-        # the repair exception: a source-only commit must follow a test that already stood at the start head
+        # the repair exception: a source-only commit must follow the block's bytes already standing at the
+        # start head; a test installed or changed by a separate commit of this step is not the same commit
         start = facts.get("startFiles")
-        if isinstance(start, dict) and start.get(path) is None:
+        if isinstance(start, dict) and start.get(path) != wanted:
             return FIX_TEST_MISSING
     if have is None:
         return FIX_TEST_MISSING
@@ -5537,10 +5550,16 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
     names = _slice_finding_resolver(slice_)
     bindings = _report_bindings(artifact)
     unfixed = [e for e in (artifact.get("unfixed") or []) if isinstance(e, dict)]
+    shared = {rid for rid, keys in _slice_staged_ids(slice_).items()
+              if len(keys) > 1 and rid not in names}
     for entry in unfixed:
+        if entry.get("finding") in shared:
+            return "%s:%s" % (FINDING_ID_AMBIGUOUS, entry.get("finding")), []
         if entry.get("finding") not in names:
             return "%s:%s" % (UNFIXED_FINDING_UNKNOWN, entry.get("finding")), []
     for entry in bindings:
+        if entry.get("finding") in shared:
+            return "%s:%s" % (FINDING_ID_AMBIGUOUS, entry.get("finding")), []
         if entry.get("finding") not in names:
             return "%s:%s" % (FIX_FINDING_UNKNOWN, entry.get("finding")), []
     left = {names[entry["finding"]] for entry in unfixed}
@@ -7329,6 +7348,12 @@ def _migrate_fixer_step(session_dir, state):
     state["step"] = P_APPLY_FIXES
     state["_fixStepHead"] = head if _nonempty_str(head) else _fix_step_head(state.get("config"))
     state.pop("_escalatedRung", None)
+    # the build session applies the fixes from here on, so it is the fix maker: an earlier external
+    # fixer's vendor stays in the rounds that recorded it (`rounds[n]["fixerVendor"]`), not in the config
+    config = state.get("config")
+    vendor = _build_session_vendor(seat_map_receipts.effective_seat_map(state))
+    if isinstance(config, dict) and vendor is not None:
+        config["fixerVendor"] = vendor
     return True, attempt
 
 
