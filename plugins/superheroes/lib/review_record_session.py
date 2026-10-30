@@ -74,7 +74,7 @@ _UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 _FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
 # the finding parts a later row must not erase: the live row's value wins, else the ledger row's
-_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake")
+_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake", "tradeoff")  # tradeoff: the owner-choice hold survives a carried row
 
 
 def _int(v):
