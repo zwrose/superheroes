@@ -496,3 +496,15 @@ def test_the_command_exits_2_on_a_usage_error(tmp_path):
     bad.write_text("{}")
     proc = _cli("--repo-root", repo.root, "--base", base, "--earlier-record", str(record), "--proof", str(bad))
     assert proc.returncode == 2 and proc.stdout == ""
+
+
+def test_a_gitlink_only_update_is_a_changed_file_even_when_git_ignores_submodules(tmp_path):
+    # axis: the comparisons pin submodule visibility, so a user's diff.ignoreSubmodules never hides a gitlink update
+    repo = Repo(tmp_path)
+    base, _, earlier = returning(repo)
+    repo.git("config", "diff.ignoreSubmodules", "all")
+    repo.git("update-index", "--add", "--cacheinfo", "160000,%s,src/payments/vendored" % ("1" * 40))
+    repo.git("commit", "-q", "-m", "bump a submodule")
+    got = decide(repo, base, earlier)
+    assert got["changedFiles"] == ["src/payments/vendored"]
+    assert got["newAreas"] == ["Payments"] and got["read"] == "full"
