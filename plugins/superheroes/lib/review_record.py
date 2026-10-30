@@ -1808,15 +1808,33 @@ def _run_result(run):
     return "timed out" if run.get("status") == "timed-out" else "did not start"
 
 
+def _moved_heads(c):
+    """`(first_head, second_head)` when both runs of a re-run entry carry a non-empty string `head` and the two
+    differ, else None: a missing, null, empty or non-string head is unknown and never counts as moved."""
+    runs = c.get("runs") if isinstance(c, dict) else None
+    if not (isinstance(runs, list) and len(runs) == 2 and all(isinstance(run, dict) for run in runs)):
+        return None
+    first, second = runs[0].get("head"), runs[1].get("head")
+    if not (isinstance(first, str) and first and isinstance(second, str) and second and first != second):
+        return None
+    return first, second
+
+
 def _rerun_line(checks, compact):
     if not checks:
         return None
+    # axis: a re-run across two different heads is never called unchanged code — see bite-proof record c1l9b_woc_rerun_heads
+    moved = [_moved_heads(c) for c in checks]
     lead = "Re-run after one failure on unchanged code: "
     if compact:
+        lead = "Re-run after one failure: " if any(moved) else lead
         return f"{lead}{len(checks)} checks {LISTED}."
     return lead + "; ".join(
         f"round {c.get('round')} {_inline_code(str(c.get('check')))}: "
-        + " then ".join(_run_result(run) for run in c.get("runs") or []) for c in checks)
+        + " then ".join(_run_result(run) for run in c.get("runs") or [])
+        + (f" — the second run was at a different head ({heads[0][:12]} then {heads[1][:12]}), not on unchanged code"
+           if heads else "")
+        for c, heads in zip(checks, moved))
 
 
 def _roles(r):
