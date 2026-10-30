@@ -7391,14 +7391,20 @@ def _migrate_fixer_step(session_dir, state):
 
 def _vendor_did_fix_work(state, config, vendor):
     """True when the record shows `vendor` as a fixer that produced work: a round it was recorded as
-    the fixer of (`rounds[n]["fixerVendor"]`) holds fixes or commits, or the step under way holds
-    commits past its start head (work an earlier build left in place, whose fixer the config names).
-    A vendor the config merely names, before any fix, did no work."""
+    the fixer of (`rounds[n]["fixerVendor"]`) holds fixes or commits, or a PR-body edit (`prBodyFix`
+    whose `after` differs from its `before`: a body-only fix has empty fixes and no commits), or the
+    step under way holds commits past its start head (work an earlier build left in place, whose fixer
+    the config names). A vendor the config merely names, before any fix, did no work."""
     rounds = state.get("rounds")
     for rec in (rounds.values() if isinstance(rounds, dict) else ()):
-        fix = rec.get("fix") if isinstance(rec, dict) else None
-        if (isinstance(rec, dict) and rec.get("fixerVendor") == vendor and isinstance(fix, dict)
-                and (fix.get("fixes") or fix.get("commits"))):
+        if not isinstance(rec, dict) or rec.get("fixerVendor") != vendor:
+            continue
+        fix = rec.get("fix")
+        if isinstance(fix, dict) and (fix.get("fixes") or fix.get("commits")):
+            return True
+        body = rec.get("prBodyFix")
+        if (isinstance(body, dict) and _nonempty_str(body.get("after"))
+                and body.get("after") != body.get("before")):
             return True
     return _step_has_new_commits(state, config)
 

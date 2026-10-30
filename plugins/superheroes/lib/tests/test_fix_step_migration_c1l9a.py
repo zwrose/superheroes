@@ -209,6 +209,39 @@ def test_e12_a_former_fixer_vendor_with_a_recorded_fix_stays_a_maker_before_the_
     assert _state(session_dir)["formerFixerFamilies"] == [RD.model_registry.family_for("code-fixer", "claude")]
 
 
+def test_e12_a_former_fixer_whose_only_work_was_a_pr_body_edit_stays_a_maker_before_its_audit(tmp_path):
+    session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "openai"})
+    state = _state(session_dir)
+    # a body-only fix: empty fixes, no commits, a recorded body change, the step head unmoved
+    state["rounds"]["1"]["fix"] = {"fixes": [], "commits": []}
+    state["rounds"]["1"]["prBodyFix"] = {"before": "a" * 64, "after": "b" * 64}
+    state["_fixStepHead"] = RD._fix_step_head(state["config"])
+    RD.save_state(session_dir, state)
+    former_family = RD.model_registry.family_for("code-fixer", "claude")
+    host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
+    assert former_family is not None and host_vendor not in (None, "claude")
+    RD.cmd_next(session_dir)
+    after = _state(session_dir)
+    assert after["config"]["fixerVendor"] == host_vendor
+    assert after["formerFixerFamilies"] == [former_family]
+    assert former_family in RD.receipt_disclosures.accumulated_maker_families(after)
+    after["config"]["vendors"] = ["claude", host_vendor]
+    vendor, independence = RD._auditor_vendor(
+        after["config"], host_vendor, maker_families=RD.receipt_disclosures.accumulated_maker_families(after))
+    assert (vendor, independence) == (None, "unseatable")
+
+
+def test_e12_a_pr_body_record_that_changed_nothing_does_not_make_a_former_fixer_a_maker(tmp_path):
+    session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "openai"})
+    state = _state(session_dir)
+    state["rounds"]["1"]["fix"] = {"fixes": [], "commits": []}
+    state["rounds"]["1"]["prBodyFix"] = {"before": "a" * 64, "after": "a" * 64}
+    state["_fixStepHead"] = RD._fix_step_head(state["config"])
+    RD.save_state(session_dir, state)
+    RD.cmd_next(session_dir)
+    assert "formerFixerFamilies" not in _state(session_dir)
+
+
 def test_e12_a_continued_session_whose_host_family_maps_to_no_vendor_leaves_the_fixer_unknown(tmp_path):
     session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "no-such-family"})
     assert RD._build_session_vendor({"hostFamily": "no-such-family"}) is None
