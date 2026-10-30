@@ -84,6 +84,14 @@ history. There is no app to bring up on the owner's machine and no slot.
 after. The pushed branch is the only work the advisor can recover if the session stops. Never
 force-push.
 
+**At every wake, and before every push, check for a newer launch.** Run
+`python3 -B <plugin root>/lib/cloud_builder.py superseded --repo <o>/<r> --issue <n> --own-intake-id <the id of your own intake comment>`.
+On `superseded: true`, push nothing, post its `comment` on the issue as it is, and end the turn; do
+not post a park or handback. On a refusal, push nothing and end the turn. A wake is any turn that
+begins after an earlier turn ended: a message, PR activity, or a session that came back after a
+usage limit. The builder records its own intake comment's id when it posts it (the number at the end
+of the posted comment's url, `#issuecomment-<id>`, when the post returns only the url).
+
 **A stack layer.** A layer of a stack builds in a cloud session like any other build, and none of
 its steps uses GitHub's GraphQL interface. The launch's base commit is the head of the layer below,
 which the launcher checked on the owner's machine before launch. The order names the layer below's
