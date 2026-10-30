@@ -8041,6 +8041,31 @@ def _break_it_ruled_exempt(state, key):
     return None
 
 
+def _round_number(rkey):
+    return int(rkey) if str(rkey).isdigit() else 0
+
+
+def _restored_run_record(state, key, run, run_round, row):
+    """The record the kept check expects for the finding ``key`` whose latest run is ``run`` (in round
+    ``run_round``). When the finding's latest `testRestore` entry (a restore or a landed correction;
+    by round, then list order) is in that round or a later one, the committed test is the one the
+    restore put back, not the one the run saw: the record's bytes are then the carried block on the
+    finding's ledger ``row``, which `_sync_reviewer_test` rewrote. A restore is no run, so the run
+    record stands otherwise, and so it does when the row carries no readable block (fail closed)."""
+    restored = None
+    for rkey in sorted(state.get("rounds") or {}, key=_round_number):
+        for entry in (state["rounds"][rkey].get("testRestore") or []):
+            if isinstance(entry, dict) and entry.get("findingKey") == key:
+                restored = _round_number(rkey)
+    if restored is None or restored < run_round:
+        return run
+    block = break_it.carried_block(row)[0]
+    if block is None:
+        return run
+    # axis: after a restore the kept check expects the restored bytes, read from the ledger row's carried block alone — see bite-proof record c1l10b_wo2_test_restore
+    return dict(run, sha256=_sha256(block["content"]), content=block["content"])
+
+
 def _break_it_kept_step(state, config):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
@@ -8062,12 +8087,13 @@ def _break_it_kept_step(state, config):
                     state, "break-it working copy not restored: %s (%s)"
                     % (run.get("path"), str(run.get("output") or "")[-200:]))
                 return True
-    latest = {}
+    latest, latest_round = {}, {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
             # axis: the latest run per finding key wins, passed ones included, by round order and then list order, so a changed test's run is the one checked
             if isinstance(run, dict) and isinstance(run.get("findingKey"), str) and run.get("findingKey"):
                 latest[run["findingKey"]] = run
+                latest_round[run["findingKey"]] = _round_number(rkey)
     if not latest:
         return False
     _, by_key, fault = _fixed_ledger_rows(state)
@@ -8098,7 +8124,8 @@ def _break_it_kept_step(state, config):
                          "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
                          "ruledAt": ruled["provenance"]["ruledAt"]})
             continue
-        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head,
+                                  _restored_run_record(state, key, run, latest_round[key], entry),
                                   interpreter=break_it.resolve_interpreter(config))
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
                "reason": got.get("reason"), "run": got.get("run")}

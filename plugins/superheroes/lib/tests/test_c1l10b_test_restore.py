@@ -17,7 +17,9 @@ T4  a landed correction: its bytes are committed, become `reviewerTest` and the 
 T5  the restore check at both entry points, `submit` and `run_loop`, and the shared function itself;
 T6  a finding still open at the cap is handed back like any other;
 T7  the correction order and the sidecar that carries its inputs;
-T8  no mismatch, no restore step.
+T8  no mismatch, no restore step;
+T9  the break-it kept check after a restore or a landed correction expects the restored bytes, from the finding's
+    carried block, and is unchanged for a finding with no restore or a later run.
 
 Bite-proof record: c1l10b_wo2_test_restore
 """
@@ -40,6 +42,7 @@ import break_it  # noqa: E402
 import decision_kinds  # noqa: E402
 import round_phases as RP  # noqa: E402
 import test_apply_fixes_c1l9a as H  # noqa: E402
+import test_break_it_loop as BL  # noqa: E402
 import test_c1l10_audit_checks as C1  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
 
@@ -755,8 +758,6 @@ def test_t7_the_correction_template_says_what_is_asked():
     assert "passed\non the unfixed code" not in text  # the ordinary order's premise is not this one's
 
 
-@pytest.mark.xfail(strict=True, reason="round_orders.render_order picks its template by phase name only; the correction "
-                   "template is not selected until it learns the payload's `correction` flag")
 def test_t7_the_rendered_correction_order_carries_the_correction_instructions():
     import round_orders as RO
     import test_round_orders as TRO
@@ -770,6 +771,65 @@ def test_t7_the_rendered_correction_order_carries_the_correction_instructions():
     assert "judged that the change weakened" in text and ph["CORRECTION_INPUTS_PATH"] in text
 
 
+@pytest.mark.parametrize("payload,phase,expected", [
+    pytest.param({"correction": True}, RP.P_SECOND_TEST, "dispatch-second-test-correction", id="true"),
+    pytest.param({"correction": "true"}, RP.P_SECOND_TEST, RP.P_SECOND_TEST, id="string-true"),
+    pytest.param({"correction": 1}, RP.P_SECOND_TEST, RP.P_SECOND_TEST, id="one"),
+    pytest.param({"correction": None}, RP.P_SECOND_TEST, RP.P_SECOND_TEST, id="none"),
+    pytest.param({"correction": False}, RP.P_SECOND_TEST, RP.P_SECOND_TEST, id="false"),
+    pytest.param({}, RP.P_SECOND_TEST, RP.P_SECOND_TEST, id="absent"),
+    pytest.param("not a payload", RP.P_SECOND_TEST, RP.P_SECOND_TEST, id="payload-not-a-dict"),
+    pytest.param({"correction": True}, RP.P_AUDITS, RP.P_AUDITS, id="another-phase"),
+])
+def test_t7_only_the_second_test_phase_with_a_correction_of_exactly_true_picks_the_correction_template(
+        payload, phase, expected):
+    # edge 1: a `correction` that is not exactly `true` is the ordinary template; no other phase has a second one
+    import round_orders as RO
+    assert RO._template_name(phase, {"payload": payload}) == expected
+
+
+def test_t7_a_correction_that_is_not_exactly_true_renders_the_ordinary_order():
+    import round_orders as RO
+    import test_round_orders as TRO
+    ctx = TRO._GOLDEN_CONTEXTS[RP.P_SECOND_TEST]()
+    ctx["payload"] = dict(ctx.get("payload") or {}, correction="true")
+    text, reason = RO.render_order(RP.P_SECOND_TEST, "seat", ctx)
+    assert reason is None, reason
+    assert "judged that the change weakened" not in text and "Write one more test for each finding" in text
+
+
+def test_t7_a_missing_correction_template_refuses_and_never_falls_back_to_the_ordinary_one(monkeypatch):
+    # edge 2
+    import round_orders as RO
+    import test_round_orders as TRO
+    real = RO.order_template_path
+    monkeypatch.setattr(RO, "order_template_path", lambda name, root=None: real(name + "-gone")
+                        if name == RO.SECOND_TEST_CORRECTION_TEMPLATE else real(name, root))
+    ph = {k: v for k, v in TRO._second_test_placeholders().items() if k != "HELD_FINDINGS_PATH"}
+    ph["CORRECTION_INPUTS_PATH"] = os.path.join(TRO._SESSION, "round-2", "second-test-correction.json")
+    ctx = TRO._base_context(host_seat=True, placeholders=ph, payload={"correction": True, "findings": []})
+    text, reason = RO.render_order(RP.P_SECOND_TEST, "seat", ctx)
+    assert text is None and reason == "template-missing:dispatch-second-test-correction"
+
+
+def test_t7_the_correction_step_is_rendered_into_the_correction_order_on_the_cli_path(tmp_path):
+    # the hand path: `next` emits the correction step's order; before the selection it refused `order-render-refused`
+    w = World(tmp_path)
+    w.audit()
+    w.restore()
+    session = tmp_path / "cli-session"
+    session.mkdir()
+    (session / RD.round_records.META_FILE).write_text(json.dumps({"repoRoot": str(w.root), "headSha": w.fix_head}))
+    w.state["reviewedDiff"] = TRD.DIFF
+    RD.save_state(str(session), w.state)
+    n = RD.cmd_next(str(session))
+    assert n["ok"] is True and n["phase"] == RD.P_SECOND_TEST and n["payload"]["correction"] is True, n
+    (order,) = [os.path.join(d, f) for d, _dirs, files in os.walk(str(session)) for f in files
+                if f.endswith(".md") and RD.P_SECOND_TEST in d]
+    text = open(order, encoding="utf-8").read()
+    assert "judged that the change weakened" in text and RD.ORDER_SIDECAR_CORRECTION_FILE in text
+
+
 def test_t7_the_ordinary_second_test_order_is_unchanged():
     import test_round_orders as TRO
     rendered = TRO._render_golden(RP.P_SECOND_TEST)
@@ -777,3 +837,138 @@ def test_t7_the_ordinary_second_test_order_is_unchanged():
     expected = open(golden, encoding="utf-8").read()
     assert TRO._normalize_golden_machine_paths(rendered) == TRO._normalize_golden_machine_paths(expected)
     assert "judged that the change weakened" not in rendered
+
+
+# --- T9 ------------------------------------------------------------------------------------------------------------
+
+class KeptWorld:
+    """`test_break_it_loop`'s world past a fix: the test role's failing test was run in round 1, the build session then
+    changed it (`break-it-change`, run again) and fixed the code, and the finding is `fixed` on the ledger. The latest
+    run record is the build session's version; a restore or a correction then puts other bytes at head."""
+
+    def __init__(self, tmp_path):
+        self.w = BL.World(tmp_path)
+        self.state = self.w.state
+        self.w.fold_panel(BL._break_it_finding(BL._TEST_FAILING))
+        self.key = self.w.key_of_failed_run()
+        self.w.disposition("fixed")
+        self.runs = []
+        self.change(BL._TEST_WEAKENED, "the first draft was too strict", rnd=1)
+        self.w.fix(BL._TEST_WEAKENED)
+
+    def row(self):
+        return RD._fixed_ledger_rows(self.state)[1][self.key]
+
+    def change(self, content, why, rnd):
+        """What `break-it-change` records: the changed block on the ledger row and a new run record."""
+        config = self.state["config"]
+        self.state["round"] = rnd
+        block = break_it.carried_block(self.row())[0]
+        changed = {"path": block["path"], "run": block["run"], "content": content, "sha256": _sha(content)}
+        record = break_it.run_one(self.w.repo, config["headSha"], changed, scratch=str(self.w.session),
+                                  interpreter=break_it.resolve_interpreter(config))
+        RD._carry_break_it_change_to_ledger(self.state, self.key, RD._break_it_block_text(changed, content),
+                                            record, why)
+        RD._record_round_append(self.state, "breakItRuns", dict(
+            record, title=self.row().get("title"), file=self.row().get("file"), findingKey=self.key, changedWhy=why))
+
+    def commit(self, content, message="commit the test"):
+        BL._write(self.w.repo, BL.TEST_PATH, content)
+        head = BL._commit(self.w.repo, message)
+        self.state["config"][RD.FIX_FOLD_HEAD_KEY] = head
+        return head
+
+    def restore(self, content, stage="restore", rnd=2):
+        """The restore-only step's fold (the one `_fold_test_restore` the driver runs) over a commit of ``content``."""
+        self.state["round"] = rnd
+        head = self.commit(content, "restore")
+        self.state[RD.TEST_RESTORE_FIELD] = {"stage": stage, "then": RD.VERIFY_THEN_POST_AUDITS, "items": [
+            {"findingKey": self.key, "path": BL.TEST_PATH, "content": content, "sha256": _sha(content),
+             "weakened": False}]}
+        RD._fold_test_restore(self.state, self.state["config"], {"fixes": []}, check=(None, head))
+
+    def kept(self):
+        """``(parked, outcome of the latest kept row)``."""
+        parked = RD._break_it_kept_step(self.state, self.state["config"])
+        return parked, self.state["rounds"][str(self.state["round"])]["breakItKept"][-1]["outcome"]
+
+    def run_count(self):
+        return sum(len(rec.get("breakItRuns") or []) for rec in self.state["rounds"].values())
+
+
+def test_t9_a_session_that_converges_after_a_restore_keeps_the_restored_test(tmp_path):
+    # axis: E5 — after a restore the kept check expects the carried block's bytes, not the latest run's
+    k = KeptWorld(tmp_path)
+    assert k.run_count() == 2
+    k.restore(BL._TEST_FAILING)
+    assert k.row()["suggestion"].endswith(BL._TEST_FAILING) and BL._TEST_FAILING != BL._TEST_WEAKENED
+    k.state["round"] = 3  # the finding is fixed and discharged in a later round
+    RD._terminal_converged(k.state, k.state["config"], full_panel=True)
+    assert k.state["terminal"] == "converged", k.state.get("certification")
+    assert k.state["rounds"]["3"]["breakItKept"][-1]["outcome"] == "kept"
+    assert k.run_count() == 2, "a restore is no run: no run is recorded for it"
+
+
+def test_t9_a_landed_correction_is_the_test_the_kept_check_expects(tmp_path):
+    k = KeptWorld(tmp_path)
+    k.restore(BL._TEST_FAILING)
+    corrected = BL._TEST_FAILING + "assert ledger == [100]\n"
+    k.restore(corrected, stage="corrected")
+    assert [e["source"] for e in k.state["rounds"]["2"]["testRestore"]] == ["reviewer", "corrected"]
+    assert k.kept() == (False, "kept")
+    assert k.run_count() == 2
+    # the expectation is the corrected bytes: the test role's first restore is no longer what must be there
+    k.commit(BL._TEST_FAILING, "back to the first restore")
+    parked, outcome = k.kept()
+    assert parked is True and outcome == "changed" and k.state["terminal"] == "cannot-certify"
+
+
+def test_t9_a_test_the_build_session_changes_again_after_the_restore_is_checked_as_that_later_run(tmp_path):
+    k = KeptWorld(tmp_path)
+    k.restore(BL._TEST_FAILING)
+    again = BL._TEST_FAILING.replace("== 1", "<= 1")
+    k.change(again, "the restored test needs one more change", rnd=3)
+    assert k.run_count() == 3
+    k.commit(again, "commit the later change")
+    assert k.kept() == (False, "kept")
+    # the restore is older than the run: the restored bytes are not what must be there
+    k.commit(BL._TEST_FAILING, "the earlier restore again")
+    parked, outcome = k.kept()
+    assert parked is True and outcome == "changed"
+
+
+def test_t9_a_later_run_wins_over_an_older_restore_whatever_the_ledger_block_holds(tmp_path):
+    # edge 5: the ordering rule is the record's (round, then list order), not the ledger's; the ledger row here still
+    # holds the restored block while the later run is of other bytes
+    k = KeptWorld(tmp_path)
+    k.restore(BL._TEST_FAILING)
+    later = BL._TEST_FAILING.replace("== 1", "<= 1")
+    k.state["round"] = 3
+    RD._record_round_append(k.state, "breakItRuns", dict(
+        k.state["rounds"]["1"]["breakItRuns"][-1], sha256=_sha(later), content=later))
+    assert k.row()["suggestion"].endswith(BL._TEST_FAILING)
+    k.commit(later, "the later change")
+    assert k.kept() == (False, "kept")
+
+
+def test_t9_a_finding_with_no_restore_is_checked_exactly_as_before(tmp_path):
+    # edge 4 / 2d: no `testRestore` entry, no substitution; `test_break_it_loop.py::
+    # test_l5_a_fixed_break_it_test_that_is_kept_certifies` is the unchanged case this one extends
+    k = KeptWorld(tmp_path)
+    assert "testRestore" not in k.state["rounds"].get("1", {})
+    assert k.kept() == (False, "kept")
+    k.commit(BL._TEST_FAILING, "another test at the path")
+    parked, outcome = k.kept()
+    assert parked is True and outcome == "changed"
+
+
+def test_t9_a_carried_block_that_cannot_be_read_keeps_today_s_expectation_and_parks(tmp_path):
+    # edge 3: fail closed, never pass on a guess
+    k = KeptWorld(tmp_path)
+    k.restore(BL._TEST_FAILING)
+    ledger = k.state[RD.session_contract.DISPOSITION_LEDGER_KEY]
+    ledger[RD._ledger_index_by_key(ledger)[k.key]]["suggestion"] = "no longer a block"
+    assert break_it.carried_block(k.row())[0] is None
+    parked, outcome = k.kept()
+    assert parked is True and outcome == "changed"
+    assert k.state["rounds"]["2"]["breakItKept"][-1]["reason"] == "sha256-differs"
