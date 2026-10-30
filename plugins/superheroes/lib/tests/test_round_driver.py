@@ -6586,6 +6586,34 @@ def test_a_saved_scoped_session_without_a_fix_delta_is_rebuilt_before_any_order_
         == ["fix-delta-rebuilt"]
 
 
+def test_a_rebuilt_scoped_dispatch_is_reissued_at_a_greater_attempt_than_the_one_it_dropped(tmp_path):
+    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=True,
+                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
+    answer = RD.cmd_next(d)
+    assert answer["ok"] and answer["phase"] == RD.P_SCOPED, answer
+    superseded = [row for row in RD.read_journal(d) if row.get("supersededAttempt") == 1]
+    assert superseded and superseded[0]["phase"] == RD.P_SCOPED and superseded[0]["round"] == 2
+    assert RD._max_used_attempt(d, 2, RD.P_SCOPED) >= 1
+    ok, state = RD.load_state(d)
+    assert ok and state["pending"]["attempt"] >= 2, state["pending"]
+
+
+def test_a_saved_audit_target_with_a_test_change_and_no_recoverable_original_is_handed_back():
+    finding = {"title": "Retry charges twice", "file": "tests/test_charge.py", "line": 1,
+               "severity": "Important", "taxonomy": "break-it-test",
+               "suggestion": RD._break_it_block_text({"path": "tests/test_charge.py", "run": "pytest"},
+                                                     "def test_x():\n    assert True\n"),
+               "runs": [], RD.break_it.RUNS_FIELD: [{"test": "tests/test_charge.py",
+                                                      "changedWhy": "the draft missed an import"}]}
+    state = _verify_fold_state()
+    state.update(round=2, step=RD.P_AUDITS, pending=None, _auditTargets=[finding])
+    state["config"]["repoRoot"] = None
+    assert RD._finish_saved_fix_delta(state) == "fix-delta-hand-back"
+    assert state["terminal"] == "handed-back"
+    assert "breakIt" not in finding
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
 @pytest.mark.parametrize("pending", [False, True], ids=["step-only", "scoped-pending"])
 def test_a_saved_scoped_session_with_no_usable_baseline_is_handed_back(tmp_path, pending):
     d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=pending, baseline=False,

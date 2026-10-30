@@ -6577,15 +6577,45 @@ def _audit_head(state, config):
     return _resolve_head_commit(repo_root) if _nonempty_str(repo_root) else None
 
 
+def _recorded_original_test(state, finding, path):
+    """The test role's original content, read from the finding's first recorded break-it run (the run
+    of the version the reviewer wrote, which carries its content); None when no such run is saved."""
+    key = _finding_identity_key(finding)
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not (key and isinstance(rounds, dict)):
+        return None
+    for rkey in sorted(rounds, key=lambda k: int(k) if str(k).isdigit() else 0):
+        record = rounds[rkey]
+        runs = record.get("breakItRuns") if isinstance(record, dict) else None
+        for run in runs if isinstance(runs, list) else []:
+            if (isinstance(run, dict) and run.get("findingKey") == key and run.get("path") == path
+                    and not run.get("changedWhy") and isinstance(run.get("content"), str)):
+                return run["content"]
+    return None
+
+
+def _break_it_original_unrecoverable(finding, facts):
+    """True when the finding records a change to its test but the test role's original could not be
+    recovered, so the committed test has no baseline to be compared with."""
+    return facts.get("reviewerTest") is None and _changed_why(finding) is not None
+
+
 def _break_it_target_facts(state, config, finding, head):
     """The `breakIt` block of an audit target: the test role's test, the test committed at the audited
     head, the build session's reason for a change, and how the two compare (`audits.BREAK_IT_MATCHES`).
-    Fails closed: a committed test git cannot read is `missing`."""
+    Fails closed: a committed test git cannot read is `missing`, and a recorded change whose original
+    cannot be recovered reads `changed-unexplained` (never `same`)."""
     block, _kind = break_it.carried_block(finding)
     path = block["path"] if block is not None else None
     current = block["content"] if block is not None else None
     kept = finding.get(REVIEWER_TEST_FIELD)
-    reviewer = kept if isinstance(kept, str) else current
+    if isinstance(kept, str):
+        reviewer = kept
+    elif _changed_why(finding) is not None:
+        # axis: a saved change without the kept original is never read against its own rewritten text — the baseline comes from the first recorded run, else there is none
+        reviewer = _recorded_original_test(state, finding, path)
+    else:
+        reviewer = current
     committed = None
     repo_root = config.get("repoRoot")
     if path is not None and _nonempty_str(repo_root) and _nonempty_str(head):
@@ -6597,6 +6627,8 @@ def _break_it_target_facts(state, config, finding, head):
     why = _changed_why(finding)
     if committed is None:
         match = audits.MATCH_MISSING
+    elif reviewer is None:
+        match = audits.MATCH_CHANGED_UNEXPLAINED
     elif committed == reviewer:
         match = audits.MATCH_SAME
     elif committed == current and why is not None:
@@ -7157,6 +7189,8 @@ def _finish_saved_fix_delta(state):
     if not _saved_delta_stretch(state) or _is_extra_audit_round(state):
         return None
     refreshed = _refresh_saved_break_it_facts(state)
+    if state.get("terminal"):
+        return "fix-delta-hand-back"
     if isinstance(state.get("_fixDeltaDiff"), str):
         return "fix-delta-rebuilt" if refreshed else None
     scoped = state.get("step") == P_SCOPED
@@ -7191,7 +7225,14 @@ def _refresh_saved_break_it_facts(state):
             continue
         if head is None:
             head = _audit_head(state, config)
-        target["breakIt"] = _break_it_target_facts(state, config, target, head)
+        facts = _break_it_target_facts(state, config, target, head)
+        if _break_it_original_unrecoverable(target, facts):
+            # axis: a saved session whose recorded test change has no recoverable original is never certified on a guessed baseline
+            _hand_back_unknown_fix_surface(
+                state, "a saved test change has no recoverable original test to audit it against")
+            state["pending"] = None
+            return True
+        target["breakIt"] = facts
         changed = True
     if changed and state.get("step") == P_AUDITS:
         state["pending"] = None
@@ -10786,12 +10827,22 @@ def _rebuild_saved_fix_delta_for_scoped_step(session_dir, cmd):
     if not ok or not isinstance(state, dict):
         return
     held = state.get("step")
+    old = state.get("pending")
     outcome = _finish_saved_fix_delta(state)
     if outcome is None:
         return
     save_state(session_dir, state)
-    _journal_append(session_dir, {"cmd": cmd, "phase": held if isinstance(held, str) else None,
-                                  "round": state["round"], "attempt": 0, "outcome": outcome})
+    entry = {"cmd": cmd, "phase": held if isinstance(held, str) else None,
+             "round": state["round"], "attempt": 0, "outcome": outcome}
+    new = state.get("pending")
+    old_attempt = old.get("attempt") if isinstance(old, dict) else None
+    if (isinstance(old, dict) and isinstance(old.get("phase"), str) and new is None
+            and isinstance(old_attempt, int) and not isinstance(old_attempt, bool) and old_attempt >= 0):
+        # axis: the dispatch the rebuild dropped is reserved durably, so the replacement takes a greater attempt and a result stored for the dropped one can never satisfy it
+        entry["phase"] = old["phase"]
+        entry["attempt"] = old_attempt
+        entry["supersededAttempt"] = old_attempt
+    _journal_append(session_dir, entry)
 
 
 def _state_damage(session_dir):
@@ -11012,11 +11063,12 @@ def _journal_max_attempt(session_dir, rnd, phase):
 
 
 def _journal_max_superseded_attempt(session_dir, rnd, phase):
-    """Highest attempt a ``break-it-change`` took back for ``(rnd, phase)``, or -1 when none: the orders of
-    that attempt were dropped unanswered, so no result for it may be taken."""
+    """Highest attempt a journal entry took back for ``(rnd, phase)``, or -1 when none: a
+    ``break-it-change`` or a saved-session rebuild dropped the orders of that attempt unanswered, so no
+    result for it may be taken."""
     max_attempt = -1
     for event in read_journal(session_dir):
-        if event.get("cmd") != BREAK_IT_CHANGE_CMD or event.get("outcome") != "changed":
+        if event.get("cmd") == BREAK_IT_CHANGE_CMD and event.get("outcome") != "changed":
             continue
         if event.get("round") != rnd or event.get("phase") != phase:
             continue

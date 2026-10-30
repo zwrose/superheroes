@@ -333,6 +333,33 @@ def test_k4_changed_unexplained_when_the_commit_is_not_the_change_the_session_ex
     assert facts["match"] == "changed-unexplained" and facts["committedTest"] == WEAKER_TEST
 
 
+def _state_with_first_run(finding, content):
+    """A saved state whose first recorded break-it run for the finding holds the test role's `content`."""
+    key = RD._finding_identity_key(finding)
+    return {"rounds": {"1": {"breakItRuns": [
+        {"findingKey": key, "path": TEST_PATH, "content": content},
+        {"findingKey": key, "path": TEST_PATH, "content": FIXED_TEST, "changedWhy": WHY}]}}}
+
+
+def test_k4_a_saved_change_without_the_kept_original_is_read_against_the_first_recorded_run(tmp_path):
+    # a session saved before `reviewerTest` existed: the rewritten text is also what the fixer committed
+    finding = _finding(content=WEAKER_TEST, changed_why=WHY)
+    root, sha = _repo_with(tmp_path, WEAKER_TEST)
+    facts = RD._break_it_target_facts(_state_with_first_run(finding, ROLE_TEST), {"repoRoot": str(root)},
+                                      finding, sha)
+    assert facts["reviewerTest"] == ROLE_TEST
+    assert facts["match"] == "changed-explained"
+
+
+def test_k4_a_saved_change_with_no_recoverable_original_never_reads_same(tmp_path):
+    finding = _finding(content=WEAKER_TEST, changed_why=WHY)
+    root, sha = _repo_with(tmp_path, WEAKER_TEST)
+    facts = RD._break_it_target_facts({}, {"repoRoot": str(root)}, finding, sha)
+    assert facts["reviewerTest"] is None
+    assert facts["match"] == "changed-unexplained"
+    assert RD._break_it_original_unrecoverable(finding, facts)
+
+
 def test_k4_changed_unexplained_when_a_fixer_edits_a_test_nobody_changed(tmp_path):
     facts = _facts(tmp_path, WEAKER_TEST, _finding())
     assert facts["match"] == "changed-unexplained"
