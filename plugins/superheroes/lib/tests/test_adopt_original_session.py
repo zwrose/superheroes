@@ -1060,13 +1060,16 @@ def test_the_first_pr_is_the_earliest_created_of_the_branchs_pull_requests(tmp_p
     {"rows": [_pull(), _pull(created_at="not-a-time")]},
     {"rows": [_pull(), _pull(created_at="2026-10-20T10:00:00")]},
     {"rows": [_pull(), "not a pull"]},
+    {"rows": [_pull(), {"head": None, "created_at": "2026-10-01T00:00:00Z"}]},
+    {"rows": [_pull(), {"head": "x", "created_at": "2026-10-01T00:00:00Z"}]},
     {"rows": [_pull()], "returncode": 1},
     {"rows": []},
     {"rows": {"message": "Not Found"}},
     {"stdout": "not json"},
 ], ids=[
     "full-page", "fork-head", "other-branch", "bad-created-at", "no-zone-created-at",
-    "row-not-an-object", "gh-failed", "no-pull-requests", "not-a-list", "not-json",
+    "row-not-an-object", "head-null", "head-not-an-object", "gh-failed", "no-pull-requests",
+    "not-a-list", "not-json",
 ])
 def test_a_first_pr_read_that_cannot_be_trusted_is_none(tmp_path, monkeypatch, answer):
     # axis: any page that could be incomplete or hold another repository's or branch's pull request, or a failed call, reads as unknown

@@ -11,7 +11,6 @@ import ctypes
 import ctypes.util
 import functools
 import json
-import math
 import os
 import platform
 import pty
@@ -2699,7 +2698,9 @@ def _adopted_branch_first_pr(repo_root, branch, env):
         if not isinstance(row, dict):
             return None
         head = row.get("head")
-        head_repo = head.get("repo") if isinstance(head, dict) else None
+        if not isinstance(head, dict):
+            return None
+        head_repo = head.get("repo")
         full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
         if (
             head.get("ref") != branch or not isinstance(full_name, str)
@@ -3080,10 +3081,6 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
-def _is_finite_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
-
-
 def _relay_sent_ts(stamp):
     """Epoch seconds of a fix-order relay record's ``at`` (UTC, ``%Y-%m-%dT%H:%M:%SZ``, with or
     without fractional seconds, as the relay writes it), or ``None`` when it is not that."""
@@ -3188,13 +3185,13 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
                     and 0 <= at_index < len(got["records"]) else None
                 )
                 handback = record.get("ts") if isinstance(record, dict) else None
-            if not _is_finite_number(handback):
+            if not cloud_recover._is_number(handback):
                 kept[launch_id] = info
                 continue
             # axis: a vet not-ready after the handback is a fix order sent since, so the lane may write the branch again and stays; a vet stamp that is not a finite number stays too — see bite-proof record i2254_original_session
             if any(
                 a["kind"] == "vet" and a["value"] == "not-ready"
-                and not (_is_finite_number(a.get("ts")) and a["ts"] <= handback)
+                and not (cloud_recover._is_number(a.get("ts")) and a["ts"] <= handback)
                 for a in info.get("amendments") or []
             ):
                 kept[launch_id] = info
@@ -3222,7 +3219,7 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
                 reads["first"] = _adopted_branch_first_pr_fn(repo_root, branch, env)
             first = reads["first"]
             # axis: a handed-back lane had opened its own pull request before the handback, and a pull request on the adopted branch opened before then would itself be the branch's earliest, so the lane's pull request was on another branch and with no fix order since it writes only that branch; a first-pull-request time that is unread, or not past the handback plus the clock-skew allowance, keeps the lane — see bite-proof record i2254_original_session
-            if _is_finite_number(first) and handback + _ADOPT_ABSENCE_SKEW_SECONDS <= first:
+            if cloud_recover._is_number(first) and handback + _ADOPT_ABSENCE_SKEW_SECONDS <= first:
                 continue
             kept[launch_id] = info
         candidates = kept
