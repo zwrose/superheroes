@@ -346,7 +346,8 @@ def _empty_returning_round(state):
     if any(rec.get(k) for k in ("carried", "audits", "verifyPasses")):
         return None
     # axis: a session holding a carried finding, a finding or a ledger row ran something, so it is not the empty round — see bite-proof record c1l11d_wo_a_carried_review
-    if cfg.get("returningCarried") or state.get("findings") or state.get(sc.DISPOSITION_LEDGER_KEY):
+    if cfg.get("returningCarried") or state.get("findings") \
+            or any(sc.read_disposition_ledger(state, required=False)):  # rows or a fault: either way not the empty round
         return None
     return last
 

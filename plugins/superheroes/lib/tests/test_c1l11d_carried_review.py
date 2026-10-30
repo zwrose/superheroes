@@ -226,6 +226,23 @@ def test_e5_a_session_that_ran_anything_still_refuses_as_it_did(tmp_path, monkey
     assert fake.writes == [] and fake.comments == before
 
 
+def test_e5_an_otherwise_empty_session_whose_ledger_is_malformed_is_not_the_empty_round(tmp_path, monkeypatch):
+    # axis: the session reader refuses a malformed ledger before the empty-round check runs (this is not a bite for the line-349 operand)
+    s = _empty_session(tmp_path, monkeypatch)
+    path = os.path.join(s.dir, SC.STATE_FILE)
+    with open(path, encoding="utf-8") as fh:
+        state = json.load(fh)
+    state["dispositionLedger"] = "not-a-list"
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(state, fh)
+    fake = TRRS.Fake(head=s.head)
+    _post_earlier(fake, s)
+    before = list(fake.comments)
+    out = _send(tmp_path, s, fake)
+    assert out == {"ok": False, "reason": "review-session-unreadable", "detail": "disposition-ledger-malformed"}, out
+    assert fake.writes == [] and fake.comments == before
+
+
 # --- E6 (brief-check F1): the writer re-derives the empty surface; the account's word is never taken ------------------------
 
 def test_e6_a_carried_account_over_a_real_source_change_demotes_every_row(tmp_path, monkeypatch):
@@ -261,6 +278,27 @@ def test_e6_positive_control_the_same_account_over_a_catch_up_merge_is_carried(t
     out = _write(tmp_path, s, fake, _carried_account(s))
     assert out["ok"] is True and out["status"] == "reviewed", out
     assert _row_states(_latest(fake)) == [("reported-by-session", True)]
+
+
+def test_a_carried_row_over_an_earlier_engine_record_run_drops_its_measured_cost(tmp_path, monkeypatch):
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+
+    def measured(rec):
+        """The earlier covering reviewer row as an engine-record run leaves it: measured telemetry and a non-null cost."""
+        rec["reviewers"][0].update(ran="engine-record", cost={"tokens": 1234, "minutes": 2.0},
+                                   observation={"read": "engaged", "toolCalls": 5, "tokens": 1234, "wallSeconds": 120})
+
+    earlier = _post_earlier(fake, s, edit=measured)
+    assert earlier["reviewers"][0]["ran"] == "engine-record" and earlier["reviewers"][0]["cost"]["tokens"] == 1234
+    out = _send(tmp_path, s, fake)
+    assert out["ok"] is True and out["status"] == "reviewed", out
+    rec = _latest(fake)
+    assert rec["reviewers"] and all(v["ran"] == "engine-record" and v["carried"] == {"commit": s.reviewed}
+                                    and "observation" not in v and v["cost"] == {"tokens": None, "minutes": None}
+                                    for v in rec["reviewers"]), rec["reviewers"]
+    # build_record totals only engine-record observations, and a carried row has none
+    assert rec["cost"]["tokens"] is None and rec["cost"]["minutes"] == 0.0, rec["cost"]
 
 
 def test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran(tmp_path, monkeypatch):
