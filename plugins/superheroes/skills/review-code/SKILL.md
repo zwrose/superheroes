@@ -93,6 +93,8 @@ gh pr view "$PR_NUMBER" --json number,title,author,headRefName,headRefOid,baseRe
 HEAD_SHA=$(jq -r .headRefOid "$SESSION_DIR/pr.json")
 PR_BRANCH=$(jq -r .headRefName "$SESSION_DIR/pr.json")
 BASE_BRANCH=$(jq -r .baseRefName "$SESSION_DIR/pr.json")   # PR base branch NAME — pinned to a remote commit below
+DEFAULT_BRANCH=$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's@^ref: refs/heads/\(.*\)[[:space:]]HEAD$@\1@p' | head -n 1)
+if [ -n "$DEFAULT_BRANCH" ] && [ "$BASE_BRANCH" = "$DEFAULT_BRANCH" ]; then STACK_LOWER=false; else STACK_LOWER=true; fi   # a base other than the default branch is a lower layer; an unreadable default fails closed to stacked
 REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
 # Prior review comments — used for author-justification handling
@@ -122,6 +124,7 @@ If the guard fails (detached HEAD, an unrelated branch, or you're reviewing some
 BRANCH=$(git rev-parse --abbrev-ref HEAD); MODE=branch
 HEAD_SHA=$(git rev-parse HEAD)
 BASE_BRANCH=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@'); BASE_BRANCH=${BASE_BRANCH:-main}   # branch mode: default branch NAME; the pipeline exits 0 even when symbolic-ref fails, so `|| echo main` inside it would be DEAD
+STACK_LOWER=false   # branch mode reviews against the default branch, never a lower layer
 REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo "local")
 
 # No worktree, no prior comments — subagents verify against the current working tree
@@ -143,6 +146,8 @@ printf '%s' "$BASE_REF" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' && VERIFY_CMD
 **The base must RESOLVE TO A COMMIT — validated once at Setup, and every consumer uses the guarded command.** This is the only validation, and it is deliberately not a non-emptiness test: `$BASE_REF` reaching `git diff` as an empty string makes argv `...HEAD`, which git reads as `HEAD...HEAD` — a **zero-line diff at exit 0** the loop would certify clean — and reaching it as the literal string `null` (what `jq -r` prints for an absent key) passes any `[ -n … ]` check while `git diff null...HEAD` exits 128 and *still* leaves an empty `diff.txt`. `git rev-parse --verify --quiet "$BASE_REF^{commit}"` rejects both, plus a deleted branch and a non-commit tag. **Every** producer of `$BASE_REF` — the fetch/pin above, the local fallback, the `meta.json` restore below — routes through it; never add a second, weaker guard beside it, and never let a caller "recover" by substituting a branch name. On every auto-fix `next`, `round_driver.py` independently re-checks in code that the base is a *pinned commit id* and that the pin has not moved mid-session, refusing with `base-not-pinned`, `base-unresolved`, or `base-pin-moved` if not (see `reference/round-driver.md` § Base guard).
 
 **Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, and record it in `meta.json`. Both modes assume `origin` is the base branch's repository; in PR mode the driver now refuses a fork whose PR base repository differs from `origin` with `base-repo-mismatch` (full fork *support* — resolving or fetching the base by URL — is still deliberately not built).
+
+**A stacked PR's layer must hold the lower layer's current head before the session starts.** `meta.json` records `stackLower` (true when the PR's base is not the repository's default branch, or the default could not be read). On every `next`, `submit` and `advance` of such a session the driver reads the lower branch's head on `origin` and refuses `stack-lower-ahead` (the layer does not contain the pin) or `stack-lower-moved` (the lower branch is no longer at the pin). On either, the build session brings the layer current (`rubric/native-stacks.md` § How a stack stays current), writes the session's review record as abandoned when the session had started, and starts a new session. On `stack-lower-unreadable` (the lower layer's head could not be read) it makes `origin` reachable and runs the same command again.
 
 **Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above. On fresh state the round-1 artifact passed to the driver is refused in code (`round-diff-unreadable`, `round-diff-empty`, `round-diff-malformed`, `round-diff-required`); rounds 2+ rely on the shell halt above.
 
@@ -167,9 +172,9 @@ STORAGE_PROVISIONAL_ARG=$(printf '%s' "${PROVISIONAL:-}" | jq -cs 'if length == 
 jq -n --arg mode "$MODE" --arg path loop --arg repo "$REPO" --arg branch "$BRANCH" \
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" --arg repoRoot "$REPO_ROOT" \
   --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "$VERIFY_CMD" \
-  --argjson pr "$PR_ARG" --argjson focusNotes "$FOCUS_ARG" \
+  --argjson pr "$PR_ARG" --argjson focusNotes "$FOCUS_ARG" --argjson stackLower "$STACK_LOWER" \
   --argjson storageMode "$STORAGE_MODE_ARG" --argjson storageSource "$STORAGE_SOURCE_ARG" --argjson storageProvisional "$STORAGE_PROVISIONAL_ARG" \
-  '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes,storageMode:$storageMode,storageSource:$storageSource,storageProvisional:$storageProvisional}' \
+  '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes,stackLower:$stackLower,storageMode:$storageMode,storageSource:$storageSource,storageProvisional:$storageProvisional}' \
   > "$SESSION_DIR/meta.json.tmp" \
   && mv "$SESSION_DIR/meta.json.tmp" "$SESSION_DIR/meta.json" \
   || { rm -f "$SESSION_DIR/meta.json.tmp"; echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }

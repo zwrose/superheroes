@@ -724,6 +724,11 @@ reviewed, as `skills/review-code/reference/review-record.md` says. The new recor
 finding the earlier record listed, with its outcome, plus the scoped pass's own. The vet reads only
 the latest record, so a scoped pass with no record of its own reaches its re-vet held on paperwork.
 
+**A stacked layer's review runs on the lower layer's current head.** Bring the layer current before the
+session. When the review driver refuses because the lower layer moved, bring the layer current and
+start a new session, first writing the refused session's record as abandoned if that session had
+already started (`rubric/native-stacks.md` § How a stack stays current).
+
 **Keep the PR body correct as you go.** Every body edit here carries the advisor's vet write forward
 byte-for-byte (§11). **When you are blocked on the owner**, by a consequential flag, an ambiguous
 route, or a decision you cannot make, **park honestly with receipts**: what is done, what is
