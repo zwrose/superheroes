@@ -9022,6 +9022,9 @@ def _break_it_kept_step(state, config):
                             "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
                             "ruledAt": ruled["provenance"]["ruledAt"]})
     if lost:
+        # axis: the exempt rows are persisted before a mixed-case park, so the record reports the owner's ruling for the waived finding whatever happens next — see bite-proof record c1l11b_wo_k_carried_lost_test
+        if exempt_rows:
+            _record_round(state, "breakItKept", exempt_rows)
         _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
         return True
     latest, latest_round = {}, {}

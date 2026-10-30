@@ -139,6 +139,14 @@ def test_c_two_lost_test_findings_one_exempt_and_one_not_park_naming_the_one_tha
         assert RD._break_it_kept_step(state, {}) is True
         assert len(parked) == 1 and RD._finding_identity_key(owed) in parked[0], parked
         assert RD._finding_identity_key(exempt) not in parked[0], parked
+        # the waived finding's ruling is recorded even though the other one parked
+        key = RD._finding_identity_key(exempt)
+        kept = [r for rec in state["rounds"].values() for r in rec.get("breakItKept") or []]
+        assert [(r["findingKey"], r["outcome"]) for r in kept] == [(key, "ruled-out-of-scope")], kept
+        by_key, rulings, exempt_keys = RS.decision_inputs(state)
+        assert key in exempt_keys
+        _outcome, reason, _rep = RS._decide(by_key[key], by_key, rulings, exempt_keys)
+        assert "fixed and audited" not in (reason or ""), reason
 
 
 # ---- D2: a not-discharged audit keeps its newIssues ------------------------------------------
