@@ -1617,6 +1617,11 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
             entry[break_it.RUNS_FIELD] = [
                 {k: v for k, v in run.items() if k != "changedWhy"} if isinstance(run, dict) else run
                 for run in runs]
+    elif (isinstance(existing, dict) and break_it.carries_test(existing) and fresh_block is not None
+            and existing.get(REVIEWER_TEST_FIELD) is not None
+            and entry.get(REVIEWER_TEST_FIELD) is None):
+        # axis: a finding raised again with the identical test block keeps the reviewer original it held, so the next audit still compares the committed test against it
+        entry[REVIEWER_TEST_FIELD] = existing[REVIEWER_TEST_FIELD]
     if key in seen:
         ledger[seen[key]] = entry
     else:
@@ -6415,7 +6420,34 @@ def _removal_anchor(head_anchors, here):
     return None
 
 
-def _fix_delta_groups(delta, head_numbers, head_anchors):
+_FIX_DELTA_OLD_START = re.compile(r"^@@ -(\d+),")
+_PR_HUNK_OLD_RANGE = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+")
+
+
+def _vanished_hunk_lines(before, after):
+    """The indices of the ``before`` section's lines that sit in a PR hunk (header included) with no hunk
+    of the ``after`` section over the same base lines: a hunk the fix removed whole. Such a line has no
+    hunk of its own left to anchor on."""
+    def hunks(section):
+        found = []
+        for index, ln in enumerate(section):
+            m = _PR_HUNK_OLD_RANGE.match(ln)
+            if m:
+                start = int(m.group(1))
+                found.append([start, start + max(int(m.group(2) or 1), 1), index, len(section)])
+                if len(found) > 1:
+                    found[-2][3] = index
+        return found
+
+    kept = hunks(after)
+    vanished = set()
+    for lo, hi, first, end in hunks(before):
+        if not any(lo < k_hi and k_lo < hi for k_lo, k_hi, _f, _e in kept):
+            vanished.update(range(first, end))
+    return vanished
+
+
+def _fix_delta_groups(delta, head_numbers, head_anchors, before=(), after=()):
     """The groups of one file's fix delta (``_fixer_delta_lines``) that change more than the
     line numbers of the PR diff's own hunk headers, as ``(lines, head_lines)``: the group's lines,
     header first, and the head-file lines its changed lines sit on. A removed line sits on a line a
@@ -6430,16 +6462,23 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
             current.append(ln)
         else:
             return None
+    vanished = _vanished_hunk_lines(before, after)
     kept = []
     for lines in groups:
         index = int(_FIX_DELTA_GROUP_HEADER.match(lines[0]).group(1)) - 1
+        old = _FIX_DELTA_OLD_START.match(lines[0])
+        before_index = int(old.group(1)) - 1 if old else -1
         head_lines, content = [], False
         for ln in lines[1:]:
             mark, text = ln[0], ln[1:]
+            if mark in (" ", "-"):
+                before_index += 1
             if mark == "-":
                 content = content or not text.startswith("@@")
-                if text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- ")):
-                    # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk.
+                if (text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- "))
+                        and before_index - 1 not in vanished):
+                    # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk;
+                    # one whose PR hunk the fix removed whole has none, and never borrows a sibling's.
                     anchor = _removal_anchor(head_anchors, min(max(index, 0), len(head_anchors)))
                     if anchor is not None:
                         head_lines.append(anchor)
@@ -6484,7 +6523,8 @@ def _fix_delta_surface(state, reviewed_diff, head_diff):
         if before == after:
             continue
         delta = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
-        groups = _fix_delta_groups(delta, _head_line_numbers(after), _head_line_anchors(after))
+        groups = _fix_delta_groups(delta, _head_line_numbers(after), _head_line_anchors(after),
+                                   before, after)
         if groups is None:
             return None
         if not groups:
