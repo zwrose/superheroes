@@ -1596,8 +1596,10 @@ def _returning_surface(state, cfg):
     baseline, head_diff = _returning_diffs(state, cfg)
     if baseline is None:
         return None, "the earlier review's diff or the round-1 diff is not text"
+    changed = (cfg.get("returning") or {}).get("changedFiles")
+    only = set(changed) if isinstance(changed, list) and all(isinstance(f, str) for f in changed) else None
     try:
-        delta = _fix_delta_surface(state, baseline, head_diff)
+        delta = _fix_delta_surface(state, baseline, head_diff, only=only)
     except Exception as exc:  # noqa: BLE001 — a surface nobody could work out is a full panel, never a hand-back
         return None, "the change since the last reviewed commit failed on %s: %s" % (type(exc).__name__, exc)
     if delta is None:
@@ -7306,14 +7308,15 @@ def _fix_delta_groups(delta, head_numbers, head_anchors):
     return kept
 
 
-def _fix_delta_surface(state, reviewed_diff, head_diff):
+def _fix_delta_surface(state, reviewed_diff, head_diff, only=None):
     """``(surface, text)`` for the round's own fix delta, or None when it cannot be worked out.
 
     ``surface`` is the scoped finder's hunks, ``{file: [{start, end, text}]}``: for each file whose
     section differs between the reviewed (pre-fix) diff and the post-fix head diff, the head-file lines
     its changed lines sit on, one entry per group of changes, and for a file the fix removed the
     removal marker ``delta_surface.split_fix_surface`` uses. ``text`` is the same delta as a diff, each
-    file under its ``diff --git`` line. A proven copy, which every seat's files leave out, is in neither."""
+    file under its ``diff --git`` line. A proven copy, which every seat's files leave out, is in neither.
+    ``only``, when a set, keeps every file outside it out of both."""
     reviewed_hunks = delta_surface.parse_hunks(reviewed_diff)
     head_hunks = delta_surface.parse_hunks(head_diff)
     if reviewed_hunks is None or head_hunks is None:
@@ -7323,6 +7326,9 @@ def _fix_delta_surface(state, reviewed_diff, head_diff):
     for file in _diff_files(reviewed_diff) + [f for f in _diff_files(head_diff)
                                               if f not in _diff_files(reviewed_diff)]:
         if file in left_out:
+            continue
+        # axis: a returning round's surface holds only the files the decider named as changed, never a file whose only difference is a catch-up's index line — see bite-proof record c1l11e_wo_a_catch_up
+        if only is not None and file not in only:
             continue
         before, after = _diff_section(reviewed_diff, file), _diff_section(head_diff, file)
         if before == after:
@@ -9981,19 +9987,6 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
         body["value"] = value
     sys.stdout.write(json.dumps(body) + "\n")
     return 1
-
-
-def _refuse_stack_lower(session_dir):
-    """None to carry on, or the exit code of a stacked-layer refusal. `submit` and `advance` take no
-    `--repo-root`, so the checkout is the one the session's meta.json recorded."""
-    ok_meta, meta = review_base_guard.read_meta(session_dir)
-    repo_root = meta.get("repoRoot") if ok_meta else None
-    if not isinstance(repo_root, str) or not repo_root.strip():
-        repo_root = os.getcwd()
-    stack = review_base_guard.check_stack_lower(session_dir, repo_root)
-    if stack["ok"]:
-        return None
-    return _refuse_base_guard(session_dir, stack["reason"], stack.get("detail"))
 
 
 def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
@@ -16130,9 +16123,6 @@ def _dispatch(args):
             guard = review_base_guard.check_base(args.session_dir, repo_root, prior_pin=prior_pin)
             if not guard["ok"]:
                 return _refuse_base_guard(args.session_dir, guard["reason"], guard.get("detail"))
-            stack = review_base_guard.check_stack_lower(args.session_dir, repo_root)
-            if not stack["ok"]:
-                return _refuse_base_guard(args.session_dir, stack["reason"], stack.get("detail"))
             if fresh:
                 res = review_base_guard.check_round_diff(args.diff_path)
                 if not res["ok"]:
@@ -16212,9 +16202,6 @@ def _dispatch(args):
                                  evidence_path=args.evidence, occurrence=args.occurrence,
                                  expect_round=args.round, expect_phase=args.phase)
     elif args.cmd == "advance":
-        refused = _refuse_stack_lower(args.session_dir)
-        if refused is not None:
-            return refused
         out = cmd_advance(args.session_dir, break_lock=args.break_lock)
     elif args.cmd == "run-verify":
         out = cmd_run_verify(args.session_dir, timeout=args.timeout)
@@ -16235,9 +16222,6 @@ def _dispatch(args):
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:
-        refused = _refuse_stack_lower(args.session_dir)
-        if refused is not None:
-            return refused
         try:
             with open(args.artifact, encoding="utf-8") as fh:
                 artifact = json.load(fh)
