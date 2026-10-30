@@ -45,6 +45,8 @@ import test_apply_fixes_c1l9a as H  # noqa: E402
 import test_break_it_loop as BL  # noqa: E402
 import test_c1l10_audit_checks as C1  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
+import test_round_driver_advance as TA  # noqa: E402
+from test_round_driver_advance import adapters  # noqa: E402,F401  (a fixture)
 
 RD = TRD.RD
 
@@ -990,3 +992,78 @@ def test_t9_a_carried_block_that_cannot_be_read_keeps_today_s_expectation_and_pa
     parked, outcome = k.kept()
     assert parked is True and outcome == "changed"
     assert k.state["rounds"]["2"]["breakItKept"][-1]["reason"] == "sha256-differs"
+
+
+# --- the durable paths: a verify result landed before the restore, and a finding raised again -----------------------
+
+def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reuses_the_landed_pass(
+        tmp_path, monkeypatch, adapters):
+    # axis: the post-restore verify takes a fresh slot — the concurrent slot's earlier pass is not the gate's result
+    w = World(tmp_path)
+    w.cfg["verifyCommand"] = "make test"
+    d = TA._session(tmp_path, name="durable", verifyCommand="make test")
+    state = TA._state(d)
+    for field in ("round", "rounds", "fixBatch", "findings", "_auditTargets", "_newSurface", "_fixDeltaDiff",
+                  "_verifyThen", "step"):
+        state[field] = w.state[field]
+    state["config"].update({k: v for k, v in w.cfg.items() if k != "verifyCommand"})
+    state["pending"] = None
+    RD.save_state(d, state)
+    monkeypatch.chdir(w.root)
+    out = RD.cmd_next(d)
+    assert out["ok"] and out["phase"] == RD.P_AUDITS, out
+    slot = out["payload"]["verify"]
+    first = RD.cmd_run_verify(d, run=TA._verb_run(0))
+    assert first["ok"] is True and first["result"] == "pass" and first["attempt"] == slot["attempt"], first
+    assert first["landingPath"] == slot["landingPath"]
+    # the audits report a weakened test while that pass is landed and unaccepted; the restore is committed
+    w.state = TA._state(d)
+    w.state["pending"] = None
+    w.audit()
+    w.restore()
+    restored = w.head()
+    assert w.state["step"] == RD.P_VERIFY and w.state["_restoredHead"] == restored
+    RD.save_state(d, w.state)
+    nxt = RD.cmd_next(d)
+    assert nxt["ok"] and nxt["phase"] == RD.P_VERIFY, nxt
+    assert nxt["attempt"] != slot["attempt"], "the restored head was given the slot the old pass landed in"
+    assert nxt["payload"]["restoredHead"] == restored
+    calls = []
+    again = RD.cmd_run_verify(d, run=TA._verb_run(0, calls=calls))
+    assert again["ok"] is True and len(calls) == 1, again
+    landed, err = RD.round_records.read_json(again["landingPath"])
+    assert err is None and landed["headSha"] == restored
+
+
+@pytest.mark.parametrize("head,halts", [pytest.param("0" * 40, True, id="another-head"),
+                                        pytest.param(None, False, id="restored-head")])
+def test_the_gate_after_a_restore_counts_only_a_run_at_the_restored_head(tmp_path, head, halts):
+    w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore goes straight to the gate
+    w.audit()
+    w.restore()
+    restored = w.state["_restoredHead"]
+    artifact = {"result": "pass", "headSha": head or restored}
+    w.fold(RD.P_VERIFY, artifact, verified_head_resolution=(None, None))
+    if halts:
+        assert w.state["terminal"] == "halted" and w.state["step"] == RD.P_TERMINAL
+        assert w.state["decisions"][-1]["kind"] == "verify-unresolved"
+    else:
+        assert not w.state.get("terminal") and "_restoredHead" not in w.state
+
+
+def test_a_used_correction_stays_used_when_the_finding_is_raised_again(tmp_path):
+    # axis: the once-only guard also reads the round history, which a re-raised finding's fresh copies cannot reset
+    w = World(tmp_path)
+    w.audit()
+    w.restore()
+    w.correct(CORRECTED_TEST)
+    assert RD._correction_used(w.state, w.key) is True
+    # the live copies are replaced by fresh ones, as a scoped finder raising the same key again does
+    fresh = C1._finding(content=FIXED_TEST, reviewer_test=ROLE_TEST, changed_why=WHY)
+    w.state["findings"] = [fresh]
+    w.state["fixBatch"] = [copy.deepcopy(fresh)]
+    w.state["_auditTargets"] = RD._audit_targets(w.state, w.cfg, {})
+    w.state.pop(RD.session_contract.DISPOSITION_LEDGER_KEY, None)
+    assert all(RD.TEST_CORRECTION_FIELD not in row for row in w.state["findings"] + w.state["fixBatch"])
+    assert RD._correction_used(w.state, w.key) is True
+    assert RD._correction_used(w.state, "another-key") is False

@@ -5887,6 +5887,14 @@ def _correction_used(state, key):
         held = row.get(TEST_CORRECTION_FIELD)
         if isinstance(held, dict) and held.get("used") is True:
             return True
+    # axis: a correction used stays used when the finding is raised again and its live copies are replaced — the round history is the durable record, see bite-proof record c1l10b_wo2_test_restore
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    for rec in rounds.values():
+        entries = rec.get("testCorrection") if isinstance(rec, dict) else None
+        for entry in entries if isinstance(entries, list) else []:
+            if (isinstance(entry, dict) and entry.get("findingKey") == key
+                    and entry.get("outcome") in ("corrected", "none")):
+                return True
     return False
 
 
@@ -6627,6 +6635,19 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
     head, head_source, moved = _verify_execution_head(artifact, verified_head)
+    restored = state.get("_restoredHead")
+    # axis: the gate after a restore counts only a run at the restored head — a result taken at another head halts, see bite-proof record c1l10b_wo2_test_restore
+    if restored is not None and head is not None and head != restored:
+        _set_terminal(state, "halted")
+        state["certification"] = {
+            "shape": None,
+            "reason": ("verify ran at %s, not the restored head %s — halt, certification withheld"
+                       % (head, restored))}
+        _decision(state, "verify-unresolved",
+                  "verify result ran at head %s, not the restored head %s — fail closed, "
+                  "certification withheld" % (head, restored))
+        state["step"] = P_TERMINAL
+        return
     first = state.pop("_verifyRerun", None)
     # axis: a first fail does not halt — the gate is pending again once, and the second result decides — see bite-proof record c1l9a_wo1_verify_rerun
     if first is None:
@@ -9639,6 +9660,9 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         return _next_response(session_dir, state, pend, "next")
     step = _advance(state, state["config"])
     attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
+    if step["phase"] == P_VERIFY and state.get("_restoredHead") is not None:
+        # axis: the gate after a restore takes a fresh verify slot — a result landed before the restore (the concurrent slot) is never reused for the restored head
+        attempt = _first_unlanded_verify_attempt(session_dir, step["round"], attempt)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
                "attempt": attempt, "payload": step["payload"]}
     verify = pending.get("payload", {}).get("verify") if isinstance(pending.get("payload"), dict) else None
@@ -11774,6 +11798,16 @@ def _next_dispatch_attempt(session_dir, rnd, phase, state):
     if max_used < 0:
         return 0
     return max_used + 1
+
+
+def _first_unlanded_verify_attempt(session_dir, rnd, attempt):
+    """The first verify attempt at or above ``attempt`` with nothing landed in its slot. An accepted-submit
+    allocator does not count a result that landed and was never accepted, so it would hand that slot out again."""
+    skey = round_records.storage_key("verify")
+    while (_store_file_exists(round_records.bare_payload_path(session_dir, rnd, P_VERIFY, skey, attempt))
+           or _store_file_exists(round_records.store_path(session_dir, rnd, P_VERIFY, skey, attempt))):
+        attempt += 1
+    return attempt
 
 
 def _plugin_resource_root():
