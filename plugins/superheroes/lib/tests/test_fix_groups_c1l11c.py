@@ -566,3 +566,49 @@ def test_the_record_writer_takes_a_fix_group_with_or_without_a_commit_and_the_bu
     bullet = REC._finding_bullet(rec_finding(fixGroup={"id": "fg-1", "members": ["a", "b", "c"]}))
     assert bullet.endswith(" · one fix shared with 2 other finding(s) (group fg-1)")
     assert "one fix shared" not in REC._finding_bullet(rec_finding())
+
+
+# ---- item 3c: every path that composes a batch closes it over fix groups --------------------------------------
+
+def _rule_guidance(state, key):
+    """An owner `guidance` decision on `key`, written the way the `rule` verb writes one."""
+    state["rulingSeqCounter"] = state.get("rulingSeqCounter", 0) + 1
+    state.setdefault("rulingsLog", []).append({
+        "seq": state["rulingSeqCounter"], "round": state.get("round", 1), "phase": "dispatch-fixer",
+        "attempt": None, "id": key, "findingKey": key, "ruling": "guidance", "reason": "owner call",
+        "by": "owner", "guidance": "keep the retry behaviour"})
+
+
+def test_an_owner_ruling_that_adds_a_group_member_brings_its_sibling_into_the_batch():
+    u = _unit(severities=("Minor", "Minor"))  # neither is blocking: only the ruling queues the first
+    _rule_guidance(u.state, u.ka)
+    RD._after_findings_settled(u.state, u.state["config"])
+    assert u.state["step"] == RD.P_APPLY_FIXES
+    assert sorted(RD._finding_identity_key(r) for r in u.state["_fixBatch"]) == sorted([u.ka, u.kb])
+
+
+def test_a_guidance_restored_member_offered_beside_no_sibling_brings_its_sibling_into_the_batch():
+    u = _unit(severities=("Minor", "Minor"))
+    _rule_guidance(u.state, u.ka)
+    live = {RD._finding_identity_key(r): dict(r) for r in u.state["findings"]}
+    # the restored member is already offered (the ruling is satisfied by that row), so the resolver adds nothing
+    assert RD._queue_fix_batch(u.state, u.state["config"], [live[u.ka]]) == "queued"
+    assert sorted(RD._finding_identity_key(r) for r in u.state["_fixBatch"]) == sorted([u.ka, u.kb])
+
+
+def test_a_delta_settle_offering_the_important_member_brings_its_minor_sibling_into_the_batch():
+    u = _unit(severities=("Important", "Minor"))
+    state = u.state
+    state["_settleDelta"] = True
+    RD._after_findings_settled(state, state["config"])
+    assert state["step"] == RD.P_APPLY_FIXES
+    assert sorted(RD._finding_identity_key(r) for r in state["_fixBatch"]) == sorted([u.ka, u.kb])
+
+
+def test_the_delta_settle_closure_still_leaves_an_owner_held_sibling_out():
+    u = _unit(severities=("Important", "Minor"))
+    u.rows[1]["tradeoff"] = True
+    u.state["ownerChoiceHeld"] = [u.kb]
+    u.state["_settleDelta"] = True
+    RD._after_findings_settled(u.state, u.state["config"])
+    assert [RD._finding_identity_key(r) for r in u.state["_fixBatch"]] == [u.ka]

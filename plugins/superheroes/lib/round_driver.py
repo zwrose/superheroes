@@ -5434,23 +5434,21 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     spent_keys = []
     if filtered:
         filtered, spent_keys = _drop_spent_out_of_scope_rows(state, filtered)
-    filtered_before_ruled = len(filtered)
     filtered = _resolve_ruled_batch(state, filtered)
-    if len(filtered) > filtered_before_ruled:
-        # axis: owner-directed additions join their fix groups too, a sibling never offered riding through the same exclusions — see bite-proof record c1l11c_wo1_fix_groups
-        offered_keys = {_finding_identity_key(r) for r in rows if isinstance(r, dict)}
-        kept_keys = {_finding_identity_key(r) for r in filtered if isinstance(r, dict)}
-        siblings = [dict(r) for r in _close_batch_over_fix_groups(state, [], filtered)
-                    if isinstance(r, dict) and _finding_identity_key(r) not in kept_keys
-                    and _finding_identity_key(r) not in offered_keys]
+    # axis: every composed batch is closed over its fix groups here, whichever path built it, a sibling never offered riding through the same exclusions — see bite-proof record c1l11c_wo1_fix_groups
+    offered_keys = {_finding_identity_key(r) for r in rows if isinstance(r, dict)}
+    kept_keys = {_finding_identity_key(r) for r in filtered if isinstance(r, dict)}
+    siblings = [dict(r) for r in _close_batch_over_fix_groups(state, [], filtered)
+                if isinstance(r, dict) and _finding_identity_key(r) not in kept_keys
+                and _finding_identity_key(r) not in offered_keys]
+    if siblings:
+        siblings, sibling_fault = _filter_excluded_discharged_fixes(state, siblings)
+        if sibling_fault is not None:
+            _park_cannot_certify(state, sibling_fault.detail)
+            return "faulted"
         if siblings:
-            siblings, sibling_fault = _filter_excluded_discharged_fixes(state, siblings)
-            if sibling_fault is not None:
-                _park_cannot_certify(state, sibling_fault.detail)
-                return "faulted"
-            if siblings:
-                siblings, _spent = _drop_spent_out_of_scope_rows(state, siblings)
-            filtered += siblings
+            siblings, _spent = _drop_spent_out_of_scope_rows(state, siblings)
+        filtered += siblings
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:
