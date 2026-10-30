@@ -96,39 +96,13 @@ _TERMINAL_MAP = {
     "handed-back": "halted",
 }
 
-# INV-15: the harness's simulated maker vendor must not be seated on its review panel —
-# choose a vendor whose family is absent from the live pool so barring it yields a mixed panel.
-_EVAL_FIXER_VENDOR = "cursor"
+# INV-15: the simulated build session's vendor (the maker of the code under review) must not be
+# seated on the review panel — choose a vendor whose family is absent from the live pool so
+# barring it yields a mixed panel.
+_EVAL_BUILD_SESSION_VENDOR = "cursor"
 _EVAL_LIVE_POOL = ["claude", "codex"]
 # The non-panel phase each finder dimension runs as.
 _FINDER_PHASE = {"scoped-finder": RD.P_SCOPED, "gap-sweep": RD.P_GAPSWEEP}
-
-
-def _eval_live_pool_families():
-    out = set()
-    for vendor in _EVAL_LIVE_POOL:
-        fam = model_registry.family_for("code-fixer", vendor)
-        if fam is not None:
-            out.add(fam)
-    return out
-
-
-def _validate_fixer_vendor_override(vendor):
-    """INV-18: refuse fixture fixerVendor before seat-map build when its family is in the pool."""
-    family = model_registry.family_for("code-fixer", vendor)
-    pool_families = _eval_live_pool_families()
-    if family is None:
-        raise ValueError(
-            "fixture fixerVendor %r is not a registered code-fixer vendor "
-            "(eval harness live pool %r seats families %s)"
-            % (vendor, _EVAL_LIVE_POOL, sorted(pool_families))
-        )
-    if family in pool_families:
-        raise ValueError(
-            "fixture fixerVendor %r resolves to family %r, which the eval harness "
-            "live pool %r already seats — barring it would collapse the panel to one vendor"
-            % (vendor, family, _EVAL_LIVE_POOL)
-        )
 
 
 def _receipt(run_id, round_no, coverage_decisions=None):
@@ -247,11 +221,11 @@ def _eval_nonpanel_cells():
     return cells
 
 
-def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
+def _eval_clean_seat_map(build_session_vendor=_EVAL_BUILD_SESSION_VENDOR):
     """Seat map with no unexcused violations for the run's driver-derived maker family (#1190 INV-14),
     proving the live pool's non-panel cells (the harness synthesizes them; nothing is probed)."""
     live = _EVAL_LIVE_POOL
-    driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
+    driver_author_family = model_registry.family_for("implementer", build_session_vendor)
     m = SM.build(SM.PANEL_ROSTER, live, driver_author_family, 0)
     receipt = SM.to_receipt(m, driver_author_family)
     if SM.unexcused_violations(receipt, driver_author_family) == []:
@@ -271,8 +245,8 @@ def _eval_clean_seat_map(fixer_vendor=_EVAL_FIXER_VENDOR):
         return receipt
     raise RuntimeError(
         "eval harness seat map must have no unexcused violations for "
-        "fixer_vendor=%r driver_author_family=%r"
-        % (fixer_vendor, driver_author_family)
+        "build_session_vendor=%r driver_author_family=%r"
+        % (build_session_vendor, driver_author_family)
     )
 
 
@@ -624,11 +598,10 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     RD._fold_panel = _fold_panel_persist
     try:
         io = {}
-        fixer_vendor = fixture.get("fixerVendor") or _EVAL_FIXER_VENDOR
-        _validate_fixer_vendor_override(fixer_vendor)
+        build_session_vendor = _EVAL_BUILD_SESSION_VENDOR
         seat_map_obj = None
         if supply_seat_map:
-            seat_map_obj = io["seatMap"] = _eval_clean_seat_map(fixer_vendor)
+            seat_map_obj = io["seatMap"] = _eval_clean_seat_map(build_session_vendor)
         seams = {
             "reviewer": reviewer,
             "synthesis": synthesis,
@@ -646,7 +619,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             "maxRounds": max_rounds,
             "diff": _EVAL_DIFF,
             "vendors": list(_EVAL_LIVE_POOL),
-            "fixerVendor": fixer_vendor,
+            "fixerVendor": build_session_vendor,
             "verifyCommand": "none",
             "baseGuard": RD.BASE_GUARD_CHECKED,
         }

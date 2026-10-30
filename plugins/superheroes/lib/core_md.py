@@ -1370,14 +1370,6 @@ def write_spec_reviewer(cwd, engine, *, root=None):
         write_failed_reason=SPEC_REVIEWER_DEFER_WRITE_FAILED, root=root)
 
 
-def _drop_legacy_codex_pin_aliases(merged, canonical_role):
-    """Remove legacy alias keys for ``canonical_role`` from a codexModels map."""
-    import engine_pref
-    for alias, canon in engine_pref._LEGACY_CODEX_PIN_ALIAS.items():
-        if canon == canonical_role:
-            merged.pop(alias, None)
-
-
 def write_engine_pref_pins(cwd, key, pins, *, root=None):
     """Lock-guarded surgical write of ``enginePreferences[key]`` for one of the pin maps — the ONE
     writer of ``codexModels`` / ``seatPins``. Never raises.
@@ -1452,18 +1444,10 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
             current = {}
         merged = dict(current)
         set_values = {}
-        for raw_key, val in pins.items():
-            if key == "codexModels":
-                role = engine_pref.canonical_codex_pin_role(raw_key)
-            else:
-                role = raw_key
+        for role, val in pins.items():
             if val is None:
                 merged.pop(role, None)
-                if key == "codexModels":
-                    _drop_legacy_codex_pin_aliases(merged, role)
             else:
-                if key == "codexModels":
-                    _drop_legacy_codex_pin_aliases(merged, role)
                 merged[role] = val
                 set_values[role] = val
         if set_values:

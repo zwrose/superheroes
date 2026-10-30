@@ -104,11 +104,6 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
         "codex": ("gpt-6.1-sol", "high"),
         "cursor": ("composer-2.5", None),
     },
-    "code-fixer": {
-        "claude": ("sonnet-5.5", "high"),
-        "codex": ("gpt-6.1-sol", "high"),
-        "cursor": ("composer-2.5", None),
-    },
     "doc-reviser": {
         "claude": ("opus-5.5", "high"),
         "codex": ("gpt-6.1-sol", "high"),
@@ -217,14 +212,6 @@ _ROLE_META: dict[str, dict] = {
         "pin_eligible": False,
         "owner_tunable": True,
     },
-    "code-fixer": {
-        "model_tier_role": True,
-        "engine_pref_key": "implementation",
-        "codex_kind": "fix",
-        "read_write": "write",
-        "pin_eligible": True,
-        "owner_tunable": True,
-    },
     "doc-reviser": {
         "model_tier_role": True,
         "engine_pref_key": "implementation",
@@ -309,13 +296,12 @@ _MODEL_TIER_ROLES = (
     "verifier",
     "mechanical",
     "synthesis",
-    "code-fixer",
     "doc-reviser",
     "implementer",
     "pilot",
 )
 
-_CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "code-fixer", "implementer", "pilot")
+_CODEX_PIN_ROLES = ("reviewer", "reviewer-deep", "implementer", "pilot")
 
 _CODEX_PEER_BY_CLAUDE = {
     "sonnet": "gpt-6.1-sol",
@@ -676,7 +662,7 @@ def codex_role_kind() -> dict[str, str]:
 
 def codex_write_pin_roles() -> tuple[str, ...]:
     """Pin-eligible roles whose read_write is 'write', in stable registry order."""
-    return ("code-fixer", "implementer")
+    return ("implementer",)
 
 
 def engine_pref_key(role: str) -> str | None:

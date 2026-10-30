@@ -650,7 +650,7 @@ def test_composer_authored_diff_excludes_cursor_from_strong_and_critical():
     reviewer cell ever produced, so grok could seat anywhere on a composer-made diff."""
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     assert author == "xai"
     m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, author, SM.seed_from(651, None))
     for seat in sorted(SM.STRONG_TIER_SEATS | SM.CRITICAL_SEATS):
@@ -669,7 +669,7 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
     catch."""
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, SM.seed_from(651, None))
     unfilled = {
         d.get("seat") for d in m["degradations"] if d.get("constraint") == "seat-unfilled"
@@ -695,9 +695,9 @@ def test_maker_family_barred_from_every_roster_seat():
     import model_registry as MRG
 
     families = (
-        MRG.family_for("code-fixer", "claude"),
-        MRG.family_for("code-fixer", "codex"),
-        MRG.family_for("code-fixer", "cursor"),
+        MRG.family_for("implementer", "claude"),
+        MRG.family_for("implementer", "codex"),
+        MRG.family_for("implementer", "cursor"),
     )
     for author in families:
         for seed in range(40):
@@ -711,7 +711,7 @@ def test_single_vendor_collapse_is_same_family_degradation_not_violation():
     # same-family seat and never a maker-family violation
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, SM.seed_from(670, None))
     for seat in SM.PANEL_ROSTER:
         assert any(
@@ -728,7 +728,7 @@ def test_single_vendor_collapse_is_same_family_degradation_not_violation():
 def test_single_vendor_collapse_does_not_claim_author_minority():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, 0)
     assert all(m["seats"][s]["source"] == "unfilled" for s in SM.PANEL_ROSTER)
     assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
@@ -773,7 +773,7 @@ def test_verify_unknown_liveness_is_a_violation():
 def test_verify_pin_scoped_liveness_is_a_violation():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -823,7 +823,7 @@ def test_verify_malformed_liveness_is_a_violation():
 def test_to_receipt_carries_liveness_pin_scoped_provenance():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -861,7 +861,7 @@ def test_to_receipt_carries_liveness_pin_scoped_provenance():
 def test_to_receipt_same_family_derivation_is_idempotent():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, 0)
     m["authorFamily"] = author
     for _ in range(2):
@@ -1104,7 +1104,7 @@ def test_receipt_never_asserts_same_family_and_maker_family_for_one_seat():
         d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"]
     )
 
-    cursor_author = MRG.family_for("code-fixer", "cursor")
+    cursor_author = MRG.family_for("implementer", "cursor")
     collapse = SM.build(
         SM.PANEL_ROSTER,
         ["cursor"],
@@ -1165,7 +1165,7 @@ def test_pinned_maker_seat_does_not_claim_author_minority():
 def test_build_carries_liveness_pin_scoped():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     maker_vendor = next(
         v for v in MRG.vendors()
         if MRG.family_for("reviewer-deep", v) == author
@@ -1197,7 +1197,7 @@ def test_build_carries_liveness_pin_scoped():
 def test_absent_liveness_pin_scoped_is_unknown_and_fails_closed():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -1227,7 +1227,7 @@ def test_absent_liveness_pin_scoped_is_unknown_and_fails_closed():
 def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -1259,7 +1259,7 @@ def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
 def test_to_receipt_records_the_author_family_it_verified():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -1293,7 +1293,7 @@ def test_to_receipt_tolerates_null_degradations():
 def test_verify_unresolvable_tier_is_a_violation():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",

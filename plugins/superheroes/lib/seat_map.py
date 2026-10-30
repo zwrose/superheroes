@@ -1626,8 +1626,8 @@ def main(argv):
             host_fam = model_registry.host_family(host_model)
             receipt_host_family = host_fam
             impl_engine = args.implementation_engine
-            claude_host_fam = model_registry.family_for("code-fixer", "claude")
-            author_family = model_registry.family_for("code-fixer", impl_engine)
+            claude_host_fam = model_registry.family_for("implementer", "claude")
+            author_family = model_registry.family_for("implementer", impl_engine)
             if author_family is None:
                 print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
                 return 1
