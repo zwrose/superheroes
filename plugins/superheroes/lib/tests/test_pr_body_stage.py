@@ -103,9 +103,17 @@ class _Done:
         self.returncode, self.stdout = returncode, stdout
 
 
+def read_argv(pr=7):
+    return ["gh", "api", "repos/{owner}/{repo}/pulls/%s" % pr]
+
+
+def edit_argv(staged, pr=7):
+    return ["gh", "api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/%s" % pr, "-F", "body=@%s" % staged]
+
+
 class FakeGh:
-    """A `gh` runner double: `views` are the bodies successive `pr view` calls return (the last
-    repeats), `edit_rc` is the `pr edit` exit code."""
+    """A `gh` runner double over the REST API: `views` are the bodies successive pull reads return
+    (the last repeats), `edit_rc` is the PATCH exit code. Any `gh` call that is not `gh api` fails."""
 
     def __init__(self, views=(), edit_rc=0, view_rc=0, view_raw=None, boom=False):
         self.calls, self.views = [], list(views)
@@ -115,19 +123,21 @@ class FakeGh:
         self.calls.append(list(argv))
         if self.boom:
             raise OSError("gh is not installed")
-        if argv[:3] == ["gh", "pr", "view"]:
+        if argv[:2] != ["gh", "api"]:
+            raise AssertionError("unexpected gh call: %r" % (argv,))
+        if argv[2:4] == ["-X", "PATCH"]:
+            return _Done(self.edit_rc)
+        if len(argv) == 3 and argv[2].startswith("repos/{owner}/{repo}/pulls/"):
             if self.view_rc:
                 return _Done(self.view_rc)
             if self.view_raw is not None:
                 return _Done(0, self.view_raw)
             body = self.views.pop(0) if len(self.views) > 1 else self.views[0]
-            return _Done(0, json.dumps({"body": body}))
-        if argv[:3] == ["gh", "pr", "edit"]:
-            return _Done(self.edit_rc)
+            return _Done(0, json.dumps({"body": body, "number": 7}))
         raise AssertionError("unexpected gh call: %r" % (argv,))
 
     def edits(self):
-        return [c for c in self.calls if c[:3] == ["gh", "pr", "edit"]]
+        return [c for c in self.calls if c[2:4] == ["-X", "PATCH"]]
 
 
 def _receipt(sd):
@@ -254,15 +264,20 @@ def test_E4_an_absent_fixer_copy_changes_nothing(tmp_path):
 
 # ---- publish (E6-E15) --------------------------------------------------------------------------
 
-def test_publish_copies_the_audited_staged_body_with_exactly_two_views_and_one_edit(tmp_path):
+def test_publish_copies_the_audited_staged_body_with_exactly_two_reads_and_one_patch(tmp_path):
+    # axis: every GitHub call goes through the REST API, never `gh pr view` or `gh pr edit` — see
+    # bite-proof record c1l9a_wo2_pr_body_rest
     sd = _staged_fixed(tmp_path)
     gh = FakeGh(views=[BODY, FIXED])
     out = PBS.publish(sd, 7, runner=gh)
     staged = PBS.paths(sd)["staged"]
     assert (out["ok"], out["outcome"], out["reason"]) == (True, "published", None)
-    assert gh.calls == [["gh", "pr", "view", "7", "--json", "body"],
-                        ["gh", "pr", "edit", "7", "--body-file", staged],
-                        ["gh", "pr", "view", "7", "--json", "body"]]
+    assert gh.calls == [["gh", "api", "repos/{owner}/{repo}/pulls/7"],
+                        ["gh", "api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/7",
+                         "-F", "body=@%s" % staged],
+                        ["gh", "api", "repos/{owner}/{repo}/pulls/7"]]
+    assert gh.calls[0] == read_argv() and gh.calls[1] == edit_argv(staged)
+    assert not [c for c in gh.calls if c[:2] == ["gh", "pr"]]
     assert os.path.isabs(staged)
     assert _receipt(sd) == out
     assert out["schema"] == "pr-body-publish/1" and out["pr"] == 7
@@ -377,7 +392,7 @@ def test_E13_a_readback_that_fails_is_refused(tmp_path):
     views = iter([_Done(0, json.dumps({"body": BODY})), _Done(1)])
 
     def runner(argv):
-        return next(views) if argv[:3] == ["gh", "pr", "view"] else _Done(0)
+        return next(views) if argv[2:4] != ["-X", "PATCH"] else _Done(0)
     out = PBS.publish(sd, 7, runner=runner)
     assert (out["ok"], out["reason"]) == (False, "pr-body-publish-unverified")
 
@@ -433,7 +448,7 @@ def test_the_default_runner_calls_gh_with_an_argv_list(tmp_path, monkeypatch):
     sd = _staged_fixed(tmp_path)
     assert PBS.publish(sd, 7)["reason"] == "pr-body-live-unreadable"
     argv, kwargs = seen[0]
-    assert argv == ["gh", "pr", "view", "7", "--json", "body"] and not kwargs.get("shell")
+    assert argv == read_argv() and not kwargs.get("shell")
 
 
 # ---- the review account's line -----------------------------------------------------------------
@@ -452,7 +467,7 @@ def test_the_default_runner_calls_gh_with_an_argv_list(tmp_path, monkeypatch):
      "The review did not copy its PR-body fix onto the PR: the staged PR-body text is not the text an audit cleared."),
 ])
 def test_record_line_reads_the_receipt_in_plain_words(tmp_path, receipt, expected):
-    sd = _session(tmp_path)
+    sd = _staged_fixed(tmp_path)  # a staged copy that differs from the original: there is a fix to copy
     _write(PBS.paths(sd)["published"], json.dumps(receipt))
     assert PBS.record_line(sd) == expected
 
@@ -464,8 +479,58 @@ def test_record_line_is_none_without_a_readable_receipt(tmp_path):
     assert PBS.record_line(sd) is None
 
 
-def test_every_refusal_token_has_its_own_plain_phrase(tmp_path):
+def _no_fix_session(tmp_path, how):
+    """A session with no PR-body fix to copy: nothing staged, one file missing, or staged == original."""
+    if how == "nothing-staged":
+        return _session(tmp_path)
+    sd = _staged_fixed(tmp_path, fixed=BODY, audited=False)
+    if how == "staged-missing":
+        os.remove(PBS.paths(sd)["staged"])
+    elif how == "original-missing":
+        os.remove(PBS.paths(sd)["original"])
+    elif how == "trailing-newline-only":
+        _write(PBS.paths(sd)["staged"], BODY.rstrip("\n"))
+    return sd
+
+
+@pytest.mark.parametrize("how", ["nothing-staged", "staged-missing", "original-missing",
+                                 "staged-equals-original", "trailing-newline-only"])
+@pytest.mark.parametrize("reason", sorted(PBS._REFUSAL_PHRASES))
+def test_a_review_with_no_pr_body_fix_never_says_it_did_not_copy_one(tmp_path, how, reason):
+    # axis: the no-fix guard in record_line, whatever the refusal reason — see bite-proof record
+    # c1l9a_wo2_pr_body_rest
+    sd = _no_fix_session(tmp_path, how)
+    _write(PBS.paths(sd)["published"], json.dumps({"outcome": "refused", "reason": reason}))
+    assert PBS.record_line(sd) is None
+
+
+def test_publish_with_nothing_staged_before_convergence_leaves_no_did_not_copy_line(tmp_path):
     sd = _session(tmp_path)
+    _write(os.path.join(sd, "round-receipt.json"), json.dumps({"verdict": "halted"}))
+    out = PBS.publish(sd, 7, runner=FakeGh(views=[BODY]))
+    assert out["reason"] == "review-not-converged"
+    assert PBS.record_line(sd) is None
+
+
+def test_an_unchanged_body_that_moved_on_github_keeps_its_own_sentence_with_no_fix(tmp_path):
+    sd = _no_fix_session(tmp_path, "staged-equals-original")
+    _write(PBS.paths(sd)["published"], json.dumps({"outcome": "unchanged", "reason": "live-moved"}))
+    line = PBS.record_line(sd)
+    assert line == ("The PR body changed on GitHub during the review, outside the review; the review "
+                    "had no PR-body fix to copy.")
+    assert not line.startswith("The review did not copy its PR-body fix")
+
+
+@pytest.mark.parametrize("reason", ["review-not-converged", "pr-body-moved", "pr-body-publish-failed"])
+def test_a_refused_fix_that_differs_from_the_original_still_says_it_did_not_copy_it(tmp_path, reason):
+    sd = _staged_fixed(tmp_path)
+    _write(PBS.paths(sd)["published"], json.dumps({"outcome": "refused", "reason": reason}))
+    assert PBS.record_line(sd) == ("The review did not copy its PR-body fix onto the PR: %s."
+                                   % PBS._REFUSAL_PHRASES[reason])
+
+
+def test_every_refusal_token_has_its_own_plain_phrase(tmp_path):
+    sd = _staged_fixed(tmp_path)
     for reason in PBS._REFUSAL_PHRASES:
         _write(PBS.paths(sd)["published"], json.dumps({"outcome": "refused", "reason": reason}))
         line = PBS.record_line(sd)
@@ -700,6 +765,6 @@ def test_a_pr_body_finding_is_fixed_audited_and_published_through_the_chokepoint
     gh = FakeGh(views=[BODY, FIXED])
     out = PBS.publish(sd, 7, runner=gh)
     assert (out["ok"], out["outcome"]) == (True, "published")
-    assert [c[:3] for c in gh.calls] == [["gh", "pr", "view"], ["gh", "pr", "edit"], ["gh", "pr", "view"]]
-    assert gh.edits() == [["gh", "pr", "edit", "7", "--body-file", PBS.paths(sd)["staged"]]]
+    assert gh.calls == [read_argv(), edit_argv(PBS.paths(sd)["staged"]), read_argv()]
+    assert gh.edits() == [edit_argv(PBS.paths(sd)["staged"])]
     assert PBS.record_line(sd) == "The review copied its audited PR-body fix onto the PR."
