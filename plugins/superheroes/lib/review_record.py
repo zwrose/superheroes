@@ -1900,13 +1900,19 @@ def _seat_bullet(seat, rows, final_sha):
     for v, n in rows:
         state = v["ran"] if v["ran"] in _RAN_STATES else "not-run"
         commit = v["commit"][:7] if state != "not-run" and v.get("commit") and v["commit"] != final_sha else None
+        if state != "not-run" and isinstance(v.get("carried"), dict):
+            # axis: a carried row says it was carried and from which commit, never that it ran, whether or not its name carries a round suffix — see bite-proof record c1l11d_wo_a_carried_review
+            state, commit = "carried", _short(v["carried"].get("commit"))
         buckets.setdefault((state, commit), []).append(n)
     said = []
-    for state in (*_RAN_STATES, "not-run"):
+    for state in (*_RAN_STATES, "carried", "not-run"):
         for (s, commit), nums in buckets.items():
             if s != state:
                 continue
             where = _rounds_text(nums)
+            if s == "carried":
+                said.append(f"carried from {commit} in {where}")
+                continue
             text = {"engine-record": f"ran in {where} (engine record)",
                     "reported-by-session": f"ran in {where} ({SESSION})"}.get(s, f"did not run in {where}")
             said.append(text + (f" on {commit}" if commit else ""))

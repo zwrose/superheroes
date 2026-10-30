@@ -263,6 +263,25 @@ def test_e6_positive_control_the_same_account_over_a_catch_up_merge_is_carried(t
     assert _row_states(_latest(fake)) == [("reported-by-session", True)]
 
 
+def test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran(tmp_path, monkeypatch):
+    """The names the session writer generates carry a round suffix; a carried row under one still says carried."""
+    s = _empty_session(tmp_path, monkeypatch)
+    fake = TRRS.Fake(head=s.head)
+    name = "code-reviewer (round 1)"
+    _post_earlier(fake, s, reviewers=[dict(ROW, name=name, commit=s.reviewed)])
+    account = _carried_account(s)
+    account["reviewers"] = [dict(account["reviewers"][0], name=name)]
+    out = _write(tmp_path, s, fake, account)
+    assert out["ok"] is True and out["status"] == "reviewed", out
+    rec = _latest(fake)
+    assert [(v["name"], "carried" in v) for v in rec["reviewers"]] == [(name, True)]
+    bullets = RR._reviewer_bullets(rec)
+    assert bullets and all("carried from %s" % s.reviewed[:7] in b and "ran" not in b.split("findings:")[0] for b in bullets), bullets
+    body = fake.marked()[-1]["body"]
+    assert "- code-reviewer: carried from %s in round 1" % s.reviewed[:7] in body, body
+    assert "ran in round 1" not in body and "ran (reported by the session)" not in body
+
+
 # --- E7 (brief-check F2): the writer repeats the earlier record's eligibility checks ------------------------------------------
 
 @pytest.mark.parametrize("edit,over,why", [
