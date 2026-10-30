@@ -5749,9 +5749,11 @@ def _fix_commit_test_fault(facts, block, exempt_paths=()):
     return None
 
 
-def _shared_fix_commit(members, bound, facts):
+def _shared_fix_commit(members, bound, facts, plain_keys=()):
     """The resolved sha of the one commit bound to every ``(key, block)`` member of a fix group that
-    carries each member's test and a change beside all the group's tests, else None."""
+    carries each member's test and a change beside all the group's tests, else None. ``plain_keys``
+    are the group's fixed members with no test: each one that is bound must be bound to that commit
+    too."""
     def sha_of(commit):
         resolved = (facts.get(commit) or {}).get("sha")
         return resolved if _nonempty_str(resolved) else commit
@@ -5760,6 +5762,8 @@ def _shared_fix_commit(members, bound, facts):
     for commit in bound.get(members[0][0], []):
         # axis: the group's commit is one commit bound to every member, never each member's own — see bite-proof record c1l11c_wo1_fix_groups
         if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key, _block in members):
+            continue
+        if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key in plain_keys if bound.get(key)):
             continue
         # axis: the commit changes something besides every member's test, so the tests alone are no fix — see bite-proof record c1l11c_wo1_fix_groups
         if all(_fix_commit_test_fault(facts.get(commit), block, exempt_paths=paths) is None
@@ -5839,7 +5843,9 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
             if unbound is not None:
                 return "%s:%s:%s" % (FIX_WITHOUT_TEST, unbound, FIX_NO_BINDING), []
             if group_id not in shared:
-                shared[group_id] = _shared_fix_commit(members, bound, facts)
+                owed_keys = {k for k, _b in owed}
+                plain_keys = [k for k in group_keys[group_id] if k not in owed_keys and k not in left]
+                shared[group_id] = _shared_fix_commit(members, bound, facts, plain_keys)
             if shared[group_id] is None:
                 return "%s:%s" % (FIX_GROUP_NO_SHARED_COMMIT, group_id), []
             commits.append({"finding": key, "commit": shared[group_id]})

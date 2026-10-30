@@ -435,6 +435,14 @@ def test_members_bound_to_different_commits_or_a_commit_that_fails_one_member_re
     assert _check(u, [(u.ka, "c1"), (u.kb, "c1")], {"c1": _facts(BOTH_TESTS_AND_CODE, b="other\n")}) == (token, [])
 
 
+@pytest.mark.parametrize("tests", [(True, True), (True, False), (False, True)])
+def test_members_bound_to_different_commits_refuse_whether_or_not_each_carries_a_test(tests):
+    u = _unit(tests=tests)
+    passing = _facts(BOTH_TESTS_AND_CODE)
+    assert _check(u, [(u.ka, "c1"), (u.kb, "c2")], {"c1": passing, "c2": passing}) == (
+        "fix-group-no-shared-commit:%s" % u.gid, [])
+
+
 def test_a_commit_that_holds_every_members_test_and_nothing_else_refuses_no_shared_commit():
     u = _unit()
     tests_only = _facts([A_PATH, B_PATH])
