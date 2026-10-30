@@ -280,6 +280,38 @@ def test_publish_copies_the_audited_staged_body_with_exactly_two_reads_and_one_p
     assert out["at"].endswith("Z")
 
 
+class _StatefulCloudGh:
+    """A cloud-shaped `gh` double that holds the live PR body: a pulls read returns it, a PATCH must carry
+    `-F body=@<path>` and makes that file's text the live body. Anything that is not `gh api` (the GraphQL
+    commands `gh pr view` / `gh pr edit`) is an assertion error."""
+
+    def __init__(self, body):
+        self.live, self.calls = body, []
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        if argv[:2] != ["gh", "api"]:
+            raise AssertionError("unexpected gh call: %r" % (argv,))
+        if argv[2:4] == ["-X", "PATCH"]:
+            assert argv[5] == "-F" and argv[6].startswith("body=@") and len(argv) == 7, argv
+            self.live = _read(argv[6][len("body=@"):])
+            return _Done(0)
+        if len(argv) == 3 and argv[2].startswith("repos/{owner}/{repo}/pulls/"):
+            return _Done(0, json.dumps({"body": self.live, "number": 7}))
+        raise AssertionError("unexpected gh call: %r" % (argv,))
+
+
+def test_a_staged_fix_publishes_through_rest_against_a_stateful_cloud_shaped_gh(tmp_path):
+    sd = _staged_fixed(tmp_path)
+    gh = _StatefulCloudGh(BODY)
+    out = PBS.publish(sd, 7, runner=gh)
+    assert (out["ok"], out["outcome"], out["reason"]) == (True, "published", None)
+    assert gh.live == FIXED
+    assert gh.calls[0] == read_argv() and gh.calls[1] == edit_argv(PBS.paths(sd)["staged"])
+    assert not [c for c in gh.calls if c[:2] == ["gh", "pr"]]
+    assert "did not copy" not in (PBS.record_line(sd) or "")
+
+
 @pytest.mark.parametrize("verdict", [None, "halted", "held", "stalled", "cannot-certify"])
 def test_E6_publish_before_a_converged_terminal_refuses_without_calling_gh(tmp_path, verdict):
     sd = _staged_fixed(tmp_path)
