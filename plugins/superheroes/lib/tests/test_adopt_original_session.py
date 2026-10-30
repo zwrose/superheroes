@@ -775,6 +775,26 @@ def test_a_vet_not_ready_after_the_handback_keeps_the_lane(tmp_path, first_pr):
     _refused_unread(repo, result, calls, "listing-not-given")
 
 
+def test_a_vet_not_ready_recorded_during_the_first_pr_lookup_keeps_the_live_lane(tmp_path, monkeypatch):
+    # axis: the ledger is read again after the slow first-pull-request lookup, so a vet not-ready recorded during it keeps the lane and the listing then shows it live — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    lookups = []
+
+    def read_first_pr(root, branch, env):
+        lookups.append(branch)
+        time.sleep(0.01)
+        assert ll.amend(root, LANE_ID, "vet", "not-ready", "x", env=env)["ok"]
+        return time.time() + 3600
+
+    monkeypatch.setattr(L, "_adopted_branch_first_pr_fn", read_first_pr)
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_running.json"))
+    assert len(lookups) == 1
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert calls == []
+
+
 def test_a_fix_order_relay_to_the_lane_after_the_handback_keeps_the_lane(tmp_path, first_pr):
     # axis: a fix order composed for the lane's session after the handback, never checked, reopens the lane — see bite-proof record i2254_original_session
     repo = _cloud_repo(tmp_path)

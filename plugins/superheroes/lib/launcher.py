@@ -3081,7 +3081,27 @@ def _is_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+_NEEDS_FIRST_PR = object()
+
+
 def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
+    """The refusal ``_original_session_pass`` reaches, or None; every local read happens after the slow first-pull-request lookup.
+
+    The first pass reads the ledger, the recover state and (for the relay history) nothing remote;
+    when a lane needs the branch's first pull request time it stops and reports so. That lookup is
+    slow, so the ledger (vet amendments), the handover-stopped set and the relay history are all read
+    again afterwards and the whole narrowing is evaluated on the fresh snapshot, with the time
+    already fetched (never a second GitHub call).
+    """
+    reads = {}
+    result = _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
+    if result is not _NEEDS_FIRST_PR:
+        return result
+    reads["first"] = _adopted_branch_first_pr_fn(repo_root, stamped["adoptsBranch"], env)
+    return _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
+
+
+def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads):
     """None, or ``(reason, detail)``: an adoption must not launch beside a live builder that could still write the adopted branch.
 
     A premise that carries ``adoptsBranch`` is checked against the cloud lanes the ledger holds for
@@ -3137,7 +3157,6 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
             r.get("launchId"): r.get("premise") for r in got["records"] if r.get("event") == "reserved"
         }
         adopted_pr = stamped.get("adopts")
-        reads = {}
         kept = {}
         for launch_id, info in candidates.items():
             premise = premises.get(launch_id)
@@ -3183,9 +3202,9 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
             ):
                 kept[launch_id] = info
                 continue
-            # axis: the first-pull-request time is read before the relay history, since the lookup is a slow remote read and a fix order composed during it must still be seen — see bite-proof record i2254_original_session
+            # axis: the first-pull-request time is read before the ledger, the recover state and the relay history that decide the lane, since the lookup is a slow remote read and a vet not-ready, a handover stop or a fix order recorded during it must still be seen — see bite-proof record i2254_original_session
             if "first" not in reads:
-                reads["first"] = _adopted_branch_first_pr_fn(repo_root, branch, env)
+                return _NEEDS_FIRST_PR
             first = reads["first"]
             if "relays" not in reads:
                 import cloud_relay
