@@ -1850,7 +1850,7 @@ def _follow_up_of(row):
     return dict(follow_up) if isinstance(follow_up, dict) else None
 
 
-def _snapshot_earlier_pool(state, ledger):
+def _snapshot_earlier_pool(state):
     """Snapshot the PR's earlier findings once per round into ``state["_earlierPool"]``, before staging
     re-seeds (and strips the disposition of) a re-raised ledger row. Discloses a record the file did not give."""
     held = state.get("_earlierPool")
@@ -1859,7 +1859,7 @@ def _snapshot_earlier_pool(state, ledger):
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     record = cfg.get("earlierFindings")
     state["_earlierPool"] = {"round": state["round"], "entries": repeat_marks.build_pool(
-        ledger, state["round"], record if isinstance(record, list) else [])}
+        state, state["round"], record if isinstance(record, list) else [])}
     reason = cfg.get("earlierFindingsUnavailable") or ("not-supplied" if record is None else None)
     if reason:
         _record_round(state, "earlierFindingsUnavailable", reason)
@@ -1879,7 +1879,7 @@ def _stage_findings(state, compiled):
         state["_toVerify"] = compiled
         return
     ledger = _ensure_disposition_ledger_for_write(state)
-    _snapshot_earlier_pool(state, ledger)
+    _snapshot_earlier_pool(state)
     seen = _ledger_index_by_key(ledger)
     owner_class = session_contract.disposition_ledger_owner_classification(state)
     first_ledger_owner = owner_class == session_contract.DISPOSITION_LEDGER_OWNER_ABSENT
@@ -4038,7 +4038,7 @@ def _hold_for_second_test(state, session_dir, staged, held, survivors, refuted=(
     state["_secondTestHeld"] = rows
     state["_secondTestCarry"] = survivors
     state["_secondTestRefutedCarry"] = list(refuted)
-    keys =[_finding_identity_key(row["finding"]) for row in rows]
+    keys = [_finding_identity_key(row["finding"]) for row in rows]
     _record_second_test(state, held=[{"findingKey": key, "note": row["note"]} for key, row in zip(keys, rows)])
     _decision(state, "second-test-held",
               "%d finding(s) held for one more test: the break-it test passed and the verifier judged it "
@@ -4165,6 +4165,8 @@ def _repeat_changed(state, session_dir, entry):
     verifier judged on; an unreadable head or a failed comparison is a change."""
     earlier = entry.get("head") if entry["source"] == "record" else _verifier_head(
         state, session_dir, entry.get("round"))
+    if not earlier:  # an unknown judged head (every record finding's) is a change, with no git run
+        return True
     return repeat_marks.code_changed((state.get("config") or {}).get("repoRoot"), earlier,
                                      _verifier_head(state, session_dir, state["round"]))
 
@@ -4201,15 +4203,19 @@ def _repeat_plan(state, grouping, session_dir, exact_only=None):
 
 
 def _record_repeat(state, key, repeat_of, repeat_kept):
-    """Write ``repeatOf`` (and ``repeatKept`` when kept) on the finding's ledger row."""
+    """Write ``repeatOf`` (and ``repeatKept`` when kept) on the finding's ledger row, and on its live finding
+    when it has one, so the later archive of a departed finding never replaces the marked row with an unmarked copy."""
     ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
-    if key in seen:
-        row = ledger[seen[key]]
-        row["repeatOf"] = repeat_of
+    rows = [ledger[seen[key]]] if key in seen else []
+    live = _live_finding_by_key(state, key)
+    # axis: the repeat mark is on the live finding too, so the archive that replaces the ledger row with the live copy keeps it — see bite-proof record c1l8_wo_a_repeat_marks
+    rows += [live] if live is not None else []
+    for row in rows:
+        row["repeatOf"] = copy.deepcopy(repeat_of)
         row.pop("repeatKept", None)
         if repeat_kept is not None:
-            row["repeatKept"] = repeat_kept
+            row["repeatKept"] = copy.deepcopy(repeat_kept)
 
 
 def _record_kept_disposition(state, key, entry, reason, grade_verdict, restore):
@@ -4247,7 +4253,8 @@ def _apply_repeat_marks(state, plan):
                 and original["findingKey"].strip() and original["findingKey"] not in (key, entry["key"]):
             # a finding matched to itself keeps its original link to the earlier finding it repeats: a self-link
             # would cut its route to that finding's verifier closure and duplicate its owner card
-            repeat_of = dict(original)
+            # axis: the preserved link keeps its target and takes this round's fixHolds, never the old one — see bite-proof record c1l8_wo_a_repeat_marks
+            repeat_of = {"findingKey": original["findingKey"], "id": original.get("id"), "fixHolds": mark["fixHolds"]}
         repeat_kept = None
         if mark["kept"]:
             reason = repeat_marks.kept_reason(entry, mark["fixHolds"])

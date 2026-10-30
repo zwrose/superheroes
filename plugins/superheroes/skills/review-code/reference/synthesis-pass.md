@@ -148,8 +148,9 @@ whatever this round's verdict was. The rules, in order:
 2. **A repeat of a finding closed as wrong.** When the code has changed since it was judged, the
    verifier's fresh grade rules: `wrong` keeps the earlier outcome, anything else makes it a new
    finding. When nothing has changed, it keeps the earlier outcome and the grade is not read.
-3. **Any other repeat** (`craft`, `left-for-owner`, `ruling`; a ledger `out-of-scope` row counts
-   as `ruling`) keeps its earlier outcome.
+3. **Any other repeat** (`craft`, `left-for-owner`, `ruling`) keeps its earlier outcome. A session
+   finding's earlier outcome is the one the review record would give it: a ledger `out-of-scope`
+   row is a `ruling` only when an attributed ruling stands for it, else `left-for-owner`.
 4. **A repeat of a finding still open** (not yet decided) is a new finding.
 
 | Earlier outcome | Condition | Result | `fixHolds` |
@@ -165,9 +166,10 @@ whatever this round's verdict was. The rules, in order:
 The grade is the new finding's own verifier grade from this round: `confirmed`, `plausible`,
 `wrong`, or none. The code has changed when the git tree at the head the earlier finding was
 judged on differs from the tree at the head this round's verifier judged on; a head that cannot be
-read, or a comparison that cannot run, counts as changed. The earlier head is the review record's
-`finalCommit.sha` for a record finding, and the head the verifier orders of the round it was
-decided in cite for a session finding.
+read, or a comparison that cannot run, counts as changed. The earlier head is the head the verifier
+orders of the round it was decided in cite for a session finding. A finding of an earlier review
+record counts as judged on an unknown commit unless the record names it, so a repeat of one closed
+as wrong is always ruled on afresh.
 
 A repeat that is not kept is a new finding. A survivor routes as usual, to the fix batch when it
 blocks. A finding the verifier refuted this round stays refuted with its own `wrong` grade, never

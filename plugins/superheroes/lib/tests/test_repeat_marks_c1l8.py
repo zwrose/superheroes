@@ -35,6 +35,8 @@ import engine_adapter as EA  # noqa: E402
 import engine_dispatch as ED  # noqa: E402
 import engine_result_channel as ERC  # noqa: E402
 import payload_contracts as PC  # noqa: E402
+import review_record as REC  # noqa: E402
+import review_record_session as RS  # noqa: E402
 import round_adapters as RA  # noqa: E402
 import round_records as RR  # noqa: E402
 import session_checkout as SCO  # noqa: E402
@@ -42,6 +44,7 @@ import test_round_driver as TRD  # noqa: E402
 import test_round_driver_integration as TRI  # noqa: E402
 import test_second_test_c1l7 as C1L7  # noqa: E402
 import test_synthesis_seat_1858 as S1858  # noqa: E402
+from test_review_record_session import Fake as SessionFake, extras as session_extras, put_extras  # noqa: E402
 
 RD = TRD.RD
 SC = RD.session_contract
@@ -183,16 +186,15 @@ def test_t10_the_pool_lists_session_rows_then_record_findings_with_refs_from_e1(
     _earlier(state, _raw("session one", line=1), "fixed")
     _earlier(state, _raw("session two", line=2), "refuted", grade=_WRONG, refutedReason="guard holds")
     RD._stage_findings(state, _compile([_raw("still open", line=3)]))
-    ledger = state[SC.DISPOSITION_LEDGER_KEY]
-    record = [RM.record_entry(_record_finding(_raw("record one", line=4), "craft"), "c" * 40)]
-    pool = RM.build_pool(ledger, 2, record)
+    record = [RM.record_entry(_record_finding(_raw("record one", line=4), "craft"))]
+    pool = RM.build_pool(state, 2, record)
     assert [(e["ref"], e["title"], e["outcome"]) for e in pool] == [
         ("e1", "session one", "fixed"), ("e2", "session two", "shown-wrong"), ("e3", "record one", "craft")]
     assert [sorted(e) for e in RM.order_list(pool)] == [sorted(["ref", "id", "file", "line", "title", "outcome"])] * 3
     # a decision of the current round, or a record finding the session already holds, is not listed again
-    assert [e["title"] for e in RM.build_pool(ledger, 1, [])] == []
-    held = RM.record_entry(_record_finding(_raw("session one", line=1), "fixed"), "c" * 40)
-    assert [e["title"] for e in RM.build_pool(ledger, 2, [held])] == ["session one", "session two"]
+    assert [e["title"] for e in RM.build_pool(state, 1, [])] == []
+    held = RM.record_entry(_record_finding(_raw("session one", line=1), "fixed"))
+    assert [e["title"] for e in RM.build_pool(state, 2, [held])] == ["session one", "session two"]
 
 
 # ---- the snapshot (I4) ------------------------------------------------------------------------
@@ -214,6 +216,23 @@ def test_i4_a_decision_of_the_current_round_is_not_an_earlier_finding():
     state = _state()
     _earlier(state, _raw("alpha"), "craft", settledReason="cq")
     assert RD._earlier_pool(state) == []
+
+
+def test_b1_a_merged_members_exact_repeat_is_marked_a_repeat_and_keeps_its_representatives_outcome():
+    state = _state()
+    rep, member = _raw("rep one", line=1), _raw("member one", line=2)
+    RD._stage_findings(state, _compile([rep, member]))
+    RD._record_merged_into(state, _key(member), _key(rep))
+    RD._record_disposition(state, _key(rep), "craft", 1, settledReason="code quality only")
+    assert "disposition" not in _row(state, member), "premise: the member holds no decision of its own"
+    state["round"] = 2
+    _verify(state, [member], {"member one": "CONFIRMED"})
+    assert [(e["title"], e["outcome"]) for e in RD._earlier_pool(state)] == [("rep one", "craft"), ("member one", "craft")]
+    _synth(state, None)
+    row = _row(state, member)
+    assert row["repeatOf"]["findingKey"] == _key(member)
+    assert row["repeatKept"]["outcome"] == "craft" and row["disposition"] == "craft"
+    assert _titles(state) == [] and _batch(state) == []
 
 
 # ---- FR-18: the grouping of same-root-cause survivors stays as it is ---------------------------
@@ -321,6 +340,25 @@ def test_fr20_a_same_key_refuted_repeat_of_a_fixed_finding_takes_the_fixed_famil
     assert RD._disposition_is_current(row)
 
 
+def test_d2_a_preserved_link_takes_this_rounds_fix_holds_and_keeps_its_target():
+    state = _state()
+    original = _raw("alpha bug", id="F-1")
+    _earlier(state, original, "fixed", dispositionReceipt={"headSha": "a" * 40})
+    state["round"] = 2
+    reworded = _raw("alpha defect, reworded")
+    _verify(state, [reworded], {"alpha defect, reworded": "REFUTED"})
+    _synth(state, [_group(_ids(state)["alpha defect, reworded"], ref="e1")])
+    held = {"findingKey": _key(original), "id": "F-1", "fixHolds": True}
+    assert _row(state, reworded)["repeatOf"] == held, "premise: round 2 kept it as a repeat of the fixed finding"
+    state["round"] = 3
+    _verify(state, [reworded], {"alpha defect, reworded": "CONFIRMED"})
+    _synth(state, None)
+    (mark,) = state["rounds"]["3"]["repeatMarks"]
+    assert mark["source"] == "exact" and mark["kept"] is False
+    expected = dict(held, fixHolds=False)  # still the fixed finding's link, with this round's confirmed grade
+    assert mark["repeatOf"] == expected and _row(state, reworded)["repeatOf"] == expected
+
+
 def test_edge5_a_repeat_with_no_grade_follows_the_table(repo):
     state = _state(repo.root)
     fixed, wrong = _raw("fixed one", line=1), _raw("wrong one", line=2)
@@ -373,6 +411,27 @@ def test_fr21_a_shown_wrong_repeat_found_wrong_again_after_a_change_keeps_its_ow
     row = _row(state, raw)
     assert row["repeatKept"]["outcome"] == "shown-wrong" and row["disposition"] == "refuted"
     assert row["grade"]["verdict"] == "wrong" and row["grade"]["reason"] == "checked: REFUTED"
+
+
+@pytest.mark.parametrize("verdict,kept", [("CONFIRMED", False), ("REFUTED", True)])
+def test_c1_a_record_finding_is_judged_on_an_unknown_head_so_a_confirmed_repeat_is_new_on_unchanged_code(
+        repo, verdict, kept):
+    raw = _raw("beta bug")
+    stored = _record_finding(raw, "shown-wrong", id="R-4")
+    entries, _ = RM.read_earlier_findings(_record_payload([stored], sha=repo.same))  # the record ended on the head
+    assert [e["head"] for e in entries] == [None]
+    state = _state(repo.root, earlierFindings=entries)
+    _anchors(state, {1: repo.same})  # this round judges on the very commit the record ended on
+    _verify(state, [raw], {"beta bug": verdict})
+    _synth(state, None)
+    row = _row(state, raw)
+    assert row["repeatOf"]["findingKey"] == stored["findingKey"] and row["repeatOf"]["id"] == "R-4"
+    if kept:
+        assert row["repeatKept"]["outcome"] == "shown-wrong" and row["disposition"] == "refuted"
+        assert _titles(state) == [] and _batch(state) == []
+    else:
+        assert "repeatKept" not in row and "disposition" not in row
+        assert _titles(state) == ["beta bug"] and _batch(state) == ["beta bug"]
 
 
 @pytest.mark.parametrize("unreadable", ["no-anchor", "no-repo-root", "bad-repo-root"])
@@ -704,7 +763,7 @@ def test_i11_the_order_names_the_three_lists_and_keeps_its_placeholders():
 
 
 def test_i11_the_sidecar_writes_the_three_lists_from_the_pending_payload_with_refs_in_pool_order(tmp_path):
-    state = _state(earlierFindings=[RM.record_entry(_record_finding(_raw("record one", line=7), "craft"), "d" * 40)])
+    state = _state(earlierFindings=[RM.record_entry(_record_finding(_raw("record one", line=7), "craft"))])
     _earlier(state, _raw("session one", line=1), "fixed")
     state["round"] = 2
     _verify(state, [_raw("fresh", line=5), _raw("gone", line=6)], {"fresh": "CONFIRMED", "gone": "REFUTED"})
@@ -1019,4 +1078,30 @@ def test_t3b_a_judge_named_repeat_kept_as_shown_wrong_is_marked_and_kept_by_exac
     # the exact re-match keeps the original link to the shown-wrong one, never a self-link
     assert again["repeatOf"]["findingKey"] == _key(shown_wrong), again
     assert row["repeatOf"]["findingKey"] == _key(shown_wrong) and row["repeatKept"]["outcome"] == "shown-wrong", row
+    assert state["findings"] == []
+    # the terminal state goes through the record writer (no earlier posted record): the round-3 finding reads
+    # shown-wrong through its original link to the finding the verifier closed, and the write succeeds
+    fake = SessionFake()
+    extras_dir = tmp_path / "extras"
+    extras_dir.mkdir()
+    out = RS.write_from_session(r.dir, put_extras(extras_dir, session_extras()), r.checkout, fake.readers())
+    assert out["ok"], out
+    written = {f["title"]: f for f in REC.read(7, readers=fake.readers())["findings"]}
+    assert written["shown wrong one, reworded"]["outcome"] == "shown-wrong", written["shown wrong one, reworded"]
+    assert written["shown wrong one, reworded"]["repeatOf"]["findingKey"] == RM.opaque_key(shown_wrong)
+    assert written["shown wrong one"]["outcome"] == "shown-wrong"
+
+
+def test_d1_a_confirmed_repeat_of_a_fixed_finding_keeps_its_mark_through_its_fix_and_the_archive(tmp_path):
+    bug, fresh = _driven("bug one", 1), _driven("fresh one", 2)
+    scripted = {2: [fresh], 3: [bug]}  # round 3's scan raises the finding the round-2 audit decided fixed
+    r = _Rounds(tmp_path, [bug], lambda rnd, state: scripted.get(rnd, []))
+    r.drive()
+    state = r.state()
+    assert state["terminal"] and r.fixer_runs() == 3, r.seen  # rounds 1, 2 and 3 each fixed; round 4's scan was empty
+    (again,) = state["rounds"]["3"]["repeatMarks"]
+    assert (again["source"], again["kept"], again["repeatOf"]["fixHolds"]) == ("exact", False, False), again
+    # the fix departed the live finding and the archive replaced the ledger row with its copy: the mark survives
+    row = _row(state, bug)
+    assert row["repeatOf"]["findingKey"] == _key(bug) and row["repeatOf"]["fixHolds"] is False, row
     assert state["findings"] == []

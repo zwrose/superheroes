@@ -86,7 +86,6 @@ def session_account(tmp_path, ledger):
 
 
 def test_j1_repeat_kept_is_never_a_finding_part_nor_written(tmp_path):
-    assert rs._FINDING_PARTS == ("grade", "repeatOf", "breakItRuns", "kindOfMistake")
     row = ledger_row(disposition="fixed", repeatKept=kept("craft"), repeatOf=mark(KEY))
     (found,) = session_account(tmp_path, [row])["findings"]
     assert found["outcome"] == "craft" and "repeatKept" not in found

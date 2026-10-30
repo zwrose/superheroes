@@ -1,9 +1,10 @@
 """The repeat-marks module on its own (C1-L8a).
 
 `repeat_marks` is imported directly; nothing here reaches it through the round driver. Edges: M-D1..M-D7 the seven
-rows of the decision table (`decide`) · outcome_of and disposition_of · M-C `code_changed` reads the tree and
-fails closed · M-S a session ledger row's outcome follows the record writer's three readings of a refuted row ·
-M-R a record finding is pooled, an undecided one with outcome None, a malformed one never · the file readings ·
+rows of the decision table (`decide`) · disposition_of · M-C `code_changed` reads the tree and
+fails closed · M-S a session ledger row's outcome is the record writer's own decision (`review_record_session`),
+through its merge link, its repeat mark, its ruling and its break-it ruling · M-R a record finding is pooled with no
+judged head, an undecided one with outcome None, a malformed one never · the file readings ·
 pool order, refs and the no-double-listing rule · exact identity (session raw key, record stored key) over the
 judge's name · the judge's refs · the grouping faults (unknown ref, a refuted id twice, refuted ids set aside
 before survivor coverage, a refuted-only group, an omitted survivor) · strip_groups · kept_reason.
@@ -94,9 +95,20 @@ def _group(*ids, ref=None, group_id="g"):
     return {"group_id": group_id, "member_ids": list(ids), "repeatOf": ref}
 
 
+def _state(*rows, **extra):
+    """A driver state holding ``rows`` as its disposition ledger."""
+    return dict({"dispositionLedger": list(rows)}, **extra)
+
+
+def _entry(row, round_no=2, **extra):
+    """The pool entry of ledger ``row`` read as the record writer reads it, or None."""
+    inputs = RM.read_inputs(_state(row, **extra))
+    return RM.session_entry(inputs[0][_key(row)], round_no, inputs)
+
+
 def _pool(*rows):
     """A pool of one session entry per ``(raw, disposition)`` pair, refs from e1."""
-    return RM.build_pool([_row(raw, disposition) for raw, disposition in rows], 2, [])
+    return RM.build_pool(_state(*[_row(raw, disposition) for raw, disposition in rows]), 2, [])
 
 
 # ---- the decision table (one test per row) ----------------------------------------------------
@@ -154,22 +166,7 @@ def test_d7_an_undecided_earlier_finding_is_a_new_finding(grade):
     assert RM.decide("open", grade, True) == (False, None)
 
 
-# ---- outcome_of, disposition_of ---------------------------------------------------------------
-
-def test_outcome_of_maps_a_ledger_disposition_and_an_out_of_scope_row_counts_as_a_ruling():
-    assert RM.outcome_of("out-of-scope") == "ruling"
-    assert RM.outcome_of("fixed") == "fixed"
-    for token in ("craft", "left-for-owner", "ruling"):
-        assert RM.outcome_of(token) == token
-    assert RM.outcome_of("shown-wrong") is None and RM.outcome_of(None) is None and RM.outcome_of("open") is None
-
-
-def test_outcome_of_reads_a_refuted_row_as_the_record_writer_does():
-    assert RM.outcome_of("refuted", {"grade": _WRONG}) == "shown-wrong"
-    assert RM.outcome_of("refuted", {"refutedReason": "author-justified: the owner chose this"}) == "left-for-owner"
-    assert RM.outcome_of("refuted", {"grade": {"verdict": "confirmed"}, "refutedReason": "guard holds"}) is None
-    assert RM.outcome_of("refuted", {}) is None and RM.outcome_of("refuted") is None
-
+# ---- disposition_of ---------------------------------------------------------------------------
 
 def test_disposition_of_writes_shown_wrong_as_refuted_and_every_other_outcome_as_itself():
     assert RM.disposition_of("shown-wrong") == "refuted"
@@ -215,25 +212,66 @@ def test_code_changed_counts_a_failed_git_run_as_changed(repo, monkeypatch):
 # ---- the pool entries of a session ledger row (the record writer's three readings) -----------------
 
 def test_s1_a_refuted_row_with_the_verifiers_wrong_grade_is_pooled_as_shown_wrong():
-    entry = RM.session_entry(_row(_raw("a"), "refuted", grade=dict(_WRONG), refutedReason="guard holds"), 2)
+    entry = _entry(_row(_raw("a"), "refuted", grade=dict(_WRONG), refutedReason="guard holds"))
     assert (entry["source"], entry["outcome"], entry["grade"]) == ("session", "shown-wrong", _WRONG)
     assert entry["key"] == _key(_raw("a")) and entry["round"] == 1
     assert entry["family"]["disposition"] == "refuted"
 
 
 def test_s2_a_refuted_row_with_an_author_justified_reason_is_pooled_as_left_for_owner():
-    entry = RM.session_entry(_row(_raw("a"), "refuted", refutedReason="author-justified: the owner chose this"), 2)
+    entry = _entry(_row(_raw("a"), "refuted", refutedReason="author-justified: the owner chose this"))
     assert entry["outcome"] == "left-for-owner"
 
 
 def test_s3_a_refuted_row_with_neither_reading_is_undecided_and_not_pooled():
-    assert RM.session_entry(_row(_raw("a"), "refuted", refutedReason="guard holds"), 2) is None
-    assert RM.session_entry(_row(_raw("a"), "refuted", grade={"verdict": "confirmed", "reason": "r"}), 2) is None
-    assert RM.session_entry(_row(_raw("a"), "refuted"), 2) is None
+    assert _entry(_row(_raw("a"), "refuted", refutedReason="guard holds")) is None
+    assert _entry(_row(_raw("a"), "refuted", grade={"verdict": "confirmed", "reason": "r"})) is None
+    assert _entry(_row(_raw("a"), "refuted")) is None
+
+
+def test_b2_an_out_of_scope_row_with_no_attributed_ruling_is_pooled_as_left_for_owner():
+    row = _row(_raw("a"), "out-of-scope", outOfScopeReason="not this change's to fix")
+    assert _entry(row)["outcome"] == "left-for-owner"
+    unattributed = [{"findingKey": _key(row), "ruling": "out-of-scope", "seq": 3}]
+    assert _entry(row, rulingsLog=unattributed)["outcome"] == "left-for-owner"
+
+
+def test_b2_an_out_of_scope_row_with_an_attributed_ruling_is_pooled_as_a_ruling():
+    row = _row(_raw("a"), "out-of-scope", outOfScopeReason="not this change's to fix")
+    ruled = [{"findingKey": _key(row), "ruling": "out-of-scope", "seq": 3,
+              "provenance": {"ruledBy": "the owner", "ruledAt": "2026-01-02"}}]
+    assert _entry(row, rulingsLog=ruled)["outcome"] == "ruling"
+
+
+def test_b3_a_fixed_row_the_break_it_step_ruled_out_of_scope_is_pooled_as_a_ruling():
+    row = _row(_raw("a"), "fixed")
+    assert _entry(row)["outcome"] == "fixed"
+    held = {"findingKey": _key(row), "outcome": "ruled-out-of-scope", "reason": "not this change's",
+            "ruledBy": "the advisor", "ruledAt": "2026-01-02"}
+    rounds = {"1": {"breakItKept": [held, {"findingKey": "other", "outcome": "kept"}]}}
+    assert _entry(row, rounds=rounds)["outcome"] == "ruling"
+    assert _entry(row, rounds={"1": {"breakItKept": [dict(held, outcome="kept")]}})["outcome"] == "fixed"
+
+
+def test_b4_a_refuted_row_with_a_plausible_grade_is_undecided_and_not_pooled():
+    row = _row(_raw("a"), "refuted", grade={"verdict": "plausible", "reason": "could not be shown"},
+               refutedReason="guard holds")
+    assert _entry(row) is None
+    assert RM.build_pool(_state(row), 2, []) == []
+
+
+def test_a_ledger_the_record_writer_cannot_read_or_no_state_pools_nothing():
+    row = _row(_raw("a"), "craft", settledReason="cq")
+    assert RM.build_pool(_state(row, dispositionLedger=["not a row"]), 2, []) == []
+    assert RM.read_inputs(None) == ({}, {}, {}) and RM.build_pool(None, 2, None) == []
+    # a rulings log or round record that is missing or malformed reads as empty, as the writer reads it
+    assert RM.read_inputs(_state(row, rulingsLog="x", rounds=["x"], _policyApplied=3))[1:] == ({}, {})
+    assert [e["outcome"] for e in RM.build_pool(_state(row, rulingsLog="x", rounds="x"), 2, [])] == ["craft"]
 
 
 def test_s4_a_ledger_row_pools_with_the_outcome_the_record_writer_gives_it():
-    # bites on: the mergedInto resolution and the repeatKept read of `session_entry`
+    # bites on: the outcome of `session_entry` coming from the record writer's decision (a row's own disposition,
+    # its mergedInto link, its repeatKept, its ruling and the break-it ruling are all read there)
     wrong_rep = _row(_raw("wrong rep"), "refuted", grade=dict(_WRONG), refutedReason="guard holds")
     fixed_rep = _row(_raw("fixed rep"), "fixed")
     member = lambda title, rep: dict(_raw(title), raisedSeq=1, **{SC.MERGED_INTO_FIELD: _key(rep)})  # noqa: E731
@@ -256,12 +294,24 @@ def test_s4_a_ledger_row_pools_with_the_outcome_the_record_writer_gives_it():
         "malformed repeatKept on an ungraded refuted row": _row(
             _raw("odd refuted"), "refuted", refutedReason="guard holds",
             repeatKept={"outcome": "shown-wrong", "reason": ""}),
+        "out-of-scope, no ruling": _row(_raw("unruled"), "out-of-scope", outOfScopeReason="not this change's"),
+        "out-of-scope, attributed ruling": _row(_raw("ruled"), "out-of-scope", outOfScopeReason="not this change's"),
+        "fixed, ruled out of scope by the break-it step": _row(_raw("exempt"), "fixed"),
+        "refuted + plausible grade": _row(
+            _raw("plausible"), "refuted", grade={"verdict": "plausible", "reason": "r"}, refutedReason="guard holds"),
     }
-    by_key = {_key(row): row for row in rows.values()}
-    pooled = {e["key"]: e for e in RM.build_pool(list(rows.values()), 2, [])}
+    state = _state(*rows.values(),
+                   rulingsLog=[{"findingKey": _key(rows["out-of-scope, attributed ruling"]), "ruling": "out-of-scope",
+                                "seq": 1, "provenance": {"ruledBy": "the owner", "ruledAt": "2026-01-02"}}],
+                   rounds={"1": {"breakItKept": [{
+                       "findingKey": _key(rows["fixed, ruled out of scope by the break-it step"]),
+                       "outcome": "ruled-out-of-scope", "reason": "not this change's", "ruledBy": "the advisor",
+                       "ruledAt": "2026-01-02"}]}})
+    inputs = RM.read_inputs(state)
+    pooled = {e["key"]: e for e in RM.build_pool(state, 2, [])}
     expected = {}
     for name, row in rows.items():
-        outcome = RS._decide(row, by_key, {})[0]
+        outcome = RS.row_decision(inputs[0][_key(row)], inputs)[0]
         expected[name] = outcome
         if outcome is None:
             assert _key(row) not in pooled, name
@@ -271,44 +321,50 @@ def test_s4_a_ledger_row_pools_with_the_outcome_the_record_writer_gives_it():
     assert expected["member of a fixed group"] == "fixed" and expected["member of a refuted+wrong group"] == "shown-wrong"
     assert expected["valid repeatKept shown-wrong, confirmed grade"] == "shown-wrong"
     assert expected["malformed repeatKept on a craft row"] == "craft"
-    assert [n for n, o in expected.items() if o is None] == ["refuted ungraded", "malformed repeatKept on an ungraded refuted row"]
+    assert [n for n, o in expected.items() if o is None] == [
+        "refuted ungraded", "malformed repeatKept on an ungraded refuted row", "refuted + plausible grade"]
+    # the shapes the old pool reading got wrong: an unruled out-of-scope row is the owner's, a ruled one and a fixed
+    # row the break-it step ruled out of scope are rulings
+    assert expected["out-of-scope, no ruling"] == "left-for-owner"
+    assert expected["out-of-scope, attributed ruling"] == "ruling"
+    assert expected["fixed, ruled out of scope by the break-it step"] == "ruling"
     entry = pooled[_key(rows["member of a fixed group"])]
     assert (entry["id"], entry["title"], entry["round"]) == (None, "fixed member", 1)  # the row's own identity, the representative's round
 
 
-def test_s4_an_unresolvable_merge_chain_is_not_pooled_and_no_by_key_reads_the_row_itself():
+def test_s4_an_unresolvable_merge_chain_is_not_pooled_and_a_valid_repeat_kept_gives_its_outcome():
     orphan = dict(_raw("orphan"), raisedSeq=1, **{SC.MERGED_INTO_FIELD: "no-such-key"})
-    assert RM.session_entry(orphan, 2, {_key(orphan): orphan}) is None
+    assert _entry(orphan) is None
     marked = _row(_raw("marked"), "refuted", grade={"verdict": "confirmed", "reason": "r"},
                   repeatKept={"outcome": "shown-wrong", "reason": "repeat of x"})
-    assert RM.session_entry(marked, 2) is None  # no by_key: today's reading, the row's own disposition and grade
-    assert RM.session_entry(marked, 2, {_key(marked): marked})["outcome"] == "shown-wrong"
+    assert _entry(marked)["outcome"] == "shown-wrong"
     member = dict(_raw("member"), raisedSeq=1, **{SC.MERGED_INTO_FIELD: _key(_raw("rep"))})
-    assert RM.session_entry(member, 2) is None  # no by_key: the member has no disposition of its own
+    assert _entry(member) is None  # the representative is not in the ledger
 
 
 def test_a_session_row_is_pooled_only_when_decided_in_an_earlier_round_and_after_it_was_raised():
-    assert RM.session_entry(_row(_raw("a"), "craft"), 2)["outcome"] == "craft"
-    assert RM.session_entry(_row(_raw("a"), "out-of-scope"), 2)["outcome"] == "ruling"
-    assert RM.session_entry(_row(_raw("a"), "craft", decided=2), 2) is None      # this round's decision
-    assert RM.session_entry(_row(_raw("a"), "craft", decided=True), 2) is None   # not a plain int
-    assert RM.session_entry(dict(_row(_raw("a"), "craft"), dispositionSeq=1), 2) is None  # stale disposition
-    assert RM.session_entry(dict(_row(_raw("a"), "craft"), raisedSeq=None), 2) is None
-    assert RM.session_entry(dict(_raw("a"), raisedSeq=1, dispositionSeq=2), 2) is None    # never decided
-    assert RM.session_entry("not a dict", 2) is None and RM.session_entry(None, 2) is None
+    assert _entry(_row(_raw("a"), "craft"))["outcome"] == "craft"
+    assert _entry(_row(_raw("a"), "out-of-scope"))["outcome"] == "left-for-owner"  # no attributed ruling
+    assert _entry(_row(_raw("a"), "craft", decided=2)) is None      # this round's decision
+    assert _entry(_row(_raw("a"), "craft", decided=True)) is None   # not a plain int
+    assert _entry(dict(_row(_raw("a"), "craft"), dispositionSeq=1)) is None  # stale disposition
+    assert _entry(dict(_row(_raw("a"), "craft"), raisedSeq=None)) is None
+    assert _entry(dict(_raw("a"), raisedSeq=1, dispositionSeq=2)) is None    # never decided
+    assert RM.session_entry("not a dict", 2, RM.read_inputs(_state())) is None
+    assert RM.session_entry(None, 2, RM.read_inputs(_state())) is None
 
 
 # ---- the pool entries of a record finding -----------------------------------------------------------
 
 def test_r1_an_undecided_earlier_finding_is_pooled_with_outcome_none_and_reads_as_new():
     open_finding = dict(_raw("still open", id="R-9"), findingKey=review_record._key(_raw("still open")), outcome=None)
-    entry = RM.record_entry(open_finding, "b" * 40)
+    entry = RM.record_entry(open_finding)
     assert entry is not None
     assert (entry["source"], entry["key"], entry["id"], entry["outcome"], entry["head"]) == (
-        "record", open_finding["findingKey"], "R-9", None, "b" * 40)
+        "record", open_finding["findingKey"], "R-9", None, None)
     assert RM.decide(entry["outcome"], "wrong", False) == (False, None)
-    assert RM.record_entry(_raw("no outcome field", line=2), None)["outcome"] is None
-    odd = RM.record_entry(dict(_raw("odd outcome", line=4), findingKey="rr1:x", outcome="open"), None)
+    assert RM.record_entry(_raw("no outcome field", line=2))["outcome"] is None
+    odd = RM.record_entry(dict(_raw("odd outcome", line=4), findingKey="rr1:x", outcome="open"))
     assert odd["outcome"] is None
     entries, reason = RM.read_earlier_findings(_record_payload([open_finding]))
     assert reason is None and [e["outcome"] for e in entries] == [None]
@@ -317,12 +373,11 @@ def test_r1_an_undecided_earlier_finding_is_pooled_with_outcome_none_and_reads_a
 @pytest.mark.parametrize("outcome", [["craft"], {"craft": 1}])
 def test_a_list_or_dict_outcome_reads_as_undecided_and_never_raises(outcome, tmp_path):
     odd = _stored(_raw("odd", id="R-3"), outcome)
-    assert RM.record_entry(odd, None)["outcome"] is None
+    assert RM.record_entry(odd)["outcome"] is None
     path = tmp_path / "odd.json"
     path.write_text(json.dumps(_record_payload([_stored(_raw("good"), "craft"), odd])), encoding="utf-8")
     payload, entries, reason = RM.read_file(str(path))
     assert reason is None and [e["outcome"] for e in entries] == ["craft", None]
-    assert RM.outcome_of(outcome) is None and RM.outcome_of(outcome, {"grade": _WRONG}) is None
     assert RM.decide(outcome, "wrong", False) == (False, None)
 
 
@@ -333,12 +388,21 @@ def test_opaque_key_is_the_review_records_stored_key():
     assert RM.opaque_key(already) == review_record._key(already)
 
 
-def test_r2_a_decided_record_finding_reads_into_a_pool_entry_with_its_judged_head():
+def test_r2_a_decided_record_finding_reads_into_a_pool_entry_judged_on_an_unknown_head():
     keep = _stored(_raw("kept", id="R-1"), "craft")
     entries, reason = RM.read_earlier_findings(_record_payload([keep], sha="b" * 40))
     assert reason is None
+    # the record's final commit is where its review ended, not the commit this finding was judged on
     assert [(e["source"], e["key"], e["id"], e["outcome"], e["head"]) for e in entries] == [
-        ("record", keep["findingKey"], "R-1", "craft", "b" * 40)]
+        ("record", keep["findingKey"], "R-1", "craft", None)]
+
+
+def test_c2_a_record_finding_without_a_judged_head_field_has_no_judged_head():
+    plain = _stored(_raw("plain"), "shown-wrong")
+    assert RM.record_entry(plain)["head"] is None
+    # whatever a finding carries under a head-like name, the review record defines no judged-head field
+    for field, value in (("head", "b" * 40), ("judgedHead", "b" * 40), ("commit", "b" * 40), ("head", 7), ("head", "")):
+        assert RM.record_entry(dict(plain, **{field: value}))["head"] is None, (field, value)
 
 
 def test_r3_a_record_finding_with_no_key_and_no_file_and_title_is_never_pooled():
@@ -355,7 +419,7 @@ def test_r3_a_record_finding_with_no_key_and_no_file_and_title_is_never_pooled()
     minted = {"outcome": "craft", "file": "f.py", "title": "no stored key", "line": 9}
     entries, _ = RM.read_earlier_findings(_record_payload([minted]))
     assert entries[0]["key"] == review_record._key(minted)
-    assert RM.record_entry("not a dict", None) is None
+    assert RM.record_entry("not a dict") is None
 
 
 def test_the_record_readings_name_a_reason_unless_the_record_is_missing():
@@ -406,27 +470,27 @@ def test_the_pool_lists_session_rows_then_record_findings_with_refs_from_e1():
     ledger = [_row(_raw("session one", line=1), "fixed"),
               _row(_raw("session two", line=2), "refuted", grade=dict(_WRONG)),
               dict(_raw("still open", line=3), raisedSeq=1)]
-    record = [RM.record_entry(_stored(_raw("record one", line=4), "craft"), "c" * 40),
-              RM.record_entry(_stored(_raw("record open", line=5), None), "c" * 40)]
-    pool = RM.build_pool(ledger, 2, record)
+    record = [RM.record_entry(_stored(_raw("record one", line=4), "craft")),
+              RM.record_entry(_stored(_raw("record open", line=5), None))]
+    pool = RM.build_pool(_state(*ledger), 2, record)
     assert [(e["ref"], e["source"], e["title"], e["outcome"]) for e in pool] == [
         ("e1", "session", "session one", "fixed"), ("e2", "session", "session two", "shown-wrong"),
         ("e3", "record", "record one", "craft"), ("e4", "record", "record open", None)]
-    assert RM.build_pool(ledger, 1, []) == []                      # nothing was decided before round 1
+    assert RM.build_pool(_state(*ledger), 1, []) == []             # nothing was decided before round 1
     assert RM.build_pool(None, 2, None) == []
 
 
 def test_a_record_finding_the_session_already_holds_is_not_listed_twice():
     session_raw = _raw("session one", line=1)
-    ledger = [_row(session_raw, "fixed")]
-    by_stored_key = RM.record_entry(_stored(session_raw, "fixed"), "c" * 40)
+    state = _state(_row(session_raw, "fixed"))
+    by_stored_key = RM.record_entry(_stored(session_raw, "fixed"))
     by_raw_key = dict(by_stored_key, key=_key(session_raw))
-    other = RM.record_entry(_stored(_raw("other", line=2), "craft"), "c" * 40)
+    other = RM.record_entry(_stored(_raw("other", line=2), "craft"))
     for held in (by_stored_key, by_raw_key):
-        pool = RM.build_pool(ledger, 2, [held, other])
+        pool = RM.build_pool(state, 2, [held, other])
         assert [(e["ref"], e["title"], e["source"]) for e in pool] == [
             ("e1", "session one", "session"), ("e2", "other", "record")]
-    twice = RM.build_pool([], 2, [other, dict(other)])             # two record entries of one key: one listing
+    twice = RM.build_pool(_state(), 2, [other, dict(other)])           # two record entries of one key: one listing
     assert [e["ref"] for e in twice] == ["e1"]
 
 
@@ -441,9 +505,9 @@ def test_order_list_carries_the_six_fields_the_order_names():
 # ---- exact identity and the judge's refs ---------------------------------------------------------------
 
 def test_exact_match_reads_a_session_raw_key_and_a_record_stored_key():
-    session_entry = dict(RM.session_entry(_row(_raw("s"), "craft"), 2), ref="e1")
-    stored_entry = RM.record_entry(_stored(_raw("r", line=2), "ruling"), None)
-    pool = RM.build_pool([], 2, [stored_entry])
+    session_entry = dict(_entry(_row(_raw("s"), "craft")), ref="e1")
+    stored_entry = RM.record_entry(_stored(_raw("r", line=2), "ruling"))
+    pool = RM.build_pool(_state(), 2, [stored_entry])
     pool = [session_entry] + [dict(pool[0], ref="e2")]
     assert RM.exact_match(_raw("s"), pool) is pool[0]
     assert RM.exact_match(_raw("r", line=2), pool) is pool[1]
