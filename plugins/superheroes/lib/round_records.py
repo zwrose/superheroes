@@ -344,7 +344,6 @@ landing_dir = record_paths.landing_dir
 landing_path = record_paths.landing_path
 bare_payload_path = record_paths.bare_payload_path
 landing_entry_present = record_paths.landing_entry_present
-is_landing_dir = record_paths.is_landing_dir
 
 
 def order_prompt_path(session_dir, rnd, phase, skey, attempt):

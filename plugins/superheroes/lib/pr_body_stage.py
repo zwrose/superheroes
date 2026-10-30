@@ -8,10 +8,9 @@ Session layout (all under ``<session>/pr-body/``):
   staged.md       the current staged copy; created from original.md once
   published.json  the publish receipt (``schema: "pr-body-publish/1"``), written for every outcome
 
-The fixer works on a copy in its round's landing directory (``fixer_copy_path``): `dispatch-write
---landing-dir` already grants a restricted claude fixer file tools there, and ``pr-body/`` has no such
-grant. The ``_`` prefix of the copy's name is ``record_paths.RESERVED_PREFIX``, which the landing sweep
-skips, so the copy is never read as a stray seat file.
+The staged copy for a fix lives in its round's landing directory (``fixer_copy_path``), not under
+``pr-body/``. The ``_`` prefix of the copy's name is ``record_paths.RESERVED_PREFIX``, which the landing
+sweep skips, so the copy is never read as a stray seat file.
 
 Stdlib plus the record layer; every public function returns a value instead of raising."""
 import argparse

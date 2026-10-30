@@ -208,9 +208,6 @@ REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
 REFUSAL_SANDBOX_ACCESS_MALFORMED = "sandbox-access-malformed"
 REFUSAL_SANDBOX_ACCESS_UNREADABLE = "sandbox-access-unreadable"
 REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM = "sandbox-access-unsupported-platform"
-REFUSAL_SANDBOX_LANDING_DIR_INVALID = "sandbox-landing-dir-invalid"
-REFUSAL_SANDBOX_LANDING_DIR_DENIED = "sandbox-landing-dir-denied"
-REFUSAL_SANDBOX_LANDING_DIR_MISMATCH = "sandbox-landing-dir-mismatch"
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
@@ -232,9 +229,6 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     REFUSAL_SANDBOX_ACCESS_MALFORMED,
     REFUSAL_SANDBOX_ACCESS_UNREADABLE,
     REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM,
-    REFUSAL_SANDBOX_LANDING_DIR_INVALID,
-    REFUSAL_SANDBOX_LANDING_DIR_DENIED,
-    REFUSAL_SANDBOX_LANDING_DIR_MISMATCH,
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
@@ -281,10 +275,6 @@ def claude_write_sandbox_valid(sandbox):
             return False
     if "localBinding" in sandbox and type(sandbox["localBinding"]) is not bool:
         return False
-    if "landingDir" in sandbox:
-        landing = sandbox["landingDir"]
-        if not _abs_str(landing) or sandbox_path_has_glob(landing):
-            return False
     return _sandbox_access_valid(sandbox.get("access"))
 
 
@@ -351,8 +341,6 @@ def claude_write_sandbox_settings(sandbox):
         allow_write.append(uv_cache)
     allow_write.extend(sandbox.get("tmpWriteRoots") or [])
     allow_write.extend(extra_paths)
-    if sandbox.get("landingDir") is not None:
-        allow_write.append(sandbox["landingDir"])
     network = {"allowedDomains": list(domains), "strictAllowlist": True}
     if sandbox.get("localBinding") is True or access.get("localPorts"):
         network["allowLocalBinding"] = True
@@ -723,12 +711,6 @@ def build_argv_result(seat, role_kind, opts):
                 "--permission-mode", "acceptEdits", "--restricted",
                 "--tools", CLAUDE_WRITE_TOOLS,
                 "--strict-mcp-config",
-            ]
-            landing = opts["claudeWriteSandbox"].get("landingDir")
-            if landing is not None:
-                # variadic: the next token must stay a flag or the prompt is swallowed
-                argv += ["--add-dir", landing]
-            argv += [
                 "--settings", claude_write_sandbox_settings(opts["claudeWriteSandbox"]),
             ]
         return _ok(argv)
