@@ -161,7 +161,7 @@ An abandoned session:
 Outcomes:
 
 - A fixed finding becomes `fixed`, with the round it was audited in; a finding an audit raised and a later audit discharged under its own key reads `fixed` like any audited fix; a fix a later full panel did not raise again reads `fixed; the full panel in round <n> did not raise it again`.
-- A finding refuted by verification becomes `shown-wrong`, with the refuted reason; a refutation whose reason starts `author-justified` becomes `left-for-owner`.
+- A finding the verifier refuted, whose ledger row carries the verifier's wrong grade, becomes `shown-wrong`, with the refuted reason and that grade; a refutation whose reason starts `author-justified` becomes `left-for-owner`; any other refuted row stays undecided ("refuted without the verifier's wrong grade; still open"). The writer refuses an account that writes `shown-wrong` on any other ground, unless the latest earlier record already listed that finding as shown wrong.
 - When the loop ends, every finding it took in that is not fixed or shown wrong is settled by its consequence ([how the loop settles what is left](round-driver.md#how-the-loop-settles-what-is-left) says how). The adapter reads a settled disposition `craft`, `left-for-owner` or `ruling` as the outcome of the same name, with the recorded `settledReason` as its reason.
 - An out-of-scope finding is settled like any other open one: it becomes `ruling` only when a decision on record settles it, and otherwise `left-for-owner`, a leftover.
 - A finding merged into another takes the representative's outcome, and its reason names the representative. A ruling logged against any finding merged into the representative counts as a ruling on it; the newest one stands.
@@ -214,7 +214,7 @@ Reading and independence are computed by the record, never taken from the sessio
 
 ## Map each exit's results to outcomes
 
-- A REFUTED drop becomes `shown-wrong`, with the drop reason as the reason. A REFUTED resting on a check that did not execute is not a drop and never becomes `shown-wrong`; the finding keeps its earlier outcome path and the round's verify record lists it under `notExecuted`.
+- A REFUTED drop becomes `shown-wrong`, with the drop reason as the reason. It carries the grade wrong. A REFUTED resting on a check that did not execute is not a drop and never becomes `shown-wrong`; the finding keeps its earlier outcome path and the round's verify record lists it under `notExecuted`.
 - A finding the session decided is code-quality only becomes `craft`, with the reason.
 - A finding put to a human (the undecided set) becomes `left-for-owner`.
 - An approved-to-fix finding has no outcome until it is fixed.
@@ -223,7 +223,7 @@ Reading and independence are computed by the record, never taken from the sessio
 
 **Light and micro lanes.**
 - A finding fixed and re-reviewed becomes `fixed`.
-- A finding argued wrong becomes `shown-wrong`, with the argument as the reason.
+- A finding argued wrong is not closed as wrong: only the verifier does that, so it becomes `left-for-owner`, with the argument as the reason; a finding an earlier record already listed as shown wrong keeps that outcome.
 - A finding covered by a standing ruling, or a recorded residual under the review discipline's
   review bars, becomes `ruling`, naming which.
 - Anything the owner must decide becomes `left-for-owner`.
