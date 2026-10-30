@@ -102,7 +102,7 @@ def _responder(round1_findings=None, head=HEAD, grouping=None, verify="pass"):
                                            for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": head}
         if phase == RD.P_VERIFY:
             return {"result": verify}
@@ -359,12 +359,12 @@ def test_gap_sweep_assembles_its_candidate_findings(tmp_path):
     assert artifact == {"findings": []}
 
 
-def test_fixer_passes_its_payload_through(tmp_path):
+def test_apply_fixes_passes_its_payload_through(tmp_path):
     def build(n, state):
         hand = {"fixes": [], "headDiff": HEAD}
-        return hand, [_result_env(RA.SEAT_FIXER, {"fixes": [], "headDiff": HEAD})], {}
+        return hand, [_result_env(RA.SEAT_APPLY_FIXES, {"fixes": [], "headDiff": HEAD})], {}
 
-    artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_FIXER, build)
+    artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_APPLY_FIXES, build)
     assert artifact == hand
 
 
@@ -463,7 +463,7 @@ def test_roster_audits_keeps_two_targets_that_share_one_id(tmp_path):
     (RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP),
     (RD.P_SCOPED, RA.SEAT_SCOPED),
     (RD.P_VERIFY, RA.SEAT_VERIFY),
-    (RD.P_FIXER, RA.SEAT_FIXER),
+    (RD.P_APPLY_FIXES, RA.SEAT_APPLY_FIXES),
 ])
 def test_roster_single_seat_phases(phase, seat):
     assert RA.roster_for(phase, {}, {}) == ([seat], None)
@@ -482,7 +482,7 @@ def test_missing_policy_per_phase():
     assert RA.missing_policy(RD.P_PANEL) == RA.MISSING_SEAT_STATUS
     assert RA.missing_policy(RD.P_VERIFIERS) == RA.MISSING_FOLD_FAIL_CLOSED
     assert RA.missing_policy(RD.P_AUDITS) == RA.MISSING_FOLD_FAIL_CLOSED
-    for phase in (RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_VERIFY, RD.P_FIXER):
+    for phase in (RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES):
         assert RA.missing_policy(phase) == RA.MISSING_REFUSE_FOLD
 
 
@@ -568,7 +568,7 @@ def test_fold_fail_closed_policy_a_silent_auditor_leaves_its_target_not_discharg
     (RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP, {"findings": []}),
     (RD.P_SCOPED, RA.SEAT_SCOPED, {"findings": []}),
     (RD.P_VERIFY, RA.SEAT_VERIFY, {"result": "pass"}),
-    (RD.P_FIXER, RA.SEAT_FIXER, {"fixes": []}),
+    (RD.P_APPLY_FIXES, RA.SEAT_APPLY_FIXES, {"fixes": []}),
 ])
 def test_refuse_fold_policy_every_single_seat_phase_refuses_a_missing_seat(phase, seat, payload):
     """`refuse-fold`: an empty success artifact at a single-seat phase could let the run certify.
@@ -779,13 +779,16 @@ def test_synthesis_payload_none_grouping_is_a_real_answer():
 @pytest.mark.parametrize("payload,fragment", [
     ({}, "`fixes` is missing"),
     ({"fixes": {}}, "`fixes` is dict, not a list"),
-    ({"fixes": [], "escalated": "yes"}, "`escalated` is str, not a boolean"),
     ({"fixes": [], "headDiff": 3}, "`headDiff` is int, not a string"),
     ({"fixes": [], "headDiffPath": "relative/head.diff"}, "is not an absolute path"),
     ({"fixes": [], "coverageDecisions": ["x"]}, "`coverageDecisions`[0] is str"),
+    ({"fixes": [], "unfixed": {}}, "`unfixed` is dict, not a list"),
+    ({"fixes": [], "unfixed": ["x"]}, "`unfixed`[0] is str, not an object"),
+    ({"fixes": [], "unfixed": [{"finding": "k"}]}, "`unfixed[0].why` is NoneType, not a non-empty string"),
+    ({"fixes": [], "unfixed": [{"why": "w"}]}, "`unfixed[0].finding` is NoneType, not a non-empty string"),
 ])
-def test_fixer_payload_faults(payload, fragment):
-    fault = RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER)
+def test_apply_fixes_payload_faults(payload, fragment):
+    fault = RA.payload_fault(RD.P_APPLY_FIXES, payload, RA.SEAT_APPLY_FIXES)
     assert fault is not None and fragment in fault, fault
 
 
@@ -925,97 +928,6 @@ def test_seat_map_comes_from_state_and_is_omitted_when_empty(tmp_path):
 
 
 # =============================================================================
-# durability — the fixer head diff
-# =============================================================================
-
-def test_fixer_payload_refuses_caller_head_diff_store_path(tmp_path):
-    """`headDiffStorePath` is driver-owned — a caller cannot inject a trusted store path."""
-    store = tmp_path / "evil.diff"
-    store.write_text(HEAD, encoding="utf-8")
-    payload = {"fixes": [], "headDiffStorePath": str(store)}
-    fault = RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER, record_boundary=True)
-    assert fault is not None
-    assert "headDiffStorePath" in fault and "driver-owned" in fault
-    # A/B: headDiffPath alone is still accepted
-    caller = tmp_path / "caller-head.diff"
-    caller.write_text(HEAD, encoding="utf-8")
-    assert RA.payload_fault(RD.P_FIXER, {"fixes": [], "headDiffPath": str(caller)},
-                            RA.SEAT_FIXER) is None
-
-
-def test_fixer_head_diff_path_points_at_the_immutable_store_copy(tmp_path):
-    """`_resolve_head_diff` opens the path at FOLD time, so a caller-controlled path can change
-    between record and fold. The store copy is the one that cannot."""
-    d = str(tmp_path / "session")
-    os.makedirs(d)
-    pend = RD.new_state(_cfg())
-    pend["round"] = 1
-    attempt = 0
-    seat = RA.SEAT_FIXER
-    skey = RR.storage_key(seat)
-    store_copy = RR.store_path(d, 1, RD.P_FIXER, skey, attempt)
-    os.makedirs(os.path.dirname(store_copy), exist_ok=True)
-    headdiff = os.path.join(os.path.dirname(store_copy), "%s.a%d.headdiff" % (skey, attempt))
-    with open(headdiff, "w", encoding="utf-8") as fh:
-        fh.write(HEAD)
-    payload = {"fixes": [], "headDiffStorePath": headdiff}
-    env = _result_env(seat, payload)
-    env.update({"round": 1, "phase": RD.P_FIXER, "attempt": attempt})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], pend, _cfg(), session_dir=d)
-    assert reason is None
-    assert artifact["headDiffPath"] == headdiff
-    assert "headDiffStorePath" not in artifact
-    assert artifact["provenance"]["headDiffPathSource"] == "store"
-
-
-def test_fixer_rejects_an_untrusted_head_diff_store_path(tmp_path):
-    d = str(tmp_path / "session")
-    os.makedirs(d)
-    caller = tmp_path / "caller-head.diff"
-    caller.write_text(HEAD, encoding="utf-8")
-    skey = RR.storage_key(RA.SEAT_FIXER)
-    lookalike = os.path.join("/attacker", "round-1", "seats", RD.P_FIXER,
-                             "%s.a0.headdiff" % skey)
-    payload = {"fixes": [], "headDiffPath": str(caller), "headDiffStorePath": lookalike}
-    assert RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER, record_boundary=True) is not None
-    env = _result_env(RA.SEAT_FIXER, payload)
-    env.update({"round": 1, "phase": RD.P_FIXER, "attempt": 0})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], {}, {}, session_dir=d)
-    assert artifact is None and reason == "head-diff-store-path-untrusted"
-
-
-def test_fixer_head_diff_path_without_a_store_copy_is_disclosed(tmp_path):
-    caller = tmp_path / "caller-head.diff"
-    caller.write_text(HEAD, encoding="utf-8")
-    payload = {"fixes": [], "headDiffPath": str(caller)}
-    artifact, reason = RA.assemble(RD.P_FIXER, [_result_env(RA.SEAT_FIXER, payload)], {}, {})
-    assert reason is None
-    assert artifact["headDiffPath"] == str(caller)
-    assert artifact["provenance"]["headDiffPathSource"] == "caller-path-no-store-copy"
-
-
-def test_fixer_store_path_head_diff_folds_through_the_real_driver(tmp_path):
-    """End to end: the driver-written store path the adapter emits is the one the fold reads."""
-    d, n, state = _at(tmp_path, RD.P_FIXER)
-    skey = RR.storage_key(RA.SEAT_FIXER)
-    store_copy = RR.store_path(d, n["round"], RD.P_FIXER, skey, n["attempt"])
-    headdiff = os.path.join(os.path.dirname(store_copy), "%s.a%d.headdiff" % (skey, n["attempt"]))
-    os.makedirs(os.path.dirname(headdiff), exist_ok=True)
-    with open(headdiff, "w", encoding="utf-8") as fh:
-        fh.write(HEAD)
-    payload = {"fixes": [], "headDiffStorePath": headdiff}
-    env = _result_env(RA.SEAT_FIXER, payload)
-    env.update({"round": n["round"], "phase": RD.P_FIXER, "attempt": n["attempt"]})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], state, state["config"], session_dir=d)
-    assert reason is None
-    assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)["ok"]
-    ok, after = RD.load_state(d)
-    assert after["headDiff"] == HEAD
-    assert after["rounds"]["1"]["headDiffSource"] == "path"
-    assert after["rounds"]["1"]["adapterProvenance"]["byPhase"][RD.P_FIXER]["headDiffPathSource"] == "store"
-
-
-# =============================================================================
 # payload_contract — conformance with checkers
 # =============================================================================
 
@@ -1029,7 +941,7 @@ _SEAT_KEYS = {
     RD.P_SECOND_TEST: RA.SEAT_SECOND_TEST,
     RD.P_SCOPED: RA.SEAT_SCOPED,
     RD.P_VERIFY: RA.SEAT_VERIFY,
-    RD.P_FIXER: RA.SEAT_FIXER,
+    RD.P_APPLY_FIXES: RA.SEAT_APPLY_FIXES,
     RD.P_AUDITS: "f.py::t",
 }
 
@@ -1168,7 +1080,7 @@ def test_declared_element_enum_verdict_is_enforced():
 
 
 def test_declared_top_level_type_fixes_is_list():
-    fault = RA.payload_fault(RD.P_FIXER, {"fixes": "not-a-list"}, RA.SEAT_FIXER)
+    fault = RA.payload_fault(RD.P_APPLY_FIXES, {"fixes": "not-a-list"}, RA.SEAT_APPLY_FIXES)
     assert fault is not None and "`fixes` is str, not a list" in fault
 
 
@@ -1204,7 +1116,7 @@ def test_payload_contract_optional_keys_match_checker(phase):
         elif field in ("confidence", "tier", "reason", "command", "headDiff", "headDiffPath",
                        "evidence", "auditorVendor"):
             payload[field] = 1
-        elif field in ("receiptMissing", "receiptStale", RA.VACUOUS_FIELD, "escalated"):
+        elif field in ("receiptMissing", "receiptStale", RA.VACUOUS_FIELD):
             payload[field] = "not-a-bool"
         elif field == "newIssues":
             payload[field] = "not-a-list"

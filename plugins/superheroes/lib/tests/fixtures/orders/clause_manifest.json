@@ -29,17 +29,6 @@
     "Echo staged ids verbatim",
     "every survivor id appears exactly once"
   ],
-  "dispatch-fixer": [
-    "You are the fixer for one round of an auto-fix code-review loop",
-    "Fix ONLY what the findings call for. No unrelated refactors (YAGNI)",
-    "retry ONCE. If it still fails, STOP and report CHECK_FAILED",
-    "autofix-probe-",
-    "Commit ALL changes in ONE commit",
-    "Create and edit files only with the host's file-write and file-edit tools",
-    "Never run a formatter, a linter's autofix, or anything else that rewrites a committed break-it test file",
-    "do NOT guess. Report it for owner escalation via the runner's native write-result contract",
-    "Leave `headDiff` and `headDiffPath` out of your result, on every ending"
-  ],
   "dispatch-gap-sweep": [
     "You are the gap-sweep finder for a big-diff review round",
     "only flag code in `+` or `-` lines",

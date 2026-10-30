@@ -2,7 +2,7 @@
 
 A finding has exactly one effective decision: the latest of a ``rule`` ruling and an owner-gate
 decision by one sequence, read through ``_live_ruling_by_key``. It binds the finding under any
-wording a later round gives it at the same file and line, and the fixer order renders only it.
+wording a later round gives it at the same file and line, and the `apply-fixes` guidance file carries only it.
 """
 import ast
 import copy
@@ -47,7 +47,7 @@ def _mem_state(round_no=2):
 
 def _add_rule(state, key, ruling, *, guidance=None, file=FILE, line=LINE, rnd=None, **extra):
     """Append a ``rulingsLog`` row the way the ``rule`` verb writes one (sequence from the counter)."""
-    row = {"seq": RD._next_ruling_seq(state), "round": rnd or state["round"], "phase": RD.P_FIXER,
+    row = {"seq": RD._next_ruling_seq(state), "round": rnd or state["round"], "phase": RD.P_APPLY_FIXES,
            "attempt": 0, "id": key, "findingKey": key, "ruling": ruling, "reason": "because",
            "by": "owner"}
     if file is not None:
@@ -100,7 +100,7 @@ def test_t1_reword_carries_guidance_to_next_fix(tmp_path):
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-1)
     """
-    session_dir, _, _, row_a, _row_b = RC._pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _row_b = RC._pending_apply_fixes_two_findings(tmp_path)
     key_a = RD._fix_batch_row_key(row_a)
     path = RC._write_ruling_file(tmp_path / "r.json", [
         {"id": key_a, "ruling": "guidance", "reason": "keep it small", "guidance": "G1"}])
@@ -229,7 +229,7 @@ def test_t4_gate_skip_binds_its_finding_but_never_a_reword():
     assert key_new not in RD._live_out_of_scope_ruling_keys(state)
     state["findings"] = [dict(different, verdict="CONFIRMED")]
     RD._after_findings_settled(state, state["config"])
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert key_new in {RD._fix_batch_row_key(r) for r in state["_fixBatch"]}
 
 
@@ -577,7 +577,7 @@ def test_a_skip_never_reaches_another_finding_through_a_guidance_lineage(skipped
 def test_a_rule_guidance_reopens_a_skipped_lineage_member(tmp_path):
     """axis: a rule guidance on one lineage member that supersedes another member's own skip clears
     that member's skip and restores it to the fixer queue."""
-    session_dir, _, _, row_a, row_b = RC._pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, row_b = RC._pending_apply_fixes_two_findings(tmp_path)
     key_a = RD._fix_batch_row_key(row_a)
     key_b = RD._fix_batch_row_key(row_b)
     state = RC._state(session_dir)
