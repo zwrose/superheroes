@@ -7134,11 +7134,28 @@ def _saved_delta_stretch(state):
             or (step == P_VERIFY and state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS))
 
 
+def _saved_delta_stretch_lacks_facts(state):
+    """True when a saved delta-stretch state lacks the evidence this version's audit, post-audits
+    verify and scoped steps read: no kept `_fixDeltaDiff`, or an audit target that carries a break-it
+    test but no `breakIt` comparison facts. A state this version computed itself holds both."""
+    if not isinstance(state.get("_fixDeltaDiff"), str):
+        return True
+    targets = state.get("_auditTargets")
+    for row in targets if isinstance(targets, list) else []:
+        if isinstance(row, dict) and break_it.carries_test(row) and not isinstance(row.get("breakIt"), dict):
+            return True
+    return False
+
+
 def _holds_change_without_kept_original(state):
     """True when any finding the state holds records a build-session test change (`_changed_why`) and
-    carries no kept `REVIEWER_TEST_FIELD`: the previous release did not keep the reviewer's original."""
-    for key in ("findings", "fixBatch", "_auditTargets"):
-        rows = state.get(key)
+    carries no kept `REVIEWER_TEST_FIELD`: the previous release did not keep the reviewer's original.
+    It reads every list a later test change reads or rewrites: the findings, the fix batch, the audit
+    targets, the staged `_toVerify` findings and the disposition ledger."""
+    stores = [state.get(key) for key in ("findings", "fixBatch", "_auditTargets", "_toVerify")]
+    ledger, _fault = session_contract.read_disposition_ledger(state)
+    stores.append(ledger)
+    for rows in stores:
         for finding in rows if isinstance(rows, list) else []:
             if (isinstance(finding, dict) and _changed_why(finding) is not None
                     and not isinstance(finding.get(REVIEWER_TEST_FIELD), str)):
@@ -7159,7 +7176,8 @@ def _finish_saved_previous_release(state):
             or not _generation_is_continuable_earlier(state)):
         return False
     # axis: a stretch step of a continuable earlier generation is handed back before any scoped or audit order renders
-    in_stretch = _saved_delta_stretch(state) and not _is_extra_audit_round(state)
+    in_stretch = (_saved_delta_stretch(state) and not _is_extra_audit_round(state)
+                  and _saved_delta_stretch_lacks_facts(state))
     # axis: a recorded test change with no kept original is handed back, never certified on a guessed baseline
     if not (in_stretch or _holds_change_without_kept_original(state)):
         return False
