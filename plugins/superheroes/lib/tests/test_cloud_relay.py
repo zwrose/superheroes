@@ -1038,8 +1038,6 @@ def test_cli_compose_fix_order_flag_passes_through(world, monkeypatch):
 
 @pytest.mark.parametrize("entry", [
     None, "x", ["y"], {"fixOrder": "yes"}, {"fixOrder": 1}, {"fixOrder": None},
-    {"fixOrder": True}, {"fixOrder": True, "session": ""}, {"fixOrder": True, "session": None},
-    {"fixOrder": True, "session": 7},
 ])
 def test_fix_orders_refuses_a_malformed_pending_entry_only_when_unchecked_are_included(world, entry):
     # axis: with include_unchecked, an entry that cannot be read as a fix order or not refuses the read; the default read is unchanged — see bite-proof record i2254_original_session

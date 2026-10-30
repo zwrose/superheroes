@@ -251,15 +251,13 @@ _MAY_HAVE_REACHED = ("relay-silent", "relay-text-mismatch", "relay-send-unconfir
 
 def _readable_pending_entry(entry):
     """True when a pending entry has the one readable shape: a dict whose `fixOrder`, when the key is present
-    (an explicit null included), is a bool, and whose `session` is a non-empty string when it is a fix order."""
+    (an explicit null included), is a bool."""
     if not isinstance(entry, dict):
         return False
     # axis: key presence, not value, decides whether the marker is checked, so an explicit null is damage — see bite-proof record i2254_original_session
     if "fixOrder" not in entry:
         return True
-    if not isinstance(entry["fixOrder"], bool):
-        return False
-    return not entry["fixOrder"] or (isinstance(entry.get("session"), str) and bool(entry["session"]))
+    return isinstance(entry["fixOrder"], bool)
 
 
 def fix_orders(repo_root, *, env=None, include_unchecked=False):
@@ -268,9 +266,8 @@ def fix_orders(repo_root, *, env=None, include_unchecked=False):
     compose: a stable send boundary that a later check or re-check never moves). A fix order never checked
     (a draft) or whose send failed is left out; the decision only decides eligibility. With `include_unchecked`
     every composed fix order is listed whatever its decision, one that may have been sent but was never checked included,
-    and a pending entry that is not a dict, whose `fixOrder` is present but not a bool (null included), or that
-    is a fix order without a non-empty string `session`, refuses the read with `relay-state-malformed` since a
-    damaged record may be a fix order.
+    and a pending entry that is not a dict, or whose `fixOrder` is present but not a bool (null included),
+    refuses the read with `relay-state-malformed` since a damaged record may be a fix order.
     Reads only; never writes."""
     _path, state, refusal = _open_state(repo_root, env)
     if refusal:
