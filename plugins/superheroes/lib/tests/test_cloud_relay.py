@@ -1006,8 +1006,9 @@ def test_fix_orders_lists_only_flagged_records_whose_text_may_have_reached_the_b
     assert {r["msgId"] for r in out["records"]} == listed
     # axis: the exported `at` is the message's own sentAfter, which a decision stamped later does not move — see bite-proof record wo_2148_fix_order.md
     sent = {m: e["sentAfter"] for m, e in json.load(open(_state_file(world)))["pending"].items()}
+    decisions = {m: e["decision"] for m, e in json.load(open(_state_file(world)))["pending"].items()}
     assert all(r == {"msgId": r["msgId"], "session": SESSION, "configDir": world.config,
-                     "at": sent[r["msgId"]]} for r in out["records"])
+                     "at": sent[r["msgId"]], "decision": decisions[r["msgId"]]} for r in out["records"])
     assert all(r["at"] != stamp for r in out["records"])
     assert open(_state_file(world)).read() == before
 

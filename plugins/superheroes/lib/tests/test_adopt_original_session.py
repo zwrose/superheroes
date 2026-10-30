@@ -835,6 +835,42 @@ def test_a_relay_record_for_another_session_does_not_keep_the_lane(
     _proceeds(result, calls)
 
 
+def test_a_fix_order_delivered_before_the_handback_does_not_keep_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a fix order the relay confirmed delivered at or before the handback is answered by it, so the lane is dropped on the first-pull-request timing — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{
+        "session": SESSION_TITLE, "at": _utc_stamp(-3600),
+        "decision": {"delivered": True, "reason": "relay-delivered", "at": _utc_stamp(-60)},
+    }])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_a_fix_order_delivered_after_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a fix order whose delivery was confirmed after the handback may have reopened the lane, so it stays — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{
+        "session": SESSION_TITLE, "at": _utc_stamp(-3600),
+        "decision": {"delivered": True, "reason": "relay-delivered", "at": _utc_stamp(60)},
+    }])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_an_undecided_fix_order_composed_before_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a fix order with no decision may still be delivered after the handback, so it keeps the lane whatever its compose time — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{"session": SESSION_TITLE, "at": _utc_stamp(-3600), "decision": None}])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
 def test_a_first_pr_that_could_not_be_read_keeps_the_lane(tmp_path, first_pr):
     # axis: a first-pull-request time that could not be read keeps the lane
     repo = _cloud_repo(tmp_path)

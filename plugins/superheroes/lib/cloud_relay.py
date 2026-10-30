@@ -252,7 +252,8 @@ _MAY_HAVE_REACHED = ("relay-silent", "relay-text-mismatch", "relay-send-unconfir
 def fix_orders(repo_root, *, env=None, include_unchecked=False):
     """{"ok": True, "records": [...]} of the fix orders whose text may have reached the builder, else
     {"ok": False, "reason": ...}. A record is `msgId`, `session`, `configDir` and `at` (the message's `sentAfter`, written once at
-    compose: a stable send boundary that a later check or re-check never moves). A fix order never checked
+    compose: a stable send boundary that a later check or re-check never moves) and `decision` (the check's
+    `delivered`, `reason` and `at`, or None when never checked). A fix order never checked
     (a draft) or whose send failed is left out; the decision only decides eligibility. With `include_unchecked`
     every composed fix order is listed whatever its decision, one that may have been sent but was never checked included.
     Reads only; never writes."""
@@ -268,7 +269,8 @@ def fix_orders(repo_root, *, env=None, include_unchecked=False):
                     decision.get("delivered") is True or decision.get("reason") in _MAY_HAVE_REACHED)))):
             # axis: the window opens at the message's own sentAfter, never at the decision's check time, which a later check moves — see bite-proof record wo_2148_fix_order.md
             records.append({"msgId": msg_id, "session": entry.get("session"),
-                            "configDir": entry.get("configDir"), "at": entry.get("sentAfter")})
+                            "configDir": entry.get("configDir"), "at": entry.get("sentAfter"),
+                            "decision": decision if isinstance(decision, dict) else None})
     return {"ok": True, "records": records}
 
 
