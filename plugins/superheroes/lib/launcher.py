@@ -2633,24 +2633,6 @@ def _base_on_remote(repo_root, base, env):
 _base_on_remote_fn = _base_on_remote
 
 
-def _adopted_branch_absent(repo_root, branch, env):
-    """Whether ``origin`` has no branch ``branch``, asked of the remote afresh: True, False, or None
-    when it could not be asked (no ``origin``, git failed or timed out, an answer that is not a ref
-    line for exactly that branch)."""
-    ref = "refs/heads/%s" % branch
-    got = _git_scrubbed(
-        repo_root, "ls-remote", "--heads", "origin", ref, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-    )
-    if got is None or got.returncode != 0:
-        return None
-    lines = [line for line in (got.stdout or "").splitlines() if line.strip()]
-    if not lines:
-        return True
-    if any(len(line.split()) == 2 and line.split()[1] == ref for line in lines):
-        return False
-    return None
-
-
 def _gh_branch_pulls(owner, repo, branch, env, timeout):
     """Ask GitHub's pulls endpoint for every pull request (any state) headed at ``branch`` with
     ``gh``; the completed process, or None when ``gh`` could not run or timed out. Tests replace it."""
@@ -2716,6 +2698,9 @@ def _adopted_branch_first_pr(repo_root, branch, env):
 
 # The round-trip to GitHub; tests replace it.
 _adopted_branch_first_pr_fn = _adopted_branch_first_pr
+
+# The clock the original-session check reads an account's usage limit against; tests replace it.
+_now_fn = time.time
 
 
 def _cloud_base_refusal(repo_root, stamped, env):
@@ -2860,11 +2845,25 @@ def _cloud_start_refusal(repo_root, stamped, env):
 
     The base-on-remote refusals come first, with their tokens and their local fallback
     unchanged; then the checkout check, whose refusals carry the checkout's facts in ``extra``.
+    An adoption (``adoptsBranch`` with an ``adoptsHead`` that is a full sha) launches from a
+    checkout at its adopted head, since its base is an ancestor of that head; any other launch
+    needs a checkout at its ``baseCommit``. ``extra`` keeps ``baseCommit`` and says which it was
+    checked against.
     """
     reason = _cloud_base_refusal(repo_root, stamped, env)
     if reason is not None:
         return reason, {}
-    return _cloud_checkout_refusal(repo_root, stamped["baseCommit"], env)
+    head = stamped.get("adoptsHead")
+    # axis: an adoption is checked against its adopted head and every other launch against its base — see bite-proof record i2272_launcher
+    adopting = "adoptsBranch" in stamped and isinstance(head, str) and bool(_HEX40.match(head))
+    target = head if adopting else stamped["baseCommit"]
+    refusal = _cloud_checkout_refusal(repo_root, target, env)
+    if refusal is None:
+        return None
+    refusal_reason, detail = refusal
+    detail["baseCommit"] = stamped["baseCommit"]
+    detail["checkedAgainst"] = "adoptsHead" if adopting else "baseCommit"
+    return refusal_reason, detail
 
 
 _ADOPT_HEAD_NOT_ON_BASE = "premise-adopts-head-not-on-base"
@@ -2971,7 +2970,11 @@ _ADOPT_ORIGINAL_REMEDY_UNREAD = (
     "post the results on the issue (orchestration.md § Acting on the builders' account), save "
     "them to a file and launch again with --cloud-sessions-file; or get the lane's handover "
     "(cloud_recover.py ask, then assess). A lane that handed back before the adopted branch's "
-    "first pull request opened needs no read, unless a fix order went to its session. When the issue's newest "
+    "first pull request opened needs no read, unless a fix order went to its session. While the "
+    "builders' account is at its usage limit, `cloud_relay.py limit --config-dir <the builders' "
+    "config dir>` shows it, and a lane that started before the limit needs no session read until "
+    "the reset time it names (the relay records the limit only when it next runs, so send a status "
+    "ping through the relay first); after the reset, the session read is needed again. When the issue's newest "
     "lane is a local lane on this account, resume that same session instead of adopting."
 )
 _ADOPT_ORIGINAL_REMEDY_STATE = (
@@ -3082,28 +3085,22 @@ def _is_int(value):
 
 
 _NEEDS_FIRST_PR = object()
-_NEEDS_BRANCH_ABSENCE = object()
 
 
 def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
-    """The refusal ``_original_session_pass`` reaches, or None; every local read happens after every slow remote read.
+    """The refusal ``_original_session_pass`` reaches, or None; every local read happens after the slow remote read.
 
     A pass reads the ledger, the recover state and the relay history (all local); when a lane needs
-    a remote read (the branch's absence from ``origin``, or its first pull request time) the pass
-    stops and names it. That read is made once, and the whole narrowing is evaluated again on a
-    fresh local snapshot, so a vet amendment, a handover stop or a fix order recorded during any
-    remote read is still seen. The pass that returns a result is always one that made no remote
-    read of its own.
+    the remote read (the adopted branch's first pull request time) the pass stops and names it.
+    That read is made once, and the whole narrowing is evaluated again on a fresh local snapshot,
+    so a vet amendment, a handover stop or a fix order recorded during it is still seen. The pass
+    that returns a result is always one that made no remote read of its own.
     """
     reads = {}
     while True:
         result = _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         if result is _NEEDS_FIRST_PR:
             reads["first"] = _adopted_branch_first_pr_fn(repo_root, stamped["adoptsBranch"], env)
-            # the absence read must be the last remote read before the snapshot the decision rests on
-            reads.pop("absent", None)
-        elif result is _NEEDS_BRANCH_ABSENCE:
-            reads["absent"] = _adopted_branch_absent(repo_root, stamped["adoptsBranch"], env)
         else:
             return result
 
@@ -3115,17 +3112,20 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
     the issue that started a session. A lane is exempt when its latest outcome is ``refusal`` (it
     built nothing) or ``cloud_recover assess`` recorded it stopped on a handover. Of the rest, a lane
     is dropped only on evidence this machine reads itself, and every read that fails or is
-    ambiguous keeps it: a lane bound to the adopted branch by its premise whose branch ``origin``
-    shows gone needs no listing, but a supplied listing that shows its session live still refuses
-    ``adopt-original-session-live``, unless a fix order reopened it (the same opener checks as below),
-    which leaves it needing session evidence like any other lane; any other lane is dropped when it handed back before the
-    branch's first pull request opened and neither a ``vet not-ready`` nor a fix-order relay record
-    addressed to it reopened it (any fix-order relay record to its session does), since a pull request on the branch before the handback would itself be the
-    first, so the lane's pull request was on another branch and nothing sends it back to this one.
-    For the lanes left, the recorded host listing (``sessions_file``) must show the lane's session
-    archived, failed or gone: a row that is none of those is live, and a listing that cannot be
-    read, or that does not cover a session it does not show, refuses
-    ``adopt-original-session-unread``.
+    ambiguous keeps it: a lane not bound to the adopted branch by its premise is dropped when it
+    handed back before the branch's first pull request opened and neither a ``vet not-ready`` nor a
+    fix-order relay record addressed to it reopened it (any fix-order relay record to its session
+    does), since a pull request on the branch before the handback would itself be the first, so the
+    lane's pull request was on another branch and nothing sends it back to this one. A lane bound
+    to the adopted branch is kept whether or not the branch is still on ``origin``: deleting a
+    branch does not stop its builder.
+    A lane left is limited when its account reads at its usage limit (``cloud_relay.account_limit``)
+    with the limit recorded after the lane started; a limited lane needs no listing while the
+    limit holds, but a supplied listing that shows its session live still refuses
+    ``adopt-original-session-live``. For the other lanes left, the recorded host listing
+    (``sessions_file``) must show the lane's session archived, failed or gone: a row that is none
+    of those is live, and a listing that cannot be read, or that does not cover a session it does
+    not show, refuses ``adopt-original-session-unread``.
     """
     if "adoptsBranch" not in stamped:
         return None
@@ -3161,7 +3161,7 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
     if not candidates:
         return None
     branch = stamped["adoptsBranch"]
-    gone = set()
+    limited = set()
     relays = None  # the relay history is local and read afresh by every pass
     if isinstance(branch, str) and branch:
         premises = {
@@ -3221,21 +3221,7 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
                     and premise["adopts"] == adopted_pr
                 )
             ):
-                if "absent" not in reads:
-                    return _NEEDS_BRANCH_ABSENCE
-                # axis: a lane bound to the adopted branch by its premise needs no listing only when origin shows that branch gone; a branch still there, or a read that failed, keeps the lane, and a gone-branch lane is still refused when a supplied listing shows its session live, since the deleted ref does not stop its builder — see bite-proof record i2254_original_session
-                # axis: a gone-branch lane that a fix order has reopened (a vet not-ready after its terminal record, or a fix-order relay record addressed to its session or with an ambiguous session, or a relay read that is not ok) gets no exemption and needs session evidence like any other lane — see bite-proof record i2254_original_session
-                if reads["absent"] is True:
-                    exempt = True
-                    if cloud_recover._latest_outcome(info) == "handback":
-                        handback = handback_ts(info)
-                        exempt = (
-                            cloud_recover._is_number(handback)
-                            and not vet_reopened(info, handback)
-                            and not relay_reopened(info)
-                        )
-                    if exempt:
-                        gone.add(launch_id)
+                # axis: a lane bound to the adopted branch by its premise is kept whether or not its branch is still on origin, since deleting a branch does not stop its builder; it needs a session read or a limit reading like any other lane — see bite-proof record i2272_launcher
                 kept[launch_id] = info
                 continue
             if cloud_recover._latest_outcome(info) != "handback":
@@ -3263,8 +3249,28 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         candidates = kept
     if not candidates:
         return None
-    # a gone-branch lane is refused only on affirmative live evidence; it never makes a listing missing or incomplete refuse
-    lane_ids = sorted(launch_id for launch_id in candidates if launch_id not in gone)
+    readings = {}  # one account_limit read per distinct configDir in this pass
+    for launch_id, info in candidates.items():
+        cfg = info.get("configDir")
+        if not isinstance(cfg, str) or not cfg:
+            continue
+        if cfg not in readings:
+            import cloud_relay
+
+            readings[cfg] = cloud_relay.account_limit(repo_root, cfg, env=env, now=_now_fn())
+        reading = readings[cfg]
+        started_ts = info.get("startedTs")
+        # axis: a lane is limited only while its account reads limited, with the limit recorded after the lane started; a limit that has passed, one recorded before the lane started, a lane with no started time and an account with no reading leave the lane needing a listing — see bite-proof record i2272_launcher
+        if (
+            isinstance(reading, dict) and reading.get("ok") is True
+            and reading.get("limited") is True
+            and cloud_recover._is_number(started_ts)
+            and cloud_recover._is_number(reading.get("recordedAt"))
+            and started_ts < reading["recordedAt"]
+        ):
+            limited.add(launch_id)
+    # a limited lane is refused only on affirmative live evidence; it never makes a listing missing or incomplete refuse
+    lane_ids = sorted(launch_id for launch_id in candidates if launch_id not in limited)
     # axis: an adoption over a lane that started a session with no listing given refuses unread — see bite-proof record i2119_original_session
     if sessions_file is None:
         return unread("listing-not-given", launchIds=lane_ids) if lane_ids else None
@@ -3301,7 +3307,7 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
                 created_by_env.get(lane_env)
                 if created_by_env is not None and isinstance(lane_env, str) else None
             )
-            if launch_id in gone:
+            if launch_id in limited:
                 continue
             # axis: absence needs a row of the lane's own cloud environment created at or after the lane started plus the clock-skew allowance, and a lane with no started time or no environment proves nothing, and a lane whose session id was never confirmed is matched by title only, so absence never proves it gone — see bite-proof record i2119_original_session
             if (
@@ -4075,6 +4081,14 @@ def launch_build(
                 repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
             )
             return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
+        # axis: the original-session check ran before the remote reads, the reservation and local setup, so a usage limit it read can have expired; it is read again right before the cloud command, and a refusal terminalizes the unstarted lane — see bite-proof record i2272_launcher
+        recheck = _original_session_refusal(repo_root, issue, stamped, cloud_sessions_file, env)
+        if recheck is not None:
+            recheck_reason, recheck_detail = recheck
+            term = _terminalize(
+                repo_root, launch_id, False, recheck_reason, stage="original-session", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, recheck_reason), **recheck_detail)
         cloud_result = _run_cloud_spawn(
             repo_root,
             launch_id,
@@ -4128,6 +4142,15 @@ def launch_build(
             )
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
             return _post_reserve_fail(reason)
+
+        # axis: the original-session check ran before the reservation and local setup, so a usage limit it read can have expired; it is read again right before every spawn attempt, and a refusal terminalizes the lane — see bite-proof record i2272_launcher
+        recheck = _original_session_refusal(repo_root, issue, stamped, cloud_sessions_file, env)
+        if recheck is not None:
+            recheck_reason, recheck_detail = recheck
+            term = _terminalize(
+                repo_root, launch_id, False, recheck_reason, stage="original-session", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, recheck_reason), **recheck_detail)
 
         spawn_result = _spawn_attempt(
             repo_root,
