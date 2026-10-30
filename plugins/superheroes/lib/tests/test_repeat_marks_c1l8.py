@@ -173,129 +173,9 @@ def _record_payload(findings, sha="a" * 40):
     return {"ok": True, "findings": findings, "finalCommit": {"sha": sha}}
 
 
-# ---- the decision table (one test per row) ----------------------------------------------------
-
-def test_t1_a_fixed_finding_raised_again_and_found_wrong_is_kept_and_the_fix_holds():
-    assert RM.decide("fixed", "wrong", False) == (True, True)
-    assert RM.decide("fixed", "wrong", True) == (True, True)
-
-
-@pytest.mark.parametrize("grade", ["confirmed", "plausible", None])
-def test_t2_a_fixed_finding_raised_again_with_any_other_grade_is_a_new_finding(grade):
-    assert RM.decide("fixed", grade, False) == (False, False)
-    assert RM.decide("fixed", grade, True) == (False, False)
-
-
-def test_t3_a_shown_wrong_finding_after_a_code_change_and_found_wrong_again_is_kept():
-    assert RM.decide("shown-wrong", "wrong", True) == (True, None)
-
-
-@pytest.mark.parametrize("grade", ["confirmed", "plausible", None])
-def test_t4_a_shown_wrong_finding_after_a_code_change_with_any_other_grade_is_new(grade):
-    assert RM.decide("shown-wrong", grade, True) == (False, None)
-
-
-@pytest.mark.parametrize("grade", ["wrong", "confirmed", "plausible", None])
-def test_t5_a_shown_wrong_finding_on_unchanged_code_is_kept_whatever_the_grade(grade):
-    assert RM.decide("shown-wrong", grade, False) == (True, None)
-
-
-def test_t5_the_change_is_read_only_for_a_shown_wrong_outcome_and_unknown_counts_as_changed(monkeypatch):
-    reads = []
-
-    def changed():
-        reads.append(1)
-        return True
-
-    for outcome in ("fixed", "craft", "left-for-owner", "ruling"):
-        RM.decide(outcome, "confirmed", changed)
-    assert reads == []
-    assert RM.decide("shown-wrong", "confirmed", changed) == (False, None)
-    assert reads == [1]
-
-
-@pytest.mark.parametrize("outcome", ["craft", "left-for-owner", "ruling"])
-@pytest.mark.parametrize("grade", ["wrong", "confirmed", None])
-def test_t6_a_settled_outcome_is_kept_whatever_the_grade_and_the_code(outcome, grade):
-    assert RM.decide(outcome, grade, True) == (True, None)
-    assert RM.decide(outcome, grade, False) == (True, None)
-
-
-def test_t6_an_out_of_scope_ledger_row_counts_as_a_ruling_and_a_refuted_one_as_shown_wrong():
-    assert RM.outcome_of("out-of-scope") == "ruling"
-    assert RM.outcome_of("refuted") == "shown-wrong"
-    assert RM.outcome_of("fixed") == "fixed" and RM.outcome_of("left-for-owner") == "left-for-owner"
-    assert RM.outcome_of("shown-wrong") is None and RM.outcome_of(None) is None
-
-
-@pytest.mark.parametrize("grade", ["wrong", "confirmed", None])
-def test_t7_an_undecided_earlier_finding_is_a_new_finding(grade):
-    assert RM.decide(None, grade, False) == (False, None)
-    assert RM.decide("open", grade, True) == (False, None)
-
-
-# ---- the code-changed read (edge 4) -----------------------------------------------------------
-
-def test_t8_code_changed_reads_the_tree_and_a_head_or_git_failure_counts_as_changed(repo):
-    assert RM.code_changed(repo.root, repo.first, repo.changed) is True
-    assert RM.code_changed(repo.root, repo.changed, repo.same) is False
-    assert RM.code_changed(repo.root, None, repo.same) is True
-    assert RM.code_changed(repo.root, repo.changed, "") is True
-    assert RM.code_changed(repo.root, "-oops", repo.same) is True
-    assert RM.code_changed(repo.root, "0" * 40, repo.same) is True
-    assert RM.code_changed(repo.root + "-absent", repo.changed, repo.same) is True
-    assert RM.code_changed(None, repo.changed, repo.same) is True
-
-
-# ---- the earlier-findings file (edge 1, edge 2) -----------------------------------------------
-
-def test_t9_a_record_reads_into_pool_entries_with_its_judged_head():
-    keep = _record_finding(_raw("kept", id="R-1"), "craft")
-    entries, reason = RM.read_earlier_findings(_record_payload([keep], sha="b" * 40))
-    assert reason is None
-    assert [(e["source"], e["key"], e["id"], e["outcome"], e["head"]) for e in entries] == [
-        ("record", keep["findingKey"], "R-1", "craft", "b" * 40)]
-
-
-def test_t9_only_a_missing_record_is_silent_every_other_refusal_names_its_reason():
-    assert RM.read_earlier_findings({"ok": False, "reason": "review-record-missing"}) == ([], None)
-    assert RM.read_earlier_findings({"ok": False, "reason": "review-record-unreadable"}) == (
-        [], "review-record-unreadable")
-    assert RM.read_earlier_findings({"ok": False}) == ([], "refused")
-    for malformed in ([], "x", None, {"findings": []}, {"ok": True, "findings": "x"}):
-        assert RM.read_earlier_findings(malformed) == ([], "malformed"), malformed
-
-
-def test_t9_a_record_finding_without_a_key_or_file_and_title_or_an_outcome_is_never_pooled():
-    rows = [
-        _record_finding(_raw("good"), "ruling"),
-        {"outcome": "craft", "title": "titled only"},                          # no stored key, no file
-        {"outcome": "craft", "file": "f.py"},                                   # no stored key, no title
-        {"findingKey": "", "outcome": "craft"},                                 # empty key, nothing to mint
-        _raw("undecided", line=3),                                               # no outcome: still open
-        dict(_raw("odd outcome", line=4), findingKey="rr1:x", outcome="open"),  # not an outcome
-        "not a dict", None, 7,
-    ]
-    entries, reason = RM.read_earlier_findings(_record_payload(rows))
-    assert reason is None
-    assert [e["title"] for e in entries] == ["good"]
-    minted = {"outcome": "craft", "file": "f.py", "title": "no stored key", "line": 9}
-    entries, _ = RM.read_earlier_findings(_record_payload([minted]))
-    assert entries[0]["key"] == RM.opaque_key(minted)
-
-
-def test_t9_the_file_reading_names_a_missing_unreadable_or_not_json_file(tmp_path):
-    missing = str(tmp_path / "absent.json")
-    assert RM.read_file(missing) == (None, [], "file-missing")
-    assert RM.read_file(str(tmp_path)) == (None, [], "unreadable")
-    bad = tmp_path / "bad.json"
-    bad.write_text("{not json", encoding="utf-8")
-    assert RM.read_file(str(bad)) == (None, [], "not-json")
-    good = tmp_path / "good.json"
-    good.write_text(json.dumps(_record_payload([_record_finding(_raw("a"), "craft")])), encoding="utf-8")
-    payload, entries, reason = RM.read_file(str(good))
-    assert payload["ok"] is True and len(entries) == 1 and reason is None
-
+# ---- the pool ---------------------------------------------------------------------------------
+# The module's own readings (decision table, code_changed, the file, exact_match) are tested in
+# test_repeat_marks_module_c1l8a.py; the tests here need the driver.
 
 def test_t10_the_pool_lists_session_rows_then_record_findings_with_refs_from_e1():
     state = _state()
@@ -312,17 +192,6 @@ def test_t10_the_pool_lists_session_rows_then_record_findings_with_refs_from_e1(
     assert [e["title"] for e in RM.build_pool(ledger, 1, [])] == []
     held = RM.record_entry(_record_finding(_raw("session one", line=1), "fixed"), "c" * 40)
     assert [e["title"] for e in RM.build_pool(ledger, 2, [held])] == ["session one", "session two"]
-
-
-def test_t10_exact_match_reads_a_session_raw_key_and_a_record_stored_key():
-    session = RM.session_entry(
-        dict(_compile([_raw("s")])[0], disposition="craft", dispositionRound=1, raisedSeq=1, dispositionSeq=2), 2)
-    stored = RM.record_entry(_record_finding(_raw("r", line=2), "ruling"), None)
-    pool = RM.build_pool([], 2, [stored])
-    pool = [dict(session, ref="e0")] + pool
-    assert RM.exact_match(_raw("s"), pool)["key"] == _key(_raw("s"))
-    assert RM.exact_match(_raw("r", line=2), pool)["source"] == "record"
-    assert RM.exact_match(_raw("other"), pool) is None
 
 
 # ---- the snapshot (I4) ------------------------------------------------------------------------

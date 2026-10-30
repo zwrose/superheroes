@@ -33,11 +33,20 @@ def _text(value):
     return value if isinstance(value, str) and value.strip() else None
 
 
-def outcome_of(disposition):
-    """The outcome an earlier ledger disposition stands for, or None when it is no decision."""
+def outcome_of(disposition, row=None):
+    """The outcome an earlier ledger disposition stands for, or None when it is no decision.
+
+    A ``refuted`` row reads as the record writer reads it: shown-wrong with the verifier's `wrong` grade,
+    left-for-owner when its refutedReason starts ``author-justified``, else undecided (also with no ``row``)."""
     if disposition not in session_contract.DISPOSITIONS:
         return None
-    return {"refuted": SHOWN_WRONG, "out-of-scope": "ruling"}.get(disposition, disposition)
+    if disposition == "refuted":
+        row = row if isinstance(row, dict) else {}
+        grade, why = row.get("grade"), row.get("refutedReason")
+        if isinstance(grade, dict) and grade.get("verdict") == "wrong":
+            return SHOWN_WRONG
+        return "left-for-owner" if isinstance(why, str) and why.startswith("author-justified") else None
+    return "ruling" if disposition == "out-of-scope" else disposition
 
 
 def disposition_of(outcome):
@@ -52,7 +61,7 @@ def decide(outcome, grade_verdict, changed):
     or None; ``changed`` is whether the code changed since the earlier judgment (a bool, or a callable
     read only when the table needs it). ``fixHolds`` is only meaningful for a ``fixed`` earlier outcome."""
     if outcome == FIXED:
-        # axis: a refuted repeat of a fixed finding keeps `fixed`, the fix holds — see bite-proof record c1l8_wo_a_repeat_marks
+        # axis: a refuted repeat of a fixed finding keeps `fixed`, the fix holds — see bite-proof record c1l8a_repeat_marks_module
         if grade_verdict == "wrong":
             return True, True
         return False, False
@@ -98,7 +107,7 @@ def session_entry(row, round_no):
     """The pool entry for a ledger row decided (current disposition) before ``round_no``, else None."""
     if not isinstance(row, dict):
         return None
-    outcome = outcome_of(row.get("disposition"))
+    outcome = outcome_of(row.get("disposition"), row)
     key = session_contract.finding_identity_key(row)
     decided = row.get("dispositionRound")
     disp_seq = row.get(session_contract.DISPOSITION_SEQ_FIELD)
@@ -113,15 +122,18 @@ def session_entry(row, round_no):
 
 
 def record_entry(finding, head):
-    """The pool entry for one finding of the earlier review record, else None (undecided or malformed)."""
-    if not isinstance(finding, dict) or finding.get("outcome") not in review_findings_schema.OUTCOME_SET:
+    """The pool entry for one finding of the earlier review record, else None (malformed); an undecided
+    finding (no outcome) is pooled with outcome None, which ``decide`` reads as new."""
+    if not isinstance(finding, dict):
         return None
+    outcome = finding.get("outcome")
+    outcome = outcome if outcome in review_findings_schema.OUTCOME_SET else None
     key = finding.get(session_contract.FINDING_KEY_FIELD)
     if not _text(key):
         if not (_text(finding.get("file")) and _text(finding.get("title"))):
             return None
         key = opaque_key(finding)
-    return _entry("record", key, finding, finding["outcome"], head=head) if _text(key) else None
+    return _entry("record", key, finding, outcome, head=head) if _text(key) else None
 
 
 def read_earlier_findings(payload):
@@ -179,7 +191,7 @@ def order_list(pool):
 
 def exact_match(finding, pool):
     """The pool entry whose identity key is the finding's own, else None."""
-    # axis: exact identity is the floor of repeat marking, whatever the judge named — see bite-proof record c1l8_wo_a_repeat_marks
+    # axis: exact identity is the floor of repeat marking, whatever the judge named — see bite-proof record c1l8a_repeat_marks_module
     raw = session_contract.finding_identity_key(finding)
     stored = None
     for entry in pool or ():
@@ -228,14 +240,14 @@ def grouping_fault(survivors, refuted, grouping, pool):
     if not isinstance(grouping, list):
         return None
     refs = {e["ref"] for e in pool or ()}
-    # axis: refuted ids are set aside before survivor coverage is checked — see bite-proof record c1l8_wo_a_repeat_marks
+    # axis: refuted ids are set aside before survivor coverage is checked — see bite-proof record c1l8a_repeat_marks_module
     refuted_ids = {r["id"] for r in refuted or () if isinstance(r, dict) and isinstance(r.get("id"), str)}
     seen_refuted, stripped = set(), []
     for index, group in enumerate(grouping):
         if not isinstance(group, dict):
             continue
         ref = group.get("repeatOf")
-        # axis: a repeat name that is not an earlier-finding ref of the order is refused — see bite-proof record c1l8_wo_a_repeat_marks
+        # axis: a repeat name that is not an earlier-finding ref of the order is refused — see bite-proof record c1l8a_repeat_marks_module
         if ref is not None and (not isinstance(ref, str) or ref not in refs):
             return {"kind": "repeat_ref", "member_id": ref, "index": index}
         members = []
