@@ -136,10 +136,13 @@ def test_handback_reference_names_the_pr_mode_handback_check():
     assert "`stack-not-caught-up`" in text
 
 
-def test_transition_unreleased_has_the_catch_up_note_and_no_retired_token():
-    # axis: the Unreleased section carries the new heading and never the retired lower-layer-moved token
+def test_transition_has_the_catch_up_note_and_no_retired_token():
+    # axis: TRANSITION.md carries the catch-up subsection (wherever release day moved it) and never the retired lower-layer-moved token
     text = _text(_TRANSITION)
-    start = text.index("## Unreleased")
-    unreleased = text[start:re.search(r"^## (?!Unreleased)", text[start:], re.M).start() + start]
-    assert "### Review: a stacked layer catches up at handback" in unreleased
-    assert "stack-lower-moved" not in unreleased
+    heading = "### Review: a stacked layer catches up at handback"
+    start = text.index(heading)
+    following = re.search(r"^#{2,3} ", text[start + len(heading):], re.M)
+    end = start + len(heading) + following.start() if following else len(text)
+    note = text[start:end]
+    assert "`stack-not-caught-up`" in note
+    assert "stack-lower-moved" not in note
