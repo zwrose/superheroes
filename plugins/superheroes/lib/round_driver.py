@@ -1384,6 +1384,9 @@ def new_state(config=None):
         # challenged-coverage / recurrence breaker reads, plus the accumulated coverage decisions.
         "_records": [],
         "_coverage": [],
+        # The build session applies the fixes of a state minted here; a continued state lacks it and
+        # is attributed by `_attribute_fix_maker` before its next command.
+        FIX_MAKER_MARK: True,
     }
     _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
@@ -7340,6 +7343,9 @@ RETIRED_STALL_FIELDS = ("_stallChoices", "_stallTargets")
 # classified as a retired owner gate.
 RETIRED_FIXER_PHASE = "dispatch-fixer"
 
+# The state key that says the build session is the fix maker (set at mint, or by `_attribute_fix_maker`).
+FIX_MAKER_MARK = "fixMakerIsBuildSession"
+
 
 def _migrate_fixer_step(session_dir, state):
     """Move a saved, unfinished state whose step, or pending action or phase, is the retired fixer
@@ -7364,24 +7370,35 @@ def _migrate_fixer_step(session_dir, state):
     state["step"] = P_APPLY_FIXES
     state["_fixStepHead"] = head if _nonempty_str(head) else _fix_step_head(state.get("config"))
     state.pop("_escalatedRung", None)
-    # the build session applies the fixes from here on, so it is the fix maker: an earlier external
-    # fixer's vendor stays in the rounds that recorded it (`rounds[n]["fixerVendor"]`), not in the
-    # config. Its commits since the preserved start head still count for the step, so its family
-    # stays a maker: the audit of them is never seated on that family.
-    config = state.get("config")
-    vendor = _build_session_vendor(seat_map_receipts.effective_seat_map(state))
-    if isinstance(config, dict) and vendor is not None:
-        former = config.get("fixerVendor")
-        former_family = (model_registry.family_for("code-fixer", former)
-                         if _nonempty_str(former) and former != vendor else None)
-        if former_family is not None:
-            held = state.get("formerFixerFamilies")
-            held = list(held) if isinstance(held, list) else []
-            if former_family not in held:
-                held.append(former_family)
-            state["formerFixerFamilies"] = held
-        config["fixerVendor"] = vendor
     return True, attempt
+
+
+def _attribute_fix_maker(state):
+    """Make the build session the fix maker of a continued, unfinished state that does not yet say so
+    (True when it changed). Whatever phase it stands at, the build session applies the fixes from here
+    on, so `config.fixerVendor` becomes its vendor, or unknown (None) when its seat map names no
+    family: the audit then degrades, never reading a stale external fixer. An earlier external
+    fixer's vendor stays in the rounds that recorded it (`rounds[n]["fixerVendor"]`), not in the
+    config. Its commits stay in the step, so its family stays a maker: the audit of them is never
+    seated on that family."""
+    if not isinstance(state, dict) or state.get("terminal") or state.get(FIX_MAKER_MARK) is True:
+        return False
+    config = state.get("config")
+    if not isinstance(config, dict):
+        return False
+    vendor = _build_session_vendor(seat_map_receipts.effective_seat_map(state))
+    former = config.get("fixerVendor")
+    former_family = (model_registry.family_for("code-fixer", former)
+                     if _nonempty_str(former) and former != vendor else None)
+    if former_family is not None:
+        held = state.get("formerFixerFamilies")
+        held = list(held) if isinstance(held, list) else []
+        if former_family not in held:
+            held.append(former_family)
+        state["formerFixerFamilies"] = held
+    config["fixerVendor"] = vendor
+    state[FIX_MAKER_MARK] = True
+    return True
 
 
 def _step_is_retired(state):
@@ -10507,11 +10524,13 @@ def _migrate_saved_fixer_step(session_dir, cmd):
     if not ok or not isinstance(state, dict):
         return
     moved, attempt = _migrate_fixer_step(session_dir, state)
-    if not moved:
+    attributed = _attribute_fix_maker(state)
+    if not moved and not attributed:
         return
     save_state(session_dir, state)
-    _journal_append(session_dir, {"cmd": cmd, "phase": RETIRED_FIXER_PHASE, "round": state["round"],
-                                  "attempt": attempt, "outcome": "fix-step-migrated"})
+    if moved:
+        _journal_append(session_dir, {"cmd": cmd, "phase": RETIRED_FIXER_PHASE, "round": state["round"],
+                                      "attempt": attempt, "outcome": "fix-step-migrated"})
 
 
 def _hand_back_retired_gate(session_dir, cmd):

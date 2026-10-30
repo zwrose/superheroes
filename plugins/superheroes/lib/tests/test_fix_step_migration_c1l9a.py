@@ -139,6 +139,59 @@ def test_e12_the_replaced_external_fixers_family_stays_a_maker_so_its_commits_ar
     assert (vendor, independence) == (None, "unseatable")
 
 
+def _continued_at_apply_fixes(tmp_path, seat_map):
+    """The fixer-step fixture, moved on to `apply-fixes` and made a continued session that names an
+    external fixer: no fix-maker mark, `fixerVendor` claude, the given seat map."""
+    session_dir, _before, _anchor = _migrated_session(tmp_path)
+    RD.cmd_next(session_dir)
+    state = _state(session_dir)
+    assert state["step"] == RD.P_APPLY_FIXES
+    state.pop(RD.FIX_MAKER_MARK, None)
+    state.pop("formerFixerFamilies", None)
+    state["config"]["fixerVendor"] = "claude"
+    state["config"]["seatMap"] = seat_map
+    state["seatMapReceipts"] = []
+    state.pop("seatMap", None)
+    RD.save_state(session_dir, state)
+    return session_dir
+
+
+def test_e12_a_continued_session_past_the_fixer_step_also_takes_the_build_session_as_fix_maker(tmp_path):
+    session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "openai"})
+    former_family = RD.model_registry.family_for("code-fixer", "claude")
+    host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
+    assert former_family is not None and host_vendor not in (None, "claude")
+    RD.cmd_next(session_dir)
+    after = _state(session_dir)
+    assert after["config"]["fixerVendor"] == host_vendor and after[RD.FIX_MAKER_MARK] is True
+    assert after["formerFixerFamilies"] == [former_family]
+    # the attribution is once-only: a later command changes nothing
+    after["config"]["fixerVendor"] = "claude"
+    RD.save_state(session_dir, after)
+    RD.cmd_next(session_dir)
+    assert _state(session_dir)["config"]["fixerVendor"] == "claude"
+
+
+def test_e12_a_continued_session_whose_host_family_maps_to_no_vendor_leaves_the_fixer_unknown(tmp_path):
+    session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "no-such-family"})
+    assert RD._build_session_vendor({"hostFamily": "no-such-family"}) is None
+    RD.cmd_next(session_dir)
+    after = _state(session_dir)
+    # a stale external vendor is never kept as the maker: the audit degrades instead
+    assert after["config"]["fixerVendor"] is None and after[RD.FIX_MAKER_MARK] is True
+    assert after["formerFixerFamilies"] == [RD.model_registry.family_for("code-fixer", "claude")]
+
+
+def test_e12_a_new_session_keeps_a_fixer_vendor_it_was_given(tmp_path):
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    out = RD.cmd_next(session_dir, TRD._cfg(fixerVendor="claude", seatMap={"hostFamily": "openai"}))
+    assert out["ok"] is True, out
+    state = _state(session_dir)
+    assert state["config"]["fixerVendor"] == "claude" and state[RD.FIX_MAKER_MARK] is True
+    assert "formerFixerFamilies" not in state
+
+
 def test_e12_a_second_command_migrates_nothing_again(tmp_path):
     session_dir, _before, _anchor = _migrated_session(tmp_path)
     first = RD.cmd_next(session_dir)
