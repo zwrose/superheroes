@@ -1036,6 +1036,7 @@ def test_order_placeholder_registry_partition_is_complete():
         "config": {"repoRoot": "/tmp"},
         "reviewedDiff": "diff --git a/f b/f\n",
         "headDiff": "diff --git a/f b/f\n",
+        "_fixDeltaDiff": "diff --git a/f b/f\n",
         "_fixBatch": [],
     }
     payloads = {

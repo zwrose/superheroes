@@ -156,3 +156,13 @@ def test_wrong_principle_probe_uses_shell_runner():
     assert "RCD-wrong" in observed["coverageDecisionIds"]
 
 
+def test_skipped_dimension_regression_runs_no_confirmation_round():
+    # re-pinned: this fixture scripts its security Critical only into confirmation rounds, and no later
+    # round runs a panel now, so no confirmation round runs and the Critical is never raised; the
+    # review ends on the round's audit and scoped finder instead of parking at a confirmation cap.
+    observed = run_fixture("skipped_dimension_regression.json")
+    assert confirmation_rounds(observed) == [], confirmation_rounds(observed)
+    assert not any(c["roundKind"] == "confirmation" for c in observed["seen"])
+    assert observed["terminal"] == "clean"
+
+

@@ -234,7 +234,10 @@ def test_t1_a_critical_out_of_scope_finding_is_offered_to_a_fixer_once(captured_
                 for t in (targets or [])]
 
     seams = TRD._seams(reviewer=reviewer, verifier=verifier, fix_step=fix_step, auditor=auditor)
-    _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
+    # the fix changed a file, so the round's scoped finder runs; the proven non-panel cells let it seat
+    # on the vendor outside the fixer's family instead of parking the review
+    _result, state = TRD._run_loop_capturing_state(
+        seams, TRD._cfg_cert(seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
     assert state["terminal"]
     assert offers == [(1, [key])]  # offered once; the next round's batch left it out
     assert state["outOfScopeFixerRounds"][key] == {"episode": 1, "rounds": [1]}
@@ -374,7 +377,10 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_
         return out
 
     seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor)
-    _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
+    # the fix changed a file, so the round's scoped finder runs; the proven non-panel cells let it seat
+    # on the vendor outside the fixer's family instead of parking the review
+    _result, state = TRD._run_loop_capturing_state(
+        seams, TRD._cfg_cert(seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
     return key, state, offers, seen_targets, history
 
 

@@ -404,7 +404,10 @@ def _same_round_loop(captured_state, claims_by_round, extra=()):
         return out
 
     seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor)
-    _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
+    # the fix changed a file, so the round's scoped finder runs; the proven non-panel cells let it seat
+    # on the vendor outside the fixer's family instead of parking the review
+    _result, state = TRD._run_loop_capturing_state(
+        seams, TRD._cfg_cert(seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
     return batch_key, state, offers, seen
 
 

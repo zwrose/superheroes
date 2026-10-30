@@ -7,9 +7,9 @@ mandated path is the easiest path. These pin BOTH layers over the shared core:
     hash mismatch rejected, exact-duplicate idempotent), v1-state refusal, per-call journalling.
   - Layer 1 (run_loop): the ported run-shape driven end-to-end with scripted seams.
 
-Ported invariants from the retired test_code_loop_plan.py (round-1 full-deep baseline; the #174
-confirmation economics incl. cap-parks-on-Critical; fail-toward-run-all on an unknown surface;
-exits only off a qualifying round — now also expressible as an audited-chain certification), plus
+Ported invariants from the retired test_code_loop_plan.py (round-1 full-deep baseline; rounds 2 and
+later run no panel; a fix surface the driver cannot work out hands the PR back; exits only off a
+qualifying round — now also expressible as an audited-chain certification), plus
 the new #507 mechanics: audit-keyed stall + self-recovery + hand-back, delta rounds, degraded
 independence, receipt-missing seats carried unverified, the author-justification POST-filter, and
 the driver receipt + its validator.

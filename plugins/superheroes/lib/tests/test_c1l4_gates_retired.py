@@ -91,6 +91,12 @@ def _failing_fix_seams(findings):
                                       for t in (targets or [])])
 
 
+def _cfg_scoped_finder_seated(**over):
+    """A fix changes a file, so the round's scoped finder runs; the proven non-panel cells let it seat on
+    the vendor outside the fixer's family, so the loop reaches the end the test guards, not a park."""
+    return TRD._cfg_cert(seatMap=TRD._nonpanel_cell_proof(["claude", "codex"]), **over)
+
+
 def _kinds(state):
     return [d["kind"] for d in state["decisions"]]
 
@@ -114,7 +120,7 @@ def test_t1_a_loop_through_a_tradeoff_blocker_and_an_audit_stall_never_leaves_th
     # still emits a phase the constants no longer list — see bite-proof record c1l4_wo_a
     seen, _orders = _spy_actions(monkeypatch)
     _result, state = TRD._run_loop_capturing_state(
-        _failing_fix_seams([_BUG, _CHOICE]), TRD._cfg_cert(maxRounds=20))
+        _failing_fix_seams([_BUG, _CHOICE]), _cfg_scoped_finder_seated(maxRounds=20))
     assert state["terminal"] == "handed-back"
     kinds = _kinds(state)
     assert "owner-choice-held" in kinds and "self-recovery" in kinds, kinds  # both paths were walked
@@ -129,7 +135,7 @@ def test_t2_a_fix_that_keeps_failing_gets_one_recovery_then_is_handed_back(monke
     # axis: a stall with selfRecovered already true ends handed-back, never held or stalled
     seen, fixer_orders = _spy_actions(monkeypatch)
     _result, state = TRD._run_loop_capturing_state(
-        _failing_fix_seams([_BUG]), TRD._cfg_cert(maxRounds=20))
+        _failing_fix_seams([_BUG]), _cfg_scoped_finder_seated(maxRounds=20))
     assert state["terminal"] == "handed-back"
     assert state["terminal"] not in ("held", "stalled")
     assert state["decisions"][-1]["kind"] == "fix-keeps-failing"
@@ -171,7 +177,8 @@ def test_t4_a_mixed_batch_fixes_the_mechanical_blocker_then_hands_the_owner_choi
         return {"fixes": [], "headDiff": TRD.HEAD, "changedSubjects": ["Code"]}
 
     _result, state = TRD._run_loop_capturing_state(
-        TRD._seams(reviewer=_reviewer([_BUG, _CHOICE]), fix_step=fix_step), TRD._cfg_cert())
+        TRD._seams(reviewer=_reviewer([_BUG, _CHOICE]), fix_step=fix_step),
+        _cfg_scoped_finder_seated())
     assert state["terminal"] != "converged"
     assert state["terminal"] == "handed-back"
     assert state["decisions"][-1]["kind"] == "owner-choice-open"
@@ -331,7 +338,7 @@ def _stopped_at_cap(tmp_path, terminal, decisions):
 def test_t6_the_hand_backs_of_t2_and_t3_did_not_stop_at_the_cap(tmp_path):
     # axis: stoppedAtCap reads the hand-back's own cause — a "cap" terminal state alone is not a stop at the cap
     _r, stalled = TRD._run_loop_capturing_state(
-        _failing_fix_seams([_BUG]), TRD._cfg_cert(maxRounds=20))
+        _failing_fix_seams([_BUG]), _cfg_scoped_finder_seated(maxRounds=20))
     _r, choice = TRD._run_loop_capturing_state(
         TRD._seams(reviewer=_reviewer([_CHOICE])), TRD._cfg_cert())
     assert stalled["decisions"][-1]["kind"] == "fix-keeps-failing"
