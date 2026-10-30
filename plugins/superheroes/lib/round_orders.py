@@ -66,6 +66,7 @@ ORDER_PHASES = (
     round_phases.P_VERIFIERS,
     round_phases.P_SYNTHESIS,
     round_phases.P_GAPSWEEP,
+    round_phases.P_SECOND_TEST,
     round_phases.P_AUDITS,
     round_phases.P_FIXER,
     round_phases.P_SCOPED,
@@ -443,6 +444,24 @@ def _validate_common_context(context: object) -> str | None:
     return None
 
 
+def _test_role_derived_placeholders(ph: dict) -> dict[str, str]:
+    """``ph`` with the test role's brief line and break-it grammar block derived from the order inputs
+    ``ROLE_BRIEF_PATH`` and ``BREAK_IT_GRAMMAR_TEXT`` — one home for the panel's test-role order and the
+    second-test order."""
+    ph = dict(ph)
+    role_brief = ph.get("ROLE_BRIEF_PATH", "").strip()
+    ph["ROLE_BRIEF_LINE"] = (
+        "- Your role brief (read it first; it binds over the generic assignment above): %s"
+        % role_brief if role_brief else ""
+    )
+    grammar_text = ph.get("BREAK_IT_GRAMMAR_TEXT", "").strip()
+    ph["BREAK_IT_GRAMMAR_BLOCK"] = (
+        "- The break-it block (a break-it finding's suggestion is exactly this; the loop parses it):\n\n"
+        + grammar_text if grammar_text else ""
+    )
+    return ph
+
+
 def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
@@ -481,21 +500,11 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph["FOCUS_CONTEXT_LINE"] = (
         "- Focus: %s" % focus if focus else ""
     )
-    role_brief = ph.get("ROLE_BRIEF_PATH", "").strip()
-    ph["ROLE_BRIEF_LINE"] = (
-        "- Your role brief (read it first; it binds over the generic assignment above): %s"
-        % role_brief if role_brief else ""
-    )
     risk_text = ph.get("RISK_AREAS_TEXT", "").strip()
     ph["RISK_AREAS_LINE"] = (
         "- Risk areas this change touches: %s" % risk_text if risk_text else ""
     )
-    grammar_text = ph.get("BREAK_IT_GRAMMAR_TEXT", "").strip()
-    ph["BREAK_IT_GRAMMAR_BLOCK"] = (
-        "- The break-it block (a break-it finding's suggestion is exactly this; the loop parses it):\n\n"
-        + grammar_text if grammar_text else ""
-    )
-    return ph
+    return _test_role_derived_placeholders(ph)
 
 
 # The fixer reports no diff (#2109): the driver derives the post-fix diff from git against the
@@ -570,7 +579,7 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             "Write your grouping payload to %s.\n"
             "every survivor id appears exactly once across all groups." % landing
         )
-    elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+    elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Deliver per the base rubric's panel output-format section. Write your findings "
             "payload to %s — write an empty findings list rather than skipping the file when "
@@ -588,8 +597,10 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     elif phase == round_phases.P_FIXER:
         ph = _fixer_derived_placeholders(context)
     elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
-                   round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+                   round_phases.P_GAPSWEEP, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
         ph = _channel_derived_placeholders(phase, context)
+        if phase == round_phases.P_SECOND_TEST:
+            ph = _test_role_derived_placeholders(ph)
     return ph
 
 

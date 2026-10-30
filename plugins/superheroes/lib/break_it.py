@@ -1620,7 +1620,9 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, 
             record = _not_run(head, block, "path-mismatch")
         else:
             record = _safe_run(runner, repo_root, head, block, interpreter, scratch)
-        runs.append(dict(record, title=copy.get("title"), file=copy.get("file"), line=copy.get("line")))
+        # axis: the round-level run entry names its kind from per_area, not from carried_block's kind (None for a malformed per-area block), so the kept-check can tell a dropped attached test from a dropped per-area one
+        runs.append(dict(record, title=copy.get("title"), file=copy.get("file"), line=copy.get("line"),
+                         kind=KIND_PER_AREA if per_area else KIND_ATTACHED))
         copy[RUN_FIELD] = record
         copy[RUNS_FIELD] = [record_run(dict(record, file=copy.get("file")))]
         kept.append(copy)

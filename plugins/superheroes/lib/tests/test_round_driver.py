@@ -2881,6 +2881,8 @@ _ALL_CHANNELS = {
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "verifierProvenance": [{"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}],
     "synthesisUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude"}],
+    "secondTestUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude",
+                              "held": ["f.py::bug@L1"]}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",

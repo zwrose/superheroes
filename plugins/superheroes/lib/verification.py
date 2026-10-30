@@ -139,8 +139,23 @@ def _grade(verdict, reason_text, confirmed, unrun):
     return None
 
 
+SECOND_TEST_FIELD = "secondTest"
+_SECOND_TEST_KEPT = " (kept as a judgment call; no further test)"
+
+
+def _passed_run(finding):
+    """True when the finding's own break-it run record says the test passed (exactly `passed`)."""
+    record = finding.get(break_it.RUN_FIELD)
+    return isinstance(record, dict) and record.get("outcome") == break_it.OUTCOME_PASSED
+
+
 def apply_verdicts(findings, verdicts):
-    """Consume per-finding verification verdicts; fail-closed on ambiguity."""
+    """Consume per-finding verification verdicts; fail-closed on ambiguity.
+
+    A finding whose break-it test passed, whose verdict says (`pathReached` exactly False) the test never reached
+    the path the finding names, and that has not had its one more test (`secondTest`) is HELD: it goes to
+    `held`, to neither `findings` nor `drops`, and gets no grade, unless the verdict is an honored CONFIRMED with
+    evidence. A `secondTest` finding ignores `pathReached` and is graded like any other."""
     # Build the id→verdict map, detecting duplicate ids. A finding id carried by MORE THAN
     # ONE verdict is ambiguous — honor none of them (KEEP-ON-UNCERTAIN) so a later
     # REFUTED can't silently win and drop the finding. `seen_ids` is every id that appeared
@@ -162,7 +177,7 @@ def apply_verdicts(findings, verdicts):
         findings = []
     matched_ids = set()
     survivors, drops, downgrades = [], [], []
-    unverified, not_executed = [], []
+    unverified, not_executed, held = [], [], []
     for f in findings:
         if not isinstance(f, dict):
             continue
@@ -180,6 +195,20 @@ def apply_verdicts(findings, verdicts):
         verdict = v.get("verdict") if isinstance(v, dict) else None
         reason = v.get("reason") if isinstance(v, dict) else None
         unrun = not_executed_reason(v) if verdict == "REFUTED" else None
+        reason_text = reason.strip() if isinstance(reason, str) and reason.strip() else None
+        evidence = v.get("evidence") if isinstance(v, dict) else None
+        has_evidence = isinstance(evidence, str) and bool(evidence.strip())
+        stamped = verdict == "CONFIRMED" and has_evidence and reason_text is not None
+        second = f.get(SECOND_TEST_FIELD) is True
+        path_missed = isinstance(v, dict) and v.get("pathReached") is False
+        # axis: a passed test the verifier says missed the path is held for one more test, never graded or closed on it — see bite-proof record c1l7_wo_c_second_test
+        hold = path_missed and _passed_run(f) and not stamped
+        # axis: a finding that has had its one more test is never held again — see bite-proof record c1l7_wo_c_second_test
+        hold = hold and not second
+        if hold:
+            held.append({"id": fid, "file": f.get("file"), "title": f.get("title"),
+                         "note": reason_text or "no reason given"})
+            continue
         # axis: a REFUTED resting on a check that did not execute is kept unverified, never dropped — see bite-proof record wo_1_1981_not_executed
         if verdict == "REFUTED" and isinstance(reason, str) and reason.strip() and not unrun:
             drops.append({
@@ -198,12 +227,8 @@ def apply_verdicts(findings, verdicts):
         honored = verdict in ("CONFIRMED", "PLAUSIBLE")
         kept = dict(f)
         kept.pop("grade", None)  # only this fold grades; a grade the staged copy held is never honored
-        reason_text = reason.strip() if isinstance(reason, str) and reason.strip() else None
         # Evidence-or-silence: a CONFIRMED stamps CONFIRMED only WITH a non-empty executed
         # receipt and a reason; a receiptless or reasonless CONFIRMED is an unproven claim → PLAUSIBLE.
-        evidence = v.get("evidence") if isinstance(v, dict) else None
-        has_evidence = isinstance(evidence, str) and bool(evidence.strip())
-        stamped = verdict == "CONFIRMED" and has_evidence and reason_text is not None
         if stamped:
             kept["verdict"] = "CONFIRMED"
             kept["evidence"] = evidence
@@ -211,6 +236,8 @@ def apply_verdicts(findings, verdicts):
             kept["verdict"] = "PLAUSIBLE"
         grade = _grade(verdict, reason_text, stamped, unrun)
         if grade is not None:
+            if second and path_missed:
+                grade = dict(grade, reason=grade["reason"] + _SECOND_TEST_KEPT)
             kept["grade"] = grade
         kept["severity"] = _kept_severity(f, v, honored)
         if unrun:
@@ -252,6 +279,7 @@ def apply_verdicts(findings, verdicts):
         "unverified": unverified,
         "ambiguous": sorted(ambiguous_ids),
         "notExecuted": not_executed,
+        "held": held,
     }
 
 
