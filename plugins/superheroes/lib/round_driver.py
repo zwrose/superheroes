@@ -4419,13 +4419,15 @@ def _close_batch_over_fix_groups(state, blocking, batch):
     held = {_finding_identity_key(f) for f in blocking} - present
     held.update(k for k in state.get("ownerChoiceHeld") or [] if isinstance(k, str))
     closed = list(batch)
+    pulled = []
     for row in state.get("findings") or []:
         key = _finding_identity_key(row) if isinstance(row, dict) else None
         # axis: the batch is closed over fix groups, so a non-blocking member rides with its group — see bite-proof record c1l11c_wo1_fix_groups
         if key and key not in present and key not in held and _fix_group_id(row) in group_ids:
-            closed.append(row)
+            pulled.append(row)
             present.add(key)
-    return closed
+    # axis: a pulled sibling goes through the same owner-ruling-aware hold as a blocker, so a tradeoff sibling is never admitted unheld — see bite-proof record c1l11c_wo1_fix_groups
+    return closed + (_hold_owner_choice(state, pulled) if pulled else [])
 
 
 def _stamp_fix_groups(state, fix_groups, kept):
