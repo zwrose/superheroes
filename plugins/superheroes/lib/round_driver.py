@@ -5163,7 +5163,7 @@ def _note_sent_under_decision(state, rows):
 
 
 def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0,
-                     keep_step_start=False):
+                     keep_step_start=False, session_dir=None):
     """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
 
     It also records the head the step starts at (``_fixStepHead``) and clears the staged PR body
@@ -5178,7 +5178,7 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
     is 0; on a continuation the caller enters post-fix), ``"empty"`` when no row was offered and
     none is named by a ruling (the caller settles), ``"held"`` when a ruling emptied a step that
-    already holds commits (``keep_step_start``; the slice stays for its fold), or ``"faulted"``
+    already holds commits or a PR-body edit (``keep_step_start``; the slice stays for its fold), or ``"faulted"``
     when a disposition-ledger read fault parked the session.
     """
     cap = _fix_batch_cap(config)
@@ -5199,13 +5199,14 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if not filtered:
         # Only rows the discharge filter dropped count as excluded by discharge; rows the
         # once-per-episode rule dropped do not.
-        if keep_step_start and _step_has_new_commits(state, config):
-            # A ruling arriving mid-step cannot unwind commits the step already holds: the slice
-            # stays as it is, so the report still folds, verifies and audits them — an empty slice
-            # would converge on changes no one reviewed.
+        if keep_step_start and _step_holds_work(state, config, session_dir):
+            # A ruling arriving mid-step cannot unwind work the step already holds, a commit or an
+            # edit of the staged PR body: the slice stays as it is, so the report still folds,
+            # verifies and audits it — an empty slice would converge on changes no one reviewed.
             _decision(state, "fix-batch-held",
-                      "a ruling emptied the fix batch after the step committed fixes — the slice "
-                      "stays, so those commits fold, verify and are audited before the round settles")
+                      "a ruling emptied the fix batch after the step committed fixes or edited the "
+                      "PR body — the slice stays, so that work folds, verifies and is audited "
+                      "before the round settles")
             return "held"
         excluded_by_discharge = len(rows) - discharge_survivors
         if excluded_by_discharge:
@@ -5240,6 +5241,21 @@ def _step_has_new_commits(state, config):
     start = state.get("_fixStepHead")
     head = _fix_step_head(config)
     return _nonempty_str(start) and head is not None and head != start
+
+
+def _step_has_new_pr_body(state, session_dir):
+    """True when the staged PR body differs from the snapshot taken as the step was emitted."""
+    snapshot = state.get("_prBodyAtStep")
+    if not session_dir or not _nonempty_str(snapshot):
+        return False
+    staged = _staged_pr_body_sha256(session_dir)
+    return staged is not None and staged != snapshot
+
+
+def _step_holds_work(state, config, session_dir=None):
+    """True when the apply-fixes step already holds work a fold must see: a commit past its start
+    head, or an edit of the staged PR body."""
+    return _step_has_new_commits(state, config) or _step_has_new_pr_body(state, session_dir)
 
 
 def _fix_step_head(config):
@@ -5303,7 +5319,7 @@ def _reconcile_fix_queue_after_rulings(state, config, extra_rows=None, session_d
     batch_index = state.get("_fixBatchIndex") or 0
     status = _queue_fix_batch(
         state, config, offered, reset_accumulator=False, batch_index=batch_index,
-        keep_step_start=True)
+        keep_step_start=True, session_dir=session_dir)
     if status == "excluded" and batch_index >= 1 and not state.get("terminal"):
         state.pop("_fixQueue", None)
         state.pop("_fixBatchIndex", None)
@@ -7373,6 +7389,20 @@ def _migrate_fixer_step(session_dir, state):
     return True, attempt
 
 
+def _vendor_did_fix_work(state, config, vendor):
+    """True when the record shows `vendor` as a fixer that produced work: a round it was recorded as
+    the fixer of (`rounds[n]["fixerVendor"]`) holds fixes or commits, or the step under way holds
+    commits past its start head (work an earlier build left in place, whose fixer the config names).
+    A vendor the config merely names, before any fix, did no work."""
+    rounds = state.get("rounds")
+    for rec in (rounds.values() if isinstance(rounds, dict) else ()):
+        fix = rec.get("fix") if isinstance(rec, dict) else None
+        if (isinstance(rec, dict) and rec.get("fixerVendor") == vendor and isinstance(fix, dict)
+                and (fix.get("fixes") or fix.get("commits"))):
+            return True
+    return _step_has_new_commits(state, config)
+
+
 def _attribute_fix_maker(state):
     """Make the build session the fix maker of a continued, unfinished state that does not yet say so
     (True when it changed). Whatever phase it stands at, the build session applies the fixes from here
@@ -7380,7 +7410,8 @@ def _attribute_fix_maker(state):
     family: the audit then degrades, never reading a stale external fixer. An earlier external
     fixer's vendor stays in the rounds that recorded it (`rounds[n]["fixerVendor"]`), not in the
     config. Its commits stay in the step, so its family stays a maker: the audit of them is never
-    seated on that family."""
+    seated on that family. That holds only for a former vendor that did work (`_vendor_did_fix_work`): one the
+    config names but no round or step shows contributing is not a maker, so it stays eligible to audit."""
     if not isinstance(state, dict) or state.get("terminal") or state.get(FIX_MAKER_MARK) is True:
         return False
     config = state.get("config")
@@ -7389,7 +7420,8 @@ def _attribute_fix_maker(state):
     vendor = _build_session_vendor(seat_map_receipts.effective_seat_map(state))
     former = config.get("fixerVendor")
     former_family = (model_registry.family_for("code-fixer", former)
-                     if _nonempty_str(former) and former != vendor else None)
+                     if _nonempty_str(former) and former != vendor
+                     and _vendor_did_fix_work(state, config, former) else None)
     if former_family is not None:
         held = state.get("formerFixerFamilies")
         held = list(held) if isinstance(held, list) else []

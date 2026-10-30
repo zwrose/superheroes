@@ -628,7 +628,34 @@ def test_e13_a_ruling_that_empties_the_slice_before_any_commit_still_settles(tmp
     assert not any(d["kind"] == "fix-batch-held" for d in state["decisions"])
 
 
-# ---- E14 / E15 -----------------------------------------------------------------------------------------------
+def test_e13_a_ruling_that_empties_the_slice_after_a_staged_pr_body_edit_keeps_it_for_the_fold(tmp_path):
+    fx = Fixture(tmp_path, staged_pr_body="the body, as staged\n")
+    n = fx.reach()
+    key = fx.keys()[0]
+    staged = os.path.join(str(fx.session), "pr-body", "staged.md")
+    open(staged, "w").write("the body, as fixed\n")
+    after = hashlib.sha256(open(staged, "rb").read()).hexdigest()
+    prov = {"ruledBy": "owner", "ruledAt": "2026-08-26T00:00:00Z", "records": ["rulings.json"]}
+    ruling = tmp_path / "ruling.json"
+    ruling.write_text(json.dumps({"_provenance": prov, "rulings": [
+        {"id": key, "ruling": "out-of-scope", "reason": "defer",
+         "followUp": {"item": "backlog item", "revisitTrigger": "next milestone",
+                      "classClosure": "owner backlog"}}]}))
+    out = RD.cmd_rule(str(fx.session), str(ruling), "owner")
+    assert out["ok"] is True, out
+    state = fx.state()
+    # the body edit is not converged past: the step stays pending with its slice, to fold the edit
+    assert state["terminal"] is None and state["step"] == RD.P_APPLY_FIXES
+    assert [RD._finding_identity_key(r) for r in state["_fixBatch"]] == [key]
+    assert any(d["kind"] == "fix-batch-held" for d in state["decisions"])
+    again = RD.cmd_next(str(fx.session))
+    assert (again["phase"], again["attempt"]) == (RD.P_APPLY_FIXES, n["attempt"])
+    assert fx.submit({"fixes": ["body corrected"], "unfixed": [{"finding": key, "why": "ruled out of scope"}]},
+                     pending=again)["ok"] is True
+    assert fx.state()["rounds"]["1"]["prBodyFix"]["after"] == after
+
+
+# ---- E14 / E15-----------------------------------------------------------------------------------------------
 
 def test_e14_next_no_longer_takes_a_fixer_vendor(tmp_path):
     with pytest.raises(SystemExit) as exit_info:

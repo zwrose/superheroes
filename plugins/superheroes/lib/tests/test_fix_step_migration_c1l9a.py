@@ -121,6 +121,7 @@ def test_e12_the_replaced_external_fixers_family_stays_a_maker_so_its_commits_ar
     session_dir, _before, _anchor = _migrated_session(tmp_path)
     state = _state(session_dir)
     state["config"]["fixerVendor"] = "claude"
+    _record_fix_work(state)
     state["config"]["seatMap"] = {"hostFamily": "openai"}
     state["seatMapReceipts"] = []
     state.pop("seatMap", None)
@@ -139,6 +140,13 @@ def test_e12_the_replaced_external_fixers_family_stays_a_maker_so_its_commits_ar
     assert (vendor, independence) == (None, "unseatable")
 
 
+def _record_fix_work(state):
+    """Record, in round 1, an external fixer (claude) that fixed something: the history that makes its
+    family a maker."""
+    state["rounds"]["1"]["fixerVendor"] = "claude"
+    state["rounds"]["1"]["fix"] = {"fixes": ["fixed"], "commits": []}
+
+
 def _continued_at_apply_fixes(tmp_path, seat_map):
     """The fixer-step fixture, moved on to `apply-fixes` and made a continued session that names an
     external fixer: no fix-maker mark, `fixerVendor` claude, the given seat map."""
@@ -148,6 +156,7 @@ def _continued_at_apply_fixes(tmp_path, seat_map):
     assert state["step"] == RD.P_APPLY_FIXES
     state.pop(RD.FIX_MAKER_MARK, None)
     state.pop("formerFixerFamilies", None)
+    _record_fix_work(state)
     state["config"]["fixerVendor"] = "claude"
     state["config"]["seatMap"] = seat_map
     state["seatMapReceipts"] = []
@@ -170,6 +179,34 @@ def test_e12_a_continued_session_past_the_fixer_step_also_takes_the_build_sessio
     RD.save_state(session_dir, after)
     RD.cmd_next(session_dir)
     assert _state(session_dir)["config"]["fixerVendor"] == "claude"
+
+
+def test_e12_a_configured_fixer_vendor_that_did_no_work_is_not_made_a_maker(tmp_path):
+    session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "openai"})
+    state = _state(session_dir)
+    # before its first fix: no round names a fixer, and the step holds no commit past its start head
+    for rec in state["rounds"].values():
+        rec.pop("fixerVendor", None)
+        rec.pop("fix", None)
+    state["_fixStepHead"] = RD._fix_step_head(state["config"])
+    RD.save_state(session_dir, state)
+    host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
+    assert host_vendor not in (None, "claude")
+    RD.cmd_next(session_dir)
+    after = _state(session_dir)
+    assert after["config"]["fixerVendor"] == host_vendor and after[RD.FIX_MAKER_MARK] is True
+    assert "formerFixerFamilies" not in after
+    assert RD.model_registry.family_for("code-fixer", "claude") not in (
+        RD.receipt_disclosures.accumulated_maker_families(after))
+
+
+def test_e12_a_former_fixer_vendor_with_a_recorded_fix_stays_a_maker_before_the_next_fix(tmp_path):
+    session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "openai"})
+    state = _state(session_dir)
+    _record_fix_work(state)
+    RD.save_state(session_dir, state)
+    RD.cmd_next(session_dir)
+    assert _state(session_dir)["formerFixerFamilies"] == [RD.model_registry.family_for("code-fixer", "claude")]
 
 
 def test_e12_a_continued_session_whose_host_family_maps_to_no_vendor_leaves_the_fixer_unknown(tmp_path):
