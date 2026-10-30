@@ -706,6 +706,7 @@ def _fold_audits(state, rulings=None, manifest_vendor=None):
         ruling = (rulings or {}).get(i, "discharged")
         results.append({"id": t["id"], "ruling": ruling, "reason": "the answers are now stated",
                         "evidence": "read the staged copy", "auditorVendor": t.get("auditorVendor"),
+                        "checks": TRD.audit_checks(),
                         **({"newIssues": [{"title": "n", "severity": "Nit", "file": PBS.CITATION,
                                            "line": 1, "consequence": CONSEQUENCE}]}
                            if ruling == "discharged-but-new-issue" else {})})
@@ -731,7 +732,8 @@ def test_E10_the_audit_fold_records_nothing_unless_every_target_cleared(tmp_path
         state["rounds"].setdefault("1", {})["prBodyFix"] = {"before": sha(BODY), "after": None}
     if why == "silence":
         results = [{"id": state["_auditTargets"][0]["id"], "ruling": "discharged", "reason": "ok",
-                    "evidence": "e", "auditorVendor": state["_auditTargets"][0].get("auditorVendor")}]
+                    "evidence": "e", "auditorVendor": state["_auditTargets"][0].get("auditorVendor"),
+                    "checks": TRD.audit_checks()}]
         manifest = {state["_auditTargets"][0]["id"]: state["_auditTargets"][0].get("auditorVendor")}
         RD._fold_audits(state, state["config"], {"results": results, "collectionManifest": manifest})
     else:

@@ -87,7 +87,8 @@ def _failing_fix_seams(findings):
 
     return TRD._seams(
         reviewer=_reviewer(findings), verifier=plausible, fix_step=fix_step,
-        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
+        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken",
+                                       "checks": TRD.audit_checks(right="no")}
                                       for t in (targets or [])])
 
 

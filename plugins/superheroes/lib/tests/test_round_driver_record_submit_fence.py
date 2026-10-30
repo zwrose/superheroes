@@ -27,6 +27,10 @@ _SPEC = importlib.util.spec_from_file_location(
 _TDI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_TDI)
 
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                 for name in ("right", "brokeNothing", "testWouldFail")}
+
 _bootstrap = _TDI._bootstrap
 _land = _TDI._land
 _write_dispatch_manifest = _TDI._write_dispatch_manifest
@@ -236,7 +240,8 @@ def test_second_distinct_audit_target_record_fires_fence_on_hand_submit(tmp_path
     pend = state["pending"]
     _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
     _land(session_dir, state, pend, tid1,
-          {"id": tid1, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+          {"id": tid1, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": _AUDIT_CHECKS})
     assert round_driver.cmd_record_result(session_dir, tid1, occurrence=0)["ok"] is True
     state = _state(session_dir)
     # Prior phases folded via `advance`; isolate the record-submit fence under test.
@@ -245,8 +250,8 @@ def test_second_distinct_audit_target_record_fires_fence_on_hand_submit(tmp_path
     state = _state(session_dir)
     out = round_driver.cmd_submit(
         session_dir, pend["phase"], pend["attempt"], round_driver.state_hash(state),
-        {"results": [{"id": tid0, "ruling": "discharged", "reason": "ok"},
-                     {"id": tid1, "ruling": "discharged", "reason": "ok"}]})
+        {"results": [{"id": tid0, "ruling": "discharged", "reason": "ok", "checks": _AUDIT_CHECKS},
+                     {"id": tid1, "ruling": "discharged", "reason": "ok", "checks": _AUDIT_CHECKS}]})
     assert out["ok"] is False and out["reason"] == "record-submit-interleaved", out
     assert out.get("seats") == [tid1], out
 
@@ -378,7 +383,8 @@ def test_advance_audits_without_manifest_discloses_absent(tmp_path):
     for tid in (tid0, tid1):
         _land(session_dir, state, pend, tid,
               {"id": tid, "ruling": "discharged", "auditorVendor": "claude",
-               "reason": "re-read the fixed hunk; the cited defect is gone"})
+               "reason": "re-read the fixed hunk; the cited defect is gone",
+               "checks": _AUDIT_CHECKS})
         assert round_driver.cmd_record_result(session_dir, tid, occurrence=0)["ok"]
     expected = os.path.abspath(round_records.dispatch_manifest_path(
         session_dir, pend["round"], pend["phase"], pend["attempt"]))

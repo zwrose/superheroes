@@ -97,6 +97,21 @@ def _big_diff(n_files=25):
 
 # --- default scripted seams ---------------------------------------------------
 
+def audit_checks(**answers):
+    """The fix auditor's three answers (`right`, `brokeNothing`, `testWouldFail`) as an audit result
+    carries them in `checks`: every one `yes` unless a check is named with another answer."""
+    return {name: {"answer": answers.get(name, "yes"), "why": "checked: %s" % name}
+            for name in ("right", "brokeNothing", "testWouldFail")}
+
+
+def audit_test_match(target, answer="matches"):
+    """The `testMatch` an audit result owes for `target`: `{"testMatch": ...}` when the target's committed
+    break-it test was changed and explained, else nothing."""
+    if (target.get("breakIt") or {}).get("match") != "changed-explained":
+        return {}
+    return {"testMatch": {"answer": answer, "why": "compared the committed test with the test role's"}}
+
+
 def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=None,
            verify_runner=None, io=None, vendors=None, fixer_vendor="claude"):
     def default_reviewer(dim, tier, rnd, ctx):
@@ -114,8 +129,9 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
 
     def default_auditor(targets, rnd):
         # Echo the selected independent auditor vendor so the discharge passes the provenance gate.
-        return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                 "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+        return [dict({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": audit_checks()}, **audit_test_match(t))
                 for t in (targets or [])]
 
     def default_fix(batch, rnd, payload):
@@ -508,8 +524,9 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
         if phase == RD.P_AUDITS:
             # The orchestrator records its dispatch manifest out-of-band from the results — the vendor
             # it seated per target, read off the dispatch payload (never the result echo).
-            return {"results": [{"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
-                                 "auditorVendor": t.get("auditorVendor")}
+            return {"results": [dict({"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
+                                      "auditorVendor": t.get("auditorVendor"),
+                                      "checks": audit_checks()}, **audit_test_match(t))
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -751,7 +768,7 @@ def _audit_artifact(n, **over):
     targets = n["payload"]["targets"]
     assert targets, "the audits payload carried no targets to key rulings against"
     result = {"id": targets[0]["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-              "auditorVendor": targets[0].get("auditorVendor")}
+              "auditorVendor": targets[0].get("auditorVendor"), "checks": audit_checks()}
     result.update(over)
     return ({"results": [result],
              "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}, targets)
@@ -821,8 +838,10 @@ def test_submit_audits_two_targets_one_colliding_id_not_refused():
     collapses two same-identity findings into one. The chokepoint behavior is pinned by the
     loop-level test above."""
     targets = [{"id": "f.py::unchecked return value"}, {"id": "f.py::unchecked return value"}]
-    one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"},
-                       {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"}]
+    one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r",
+                        "checks": audit_checks()},
+                       {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r",
+                        "checks": audit_checks()}]
     assert RD.audit_results_fault({"results": one_ruling_each}, targets) is None
 
 
@@ -920,7 +939,7 @@ def test_verify_result_fault_pure():
 
 
 def test_audit_results_fault_pure():
-    good = [{"id": "a1", "ruling": "not-discharged"}]
+    good = [{"id": "a1", "ruling": "not-discharged", "checks": audit_checks()}]
     assert RD.audit_results_fault({"results": good}, [{"id": "a1"}]) is None
     assert RD.audit_results_fault({}, [{"id": "a1"}]) is None
     # a non-dict ROOT can carry no rulings at all — refused, naming the envelope (never a `results`
@@ -931,7 +950,8 @@ def test_audit_results_fault_pure():
     # `ambiguous` handling governs (test_submit_audits_repeated_id_accepted_the_fold_governs)
     assert RD.audit_results_fault({"results": good + good}, [{"id": "a1"}, {"id": "a1"}]) is None
     # an empty target set judges no id — the seat-key guard's empty-key rule, audit-side
-    assert RD.audit_results_fault({"results": [{"id": "zz", "ruling": "not-discharged"}]}, []) is None
+    assert RD.audit_results_fault(
+        {"results": [{"id": "zz", "ruling": "not-discharged", "checks": audit_checks()}]}, []) is None
     assert "not an audit target" in RD.audit_results_fault({"results": good}, [{"id": "other"}])
     # a ruling with no binding id is refused even with NO targets to key against — the id branch
     # stands on its own, so its bite-proof reddens on the refusal axis rather than on a message
@@ -939,7 +959,8 @@ def test_audit_results_fault_pure():
         {"results": [{"id": None, "ruling": "not-discharged"}]}, [])
     assert "results[0] is str" in RD.audit_results_fault({"results": ["discharged"]}, [])
     # the entry index is named so a multi-result artifact says WHICH ruling is wrong
-    two = [{"id": "a1", "ruling": "not-discharged"}, {"id": "a2", "ruling": "nope"}]
+    two = [{"id": "a1", "ruling": "not-discharged", "checks": audit_checks()},
+           {"id": "a2", "ruling": "nope"}]
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
@@ -1190,7 +1211,7 @@ def test_new_issues_usability_agrees_with_the_running_fold():
         out = AU.apply_audit_results(
             [target],
             [{"id": "v0", "ruling": "discharged-but-new-issue", "reason": "fixed but leaked",
-              "newIssues": candidates}])
+              "newIssues": candidates, "checks": audit_checks()}])
         folded = out["audits"][0]["ruling"]
         if usable:
             assert folded == "discharged-but-new-issue", (candidates, out)
@@ -1331,7 +1352,8 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
             return {"grouping": None}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -1376,7 +1398,8 @@ def _multifile_delta_respond(captured, fixer_artifact):
             return {"grouping": None}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -1446,7 +1469,7 @@ def test_fixer_unreadable_head_diff_path_with_repository_derives_git(tmp_path):
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                                 "auditorVendor": t.get("auditorVendor")}
+                                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -1665,7 +1688,8 @@ def _persistent_not_discharged_seams(io=None):
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verifier=plaus_verifier,
-        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
+        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken",
+                                       "checks": audit_checks(right="no")}
                                       for t in (targets or [])],
         fix_step=fix_step, io=io, vendors=["claude", "codex"])
 
@@ -1704,7 +1728,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         return [{"id": t["id"], "ruling": ruling,
                  "reason": "broken" if ruling == "not-discharged" else "fixed",
                  "evidence": "tests pass" if ruling == "discharged" else None,
-                 "auditorVendor": t.get("auditorVendor")}
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
                 for t in (targets or [])]
 
     def fix_step(batch, rnd, payload):
@@ -1846,7 +1870,8 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
     def auditor(targets, rnd):
         seen.extend(dict(t) for t in (targets or []))
         return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                 "evidence": "tests pass", "auditorVendor": "claude"} for t in (targets or [])]
+                 "evidence": "tests pass", "auditorVendor": "claude", "checks": audit_checks()}
+                for t in (targets or [])]
 
     refusal, state = _run_loop_capturing_state(
         _seams(reviewer=lambda dim, tier, rnd, ctx:
@@ -1874,7 +1899,8 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
@@ -1899,7 +1925,8 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
            "baseGuard": RD.BASE_GUARD_CHECKED}
@@ -1921,7 +1948,8 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     # the build session (claude) and the codex fixer are both makers, so the scoped finder, which sits
     # outside every maker's family, is seated on a third vendor and reports that one
@@ -1950,14 +1978,14 @@ def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
     # the fixer vendor tries to self-clear — echoing "claude" proves nothing (no manifest either)
     out = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "trust me",
-                    "auditorVendor": "claude"}])
+                    "auditorVendor": "claude", "checks": audit_checks()}])
     assert out["discharged"] == []
     assert out["notDischarged"] == ["v0"]
     assert out["unauthenticated"] == ["v0"]
     # the orchestrator's manifest authenticates the codex dispatch → discharged, trusted vendor recorded
     ok = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "fix verified",
-                    "auditorVendor": "codex"}],
+                    "auditorVendor": "codex", "checks": audit_checks()}],
         collection_manifest={"v0": "codex"})
     assert ok["discharged"] == ["v0"]
     assert ok["unauthenticated"] == []
@@ -1977,7 +2005,8 @@ def test_audit_round_outcomes_carry_class_keys_for_alias_stall(tmp_path):
     tgt = state["_auditTargets"][0]
     assert tgt["classKey"] == "Security::CWE-401::orig"
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+         "checks": audit_checks(right="no")}]})
     round1 = state["auditRounds"][-1]
     assert round1["outcomes"][0]["classKey"] == "Security::CWE-401::orig"
     # a SECOND round: the finding is retitled (a different identity) but keeps its classKey.
@@ -2001,7 +2030,8 @@ def test_audit_outcome_carries_title_so_distinct_classkeys_dont_false_stall(tmp_
         state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
         tgt = state["_auditTargets"][0]
         RD._fold_audits(state, state["config"], {"results": [
-            {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+            {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+             "checks": audit_checks(right="no")}]})
         return state["auditRounds"][-1]
 
     r1 = fold("secret a", "Security::CWE-401::secret a")
@@ -2464,7 +2494,7 @@ def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
     assert tgt["auditorVendor"] == "codex"
     RD._fold_audits(state, state["config"], {"results": [
         {"id": tgt["id"], "ruling": "discharged", "reason": "self-clear",
-         "auditorVendor": "claude"}]})  # echoes the FIXER, not the recorded codex
+         "auditorVendor": "claude", "checks": audit_checks()}]})  # echoes the FIXER, not the recorded codex
     assert state["_auditOutcome"]["unauthenticated"] == [tgt["id"]]
     assert state["_auditOutcome"]["discharged"] == []
 
@@ -4220,7 +4250,8 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
@@ -6794,7 +6825,8 @@ def test_a_result_submitted_for_a_target_with_no_auditor_is_ignored_and_the_targ
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tid = state["_auditTargets"][0]["id"]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude"}]})
+        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude",
+         "checks": audit_checks()}]})
     outcome = state["_auditOutcome"]
     assert outcome["unaudited"] == [tid] and outcome["discharged"] == []
     assert outcome["notDischarged"] == [tid]

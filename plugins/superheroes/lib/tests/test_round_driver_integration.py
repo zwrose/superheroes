@@ -53,6 +53,10 @@ from session_checkout import enter_checkout, make_checkout  # noqa: E402
 
 _CODEX_IMPLEMENTER_MODEL = model_registry.matrix_config("implementer", "codex")[0]
 
+# The three checks every audit result owes, each answered `yes`.
+AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                for name in ("right", "brokeNothing", "testWouldFail")}
+
 # =============================================================================================
 # the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
 # =============================================================================================
@@ -387,7 +391,7 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         return _verify_payload_via_verb(session_dir)
     if phase == round_driver.P_AUDITS:
         return {"id": seat, "ruling": "discharged", "auditorVendor": "claude",
-                "reason": "re-read the fixed hunk; the cited defect is gone"}
+                "reason": "re-read the fixed hunk; the cited defect is gone", "checks": AUDIT_CHECKS}
     raise AssertionError("no payload for phase %r" % phase)
 
 
@@ -720,7 +724,7 @@ def test_two_same_titled_targets_at_different_lines_one_discharged_sibling_not(t
     _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
     _land(session_dir, state, pend, tid0,
           {"id": tid0, "ruling": "discharged", "auditorVendor": "claude",
-           "reason": "re-read line 2; the defect is gone"})
+           "reason": "re-read line 2; the defect is gone", "checks": AUDIT_CHECKS})
     assert _record(session_dir, tid0)["ok"] is True
     out = round_driver.cmd_record_missing(session_dir, tid1, pend["attempt"], "forfeit")
     assert out["ok"] is True, out
@@ -762,7 +766,8 @@ def test_a_missing_second_occurrence_is_named_by_slot_not_by_seat(tmp_path):
     pend = state["pending"]
     _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
     _land(session_dir, state, pend, tid0,
-          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": AUDIT_CHECKS})
     assert _record(session_dir, tid0)["ok"] is True
 
     out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
@@ -782,7 +787,8 @@ def test_record_missing_addresses_the_second_target(tmp_path):
     assert tid0 != tid1, targets
     pend = state["pending"]
     _land(session_dir, state, pend, tid0,
-          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": AUDIT_CHECKS})
     assert _record(session_dir, tid0)["ok"] is True
     out = round_driver.cmd_record_missing(session_dir, tid1, pend["attempt"], "forfeit")
     assert out["ok"] is True, out
@@ -810,7 +816,8 @@ def test_recording_an_occurrence_outside_the_roster_is_refused(tmp_path, occurre
     tid = state["_auditTargets"][0]["id"]
     pend = state["pending"]
     _land(session_dir, state, pend, tid,
-          {"id": tid, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"},
+          {"id": tid, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": AUDIT_CHECKS},
           occurrence=occurrence)
     out = _record(session_dir, tid, occurrence=occurrence)
     assert out["ok"] is False and out["reason"] == "unknown-occurrence", out

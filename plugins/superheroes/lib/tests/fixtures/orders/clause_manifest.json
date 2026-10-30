@@ -52,6 +52,9 @@
     "When an independent runner-channel vendor is live, you are never the fixer's vendor",
     "Return exactly one audit result for this target",
     "Judge only this one target",
+    "answer three questions about the fix in the result's field for them",
+    "stands only when all three answers are `yes`",
+    "compare `committedTest` with `reviewerTest` in light of `changedWhy`",
     "Never change the repository, and never claim a run you did not make",
     "Transport keys use the per-location target identifier"
   ],

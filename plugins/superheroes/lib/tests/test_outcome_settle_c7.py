@@ -171,14 +171,18 @@ def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
         for t in targets or []:
             if t["id"] == "f.py::first bug@L1":
                 rulings.append({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                                "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")})
+                                "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                                "checks": TRD.audit_checks()})
             else:
-                rulings.append({"id": t["id"], "ruling": "not-discharged", "reason": "still broken"})
+                rulings.append({"id": t["id"], "ruling": "not-discharged", "reason": "still broken",
+                                "checks": TRD.audit_checks(right="no")})
         return rulings
 
+    # the fix changed a file, so the scoped finder runs; the proven non-panel cells let it seat on the
+    # vendor outside the fixer's family instead of parking the review
     result, state = TRD._run_loop_capturing_state(
         TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor),
-        TRD._cfg_cert(maxRounds=2))
+        TRD._cfg_cert(maxRounds=2, seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
     assert state["terminal"]
     assert counter["n"] >= 1
     _assert_all_settled(state)

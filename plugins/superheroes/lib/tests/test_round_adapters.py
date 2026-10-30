@@ -28,6 +28,9 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from session_checkout import enter_checkout  # noqa: E402
 
+# The three checks every audit result owes (`audits.audit_checks_fault`), each answered `yes`.
+_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in audits.CHECK_NAMES}
+
 # --- diffs (same shapes test_round_driver.py drives with) ---------------------
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
@@ -96,7 +99,8 @@ def _responder(round1_findings=None, head=HEAD, grouping=None, verify="pass"):
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": _CHECKS}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -391,7 +395,7 @@ def test_audits_assembles_results_and_a_trusted_collection_manifest(tmp_path):
         targets = n["payload"]["targets"]
         assert targets
         results = [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                    "auditorVendor": t.get("auditorVendor")} for t in targets]
+                    "auditorVendor": t.get("auditorVendor"), "checks": _CHECKS} for t in targets]
         hand = {"results": results,
                 "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}
         envelopes = [_result_env(t["id"], dict(r), vendor=t.get("auditorVendor"))
@@ -455,7 +459,7 @@ def test_roster_audits_keeps_two_targets_that_share_one_id(tmp_path):
     state = {"_auditTargets": [{"id": shared, "line": 1}, {"id": shared, "line": 90}]}
     keys, reason = RA.roster_for(RD.P_AUDITS, state, {})
     assert reason is None and keys == [shared, shared]
-    payload = {"id": shared, "ruling": audits.AUDIT_RULINGS[0], "reason": "r"}
+    payload = {"id": shared, "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS}
     envelopes = [_result_env(shared, dict(payload), occurrence=0),
                  _result_env(shared, dict(payload), occurrence=1)]
     artifact, reason = RA.assemble(RD.P_AUDITS, envelopes, state, {})
@@ -652,7 +656,7 @@ def test_edge_occurrence_beyond_the_roster():
     shared = "f.py::t"
     state = {"_auditTargets": [{"id": shared}]}
     envelopes = [_result_env(shared, {"id": shared, "ruling": audits.AUDIT_RULINGS[0],
-                                      "reason": "r"}, occurrence=1)]
+                                      "reason": "r", "checks": _CHECKS}, occurrence=1)]
     artifact, reason = RA.assemble(RD.P_AUDITS, envelopes, state, {})
     assert artifact is None and reason == "seat-occurrence-not-in-roster:%s#1" % shared
 
@@ -817,16 +821,17 @@ def test_new_issue_ruling_is_a_real_member_of_the_audits_enum():
 
 
 @pytest.mark.parametrize("payload,fragment", [
-    ({"ruling": audits.AUDIT_RULINGS[0], "reason": "r"}, "`id` is NoneType"),
-    ({"id": "other", "ruling": audits.AUDIT_RULINGS[0], "reason": "r"},
+    ({"ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS}, "`id` is NoneType"),
+    ({"id": "other", "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS},
      "`id` is 'other' but this seat is"),
-    ({"id": "f.py::t", "ruling": "fixed", "reason": "r"}, "`ruling` is 'fixed'"),
-    ({"id": "f.py::t", "ruling": None, "reason": "r"}, "`ruling` is None"),
-    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r"},
+    ({"id": "f.py::t", "ruling": "fixed", "reason": "r", "checks": _CHECKS}, "`ruling` is 'fixed'"),
+    ({"id": "f.py::t", "ruling": None, "reason": "r", "checks": _CHECKS}, "`ruling` is None"),
+    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r", "checks": _CHECKS},
      "`newIssues` carries no usable issue object"),
-    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r",
+    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r", "checks": _CHECKS,
       "newIssue": "found another"}, "`newIssue` (singular)"),
-    ({"id": "f.py::t", "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "evidence": 3},
+    ({"id": "f.py::t", "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS,
+      "evidence": 3},
      "`evidence` is int, not a string"),
 ])
 def test_audit_payload_faults(payload, fragment):
@@ -838,7 +843,7 @@ def test_audit_payload_faults(payload, fragment):
 def test_audit_payload_requires_a_reason_on_every_ruling(ruling):
     """A ruling with no grounds is the unproven claim the audit fold exists to reject. Record time
     is where it is still a cheap re-dispatch away from being right."""
-    payload = {"id": "f.py::t", "ruling": ruling}
+    payload = {"id": "f.py::t", "ruling": ruling, "checks": _CHECKS}
     if ruling == RA.RULING_NEW_ISSUE:
         payload["newIssues"] = [{"title": "n", "file": "f.py", "line": 1, "severity": "Minor"}]
     for reasonless in (dict(payload), dict(payload, reason=""), dict(payload, reason="   "),
@@ -855,7 +860,8 @@ def test_audit_payload_reason_predicate_is_the_folds_own():
     """Same predicate as the fold, never a second copy of the rule."""
     for reason in ("r", " r ", "", "   ", None, 3, []):
         fault = RA.payload_fault(
-            RD.P_AUDITS, {"id": "i", "ruling": audits.AUDIT_RULINGS[1], "reason": reason}, "i")
+            RD.P_AUDITS, {"id": "i", "ruling": audits.AUDIT_RULINGS[1], "reason": reason,
+                          "checks": _CHECKS}, "i")
         assert (fault is None) == audits.has_usable_reason(reason), (reason, fault)
 
 
@@ -897,7 +903,8 @@ def test_collection_manifest_comes_only_from_the_dispatch_manifest(tmp_path):
                       respond=_responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
     targets = n["payload"]["targets"]
     envelopes = [_result_env(t["id"], {"id": t["id"], "ruling": audits.AUDIT_RULINGS[0],
-                                       "reason": "r", "auditorVendor": t.get("auditorVendor")},
+                                       "reason": "r", "auditorVendor": t.get("auditorVendor"),
+                                       "checks": _CHECKS},
                              vendor=t.get("auditorVendor")) for t in targets]
     artifact, reason = RA.assemble(RD.P_AUDITS, envelopes, state, state["config"],
                                    dispatch_manifest=None)
@@ -972,6 +979,8 @@ def _minimal_payload_for_contract(phase, contract, seat_key):
             payload[field] = audits.AUDIT_RULINGS[0]
         elif field == "reason":
             payload[field] = "grounds"
+        elif field == "checks":
+            payload[field] = _CHECKS
         else:
             payload[field] = "x"
     if phase == RD.P_PANEL and "findings" not in payload:
@@ -1121,6 +1130,13 @@ def test_payload_contract_optional_keys_match_checker(phase):
             # declared `any`: the verb writes null for a run with no exit code, so no value is a wrong
             # type — the field is accepted as an integer and as null
             for value in (0, 1, None):
+                payload[field] = value
+                assert RA.payload_fault(phase, payload, seat_key) is None, value
+            continue
+        if field == "testMatch":
+            # declared `any`: the contract holds no target, so `audit-checks` judges `checks` alone; the
+            # shape of a `testMatch` is judged against its target (test_c1l10_audit_checks)
+            for value in (None, 1, {"answer": "matches", "why": "w"}):
                 payload[field] = value
                 assert RA.payload_fault(phase, payload, seat_key) is None, value
             continue

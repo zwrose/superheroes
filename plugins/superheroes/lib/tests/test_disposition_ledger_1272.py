@@ -22,6 +22,10 @@ RD = _load("round_driver")
 SC = _load("session_contract")
 V = _load("verification")
 
+# The three checks every audit result owes (`audits.audit_checks_fault`), each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                 for name in ("right", "brokeNothing", "testWouldFail")}
+
 
 def _cfg():
     # A native `claude` seat takes the seat map's hostFamily; without one the host is unknown and
@@ -217,8 +221,9 @@ def test_L3_fold_audits_stamps_fixed_on_discharged_only():
     manifest = {discharged_id: auditor, open_id: auditor}
     RD._fold_audits(state, state["config"], {
         "results": [
-            {"id": discharged_id, "ruling": "discharged", "reason": "gone"},
-            {"id": open_id, "ruling": "not-discharged", "reason": "still there"},
+            {"id": discharged_id, "ruling": "discharged", "reason": "gone", "checks": _AUDIT_CHECKS},
+            {"id": open_id, "ruling": "not-discharged", "reason": "still there",
+             "checks": _AUDIT_CHECKS},
         ],
         "collectionManifest": manifest,
     })

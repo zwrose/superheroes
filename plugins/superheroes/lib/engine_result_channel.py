@@ -12,6 +12,7 @@ import json
 import os
 import uuid
 
+import audits
 import command_refusals
 import engine_adapter
 import model_registry
@@ -57,6 +58,33 @@ _STRICT_MODE_REFINEMENTS = {
     ("ruling", "unnamedChangeReverts"): {
         "type": "array",
         "items": {"type": "string"},
+    },
+    # The fix auditor's three answers; the shape's one judge is audits.audit_checks_fault.
+    ("ruling", "checks"): {
+        "type": "object",
+        "additionalProperties": False,
+        "required": list(audits.CHECK_NAMES),
+        "properties": {
+            name: {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["answer", "why"],
+                "properties": {
+                    "answer": {"type": "string", "enum": list(audits.CHECK_ANSWERS)},
+                    "why": {"type": "string"},
+                },
+            }
+            for name in audits.CHECK_NAMES
+        },
+    },
+    ("ruling", "testMatch"): {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["answer", "why"],
+        "properties": {
+            "answer": {"type": "string", "enum": list(audits.TEST_MATCH_ANSWERS)},
+            "why": {"type": "string"},
+        },
     },
 }
 

@@ -16,6 +16,7 @@ DECISION_KINDS = (
     "break-it-change",
     "break-it-kept",
     "break-it-run",
+    "break-it-test-mismatch",
     "cannot-certify",
     "capped-with-open-blocker",
     "capped-with-open-critical",

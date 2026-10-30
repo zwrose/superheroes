@@ -23,6 +23,9 @@ FI = _load("finding_identity")
 RR = _load("round_records")
 SC = _load("session_contract")
 
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in AU.CHECK_NAMES}
+
 
 def _cfg(**over):
     base = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
@@ -90,7 +93,8 @@ def test_fold_audits_outcomes_identity_is_line_less():
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tgt = state["_auditTargets"][0]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+         "checks": _AUDIT_CHECKS}]})
     outcome = state["auditRounds"][-1]["outcomes"][0]
     assert outcome["identity"] == tgt["identity"]
     assert outcome["identity"] == FI.finding_identity(tgt)
@@ -106,7 +110,7 @@ def test_fold_audits_outcome_identity_classkey_free():
     state["_auditTargets"] = [{"id": loc_id, "identity": ident, "file": "f.py", "line": 9,
                                "title": "plain", "severity": "Important", "independence": "n/a"}]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": loc_id, "ruling": "not-discharged", "reason": "nope"}]})
+        {"id": loc_id, "ruling": "not-discharged", "reason": "nope", "checks": _AUDIT_CHECKS}]})
     outcome = state["auditRounds"][-1]["outcomes"][0]
     assert outcome["identity"] == ident
     assert "classKey" not in outcome or outcome.get("classKey") is None
@@ -119,7 +123,7 @@ def test_apply_audit_results_duplicate_target_ids_fail_closed():
     collided = "f.py::bug@L1"
     targets = [{"id": collided, "file": "f.py", "line": 1, "title": "bug"},
                {"id": collided, "file": "f.py", "line": 2, "title": "bug"}]
-    results = [{"id": collided, "ruling": "discharged", "reason": "ok"}]
+    results = [{"id": collided, "ruling": "discharged", "reason": "ok", "checks": _AUDIT_CHECKS}]
     out = AU.apply_audit_results(targets, results)
     assert out["ambiguous"] == [collided]
     assert out["discharged"] == []

@@ -23,6 +23,10 @@ import round_driver as RD  # noqa: E402
 import round_records as RR  # noqa: E402
 import session_contract  # noqa: E402
 
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                 for name in ("right", "brokeNothing", "testWouldFail")}
+
 _SPEC = importlib.util.spec_from_file_location(
     "test_rulings_channel_1445", os.path.join(_HERE, "test_rulings_channel_1445.py"))
 _RC = importlib.util.module_from_spec(_SPEC)
@@ -210,7 +214,8 @@ def test_1835_ruling_after_a_fixer_that_changed_nothing_rides_the_next_order(
         if pend["phase"] == P_APPLY_FIXES:
             return {"fixes": [], "headDiffPath": head_diff_path}
         if pend["phase"] == RD.P_AUDITS:
-            return dict(payload, ruling="not-discharged", reason="the cited line is unchanged")
+            return dict(payload, ruling="not-discharged", reason="the cited line is unchanged",
+                        checks=_AUDIT_CHECKS)
         return payload
 
     monkeypatch.setattr(_TRI, "_payload_for", idle)
@@ -985,7 +990,7 @@ def test_audit_discharge_of_the_ruled_rewording_supersedes_the_reopened_ancestor
     state["_newSurface"] = True
     auditor = state["_auditTargets"][0]["auditorVendor"]
     RD._fold_audits(state, state["config"], {
-        "results": [{"id": zid, "ruling": "discharged", "reason": "gone"}],
+        "results": [{"id": zid, "ruling": "discharged", "reason": "gone", "checks": _AUDIT_CHECKS}],
         "collectionManifest": {zid: auditor}})
     assert "A" not in (state.get("restagedAfterDispositionSeq") or {})
 
@@ -1014,7 +1019,7 @@ def test_audit_discharge_keeps_every_restage_mark_when_the_open_list_cannot_be_r
     monkeypatch.setattr(RD, "_open_audit_ids_from_not_discharged", lambda _not_discharged: None)
     auditor = state["_auditTargets"][0]["auditorVendor"]
     RD._fold_audits(state, state["config"], {
-        "results": [{"id": zid, "ruling": "discharged", "reason": "gone"}],
+        "results": [{"id": zid, "ruling": "discharged", "reason": "gone", "checks": _AUDIT_CHECKS}],
         "collectionManifest": {zid: auditor}})
     assert state["restagedAfterDispositionSeq"] == {"A": mark}
 
@@ -1071,7 +1076,8 @@ def test_a_successful_audit_keeps_the_reopening_mark_of_a_member_that_still_fail
     state["_newSurface"] = True
     auditor = state["_auditTargets"][0]["auditorVendor"]
     RD._fold_audits(state, state["config"], {
-        "results": [{"id": zid, "ruling": "discharged", "reason": "gone"},
-                    {"id": aid, "ruling": "not-discharged", "reason": "still broken"}],
+        "results": [{"id": zid, "ruling": "discharged", "reason": "gone", "checks": _AUDIT_CHECKS},
+                    {"id": aid, "ruling": "not-discharged", "reason": "still broken",
+                     "checks": _AUDIT_CHECKS}],
         "collectionManifest": {zid: auditor, aid: auditor}})
     assert aid in (state.get("restagedAfterDispositionSeq") or {})

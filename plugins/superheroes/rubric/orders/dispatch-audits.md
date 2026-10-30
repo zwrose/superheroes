@@ -42,9 +42,11 @@ whose text names the change as their fix and whose guidance it follows (audit th
 against those findings as you audit this fix, and report any new issue it introduces); in the reverts
 field, the `ref` of each `reportedUnnamedChanges` entry the change undoes. Give them only when every
 unnamed change you reported is covered by one of them; when any part is covered by neither, leave both
-out. The fold checks that every identifier and ref you name is in the review's own record, and makes
+out. The fold confirms that every identifier and ref you name is in the review's own record, and makes
 the call; whether the change really is that fix or that undo is your judgment. Leave all four of
 these fields out when every change in `fixerDelta` is named by a finding of the batch.
+Whatever your verdict, answer three questions about the fix in the result's field for them, which holds one entry per question, each as `{"answer": "yes" or "no", "why": "<your grounds>"}`: `right` (is the fix right?), `brokeNothing` (did it break nothing next to it?) and `testWouldFail` (would a test fail if the fix were wrong?). A result missing an entry, with an answer other than `yes` or `no`, or with a blank `why` is refused. A verdict that clears the fix, with or without a new issue, stands only when all three answers are `yes`; with any `no` the driver leaves the fix open. A verdict that leaves the fix open may carry any answers.
+When the target carries `breakIt` and its `match` is `changed-explained`, the committed break-it test is not the test role's own text: compare `committedTest` with `reviewerTest` in light of `changedWhy` (the build session's explanation), and answer in the result's field for the test comparison, `{"answer": "matches" or "weakened", "why": "<your grounds>"}`. Answer `weakened` when the change lets the test pass on code it should fail on, or narrows what it covers. Answer `matches` when it only makes the test run (for example a type, syntax or import fix) and covers the same behaviour. A `weakened` answer blocks the fix. When `match` is `missing` or `changed-unexplained`, the driver has already left the fix open; still answer the three questions.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.

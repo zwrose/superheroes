@@ -495,6 +495,7 @@ def _legacy_stdout_to_native_review_branch(stdout):
         "id": obj.get("id"),
         "ruling": obj.get("ruling"),
         "reason": obj.get("reason"),
+        "checks": obj.get("checks"),
     }
     contract, _ = PC.payload_contract(PC.P_AUDITS)
     for opt in contract.get("optional") or ():
@@ -5020,7 +5021,9 @@ def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
 
 _VALID_GROUPING_STDOUT = json.dumps({"grouping": [{"member_ids": ["f1"], "repeatOf": None}]})
 _VALID_RULING_STDOUT = json.dumps(
-    {"id": "f1", "ruling": "discharged", "reason": "resolved in diff"},
+    {"id": "f1", "ruling": "discharged", "reason": "resolved in diff",
+     "checks": {name: {"answer": "yes", "why": "checked"}
+                for name in ("right", "brokeNothing", "testWouldFail")}},
 )
 
 
@@ -7058,6 +7061,8 @@ def _matrix_investigated_only_stdout(kind, path="good.py"):
             "id": "f1",
             "ruling": "discharged",
             "reason": "resolved in diff",
+            "checks": {name: {"answer": "yes", "why": "checked"}
+                       for name in ("right", "brokeNothing", "testWouldFail")},
             "investigated": [path],
         })
     raise AssertionError("unsupported kind %r" % kind)
@@ -11871,6 +11876,8 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -11902,6 +11909,8 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -11921,6 +11930,8 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -11930,6 +11941,8 @@ def _native_review_branch(kind, **overrides):
             "id": "audit-seat",
             "ruling": contract["enums"]["ruling"][0],
             "reason": "grounds",
+            "checks": {name: {"answer": "yes", "why": "checked"}
+                       for name in ("right", "brokeNothing", "testWouldFail")},
         }
         for opt in contract.get("optional") or ():
             ruling[opt] = None

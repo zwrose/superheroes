@@ -109,6 +109,8 @@ def _native_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
             "readParts": None,
             "investigated": investigated,
         }

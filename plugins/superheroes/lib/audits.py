@@ -59,6 +59,77 @@ def has_usable_reason(reason):
     return isinstance(reason, str) and bool(reason.strip())
 
 
+CHECK_NAMES = ("right", "brokeNothing", "testWouldFail")
+CHECK_ANSWERS = ("yes", "no")
+TEST_MATCH_ANSWERS = ("matches", "weakened")
+
+MATCH_SAME = "same"
+MATCH_CHANGED_EXPLAINED = "changed-explained"
+MATCH_CHANGED_UNEXPLAINED = "changed-unexplained"
+MATCH_MISSING = "missing"
+BREAK_IT_MATCHES = (MATCH_SAME, MATCH_CHANGED_EXPLAINED, MATCH_CHANGED_UNEXPLAINED, MATCH_MISSING)
+# The matches that block the fix whatever the result says: the committed test is not the test role's
+# version, nor a change of it the build session explained.
+_BLOCKING_MATCHES = (MATCH_CHANGED_UNEXPLAINED, MATCH_MISSING)
+
+
+def break_it_match(target):
+    """The `breakIt.match` the driver recorded on an audit target: None when the target carries no
+    `breakIt`; a value outside `BREAK_IT_MATCHES` reads as `missing` (fail closed)."""
+    if not isinstance(target, dict) or "breakIt" not in target:
+        return None
+    block = target.get("breakIt")
+    match = block.get("match") if isinstance(block, dict) else None
+    return match if match in BREAK_IT_MATCHES else MATCH_MISSING
+
+
+def _answered(entry, allowed):
+    """None when `entry` is `{"answer": <one of allowed>, "why": <usable reason>}`, else what is wrong."""
+    if not isinstance(entry, dict):
+        return "is not an object"
+    if not isinstance(entry.get("answer"), str) or entry["answer"] not in allowed:
+        return "has an `answer` of %r, not one of: %s" % (entry.get("answer"), ", ".join(allowed))
+    if not has_usable_reason(entry.get("why")):
+        return "has no usable `why`"
+    return None
+
+
+def audit_checks_fault(result, target=None):
+    """None when an audit result answers the fix auditor's three checks (`checks.right`,
+    `checks.brokeNothing`, `checks.testWouldFail`, each `{"answer": "yes"|"no", "why": <reason>}`) and,
+    where `target` carries a `breakIt` whose match is `changed-explained`, the test comparison
+    (`testMatch`: `{"answer": "matches"|"weakened", "why": <reason>}`); otherwise a short reason. With
+    no target in hand only the `checks` shape is judged. The ONE judge of this shape: the payload
+    contract's `audit-checks` predicate, the submit-shape guard and the fold all call this function."""
+    checks = result.get("checks") if isinstance(result, dict) else None
+    if not isinstance(checks, dict):
+        return "`checks` is %s, not an object with `right`, `brokeNothing` and `testWouldFail`" % (
+            "missing" if checks is None else type(checks).__name__)
+    for name in CHECK_NAMES:
+        if name not in checks:
+            return "`checks.%s` is missing" % name
+        why = _answered(checks[name], CHECK_ANSWERS)
+        if why is not None:
+            return "`checks.%s` %s" % (name, why)
+    if break_it_match(target) == MATCH_CHANGED_EXPLAINED:
+        why = _answered(result.get("testMatch"), TEST_MATCH_ANSWERS)
+        if why is not None:
+            return ("`testMatch` %s — the committed break-it test was changed, so the audit owes "
+                    "whether it still matches the test role's" % why)
+    return None
+
+
+def failed_check(result):
+    """`(name, why)` of the first of the three checks answered `no` in a result that passes
+    `audit_checks_fault`, else None."""
+    checks = result.get("checks") if isinstance(result, dict) else None
+    for name in CHECK_NAMES:
+        entry = checks.get(name) if isinstance(checks, dict) else None
+        if isinstance(entry, dict) and entry.get("answer") == "no":
+            return name, str(entry.get("why")).strip()
+    return None
+
+
 def _resolve_expected_auditor(fid, finding, expected_auditors):
     """The TRUSTED independent-auditor selection for a target — the DRIVER's record, never the
     result's own echo (#507 R2). Prefer the explicit `expected_auditors` map the driver passes
@@ -178,8 +249,15 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                  is not None or a list of non-blank strings is malformed. Every result that states
                  an `unnamedChange` records it on its entry as `reportedUnnamedChange`.
 
+    Every result answers the three checks (`audit_checks_fault`); one that does not is malformed and
+    not-discharged. A clearing ruling stands only on three `yes` answers. A target carrying `breakIt`
+    is blocked (not-discharged, listed in `testMismatch`) when its `match` is `missing` or
+    `changed-unexplained`, or is `changed-explained` and the result's `testMatch` says `weakened`; each
+    of its `audits` entries records `testMatch: {match, answer, blocking}`. Only a target that has a
+    result is listed in `testMismatch`.
+
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
-    unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange}. Each `audits` entry
+    unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange, testMismatch}. Each `audits` entry
     carries the EFFECTIVE (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
     are subsets of notDischarged that name WHY the finding could not be certified discharged;
     `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the
@@ -231,6 +309,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     echo_mismatch = []
     unnamed_change = []
     attributed_change = []
+    test_mismatch = []
     allowed_ids = set(i for i in (change_allowed_ids or ()) if isinstance(i, str))
     matched_ids = set()
 
@@ -291,6 +370,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             marker = f.get(name)
             if isinstance(marker, str) and marker:
                 base[name] = marker
+        match = break_it_match(f)
+        if match is not None:
+            base["testMatch"] = {"match": match, "answer": None, "blocking": False}
 
         # No matching result (silence) → fail-closed not-discharged, disclosed as unaudited.
         # An ambiguous id is IN seen_ids OR is a duplicate target id — disclosed via `ambiguous`.
@@ -372,6 +454,57 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 if fid is not None:
                     echo_mismatch.append(fid)
                 base["echoMismatch"] = {"echo": echo, "manifest": manifest_vendor}
+
+        # The committed break-it test is judged after provenance and before any ruling arm. A test that
+        # is missing, or changed with no explanation, is not the test role's version: the fix is
+        # blocked whatever the result says.
+        test_match = r.get("testMatch")
+        reported = test_match.get("answer") if isinstance(test_match, dict) else None
+        if match in _BLOCKING_MATCHES:
+            if fid is not None:
+                test_mismatch.append(fid)
+                not_discharged.append(fid)
+            base["testMatch"].update(answer=reported if reported in TEST_MATCH_ANSWERS else None,
+                                     blocking=True)
+            base.update(ruling="not-discharged",
+                        reason=("break-it test %s: the committed test at %s is not the test role's "
+                                "version (or the build session's explained change of it)"
+                                % (match, (f.get("breakIt") or {}).get("path"))))
+            audits.append(base)
+            continue
+        # Every result answers the three checks, whatever its ruling; a result that does not is
+        # refused here exactly as the submit guard refuses it.
+        checks_fault = audit_checks_fault(r, f)
+        if checks_fault is not None:
+            if fid is not None:
+                malformed.append(fid)
+                not_discharged.append(fid)
+            base.update(ruling="not-discharged", reason="audit refused: %s" % checks_fault)
+            audits.append(base)
+            continue
+        if match == MATCH_CHANGED_EXPLAINED:
+            base["testMatch"]["answer"] = reported
+            if reported == "weakened":
+                base["testMatch"]["blocking"] = True
+                if fid is not None:
+                    test_mismatch.append(fid)
+                    not_discharged.append(fid)
+                base.update(ruling="not-discharged",
+                            reason="break-it test weakened: %s" % test_match["why"].strip())
+                audits.append(base)
+                continue
+        # A clearing ruling stands only when all three checks are answered `yes`.
+        failed = failed_check(r) if ruling in _CLEARS else None
+        if failed is not None:
+            if fid is not None:
+                not_discharged.append(fid)
+            candidates = (_valid_new_issues(r.get("newIssues"), fid)
+                          if ruling == "discharged-but-new-issue" else [])
+            new_issues.extend(candidates)
+            base.update(ruling="not-discharged",
+                        reason="audit check failed: %s: %s" % failed)
+            audits.append(base)
+            continue
 
         # A clearing result that names behaviour its finding does not name is accepted only when the
         # finding's ruling allows the change. Provenance (above) keeps its precedence.
@@ -513,4 +646,5 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         "echoMismatch": echo_mismatch,
         "unnamedChange": unnamed_change,
         "attributedChange": attributed_change,
+        "testMismatch": test_mismatch,
     }

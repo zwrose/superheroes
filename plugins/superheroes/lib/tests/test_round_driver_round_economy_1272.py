@@ -28,7 +28,7 @@ _SPEC.loader.exec_module(_TDI)
 
 from session_checkout import seed_session_meta  # noqa: E402
 from test_round_driver import (  # noqa: E402
-    _claim_reviewer,
+    _claim_reviewer, audit_checks,
     DIFF, HEAD, HEAD_NEW_SURFACE, _cfg, _drive_cli, _drive_to_phase, _nonpanel_cell_proof,
     _responder, _synthesis_seatable_map,
 )
@@ -149,7 +149,8 @@ def test_t1c_hand_submit_audits_then_verify(tmp_path):
     assert "verify" in n["payload"]
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                    "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                    "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                    "checks": audit_checks()}
                                    for t in n["payload"]["targets"]],
                        "collectionManifest": {t["id"]: t.get("auditorVendor")
                                               for t in n["payload"]["targets"]}})
@@ -174,7 +175,8 @@ def test_t2_verify_fail_after_audits_halts(tmp_path):
                         RD.P_AUDITS)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                    "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                    "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                    "checks": audit_checks()}
                                    for t in n["payload"]["targets"]],
                        "collectionManifest": {t["id"]: t.get("auditorVendor")
                                               for t in n["payload"]["targets"]}})

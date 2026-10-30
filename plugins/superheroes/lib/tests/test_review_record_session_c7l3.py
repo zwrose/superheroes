@@ -467,7 +467,8 @@ def test_a_malformed_sheet_answers_or_base_ref_is_refused_naming_the_key(tmp_pat
 
 def test_a_rejection_by_the_selected_auditor_records_that_vendor_and_a_headless_audit_stays_a_missing_review(tmp_path):
     target = {"id": "f", "identity": "f", "file": "x.py", "line": 1, "title": "t", "auditorVendor": "codex"}
-    results = [{"id": "f", "ruling": "not-discharged", "reason": "the fix leaves the defect"}]
+    results = [{"id": "f", "ruling": "not-discharged", "reason": "the fix leaves the defect",
+                "checks": _TRD.audit_checks(right="no")}]
     # bites on: audits.apply_audit_results stamping the executing vendor only on clearing rulings
     got = audits.apply_audit_results([target], results, expected_auditors={"f": "codex"}, collection_manifest={"f": "codex"})
     assert got["audits"][0]["auditor"] == "codex"
