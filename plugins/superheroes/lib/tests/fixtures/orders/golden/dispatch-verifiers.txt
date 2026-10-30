@@ -47,7 +47,10 @@ Verdict semantics:
   for any other issue.
 - For an issue whose `breakItRun` passed, also return `pathReached`: `true` when the test ran the
   code down the path the issue names, `false` when it never reached that path. A passing test
-  that reached the path is evidence the issue does not hold: REFUTED. One that missed it gets one
+  that reached the path is evidence the issue does not hold, but only when its assertions check the
+  behaviour the issue names (read the test's asserts: one that only asserts a non-null result, or
+  nothing about the disputed value, shows nothing). REFUTED when it does; when the assertions are
+  too weak to decide it, judge from the code and return CONFIRMED or PLAUSIBLE. One that missed it gets one
   more test from a fresh run of the test reviewer, so judge nothing final on it: return
   PLAUSIBLE with `pathReached: false` and your note in `reason`. An issue marked `secondTest: true` has had its
   one more test; there is no other, so decide it on the evidence you have — REFUTED when it does

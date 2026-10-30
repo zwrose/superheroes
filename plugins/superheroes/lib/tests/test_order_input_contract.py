@@ -1043,6 +1043,7 @@ def test_order_placeholder_registry_partition_is_complete():
         RP.P_VERIFIERS: {"clusters": [{"key": "c0", "findings": []}]},
         RP.P_SYNTHESIS: {"findings": []},
         RP.P_GAPSWEEP: {},
+        RP.P_SECOND_TEST: {"findings": []},
         RP.P_AUDITS: {"targets": [{"id": "finding::auth.py::12"}]},
         RP.P_SCOPED: {"hunks": {}},
     }
@@ -1051,6 +1052,7 @@ def test_order_placeholder_registry_partition_is_complete():
         RP.P_VERIFIERS: "verifier:c0",
         RP.P_SYNTHESIS: "synthesis",
         RP.P_GAPSWEEP: "gap-sweep",
+        RP.P_SECOND_TEST: "second-test",
         RP.P_AUDITS: "finding::auth.py::12",
         RP.P_SCOPED: "scoped-finder",
     }

@@ -5018,7 +5018,7 @@ def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
     assert "findings" not in grade
 
 
-_VALID_GROUPING_STDOUT = json.dumps({"grouping": [{"member_ids": ["f1"]}]})
+_VALID_GROUPING_STDOUT = json.dumps({"grouping": [{"member_ids": ["f1"], "repeatOf": None}]})
 _VALID_RULING_STDOUT = json.dumps(
     {"id": "f1", "ruling": "discharged", "reason": "resolved in diff"},
 )
@@ -11910,7 +11910,7 @@ def _native_review_branch(kind, **overrides):
             "resultKind": "grouping",
             "findings": None,
             "verdicts": None,
-            "grouping": [{"member_ids": ["a-001", "b-002"]}],
+            "grouping": [{"member_ids": ["a-001", "b-002"], "repeatOf": None}],
             "id": None,
             "ruling": None,
             "reason": None,

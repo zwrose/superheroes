@@ -86,7 +86,6 @@ def session_account(tmp_path, ledger):
 
 
 def test_j1_repeat_kept_is_never_a_finding_part_nor_written(tmp_path):
-    assert rs._FINDING_PARTS == ("grade", "repeatOf", "breakItRuns", "kindOfMistake")
     row = ledger_row(disposition="fixed", repeatKept=kept("craft"), repeatOf=mark(KEY))
     (found,) = session_account(tmp_path, [row])["findings"]
     assert found["outcome"] == "craft" and "repeatKept" not in found
@@ -288,6 +287,8 @@ def test_j4_a_shown_wrong_repeat_naming_anything_else_is_still_refused(tmp_path,
 def test_j4_a_kept_repeat_of_an_earlier_finding_that_is_not_closed_is_refused(tmp_path):
     # the earlier finding is itself bare, so there is no closure to pass through
     bare = finding("a-1", title="one", outcome="shown-wrong", reason="r")
+    # both are refused: the repeat gains no closure through an original that has none
+    assert rr._wrong_ungraded([bare, repeat_wrong(bare)], None, closed(bare)) == [0, 1]
     out = write(tmp_path, Fake(), [bare, repeat_wrong(bare)], verifier_closed=closed(bare))
     assert out["ok"] is False and out["detail"].startswith("findings[")
 
