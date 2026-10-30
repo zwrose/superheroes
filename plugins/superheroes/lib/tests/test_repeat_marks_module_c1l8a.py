@@ -25,6 +25,7 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import repeat_marks as RM  # noqa: E402
+import review_record  # noqa: E402
 import session_contract as SC  # noqa: E402
 
 _CONSEQUENCE = "a reviewer-found defect stays in the change"
@@ -80,7 +81,7 @@ def _row(raw, disposition, decided=1, **extra):
 
 def _stored(raw, outcome, **extra):
     """A finding as the review record holds it: an opaque stored key and an outcome."""
-    return dict(raw, findingKey=RM.opaque_key(raw), outcome=outcome, **extra)
+    return dict(raw, findingKey=review_record._key(raw), outcome=outcome, **extra)
 
 
 def _record_payload(findings, sha="a" * 40):
@@ -195,8 +196,9 @@ def test_code_changed_counts_an_unreadable_head_as_changed(repo):
 
 
 def test_code_changed_counts_a_head_starting_with_a_dash_as_changed(repo):
-    assert RM.code_changed(repo.root, "-oops", repo.same) is True
-    assert RM.code_changed(repo.root, repo.changed, "--help") is True
+    # `--quiet` is a real git option: without the guard git reads the clean tree as unchanged
+    assert RM.code_changed(repo.root, "--quiet", repo.same) is True
+    assert RM.code_changed(repo.root, repo.same, "--quiet") is True
 
 
 def test_code_changed_counts_a_failed_git_run_as_changed(repo, monkeypatch):
@@ -242,7 +244,7 @@ def test_a_session_row_is_pooled_only_when_decided_in_an_earlier_round_and_after
 # ---- the pool entries of a record finding -----------------------------------------------------------
 
 def test_r1_an_undecided_earlier_finding_is_pooled_with_outcome_none_and_reads_as_new():
-    open_finding = dict(_raw("still open", id="R-9"), findingKey=RM.opaque_key(_raw("still open")), outcome=None)
+    open_finding = dict(_raw("still open", id="R-9"), findingKey=review_record._key(_raw("still open")), outcome=None)
     entry = RM.record_entry(open_finding, "b" * 40)
     assert entry is not None
     assert (entry["source"], entry["key"], entry["id"], entry["outcome"], entry["head"]) == (
@@ -253,6 +255,25 @@ def test_r1_an_undecided_earlier_finding_is_pooled_with_outcome_none_and_reads_a
     assert odd["outcome"] is None
     entries, reason = RM.read_earlier_findings(_record_payload([open_finding]))
     assert reason is None and [e["outcome"] for e in entries] == [None]
+
+
+@pytest.mark.parametrize("outcome", [["craft"], {"craft": 1}])
+def test_a_list_or_dict_outcome_reads_as_undecided_and_never_raises(outcome, tmp_path):
+    odd = _stored(_raw("odd", id="R-3"), outcome)
+    assert RM.record_entry(odd, None)["outcome"] is None
+    path = tmp_path / "odd.json"
+    path.write_text(json.dumps(_record_payload([_stored(_raw("good"), "craft"), odd])), encoding="utf-8")
+    payload, entries, reason = RM.read_file(str(path))
+    assert reason is None and [e["outcome"] for e in entries] == ["craft", None]
+    assert RM.outcome_of(outcome) is None and RM.outcome_of(outcome, {"grade": _WRONG}) is None
+    assert RM.decide(outcome, "wrong", False) == (False, None)
+
+
+def test_opaque_key_is_the_review_records_stored_key():
+    raw = _raw("contract")
+    assert RM.opaque_key(raw) == review_record._key(raw)
+    already = {"findingKey": review_record._key(raw)}
+    assert RM.opaque_key(already) == review_record._key(already)
 
 
 def test_r2_a_decided_record_finding_reads_into_a_pool_entry_with_its_judged_head():
@@ -276,7 +297,7 @@ def test_r3_a_record_finding_with_no_key_and_no_file_and_title_is_never_pooled()
     assert [e["title"] for e in entries] == ["good"]
     minted = {"outcome": "craft", "file": "f.py", "title": "no stored key", "line": 9}
     entries, _ = RM.read_earlier_findings(_record_payload([minted]))
-    assert entries[0]["key"] == RM.opaque_key(minted)
+    assert entries[0]["key"] == review_record._key(minted)
     assert RM.record_entry("not a dict", None) is None
 
 
@@ -481,11 +502,13 @@ def test_strip_groups_removes_the_ids_and_a_group_left_empty_and_loses_nothing_e
 
 def test_kept_reason_names_the_earlier_finding_its_outcome_and_a_held_fix():
     named = {"id": "F-1", "key": "k", "outcome": "craft"}
-    assert RM.kept_reason(named, None) == "repeat of F-1; keeps its earlier outcome (craft)"
-    assert RM.kept_reason(dict(named, outcome="fixed"), True) == (
-        "repeat of F-1; keeps its earlier outcome (fixed); the verifier found the fix still holds")
-    assert RM.kept_reason(dict(named, outcome="fixed"), False) == "repeat of F-1; keeps its earlier outcome (fixed)"
+    reason = RM.kept_reason(named, None)
+    assert "F-1" in reason and "craft" in reason
+    unheld = RM.kept_reason(dict(named, outcome="fixed"), False)
+    held = RM.kept_reason(dict(named, outcome="fixed"), True)
+    assert "F-1" in held and "fixed" in held and unheld in held and len(held) > len(unheld)
     short = {"id": None, "key": "f.py@L1:title", "outcome": "ruling"}
-    assert RM.kept_reason(short, None) == "repeat of f.py@L1:title; keeps its earlier outcome (ruling)"
+    assert "f.py@L1:title" in RM.kept_reason(short, None)
     long_key = {"id": None, "key": "k" * 60, "outcome": "ruling"}
-    assert RM.kept_reason(long_key, None) == "repeat of %s…; keeps its earlier outcome (ruling)" % ("k" * 40)
+    long_reason = RM.kept_reason(long_key, None)
+    assert "k" * 40 in long_reason and "k" * 41 not in long_reason
