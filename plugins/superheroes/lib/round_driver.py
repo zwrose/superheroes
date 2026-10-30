@@ -4235,6 +4235,12 @@ def _apply_repeat_marks(state, plan):
         if not key:
             continue
         repeat_of = {"findingKey": entry["key"], "id": entry.get("id"), "fixHolds": mark["fixHolds"]}
+        original = entry.get("repeatOf") if mark["source"] == "exact" else None
+        if isinstance(original, dict) and isinstance(original.get("findingKey"), str) \
+                and original["findingKey"].strip() and original["findingKey"] not in (key, entry["key"]):
+            # a finding matched to itself keeps its original link to the earlier finding it repeats: a self-link
+            # would cut its route to that finding's verifier closure and duplicate its owner card
+            repeat_of = dict(original)
         repeat_kept = None
         if mark["kept"]:
             reason = repeat_marks.kept_reason(entry, mark["fixHolds"])

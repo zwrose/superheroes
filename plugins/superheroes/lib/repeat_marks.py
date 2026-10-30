@@ -100,6 +100,10 @@ def _entry(source, key, finding, outcome, **extra):
     row = {"source": source, "key": key, "outcome": outcome,
            "id": finding.get("id") if isinstance(finding.get("id"), str) else None,
            "file": finding.get("file"), "line": finding.get("line"), "title": finding.get("title")}
+    # the finding's own earlier link, so a re-match of the finding to itself can keep it
+    link = finding.get("repeatOf")
+    if isinstance(link, dict):
+        row["repeatOf"] = copy.deepcopy(link)
     row.update(extra)
     return row
 

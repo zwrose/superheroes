@@ -1016,5 +1016,7 @@ def test_t3b_a_judge_named_repeat_kept_as_shown_wrong_is_marked_and_kept_by_exac
     (again,) = state["rounds"]["3"]["repeatMarks"]
     assert (again["source"], again["kept"]) == ("exact", True), again
     row = _row(state, reworded)
-    assert row["repeatOf"]["findingKey"] == _key(reworded) and row["repeatKept"]["outcome"] == "shown-wrong", row
+    # the exact re-match keeps the original link to the shown-wrong one, never a self-link
+    assert again["repeatOf"]["findingKey"] == _key(shown_wrong), again
+    assert row["repeatOf"]["findingKey"] == _key(shown_wrong) and row["repeatKept"]["outcome"] == "shown-wrong", row
     assert state["findings"] == []
