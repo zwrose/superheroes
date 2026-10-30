@@ -2,8 +2,8 @@
 """Conformance (#2272): a cloud builder that wakes after a newer launch took its issue over stands down.
 
 `cloud_builder.superseded` reads the issue's comments whole through `cloud_recover._issue_comments` and
-names a newer launch: a `Builder superseded (cloud build).` notice created later than the builder's own
-start time. An intake comment never orders launches. Only `gh` is faked, through the `run=` injection, the
+names a newer launch: a `Builder superseded (cloud build).` notice that names the builder's own launch id
+as a whole token, whatever its time. An intake comment never orders launches. Only `gh` is faked, through the `run=` injection, the
 way test_cloud_recover.py fakes it. Nothing touches the network or the real environment."""
 import datetime
 import json
@@ -31,7 +31,7 @@ def _at(minute, second=0):
     return datetime.datetime(2026, 10, 12, 10, minute, second, tzinfo=UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-STARTED = _at(0)
+LAUNCH = "launch-1"
 
 
 def _comment(cid, body, created):
@@ -43,8 +43,8 @@ def _intake(cid, minute, second=0):
     return _comment(cid, CB.INTAKE_TEXT.format(v="0.47.0", sha=SHA), _at(minute, second))
 
 
-def _notice(cid, minute, second=0):
-    return _comment(cid, CB.superseded_notice_text("launch-1"), _at(minute, second))
+def _notice(cid, minute, second=0, launch=LAUNCH):
+    return _comment(cid, CB.superseded_notice_text(launch), _at(minute, second))
 
 
 class Gh:
@@ -60,12 +60,12 @@ class Gh:
         return subprocess.CompletedProcess(argv, 0, json.dumps(self.comments), "")
 
 
-def _superseded(comments, started=STARTED, **kw):
-    return CB.superseded(REPO, ISSUE, started, env={}, run=Gh(comments, **kw))
+def _superseded(comments, launch=LAUNCH, **kw):
+    return CB.superseded(REPO, ISSUE, launch, env={}, run=Gh(comments, **kw))
 
 
-# 1. a supersession notice later than the builder's start
-def test_a_notice_later_than_the_start_supersedes_and_stand_down_names_it():
+# 1. a supersession notice that names the builder's own launch
+def test_a_notice_naming_the_launch_supersedes_and_stand_down_names_it():
     result = _superseded([_intake(100, 0), _notice(101, 1)])
     assert result["ok"] is True and result["superseded"] is True
     url = "https://github.com/%s/issues/%d#issuecomment-101" % (REPO, ISSUE)
@@ -82,16 +82,22 @@ def test_the_newest_of_several_notices_is_named():
 
 def test_the_whole_issue_is_read_from_epoch_zero():
     gh = Gh([_notice(101, 1)])
-    CB.superseded(REPO, ISSUE, STARTED, env={}, run=gh)
+    CB.superseded(REPO, ISSUE, LAUNCH, env={}, run=gh)
     assert "since=1970-01-01T00:00:00Z" in gh.calls[0][-1]
 
 
 def test_a_delayed_own_intake_posted_after_the_notice_does_not_reverse_the_supersession():
     # the original's intake POST completes after the successor's notice and intake: ordering by intake comments
-    # would call the original the newest; the notice, created after the original started, still supersedes it
+    # would call the original the newest; the notice that names its launch still supersedes it
     comments = [_notice(100, 1), _intake(101, 2), _intake(102, 3)]
     result = _superseded(comments)
     assert result["superseded"] is True and result["newerLaunch"]["commentId"] == 100
+
+
+def test_a_notice_older_than_the_builders_own_intake_still_supersedes_it():
+    # a builder whose first intake was delayed past the notice by a usage limit: time orders nothing
+    comments = [_notice(99, 0), _intake(100, 30)]
+    assert _superseded(comments)["superseded"] is True
 
 
 # 2. nothing newer
@@ -106,16 +112,19 @@ def test_intakes_and_other_builder_comments_never_supersede():
     assert result == {"ok": True, "superseded": False, "newerLaunch": None, "comment": None}
 
 
-def test_a_notice_earlier_than_the_start_does_not_supersede():
-    assert _superseded([_notice(99, 0), _intake(100, 3)], started=_at(2))["superseded"] is False
+def test_a_notice_naming_another_launch_never_supersedes():
+    assert _superseded([_notice(101, 5, launch="launch-2")])["superseded"] is False
 
 
-def test_a_notice_created_in_the_start_second_does_not_supersede():
-    assert _superseded([_notice(101, 2)], started=_at(2))["superseded"] is False
+@pytest.mark.parametrize("other", ["launch-12", "launch-10", "xlaunch-1", "launch-1-x", "launch-1_a"])
+def test_a_launch_id_is_matched_as_a_whole_token(other):
+    notice = _comment(101, CB.SUPERSEDED_HEADER + "\n\nThe earlier lane " + other + " is superseded.", _at(1))
+    assert _superseded([notice])["superseded"] is False
 
 
-def test_a_notice_one_second_after_the_start_supersedes():
-    assert _superseded([_notice(101, 2, 1)], started=_at(2))["superseded"] is True
+def test_a_launch_id_followed_by_punctuation_is_still_named():
+    notice = _comment(101, CB.SUPERSEDED_HEADER + "\n\nThe earlier lane (launch-1), is superseded.", _at(1))
+    assert _superseded([notice])["superseded"] is True
 
 
 # 3. a detective intake, or a quoted header, is not a launch
@@ -144,15 +153,15 @@ def test_a_page_that_is_not_a_list_of_comments_is_a_refusal():
     assert _superseded(["not a comment"])["reason"] == "comments-unreadable"
 
 
-@pytest.mark.parametrize("repo, issue, started", [
-    ("nope", ISSUE, STARTED), ("../x", ISSUE, STARTED), (None, ISSUE, STARTED), ("a/b/c", ISSUE, STARTED),
-    (REPO, 0, STARTED), (REPO, -1, STARTED), (REPO, True, STARTED), (REPO, "17", STARTED), (REPO, None, STARTED),
-    (REPO, ISSUE, ""), (REPO, ISSUE, "yesterday"), (REPO, ISSUE, "2026-10-12"), (REPO, ISSUE, "2026-10-12T10:00:00"),
-    (REPO, ISSUE, 100), (REPO, ISSUE, True), (REPO, ISSUE, None),
+@pytest.mark.parametrize("repo, issue, launch", [
+    ("nope", ISSUE, LAUNCH), ("../x", ISSUE, LAUNCH), (None, ISSUE, LAUNCH), ("a/b/c", ISSUE, LAUNCH),
+    (REPO, 0, LAUNCH), (REPO, -1, LAUNCH), (REPO, True, LAUNCH), (REPO, "17", LAUNCH), (REPO, None, LAUNCH),
+    (REPO, ISSUE, ""), (REPO, ISSUE, "launch-"), (REPO, ISSUE, "issue-17-abc"), (REPO, ISSUE, "launch-1\nlaunch-2"),
+    (REPO, ISSUE, "launch-1 "), (REPO, ISSUE, 100), (REPO, ISSUE, True), (REPO, ISSUE, None),
 ])
-def test_bad_inputs_are_refused_before_any_read(repo, issue, started):
+def test_bad_inputs_are_refused_before_any_read(repo, issue, launch):
     gh = Gh([_notice(101, 1)])
-    assert CB.superseded(repo, issue, started, env={}, run=gh) == {"ok": False, "reason": "input-invalid"}
+    assert CB.superseded(repo, issue, launch, env={}, run=gh) == {"ok": False, "reason": "input-invalid"}
     assert gh.calls == []
 
 
@@ -171,23 +180,24 @@ def test_the_stand_down_is_not_read_as_any_other_builder_comment():
 def test_cli_prints_the_same_json_and_exits_zero_when_superseded(monkeypatch, capsys):
     comments = [_notice(101, 1)]
     monkeypatch.setattr(cloud_recover, "_issue_comments", lambda repo, issue, since, env, run: comments)
-    expected = CB.superseded(REPO, ISSUE, STARTED)
+    expected = CB.superseded(REPO, ISSUE, LAUNCH)
     assert expected["superseded"] is True
-    code = CB.main(["superseded", "--repo", REPO, "--issue", str(ISSUE), "--started", STARTED])
+    code = CB.main(["superseded", "--repo", REPO, "--issue", str(ISSUE), "--launch-id", LAUNCH])
     assert code == 0
     assert json.loads(capsys.readouterr().out) == expected
 
 
 def test_cli_exits_one_only_on_a_refusal(monkeypatch, capsys):
     monkeypatch.setattr(cloud_recover, "_issue_comments", lambda repo, issue, since, env, run: None)
-    code = CB.main(["superseded", "--repo", REPO, "--issue", str(ISSUE), "--started", STARTED])
+    code = CB.main(["superseded", "--repo", REPO, "--issue", str(ISSUE), "--launch-id", LAUNCH])
     assert code == 1
     assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "comments-unreadable"}
 
 
 def test_cli_verb_is_listed_in_the_module_docstring():
-    assert "cloud_builder.py superseded --repo O/N --issue N --started T" in CB.__doc__
+    assert "cloud_builder.py superseded --repo O/N --issue N --launch-id L" in CB.__doc__
     assert "--own-intake-id" not in CB.__doc__
+    assert "--issue N --started" not in CB.__doc__
     assert "cloud_builder.py superseded-notice --launch-id L" in CB.__doc__
 
 
@@ -242,17 +252,26 @@ def test_cloud_reference_tells_a_waking_builder_to_check_and_push_nothing():
     assert "On `superseded: true`, push nothing" in text
 
 
-def test_cloud_reference_passes_the_start_time_not_an_intake_id():
+def test_cloud_reference_passes_the_launch_id_not_a_time_or_an_intake_id():
     text = " ".join(_doc("skills/workhorse/reference/cloud.md").split())
-    assert "--started <your start time>" in text
-    assert "date -u +%Y-%m-%dT%H:%M:%SZ" in text
+    assert "At intake, at every wake, and before every push" in text
+    assert "--launch-id <your launch id>" in text
+    assert "`issue-<n>-<hash>`" in text and "`launch-<hash>`" in text
+    assert "--started <your start time>" not in text
     assert "--own-intake-id" not in text
 
 
-def test_transition_names_the_started_verb():
+def test_transition_names_the_launch_id_verb():
     text = _doc("TRANSITION.md")
-    assert "`superseded --repo O/N --issue N --started T`" in text
+    assert "`superseded --repo O/N --issue N --launch-id L`" in text
     assert "--own-intake-id" not in text
+    assert "--issue N --started T" not in text
+
+
+def test_orchestration_posts_the_notice_before_the_successor_runs():
+    text = " ".join(_doc("skills/showrunner/reference/orchestration.md").split())
+    assert text.index("superseded-notice --launch-id <the stopped lane>") < text.index("then run `successor` and launch")
+    assert "stands down, which covers a never-pushed lane too" in text
 
 
 def test_orchestration_no_longer_exempts_a_bound_lane_whose_branch_is_gone():

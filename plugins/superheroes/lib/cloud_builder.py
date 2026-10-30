@@ -31,9 +31,10 @@ preflight, review and park.
                           the handback, stop or park comment, headed with its fixed first line
   cloud_builder.py pass-state
                           the placed reviewer sign-in's state, and whether this is a cloud session
-  cloud_builder.py superseded --repo O/N --issue N --started T
-                          whether a newer launch took the issue over since this builder started (T, UTC
-                          ISO); on `superseded: true` the result's `comment` is the stand-down to post
+  cloud_builder.py superseded --repo O/N --issue N --launch-id L
+                          whether a supersession notice names this builder's own launch (L, launch-<hash>,
+                          from its session name issue-<n>-<hash>); on `superseded: true` the result's
+                          `comment` is the stand-down to post
   cloud_builder.py superseded-notice --launch-id L
                           the notice the advisor posts on the issue before it launches a successor
 
@@ -622,15 +623,24 @@ def _positive_int(value):
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def superseded(repo, issue, started, *, env=None, run=None):
-    """Whether a newer launch took the issue over since the builder started: a supersession notice created
-    later than `started` (the builder's own start time, UTC ISO). Intake comments never order launches: a
-    delayed intake post must not reverse which builder is superseded. `newerLaunch` names the newest such
-    notice. A refusal is a result, never a raise."""
+_LAUNCH_ID_RE = re.compile(r"^launch-[A-Za-z0-9]+\Z")
+
+
+def _names_launch(body, launch_id):
+    """True when `body` names `launch_id` as a whole token: not as a part of a longer id."""
+    return re.search(r"(?<![A-Za-z0-9_-])" + re.escape(launch_id) + r"(?![A-Za-z0-9_-])", body) is not None
+
+
+def superseded(repo, issue, launch_id, *, env=None, run=None):
+    """Whether a newer launch took the issue over from the builder's own launch `launch_id` (`launch-<hash>`;
+    its cloud session name is `issue-<n>-<hash>`): a supersession notice that names exactly that launch id.
+    Time orders nothing: a builder whose intake or wake came late still finds a notice posted before it, and
+    a notice naming another launch never supersedes it. `newerLaunch` names the newest such notice. A refusal
+    is a result, never a raise."""
     cloud_recover = _sibling("cloud_recover")
-    started_at = cloud_recover._epoch(started)
     # axis: every input is judged before any read, so no GitHub call runs on an argument the verb never checked — see bite-proof record i2272_stand_down
-    if not (isinstance(repo, str) and _REPO_RE.match(repo) and _positive_int(issue) and started_at is not None):
+    if not (isinstance(repo, str) and _REPO_RE.match(repo) and _positive_int(issue)
+            and isinstance(launch_id, str) and _LAUNCH_ID_RE.match(launch_id)):
         return {"ok": False, "reason": "input-invalid"}
     # the contract reads from `since - 1`, so 1 asks for every comment from epoch 0 on
     comments = cloud_recover._issue_comments(repo, issue, 1, _env(env), run)
@@ -642,9 +652,9 @@ def superseded(repo, issue, started, *, env=None, run=None):
         created = cloud_recover._epoch(comment.get("created_at"))
         if created is not None and _positive_int(comment.get("id")):
             stamped.append((created, comment["id"], comment))
-    # axis: a newer launch is shown only by a supersession notice created later than the builder's start, never by an intake comment — see bite-proof record i2272_stand_down
+    # axis: a newer launch is shown only by a supersession notice that names this builder's own launch id as a whole token, whatever its time, never by an intake comment or a notice naming another launch — see bite-proof record i2272_stand_down
     newer = [(created, cid, comment) for created, cid, comment in stamped
-             if created > started_at and _opens_with(comment.get("body"), SUPERSEDED_HEADER)]
+             if _opens_with(comment.get("body"), SUPERSEDED_HEADER) and _names_launch(comment["body"], launch_id)]
     if not newer:
         return {"ok": True, "superseded": False, "newerLaunch": None, "comment": None}
     _, cid, comment = max(newer, key=lambda t: (t[0], t[1]))
@@ -711,7 +721,7 @@ def _build_parser():
     verb("handover", "--head")
     verb("terminal", "--kind", "--text-file", **{"--kind": {"choices": ["handback", "stop", "park"]}})
     verb("pass-state")
-    verb("superseded", "--repo", "--issue", "--started", **{"--issue": {"type": int}})
+    verb("superseded", "--repo", "--issue", "--launch-id", **{"--issue": {"type": int}})
     verb("superseded-notice", "--launch-id")
     return parser
 
@@ -757,7 +767,7 @@ def _dispatch(args):
             return {"ok": False, "reason": "text-unreadable"}
         return terminal_text(args.kind, text)
     if args.verb == "superseded":
-        return superseded(args.repo, args.issue, args.started)
+        return superseded(args.repo, args.issue, args.launch_id)
     if args.verb == "superseded-notice":
         comment = superseded_notice_text(args.launch_id)
         if comment is None:

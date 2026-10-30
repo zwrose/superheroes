@@ -144,6 +144,20 @@ def test_2_a_reading_that_is_not_ok_is_not_stop_evidence(w, monkeypatch):
     assert not os.path.exists(_state_file(w))
 
 
+@pytest.mark.parametrize("stamp", [None, 0, 2, True, "1"], ids=["absent", "zero", "two", "bool", "string"])
+def test_2_a_lane_without_a_valid_stand_down_stamp_is_not_stopped_by_the_limit(w, monkeypatch, stamp):
+    # axis: the limit is stop evidence only for a lane whose premise carries standDown == 1 (an int), the launcher's own rule
+    premise = _premise(w, 17)
+    premise.pop("standDown")
+    if stamp is not None:
+        premise["standDown"] = stamp
+    _lane(w, "l1", premise=premise)
+    _limit(monkeypatch, _reading())
+    out = _assess(w, state="unread")
+    assert (out["verdict"], out["evidence"]) == ("unresolved", "session-unread")
+    assert not os.path.exists(_state_file(w))
+
+
 def test_2_a_lane_with_no_config_dir_never_asks_for_a_reading(w, monkeypatch):
     _lane_without_config(w, "l1")
     _no_limit_call(monkeypatch)
@@ -362,13 +376,29 @@ def test_3c_an_account_limit_stop_expires_before_the_successor_reads_any_pushed_
     assert _state(w)["superseded"] == {}
 
 
+def test_3c_a_limit_that_expires_during_the_pushed_work_read_refuses_before_the_supersession_is_recorded(w, monkeypatch):
+    # axis: the limit is read again after the pushed-work reads, so a reset during them never relaunches
+    _commit_branch(w, LANE, w.base, "a")
+    _stopped(w, monkeypatch, premise=_no_stack(w))
+    holds, lapsed = _reading(), _reading(limited=False)
+    readings = iter([holds, lapsed])
+
+    def fake(repo_root, config_dir, *, env=None, now=None):
+        return next(readings)
+
+    monkeypatch.setattr(cloud_relay, "account_limit", fake, raising=False)
+    got = CR.successor(w.root, "l1", repo=REPO, run=_runner(w, pulls={LANE: [5]}))
+    assert got == {"ok": False, "reason": "stop-evidence-expired"}
+    assert _state(w)["superseded"] == {}
+
+
 def test_3c_an_account_limit_stop_that_still_holds_is_adopted_and_the_limit_is_reread(w, monkeypatch):
     _commit_branch(w, LANE, w.base, "a")
     _stopped(w, monkeypatch, premise=_no_stack(w))
     calls = _limit(monkeypatch, _reading())
     got = CR.successor(w.root, "l1", repo=REPO, run=_runner(w, pulls={LANE: [5]}))
     assert got["ok"] is True and got["branch"] == LANE
-    assert [(c["repo_root"], c["config_dir"]) for c in calls] == [(w.root, CFG)]
+    assert [(c["repo_root"], c["config_dir"]) for c in calls] == [(w.root, CFG), (w.root, CFG)]
 
 
 def test_3b2_ahead_refuses_even_when_the_premise_names_the_lanes_branch(w, monkeypatch):

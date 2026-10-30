@@ -161,7 +161,8 @@ def _premise(w, issue):
             "layerPosition": 2, "maxRunMinutes": 240, "bashMaxTimeoutMs": 900000,
             "grantScope": {"applicable": False, "reason": "no grant in this lane"},
             "ownerCapability": {"applicable": False, "reason": "no owner capability in this lane"},
-            "placeCall": {"place": "cloud", "pointedAtCloud": True}, "standingExclusions": {"merge": True}}
+            "placeCall": {"place": "cloud", "pointedAtCloud": True}, "standingExclusions": {"merge": True},
+            "standDown": 1}
 
 
 def _lane(w, launch_id, issue=17, *, premise=None, start_age=7200):

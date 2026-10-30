@@ -414,3 +414,19 @@ FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_launch_doctr
 .                                                                        [100%]
 1 passed in 0.26s
 ```
+
+---
+
+## BP6 — a notice supersedes by launch identity, not by time (`test_a_notice_naming_another_launch_never_supersedes`, `test_a_launch_id_is_matched_as_a_whole_token`, `test_a_notice_older_than_the_builders_own_intake_still_supersedes_it`)
+
+**Guarded element:** `cloud_builder.py` `superseded`, the `newer` filter's `_names_launch(comment["body"], launch_id)` — axis: a newer launch is shown by a `SUPERSEDED_HEADER` comment that names exactly the builder's own launch id as a whole token, whatever its time (`--launch-id`; the start-time rule is gone).
+
+**Neutralization:** `and _names_launch(comment["body"], launch_id)]` became `and True]`.
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_stand_down.py -q -p no:randomly`
+
+**Red run:** `6 failed, 51 passed`: `test_a_notice_naming_another_launch_never_supersedes` and the five `test_a_launch_id_is_matched_as_a_whole_token[...]` cases (`launch-12`, `launch-10`, `xlaunch-1`, `launch-1-x`, `launch-1_a`).
+
+**Restore:** the inverse edit put `_names_launch(comment["body"], launch_id)` back.
+
+**Green run:** `57 passed` for the file.

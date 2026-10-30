@@ -84,14 +84,17 @@ history. There is no app to bring up on the owner's machine and no slot.
 after. The pushed branch is the only work the advisor can recover if the session stops. Never
 force-push.
 
-**At every wake, and before every push, check for a newer launch.** Run
-`python3 -B <plugin root>/lib/cloud_builder.py superseded --repo <o>/<r> --issue <n> --started <your start time>`.
+**At intake, at every wake, and before every push, check for a newer launch.** Run
+`python3 -B <plugin root>/lib/cloud_builder.py superseded --repo <o>/<r> --issue <n> --launch-id <your launch id>`.
 On `superseded: true`, push nothing, post its `comment` on the issue as it is, and end the turn; do
 not post a park or handback. On a refusal, push nothing and end the turn. A wake is any turn that
 begins after an earlier turn ended: a message, PR activity, or a session that came back after a
-usage limit. The builder reads its start time with `date -u +%Y-%m-%dT%H:%M:%SZ` at intake, before it
-posts its intake comment, keeps it, and passes it as `--started`. A newer launch is shown only by a
-supersession notice created later than that start; an intake comment never orders launches.
+usage limit. Your launch id comes from your own session name: read the name with the session-describing
+tool called with no id (or from your session listing); it is `issue-<n>-<hash>`, and your launch id is
+`launch-<hash>`. A newer launch is shown only by a supersession notice that names exactly your launch
+id, whatever its time, so a builder whose intake came late after a usage limit still finds a notice
+posted before it. A notice naming another launch never supersedes you, and an intake comment never
+orders launches.
 
 **A stack layer.** A layer of a stack builds in a cloud session like any other build, and none of
 its steps uses GitHub's GraphQL interface. The launch's base commit is the head of the layer below,

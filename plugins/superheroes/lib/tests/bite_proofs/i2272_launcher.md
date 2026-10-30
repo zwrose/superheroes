@@ -47,6 +47,20 @@ FAILED plugins/superheroes/lib/tests/test_i2272_launcher.py::test_an_adoption_ch
 
 **Detector:** `plugins/superheroes/lib/tests/test_i2272_checkout_during_session_read_break_it.py::test_checkout_movement_during_final_session_read_prevents_cloud_spawn`, which failed with the two checks in the old order (`assert result["ok"] is False`, actual `ok: True`) and passes with the re-check first.
 
+## (i) the limit authorization is compared with the clock right before the spawn — axis: a reset during the final remote lookup refuses `limit-expired`
+
+**Guarded element:** `launcher.py` `_limit_expired_refusal` (`_now_fn() >= resets_at`), called in `launch_build` right before `_run_cloud_spawn` and right before each local `_spawn_attempt`; `_original_session_pass` keeps the earliest `resetsAt` of the limited lanes it relied on in the caller's `reads` dict.
+
+**Neutralization:** appended `and False` to the `_now_fn() >= resets_at` condition, so the comparison never refuses.
+
+**Command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_launcher.py -q -p no:randomly`
+
+**Red:** `FAILED test_i2272_launcher.py::test_a_limit_that_expires_during_the_final_cloud_checkout_lookup_refuses_and_spawns_nothing` and `FAILED test_i2272_launcher.py::test_a_limit_that_expires_during_the_final_local_session_lookup_refuses_and_spawns_nothing` (the clock crosses `resetsAt` during the final remote lookup, and the launch went on to spawn).
+
+**Restore:** removed `and False`; the condition reads `and _now_fn() >= resets_at` again.
+
+**Green:** the two nodes pass (`47 passed` for the file).
+
 ## (a) `limited is True` — axis: a limit that has passed gives no relief
 
 **Guarded element:** `launcher.py` `_original_session_pass`, the line `and reading.get("limited") is True` in the

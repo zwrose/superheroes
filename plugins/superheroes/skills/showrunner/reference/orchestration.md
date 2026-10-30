@@ -489,12 +489,15 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
      `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
      Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at
      all after a definite failure.
-  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, run `successor`, post
-     `cloud_builder.py superseded-notice --launch-id <the stopped lane>`'s `comment` on the issue
-     (so a builder of the old lane that wakes stands down even when the successor runs on the
-     owner's machine), then launch that premise with `launcher.py launch`. The routing step places
-     it: cloud when cloud is ready, the owner's machine otherwise. Until that launch starts,
-     `assess` keeps answering `stopped`, so an interrupted recovery is rerun, never lost.
+  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, post
+     `cloud_builder.py superseded-notice --launch-id <the stopped lane>`'s `comment` on the issue,
+     then run `successor` and launch that premise with `launcher.py launch`. The notice comes before
+     `successor`: a stamped original that wakes after the reset sees the notice (it names its launch
+     id) and stands down, which covers a never-pushed lane too, and the notice stops it even when the
+     successor runs on the owner's machine. `successor` reads the limit again just before it records
+     the supersession and refuses `stop-evidence-expired` if the limit no longer holds. The routing
+     step places the launch: cloud when cloud is ready, the owner's machine otherwise. Until that
+     launch starts, `assess` keeps answering `stopped`, so an interrupted recovery is rerun, never lost.
      `successor` passes over a pushed branch whose head another of the issue's pushed branches
      already contains (it names it in `passedOver`); a branch holding work found nowhere else still
      refuses `pushed-branch-ambiguous`.

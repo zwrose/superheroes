@@ -3100,8 +3100,29 @@ def _is_int(value):
 _NEEDS_FIRST_PR = object()
 
 
-def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
+def _limit_expired_refusal(reads):
+    """``(reason, detail)`` when the usage limit a passed original-session check relied on has reset, else None.
+
+    ``reads["resetsAt"]`` is the earliest reset time among the limited lanes the pass relied on; the
+    comparison with the clock is local, so it can run right before a spawn with no remote read.
+    """
+    resets_at = reads.get("resetsAt")
+    # axis: a limit authorization lasts until its reset time, so a spawn after the reset, past the remote lookups that followed the check, is refused unread — see bite-proof record i2272_launcher
+    if (
+        isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool)
+        and _now_fn() >= resets_at
+    ):
+        return _ADOPT_ORIGINAL_SESSION_UNREAD, {
+            "failedRead": "limit-expired", "remedy": _ADOPT_ORIGINAL_REMEDY_UNREAD,
+        }
+    return None
+
+
+def _original_session_refusal(repo_root, issue, stamped, sessions_file, env, reads=None):
     """The refusal ``_original_session_pass`` reaches, or None; every local read happens after the slow remote read.
+
+    ``reads`` is the caller's dict for what the pass learned: after a pass that returns None it holds
+    ``resetsAt``, the earliest reset time of the limited lanes the pass relied on, when there were any.
 
     A pass reads the ledger, the recover state and the relay history (all local); when a lane needs
     the remote read (the adopted branch's first pull request time) the pass stops and names it.
@@ -3109,7 +3130,7 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
     so a vet amendment, a handover stop or a fix order recorded during it is still seen. The pass
     that returns a result is always one that made no remote read of its own.
     """
-    reads = {}
+    reads = {} if reads is None else reads
     while True:
         result = _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
         if result is _NEEDS_FIRST_PR:
@@ -3140,6 +3161,7 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
     of those is live, and a listing that cannot be read, or that does not cover a session it does
     not show, refuses ``adopt-original-session-unread``.
     """
+    reads.pop("resetsAt", None)
     if "adoptsBranch" not in stamped:
         return None
 
@@ -3285,6 +3307,9 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
             and started_ts < reading["recordedAt"]
         ):
             limited.add(launch_id)
+            if cloud_recover._is_number(reading.get("resetsAt")):
+                resets = reads.get("resetsAt")
+                reads["resetsAt"] = reading["resetsAt"] if resets is None else min(resets, reading["resetsAt"])
     # a limited lane is refused only on affirmative live evidence; it never makes a listing missing or incomplete refuse
     lane_ids = sorted(launch_id for launch_id in candidates if launch_id not in limited)
     # axis: an adoption over a lane that started a session with no listing given refuses unread — see bite-proof record i2119_original_session
@@ -4089,7 +4114,10 @@ def launch_build(
             "warnings": warnings,
         }
         # axis: the original-session check ran before the remote reads, the reservation and local setup, so a usage limit it read can have expired; it is read again right before the cloud command, and a refusal terminalizes the unstarted lane — see bite-proof record i2272_launcher
-        recheck = _original_session_refusal(repo_root, issue, stamped, cloud_sessions_file, env)
+        limit_reads = {}
+        recheck = _original_session_refusal(
+            repo_root, issue, stamped, cloud_sessions_file, env, limit_reads,
+        )
         if recheck is not None:
             recheck_reason, recheck_detail = recheck
             term = _terminalize(
@@ -4106,6 +4134,14 @@ def launch_build(
                 repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
             )
             return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
+        # axis: the limit the check relied on is compared with the clock right before the cloud command, with no remote read, since the remote lookups above can outlive it — see bite-proof record i2272_launcher
+        expired = _limit_expired_refusal(limit_reads)
+        if expired is not None:
+            expired_reason, expired_detail = expired
+            term = _terminalize(
+                repo_root, launch_id, False, expired_reason, stage="original-session", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, expired_reason), **expired_detail)
         cloud_result = _run_cloud_spawn(
             repo_root,
             launch_id,
@@ -4161,7 +4197,13 @@ def launch_build(
             return _post_reserve_fail(reason)
 
         # axis: the original-session check ran before the reservation and local setup, so a usage limit it read can have expired; it is read again right before every spawn attempt, and a refusal terminalizes the lane — see bite-proof record i2272_launcher
-        recheck = _original_session_refusal(repo_root, issue, stamped, cloud_sessions_file, env)
+        limit_reads = {}
+        recheck = _original_session_refusal(
+            repo_root, issue, stamped, cloud_sessions_file, env, limit_reads,
+        )
+        if recheck is None:
+            # axis: the limit the check relied on is compared with the clock right before the spawn, with no remote read, since the check's own remote lookup can outlive it — see bite-proof record i2272_launcher
+            recheck = _limit_expired_refusal(limit_reads)
         if recheck is not None:
             recheck_reason, recheck_detail = recheck
             term = _terminalize(

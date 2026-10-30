@@ -390,11 +390,18 @@ def _park_reading(repo_root, repo, info, reserved, comments, cutoff, env, run):
     return {"commentId": comment_id, "url": found["url"], "kind": found["parsed"], "createdAt": found["createdAt"]}, "ok"
 
 
-def _limit_reading(repo_root, info, start, env, now):
+def _limit_reading(repo_root, info, reserved, start, env, now):
     """The account-limit reading for the lane's own account when it counts as stop evidence, else None: the
-    reading is ok and limited, and the lane started before the limit was recorded. Any doubt is no reading."""
+    reading is ok and limited, the lane started before the limit was recorded, and the lane's reserved premise
+    carries the launcher's `standDown` stamp (an int 1, the rule the launcher's original-session check uses).
+    Any doubt is no reading."""
     cfg = info.get("configDir")
     if not (isinstance(cfg, str) and cfg):
+        return None
+    premise = reserved.get("premise") if isinstance(reserved, dict) else None
+    stand_down = premise.get("standDown") if isinstance(premise, dict) else None
+    # axis: a lane launched before the stand-down check existed cannot stand down on waking, so the limit is no stop evidence for it and it needs a session read — see bite-proof record i2272_recover
+    if not (isinstance(stand_down, int) and not isinstance(stand_down, bool) and stand_down == 1):
         return None
     reading = _sib("cloud_relay").account_limit(repo_root, cfg, env=env, now=now)
     recorded = reading.get("recordedAt") if isinstance(reading, dict) else None
@@ -468,7 +475,7 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     elif handover is not None:
         out["verdict"], out["evidence"] = "stopped", "handover"
     # axis: the account's limit holding is stop evidence for a lane that started before it, but never over a fresh, parked, stopped or handed-over lane — see bite-proof record i2272_recover
-    elif (limit := _limit_reading(repo_root, info, start, env, now)) is not None:
+    elif (limit := _limit_reading(repo_root, info, reserved, start, env, now)) is not None:
         out["verdict"], out["evidence"] = "stopped", "account-limited"
         out["limitType"], out["limitResetsAt"], out["stoppedAt"] = limit.get("limitType"), limit.get("resetsAt"), limit["recordedAt"]
     elif session_state == "unread":
@@ -666,8 +673,8 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     if assessed.get("verdict") != "stopped":
         return _refusal("lane-not-assessed-stopped")
     # axis: an account-limit stop authorization expires when the limit stops holding, so a reset after the assess never relaunches beside a builder that may push again — read before any pushed work is read
-    if (assessed.get("evidence") == "account-limited"
-            and _limit_reading(repo_root, info, info.get("startedTs", info.get("reservedTs")), env, None) is None):
+    limited_stop = assessed.get("evidence") == "account-limited"
+    if limited_stop and _limit_reading(repo_root, info, reserved, info.get("startedTs", info.get("reservedTs")), env, None) is None:
         return _refusal("stop-evidence-expired")
     premise, refused = _own_premise(reserved)
     if refused:
@@ -714,6 +721,9 @@ def successor(repo_root, launch_id, *, repo, never_pushed_evidence=None, env=Non
     again, _, refused = _lane(repo_root, launch_id, env)
     if refused or _latest_outcome(again) not in ("park", "died"):
         return refused or _refusal("lane-not-assessed-stopped")
+    # axis: the limit is read a second time after the pushed-work and pull-request reads, so a reset during them never relaunches beside a builder that may push again — see bite-proof record i2272_recover
+    if limited_stop and _limit_reading(repo_root, info, reserved, info.get("startedTs", info.get("reservedTs")), env, None) is None:
+        return _refusal("stop-evidence-expired")
     wrote = _record(repo_root, "superseded", launch_id, mark, env=env, assessed=assessed)
     if not wrote["ok"]:
         return wrote

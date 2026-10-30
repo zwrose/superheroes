@@ -452,7 +452,7 @@ def test_a_limit_that_expires_before_a_local_retry_refuses_the_retry(tmp_path, a
 
     def clock():
         reads.append(1)
-        return RESETS_AT - 60 if len(reads) <= 2 else RESETS_AT
+        return RESETS_AT - 60 if len(reads) <= 3 else RESETS_AT
 
     monkeypatch.setattr(L, "_now_fn", clock)
     spawned = []
@@ -464,9 +464,94 @@ def test_a_limit_that_expires_before_a_local_retry_refuses_the_retry(tmp_path, a
     result = _local_adoption(repo, tmp_path, failing_spawn)
     assert result["ok"] is False
     assert result["reason"] == TOKEN_UNREAD
-    assert len(reads) == 3
+    assert len(reads) == 4
     assert len(spawned) == 1
     _terminalized_at_original_session(repo, result)
+
+
+class _Crossing:
+    """A clock that reads before the reset time until `cross()` is called, and at the reset time after."""
+
+    def __init__(self):
+        self.now = RESETS_AT - 60
+
+    def __call__(self):
+        return self.now
+
+    def cross(self):
+        self.now = RESETS_AT
+
+
+def test_a_limit_that_expires_during_the_final_cloud_checkout_lookup_refuses_and_spawns_nothing(
+    tmp_path, account, monkeypatch,
+):
+    # axis: the limit the re-check relied on is compared with the clock right before the cloud command with no remote read, so a reset during the final remote lookup refuses limit-expired and spawns nothing — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _two_bound_lanes(repo)
+    account.limited_until()
+    clock = _Crossing()
+    monkeypatch.setattr(L, "_now_fn", clock)
+    real = L._cloud_start_refusal
+    real_check = L._original_session_refusal
+    rechecked = []
+    lookups = []
+
+    def check_marks(*args, **kwargs):
+        result = real_check(*args, **kwargs)
+        rechecked.append(1)
+        return result
+
+    def lookup_then_cross(*args, **kwargs):
+        result = real(*args, **kwargs)
+        if len(rechecked) >= 2:  # the final lookup, after the pre-spawn re-check
+            lookups.append(1)
+            clock.cross()
+        return result
+
+    monkeypatch.setattr(L, "_original_session_refusal", check_marks)
+    monkeypatch.setattr(L, "_cloud_start_refusal", lookup_then_cross)
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    assert lookups
+    _refused_unread(repo, result, calls, "limit-expired")
+    _assert_refused_cloud_lane(repo, result, TOKEN_UNREAD, "original-session")
+    _terminalized_at_original_session(repo, result)
+    assert calls == []
+
+
+def test_a_limit_that_expires_during_the_final_local_session_lookup_refuses_and_spawns_nothing(
+    tmp_path, account, monkeypatch,
+):
+    # axis: the limit the re-check relied on is compared with the clock right before the local spawn with no remote read, so a reset during the check's own lookup refuses limit-expired and spawns nothing — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _two_bound_lanes(repo)
+    account.limited_until()
+    clock = _Crossing()
+    monkeypatch.setattr(L, "_now_fn", clock)
+    real = L._original_session_refusal
+    seen = []
+
+    def check_then_cross(*args, **kwargs):
+        result = real(*args, **kwargs)
+        seen.append(result)
+        if len(seen) == 2:  # the pre-spawn re-check; the first is the premise check
+            clock.cross()
+        return result
+
+    monkeypatch.setattr(L, "_original_session_refusal", check_then_cross)
+    spawned = []
+    delegate = _make_spawn_fn("sleep")
+
+    def recording_spawn(*args, **kwargs):
+        spawned.append(args)
+        return delegate(*args, **kwargs)
+
+    result = _local_adoption(repo, tmp_path, recording_spawn)
+    assert seen == [None, None]
+    assert result["ok"] is False
+    assert result["reason"] == TOKEN_UNREAD
+    assert result["failedRead"] == "limit-expired"
+    _terminalized_at_original_session(repo, result)
+    assert spawned == []
 
 
 def test_the_pre_spawn_recheck_changes_nothing_for_a_launch_that_adopts_nothing(tmp_path, account):

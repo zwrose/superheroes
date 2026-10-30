@@ -450,6 +450,12 @@ FAILED plugins/superheroes/lib/tests/test_i2272_recover.py::test_4_the_helper_re
 1 passed in 1.06s
 ```
 
+## Round 2 — the stand-down stamp and the second limit read
+
+**(r2a) the stand-down stamp.** Guarded element: `cloud_recover._limit_reading`, the `standDown == 1` (an int, not a bool) test on the lane's reserved premise. Neutralization: prefixed the test with `False and`. Command: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_i2272_recover.py -q -p no:randomly`. Red: the five `test_2_a_lane_without_a_valid_stand_down_stamp_is_not_stopped_by_the_limit[...]` cases failed (`absent`, `zero`, `two`, `bool`, `string`); an unstamped lane with a limited reading was stopped. Restore: `False and` removed. Green: the file passes.
+
+**(r2b) the second limit read.** Guarded element: `cloud_recover.successor`, the `limited_stop and _limit_reading(...) is None` refusal just before the supersession is recorded. Neutralization: prefixed it with `False and`. Same command. Red: `test_3c_a_limit_that_expires_during_the_pushed_work_read_refuses_before_the_supersession_is_recorded` and `test_3c_an_account_limit_stop_that_still_holds_is_adopted_and_the_limit_is_reread` (the second read is gone) failed. Restore: `False and` removed. Green: the file passes.
+
 ## After all nine
 
 Every neutralization was restored by its inverse edit before the next began. The final run of the whole detector file, with the
