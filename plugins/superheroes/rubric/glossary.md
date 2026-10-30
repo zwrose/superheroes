@@ -427,7 +427,7 @@ The plain account of one PR's review, written when the review ends on any lane. 
 
 ### Maker
 
-Any model that built or fixed the product's code under review. A fixer's family joins the makers for every later round. A reviewer that only writes break-it tests for a change is not a maker of it.
+Any model that built or fixed the product's code under review. The build session is a maker of every fix it applies. A reviewer that only writes break-it tests for a change is not a maker of it.
 
 ### Leftover
 

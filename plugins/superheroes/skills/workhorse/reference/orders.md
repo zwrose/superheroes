@@ -71,7 +71,7 @@ These obligations attach to the order on your side, when you write it.
   `agents/implementer.md`. An order that names a long suite tends to forfeit after it has already
   landed good work.
 - **The orders that carry the stop rule for refused or denied commands never restate it.** The
-  fixer order, the `dispatch-write` runner, the native preamble and the implementer template carry
+  `dispatch-write` runner, the native preamble and the implementer template carry
   it, and its home is `lib/command_refusals.py`. An order never asks for what that rule forbids.
   The rule's one exception is a route the refusing guard's or hook's own message names, taken once
   and recorded as the entry's `route`. When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
@@ -122,9 +122,7 @@ line, and what it obliges (including an advisor ruling already recorded) is `rub
 ## Linting an order
 
 Lint every order before you dispatch it, with both halves. Run both before every implementer order
-and every review-fix work order you author, on both channels (native subagent and `dispatch-write`).
-The `review-code` in-place fixer's order is rendered by the driver and gets the deterministic half at
-the driver's emission (`skills/review-code/reference/auto-fix-loop.md`).
+you author, on both channels (native subagent and `dispatch-write`).
 
 **The deterministic half** is `lib/order_lint.py`:
 
