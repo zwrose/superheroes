@@ -1700,6 +1700,9 @@ def _with_carried(state, compiled):
                 merged[field] = h[field]
             else:
                 merged.pop(field, None)
+        # a merge the fresh report wins keeps the carried finding's lost-test marker unless the fresh report attached a test
+        if h.get(CARRIED_TEST_LOST_FIELD) is True and not break_it.carries_test(merged):
+            merged[CARRIED_TEST_LOST_FIELD] = True
         rows[id(h)] = merged
         # a break-it run bound to the fresh report's key is rebound to the carried key the merged row keeps, so the kept-check finds its disposition
         new_key = _finding_identity_key(merged)
@@ -1925,7 +1928,11 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
             [existing, entry])
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
-    held_runs = existing.get(break_it.RUNS_FIELD) if isinstance(existing, dict) else None
+    # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
+    if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
+            and not break_it.carries_test(entry)):
+        entry[CARRIED_TEST_LOST_FIELD] = True
+    held_runs =existing.get(break_it.RUNS_FIELD) if isinstance(existing, dict) else None
     if isinstance(held_runs, list):
         # axis: a finding raised again keeps the break-it runs it held; its new runs read after them, none twice
         new_runs = entry.get(break_it.RUNS_FIELD, [])
