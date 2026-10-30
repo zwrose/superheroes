@@ -3278,7 +3278,7 @@ def _assert_no_cleanup_before_terminal_append(events):
     "write_honest_refusal",
     "write_dirtied_retry",
     "abandon_dead_engine",
-    "abandon_live_engine",
+    pytest.param("abandon_live_engine", marks=pytest.mark.process_listing),
     "supervise_internal_exception",
 ])
 def test_terminal_transition_invariant_no_cleanup_before_durable_record(
