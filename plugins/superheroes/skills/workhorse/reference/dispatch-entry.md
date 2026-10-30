@@ -106,9 +106,6 @@ The engine-config refusal tokens name a refused argv build. The `build-argv` CLI
 - `sandbox-access-malformed`
 - `sandbox-access-unreadable`
 - `sandbox-access-unsupported-platform`
-- `sandbox-landing-dir-denied`
-- `sandbox-landing-dir-invalid`
-- `sandbox-landing-dir-mismatch`
 - `sandbox-process-listing-unavailable`
 - `sandbox-roots-missing`
 - `sandbox-roots-unresolvable`
@@ -165,7 +162,6 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--size-base-ref` | no | `free-text` | none | the base branch; the fold counts from its merge base with HEAD when that is newer than --size-base |
 | `--claude-mode` | no | `choices:print,background` | none | print only; background is retired and refuses claude-mode-retired before spawn |
 | `--requires-process-listing` | no | `boolean-flag` | False | declare the order needs process listing (ps); a claude write refuses sandbox-process-listing-unavailable before any run opens |
-| `--landing-dir` | no | `free-text` | none | a claude write also grants its file tools this one review landing directory (<session>/round-<N>/landing/<phase>) |
 
 #### `engine_dispatch.py dispatch-review`
 

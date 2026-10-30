@@ -17,7 +17,6 @@ __all__ = (
     "store_dir",
     "round_dir",
     "landing_dir",
-    "is_landing_dir",
     "landing_path",
     "bare_payload_path",
     "landing_entry_present",
@@ -110,26 +109,6 @@ def landing_dir(session_dir, rnd, phase):
     _require_token("phase", phase)
     return _guard_within(session_dir,
                          os.path.join(round_dir(session_dir, rnd), "landing", phase))
-
-
-_ROUND_DIR_RE = re.compile(r"^round-(0|[1-9][0-9]*)$")
-
-
-def is_landing_dir(path):
-    """True when ``path`` ends ``round-<N>/landing/<phase>``, the `landing_dir` layout, read as a string."""
-    if not isinstance(path, str):
-        return False
-    parts = path.split("/")
-    if len(parts) < 3:
-        return False
-    rnd, landing, phase = parts[-3:]
-    if not _ROUND_DIR_RE.match(rnd) or landing != "landing":
-        return False
-    try:
-        _require_token("phase", phase)
-    except ValueError:
-        return False
-    return True
 
 
 def landing_path(session_dir, rnd, phase, skey, attempt):
