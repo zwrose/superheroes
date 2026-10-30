@@ -197,7 +197,7 @@ def test_t1_the_carried_finding_is_undecided_until_the_audit_settles_it(tmp_path
 
 @pytest.mark.parametrize("record,after", [(None, RD.P_SCOPED), (ABANDONED, RD.P_PANEL)], ids=["changed", "full"])
 def test_t2_a_carried_finding_the_audit_does_not_discharge_goes_to_the_verifier_and_stays_open_when_confirmed(tmp_path, monkeypatch, record, after):
-    finding = _finding(27)
+    finding = _finding(27, tradeoff=False)  # a row with no `tradeoff` key is held for the owner (I3 below), not fixed
     key = finding[SC.FINDING_KEY_FIELD]
     s = _session(tmp_path, monkeypatch, [finding], change=TOUCHES_NEAR_27, record=record)
     n, seen = _run(s, _respond(audit="not-discharged"), stop_at=RD.P_VERIFIERS)
@@ -212,6 +212,52 @@ def test_t2_a_carried_finding_the_audit_does_not_discharge_goes_to_the_verifier_
     assert n["action"] == RD.P_APPLY_FIXES, seen
     assert [SC.finding_identity_key(f) for f in n["payload"]["batch"]] == [key]
     assert _row(s.state(), key).get("disposition") != "fixed"
+
+
+def test_t2_an_abandoned_record_whose_final_commit_is_not_a_sha_audits_nothing_and_sends_the_carried_finding_to_the_verifier(tmp_path, monkeypatch):
+    finding = _finding(27, tradeoff=False)
+    key = finding[SC.FINDING_KEY_FIELD]
+    s = _session(tmp_path, monkeypatch, [finding], record=dict(ABANDONED, finalCommit={"sha": "not-a-sha"}))
+    first = s.next()
+    state = s.state()
+    assert first["action"] == RD.P_PANEL and "returningAuditBase" not in state["config"], first
+    assert state["config"]["returning"]["lastReviewed"] is None and "returningBaselineDiff" not in state["config"]
+    assert _carried(state) == {"keys": [key], "discharged": [], "sentBack": [key]}
+    n, seen = _run(s, _respond(), stop_at=RD.P_VERIFIERS)
+    assert RD.P_AUDITS not in [a for a, _ in seen], seen
+    state = s.state()
+    assert [SC.finding_identity_key(f) for f in state["_toVerify"]] == [key]
+    assert _row(state, key).get("disposition") != "fixed"
+
+
+# --- I3 (round-2 audit): a row from a record written before `tradeoff` was persisted is never fixed autonomously ------------
+
+def _confirmed_run(tmp_path, monkeypatch, finding):
+    s = _session(tmp_path, monkeypatch, [finding], change=TOUCHES_NEAR_27)
+    n, seen = _run(s, _respond(audit="not-discharged"), stop_at=RD.P_VERIFIERS)
+    assert n["action"] == RD.P_VERIFIERS, seen
+    return s, _run(s, _respond(audit="not-discharged", verdict="CONFIRMED"), stop_at=RD.P_APPLY_FIXES)
+
+
+def test_i3_a_carried_important_row_with_no_tradeoff_key_the_verifier_confirms_is_held_for_the_owner(tmp_path, monkeypatch):
+    finding = _finding(27)
+    assert "tradeoff" not in finding
+    key = finding[SC.FINDING_KEY_FIELD]
+    s, (n, seen) = _confirmed_run(tmp_path, monkeypatch, finding)
+    assert RD.P_APPLY_FIXES not in [a for a, _ in seen], seen
+    state = s.state()
+    assert key in state["ownerChoiceHeld"], state.get("ownerChoiceHeld")
+    assert key not in [SC.finding_identity_key(f) for f in state.get("fixBatch") or []]
+    assert _row(state, key).get("disposition") != "fixed"
+
+
+def test_i3_a_carried_important_row_whose_tradeoff_key_is_false_still_reaches_the_fixer(tmp_path, monkeypatch):
+    finding = _finding(27, tradeoff=False)
+    key = finding[SC.FINDING_KEY_FIELD]
+    s, (n, seen) = _confirmed_run(tmp_path, monkeypatch, finding)
+    assert n["action"] == RD.P_APPLY_FIXES, seen
+    assert [SC.finding_identity_key(f) for f in n["payload"]["batch"]] == [key]
+    assert key not in (s.state().get("ownerChoiceHeld") or [])
 
 
 # --- T3 (F3): a false carried finding is shown wrong and no fix is ordered for it ----------------------------------------
