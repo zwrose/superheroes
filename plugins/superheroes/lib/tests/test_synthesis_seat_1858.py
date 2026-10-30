@@ -321,8 +321,8 @@ def test_b5_the_harness_counts_a_synthesis_leaf_only_for_a_round_that_ran_it(mon
     fixture = Path(_EVAL) / "fixtures" / "review_loop" / "confirmation_important_certifies.json"
     clean = HARNESS._eval_clean_seat_map
 
-    def without_codex_cells(fixer_vendor=HARNESS._EVAL_FIXER_VENDOR):
-        seat_map = dict(clean(fixer_vendor))
+    def without_codex_cells(build_session_vendor=HARNESS._EVAL_BUILD_SESSION_VENDOR):
+        seat_map = dict(clean(build_session_vendor))
         seat_map["nonPanelLiveCells"] = [c for c in seat_map["nonPanelLiveCells"] if c[0] != "codex"]
         return seat_map
 
@@ -331,9 +331,10 @@ def test_b5_the_harness_counts_a_synthesis_leaf_only_for_a_round_that_ran_it(mon
     monkeypatch.setattr(HARNESS, "_eval_clean_seat_map", without_codex_cells)
     leaves = HARNESS.run_fixture(fixture)["telemetry"]["tokenUsage"]["expectedLeaves"]
     assert not [leaf for leaf in leaves if leaf.startswith("synthesis:")], leaves
-    monkeypatch.setattr(HARNESS, "_eval_clean_seat_map",
-                        lambda fixer_vendor=HARNESS._EVAL_FIXER_VENDOR: dict(clean(fixer_vendor),
-                                                                             hostFamily="google"))
+    monkeypatch.setattr(
+        HARNESS, "_eval_clean_seat_map",
+        lambda build_session_vendor=HARNESS._EVAL_BUILD_SESSION_VENDOR: dict(
+            clean(build_session_vendor), hostFamily="google"))
     # a known non-maker host family seats it on `claude`: the callback runs and its leaf is counted
     ran = HARNESS.run_fixture(fixture)["telemetry"]["tokenUsage"]["expectedLeaves"]
     assert "synthesis:r1" in ran, ran

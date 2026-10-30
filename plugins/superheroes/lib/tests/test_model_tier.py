@@ -67,16 +67,16 @@ def test_synthesis_role_is_opus():
     assert MT.resolve_model("synthesis") == "opus"
 
 
-def test_code_fixer_role_defaults_to_sonnet():
-    assert MT.resolve_model("code-fixer") == "sonnet"
+def test_implementer_role_defaults_to_sonnet():
+    assert MT.resolve_model("implementer") == "sonnet"
 
 
 def test_doc_reviser_role_defaults_to_opus():
     assert MT.resolve_model("doc-reviser") == "opus"
 
 
-def test_code_fixer_override_wins():
-    assert MT.resolve_model("code-fixer", {"code-fixer": "haiku"}) == "haiku"
+def test_implementer_override_wins():
+    assert MT.resolve_model("implementer", {"implementer": "haiku"}) == "haiku"
 
 
 def test_pr_body_role_is_retired():

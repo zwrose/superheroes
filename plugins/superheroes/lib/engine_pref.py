@@ -55,10 +55,6 @@ CODEX_PIN_ROLES = model_registry.codex_pin_roles()
 CODEX_ROLE_KIND = model_registry.codex_role_kind()
 CODEX_EFFORTS = model_registry.codex_efforts()
 
-# Legacy codexModels pin keys retired during the fixer→code-fixer rename — existing project pins
-# must remap before the CODEX_PIN_ROLES membership check so they are not silently dropped.
-_LEGACY_CODEX_PIN_ALIAS = {"fixer": "code-fixer"}
-
 # #409 write-auth probe strength order (weakest → strongest). The build-authz probe (engine_authz)
 # dispatches the strongest model the codex implementation role will actually run, so a passing probe
 # covers every weaker dispatch. Kept a superset of CODEX_MODELS (guarded by a unit test) so no valid
@@ -148,11 +144,6 @@ def _builder_dispatch_with_display(result):
     return result
 
 
-def canonical_codex_pin_role(role):
-    """Canonical codexModels pin-role key (legacy alias resolution)."""
-    return _LEGACY_CODEX_PIN_ALIAS.get(role, role)
-
-
 def normalize_codex_pin_map(raw):
     """→ {"pins": {role: model}, "invalid": {role: reason_string}}"""
     if not isinstance(raw, dict):
@@ -160,10 +151,6 @@ def normalize_codex_pin_map(raw):
     pins = {}
     invalid = {}
     for role, model in raw.items():
-        canonical = _LEGACY_CODEX_PIN_ALIAS.get(role, role)
-        if canonical != role and canonical in raw:
-            continue  # explicit canonical key wins over the legacy alias
-        role = canonical
         if role not in CODEX_PIN_ROLES:
             invalid[role] = "unknown role %r rejected" % role
             continue

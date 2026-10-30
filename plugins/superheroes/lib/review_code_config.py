@@ -70,18 +70,16 @@ def resolve_verify_from_profile(profile_path):
 
 
 # The cfg.tiers key -> model_tier role map. The single home for the review-code tier vocabulary
-# on the Python side. The review-code fixer resolves the `code-fixer` role (review-code only
-# fixes code).
+# on the Python side. Fix-applying runs in the build session, so there is no fixer tier.
 _TIER_ROLE = {
     "reviewer": "reviewer",
     "reviewerDeep": "reviewer-deep",
     "synthesis": "synthesis",
-    "fixer": "code-fixer",
 }
 
 
 def resolve_tiers(overrides):
-    """The four leaf tiers (FR-7), honoring per-role profile overrides; None => inherit session.
+    """The three leaf tiers (FR-7), honoring per-role profile overrides; None => inherit session.
     Resolved through the _TIER_ROLE vocabulary map (the SSOT for the cfg-key -> model_tier-role
     mapping)."""
     return {key: model_tier.resolve_model(role, overrides)

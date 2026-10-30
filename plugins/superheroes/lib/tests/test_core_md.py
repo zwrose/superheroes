@@ -2895,23 +2895,42 @@ def test_write_engine_pref_pins_delete_entry_and_last_entry_removes_key(tmp_path
     assert "codexModels" not in got["enginePreferences"]
 
 
-def test_write_engine_pref_pins_legacy_fixer_dropped_on_canonical_set_or_delete(tmp_path):
-    pin = MR.pin_only_models("codex")[0]
+def test_write_engine_pref_pins_sets_and_clears_ordinary_roles(tmp_path):
+    pin = MR.codex_peer_for_claude_tier("opus")
     repo, store = _write_core_for_pin_tests(
-        tmp_path, prefs={"codexModels": {"fixer": pin}})
-    res = CM.write_engine_pref_pins(
-        repo, "codexModels", {"code-fixer": pin}, root=store)
+        tmp_path, prefs={"codexModels": {"reviewer": pin}})
+    res = CM.write_engine_pref_pins(repo, "codexModels", {"implementer": pin}, root=store)
     assert res["action"] == "written"
     got = CM.read(repo, root=store)
-    pins = got["enginePreferences"]["codexModels"]
-    assert "fixer" not in pins
-    assert pins == {"code-fixer": pin}
-    repo2, store2 = _write_core_for_pin_tests(
-        tmp_path / "second", prefs={"codexModels": {"fixer": pin}})
-    res = CM.write_engine_pref_pins(repo2, "codexModels", {"code-fixer": None}, root=store2)
+    assert got["enginePreferences"]["codexModels"] == {"reviewer": pin, "implementer": pin}
+    res = CM.write_engine_pref_pins(repo, "codexModels", {"reviewer": None}, root=store)
     assert res["action"] == "written"
-    got = CM.read(repo2, root=store2)
+    got = CM.read(repo, root=store)
+    assert got["enginePreferences"]["codexModels"] == {"implementer": pin}
+    res = CM.write_engine_pref_pins(repo, "codexModels", {"implementer": None}, root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
     assert "codexModels" not in got["enginePreferences"]
+
+
+def test_write_engine_pref_pins_retired_role_keys_are_unknown_keys(tmp_path):
+    # C1-L9c: `code-fixer` and the older `fixer` are no longer pin roles and carry no alias.
+    pin = MR.codex_peer_for_claude_tier("opus")
+    repo, store = _write_core_for_pin_tests(
+        tmp_path, prefs={"codexModels": {"code-fixer": pin, "fixer": pin}})
+    res = CM.write_engine_pref_pins(repo, "codexModels", {"code-fixer": pin}, root=store)
+    assert res["action"] == "refused"
+    assert res["reason"] == CM.ENGINE_PINS_REASON_INVALID + ":code-fixer"
+    res = CM.write_engine_pref_pins(repo, "codexModels", {"implementer": pin}, root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert got["enginePreferences"]["codexModels"] == {
+        "code-fixer": pin, "fixer": pin, "implementer": pin}
+    res = CM.write_engine_pref_pins(
+        repo, "codexModels", {"code-fixer": None, "fixer": None}, root=store)
+    assert res["action"] == "written"
+    got = CM.read(repo, root=store)
+    assert got["enginePreferences"]["codexModels"] == {"implementer": pin}
 
 
 def test_write_engine_pref_pins_refused_unknown_key_and_non_mapping(tmp_path):

@@ -3913,7 +3913,7 @@ def test_seat_map_pin_excusal_degraded_shape_and_disclosure():
     pin_lines = [d for d in receipt["degraded"] if d.startswith("seat-map pin excusal:")]
     assert len(pin_lines) == 1
     assert "security-reviewer" in pin_lines[0]
-    assert SM.classify_violations(seats, model_registry.family_for("code-fixer", "claude"))["excusedByPin"]
+    assert SM.classify_violations(seats, model_registry.family_for("implementer", "claude"))["excusedByPin"]
 
 
 def test_seat_map_unproven_liveness_shape_driver():
@@ -4232,9 +4232,9 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_unseatable():
 # new expectation AND the cross-family branches the old test did not cover. One thing did go with
 # it: that test was the only one reaching `_auditor_vendor`'s SECOND (same-vendor) loop on its
 # `independent` return, and post-#651 no vendor can satisfy that branch — every vendor's
-# `code-fixer` and `verifier` roles now resolve to the same family — so it is unreachable, not
+# `implementer` and `verifier` roles now resolve to the same family — so it is unreachable, not
 # merely untested. #652 rider 4a deleted that loop; the invariant is pinned by
-# test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry.py.
+# test_auditor_and_implementer_families_match_per_vendor in test_model_registry.py.
 
 
 # axis: _auditor_vendor independence follows the auditor role family, not verifier
@@ -4542,7 +4542,7 @@ def _assertable_seat_map(vendors, fixer_vendor="claude"):
     live = sorted({v for v in (vendors or []) if isinstance(v, str) and v})
     if not live:
         live = ["claude"]
-    driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
+    driver_author_family = model_registry.family_for("implementer", fixer_vendor)
     for author in ("xai", "anthropic", "openai"):
         m = SM.build(SM.PANEL_ROSTER, live, author, 0)
         receipt = SM.to_receipt(m, author)
@@ -4932,7 +4932,7 @@ def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
     seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
     unjudgeable_map = dict(seat_map)
     unjudgeable_map.pop("authorFamily", None)
-    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    driver_fam = model_registry.family_for("implementer", cfg.get("fixerVendor"))
     assert SM.derived_violations(unjudgeable_map, driver_fam) == []
     state = RD.new_state(cfg)
     _set_seat_map(state, unjudgeable_map)
@@ -4959,7 +4959,7 @@ def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
     seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
     unjudgeable_map = dict(seat_map)
     unjudgeable_map.pop("authorFamily", None)
-    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    driver_fam = model_registry.family_for("implementer", cfg.get("fixerVendor"))
     assert SM.derived_violations(unjudgeable_map, driver_fam) == []
     state = RD.new_state(cfg)
     _set_seat_map(state, unjudgeable_map)
@@ -5118,7 +5118,7 @@ def test_emit_receipt_seat_map_derived_violations_replay_no_breach_lost():
     state["certification"] = {"shape": "full-panel-confirmed-degraded"}
     receipt = RD.build_receipt(state)
     emitted = receipt["seatMap"]
-    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    driver_fam = model_registry.family_for("implementer", cfg.get("fixerVendor"))
     replayed = SM.derived_violations(emitted, driver_fam)
     emitted_violations = emitted.get("violations") or []
     emitted_keys = {(str(v.get("constraint", "")), str(v.get("seat") or ""))

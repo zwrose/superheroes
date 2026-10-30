@@ -357,7 +357,7 @@ action that owns it, leaving the rest of the calibration untouched:
   `pilot`). Set a role back to `claude` (or clear it) to fall fully open — **except `briefCheck`**,
   which falls open to **codex** (the cross-vendor default; a brief-check on the host model is a disclosed
   degradation running at opus, one tier up from the implementer).
-- **Change the per-role model tier** (reviewer/reviewer-deep/verifier/mechanical/synthesis/code-fixer/doc-reviser/
+- **Change the per-role model tier** (reviewer/reviewer-deep/verifier/mechanical/synthesis/doc-reviser/
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
   the resolved review-crew profile. This is an optional tune action: if the owner declines, change
   nothing.
@@ -580,7 +580,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
-  `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
+  `reviewer`, `reviewer-deep`, `implementer`, and `pilot`; valid
   model IDs are `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
   `reviewer-deep` at effort `high`; pinning it on any other role is refused
   `pin-role-not-eligible`). A pin to the retired `gpt-5.6-terra` is refused at write time
@@ -590,7 +590,7 @@ action that owns it, leaving the rest of the calibration untouched:
   but admits no codex model).
   Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none; an unpinned project never
   dispatches Astra and gpt-6.1-sol is the default deep cell. A pinned model runs at the effort its role's
-  registry allowlist resolves for it — gpt-6.1-sol, gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`, `code-fixer`
+  registry allowlist resolves for it — gpt-6.1-sol, gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`
   and `implementer` and `xhigh` on `reviewer-deep`, and Astra at `high` — the
   role's `enginePreferences.effort` setting is not
   consulted for a pinned model. Show the current engine preferences and effective model first, merge
@@ -664,12 +664,11 @@ action that owns it, leaving the rest of the calibration untouched:
   codex or cursor; the same command also **refuses** with `core-md-unreadable` when the project's
   `core.md` exists but cannot be read — the tier is not saved and the refusal names the file, so it
   is a broken-config signal, not a rejected tier) or clear overrides back to `DEFAULT_TIERS`, run the helper; it creates the
-  block if absent, replaces it if present, and preserves every other profile section. `fixer` is
-  accepted as a legacy alias for `code-fixer` (read, write, and clear):
+  block if absent, replaces it if present, and preserves every other profile section:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear code-fixer
+  python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear implementer
   ```
 
   Role names are validated against `KNOWN_ROLES`; unknown roles are dropped with a warning. Unknown
