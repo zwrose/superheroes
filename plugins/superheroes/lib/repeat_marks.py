@@ -71,7 +71,7 @@ def decide(outcome, grade_verdict, changed):
         if changed and grade_verdict != "wrong":
             return False, None
         return True, None
-    if outcome in _SETTLED:
+    if isinstance(outcome, str) and outcome in _SETTLED:
         return True, None
     return False, None
 
@@ -127,7 +127,7 @@ def record_entry(finding, head):
     if not isinstance(finding, dict):
         return None
     outcome = finding.get("outcome")
-    outcome = outcome if outcome in review_findings_schema.OUTCOME_SET else None
+    outcome = outcome if isinstance(outcome, str) and outcome in review_findings_schema.OUTCOME_SET else None
     key = finding.get(session_contract.FINDING_KEY_FIELD)
     if not _text(key):
         if not (_text(finding.get("file")) and _text(finding.get("title"))):
