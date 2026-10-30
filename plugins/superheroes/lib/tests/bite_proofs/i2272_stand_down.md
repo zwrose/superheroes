@@ -311,17 +311,17 @@ FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_orchestratio
 ## BP8 — `orchestration.md` names `helper-read` and its four fields (`test_orchestration_names_the_helper_read_and_its_four_fields`)
 
 **Guarded element:** `skills/showrunner/reference/orchestration.md` § Acting on the builders' account, the cloud-helper read: "The prompt comes
-from `cloud_recover.py helper-read …`, and the helper posts only `id`, `session_status`, `status_bucket` and `archived` per session" — axis: a doc pin.
+from `cloud_recover.py helper-read …`, and the helper posts only the four fields `cloud_recover.HELPER_READ_FIELDS` names (the fields the takeover check reads) per session" — axis: a doc pin.
+The section is guarded by `test_c8c_relay_doctrine.py`, which forbids the substring `session_`, so the doc names the fields through `cloud_recover.HELPER_READ_FIELDS` rather than listing them (WO4b).
 
-**Neutralization:** that whole sentence removed.
+**Neutralization:** the phrase "only the four fields `cloud_recover.HELPER_READ_FIELDS` names (the fields the takeover check reads)" put back to the earlier literal list "only `id`, `session_status`, `status_bucket` and `archived`". The `helper-read` command stays in the sentence, so the red lands on the second assertion.
 
 **Command:**
 ```
 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_orchestration_names_the_helper_read_and_its_four_fields" -q -p no:randomly
 ```
 
-**Red run** (piped through `cut -c1-300`; the cut `E` line is mine). The sentence holds both assertions' text, so the red shows the first
-assertion (`helper-read`); the second (the four fields) is the same sentence and was not separately neutralized:
+**Red run** (piped through `cut -c1-300`; the cut `E` line is mine). The first assertion (`helper-read`) passes; the red is the second (`cloud_recover.HELPER_READ_FIELDS`):
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
@@ -329,23 +329,24 @@ _________ test_orchestration_names_the_helper_read_and_its_four_fields _________
 
     def test_orchestration_names_the_helper_read_and_its_four_fields():
         text = " ".join(_doc("skills/showrunner/reference/orchestration.md").split())
->       assert "cloud_recover.py helper-read" in text
-E       assert 'cloud_recover.py helper-read' in "# Contents - [Orchestration — launcher, ledger, and wave mechanic..., so the session's permission classifier refuses its merges and pushes on the others, even after the owner's go-ahead."
+        assert "cloud_recover.py helper-read" in text
+>       assert "`cloud_recover.HELPER_READ_FIELDS`" in text
+E       assert '`cloud_recover.HELPER_READ_FIELDS`' in "# Contents - [Orchestration — launcher, ledger, and wave mechanics](#orchestration--launcher-ledger-and-wave-mechanic..., so the session's permission classifier refuses its merges and pushes on the others, even after the owner's go-ahead."
 
-/home/user/wt-2272-wo4/plugins/superheroes/lib/tests/test_i2272_stand_down.py:261: AssertionError
+/home/user/wt-2272-wo4/plugins/superheroes/lib/tests/test_i2272_stand_down.py:262: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_i2272_stand_down.py::test_orchestration_names_the_helper_read_and_its_four_fields
 1 failed in 0.28s
 ```
 
-**Restore:** the inverse edit put the sentence back.
+**Restore:** the inverse edit put the new phrase back.
 
-**Restore receipt:** the sentence reads again "…since a cloud session cannot message back. The prompt comes from `cloud_recover.py helper-read --repo O/N --issue N --session-id S …`, and the helper posts only `id`, `session_status`, `status_bucket` and `archived` per session (never usage or cost data: the issue is public)."
+**Restore receipt:** the sentence reads again "…since a cloud session cannot message back. The prompt comes from `cloud_recover.py helper-read --repo O/N --issue N --session-id S …`, and the helper posts only the four fields `cloud_recover.HELPER_READ_FIELDS` names (the fields the takeover check reads) per session (never usage or cost data: the issue is public)." `grep -n "session_"` over the file prints nothing.
 
 **Green run:**
 ```
 .                                                                        [100%]
-1 passed in 0.33s
+1 passed in 2.16s
 ```
 
 ---

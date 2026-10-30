@@ -259,7 +259,7 @@ def test_orchestration_no_longer_exempts_a_bound_lane_whose_branch_is_gone():
 def test_orchestration_names_the_helper_read_and_its_four_fields():
     text = " ".join(_doc("skills/showrunner/reference/orchestration.md").split())
     assert "cloud_recover.py helper-read" in text
-    assert "`id`, `session_status`, `status_bucket` and `archived`" in text
+    assert "`cloud_recover.HELPER_READ_FIELDS`" in text
 
 
 def test_launch_doctrine_recovery_names_the_usage_limit_recovery():

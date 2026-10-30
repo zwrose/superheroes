@@ -411,7 +411,7 @@ such a step to the owner first.
   asks for `get_session` on each, and asks the helper to post the raw results as one JSON array on
   the lane's issue in a fenced block, since a cloud session cannot message back. The prompt comes
   from `cloud_recover.py helper-read --repo O/N --issue N --session-id S …`, and the helper posts
-  only `id`, `session_status`, `status_bucket` and `archived` per session (never usage or cost data:
+  only the four fields `cloud_recover.HELPER_READ_FIELDS` names (the fields the takeover check reads) per session (never usage or cost data:
   the issue is public). The advisor reads
   that comment through REST, saves the array to a file, and passes it with `--cloud-sessions-file`.
   The posted copy is the helper's transcription of its tool output. A row that clears a lane
