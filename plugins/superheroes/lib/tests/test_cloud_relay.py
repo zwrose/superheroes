@@ -1052,7 +1052,8 @@ def test_fix_orders_refuses_a_malformed_pending_entry_only_when_unchecked_are_in
     assert default["ok"] is True and default["records"] == []
 
 
-def test_fix_orders_lists_an_entry_with_no_fix_order_key_when_unchecked_are_included(world):
+def test_fix_orders_does_not_list_an_entry_without_a_fix_order_when_unchecked_are_included(world):
+    # axis: with include_unchecked, an entry composed without fix_order is not listed as a fix order — see bite-proof record i2254_original_session
     out = cr.compose(world.repo, world.config, SESSION, "just a note", env=world.env)
     assert out["ok"]
     listed = cr.fix_orders(world.repo, env=world.env, include_unchecked=True)

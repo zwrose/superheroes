@@ -3183,6 +3183,10 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
             ):
                 kept[launch_id] = info
                 continue
+            # axis: the first-pull-request time is read before the relay history, since the lookup is a slow remote read and a fix order composed during it must still be seen — see bite-proof record i2254_original_session
+            if "first" not in reads:
+                reads["first"] = _adopted_branch_first_pr_fn(repo_root, branch, env)
+            first = reads["first"]
             if "relays" not in reads:
                 import cloud_relay
 
@@ -3205,9 +3209,6 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
             if reopened:
                 kept[launch_id] = info
                 continue
-            if "first" not in reads:
-                reads["first"] = _adopted_branch_first_pr_fn(repo_root, branch, env)
-            first = reads["first"]
             # axis: a handed-back lane had opened its own pull request before the handback, and a pull request on the adopted branch opened before then would itself be the branch's earliest, so the lane's pull request was on another branch and with no fix order since it writes only that branch; a first-pull-request time that is unread, or not past the handback plus the clock-skew allowance, keeps the lane — see bite-proof record i2254_original_session
             if cloud_recover._is_number(first) and handback + _ADOPT_ABSENCE_SKEW_SECONDS <= first:
                 continue
