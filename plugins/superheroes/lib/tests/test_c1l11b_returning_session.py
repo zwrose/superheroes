@@ -106,6 +106,15 @@ class Session:
                     found[os.path.relpath(os.path.join(root, name), self.dir)] = fh.read()
         return found
 
+    def scoped_seat_inputs(self):
+        """``{relative path: text}`` of the scoped finder's seat inputs only: its order (``.md``) and the hunks and
+        fix-delta files that order names. `diff.txt` (the whole change) is bookkeeping, not a seat input."""
+        inputs = self.round_one_files()
+        [order_name] = [name for name in inputs
+                        if name.startswith(os.path.join("round-1", "orders", RD.P_SCOPED)) and name.endswith(".md")]
+        names = (os.path.join("round-1", RD.ORDER_SIDECAR_SCOPED_HUNKS_FILE), os.path.join("round-1", "fix-delta.diff"), order_name)
+        return {name: inputs[name] for name in names}
+
 
 def _append(rel, text):
     def change(repo):
@@ -286,8 +295,10 @@ def test_t5_a_proven_binary_copy_beside_a_small_edit_is_counted_nowhere_and_read
     assert all(d["kind"] != "fix-surface-unknown" for d in state["decisions"]), state["decisions"]
     assert list(answer["payload"]["hunks"]) == ["src/app.py"]
     assert [(h["start"], h["end"]) for h in answer["payload"]["hunks"]["src/app.py"] if h["start"]] == [(101, 106)]
-    inputs = s.round_one_files()
-    assert inputs and all("blob.bin" not in name and "blob.bin" not in text for name, text in inputs.items()), sorted(inputs)
+    # the scoped finder's seat inputs (its order and the hunks and fix-delta files the order names); `diff.txt`, the whole
+    # change, is bookkeeping and does name the copy
+    seat_inputs = s.scoped_seat_inputs()
+    assert len(seat_inputs) == 3 and all("blob.bin" not in name and "blob.bin" not in text for name, text in seat_inputs.items()), sorted(seat_inputs)
     assert "blob.bin" not in state["_fixDeltaDiff"] and "blob.bin" not in json.dumps(state["_newSurface"])
 
 

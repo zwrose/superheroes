@@ -1508,6 +1508,7 @@ def _returning_overrides(session_dir, overrides):
     else:
         stored = _returning_answer(answer)
     out = {}
+    carried = _carried_findings(earlier)
     if stored["read"] == returning_review.READ_CHANGED:
         baseline = _returning_baseline_diff(repo_root, base, stored["lastReviewed"])
         if baseline is None:
@@ -1515,7 +1516,31 @@ def _returning_overrides(session_dir, overrides):
                           why=list(stored["why"]) + ["%s: git could not produce the diff of the earlier review" % RETURNING_BASELINE_UNREADABLE])
         else:
             out["returningBaselineDiff"] = baseline
+    elif carried and returning_review._is_sha(stored.get("lastReviewed")):
+        # a full read that still named the last reviewed commit: the carried findings are audited against the change since it
+        baseline = _returning_baseline_diff(repo_root, base, stored["lastReviewed"])
+        if baseline is not None:
+            out["returningBaselineDiff"] = baseline
+    if carried:
+        out["returningCarried"] = carried
     out["returning"] = stored
+    return out
+
+
+def _carried_findings(earlier):
+    """The earlier record's findings with no outcome, each once, as the rows the session seeds: the record's stored key
+    in ``findingKey``, and no outcome or reason of the record's own. ``[]`` for a record that holds none."""
+    findings = earlier.get("findings") if isinstance(earlier, dict) else None
+    out, held = [], set()
+    for finding in findings if isinstance(findings, list) else ():
+        entry = repeat_marks.record_entry(finding)
+        # axis: a record finding that has an outcome is never carried — it keeps that outcome (repeat marks) — see bite-proof record c1l11b_wo_d2_carried_findings
+        if entry is None or entry["outcome"] is not None or entry["key"] in held:
+            continue
+        held.add(entry["key"])
+        row = {k: v for k, v in finding.items() if k not in ("outcome", "reason")}
+        row[session_contract.FINDING_KEY_FIELD] = entry["key"]
+        out.append(row)
     return out
 
 
@@ -1528,16 +1553,22 @@ def _record_returning(state, returning):
                   "; ".join(returning.get("why") or [])))
 
 
+def _returning_diffs(state, cfg):
+    """``(baseline, head)``: the diff of what the earlier session reviewed and the round-1 diff, a proven copy's section
+    cut from both before any parser reads them; ``(None, None)`` when either is not text."""
+    baseline, head_diff = cfg.get("returningBaselineDiff"), state.get("reviewedDiff")
+    if not isinstance(baseline, str) or not isinstance(head_diff, str):
+        return None, None
+    left_out = [copy["file"] for copy in _left_out(state, head_diff)]
+    return countable_lines.reviewer_diff(baseline, left_out), countable_lines.reviewer_diff(head_diff, left_out)
+
+
 def _returning_surface(state, cfg):
     """``(surface, text)`` of what changed since the last reviewed commit, or ``(None, why)``: the fix-delta
     surface between ``base...lastReviewed`` and the round-1 diff, no proven copy in either diff."""
-    baseline, head_diff = cfg.get("returningBaselineDiff"), state.get("reviewedDiff")
-    if not isinstance(baseline, str) or not isinstance(head_diff, str):
+    baseline, head_diff = _returning_diffs(state, cfg)
+    if baseline is None:
         return None, "the earlier review's diff or the round-1 diff is not text"
-    # a proven copy's section is cut from both diffs before any parser reads them
-    left_out = [copy["file"] for copy in _left_out(state, head_diff)]
-    baseline = countable_lines.reviewer_diff(baseline, left_out)
-    head_diff = countable_lines.reviewer_diff(head_diff, left_out)
     try:
         delta = _fix_delta_surface(state, baseline, head_diff)
     except Exception as exc:  # noqa: BLE001 — a surface nobody could work out is a full panel, never a hand-back
@@ -1545,6 +1576,65 @@ def _returning_surface(state, cfg):
     if delta is None:
         return None, "the change since the last reviewed commit could not be worked out for every file"
     return delta, None
+
+
+def _seed_carried(state, cfg, returning):
+    """Seed every carried finding (``cfg["returningCarried"]``, see `_carried_findings`) into the disposition ledger
+    under its stored key, once each, before any disposition is recorded on it. Then set up round 1's audit of them
+    against the change since the last reviewed commit (the fix-audit machinery, the returning baseline as the reviewed
+    diff): the carried findings whose line that change touches are the targets, in ``_carriedAudited``. Every other one
+    (no file or line, no hunk over its line, a proven copy, no usable last reviewed commit or baseline) is sent back at
+    once. A finding sent back waits in ``_carriedToVerify`` to join the round's candidates at the verifier, past the compile
+    step whose diff-scope rule would drop one whose line this round's diff does not hold. Returns True when audits are due."""
+    carried = [c for c in cfg.get("returningCarried") or [] if isinstance(c, dict)]
+    if not carried:
+        return False
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    rows = {}
+    for finding in carried:
+        key = _finding_identity_key(finding)
+        if key and key not in rows:  # two carried findings with one key are one row
+            rows[key] = finding
+            # axis: a carried finding is on the ledger, with a raised sequence, before its disposition is recorded — see bite-proof record c1l11b_wo_d2_carried_findings
+            _seed_ledger_entry(state, ledger, seen, finding, key, state["round"])
+    if not rows:
+        return False
+    state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = session_contract.DISPOSITION_LEDGER_OWNER_VALUE
+    audited, baseline, head_diff, hunks = {}, None, None, {}
+    if returning_review._is_sha(returning.get("lastReviewed")):
+        baseline, head_diff = _returning_diffs(state, cfg)
+    usable = [f for f in rows.values() if isinstance(f.get("file"), str) and f["file"] and _coerce_line(f.get("line"))[0]]
+    if baseline is not None and usable:
+        split = delta_surface.split_fix_surface(baseline, head_diff, usable)
+        hunks = {} if split.get("unknown") else split.get("auditTargets") or {}
+    for key, finding in rows.items():
+        # a carried finding is audited only where the change since the last reviewed commit touches its line
+        if (finding in usable and _fix_hunks_over_line(hunks, finding["file"], finding.get("line"))
+                and _fixer_delta_lines(baseline, head_diff, finding["file"], finding.get("line"))):
+            audited[key] = finding
+    state["_carriedToVerify"] = [f for key, f in rows.items() if key not in audited]
+    _record_round(state, "carried", {"keys": list(rows), "discharged": [], "sentBack": [_finding_identity_key(f) for f in state["_carriedToVerify"]]})
+    if not audited:
+        return False
+    state["_carriedAudited"] = audited
+    # the audit reads the round-1 diff as the head the change since the last reviewed commit ended on
+    state["headDiff"] = state.get("reviewedDiff")
+    state["fixBatch"] = list(audited.values())
+    state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
+    state["fixBatch"] = []
+    return True
+
+
+def _with_carried(state, compiled):
+    """``compiled`` and the findings held past the compile step (`_seed_carried`'s sent-back carried findings, the audits'
+    new issues on a full read), once each: a compiled finding that the stored key of a held one names is that finding,
+    and the held row, with its stored key, stays."""
+    held = [h for h in state.pop("_carriedToVerify", None) or [] if isinstance(h, dict)]
+    if not held:
+        return compiled
+    keys = {repeat_marks.opaque_key(h) for h in held}
+    return [c for c in compiled if repeat_marks.opaque_key(c) not in keys] + held
 
 
 def _seed_returning_round(state, cfg):
@@ -1563,16 +1653,22 @@ def _seed_returning_round(state, cfg):
                              why=list(returning.get("why") or []) + ["%s: %s" % (RETURNING_SURFACE_UNKNOWN, detail)])
             cfg["returning"] = returning
     _record_returning(state, returning)
+    audits_due = _seed_carried(state, cfg, returning)
     # axis: the driver acts on a changed decision — round 1 is a returning round with no panel — see bite-proof record c1l11b_wo_d1_returning_session
     if returning.get("read") != returning_review.READ_CHANGED:
         cfg.pop("returningBaselineDiff", None)
+        if audits_due:  # a full read audits the carried findings first, then runs the panel round 1 always ran
+            state["_auditFirst"] = True
+            state["step"] = P_AUDITS
         return
     new_surface, fix_delta_text = delta
     state["fullPanelRan"] = False
-    state["_auditTargets"] = []
+    state["_auditTargets"] = state.get("_auditTargets") or []
     state["_newSurface"], state["_fixDeltaDiff"] = new_surface, fix_delta_text
     _record_round(state, "roundKind", RETURNING_KIND)
-    # WO-D2 seam: the carried findings of the earlier record are audited here, before the scoped finder is scheduled.
+    if audits_due:  # the carried findings are audited first; `_after_audits` then schedules the scoped finder
+        state["step"] = P_AUDITS
+        return
     state["step"] = P_SCOPED
     if not new_surface:
         # nothing to read (the change touched only proven copies, or nothing): converge as an empty fix delta does
@@ -3548,7 +3644,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
     _append_review_record(state, state["round"], kind, dim_map, compiled)
-    _stage_findings(state, compiled)
+    _stage_findings(state, _with_carried(state, compiled))  # a returning round's carried findings go to the verifier with the panel's
     state["step"] = P_VERIFIERS
 
 
@@ -7048,6 +7144,19 @@ def _fold_audits(state, config, artifact, session_dir=None):
     rider_ids = set(spawned_from)
     riders_open = [i for i in outcome["notDischarged"] if i in rider_ids]
     outcome["notDischarged"] = [i for i in outcome["notDischarged"] if i not in rider_ids]
+    # A carried finding the audit did not discharge (a missing or refused result included) is sent back to the reviewers:
+    # it leaves `notDischarged` here, before anything builds a fix batch from that list, and joins the verifier's candidates.
+    carried_audited = state.pop("_carriedAudited", None)
+    carried_back = set()
+    if isinstance(carried_audited, dict) and carried_audited:
+        cleared = {i for i in outcome.get("discharged") or [] if isinstance(i, str)}
+        # axis: a carried finding the audit did not discharge goes to the verifier, never to the fix queue — see bite-proof record c1l11b_wo_d2_carried_findings
+        carried_back = set()
+        outcome["notDischarged"] = [i for i in outcome["notDischarged"] if not (isinstance(i, str) and i in carried_audited)]
+        state["_carriedToVerify"] = (state.get("_carriedToVerify") or []) + [carried_audited[key] for key in carried_audited if key in carried_back]
+        held = state["rounds"].get(str(state["round"]), {}).get("carried")
+        _record_round(state, "carried", dict(held, discharged=[key for key in carried_audited if key in cleared],
+                                             sentBack=list(held.get("sentBack") or []) + [key for key in carried_audited if key in carried_back]))
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -7058,7 +7167,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
         {"identity": a.get("identity"), "ruling": a.get("ruling"),
          "title": a.get("title"), "classKey": a.get("classKey"),
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
-        for a in outcome["audits"] if a.get("id") not in rider_ids]}
+        for a in outcome["audits"] if a.get("id") not in rider_ids and a.get("id") not in carried_back]}
     state["auditRounds"].append(audit_round)
     mismatch_ids = list(outcome.get("testMismatch") or [])
     if mismatch_ids:
@@ -7187,6 +7296,16 @@ def _after_audits(state, config):
     if _is_extra_audit_round(state):
         _settle_extra_audit(state, config)
         return
+    if state.pop("_auditFirst", False):
+        # a returning round 1 that reads in full: the carried findings were audited first, and the panel round 1 always ran
+        # follows. What the audits raised is compiled as a scoped finder's candidates are and waits with the carried findings
+        # sent back, to join the panel's candidates at the verifier.
+        raised, drops = mechanical_compile([ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)],
+                                           state.get("reviewedDiff"))
+        _record_compile_drops(state, drops)
+        state["_carriedToVerify"] = (state.get("_carriedToVerify") or []) + raised
+        state["step"] = P_PANEL
+        return
     # Scoped-finder routing (#507 WO-R2b). Dispatch the scoped new-finding scan whenever the round's
     # fix delta left a NON-EMPTY surface (`_newSurface`, set by `_enter_delta_round`: the head-side
     # lines the fixes changed in every file that is not a proven copy). A genuinely empty surface (the
@@ -7269,6 +7388,7 @@ def _fold_scoped(state, config, artifact):
     compiled, drops = mechanical_compile(scoped + new_issues, state.get("reviewedDiff"))
     _bind_audit_spawned(state, new_issues, compiled)
     _record_compile_drops(state, drops)
+    compiled = _with_carried(state, compiled)  # the carried findings sent back go to the verifier with the round's candidates
     state["_postAudit"] = True
     if compiled:
         _stage_findings(state, compiled)
@@ -8876,7 +8996,8 @@ def _cmd_next_locked(session_dir, config_overrides=None):
         try:
             overrides = _with_build_session_vendor(config_overrides) or {}
             # the decision is taken here, once, and stored in the config: a caller cannot supply it
-            overrides = dict({k: v for k, v in overrides.items() if k not in ("returning", "returningBaselineDiff")},
+            overrides = dict({k: v for k, v in overrides.items()
+                              if k not in ("returning", "returningBaselineDiff", "returningCarried")},
                              **_returning_overrides(session_dir, overrides))
             state = new_state(overrides or None)
         except MaxRoundsRefusal as refusal:
