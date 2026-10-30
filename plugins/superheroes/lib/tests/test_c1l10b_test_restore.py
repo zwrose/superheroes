@@ -114,6 +114,9 @@ class World:
         self.state["fixBatch"] = [self.finding]
         self.state["findings"] = [copy.deepcopy(self.finding)]
         self.state["_auditTargets"] = RD._audit_targets(self.state, self.cfg, {})
+        # a real delta round carries its fixes' own diff (set by the post-fix fold); empty here, so the scoped finder is skipped
+        self.state["_newSurface"] = {}
+        self.state["_fixDeltaDiff"] = ""
         self.state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
         self.state["step"] = RD.P_AUDITS
 
