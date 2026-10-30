@@ -448,7 +448,7 @@ was not. The stat binding applies to the **round-1** diff artifact the driver re
 state; rounds 2+ rely on the skill's per-round shell halt for diff integrity.
 
 **Inputs (no new required CLI flag).** The guard reads the session's own records: `$SESSION_DIR/meta.json`
-(`mode`, `baseRef`, `baseBranch`, `baseFetch`, `repoRoot`) and, in PR mode, `$SESSION_DIR/pr.json`
+(`mode`, `baseRef`, `baseBranch`, `baseFetch`, `repoRoot`, `stackLower`) and, in PR mode, `$SESSION_DIR/pr.json`
 (`url`) — both written by the skill's Setup before the first `next`. One optional flag:
 `--repo-root` (default: the process cwd), for tests.
 
@@ -481,6 +481,9 @@ field.
 | `round-diff-base-unverifiable` | `git diff --numstat` could not be run (git failure/timeout/unavailable) — expectation not computed |
 | `base-mode-unrecognized` | `meta.mode` is not `pr` or `branch` |
 | `diff-path-not-fresh-state` | `--diff-path` passed on non-fresh state (the same discipline as `--vendors`) |
+| `stack-lower-unreadable` | a stacked session (`meta.stackLower` true) on `next`, `submit` or `advance`: the lower branch's head on `origin` could not be read (git failed or timed out, no such branch, or the output is not one full sha), or `meta.baseBranch` / `meta.baseRef` is unusable |
+| `stack-lower-moved` | a stacked session: the lower branch's head on `origin` is not the session's pinned base commit |
+| `stack-lower-ahead` | a stacked session: the pinned base commit is not in `HEAD`'s history — the layer does not hold the lower layer's current head |
 
 **Pending hand-out refusals (`next`).** After the base guard, `_next_response` may refuse before it returns a non-terminal pending step.
 
@@ -501,6 +504,11 @@ field.
   command failed, produced nothing, or produced output that is not a valid diff; for
   `round-diff-base-mismatch`, re-derive the round-1 artifact from the pinned base; for
   `round-diff-base-unverifiable`, fix git availability/timeouts before re-running `next`.
+- **Stacked layer** (`stack-lower-moved`, `stack-lower-ahead`): bring the layer current with the
+  lower layer by a `--no-ff` merge (`rubric/native-stacks.md` § How a stack stays current) and
+  start a new session; when the refused session had started (its state file exists), first write
+  its review record as abandoned. The refusal changes nothing but a journal line.
+  `stack-lower-unreadable`: make `origin` reachable and run the same command again.
 - **`base-mode-unrecognized`:** re-run Setup so `meta.mode` is `pr` or `branch`.
 - **`base-repo-mismatch`:** this checkout's `origin` is not the PR's base repository — re-run from
   a clone of the base repo (full fork support is deliberately not built).
