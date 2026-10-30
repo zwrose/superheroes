@@ -89,6 +89,7 @@ import review_seats  # noqa: E402
 import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import repeat_marks  # noqa: E402
+import returning_review  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_commit  # noqa: E402
 import round_orders  # noqa: E402
@@ -1383,6 +1384,8 @@ def new_state(config=None):
     _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
     _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
+    if not state["terminal"]:
+        _seed_returning_round(state, cfg)
     return state
 
 
@@ -1401,22 +1404,191 @@ def _resolve_head_commit(repo_root):
     return sha or None
 
 
+def _copy_proof_applies(cfg):
+    """True when ``cfg`` holds a round-1 diff and a well-formed copy proof, so there is something to check."""
+    return isinstance(cfg.get("diff"), str) and countable_lines.proof_fault(cfg.get("copyProof")) is None
+
+
+def _proven_copies_at(cfg, head):
+    """``(proven, rejected)``: the copies ``cfg``'s copy proof proves in its round-1 diff at ``head`` — the one
+    computation of the session's proven copies, shared by ``_check_copy_proof`` and the returning-review decision.
+    ``([], [])`` when ``_copy_proof_applies`` is false."""
+    if not _copy_proof_applies(cfg):
+        return [], []
+    return countable_lines.proven_copies(cfg["diff"], cfg.get("repoRoot") or os.getcwd(), cfg["copyProof"], head=head)
+
+
 def _check_copy_proof(state, cfg):
     """Check the configured copy proof once against the round-1 diff and the head commit, and store what it
     proved (each copy with its diff section's digest), what it rejected, and the head it was checked at. Writes
     nothing when there is no well-formed proof or no diff."""
-    proof = cfg.get("copyProof")
-    diff_text = cfg.get("diff")
-    if not isinstance(diff_text, str) or countable_lines.proof_fault(proof) is not None:
+    if not _copy_proof_applies(cfg):
         return
+    diff_text = cfg["diff"]
     repo_root = cfg.get("repoRoot") or os.getcwd()
     # A head that cannot be resolved is passed on as None, which the counter reads as unreadable for every copy.
     head = _resolve_head_commit(repo_root)
-    proven, rejected = countable_lines.proven_copies(diff_text, repo_root, proof, head=head)
+    proven, rejected = _proven_copies_at(cfg, head)
     state["provenCopies"] = [dict(copy, section=countable_lines.section_digest(diff_text, copy["file"]))
                              for copy in proven]
     state["copyProofRejected"] = rejected
     state["provenCopiesHead"] = head
+
+
+# --- a returning pull request's new session (FR-44, FR-45): the decision at fresh state, the seeding of round 1 ---
+
+# The decider, called through this name so a test can replace it. lib/returning_review.py states the rule.
+_returning_decide = returning_review.decide
+
+RETURNING_KIND = "returning"
+RETURNING_DECISION_KIND = "returning-review"
+RETURNING_RECORD_FIELDS = ("read", "lastReviewed", "countable", "newAreas", "why")
+RETURNING_BASELINE_TIMEOUT = 120
+RETURNING_MALFORMED = "returning-decision-malformed"
+RETURNING_FAILED = "returning-decision-failed"
+RETURNING_BASELINE_UNREADABLE = "returning-baseline-unreadable"
+RETURNING_SURFACE_UNKNOWN = "returning-surface-unknown"
+
+
+def _returning_full(token, text):
+    """A stored decision that reads ``full``, for a decision the driver could not take or trust."""
+    return {"read": returning_review.READ_FULL, "lastReviewed": None, "countable": None,
+            "bar": countable_lines.COUNTABLE_LINES_BAR, "unsettled": [], "changedFiles": [], "newAreas": [],
+            "overlap": [], "why": ["%s: %s" % (token, text)]}
+
+
+def _returning_answer(answer):
+    """``answer`` (the decider's) as the decision to store, without ``deltaDiff``; anything that is not a whole
+    answer, or a ``changed`` one that names no last reviewed commit, is a ``full`` decision that says so."""
+    why = answer.get("why") if isinstance(answer, dict) else None
+    well_formed = (isinstance(answer, dict) and answer.get("read") in (returning_review.READ_FULL, returning_review.READ_CHANGED)
+                   and isinstance(why, list) and all(isinstance(w, str) for w in why))
+    if well_formed and answer["read"] == returning_review.READ_CHANGED:
+        well_formed = returning_review._is_sha(answer.get("lastReviewed"))
+    if well_formed:
+        stored = {k: v for k, v in answer.items() if k != "deltaDiff"}
+        try:
+            json.dumps(stored)
+            return stored
+        except (TypeError, ValueError):
+            pass
+    return _returning_full(RETURNING_MALFORMED, "the returning-review decider gave no usable answer")
+
+
+def _returning_baseline_diff(repo_root, base, last_reviewed):
+    """The pinned diff ``base...last_reviewed`` (what the earlier session reviewed), or None when git cannot give it."""
+    try:
+        proc = review_diff_bytes.run_git_diff_three_dot(repo_root, base, last_reviewed, timeout=RETURNING_BASELINE_TIMEOUT)
+        return proc.stdout.decode("utf-8") if proc.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):  # ValueError covers a bad sha and undecodable bytes
+        return None
+
+
+def _returning_overrides(session_dir, overrides):
+    """The config keys the first ``next`` adds for a returning pull request: ``returning`` (the decision, without
+    ``deltaDiff``) and, for a ``changed`` decision, ``returningBaselineDiff``. ``{}`` when the session is not a
+    pull request's, or holds no earlier record (``earlier-findings.json`` in the session dir). Every fault is a
+    ``full`` decision with its reason; nothing here raises."""
+    if session_mode.resolve(_session_meta(session_dir), overrides)["mode"] != session_mode.MODE_PR:
+        return {}
+    path = _earlier_findings_canonical_path(session_dir)
+    if not os.path.isfile(path):
+        return {}
+    earlier, fault = round_records.read_json(path)
+    if fault is not None or earlier is None:
+        earlier = {"ok": False, "reason": "earlier-record-unreadable"}
+    repo_root, base = overrides.get("repoRoot"), overrides.get("baseRef")
+    repo_root = repo_root if isinstance(repo_root, str) and repo_root else None
+    head = _resolve_head_commit(repo_root) if repo_root else None
+    try:
+        proven, _ = _proven_copies_at(overrides, head)
+        answer = _returning_decide(repo_root, base, head, earlier, proven=proven)
+    except Exception as exc:  # noqa: BLE001 — a decision nobody could take is a full read, never a changed one
+        stored = _returning_full(RETURNING_FAILED, "the decision failed on %s: %s" % (type(exc).__name__, exc))
+    else:
+        stored = _returning_answer(answer)
+    out = {}
+    if stored["read"] == returning_review.READ_CHANGED:
+        baseline = _returning_baseline_diff(repo_root, base, stored["lastReviewed"])
+        if baseline is None:
+            stored = dict(stored, read=returning_review.READ_FULL,
+                          why=list(stored["why"]) + ["%s: git could not produce the diff of the earlier review" % RETURNING_BASELINE_UNREADABLE])
+        else:
+            out["returningBaselineDiff"] = baseline
+    out["returning"] = stored
+    return out
+
+
+def _returning_decision_row(state, returning):
+    """The decision row for round 1's returning decision. Its kind is not in ``decision_kinds.DECISION_KINDS`` (that
+    file is outside this change), so the row is written here and not through ``_decision``."""
+    state["decisions"].append({
+        "round": state["round"], "kind": RETURNING_DECISION_KIND,
+        "detail": "returning review reads %s%s: %s" % (
+            returning.get("read"),
+            " since %s" % returning["lastReviewed"] if returning.get("lastReviewed") else "",
+            "; ".join(returning.get("why") or [])),
+    })
+
+
+def _record_returning(state, returning):
+    _record_round(state, "returning", {k: returning.get(k) for k in RETURNING_RECORD_FIELDS})
+    _returning_decision_row(state, returning)
+
+
+def _returning_surface(state, cfg):
+    """``(surface, text)`` of what changed since the last reviewed commit, or ``(None, why)``: the fix-delta
+    surface between ``base...lastReviewed`` and the round-1 diff, no proven copy in either diff."""
+    baseline, head_diff = cfg.get("returningBaselineDiff"), state.get("reviewedDiff")
+    if not isinstance(baseline, str) or not isinstance(head_diff, str):
+        return None, "the earlier review's diff or the round-1 diff is not text"
+    # a proven copy's section is cut from both diffs before any parser reads them
+    left_out = [copy["file"] for copy in _left_out(state, head_diff)]
+    baseline = countable_lines.reviewer_diff(baseline, left_out)
+    head_diff = countable_lines.reviewer_diff(head_diff, left_out)
+    try:
+        delta = _fix_delta_surface(state, baseline, head_diff)
+    except Exception as exc:  # noqa: BLE001 — a surface nobody could work out is a full panel, never a hand-back
+        return None, "the change since the last reviewed commit failed on %s: %s" % (type(exc).__name__, exc)
+    if delta is None:
+        return None, "the change since the last reviewed commit could not be worked out for every file"
+    return delta, None
+
+
+def _seed_returning_round(state, cfg):
+    """Round 1 of a fresh session whose config holds a returning-review decision. A ``changed`` decision makes
+    round 1 a returning round: no panel, the scoped finder over what changed since the last reviewed commit (an
+    empty change converges as a later round with an empty fix delta does). Any other decision, and a ``changed``
+    one whose surface cannot be worked out, leaves round 1 as it is — the full panel — and records why."""
+    returning = cfg.get("returning")
+    if not isinstance(returning, dict):
+        return
+    delta = None
+    if returning.get("read") == returning_review.READ_CHANGED:
+        delta, detail = _returning_surface(state, cfg)
+        if delta is None:
+            returning = dict(returning, read=returning_review.READ_FULL,
+                             why=list(returning.get("why") or []) + ["%s: %s" % (RETURNING_SURFACE_UNKNOWN, detail)])
+            cfg["returning"] = returning
+    _record_returning(state, returning)
+    # axis: the driver acts on a changed decision — round 1 is a returning round with no panel — see bite-proof record c1l11b_wo_d1_returning_session
+    if returning.get("read") != returning_review.READ_CHANGED:
+        cfg.pop("returningBaselineDiff", None)
+        return
+    new_surface, fix_delta_text = delta
+    state["fullPanelRan"] = False
+    state["_auditTargets"] = []
+    state["_newSurface"], state["_fixDeltaDiff"] = new_surface, fix_delta_text
+    _record_round(state, "roundKind", RETURNING_KIND)
+    # WO-D2 seam: the carried findings of the earlier record are audited here, before the scoped finder is scheduled.
+    state["step"] = P_SCOPED
+    if not new_surface:
+        # nothing to read (the change touched only proven copies, or nothing): converge as an empty fix delta does
+        _record_round(state, "scopedFinder", "skipped-empty-surface")
+        _decision(state, "scoped-finder-skipped",
+                  "scopedFinder: skipped-empty-surface — the change since the last reviewed commit left an empty "
+                  "surface; the scoped new-finding scan was skipped")
+        _fold_scoped(state, cfg, {})
 
 
 def _finding_identity_key(finding):
@@ -4812,7 +4984,7 @@ def _drop_spent_out_of_scope_rows(state, rows):
 def _resolve_empty_fix_batch_convergence(state, config):
     """Route an exclusion-emptied batch through the path's own resolver (A2)."""
     round_rec = state.get("rounds", {}).get(str(state["round"]), {})
-    if round_rec.get("roundKind") == "delta":
+    if round_rec.get("roundKind") in ("delta", RETURNING_KIND):
         _settle_delta_converged(state, config)
         return
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
@@ -8710,7 +8882,11 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return {"ok": False, "reason": "session-id-unmintable", "detail": mint_reason}
         _bootstrap_review_session_marker(session_dir)
         try:
-            state = new_state(_with_build_session_vendor(config_overrides))
+            overrides = _with_build_session_vendor(config_overrides) or {}
+            # the decision is taken here, once, and stored in the config: a caller cannot supply it
+            overrides = dict({k: v for k, v in overrides.items() if k not in ("returning", "returningBaselineDiff")},
+                             **_returning_overrides(session_dir, overrides))
+            state = new_state(overrides or None)
         except MaxRoundsRefusal as refusal:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
                                           "attempt": None, "outcome": "refused-max-rounds",
