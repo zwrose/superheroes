@@ -8912,7 +8912,8 @@ def _break_it_kept_step(state, config):
                     % (run.get("path"), str(run.get("output") or "")[-200:]))
                 return True
     # axis: a carried finding whose test was lost and never re-attached withholds certification, though no round-level run registers it — see bite-proof record c1l11b_wo_k_carried_lost_test
-    lost = _carried_test_lost_unresolved(state)
+    # axis: a carried lost-test finding the owner ruled out of scope with an audit-cleared, attributed ruling owes no park; every other one still parks — see bite-proof record c1l11b_wo_k_carried_lost_test
+    lost = [key for key in _carried_test_lost_unresolved(state) if _break_it_ruled_exempt(state, key) is None]
     if lost:
         _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
         return True
