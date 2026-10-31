@@ -45,6 +45,7 @@ import leftover_accepting  # noqa: E402
 import md_fence  # noqa: E402
 import pr_body_regions  # noqa: E402
 import review_record  # noqa: E402
+import stack_check  # noqa: E402
 
 GH_TIMEOUT = 120
 RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
@@ -372,9 +373,15 @@ def check_leftovers(pr, repo, body, comments):
 
 
 def reads_ready(slot_text):
-    """Whether the slot's verdict line (its first non-empty line) carries the READY token."""
+    """Whether the slot's verdict line (its first non-empty line) opens with a READY token of the canonical verdict
+    form (``rubric/vet-verdict-form.json``, read through ``stack_check``). A form that cannot be read reads READY, so
+    the leftover check runs rather than being skipped."""
+    form, _error = stack_check._load_vet_verdict_form()
+    # axis: an unreadable verdict form fails toward running the leftover check
+    if form is None:
+        return True
     first = next((line for line in slot_text.splitlines() if line.strip()), "")
-    return first.lstrip().startswith("**Verdict: READY**")
+    return any(first.startswith(token) for token, verdict in form[1] if verdict == stack_check.VERDICT_READY)
 
 
 def check_slot_text(slot_text):

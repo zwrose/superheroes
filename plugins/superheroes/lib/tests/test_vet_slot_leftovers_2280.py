@@ -243,3 +243,44 @@ def test_both_callers_reach_the_one_rule(monkeypatch, tmp_path):
     handback(body(ACCEPT_BOTH), [record_comment([F1, F2])])
     write(body(ACCEPT_BOTH), [RECEIPT, record_comment([F1, F2])], tmp_path)
     assert len(seen) == 2
+
+
+# --- review round 1 (codex light-lane seat) fixes ---------------------------------------------------
+
+def test_id_and_title_only_inside_an_html_comment_are_not_named():
+    """code-001: GitHub renders `None` alone; the id and title in the comment never reach the owner."""
+    hidden = body("- None <!-- f-1 the retry loop never backs off -->\n")
+    assert [g["id"] for g in la.missing(read_ok(F1), hidden)] == ["f-1"]
+    assert handback(hidden, [record_comment([F1])])["reason"] == "leftover-not-accepted"
+
+
+def test_visible_text_beside_a_comment_still_names_it():
+    shown = body("- f-1 the retry loop never backs off <!-- builder note -->: merging accepts it.\n")
+    assert la.missing(read_ok(F1), shown) == []
+
+
+def test_two_findings_sharing_an_id_are_each_checked_with_their_own_title(tmp_path):
+    """code-002: the second finding's title is required too, not only the first's."""
+    twin = dict(F2, id="f-1")
+    assert la.missing(read_ok(F1, twin), body(ACCEPT_ONLY_F1)) == [{"id": "f-1", "title": F2["title"]}]
+    both = body(ACCEPT_ONLY_F1 + "- f-1 a stale cache entry survives restart: merging accepts it.\n")
+    assert la.missing(read_ok(F1, twin), both) == []
+    result, fake = write(body(ACCEPT_ONLY_F1), [RECEIPT, record_comment([F1, twin], left=["f-1", "f-1"])], tmp_path)
+    assert result["reason"] == "leftover-not-accepted" and fake.edited == []
+
+
+def test_ready_detection_reads_the_canonical_verdict_form(monkeypatch):
+    """code-003: READY is read from rubric/vet-verdict-form.json through stack_check, its one home."""
+    assert vs.reads_ready("**Verdict: READY** · " + "a" * 40) is True
+    assert vs.reads_ready("\n\n**Verdict: READY** · x\n") is True
+    assert vs.reads_ready("**Verdict: NOT-READY** · x") is False
+    assert vs.reads_ready("**Verdict: PARKED** · x") is False
+    form = (" · ", [("**Vet: GO**", "READY"), ("**Vet: HOLD**", "NOT-READY"), ("**Vet: PARK**", "PARKED")])
+    monkeypatch.setattr(vs.stack_check, "_load_vet_verdict_form", lambda: (form, None))
+    assert vs.reads_ready("**Vet: GO** · x") is True
+    assert vs.reads_ready("**Verdict: READY** · x") is False
+
+
+def test_an_unreadable_verdict_form_runs_the_check(monkeypatch):
+    monkeypatch.setattr(vs.stack_check, "_load_vet_verdict_form", lambda: (None, "missing"))
+    assert vs.reads_ready("**Verdict: NOT-READY** · x") is True

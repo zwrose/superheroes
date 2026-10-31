@@ -38,17 +38,27 @@ def _leftovers(record):
     out = []
     for name in left:
         held = [f for f in findings if f.get("outcome") == review_record._LEFT_FOR_OWNER
-                and review_record._name(f) == name]
+                and review_record._name(f) == name and not review_record.repeat_held_elsewhere(f, findings)]
         # axis: a leftForOwner entry that is not a non-empty string, or names no left-for-owner finding, is unreadable
         if not (isinstance(name, str) and name.strip() and held):
             raise Unreadable("leftForOwner entry %r names no finding left for the owner" % (name,))
-        title = held[0].get("title")
-        out.append((name, title if isinstance(title, str) and title.strip() else None))
+        # axis: two findings sharing one id are each checked with their own title, never only the first
+        for f in held:
+            title = f.get("title")
+            pair = (name, title if isinstance(title, str) and title.strip() else None)
+            if pair not in out:
+                out.append(pair)
     return out
 
 
+_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
+
+
 def _names(item, ident, title):
-    """Whether one acceptance names the id as a whole token and carries the title, both byte for byte."""
+    """Whether one acceptance names the id as a whole token and carries the title, both byte for byte, in its visible
+    text: an HTML comment inside the line does not render, so nothing in it counts."""
+    # axis: an id or title only inside an inline HTML comment is not named
+    item = _COMMENT.sub(" ", item)
     token = re.search("(?<![%s])%s(?![%s])" % (_ID_CHAR, re.escape(ident), _ID_CHAR), item)
     return token is not None and (title is None or title in item)
 
