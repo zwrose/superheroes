@@ -1,5 +1,7 @@
 # WO-R5-A bite-proofs — probe git-fake fixture teardown guards (BP29–BP32)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 ## BP29 → G1 — fixture teardown aggregator (`line 5995`)
 
 **Guarded element:** `test_engine_dispatch.py:_probe_git_fake_route_registry` teardown — axis: **any arm that appended to `teardown_errors` causes fixture teardown to fail**.
@@ -204,7 +206,7 @@ FFF                                                                      [100%]
 ______ test_probe_git_fake_teardown_raises_on_undeclared_route_end_to_end ______
 ...
 >       assert "1 passed" in child.stdout, msg
-E       AssertionError: stdout='' stderr='ImportError while loading conftest ...\nconftest.py:7: in <module>\n    assert sys.pycache_prefix == ... and sys.dont_write_bytecode, "child must not import stale bytecode of the fixture under test"\nE   AssertionError: child must not import stale bytecode of the fixture under test\nE   assert (\'/Users/zwrose/Library/Caches/com.apple.python\' == \'.../pyc\')\n'
+E       AssertionError: stdout='' stderr='ImportError while loading conftest ...\nconftest.py:7: in <module>\n    assert sys.pycache_prefix == ... and sys.dont_write_bytecode, "child must not import stale bytecode of the fixture under test"\nE   AssertionError: child must not import stale bytecode of the fixture under test\nE   assert (\'/path/to/home/Library/Caches/com.apple.python\' == \'.../pyc\')\n'
 E       assert '1 passed' in ''
 ...
 __ test_probe_git_fake_teardown_raises_on_declared_route_mismatch_end_to_end ___

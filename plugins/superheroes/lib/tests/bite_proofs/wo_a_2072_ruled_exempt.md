@@ -1,5 +1,7 @@
 # Work order A (#2072, layer 3 of #2053) bite-proof: a break-it test ruled out of scope and discharged by the audit is not required to be kept
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 **Provenance:** claude / sonnet-5.5 (implementer, work order A), maker family anthropic. Production under proof: `plugins/superheroes/lib/round_driver.py` (`_break_it_ruled_exempt`, `_break_it_kept_step`), `plugins/superheroes/lib/review_record_session.py` (`_decide`), `plugins/superheroes/lib/receipt_disclosures.py` (`build_degraded_prose`, the `breakItKept` not-kept filter). Tests: `plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py`.
 
 Declared guarded-element set (from the order): **E1**, **E2**, **E3**, **E4**, **E5**, **E6**, **E7**. Each was neutralized by one targeted edit (the Edit tool, exact-text match), only its proving nodes run by exact node id (never `-k`; a bare function id selects every parametrization of that function), the inverse edit applied, `git diff --stat` taken over the file (empty: the file equals the implementation commit `cd750964a`), and the same ids run again. The probes ran on the committed implementation. No `git checkout`, `git restore`, `git reset` or `git stash` was used.
@@ -24,7 +26,7 @@ Declared guarded-element set (from the order): **E1**, **E2**, **E3**, **E4**, *
 - E3 is neutralized by returning the ruling row (`return live`) where the scan finds no clearing audit, because the edge-1 fixtures record no audit at all, so a neutralized per-entry test would never run. The sub-conditions of the per-entry test (`id == key`, `ruling in audits._CLEARS`) are not declared elements; they are exercised by `::test_edge5_a_not_discharged_audit_owes_the_check`, `::test_edge8_a_round_without_a_usable_audit_list_contributes_no_discharge[other-key]` and `::test_a_ruled_out_of_scope_and_discharged_test_is_exempt_from_the_kept_check`, but were not neutralized.
 - The restore receipt is `git diff --stat -- <file>` taken after the inverse edit, printed between `--- git diff --stat` and `--- end diff` markers: in every element it printed nothing. The restored line is also quoted from `grep -n` (or the Read tool for E3).
 - The command shape is `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <exact node ids> -q`, followed by `echo "pytest exit: $?"`. Everything else is verbatim (default `--tb`, no filter).
-- Redaction: none needed; local `/Users/zwrose/...` and `/private/tmp/...` paths are kept as printed, no secret, token or private URL appears.
+- Redaction: none needed; local `/path/to/home/...` and `/private/tmp/...` paths are kept as printed, no secret, token or private URL appears.
 - **E2's red capture is 40480 bytes, over the 32 KiB ceiling**, so it is stored off-repo at `/private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-2072-wo-a/f9907c28-e51a-4615-ac4e-768bdc84522a/scratchpad/e2_red.txt` and its first and last lines are quoted below. All other captures are under 32 KiB, and the record is under 128 KiB together.
 
 ---
@@ -58,12 +60,12 @@ world = <test_break_it_loop.World object at 0x1077a68a0>, spy = []
         _audit(world, key)
 >       _owes_the_check(world, spy)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:140: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:140: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: in _owes_the_check
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: in _owes_the_check
     assert RD._break_it_kept_step(world.state, world.state["config"]) is True
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6958: in _break_it_kept_step
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6958: in _break_it_kept_step
     ruled = _break_it_ruled_exempt(state, key)
             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
@@ -84,7 +86,7 @@ key = 'tests/test_charge_once.py::breakit a retried charge runs twice@L1'
                ^^^^^^^^
 E       AttributeError: 'NoneType' object has no attribute 'get'
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6899: AttributeError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6899: AttributeError
 _ test_edge4_a_later_ruling_that_superseded_the_skip_owes_the_check[guidance] __
 
 world = <test_break_it_loop.World object at 0x1077bffb0>, spy = []
@@ -98,7 +100,7 @@ later = 'guidance'
         _audit(world, key)
 >       _owes_the_check(world, spy)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:162: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:162: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 world = <test_break_it_loop.World object at 0x1077bffb0>, spy = []
@@ -111,7 +113,7 @@ E        +  where False = <function _break_it_kept_step at 0x10782dee0>({'schema
 E        +    where <function _break_it_kept_step at 0x10782dee0> = RD._break_it_kept_step
 E        +    and   {'schemaVersion': 5, 'sessionGeneration': 6, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 1, ...} = <test_break_it_loop.World object at 0x1077bffb0>.state
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
 ____ test_edge4_a_later_ruling_that_superseded_the_skip_owes_the_check[fix] ____
 
 world = <test_break_it_loop.World object at 0x106a71a00>, spy = []
@@ -125,7 +127,7 @@ later = 'fix'
         _audit(world, key)
 >       _owes_the_check(world, spy)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:162: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:162: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 world = <test_break_it_loop.World object at 0x106a71a00>, spy = []
@@ -138,7 +140,7 @@ E        +  where False = <function _break_it_kept_step at 0x10782dee0>({'schema
 E        +    where <function _break_it_kept_step at 0x10782dee0> = RD._break_it_kept_step
 E        +    and   {'schemaVersion': 5, 'sessionGeneration': 6, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 1, ...} = <test_break_it_loop.World object at 0x106a71a00>.state
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_edge2_a_cleared_finding_with_no_rule_still_owes_the_check
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_edge4_a_later_ruling_that_superseded_the_skip_owes_the_check[guidance]
@@ -210,7 +212,7 @@ Last lines of the capture:
 E        +    where <function _break_it_kept_step at 0x10555e020> = RD._break_it_kept_step
 E        +    and   {'schemaVersion': 5, 'sessionGeneration': 6, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 1, ...} = <test_break_it_loop.World object at 0x1054d0350>.state
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_edge3_an_unattributed_rule_owes_the_check[missing]
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_edge3_an_unattributed_rule_owes_the_check[not-a-dict]
@@ -276,7 +278,7 @@ disposition = 'fixed'
         _rule(world, key)
 >       _owes_the_check(world, spy)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:134: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:134: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 world = <test_break_it_loop.World object at 0x102ce1010>, spy = []
@@ -289,7 +291,7 @@ E        +  where False = <function _break_it_kept_step at 0x102d69ee0>({'schema
 E        +    where <function _break_it_kept_step at 0x102d69ee0> = RD._break_it_kept_step
 E        +    and   {'schemaVersion': 5, 'sessionGeneration': 6, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 1, ...} = <test_break_it_loop.World object at 0x102ce1010>.state
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
 _ test_edge1_a_rule_with_no_clearing_audit_still_owes_the_check[out-of-scope] __
 
 world = <test_break_it_loop.World object at 0x102cf1250>, spy = []
@@ -301,7 +303,7 @@ disposition = 'out-of-scope'
         _rule(world, key)
 >       _owes_the_check(world, spy)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:134: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:134: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 world = <test_break_it_loop.World object at 0x102cf1250>, spy = []
@@ -314,7 +316,7 @@ E        +  where False = <function _break_it_kept_step at 0x102d69ee0>({'schema
 E        +    where <function _break_it_kept_step at 0x102d69ee0> = RD._break_it_kept_step
 E        +    and   {'schemaVersion': 5, 'sessionGeneration': 6, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 1, ...} = <test_break_it_loop.World object at 0x102cf1250>.state
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_edge1_a_rule_with_no_clearing_audit_still_owes_the_check[fixed]
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_edge1_a_rule_with_no_clearing_audit_still_owes_the_check[out-of-scope]
@@ -378,7 +380,7 @@ disposition = 'out-of-scope'
         _rule(world, key)
 >       _owes_the_check(world, spy)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:134: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:134: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 world = <test_break_it_loop.World object at 0x1056ee450>, spy = []
@@ -391,7 +393,7 @@ E        +  where False = <function _break_it_kept_step at 0x105775ee0>({'schema
 E        +    where <function _break_it_kept_step at 0x105775ee0> = RD._break_it_kept_step
 E        +    and   {'schemaVersion': 5, 'sessionGeneration': 6, 'config': {'leg': 'code', 'panel': False, 'code': True, 'vendors': ['claude', 'codex'], ...}, 'round': 1, ...} = <test_break_it_loop.World object at 0x1056ee450>.state
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:64: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_edge1_a_rule_with_no_clearing_audit_still_owes_the_check[out-of-scope]
 1 failed in 10.80s
@@ -452,20 +454,20 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106a9b9b0>
 >       assert RD._break_it_kept_step(world.state, world.state["config"]) is False
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:81: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:81: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6964: in _break_it_kept_step
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6964: in _break_it_kept_step
     got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-args = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-294/test_a_ruled_out_of_scope_and_0/repo', 'c873de8e426030e45baba9cc..._charge_once.py', 'command': '/Users/zwrose/.cache/uv/builds-v0/.tmpePJJ4g/bin/python tests/test_charge_once.py', ...})
-kwargs = {'interpreter': '/Users/zwrose/.cache/uv/builds-v0/.tmpePJJ4g/bin/python'}
+args = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-294/test_a_ruled_out_of_scope_and_0/repo', 'c873de8e426030e45baba9cc..._charge_once.py', 'command': '/path/to/home/.cache/uv/builds-v0/.tmpePJJ4g/bin/python tests/test_charge_once.py', ...})
+kwargs = {'interpreter': '/path/to/home/.cache/uv/builds-v0/.tmpePJJ4g/bin/python'}
 
     def never(*args, **kwargs):
 >       raise AssertionError("check_kept ran for an exempt finding")
 E       AssertionError: check_kept ran for an exempt finding
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:78: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:78: AssertionError
 ______________ test_the_exempt_finding_lets_the_terminal_converge ______________
 
 world = <test_break_it_loop.World object at 0x106ba97f0>
@@ -478,23 +480,23 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106aa6300>
         monkeypatch.setattr(break_it, "check_kept", lambda *a, **k: pytest.fail("check_kept ran"))
 >       RD._terminal_converged(world.state, world.state["config"], full_panel=True)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:94: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:94: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:7007: in _terminal_converged
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:7007: in _terminal_converged
     if _break_it_kept_step(state, config):
        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6964: in _break_it_kept_step
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/round_driver.py:6964: in _break_it_kept_step
     got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, run,
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
-a = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-294/test_the_exempt_finding_lets_t0/repo', 'ad5fc089eb291d1576e7b40d..._charge_once.py', 'command': '/Users/zwrose/.cache/uv/builds-v0/.tmpePJJ4g/bin/python tests/test_charge_once.py', ...})
-k = {'interpreter': '/Users/zwrose/.cache/uv/builds-v0/.tmpePJJ4g/bin/python'}
+a = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-294/test_the_exempt_finding_lets_t0/repo', 'ad5fc089eb291d1576e7b40d..._charge_once.py', 'command': '/path/to/home/.cache/uv/builds-v0/.tmpePJJ4g/bin/python tests/test_charge_once.py', ...})
+k = {'interpreter': '/path/to/home/.cache/uv/builds-v0/.tmpePJJ4g/bin/python'}
 
 >   monkeypatch.setattr(break_it, "check_kept", lambda *a, **k: pytest.fail("check_kept ran"))
                                                                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 E   Failed: check_kept ran
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:93: Failed
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:93: Failed
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_a_ruled_out_of_scope_and_discharged_test_is_exempt_from_the_kept_check
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_the_exempt_finding_lets_the_terminal_converge
@@ -558,7 +560,7 @@ E
 E         - ruling
 E         + fixed
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:107: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:107: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_the_review_record_labels_the_exempt_finding_ruling_never_fixed
 1 failed in 12.56s
@@ -609,7 +611,7 @@ _ test_the_receipt_disclosure_does_not_list_a_ruled_out_of_scope_row_as_not_kept
 >       assert not [line for line in _degraded_for([exempt]) if "break-it-test-not-kept" in line]
 E       AssertionError: assert not ['break-it-test-not-kept (round 1): 1 fixed break-it test(s) not held in the final change (tests/t.py: ruled-out-of-scope) — certification withheld']
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:122: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2072-wo-a/plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py:122: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_ruled_exempt_2072.py::test_the_receipt_disclosure_does_not_list_a_ruled_out_of_scope_row_as_not_kept
 1 failed in 2.04s
