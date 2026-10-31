@@ -310,7 +310,8 @@ def test_t9_an_abandoned_session_does_not_list_a_finding_on_the_outside_list_as_
         account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
         assert account["findings"] == [] and account["refused"] == []
         assert account["outsideThisPR"][0]["hits"][0]["title"] == "Unfolded defect"
-    other_line = _abandoned(tmp_path / "other", outsideThisPR=[{"source": {"kind": "reviewer", "name": "x", "sweepId": None},
+    # the control keeps the stored report's own source name and changes only the line, so only the line can keep it open
+    other_line = _abandoned(tmp_path / "other", outsideThisPR=[{"source": {"kind": "reviewer", "name": "code-reviewer", "sweepId": None},
                                                                 "hits": [dict(hit, line=9)]}])
     kept = rs.account_from_session(other_line, extras(), Fake().readers(), abandoned="stopped")
     assert [f["title"] for f in kept["findings"]] == ["Unfolded defect"]  # a hit at another line covers nothing

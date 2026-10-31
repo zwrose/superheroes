@@ -266,6 +266,11 @@ def test_a_malformed_block_keeps_ordinary_scope_checking(world):
     assert world.state["_toVerify"] == []
     assert _drop_reasons(world.state) == []
     assert _outside_sources(world.state) == [("test-role", "unrelated.py", 42)]
+    # the not-run record is kept, marked as routed outside, and the outside finding does not park certification
+    (run,) = world.round_record["breakItRuns"]
+    assert run["outcome"] == "not-run" and run["droppedAtCompile"] is True and run["routedOutside"] is True
+    RD._terminal_converged(world.state, world.state["config"], full_panel=True)
+    assert world.state["terminal"] != "cannot-certify"
     # a path-mismatched block and a block off line 1 lose the exemption too
     other = World(world.session.parent / "other")
     other.fold_panel(_break_it_finding(file="unrelated.py", line=1),

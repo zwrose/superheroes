@@ -3666,11 +3666,22 @@ def _break_it_scope(session_dir, state, config):
     return config.get("repoRoot"), config.get("headSha")
 
 
-def _break_it_run_keys(runs, compiled):
+def _outside_anchors(drops):
+    """The `(file, normalized title, line)` anchors of the outside-scope drops, for `_break_it_run_keys`."""
+    anchors = set()
+    for drop in drops or []:
+        if isinstance(drop, dict) and drop.get("reason") == COMPILE_DROP_OUTSIDE and isinstance(drop.get("file"), str):
+            line_ok, line = _coerce_line(drop.get("line"))
+            anchors.add((drop["file"], normalize_title(str(drop.get("title") or "")), line if line_ok else None))
+    return anchors
+
+
+def _break_it_run_keys(runs, compiled, outside=()):
     """Put the compiled finding's key on each run entry, passed runs included: the run binds to the compiled
     finding that carries its test (the same (file, normalized title) match, per-area or attached). A run whose
     proposal compile merged away is `supersededAtCompile` with no key; a run whose finding compile dropped is
-    `droppedAtCompile` with no key."""
+    `droppedAtCompile` with no key, and also `routedOutside` when the finding went to the "Outside this PR" list
+    (`outside` holds `_outside_anchors` of this fold's drops)."""
     by_anchor, by_identity = {}, {}
     flat = []
     for f in compiled:
@@ -3711,6 +3722,12 @@ def _break_it_run_keys(runs, compiled):
             entry["findingKey"] = match.get(session_contract.FINDING_KEY_FIELD) if match else None
             if match is None:
                 entry["droppedAtCompile"] = True
+                if isinstance(entry.get("file"), str):
+                    run_line_ok, run_line = _coerce_line(entry.get("line")) if "line" in entry else (False, None)
+                    run_ident = ident + (run_line if run_line_ok else None,)
+                    # axis: a run whose finding compile routed outside the PR is marked so certification does not park on it; any other dropped run still parks
+                    if run_ident in outside or ("line" not in entry and any(a[:2] == ident for a in outside)):
+                        entry["routedOutside"] = True
         out.append(entry)
     return out
 
@@ -3816,7 +3833,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped,
                                          sources=seat_sources)
     if runs:
-        runs = _break_it_run_keys(runs, compiled)
+        runs = _break_it_run_keys(runs, compiled, _outside_anchors(drops))
         _record_round(state, "breakItRuns", runs)
         _decision(state, "break-it-run",
                   "%d run: %d exited 0, %d exited non-zero, %d not run"
@@ -9389,8 +9406,9 @@ def _break_it_kept_step(state, config):
     check; a finding with any other disposition besides fixed or out-of-scope owes none either."""
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
-            # axis: a per-area (or kind-less) break-it run that compile dropped and that did not pass withholds certification; an attached test's dropped run stays recorded and parks nothing, as its dropped finding would without a test
+            # axis: a per-area (or kind-less) break-it run that compile dropped and that did not pass withholds certification; an attached test's dropped run stays recorded and parks nothing, as its dropped finding would without a test; a run whose finding went to the "Outside this PR" list parks nothing either, as the list is no block on the review
             if (isinstance(run, dict) and run.get("droppedAtCompile") is True
+                    and run.get("routedOutside") is not True
                     and run.get("outcome") != break_it.OUTCOME_PASSED
                     and run.get("kind") != break_it.KIND_ATTACHED):
                 _park_cannot_certify(
