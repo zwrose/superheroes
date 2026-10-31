@@ -26,7 +26,7 @@ import test_round_driver_integration as IT  # noqa: E402
 import test_verifier_vendor_provenance_1797 as P17  # noqa: E402
 
 FINDERS = [(RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP), (RD.P_SCOPED, RA.SEAT_SCOPED)]
-BAR_HOW = ["maker-family", "fixer-vendor"]
+BAR_HOW = ["maker-family", "vendor-is-the-fixer"]
 
 
 def _state(fixer="claude", host="anthropic", makers=()):

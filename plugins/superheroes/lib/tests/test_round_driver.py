@@ -518,7 +518,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
                 scoped_state["fired"] = True
                 return {"findings": list(scoped)}
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": head, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": verify}
@@ -1251,7 +1251,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": bad_head, "changedSubjects": []}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1313,7 +1313,7 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
         if phase == RD.P_SCOPED:
             captured["payload"] = payload
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": _R2B_HEAD_MF, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1361,7 +1361,7 @@ def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
 
 
 # =============================================================================
-# dispatch-fixer head diff: inline OR absolute headDiffPath; unreadable → full panel (#507)
+# apply-fixes head diff: inline OR absolute headDiffPath; unreadable → full panel (#507)
 # =============================================================================
 
 def _multifile_delta_respond(captured, fixer_artifact):
@@ -1390,7 +1390,7 @@ def _multifile_delta_respond(captured, fixer_artifact):
         if phase == RD.P_SCOPED:
             captured["payload"] = payload
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return dict(fixer_artifact)
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1399,7 +1399,7 @@ def _multifile_delta_respond(captured, fixer_artifact):
 
 
 def test_fixer_head_diff_path_form_end_to_end(tmp_path):
-    """A `dispatch-fixer` artifact may carry the post-fix head diff as an ABSOLUTE `headDiffPath` the
+    """An `apply-fixes` report may carry the post-fix head diff as an ABSOLUTE `headDiffPath` the
     driver reads itself (a real git diff cannot inline into a JSON submit artifact). The delta split
     reads the file's content, so the scoped finder's payload carries that file's new surface (#507)."""
     d = str(tmp_path)
@@ -1446,7 +1446,7 @@ def test_fixer_unreadable_head_diff_path_with_repository_derives_git(tmp_path):
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiffPath": missing, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1752,37 +1752,6 @@ def test_audit_stall_clears_on_clean_round_then_certifies_converged():
     assert any(r["round"] == 4 and r.get("audits") for r in receipt["rounds"])
     recoveries = [r for r in receipt["rounds"] if r.get("selfRecovery")]
     assert len(recoveries) == 1
-
-
-def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
-    """#608 review: unknown fixer → escalate returns None — must not set a truthy _escalatedRung."""
-    state = RD.new_state({"leg": "code", "vendors": ["claude"]})
-    assert state["config"]["fixerVendor"] is None
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_TERMINAL
-    assert state.get("_escalatedRung") is None
-    # #620 R3a: the null-rung self-recovery decision detail must be honest — never "escalated to None".
-    sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
-    assert len(sr) == 1
-    assert "escalated to None" not in sr[0]["detail"]
-    assert "no escalation rung available" in sr[0]["detail"]
-
-
-def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
-    """#608 review contrast: known claude fixer at default sonnet-5.5/high has a next ladder rung."""
-    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_TERMINAL
-    escalated = state.get("_escalatedRung")
-    assert escalated is not None
-    assert escalated["rung"] is not None
-    assert escalated["vendor"] == "claude"
-    # #620 R3a contrast: on the real-rung path the detail names the actual escalation target.
-    sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
-    assert len(sr) == 1
-    assert ("fixer escalated to %r" % (escalated["rung"],)) in sr[0]["detail"]
 
 
 # =============================================================================
@@ -2107,7 +2076,7 @@ def test_new_blocker_does_not_drop_unresolved_target_at_different_line():
         {"identity": "f.py::same bug", "ruling": "not-discharged"}]}]
     state["findings"] = [{"title": "same bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}]
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert sorted(b.get("line") for b in state["_fixBatch"]) == [1, 2]
 
 
@@ -2500,7 +2469,7 @@ def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
     assert state["_changedSubjectsSincePanel"] == []
     for subj in (["Security"], ["Code"], ["Test"]):
         state["round"] = 2
-        RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
+        RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
                        lambda r, h, a, _s=subj: _s)
     assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
     assert RRP.is_cross_cutting(state["_changedSubjectsSincePanel"]) is True
@@ -2513,12 +2482,12 @@ def test_panel_resets_accumulator_and_baseline_fix_excluded():
     state = RD.new_state(_cfg())
     RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
     state["round"] = 1
-    RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
+    RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
                    lambda r, h, a: ["Code", "Security", "Test"])
     assert state["_changedSubjectsSincePanel"] == []
     # a broad delta fix accumulates, then a later panel resets it
     state["round"] = 2
-    RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
+    RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
                    lambda r, h, a: ["Code", "Security", "Test"])
     assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
     state["round"] = 3
@@ -2554,19 +2523,6 @@ def test_owner_choice_holds_are_distinct_for_same_title_different_lines():
     assert RD._hold_owner_choice(state, [dict(a), dict(b)]) == []
     assert len(set(state["ownerChoiceHeld"])) == 2, state["ownerChoiceHeld"]
     assert state["ownerChoiceHeld"] == [RD._finding_key_of(a), RD._finding_key_of(b)]
-
-
-def test_fixer_vendor_flag_rejects_unknown_and_wires_fresh(tmp_path):
-    """#507 R2 v4: --fixer-vendor sets the ACTUAL fixer so the auditor is seated as a DIFFERENT
-    vendor. An unknown vendor or a non-fresh state fails loud (nonzero), never a silent default."""
-    d = str(tmp_path)
-    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "nope"]) == 1
-    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "codex",
-                    "--vendors", "codex,cursor"] + _guard_argv(d)) == 0
-    ok, state = RD.load_state(d)
-    assert ok and state["config"]["fixerVendor"] == "codex"
-    # non-fresh: a later --fixer-vendor cannot take effect → rejected loud
-    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "cursor"]) == 1
 
 
 def test_receipt_missing_seat_surfaces_unverified(tmp_path):
@@ -3471,7 +3427,7 @@ def test_fold_fixer_derives_subjects_from_git_not_self_report():
     ]
     head = _file_diff("a.py", 3) + _file_diff("b.py", 3) + _file_diff("c.py", 3)
     artifact = {"fixes": [], "headDiff": head, "changedSubjects": ["Code"]}
-    RD._fold_fixer(state, state["config"], artifact)
+    RD._fold_apply_fixes(state, state["config"], artifact)
     assert state["_changedSubjects"] == ["Code", "Security", "Test"]
 
 
@@ -3714,9 +3670,14 @@ def test_base_guard_wrong_base_diff_refuses_no_state(tmp_path, capsys):
 
 def test_base_guard_healthy_next_stat_bound_receipt(tmp_path, capsys):
     d = str(tmp_path)
-    ga = _guard_argv(d) + ["--vendors", "codex,cursor", "--fixer-vendor", "codex"]
+    # the build session's own family (openai) is the fixer, so the audits are seated on another vendor
+    seat_map = dict(_nonpanel_cell_proof(["codex", "cursor"]), hostFamily="openai")
+    seat_map_path = os.path.join(d, "seat-map.json")
+    with open(seat_map_path, "w", encoding="utf-8") as fh:
+        json.dump(seat_map, fh)
+    ga = _guard_argv(d) + ["--vendors", "codex,cursor", "--seat-map", seat_map_path]
     rc, out = _cli_next_json(d, ga, capsys)
-    assert rc == 0 and out["ok"]
+    assert rc == 0 and out["ok"], out
     pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
     for _ in range(80):
         n = RD.cmd_next(d)
@@ -4437,7 +4398,7 @@ def test_receipt_projects_judgment_dispositions_when_recorded():
 
 
 def test_judgment_dispositions_guidance_reaches_the_export_the_receipt_and_the_fixer_order(tmp_path):
-    """E6: fold guidance reaches the export, the receipt and the rendered fixer order in one session."""
+    """E6: fold guidance reaches the export, the receipt and the apply-fixes guidance file in one session."""
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
     _record_gate_decision(state, _TRADEOFF, "fix-with-guidance", "narrow only")
@@ -4455,24 +4416,16 @@ def test_judgment_dispositions_guidance_reaches_the_export_the_receipt_and_the_f
                            "judgmentDisposition": "fix-with-guidance"}]
     session_dir = str(tmp_path / "resume-render")
     os.makedirs(session_dir)
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    assert "narrow only" in ph["GATE_GUIDANCE"]
-    assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
+    fields = RD._apply_fixes_payload_fields(session_dir, state, 1, 0)
+    assert fields["guidancePath"] is not None
+    with open(fields["guidancePath"], encoding="utf-8") as fh:
+        guidance = fh.read()
+    assert "narrow only" in guidance
+    assert guidance.strip() != RD._GATE_GUIDANCE_NO_GUIDANCE
 
 
 def test_judgment_dispositions_identity_fields_reach_the_export_the_receipt_and_the_fixer_order(tmp_path):
-    """E6b: fold identity fields (id, file, line) reach the export, the receipt and the rendered fixer order in one session."""
+    """E6b: fold identity fields (id, file, line) reach the export, the receipt and the apply-fixes guidance file in one session."""
     records = tmp_path / "round-records.json"
     tradeoff = dict(_RESUME_IDENTITY_TRADEOFF)
     guidance_text = "keep the resume identity intact"
@@ -4503,19 +4456,10 @@ def test_judgment_dispositions_identity_fields_reach_the_export_the_receipt_and_
                            "judgmentDisposition": "fix-with-guidance"}]
     session_dir = str(tmp_path / "resume-identity-render")
     os.makedirs(session_dir)
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
+    fields = RD._apply_fixes_payload_fields(session_dir, state, 1, 0)
+    assert fields["guidancePath"] is not None
+    with open(fields["guidancePath"], encoding="utf-8") as fh:
+        block = fh.read()
     assert "### %s:%s — %s" % (tradeoff["file"], tradeoff["line"], tradeoff["title"]) in block
     assert _gate_guidance_record_id_line(block) == _RESUME_IDENTITY_TRADEOFF_ID
 
@@ -6462,7 +6406,7 @@ def test_settle_delta_unregistered_halt_reason_parks_fail_closed(monkeypatch):
     RD._settle_delta(state, state["config"])
     assert state["terminal"] == "cannot-certify"
     assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
-    assert state["step"] != RD.P_FIXER
+    assert state["step"] != RD.P_APPLY_FIXES
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
     assert "synthetic-unregistered-reason" in detail
 
@@ -6674,7 +6618,7 @@ def test_fixer_fold_records_refusal_when_head_unresolvable(tmp_path, monkeypatch
     state["round"] = 1
     state["_fixBatch"] = [{"id": "F1", "file": "a.py", "line": 1, "severity": "Important"}]
     monkeypatch.setattr(RD.store_core, "run_git", lambda _repo_root, *_args, **_kwargs: None)
-    RD._fold_fixer(state, state["config"], {"fixes": [{"file": "a.py"}], "headDiff": "diff"},
+    RD._fold_apply_fixes(state, state["config"], {"fixes": [{"file": "a.py"}], "headDiff": "diff"},
                    session_dir=session_dir)
     assert "git rev-parse HEAD failed" in state["rounds"]["1"]["fixFoldHeadRefused"]
     assert "fixFoldHead" not in state["rounds"]["1"]

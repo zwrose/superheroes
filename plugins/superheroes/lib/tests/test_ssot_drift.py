@@ -1366,6 +1366,8 @@ _EXPECTED_RAW_MODE_READS = {
     "lib/round_driver.py": {
         'base["mode"] = _mode_resolved["mode"]',
         'if mode_resolved["mode"] == session_mode.MODE_BRANCH:',
+        # the apply-fixes step stages the PR body only in PR mode; the mode is read off the single resolver's own result
+        'if session_mode.resolve(_session_meta(session_dir), cfg)["mode"] != session_mode.MODE_BRANCH:',
         '"MODE": mode_resolved["mode"],',
     },
     "lib/review_base_guard.py": {

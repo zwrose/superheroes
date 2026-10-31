@@ -380,9 +380,9 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
         return {"grouping": None}
     if phase in (round_driver.P_GAPSWEEP, round_driver.P_SCOPED):
         return {"findings": []}
-    if phase == round_driver.P_FIXER:
+    if phase == round_driver.P_APPLY_FIXES:
         return {"fixes": [{"file": FIXED_FILE, "summary": "guard restored"}],
-                "escalated": False, "headDiffPath": head_diff_path}
+                "headDiffPath": head_diff_path}
     if phase == round_driver.P_VERIFY:
         return _verify_payload_via_verb(session_dir)
     if phase == round_driver.P_AUDITS:
@@ -1345,7 +1345,8 @@ def _fixer_envelope_for_write_run(record, *, order_sha=None):
     }
 
 
-def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
+def test_assemble_dispatch_evidence_write_run_is_refused_for_every_phase(tmp_path):
+    # axis: no phase admits a write run's execution-only evidence — the build session writes its own fixes
     order_path = str(tmp_path / "fixer-order.txt")
     with open(order_path, "w", encoding="utf-8") as fh:
         fh.write("Fix the bug.\n")
@@ -1353,14 +1354,14 @@ def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record)
-    assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
-    assert refusal is None, extra
-    assert assembled is not None
-    assert cited_head_source == round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
-    assert assembled["executionEvidence"]["resultKind"] == session_contract.WRITE_RESULT_KIND
-    assert assembled["envelopeSha256"] == round_records.envelope_sha256(
-        envelope["payload"], assembled["executionEvidence"])
+    assert round_driver.P_APPLY_FIXES in round_driver.round_phases.ALL_PHASES
+    for phase in round_driver.round_phases.ALL_PHASES:
+        assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
+            str(tmp_path / "session"), envelope, run_dir, "abc", phase)
+        assert assembled is None, phase
+        assert refusal == "evidence-run-kind-mismatch", (phase, refusal)
+        assert extra == {"runKind": "write", "phase": phase}
+        assert cited_head_source is None
 
 
 def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
@@ -1372,7 +1373,7 @@ def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record, order_sha="0" * 64)
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_APPLY_FIXES)
     assert assembled is None
     assert refusal == "evidence-order-mismatch"
 
@@ -1395,17 +1396,17 @@ def test_assemble_dispatch_evidence_write_run_binding_incomplete_refuses(tmp_pat
     assert "resultDigest" not in record
     envelope = _fixer_envelope_for_write_run(record)
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_APPLY_FIXES)
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra.get("detail") == "result-binding-incomplete"
 
 
 def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
-    order_path = str(tmp_path / "fixer-order-unknown-kind.txt")
+    order_path = str(tmp_path / "review-order-unknown-kind.txt")
     with open(order_path, "w", encoding="utf-8") as fh:
-        fh.write("Fix the bug.\n")
-    run_dir = _write_execution_run_dir(tmp_path, order_path)
+        fh.write("Review this.\n")
+    run_dir = _execution_run_dir(tmp_path, order_path, [])
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     real_record = engine_dispatch.run_execution_record
@@ -1419,9 +1420,9 @@ def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
 
     engine_dispatch.run_execution_record = _patched
     try:
-        envelope = _fixer_envelope_for_write_run(record)
+        envelope = {"orderSha256": record["orderPromptSha256"], "payload": {"fixes": []}}
         assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-            str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
+            str(tmp_path / "session"), envelope, run_dir, "abc123fake", round_driver.P_PANEL)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is None

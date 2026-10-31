@@ -12,7 +12,6 @@ Authoritative homes (code builders, derived at runtime — never retyped as lite
   - round_driver._orders_manifest_path
   - round_records.dispatch_manifest_path
   - round_records.store_path
-  - round_records.head_diff_store_path
   - round_adapters.missing_policy (refuse-fold phase recovery row)
 """
 import os
@@ -47,7 +46,6 @@ _BUILDER_KEYS = frozenset({
 _DURABLE_BUILDER_KEYS = frozenset({
     "dispatch_manifest",
     "store",
-    "head_diff_store",
 })
 
 _SKILL_ARTIFACT_TO_BUILDER = {
@@ -72,7 +70,6 @@ _REF_LANDING_ARTIFACT_TO_BUILDER = {
 _REF_DURABLE_ARTIFACT_TO_BUILDER = {
     "Dispatch manifest": "dispatch_manifest",
     "Seat store": "store",
-    "Head-diff store": "head_diff_store",
 }
 
 
@@ -221,7 +218,6 @@ def _code_paths(session=_TEST_SESSION, rnd=_TEST_RND, phase=_TEST_PHASE,
         "landing_host": RR.bare_payload_path(session, rnd, phase, skey, attempt),
         "dispatch_manifest": RR.dispatch_manifest_path(session, rnd, phase, attempt),
         "store": RR.store_path(session, rnd, phase, skey, attempt),
-        "head_diff_store": RR.head_diff_store_path(session, rnd, phase, "code-reviewer", attempt),
     }
 
 

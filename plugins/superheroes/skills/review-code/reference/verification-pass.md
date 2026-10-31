@@ -235,7 +235,7 @@ for a CONFIRMED finding, **stop the auto-fix loop immediately** — write the GA
 `escalation-base.md` § Writing a GATE into the durable artifact into `$SESSION_DIR/round-receipt.json`
 (the terminal receipt the driver writes on exit), force terminal with verdict **`handed-back`**
 (certification withheld), and hand back — **never
-wait**. **Never** fold a GATE finding into `fix-batch.json` and **never** dispatch `dispatch-fixer`
+wait**. **Never** fold a GATE finding into `fix-batch.json` and **never** set `apply-fixes`
 past it. A GATE is a terminal hand-back, not a mid-run question.
 
 A **PLAUSIBLE Critical never GATEs and never parks** — for unproven blockers, use only:

@@ -203,7 +203,7 @@ def test_standing_rulings_for_orders_reads_only_the_latest_out_of_scope_rows():
 
 
 def test_ruled_finding_reaches_every_phase_and_is_not_reraised_as_new(tmp_path):
-    session_dir, _g, _h, row_a, row_b = RUL._pending_fixer_two_findings(tmp_path)
+    session_dir, _g, _h, row_a, row_b = RUL._pending_apply_fixes_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     key_b = RD._fix_batch_row_key(row_b)
     path = RUL._write_ruling_file(tmp_path / "r.json", [
@@ -220,10 +220,8 @@ def test_ruled_finding_reaches_every_phase_and_is_not_reraised_as_new(tmp_path):
         for host_seat in (True, False):
             text = _render(phase, host_seat, standing_rulings=rows)
             assert "- %s: out of scope — belongs to the next milestone" % key_b in text, phase
-    # ... and through the driver's own context builder on the real pending fixer order
-    fixer_text = RUL._fixer_order_text(session_dir)
-    assert "- %s: out of scope — belongs to the next milestone" % key_b in fixer_text
-    assert "## Project threat model (project calibration, quoted data)" in fixer_text
+    # ... and the pending `apply-fixes` step makes no order: its batch file leaves the ruled-out row out
+    assert key_b not in RUL._apply_fixes_text(session_dir)
 
     # (b) a later round's finding with the same identity is dispositioned out of scope and stays
     # out of the fix batch
@@ -250,19 +248,6 @@ def test_ruled_finding_reaches_every_phase_and_is_not_reraised_as_new(tmp_path):
     filtered2, ffault2 = RD._filter_excluded_discharged_fixes(state2, [crit])
     assert ffault2 is None
     assert len(filtered2) == 1
-
-
-def test_lint_elision_covers_both_quoted_blocks_and_nothing_else():
-    ctx = {"threat_model": "Attackers read /etc/shadow-ish paths: src/ghost/never.py",
-           "standing_rulings": [{"findingKey": "src/ghost/other.py:x", "reason": "see docs/none.md"}]}
-    context = _context(RO.ORDER_PHASES[0], True, **ctx)
-    text, reason = RO.render_order(RO.ORDER_PHASES[0], "seat", context)
-    assert reason is None, reason
-    lint_text = RD._order_lint_text(text, context)
-    assert "src/ghost/never.py" not in lint_text
-    assert "docs/none.md" not in lint_text
-    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
-    assert "## Return your result" in lint_text
 
 
 # --- B1: the panel follows the seeded seat map's roster -----------------------------------------

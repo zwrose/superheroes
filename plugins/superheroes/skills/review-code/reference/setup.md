@@ -25,7 +25,8 @@
 | `$SESSION_DIR/round-<N>/compiled.json`              | orchestrator   | Deduplicated, verified findings + summary + verdict (read by `circuit_breaker.py`)          |
 | `$SESSION_DIR/round-<N>/triage.json`                | triage agent   | Per-finding `mechanical`/`judgment` classification + POV for every finding (loop only)      |
 | `$SESSION_DIR/round-<N>/resolutions.json`           | orchestrator   | User decisions on `present-set` findings (loop only; read by `circuit_breaker.py`)          |
-| `$SESSION_DIR/round-<N>/fix-batch.json`             | round driver   | Findings handed to the fixer this round — materialized from loop state before fixer emit (loop only) |
+| `$SESSION_DIR/round-<N>/fix-batch.json`             | round driver   | Findings the session fixes at `apply-fixes` this round — written from loop state when the step is set; the session reads it (loop only) |
+| `$SESSION_DIR/round-<N>/fix-guidance.md`            | round driver   | Owner or advisor guidance for that batch's findings, written beside it when the step is set (loop only) |
 | `$SESSION_DIR/loop-state.json`                      | round driver   | Auto-fix loop only: driver state (`next`/`submit` protocol)                                 |
 | `$SESSION_DIR/driver-journal.jsonl`                 | round driver   | Auto-fix loop only: `scriptRan` journal (one line per `next`/`submit`)                      |
 | `$SESSION_DIR/round-receipt.json`                   | round driver   | Auto-fix loop only: terminal receipt (`validate_receipt` shape)                             |
@@ -163,7 +164,7 @@ NOTIFY: take the returned `.mode` from `decide-location`, encode `storageMode`/`
 
 When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. **Skip review-init's interview** — take the provisional profile from detected defaults instead. When the created layer lands **in-repo**, **do not ask whether to commit** the new files: write the core + layer, leave them **uncommitted and untracked**, say so in the **dispatch summary**, and continue. Committing them unasked would be a review writing to the user's index — the honest answer is to leave the files for a human to stage.
 
-**Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate and fixer:
+**Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

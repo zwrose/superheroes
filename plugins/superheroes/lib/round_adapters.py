@@ -32,11 +32,6 @@ SILENCE NEVER CERTIFIES. `missing_policy` is the whole safety surface of this mo
 (`missing-seat-refuse-fold:<seat>`) rather than emit `{"findings": []}`, because an empty
 scoped-finder artifact settles the delta and can certify a round nobody reviewed.
 
-DURABILITY. The fixer's `headDiffPath` is opened at FOLD time, so a path into caller-controlled
-space can change between record and fold. When the envelope carries a store copy
-(`payload["headDiffStorePath"]`) the artifact emits THAT path; falling back to the caller's path is
-disclosed in `provenance`.
-
 stdlib only; runs on Python 3.9 and 3.12 (no `match`, no PEP-604 runtime annotations).
 """
 import os
@@ -67,7 +62,7 @@ P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
-P_FIXER = round_phases.P_FIXER
+P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 
 # Re-export payload-contract names from the single contract home (CONVENTIONS §11 Pattern 1).
 ADAPTER_PHASES = payload_contracts.ADAPTER_PHASES
@@ -76,7 +71,7 @@ SEAT_GAPSWEEP = payload_contracts.SEAT_GAPSWEEP
 SEAT_SECOND_TEST = payload_contracts.SEAT_SECOND_TEST
 SEAT_SCOPED = payload_contracts.SEAT_SCOPED
 SEAT_VERIFY = payload_contracts.SEAT_VERIFY
-SEAT_FIXER = payload_contracts.SEAT_FIXER
+SEAT_APPLY_FIXES = payload_contracts.SEAT_APPLY_FIXES
 RULING_NEW_ISSUE = payload_contracts.RULING_NEW_ISSUE
 VACUOUS_FIELD = payload_contracts.VACUOUS_FIELD
 TYPE_TOKENS = payload_contracts.TYPE_TOKENS
@@ -92,11 +87,11 @@ _SINGLE_SEAT = {
     P_SECOND_TEST: SEAT_SECOND_TEST,
     P_SCOPED: SEAT_SCOPED,
     P_VERIFY: SEAT_VERIFY,
-    P_FIXER: SEAT_FIXER,
+    P_APPLY_FIXES: SEAT_APPLY_FIXES,
 }
 
 # Phases fulfilled by the orchestrator itself — no `dispatch-*` orders manifest is emitted.
-ORCHESTRATOR_FULFILLED_PHASES = (P_VERIFY,)
+ORCHESTRATOR_FULFILLED_PHASES = (P_VERIFY, P_APPLY_FIXES)
 
 
 def is_orchestrator_fulfilled(phase):
@@ -111,6 +106,8 @@ def orchestrator_payload_fault(phase, payload):
     """Submit-shape guard for orchestrator-fulfilled phase payloads. None when well-formed."""
     if phase == P_VERIFY:
         return round_phases.verify_result_fault(payload)
+    if phase == P_APPLY_FIXES:
+        return payload_contracts.payload_fault(P_APPLY_FIXES, payload, SEAT_APPLY_FIXES)
     return "orchestrator-payload-unknown-phase:%s" % _label(phase)
 
 
@@ -137,7 +134,7 @@ _MISSING_POLICY = {
     P_SECOND_TEST: MISSING_REFUSE_FOLD,
     P_SCOPED: MISSING_REFUSE_FOLD,
     P_VERIFY: MISSING_REFUSE_FOLD,
-    P_FIXER: MISSING_REFUSE_FOLD,
+    P_APPLY_FIXES: MISSING_REFUSE_FOLD,
 }
 
 _KIND_RESULT = "result"
@@ -462,10 +459,8 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
         if fault is not None:
             return None, fault
         artifact = _assemble_findings(roster, indexed, disclosures)
-    elif phase == P_FIXER:
-        artifact = _assemble_fixer(roster, indexed, disclosures, phase, session_dir)
-        if artifact is None:
-            return None, "head-diff-store-path-untrusted"
+    elif phase == P_APPLY_FIXES:
+        artifact = _assemble_apply_fixes(roster, indexed)
     else:
         artifact = _assemble_verify(roster, indexed, disclosures)
     if disclosures:
@@ -624,25 +619,8 @@ def _assemble_findings(roster, indexed, disclosures):
     return {"findings": [dict(f) for f in payload["findings"]]}
 
 
-def _assemble_fixer(roster, indexed, disclosures, phase, session_dir):
-    payload = indexed[(roster[0], 0)]["payload"]
-    envelope = indexed[(roster[0], 0)]["envelope"]
-    artifact = dict(payload)
-    store_path = artifact.pop("headDiffStorePath", None)
-    if isinstance(store_path, str) and store_path:
-        if not isinstance(session_dir, str) or not session_dir:
-            return None
-        if not round_records.head_diff_store_path_valid(
-                store_path, session_dir, envelope.get("round"), phase, envelope.get("seat"),
-                envelope.get("attempt"), envelope.get("occurrence", 0)):
-            return None
-        # `_resolve_head_diff` opens the path at FOLD time; the immutable store copy is the only
-        # path that cannot change under it between record and fold.
-        artifact["headDiffPath"] = store_path
-        disclosures["headDiffPathSource"] = "store"
-    elif "headDiffPath" in artifact:
-        disclosures["headDiffPathSource"] = "caller-path-no-store-copy"
-    return artifact
+def _assemble_apply_fixes(roster, indexed):
+    return dict(indexed[(roster[0], 0)]["payload"])
 
 
 def _assemble_verify(roster, indexed, disclosures):

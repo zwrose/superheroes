@@ -3,7 +3,7 @@
 External review seats run in a sanitized view with CLAUDE.md stripped, so a bare relative
 `CLAUDE.md` in a reviewer order opens nothing. The round driver resolves the live-checkout path
 once (`_claude_md_path_placeholder`) and every `dispatch-review` order template names it only
-through the `CLAUDE_MD_PATH` placeholder. `dispatch-fixer.md` runs in place and keeps the bare name.
+through the `CLAUDE_MD_PATH` placeholder. The build session applies the fixes in place and has no order.
 """
 import os
 import re
@@ -25,7 +25,7 @@ _PLACEHOLDER = "{{CLAUDE_MD_PATH}}"
 # A bare relative CLAUDE.md in a path slot: "...: CLAUDE.md" at end of line, a line that is only
 # the name, "(CLAUDE.md)" tail, or "...: CLAUDE.md and ..." (the five "Project conventions" lines).
 _BARE_SLOT = re.compile(r"(?:^|[:(]\s*)CLAUDE\.md\)?\s*$|:\s*CLAUDE\.md\s+and\b")
-_REVIEWER_PHASES = [p for p in RO.ORDER_PHASES if p != RP.P_FIXER]
+_REVIEWER_PHASES = list(RO.ORDER_PHASES)
 
 
 def _template(phase):
@@ -45,13 +45,10 @@ def test_reviewer_template_names_claude_md_only_through_placeholder(phase):
     assert bare == [], "%s names CLAUDE.md as a bare relative path: %r" % (phase, bare)
 
 
-def test_fixer_template_stays_out_of_scope():
-    assert _PLACEHOLDER not in _template(RP.P_FIXER)
-
-
-def test_reviewer_phase_set_is_every_phase_but_the_fixer():
-    assert RP.P_FIXER in RO.ORDER_PHASES
-    assert len(_REVIEWER_PHASES) == len(RO.ORDER_PHASES) - 1
+def test_reviewer_phase_set_is_every_order_phase():
+    assert _REVIEWER_PHASES == [
+        RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_GAPSWEEP, RP.P_SECOND_TEST, RP.P_AUDITS,
+        RP.P_SCOPED]
     assert "CLAUDE_MD_PATH" in RD.ORDER_DERIVED_PLACEHOLDERS
 
 
@@ -138,15 +135,6 @@ def test_panel_order_renders_no_claude_md_sentence_end_to_end(tmp_path, monkeypa
     assert reason is None, reason
     assert ("- CLAUDE.md (project conventions): (this project has no CLAUDE.md at %s)" % repo
             ) in text.splitlines()
-
-
-def test_fixer_placeholders_do_not_carry_claude_md_path():
-    # the fixer runs in place in the live checkout; the key would be refused as unused-context-key
-    import inspect
-
-    src = inspect.getsource(RD._order_placeholders)
-    fixer_branch = src.split("elif phase == P_FIXER:", 1)[1]
-    assert "CLAUDE_MD_PATH" not in fixer_branch
 
 
 # --- (e) the sanitized-view notice -----------------------------------------------------

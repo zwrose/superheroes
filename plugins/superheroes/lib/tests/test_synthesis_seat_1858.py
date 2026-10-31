@@ -211,7 +211,7 @@ def test_c1_cli_unseatable_synthesis_is_never_offered_and_the_round_continues(tm
     # axis: the empty-grouping fold at the chokepoint — the step never becomes dispatch-synthesis
     seen, state, receipt = _cli_run(tmp_path, **_VERIFIER_ONLY)
     assert RD.P_SYNTHESIS not in seen
-    assert RD.P_FIXER in seen, seen
+    assert RD.P_APPLY_FIXES in seen, seen
     assert state["rounds"]["1"]["synthesisUnseatable"]
     assert state["terminal"] != "cannot-certify", state.get("certification")
     assert any(UNSEATABLE_LINE in line for line in receipt["degraded"]), receipt["degraded"]

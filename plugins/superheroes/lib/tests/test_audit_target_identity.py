@@ -311,7 +311,7 @@ def test_stall_batch_never_drops_a_second_open_target_regression_1165():
     breaker = {"reason": "audit-stall", "detail": "x",
                "stalledIdentities": [target_a["classKey"]]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     batch = state.get("_fixBatch") or []
     assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
 
@@ -410,7 +410,7 @@ def test_handle_stall_retains_occurrence_suffixed_open_targets():
     breaker = {"reason": "audit-stall", "detail": "x",
                "stalledIdentities": [ident]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     batch = state.get("_fixBatch") or []
     assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
 
@@ -750,7 +750,7 @@ def test_settle_delta_empty_not_discharged_with_new_blocker_composes_batch():
     )
     RD._settle_delta(state, state["config"])
     assert state.get("terminal") is None
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     batch = state.get("_fixBatch") or []
     assert len(batch) == 1
 

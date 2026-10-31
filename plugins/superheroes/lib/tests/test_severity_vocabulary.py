@@ -291,7 +291,7 @@ def test_e2e_same_anchor_blocker_reaches_fix_batch(order):
     assert len(compiled) == 1
     assert CB.effective_severity(compiled[0]["severity"]) == "Important"
     state = _drive_fold_path(seat_findings)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert len(state["_fixBatch"]) == 1
     assert state["_fixBatch"][0]["severity"] == "Important"
 
@@ -314,6 +314,6 @@ def test_e2e_cross_anchor_synthesis_blocker_reaches_fix_batch(order):
     assert len(compiled) == 2
     grouping = [{"group_id": "g0", "member_ids": ["v0", "v1"]}]
     state = _drive_fold_path(seat_findings, grouping=grouping)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert len(state["_fixBatch"]) == 1
     assert state["_fixBatch"][0]["severity"] == "Important"

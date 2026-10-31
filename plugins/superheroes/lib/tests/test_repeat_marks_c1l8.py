@@ -477,7 +477,7 @@ def test_fr22_a_repeat_only_round_of_kept_findings_converges_with_nothing_to_fix
     state["round"] = 2
     _verify(state, [craft], {"craft one": "CONFIRMED"})
     _synth(state, None)
-    assert state["findings"] == [] and state["step"] != RD.P_FIXER and state["rounds"]["2"]["blockingCount"] == 0
+    assert state["findings"] == [] and state["step"] != RD.P_APPLY_FIXES and state["rounds"]["2"]["blockingCount"] == 0
 
 
 @pytest.mark.parametrize("kept_severity,fresh_severity", [("Critical", "Important"), ("Important", "Critical")])
@@ -884,7 +884,7 @@ def test_e2e_a_new_finding_that_is_a_record_finding_exactly_is_kept_and_reaches_
     TRD._drive_cli(session_dir, TRD._cfg(**cfg), respond)
     ok, state = RD.load_state(session_dir)
     assert ok and state["terminal"], state.get("terminal")
-    assert RD.P_SYNTHESIS in seen and RD.P_FIXER not in seen, seen
+    assert RD.P_SYNTHESIS in seen and RD.P_APPLY_FIXES not in seen, seen
     row = _row(state, raw)
     assert row["repeatOf"]["id"] == "R-3" and row["repeatKept"]["outcome"] == "craft"
     assert state["findings"] == [] and state["rounds"]["1"]["repeatMatching"] == "judge"
@@ -1013,12 +1013,12 @@ class _Rounds(C1L7.Round):
                     "verifierVendor": RD._nonpanel_selection(self.state(), self.dir, phase)[0]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": self.synth(rnd, payload)}
-        if phase == RD.P_FIXER:  # each fix leaves a new surface, so the next round's scoped scan runs
-            return {"fixes": [], "headDiff": TRD._headf_ns(self.seen.count(RD.P_FIXER)), "changedSubjects": ["Code"]}
+        if phase == RD.P_APPLY_FIXES:  # each fix leaves a new surface, so the next round's scoped scan runs
+            return {"fixes": [], "headDiff": TRD._headf_ns(self.seen.count(RD.P_APPLY_FIXES)), "changedSubjects": ["Code"]}
         return TRD._responder()(phase, payload, rnd)
 
     def fixer_runs(self):
-        return self.seen.count(RD.P_FIXER)
+        return self.seen.count(RD.P_APPLY_FIXES)
 
 
 def test_t3a_a_non_representative_member_of_a_fixed_group_raised_again_is_marked_a_repeat_and_kept(tmp_path):

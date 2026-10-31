@@ -194,7 +194,7 @@ def test_t3_a_stall_found_in_the_cap_round_runs_no_recovery_attempt(monkeypatch)
     assert state["terminal"] == "handed-back"
     assert kinds[-1] == "round-cap", kinds
     assert max(rnd for _action, rnd in seen) == 4
-    assert max(rnd for action, rnd in seen if action == RD.P_FIXER) == 3  # no fix leg in the cap round
+    assert max(rnd for action, rnd in seen if action == RD.P_APPLY_FIXES) == 3  # no fix leg in the cap round
 
 
 # --- T4: a round-1 panel with nothing blocking ends at round 1 ----------------------------------
@@ -237,7 +237,7 @@ def test_t4_a_panel_whose_findings_are_all_refuted_or_minor_ends_at_round_one(mo
     # — see bite-proof record c1l4_wo_f
     assert refute or round_one["verifyPasses"][0]["CONFIRMED"] == 2, shown
     assert sorted(state["rounds"]) == ["1"], (seen, _trace(state))
-    assert RD.P_FIXER not in [action for action, _rnd in seen]
+    assert RD.P_APPLY_FIXES not in [action for action, _rnd in seen]
     assert max(rnd for _action, rnd in seen) == 1
 
 
@@ -366,7 +366,7 @@ def test_t7_a_loaded_state_whose_config_says_seven_begins_round_five_and_hands_b
         if phase == RD.P_SCOPED:
             seq["n"] += 1
             return {"findings": [_finding("scoped-%d" % seq["n"], "Important")]}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             seq["n"] += 1
             return {"fixes": [], "headDiff": TRD._headf_ns(seq["n"]), "changedSubjects": ["Code"]}
         return base(phase, payload, rnd)

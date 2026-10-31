@@ -338,17 +338,6 @@ def _payload_for(phase):
     return {}
 
 
-def test_the_fixer_is_not_swept_into_the_read_only_fold():
-    """`dispatch-fixer` writes in place and its vendor is UNKNOWN by default (#608).
-
-    Folding its absent vendor to stdout would rewrite a deliberate default rather than close a
-    forfeit, so it is excluded by name — pinned here so a later edit cannot quietly add it.
-    """
-    assert RD.P_FIXER not in RD._READ_ONLY_CHANNEL_PHASES
-    row = {"vendor": None, "model": None, "engine": None}
-    assert RD._seat_channel(RD.P_FIXER, row) == RD.CHANNEL_FILE
-
-
 # =================================================================================================
 # the channel switch itself — one home for both `host_seat` and the CHANNEL placeholder
 # =================================================================================================
@@ -522,31 +511,6 @@ def test_a_configured_reviewer_vendor_is_not_disclosed_as_a_gap(tmp_path, monkey
     assert not any(g.get("seat") == seat for g in gaps), gaps
 
 
-@pytest.mark.parametrize("vendor", _TRUTH_TABLE_VENDORS)
-def test_seat_channel_fixer_folds_on_the_same_table_but_never_via_the_read_only_exclusion(vendor):
-    """`P_FIXER` is deliberately excluded from the READ-ONLY fold — pinned across the same vendor
-    sweep as the read-only phases above, so the exclusion is checked on the SAME table.
-
-    An engine vendor (`codex`/`cursor`) still folds to `CHANNEL_STDOUT` on the fixer phase — that is
-    the vendor-is-an-engine check (`_seat_is_engine`), which fires for every phase and is correct: a
-    genuine codex/cursor fixer really is sandboxed and needs the stdout contract (pinned separately
-    in `test_round_orders.py::test_engine_fixer_order_landing_block_uses_fixes_stdout_contract`).
-    What `P_FIXER`'s exclusion from `_READ_ONLY_CHANNEL_PHASES` protects is narrower: an UNRESOLVED
-    vendor (`None`/empty) must stay `CHANNEL_FILE` — the fixer's deliberate default-to-write (#608)
-    — rather than falling to stdout the way an unresolved read-only-phase seat would.
-
-    Bite axis: `P_FIXER` collapsing an UNRESOLVED vendor onto `CHANNEL_STDOUT`, which would silently
-    drop the fixer's deliberate default-to-write behaviour — the one fold this exclusion must never
-    let happen. (An engine vendor going to stdout is the correct, unrelated branch, asserted too so
-    the table stays honest rather than only testing the branch the bite axis cares about.)
-    """
-    if vendor in ("codex", "cursor"):
-        expected = RD.CHANNEL_STDOUT
-    else:
-        expected = RD.CHANNEL_FILE
-    assert RD._seat_channel(RD.P_FIXER, {"vendor": vendor}) == expected, vendor
-
-
 # --- rendering helper (isolated renderer, for the phase census) ----------------------------------
 
 SESSION = "/tmp/rd1035-census"
@@ -684,7 +648,7 @@ def _phase_placeholders(phase, channel):
 
 
 def test_read_only_channel_phases_is_derived_not_hand_typed():
-    """`_READ_ONLY_CHANNEL_PHASES` must track `round_orders.ORDER_PHASES` minus the fixer exactly.
+    """`_READ_ONLY_CHANNEL_PHASES` must track `round_orders.ORDER_PHASES` exactly.
 
     Bite axis: set MEMBERSHIP drift between the two registries — a phase added to `ORDER_PHASES`
     and forgotten in the fold, or a phase named in the fold that `ORDER_PHASES` does not know about
@@ -692,10 +656,8 @@ def test_read_only_channel_phases_is_derived_not_hand_typed():
     """
     order_phases = set(RO.ORDER_PHASES)
     fold = set(RD._READ_ONLY_CHANNEL_PHASES)
-    expected = order_phases - {RD.P_FIXER}
-    missing = expected - fold
-    assert not missing, "phase(s) in ORDER_PHASES (minus the fixer) missing from the fold: %s" % sorted(missing)
-    assert RD.P_FIXER not in fold, "the fixer must stay excluded from the fold"
+    missing = order_phases - fold
+    assert not missing, "phase(s) in ORDER_PHASES missing from the fold: %s" % sorted(missing)
     extra = fold - order_phases
     assert not extra, "fold names phase(s) ORDER_PHASES does not know about: %s" % sorted(extra)
 

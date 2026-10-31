@@ -422,7 +422,7 @@ calibration where configured, judged and disclosed in the work order where not. 
 silently inherit your session tier. **Record the effective engine + model in every work order**, so
 the dispatch's provenance is explicit.
 
-**The registry is the model authority.** For **each** of the five dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a **`check-runner` dispatch**, an **`order-linter` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on the effective seat model before dispatching. An unlisted model is a park, never a pick. Record the resolved `model_id`
+**The registry is the model authority.** For **each** of the four dispatch kinds this charter sanctions — an **implementer order**, a **`check-runner` dispatch**, an **`order-linter` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on the effective seat model before dispatching. An unlisted model is a park, never a pick. Record the resolved `model_id`
 and `effort` in the dispatch-provenance table.
 
 **Read `skills/workhorse/reference/orders.md` § The model gate when you run the gate or read a refusal.**
@@ -602,7 +602,7 @@ PR records test-pilot N/A with its stand-in evidence.
 ## 10. Review before handback
 
 **Full lane: run `review-code` with a vendor-mixed panel (the roster its seat map composes from the lane call), as its own fix loop, to convergence.** The
-loop reviews, routes each fix back as an implementer work order, and re-reviews, until no blocking
+loop reviews, has you apply each confirmed fix yourself at its `apply-fixes` step (each committed with its break-it test; no implementer work order is dispatched for a review fix), and re-reviews, until no blocking
 finding remains or you honestly park on an open blocker. Round scoping and cap economics are
 `review-code`'s own contract, and §12's delta grading does not apply here. Open the PR as a draft
 before the review runs, so the review runs in PR mode and writes its review record against the PR.

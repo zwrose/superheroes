@@ -75,7 +75,7 @@ def _respond(cap=CAP, scoped=None, fail_titles=(), extra="discharged", findings=
     def respond(phase, payload, rnd):
         if phase == RD.P_SCOPED:
             return {"findings": [dict(f) for f in scoped.get(rnd, [])]}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             fixes["n"] += 1
             return {"fixes": [], "headDiff": TRD._headf_ns(fixes["n"]), "changedSubjects": ["Code"]}
         if phase == RD.P_AUDITS:

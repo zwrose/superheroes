@@ -202,20 +202,17 @@ def test_fix_batch_file_round_trips_non_empty_batch(tmp_path):
 
 def test_round_driver_assigns_driver_ownership_for_head_diff_and_fix_batch():
     section = _ownership_section(_read_plugin(_ROUND_DRIVER_DOC))
-    for artifact, fn_name in (
-        ("head.diff", "_ensure_round_head_diff"),
-        ("fix-batch.json", "_ensure_fix_batch_file"),
-    ):
+    for artifact in ("head.diff", "fix-batch.json", "fix-guidance.md"):
         assert artifact in section, (
             "round-driver.md Order-input ownership must name driver-materialized %r"
             % artifact
         )
-        assert fn_name in section, (
-            "round-driver.md must cite driver function %r for %r" % (fn_name, artifact)
-        )
+    assert "_ensure_round_head_diff" in section, (
+        "round-driver.md must cite driver function '_ensure_round_head_diff' for 'head.diff'"
+    )
     assert "orchestrator still owns the real round diff" in section.lower(), (
         "round-driver.md must preserve orchestrator ownership of diff content"
     )
-    assert "replaces" in section.lower() and "fix-batch.json" in section, (
-        "round-driver.md must document orchestrator-supplied fix-batch.json replacement"
+    assert "loop state is authoritative" in section.lower() and "fix-batch.json" in section, (
+        "round-driver.md must document that a hand-written fix-batch.json is not the batch"
     )

@@ -44,13 +44,13 @@ SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine":
 
 class FakeAdapters(object):
   ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
-                    RD.P_SCOPED, RD.P_VERIFY, RD.P_FIXER)
+                    RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
   def __init__(self):
     self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
                     RD.P_VERIFIERS: [],
                     RD.P_SYNTHESIS: ["synthesis"],
-                    RD.P_FIXER: ["dispatch-fixer"]}
+                    RD.P_APPLY_FIXES: ["apply-fixes"]}
     self.roster_reasons = {}
     self.faults = {}
     self.assemble_reason = None
@@ -69,11 +69,13 @@ class FakeAdapters(object):
     return self.policies.get(phase, "seat-status")
 
   def is_orchestrator_fulfilled(self, phase):
-    return phase in (RD.P_VERIFY,)
+    return phase in (RD.P_VERIFY, RD.P_APPLY_FIXES)
 
   def orchestrator_payload_fault(self, phase, payload):
     if phase == RD.P_VERIFY:
       return RD.verify_result_fault(payload)
+    if phase == RD.P_APPLY_FIXES:
+      return RD.payload_contracts.payload_fault(phase, payload, "apply-fixes")
     return "orchestrator-payload-unknown-phase:%s" % phase
 
   def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
@@ -227,16 +229,6 @@ def _record_all_panel_seats(session_dir, seats=None):
     _land_and_record(session_dir, seat)
 
 
-def _fixer_session(tmp_path, adapters, name="fx"):
-  d = _session(tmp_path, name=name)
-  state = _state(d)
-  state["step"] = RD.P_FIXER
-  state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
-                      "payload": {}}
-  RD.save_state(d, state)
-  return d
-
-
 def _gitdir(base, name="_gitdir"):
   path = os.path.join(base, name)
   os.makedirs(path, exist_ok=True)
@@ -318,45 +310,34 @@ def _panel_artifact(session_dir):
   return {"seats": {dim: {"findings": []} for dim in dims}}
 
 
-def _record_ingest_setup(tmp_path, adapters, head_text="diff --git a/f.py b/f.py\n+fixed\n"):
-  d = _fixer_session(tmp_path, adapters)
-  head_path = str(tmp_path / "head.diff")
-  with open(head_path, "w", encoding="utf-8") as fh:
-    fh.write(head_text)
-  _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-  return d, head_path, head_text
+def _record_ingest_setup(tmp_path, adapters):
+  d = _session(tmp_path)
+  _land(d, "code-reviewer")
+  return d
 
 
-def _assert_record_ingest_agree(session_dir, head_text):
+def _assert_record_ingest_agree(session_dir):
   recorded = [e for e in _outcomes(session_dir, "recorded")
-              if e.get("phase") == RD.P_FIXER and e.get("seat") == "dispatch-fixer"]
+              if e.get("phase") == RD.P_PANEL and e.get("seat") == "code-reviewer"]
   assert recorded, "expected a recorded journal row"
   row = recorded[-1]
   pend = _pending(session_dir)
   spath = RR.store_path(session_dir, pend["round"], pend["phase"],
-                         RR.storage_key("dispatch-fixer"), pend["attempt"])
+                         RR.storage_key("code-reviewer"), pend["attempt"])
   stored, err = RR.read_json(spath)
   assert err is None
-  blob_path = stored["payload"]["headDiffStorePath"]
-  assert os.path.exists(blob_path)
-  with open(blob_path, encoding="utf-8") as fh:
-    assert fh.read() == head_text
   assert row["payloadSha256"] == stored["payloadSha256"]
+  assert stored["payloadSha256"] == RR.payload_sha256(stored["payload"])
 
 
 def _snapshot_record_ingest(session_dir):
   pend = _pending(session_dir)
   spath = RR.store_path(session_dir, pend["round"], pend["phase"],
-                        RR.storage_key("dispatch-fixer"), pend["attempt"])
+                        RR.storage_key("code-reviewer"), pend["attempt"])
   recorded = [e for e in _outcomes(session_dir, "recorded")
-              if e.get("phase") == RD.P_FIXER]
-  blob_path = None
-  if os.path.exists(spath):
-    stored, _ = RR.read_json(spath)
-    blob_path = (stored.get("payload") or {}).get("headDiffStorePath")
+              if e.get("phase") == RD.P_PANEL]
   return {
     "store": _read_bytes(spath),
-    "blob": _read_bytes(blob_path) if blob_path else None,
     "journal": json.dumps(recorded, sort_keys=True),
   }
 
@@ -467,45 +448,6 @@ def _assert_attest_agree(session_dir, gitdir):
   repair_begin = [e for e in _outcomes(session_dir, "sidecar-repair-begin")]
   repair_done = [e for e in _outcomes(session_dir, "sidecar-repaired")]
   assert len(repair_begin) == 1 and len(repair_done) == 1
-
-
-def _sweep_repair_setup(tmp_path, adapters):
-  d = _fixer_session(tmp_path, adapters, name="sweep")
-  head_path = str(tmp_path / "sweep-head.diff")
-  with open(head_path, "w", encoding="utf-8") as fh:
-    fh.write("diff --git a/f.py b/f.py\n+sweep-fixed\n")
-  _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-  out = RD.cmd_record_result(d, "dispatch-fixer")
-  assert out["ok"], out
-  spath = out["storePath"]
-  blob = out["headDiffStorePath"]
-  stored, _ = RR.read_json(spath)
-  del stored["payload"]["headDiffStorePath"]
-  RR.atomic_write_json(spath, stored)
-  os.remove(blob)
-  return d, head_path, "diff --git a/f.py b/f.py\n+sweep-fixed\n"
-
-
-def _snapshot_sweep_repair(session_dir):
-  pend = _pending(session_dir)
-  spath = RR.store_path(session_dir, pend["round"], pend["phase"],
-                        RR.storage_key("dispatch-fixer"), pend["attempt"])
-  stored, _ = RR.read_json(spath)
-  blob_path = (stored.get("payload") or {}).get("headDiffStorePath")
-  return {"store": _read_bytes(spath), "blob": _read_bytes(blob_path) if blob_path else None}
-
-
-def _assert_sweep_repair_agree(session_dir, head_text):
-  pend = _pending(session_dir)
-  spath = RR.store_path(session_dir, pend["round"], pend["phase"],
-                         RR.storage_key("dispatch-fixer"), pend["attempt"])
-  stored, err = RR.read_json(spath)
-  assert err is None
-  blob_path = stored["payload"]["headDiffStorePath"]
-  assert os.path.exists(blob_path)
-  with open(blob_path, encoding="utf-8") as fh:
-    assert fh.read() == head_text
-  assert stored["payloadSha256"] == RR.payload_sha256(stored["payload"])
 
 
 # --- Group A: record ingest -------------------------------------------------------------------
@@ -679,74 +621,66 @@ def _force_commit_refused_on_kind(monkeypatch, kind, reason="commit-id-collision
 
 @pytest.mark.parametrize("stop_at", RECORD_INGEST_STOP_ATS)
 def test_seam_a_record_ingest_crash_matrix(tmp_path, adapters, monkeypatch, stop_at):
-  d, _head_path, head_text = _record_ingest_setup(tmp_path, adapters)
+  d = _record_ingest_setup(tmp_path, adapters)
   before = _snapshot_record_ingest(d)
-  lpath = _landing_path(d, "dispatch-fixer")
+  lpath = _landing_path(d, "code-reviewer")
   before_landing = _read_bytes(lpath)
   _stop_at_kind(monkeypatch, "record-ingest", stop_at)
   with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, "dispatch-fixer")
+    RD.cmd_record_result(d, "code-reviewer")
   RC.recover(d)
   assert _read_bytes(lpath) == before_landing
   if stop_at == "staged":
     after = _snapshot_record_ingest(d)
     assert after == before
   else:
-    _assert_record_ingest_agree(d, head_text)
+    _assert_record_ingest_agree(d)
   assert _commits_empty(d)
 
 
 def test_seam_a_supersede_staged_preserves_old_record(tmp_path, adapters, monkeypatch):
-  d = _fixer_session(tmp_path, adapters, name="sup-staged")
-  head_path = str(tmp_path / "head1.diff")
-  with open(head_path, "w", encoding="utf-8") as fh:
-    fh.write("first-revision\n")
-  _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-  first = RD.cmd_record_result(d, "dispatch-fixer")
+  d = _session(tmp_path, name="sup-staged")
+  _land(d, "code-reviewer", payload={"findings": [], "confidence": "high"})
+  first = RD.cmd_record_result(d, "code-reviewer")
   assert first["ok"], first
   before_store = _read_bytes(first["storePath"])
-  before_blob = _read_bytes(first["headDiffStorePath"])
-  _land(d, "dispatch-fixer", payload={"fixes": ["x"], "headDiffPath": head_path})
+  _land(d, "code-reviewer", payload={"findings": [], "confidence": "medium"})
   _stop_at_kind(monkeypatch, "record-ingest", "staged")
   with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, "dispatch-fixer", supersede=True,
+    RD.cmd_record_result(d, "code-reviewer", supersede=True,
                            expect_sha256=first["casToken"])
   RC.recover(d)
   assert _read_bytes(first["storePath"]) == before_store
-  assert _read_bytes(first["headDiffStorePath"]) == before_blob
   assert _commits_empty(d)
 
 
 def test_seam_a_supersede_applied_agrees_on_new_revision(tmp_path, adapters, monkeypatch):
-  d = _fixer_session(tmp_path, adapters, name="sup-applied")
-  head_path = str(tmp_path / "head2.diff")
-  with open(head_path, "w", encoding="utf-8") as fh:
-    fh.write("second-revision\n")
-  _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path})
-  first = RD.cmd_record_result(d, "dispatch-fixer")
+  d = _session(tmp_path, name="sup-applied")
+  _land(d, "code-reviewer", payload={"findings": [], "confidence": "high"})
+  first = RD.cmd_record_result(d, "code-reviewer")
   assert first["ok"], first
-  replacement = {"fixes": ["replaced"], "headDiffPath": head_path}
-  _land(d, "dispatch-fixer", payload=replacement)
+  replacement = {"findings": [], "confidence": "medium"}
+  _land(d, "code-reviewer", payload=replacement)
   _stop_at_kind(monkeypatch, "record-ingest", "applied")
   with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, "dispatch-fixer", supersede=True,
+    RD.cmd_record_result(d, "code-reviewer", supersede=True,
                            expect_sha256=first["casToken"])
   RC.recover(d)
   stored, _ = RR.read_json(first["storePath"])
   recorded = [e for e in _outcomes(d, "recorded")
-              if e.get("phase") == RD.P_FIXER and e.get("seat") == "dispatch-fixer"]
+              if e.get("phase") == RD.P_PANEL and e.get("seat") == "code-reviewer"]
   assert recorded[-1]["payloadSha256"] == stored["payloadSha256"]
   assert stored["payloadSha256"] != first["payloadSha256"]
   assert _commits_empty(d)
 
 
 def test_seam_a_record_ingest_recovers_via_driver_command(tmp_path, adapters, monkeypatch):
-  d, _head_path, head_text = _record_ingest_setup(tmp_path, adapters)
+  d = _record_ingest_setup(tmp_path, adapters)
   _stop_at_kind(monkeypatch, "record-ingest", "sealed")
   with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, "dispatch-fixer")
-  RD.cmd_record_result(d, "dispatch-fixer")
-  _assert_record_ingest_agree(d, head_text)
+    RD.cmd_record_result(d, "code-reviewer")
+  RD.cmd_record_result(d, "code-reviewer")
+  _assert_record_ingest_agree(d)
   assert _commits_empty(d)
 
 
@@ -1117,35 +1051,6 @@ def test_seam_d_attestation_recovers_via_driver_command(tmp_path, adapters, monk
   assert _commits_empty(d)
 
 
-# --- Group E: sweep repair --------------------------------------------------------------------
-
-@pytest.mark.parametrize("stop_at", ["staged", "sealed", "applied", "done"])
-def test_seam_e_sweep_repair_crash_matrix(tmp_path, adapters, monkeypatch, stop_at):
-  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
-  before = _snapshot_sweep_repair(d)
-  _stop_at_kind(monkeypatch, "head-diff-bind", stop_at)
-  with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, sweep=True)
-  RC.recover(d)
-  if stop_at == "staged":
-    after = _snapshot_sweep_repair(d)
-    assert after == before
-  else:
-    _assert_sweep_repair_agree(d, head_text)
-  assert _commits_empty(d)
-
-
-def test_seam_e_sweep_repair_recovers_via_driver_command(tmp_path, adapters, monkeypatch):
-  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
-  _stop_at_kind(monkeypatch, "head-diff-bind", "sealed")
-  with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, sweep=True)
-  out = RD.cmd_record_result(d, sweep=True)
-  assert out["ok"], out
-  _assert_sweep_repair_agree(d, head_text)
-  assert _commits_empty(d)
-
-
 # --- Group F: forfeited seam order obligations ------------------------------------------------
 
 def test_recovery_failure_does_not_fall_open(tmp_path, adapters, monkeypatch):
@@ -1272,14 +1177,14 @@ def test_ordering_argument_removed_from_round_driver_source():
 # --- Group G: bite-proofs ---------------------------------------------------------------------
 
 def test_biteproof_record_ingest_recovery_neutralized(tmp_path, adapters, monkeypatch):
-  d, _head_path, head_text = _record_ingest_setup(tmp_path, adapters)
+  d = _record_ingest_setup(tmp_path, adapters)
   _noop_recover(monkeypatch)
   _stop_at_kind(monkeypatch, "record-ingest", "sealed")
   with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, "dispatch-fixer")
+    RD.cmd_record_result(d, "code-reviewer")
   RD.round_commit.recover(d)
   with pytest.raises(AssertionError):
-    _assert_record_ingest_agree(d, head_text)
+    _assert_record_ingest_agree(d)
 
 
 def test_biteproof_orders_manifest_recovery_neutralized(tmp_path, adapters, monkeypatch):
@@ -1318,30 +1223,15 @@ def test_biteproof_attestation_recovery_neutralized(tmp_path, adapters, monkeypa
     _assert_attest_agree(d, gitdir)
 
 
-def test_biteproof_sweep_repair_recovery_neutralized(tmp_path, adapters, monkeypatch):
-  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
-  _noop_recover(monkeypatch)
-  _stop_at_kind(monkeypatch, "head-diff-bind", "sealed")
-  with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, sweep=True)
-  RD.round_commit.recover(d)
-  pend = _pending(d)
-  spath = RR.store_path(d, pend["round"], pend["phase"],
-                        RR.storage_key("dispatch-fixer"), pend["attempt"])
-  stored, err = RR.read_json(spath)
-  assert err is None
-  assert "headDiffStorePath" not in (stored.get("payload") or {})
-
-
 # --- Group H: driver-path recovery bite-proofs ----------------------------------------------
 
 def test_biteproof_seam_a_driver_recovery_not_wired(tmp_path, adapters, monkeypatch):
-  d, _head_path, head_text = _record_ingest_setup(tmp_path, adapters)
+  d = _record_ingest_setup(tmp_path, adapters)
   _stop_at_kind(monkeypatch, "record-ingest", "sealed")
   with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, "dispatch-fixer")
+    RD.cmd_record_result(d, "code-reviewer")
   _noop_driver_recover(monkeypatch)
-  RD.cmd_record_result(d, "dispatch-fixer")
+  RD.cmd_record_result(d, "code-reviewer")
   assert not _commits_empty(d)
 
 
@@ -1377,16 +1267,6 @@ def test_biteproof_seam_d_driver_recovery_not_wired(tmp_path, adapters, monkeypa
   RD.cmd_advance(d, git=_fake_git(gitdir))
   with pytest.raises(AssertionError):
     _assert_attest_agree(d, gitdir)
-
-
-def test_biteproof_seam_e_driver_recovery_not_wired(tmp_path, adapters, monkeypatch):
-  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
-  _stop_at_kind(monkeypatch, "head-diff-bind", "sealed")
-  with pytest.raises(RC.StopPoint):
-    RD.cmd_record_result(d, sweep=True)
-  _noop_driver_recover(monkeypatch)
-  RD.cmd_record_result(d, sweep=True)
-  assert not _commits_empty(d)
 
 
 # --- FIX-3 review round 1 (#918) -------------------------------------------------------------
@@ -1434,34 +1314,6 @@ def test_r3_attest_terminal_check_sees_recovery_replay(tmp_path, adapters, monke
   out = RD.cmd_attest(d, str(seq), "second note", git=_fake_git(gitdir))
   assert out["ok"] is False
   assert out["reason"] == "terminal-receipt-exists"
-
-
-def test_r4_sweep_record_refuses_on_head_diff_commit_refused(tmp_path, adapters, monkeypatch):
-  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
-  out = RD.cmd_record_result(d, sweep=True)
-  assert out["ok"] is True
-
-  d2 = _fixer_session(tmp_path, adapters, name="r4-refuse")
-  head_path2 = str(tmp_path / "r4-head.diff")
-  with open(head_path2, "w", encoding="utf-8") as fh:
-    fh.write("diff --git a/f.py b/f.py\n+sweep-fixed\n")
-  _land(d2, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path2})
-  out_rec = RD.cmd_record_result(d2, "dispatch-fixer")
-  assert out_rec["ok"], out_rec
-  spath = out_rec["storePath"]
-  blob = out_rec["headDiffStorePath"]
-  stored, _ = RR.read_json(spath)
-  del stored["payload"]["headDiffStorePath"]
-  RR.atomic_write_json(spath, stored)
-  os.remove(blob)
-
-  def _refuse(*_a, **_k):
-    raise RC.CommitRefused("commit-id-collision", "synthetic")
-
-  monkeypatch.setattr(RD, "_store_head_diff", _refuse)
-  out2 = RD.cmd_record_result(d2, sweep=True)
-  assert out2["ok"] is False
-  assert out2["reason"] == "commit-id-collision"
 
 
 @pytest.mark.parametrize("cmd_name,runner", [

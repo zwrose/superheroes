@@ -21,7 +21,7 @@ not listed in the table below is the same as the **full** lane.
 | Review before handback | full panel, fix loop | one independent reviewer outside every maker's family | one independent reviewer outside every maker's family, in-session |
 | Test-pilot | where there is an app | where there is an app | no — *if you think you need it, it isn't micro* |
 | Preflight | yes | yes | no |
-| Order lint before dispatch | every implementer and review-fix order: the deterministic half always, the semantic half (the read-only `order-linter` seat) where the host vendor has a mechanical cell (else dispatched with semantic-lint-unavailable:<vendor> disclosed); the driver lints each fixer order | — (no orders) | — |
+| Order lint before dispatch | every implementer order: the deterministic half always, the semantic half (the read-only `order-linter` seat) where the host vendor has a mechanical cell (else dispatched with semantic-lint-unavailable:<vendor> disclosed) | — (no orders) | — |
 | Definition-of-done table | yes | yes | no — nothing to disposition against |
 | Authorized by | the route | the route | the owner, per change |
 | Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |
@@ -443,8 +443,7 @@ This section holds the standing rules about what machinery this band builds, whe
 lives, and what a review may ask a build to add. Read it before you propose new standing
 machinery or answer a finding that does. Order lint's homes: the deterministic half
 `lib/order_lint.py`, the semantic half's seat `agents/order-linter.md` and its prompt `rubric/orders/order-lint-semantic.md`, the
-dispatch step in the workhorse charter §7, the fixer emission in
-`skills/review-code/reference/auto-fix-loop.md`.
+dispatch step in the workhorse charter §7.
 
 ### Guards do not get guards
 

@@ -5,7 +5,8 @@ D1 a full panel runs an attached and a per-area test once each, before compile, 
 D3 the record writer's account carries the stamped runs in a shape the review record accepts.
 D4 `_fill` appends a run in its scrubbed form.
 D2 a per-area test with a syntax error is changed in place at the verifier step: both runs are recorded, the verifiers
-   are re-ordered from the changed copies, and the fixer's commit of the changed test is the one the kept check holds.
+   are re-ordered from the changed copies, and the build session's commit of the changed test is the one the kept check
+   holds.
 F4 `break-it-change` at any step but the verifiers' is refused, the state untouched.
 F5 each other refusal (unknown finding, no test, no reason, unreadable content, unchanged content) leaves the state alone.
 F6 a verifier result for the superseded attempt is refused.
@@ -441,14 +442,6 @@ def test_a_finding_that_carries_a_test_leaves_a_group_unmerged():
     assert kept["v0"]["suggestion"] == attached["suggestion"] and kept["v0"][break_it.RUN_FIELD] == {"outcome": "failed"}
 
 
-def test_the_fixer_lint_exempts_an_attached_test_path_only_for_the_drivers_own_stamp():
-    stamped = _attached(**{break_it.RUN_FIELD: {"outcome": "failed", "path": ATTACHED_TEST}})
-    elsewhere = _attached(**{break_it.RUN_FIELD: {"outcome": "failed", "path": "tests/other.py"}})
-    unstamped = _attached()
-    per_area = _per_area(**{break_it.RUN_FIELD: {"outcome": "passed", "path": PER_AREA_TEST}})
-    assert RD._fixer_create_items([stamped, elsewhere, unstamped, per_area, "x"]) == [ATTACHED_TEST, PER_AREA_TEST]
-
-
 def test_a_requeued_attached_target_keeps_its_test_block_and_both_stamps():
     f = _attached(**{break_it.RUN_FIELD: {"outcome": "failed", "sha256": "x"}, break_it.RUNS_FIELD: list(FORGED_RUNS)})
     (row,) = RD._audit_targets({"fixBatch": [f]}, {}, {})
@@ -501,31 +494,34 @@ VENDORS = ["claude", "codex"]
 NOT_AT_VERIFIERS = "break-it-change-not-at-verifiers"
 
 
-def _respond(seats, fixer=None):
+def _respond(seats, apply_fixes=None):
     """Answer every phase of a full review: the test role's seat returns ``seats`` in round 1, every verifier confirms,
-    every audit discharges, and ``fixer`` (given the fixer order's payload) makes the fix."""
+    every audit discharges, and ``apply_fixes`` (given the `apply-fixes` step's payload) makes the fix."""
     base = TRD._responder(vendors=VENDORS)
 
     def respond(phase, payload, rnd):
         if phase == RD.P_PANEL and rnd == 1:
             return dict(base(phase, payload, rnd), seats=seats)
-        if phase == RD.P_FIXER and fixer is not None:
-            return fixer(payload)
+        if phase == RD.P_APPLY_FIXES and apply_fixes is not None:
+            return apply_fixes(payload)
         return base(phase, payload, rnd)
 
     return respond
 
 
-def _fixer(fx_):
-    """The fixer: writes each test block its batch carries byte for byte, fixes the code, and commits both."""
+def _apply_fixes(fx_):
+    """The build session: writes each test block its batch carries byte for byte, fixes the code, commits both, and
+    reports each test-carrying finding bound to that commit."""
     def fix(payload):
+        carrying = []
         for row in payload["batch"]:
             block, _ = break_it.carried_block(row)
             if block is not None:
                 _write(fx_.repo, block["path"], block["content"])
+                carrying.append(row["id"])
         _write(fx_.repo, CHARGE_PATH, _CHARGE_FIXED)
-        _commit(fx_.repo, "fix the retry and keep the test")
-        return {"fixes": [], "changedSubjects": ["Code"]}
+        sha = _commit(fx_.repo, "fix the retry and keep the test")
+        return {"fixes": [{"finding": finding, "commit": sha} for finding in carrying]}
 
     return fix
 
@@ -615,9 +611,9 @@ def test_d2_a_syntax_error_in_a_per_area_test_is_changed_in_place_and_the_verifi
     assert RD.cmd_submit(session, fresh["phase"], fresh["attempt"], fresh["expectedStateHash"], _verdicts(fresh))["ok"]
 
 
-def test_d2_the_changed_test_is_the_one_the_fixer_commits_and_the_kept_check_holds(fx, tmp_path):
+def test_d2_the_changed_test_is_the_one_the_build_session_commits_and_the_kept_check_holds(fx, tmp_path):
     session = str(fx.session)
-    respond = _respond(_seats(test_role=[_per_area(_SYNTAX_ERROR)]), _fixer(fx))
+    respond = _respond(_seats(test_role=[_per_area(_SYNTAX_ERROR)]), _apply_fixes(fx))
     _drive_to_verifiers(fx, None, respond)
     assert RD.cmd_break_it_change(session, "v0", _content_file(tmp_path, _TEST_FAILING), WHY)["ok"] is True
     payload = TRD._drive_cli(session, fx.config, respond)
@@ -641,10 +637,10 @@ def test_f6_a_verifier_result_for_the_superseded_attempt_is_refused(fx, tmp_path
     assert fresh["attempt"] != old["attempt"]
 
 
-@pytest.mark.parametrize("step", [RD.P_PANEL, RD.P_FIXER])
+@pytest.mark.parametrize("step", [RD.P_PANEL, RD.P_APPLY_FIXES])
 def test_f4_the_verb_at_any_other_step_is_refused_and_leaves_the_state_alone(fx, tmp_path, step):
     session = str(fx.session)
-    TRD._drive_to_phase(session, fx.config, _respond(_seats(test_role=[_attached()]), _fixer(fx)), step)
+    TRD._drive_to_phase(session, fx.config, _respond(_seats(test_role=[_attached()]), _apply_fixes(fx)), step)
     ok, state = RD.load_state(session)
     assert ok and state["step"] == step != RD.P_VERIFIERS
     _assert_refused(session, NOT_AT_VERIFIERS, "v0", _content_file(tmp_path, _TEST_PASSING), WHY)
