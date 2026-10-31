@@ -8481,7 +8481,7 @@ def _attribute_fix_maker(state):
         return False
     vendor = _build_session_vendor(seat_map_receipts.effective_seat_map(state))
     former = config.get("fixerVendor")
-    former_family = (model_registry.family_for("code-fixer", former)
+    former_family = (model_registry.family_for("implementer", former)
                      if _nonempty_str(former) and former != vendor
                      and _vendor_did_fix_work(state, config, former) else None)
     if former_family is not None:
