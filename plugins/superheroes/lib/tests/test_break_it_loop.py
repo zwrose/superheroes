@@ -291,10 +291,13 @@ def test_a_deduplicated_proposal_binds_no_kept_check(world):
 
 def test_a_scrub_altered_suggestion_is_refused_not_run(world):
     import engine_adapter as EA
-    content = "request = {'token': 'sk-live-EXAMPLEfakekey0'}\nassert False\n"
-    raw = _break_it_finding(content)
+    # the credential-shaped value sits in the run: header line (built from pieces); the scrub leaves the content alone
+    raw = _break_it_finding()
+    raw["suggestion"] = "break-it-test v1\npath: %s\nrun: %s %s --token %s\n---\n%s" % (
+        TEST_PATH, PY, TEST_PATH, "sk-" + "a" * 48, _TEST_FAILING)
     accepted, _ = EA._scrub_findings([raw])
     assert accepted[0]["suggestion"] != raw["suggestion"]
+    assert accepted[0]["suggestion"].split("\n", 4)[4] == _TEST_FAILING
     assert accepted[0][break_it.REDACTED_FIELD] is True
     world.fold_panel(accepted[0])
     (run,) = world.round_record["breakItRuns"]

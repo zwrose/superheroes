@@ -52,6 +52,11 @@ RUNS_FIELD = "breakItRuns"
 KIND_PER_AREA, KIND_ATTACHED = "per-area", "attached"
 INTERPRETER_KEY = break_it_key.INTERPRETER_KEY
 REDACTED_FIELD = "suggestionRedacted"
+TRANSIT_FIELD = "suggestionTransitRedacted"
+REASON_TRANSIT_REDACTED = "transit-redacted"
+# The one home of the transit redaction placeholder shapes: a bracketed ``[REDACTED`` family closed by ``]`` on the same
+# line (``[REDACTED]``, ``[REDACTED_TOKEN]``, ``[REDACTED SECRET]``). The bare word REDACTED, with no bracket directly before it, is not one.
+_TRANSIT_PLACEHOLDER_RE = re.compile(r"\[REDACTED[^\]\n]*\]")
 DEFAULT_TIMEOUT = 300
 OUTPUT_TAIL_BYTES = 8192
 OUTCOME_FAILED, OUTCOME_PASSED, OUTCOME_NOT_RUN = "failed", "passed", "not-run"
@@ -1543,6 +1548,19 @@ def _not_run(head, block, reason):
     return _record(head, block, OUTCOME_NOT_RUN, reason)
 
 
+def transit_redacted(text):
+    """True when ``text`` carries a transit redaction placeholder; False for a non-string."""
+    return isinstance(text, str) and _TRANSIT_PLACEHOLDER_RE.search(text) is not None
+
+
+def transit_not_run(head, block):
+    """The ``transit-redacted`` not-run record for a block whose ``path``, ``run`` or ``content`` carries a transit
+    redaction placeholder, else ``None``: the one rule for a caller that runs a block outside ``intercept``."""
+    if isinstance(block, dict) and any(transit_redacted(block.get(k)) for k in ("path", "run", "content")):
+        return _not_run(head, block, REASON_TRANSIT_REDACTED)
+    return None
+
+
 def _safe_run(runner, repo_root, head, block, interpreter=_UNSET, scratch=None, **kwargs):
     if interpreter is not _UNSET:
         kwargs["interpreter"] = interpreter
@@ -1588,8 +1606,9 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, 
     """Run every break-it test the findings carry, exactly as written, once, and stamp what ran. The run judges
     nothing: no finding is dropped for a passing test. Each finding is a copy; a ``RUN_FIELD`` or ``RUNS_FIELD`` the
     seat supplied is stripped first. A per-area finding (``is_break_it``) runs its block, or is stamped a not-run
-    for a malformed block, a scrub-altered suggestion (``suggestion-redacted``) or a block path other than the
-    finding's ``file`` (``path-mismatch``). An attached finding (any other taxonomy, whose suggestion parses as a
+    for a malformed block, a block whose text carries a transit redaction placeholder (``transit-redacted``, the
+    ``TRANSIT_FIELD`` stamp, which wins over the next), a scrub-altered suggestion (``suggestion-redacted``) or a
+    block path other than the finding's ``file`` (``path-mismatch``). An attached finding (any other taxonomy, whose suggestion parses as a
     block) runs the same way, with no path rule. Every run finding is stamped with ``RUN_FIELD`` (the run record)
     and ``RUNS_FIELD`` (a one-run list in the review record's shape, ``record_run``). Returns
     ``(kept, runs, scope_exempt_ids, stamped_ids)``: ``kept`` is every finding (copies), ``runs`` one entry per
@@ -1611,11 +1630,15 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, 
             continue
         refusal = None if block else parse_block(copy.get("suggestion"))[1]
         # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is never run in altered form, but its parsed block is kept so a per-area finding still earns the scope exemption and reaches the verifier
-        redacted = not refusal and copy.get(REDACTED_FIELD) is True
-        if redacted:
+        # axis: a seat-supplied TRANSIT_FIELD is left in place: it can only make a test not run, the fail-closed direction
+        transit = not refusal and copy.get(TRANSIT_FIELD) is True
+        redacted = not refusal and not transit and copy.get(REDACTED_FIELD) is True
+        if transit:
+            refusal = REASON_TRANSIT_REDACTED
+        elif redacted:
             refusal = "suggestion-redacted"
         if refusal:
-            record = _not_run(head, None if redacted else block, refusal)
+            record = _not_run(head, None if (transit or redacted) else block, refusal)
         elif per_area and block["path"] != copy.get("file"):
             record = _not_run(head, block, "path-mismatch")
         else:
