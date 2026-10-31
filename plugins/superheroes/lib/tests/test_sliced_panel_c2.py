@@ -354,6 +354,44 @@ def test_a_slice_seat_left_out_of_a_hand_submit_folds_missing(tmp_path):
     assert state["rounds"]["1"]["lensCoverage"]["ran"] == len(roster) - 1
 
 
+def test_an_unfilled_lens_rejects_every_one_of_its_slice_seats_even_with_a_valid_finding(tmp_path):
+    state = _state(_repo(tmp_path), _three_thousand())
+    roster = RP.panel_roster(state, state["config"])
+    code_seats = [k for k in roster if k.startswith("code-reviewer:")]
+    assert len(code_seats) > 1
+    by_id = {sl["id"]: sl for sl in state["slicePlan"]["slices"]}
+    finding = {"title": "ghost bug", "severity": "Important", "consequence": "A real consequence follows.",
+               "file": "pkg/f0.py", "line": 1}
+    seats = {key: {"findings": [dict(finding)] if key in code_seats else [],
+                   **({"readParts": by_id[key.partition(":")[2]]["parts"]} if RP.is_slice_seat(key) else {})}
+             for key in roster}
+    ran = {"vendor": "claude", "model": "m", "source": "default"}
+    seat_map = {"seats": {**{RP.seat_lens(k): dict(ran) for k in roster},
+                          "code-reviewer": {"vendor": None, "model": None, "effort": None, "tier": "deep",
+                                            "family": None, "source": "unfilled"}}}
+    RD._fold_panel(state, state["config"], {"seats": seats, "seatMap": seat_map})
+    record = state["rounds"]["1"]
+    for key in code_seats:
+        assert record["seatStatus"][key] == "missing"
+    assert not [f for f in state.get("_toVerify", []) if f.get("title") == "ghost bug"]
+    assert not [f for f in state.get("_sliceCarry", []) if f.get("title") == "ghost bug"]
+    assert state["fullPanelRan"] is False
+
+
+def test_a_copy_out_of_a_risk_area_still_gets_its_slice_a_security_seat(tmp_path):
+    moved = "src/other/charge.py"
+    copy = ("diff --git a/%s b/%s\nsimilarity index 90%%\ncopy from %s\ncopy to %s\nindex 1111111..2222222 100644\n"
+            "--- a/%s\n+++ b/%s\n@@ -1,1 +1,2 @@\n ctx\n+added\n" % (PAYMENTS, moved, PAYMENTS, moved, PAYMENTS, moved))
+    assert RD._rename_sources(copy) == {moved: PAYMENTS}
+    state = _state(_repo(tmp_path, RISK_AREAS), copy + _added(OTHER, BAR + 100))
+    slices = state["slicePlan"]["slices"]
+    holding = [s for s in slices if any(p["file"] == moved for p in s["parts"])]
+    assert len(slices) > 1 and holding
+    roster = RP.panel_roster(state, state["config"])
+    for s in holding:
+        assert s["security"] is True and "security-reviewer:" + s["id"] in roster
+
+
 # --- a proven copy -------------------------------------------------------------------------------------------------
 
 def test_a_proven_copy_in_a_sliced_change_is_named_in_no_slice_seats_order_or_scope_line(tmp_path):

@@ -330,6 +330,14 @@ def merge_parts(obligations):
     return [{"file": file, "lines": _merge_ranges(ranges)} for file, ranges in files.items()]
 
 
+def _names_whole_file(read_list, file):
+    """True when ``read_list`` holds an entry naming ``file`` with an empty ``lines`` list (a whole-file read)."""
+    return isinstance(read_list, list) and any(
+               isinstance(e, dict) and e.get("file") == file
+               and isinstance(e.get("lines"), (list, tuple)) and len(e["lines"]) == 0
+               for e in read_list)
+
+
 def unread_obligations(assigned, read_lists):
     """``[{"seat", "file", "lines"}]``: each seat's assigned parts less that seat's own read list; a seat missing from ``read_lists`` read nothing."""
     # axis: only a dict of seats is read; a seat's parts must be a list, else it names nothing to owe.
@@ -351,8 +359,9 @@ def unread_obligations(assigned, read_lists):
                 left = countable_lines._subtract(ranges, taken.get(file, []))
                 if left:
                     out.append({"seat": seat, "file": file, "lines": left})
-            elif file not in taken:
-                # A file-level part (or one whose ranges are unreadable) is met only by an entry naming the file.
+            elif not taken.get(file) and not _names_whole_file(own, file):
+                # A file-level part (or one whose ranges are unreadable) is met only by an entry naming the file with a
+                # valid range or an empty lines list; an entry whose every range is malformed reads nothing.
                 out.append({"seat": seat, "file": file, "lines": []})
     return out
 

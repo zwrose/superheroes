@@ -1398,8 +1398,15 @@ def new_state(config=None):
 def _rename_sources(diff_text):
     """``{destination path: source path}`` for the renamed or copied sections of ``diff_text``; empty when it cannot be read."""
     try:
-        return {s["file"]: s["oldFile"] for s in countable_lines.parse_sections(diff_text)
-                if isinstance(s.get("oldFile"), str) and s["oldFile"] != s["file"]}
+        out = {}
+        for s in countable_lines.parse_sections(diff_text):
+            if s.get("unreadable"):
+                continue
+            # A copy section carries oldFile=None (it reads as added), so the source comes from the header's a-side.
+            sides = _diff_header_sides(s["text"].split("\n", 1)[0])
+            if sides is not None and sides[0] != sides[1]:
+                out[sides[1]] = sides[0]
+        return out
     except Exception:
         return {}
 

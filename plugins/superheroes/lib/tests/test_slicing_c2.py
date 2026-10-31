@@ -431,6 +431,15 @@ def test_a_whole_file_deletion_is_a_file_level_part_met_by_any_entry_naming_it()
     assert [o for o in got if o["file"] == "auth/secrets.py"] == [{"seat": "c", "file": "auth/secrets.py", "lines": []}]
 
 
+def test_a_malformed_read_entry_does_not_meet_a_file_level_part():
+    parts = [{"file": "old.py", "lines": []}]
+    for bad in ([[0, 0]], [[3, 1]], ["x"], [[1]]):
+        got = slicing.unread_obligations({"s": parts}, {"s": [{"file": "old.py", "lines": bad}]})
+        assert got == [{"seat": "s", "file": "old.py", "lines": []}], bad
+    assert slicing.unread_obligations({"s": parts}, {"s": [{"file": "old.py", "lines": [[2, 4]]}]}) == []
+    assert slicing.unread_obligations({"s": parts}, {"s": [{"file": "old.py", "lines": []}]}) == []
+
+
 def test_each_seat_is_subtracted_against_its_own_read_list_only():
     parts = [{"file": "x.py", "lines": [[1, 100]]}, {"file": "y.py", "lines": [[5, 9]]}]
     got = slicing.unread_obligations({"code": parts, "test": parts}, {"code": [dict(p) for p in parts], "test": []})
