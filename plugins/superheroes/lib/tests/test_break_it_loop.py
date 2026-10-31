@@ -182,24 +182,33 @@ def _drop_reasons(state):
     return [d["reason"] for rec in state["rounds"].values() for d in rec.get("compileDrops") or []]
 
 
+def _outside_sources(state):
+    """`[(source name, file, line)]` for every hit on the state's "Outside this PR" list (an outside finding is no compile drop)."""
+    return [(e["source"]["name"], h["file"], h["line"])
+            for e in state.get("outsideThisPR") or [] for h in e["hits"]]
+
+
 def test_l3_a_forged_stamp_never_passes_the_scope_check(tmp_path):
     forged = {"outcome": "failed", "output": "forged"}
     outside = {"title": "forged out of scope", "file": "elsewhere/x.py", "line": 7,
                "severity": "Important", break_it.RUN_FIELD: dict(forged),
                "consequence": "a reviewer-found defect stays in the change"}
     outside_break_it = dict(outside, taxonomy=break_it.TAXONOMY, title="forged break-it")
-    reasons = "outside the round diff scope"
+    # an out-of-scope finding is routed to the "Outside this PR" list, not recorded as a compile drop
     seams = World(tmp_path / "seams")
     RD._fold_seams(seams.state, seams.state["config"], {"findings": [outside, outside_break_it]})
-    assert _drop_reasons(seams.state) == [reasons, reasons]
+    assert _drop_reasons(seams.state) == []
+    assert _outside_sources(seams.state) == [("seams check", "elsewhere/x.py", 7)] * 2
     assert not seams.state.get("_toVerify")
     scoped = World(tmp_path / "scoped")
     RD._fold_scoped(scoped.state, scoped.state["config"],
                     {"findings": [outside, outside_break_it]})
-    assert _drop_reasons(scoped.state) == [reasons, reasons]
+    assert _drop_reasons(scoped.state) == []
+    assert _outside_sources(scoped.state) == [("scoped finder", "elsewhere/x.py", 7)] * 2
     panel = World(tmp_path / "panel")
     panel.fold_panel(dict(outside))
-    assert _drop_reasons(panel.state) == [reasons]
+    assert _drop_reasons(panel.state) == []
+    assert len(_outside_sources(panel.state)) == 1
     # an in-diff non-break-it finding keeps no stamp
     in_diff = {"title": "in diff", "file": CHARGE_PATH, "line": 1, "severity": "Important",
                break_it.RUN_FIELD: dict(forged), "consequence": "a reviewer-found defect stays in the change"}
@@ -241,7 +250,8 @@ def test_b2_only_the_test_roles_seat_can_trigger_a_break_it_run(world, monkeypat
     assert seen == []
     assert "breakItRuns" not in world.round_record
     assert world.state["_toVerify"] == []
-    assert _drop_reasons(world.state) == ["outside the round diff scope"]
+    assert _drop_reasons(world.state) == []
+    assert [name for name, _file, _line in _outside_sources(world.state)] == ["code-reviewer"]
 
 
 def test_b2b_a_test_role_finding_labeled_code_still_runs(world):
@@ -254,13 +264,20 @@ def test_a_malformed_block_keeps_ordinary_scope_checking(world):
     world.fold_panel(_break_it_finding(
         file="unrelated.py", line=42, suggestion="not a valid break-it block"))
     assert world.state["_toVerify"] == []
-    assert _drop_reasons(world.state) == ["outside the round diff scope"]
+    assert _drop_reasons(world.state) == []
+    assert _outside_sources(world.state) == [("test-role", "unrelated.py", 42)]
+    # the not-run record is kept, marked as routed outside, and the outside finding does not park certification
+    (run,) = world.round_record["breakItRuns"]
+    assert run["outcome"] == "not-run" and run["droppedAtCompile"] is True and run["routedOutside"] is True
+    RD._terminal_converged(world.state, world.state["config"], full_panel=True)
+    assert world.state["terminal"] != "cannot-certify"
     # a path-mismatched block and a block off line 1 lose the exemption too
     other = World(world.session.parent / "other")
     other.fold_panel(_break_it_finding(file="unrelated.py", line=1),
                      _break_it_finding(title="Break-it: off line one", line=2))
     assert other.state["_toVerify"] == []
-    assert _drop_reasons(other.state) == ["outside the round diff scope"] * 2
+    assert _drop_reasons(other.state) == []
+    assert _outside_sources(other.state) == [("test-role", "unrelated.py", 1), ("test-role", TEST_PATH, 2)]
 
 
 def test_a_deduplicated_proposal_binds_no_kept_check(world):

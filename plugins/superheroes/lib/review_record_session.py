@@ -31,6 +31,7 @@ import audits as audits_mod  # noqa: E402
 import break_it  # noqa: E402
 import countable_lines  # noqa: E402
 import decision_kinds  # noqa: E402
+import diff_scope  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
@@ -68,6 +69,10 @@ _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an ea
 _HANDED_BACK = "handed-back"
 _HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_SCOPED)
+# the source names the driver gives an outside hit raised outside the panel, read from their one home in
+# session_contract (the driver reads the same); a panel seat's hit is named by the seat itself
+_OUTSIDE_STAGE_SOURCES = {round_phases.P_SEAMS: sc.OUTSIDE_SEAMS_CHECK, round_phases.P_SCOPED: sc.OUTSIDE_SCOPED_FINDER,
+                          round_phases.P_AUDITS: sc.OUTSIDE_FIX_AUDITOR}
 # the second-test seat is a test reviewer run on the held findings: it reads before the round's fix, and
 # its results are tests for findings already raised, so it is listed as a reviewer but never as a raw report
 _PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_VERIFIERS,
@@ -799,14 +804,81 @@ def _raised_reports(session_dir, rows, pending, pending_round):
     return out
 
 
+def _outside_keys(outside, provenance=None):
+    """The `(source name, title, file key, line key, round)` of every hit on the state's "Outside this PR" list,
+    whatever the entry's kind; the source name is the entry's own (None when it has none). `round` is each round the
+    state's `_outsideRounds` says sent the hit out; a hit with no such row (a session begun before the rows were
+    kept) gets round None, which excludes a report of any round."""
+    rows = {}
+    for row in provenance if isinstance(provenance, list) else []:
+        if isinstance(row, dict):
+            rows.setdefault((row.get("title"), _file_key(row.get("file")), _line_key(row.get("line"))),
+                            set()).add(row.get("round"))
+    keys = set()
+    for entry in outside if isinstance(outside, list) else []:
+        hits = entry.get("hits") if isinstance(entry, dict) else None
+        src = entry.get("source") if isinstance(entry, dict) else None
+        name = src.get("name") if isinstance(src, dict) else None
+        for hit in hits if isinstance(hits, list) else []:
+            if isinstance(hit, dict):
+                base = (hit.get("title"), _file_key(hit.get("file")), _line_key(hit.get("line")))
+                for rnd in rows.get(base) or {None}:
+                    keys.add((name, *base, rnd))
+    return keys
+
+
+def _round_scope(session_dir, rnd, current_round, reviewed_diff):
+    """The touched-lines map of round `rnd`'s diff (`diff_scope.parse_touched_lines`, the map compile reads), or None
+    when no diff of that round is held (nothing is outside then, as in compile). The round's stored `diff.txt` is the
+    diff its seats were given; the state's `reviewedDiff` stands for the current round when that file is absent."""
+    text = None
+    if _int(rnd) and rnd >= 0:
+        try:
+            with open(os.path.join(record_paths.round_dir(session_dir, rnd), "diff.txt"), encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, ValueError):
+            text = None
+    if text is None and rnd == current_round and isinstance(reviewed_diff, str):
+        text = reviewed_diff
+    return diff_scope.parse_touched_lines(text) if text is not None else None
+
+
+def _outside_the_round(f, scope):
+    """The finding's coerced line when compile's scope check would send it to the "Outside this PR" list, else None:
+    a cited file (a non-blank string) and a line that coerces, neither the PR-body citation nor on a line the PR
+    touched. Same test as `round_driver._diff_scope_ok`."""
+    file = f.get("file")
+    if scope is None or not (isinstance(file, str) and file.strip()) or file == pr_body_stage.CITATION \
+            or f.get("line") is None:
+        return None
+    ok, line = sc.coerce_line(f.get("line"))
+    return line if ok and line not in (scope.get(file) or ()) else None
+
+
+def _with_recovered_outside(outside, recovered):
+    """The state's outside list with each recovered hit `(source name, title, file, line)` added by
+    `session_contract.add_outside_hit`, the insertion policy `round_driver._record_outside` shares: under the entry of
+    its source name (a new name opens an entry at the end; a sweep entry is never a target), numbered `O-<n>` with
+    n = 1 + every hit already listed, and never twice."""
+    entries = [{**e, "hits": list(e["hits"]) if isinstance(e.get("hits"), list) else []} if isinstance(e, dict) else e
+               for e in (outside if isinstance(outside, list) else [])]
+    for name, title, file, line in recovered:
+        sc.add_outside_hit(entries, name, file, line, title)
+    return entries
+
+
 def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_kinds=None, pending=None,
-              pending_round=None):
+              pending_round=None, outside=None, outside_rounds=None, reviewed_diff=None, recovered=None):
     """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
     (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
     stays; a drop whose file is not a string lost its line, so it is matched by round, title and file), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
-    own panel proposal is settled that way) add nothing. A listed finding already settled in a round before the
+    own panel proposal is settled that way) add nothing; nor does one that is a hit on the state's `outsideThisPR`
+    list under the report's own source name (matched by title, file and line, and by the round that sent it outside when the state kept that; it stays there, not here; the same place held by another source does not hide the report). A report the loop never folded that cites a line its
+    round's diff did not touch is an outside finding, not open work: compile would have sent it to that list, so it is
+    appended to `recovered` as `(source name, title, file, line)` for the caller to add to the account's outside list
+    (the test role's own break-it proposal is exempt from scope, as at compile, and stays open only when the intercept would exempt it: a block that parses, names the cited file and cites line 1). A listed finding already settled in a round before the
     report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
     settled_rounds = settled_rounds or {}
     settled_kinds = settled_kinds or {}  # a finding key to the kind of its recorded settlement
@@ -814,6 +886,8 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
     by_listed = {f["findingKey"]: f for f in findings}
     dropped = {_drop_key(d["round"], d["title"], d["file"], d["line"]) for d in _refused(rounds)}
     passed = _passed_break_it(rounds)
+    outside_keys = _outside_keys(outside, outside_rounds)
+    scopes = {}  # a round's touched-lines map, read once
     out = []
     for phase, rnd, seat, raised in _raised_reports(session_dir, rows, pending, pending_round):
         for f in raised:
@@ -827,6 +901,24 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 and (rnd, f["title"], _file_key(f.get("file"))) in passed
             if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
                 continue
+            # axis: a finding on the state's "Outside this PR" list stays there and is not listed open a second time — see bite-proof record c3_wo_a_outside
+            # axis: only the report of the round that sent the hit outside is excluded; a later round's report of the same title, file and line (a fix may have moved the line into the PR) is not — see bite-proof record c3_wo_a_outside
+            base = (f["title"], _file_key(f.get("file")), _line_key(f.get("line")))
+            # axis: the exclusion holds only for a hit under the report's own source name (seat, or stage name), so a hit held by one source never hides the same place reported by another — see bite-proof record c3_wo_a_outside
+            source = _OUTSIDE_STAGE_SOURCES.get(phase, seat)
+            if (source, *base, rnd) in outside_keys or (source, *base, None) in outside_keys:
+                continue
+            # axis: a report the loop never folded that cites a line its round's diff did not touch is an outside finding, listed on the account's outside list and never as open work, so abandoning before the fold does not change how it is treated — see bite-proof record c3_wo_a_outside
+            # axis: the test role's own break-it proposal is scope-exempt at compile only when its block parses, names the cited file and cites line 1 (break_it.intercept's rule), so only such a proposal is never classified outside here — see bite-proof record c3_wo_a_outside
+            exempt = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.scope_exempt(f)
+            # axis: the scope check runs before a listed identity is handled, so a report that matches a settled ledger row but cites a line its round's diff did not touch is recovered as outside and never reopens that row — see bite-proof record c3_wo_a_outside
+            if not exempt and recovered is not None:
+                if rnd not in scopes:
+                    scopes[rnd] = _round_scope(session_dir, rnd, pending_round, reviewed_diff)
+                line = _outside_the_round(f, scopes[rnd])
+                if line is not None:
+                    recovered.append((source, f["title"], f["file"], line))
+                    continue
             if fkey in listed:
                 held = by_listed.get(fkey)
                 # a report from a round after the one that settled the listed finding was never folded (a folded
@@ -900,6 +992,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings, merged = _findings_and_merges(state)
+    recovered_outside = []  # outside hits found in stored seat results the loop never folded (abandoned sessions only)
     if abandoned is not None:  # the loop never took these in: each is listed open rather than only in a raw file
         # axis: in an abandoned session a finding recorded in a stored seat result but never folded is listed open — see bite-proof record c1l1_wo_b_session_seam
         ledger, _ = sc.read_disposition_ledger(state, required=False)
@@ -910,7 +1003,9 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                          if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
         pending = state.get("_newIssues")
         findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds, pending,
-                              state.get("round") if _int(state.get("round")) else None)
+                              state.get("round") if _int(state.get("round")) else None,
+                              state.get("outsideThisPR"), state.get("_outsideRounds"), state.get("reviewedDiff"),
+                              recovered_outside)
     carry = None  # the lastReviewed commit of an empty returning round: its record may carry the earlier review's reviewers
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
@@ -980,6 +1075,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                        **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {})},
             **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
             **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
+            **({"outsideThisPR": _with_recovered_outside(state.get("outsideThisPR"), recovered_outside)}
+               if recovered_outside else {}),
             **({"provenCopies": proven_copies} if proven_copies else {}),
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),

@@ -532,7 +532,7 @@ def collect_node_vulns(ctx, repo):
                 }
             else:
                 # Same advisory id can appear twice with different affected ranges
-                # (observed: brace-expansion / GHSA-3jxr-9vmj-r5cp in weekly-eats).
+                # (observed: brace-expansion / GHSA-3jxr-9vmj-r5cp in a consuming project).
                 # Duplicate ids are dropped as malformed by the sweep, so aggregate.
                 item["occurrences"] += 1
                 if rank > item["metric"]:
@@ -2307,16 +2307,17 @@ class DepsLens(object):
     validation_guidance = VALIDATION_GUIDANCE
     consequence_template = CONSEQUENCE_TEMPLATE
     # Measured 2026-07-21/22 at the command line, not estimated:
-    #   weekly-eats (1099 deps): npm-check-updates --jsonUpgraded 3.2s, npm audit 1.2s
+    #   a consuming project (1099 deps): npm-check-updates --jsonUpgraded 3.2s, npm audit 1.2s
     #   home-assistant/core (59 packages): osv-scanner 0.63–0.74s (queries remote OSV DB)
-    #   aiogrilla: pip-audit 2.2s (pip-audit 2.9.0, unrated fallback)
+    #   a second consuming project: pip-audit 2.2s (pip-audit 2.9.0, unrated fallback)
     #   renovate liveness from git history: 0.02s
     cost = {
         "collectorSeconds": 6.5,
         "note": "measured on real repos 2026-07-21/22: npm-check-updates 3.2s + npm audit "
-                "1.2s (weekly-eats, 1099 deps), osv-scanner 0.63–0.74s over a 59-package "
-                "requirements.txt (home-assistant/core, queries remote OSV database), "
-                "pip-audit 2.2s (aiogrilla, unrated fallback), git liveness 0.02s. All "
+                "1.2s (a consuming project, 1099 deps), osv-scanner 0.63–0.74s over a "
+                "59-package requirements.txt (home-assistant/core, queries remote OSV "
+                "database), pip-audit 2.2s (a second consuming project, unrated "
+                "fallback), git liveness 0.02s. All "
                 "collectors are PATH-only through the guardian seam (no npx fetch, no "
                 "repo-local interpreter). Freshness collection is skipped entirely for "
                 "ecosystems an owner-confirmed `covers` list proves are covered (proven "

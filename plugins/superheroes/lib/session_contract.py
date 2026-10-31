@@ -25,6 +25,9 @@ __all__ = (
     "WRITE_RESULT_KIND",
     "RECORD_RESULT_KINDS",
     "REVIEW_LIST_RESULT_KINDS",
+    "OUTSIDE_FIX_AUDITOR",
+    "OUTSIDE_SCOPED_FINDER",
+    "OUTSIDE_SEAMS_CHECK",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
     "DISPOSITIONS",
@@ -69,6 +72,7 @@ __all__ = (
     "finding_content_canonical",
     "content_hash_suffix",
     "coerce_line",
+    "add_outside_hit",
     "resolve_merged_into_entry",
     "legacy_disposition_ledger_rows",
     "legacy_key_collision",
@@ -174,6 +178,12 @@ def run_kind_for_phase(phase):
 
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
+
+# the source names of an outside hit raised outside the panel: the driver persists them as the finding's
+# source name and the record writer matches them back, so both read this one home
+OUTSIDE_FIX_AUDITOR = "fix auditor"
+OUTSIDE_SCOPED_FINDER = "scoped finder"
+OUTSIDE_SEAMS_CHECK = "seams check"
 
 STATE_FILE = "loop-state.json"
 MIRROR_FILE = "loop-state.mirror.json"
@@ -480,6 +490,37 @@ def coerce_line(value):
                 return False, value
         return False, value
     return False, value
+
+
+def add_outside_hit(entries, name, file, line, title):
+    """Add one outside-scope hit to `entries`, the review record's "Outside this PR" list, in place; return True when
+    the hit was added and False when that reviewer's entry already held it. The one home of the list's insertion
+    policy for the driver's fold (`round_driver._record_outside`) and the abandoned-session writer's recovery:
+    one entry per reviewer source name (a new name opens an entry at the end); a sweep entry is never the target and
+    its hits are never counted to a reviewer, but they number the new ids (`O-<n>` is 1 + every hit already listed);
+    a hit already under that entry (same file, line, title) adds nothing; a reviewer entry with no hit list starts one."""
+    target, total = None, 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        hits = entry.get("hits") if isinstance(entry.get("hits"), list) else []
+        total += len(hits)
+        src = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+        if src.get("kind") == "sweep":
+            continue
+        if src.get("name") == name and target is None:
+            target = entry
+    hit = {"id": "O-%d" % (total + 1), "file": file, "line": line, "title": title}
+    if target is None:
+        entries.append({"source": {"kind": "reviewer", "name": name, "sweepId": None}, "hits": [hit]})
+        return True
+    if not isinstance(target.get("hits"), list):
+        target["hits"] = []
+    if any(isinstance(h, dict) and (h.get("file"), h.get("line"), h.get("title")) == (file, line, title)
+           for h in target["hits"]):
+        return False
+    target["hits"].append(hit)
+    return True
 
 
 def minted_identity_key(finding):

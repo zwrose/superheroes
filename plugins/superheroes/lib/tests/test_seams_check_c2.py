@@ -27,6 +27,7 @@ import decision_kinds  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_phases as RP  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
+from test_break_it_loop import _outside_sources  # noqa: E402
 
 _PLUGIN_ROOT = os.path.dirname(_LIB)
 
@@ -106,12 +107,14 @@ def test_a_seams_check_with_no_findings_stages_the_panels_alone():
     assert [f["title"] for f in state["_toVerify"]] == ["panel bug"]
 
 
-def test_a_seams_check_finding_outside_the_diff_is_dropped_at_compile_like_any_other():
+def test_a_seams_check_finding_outside_the_diff_goes_to_the_outside_list():
+    # axis: bites on an outside seams-check finding being recorded on the "Outside this PR" list rather than dropped at compile
     state = _round_one_state(SLICE_PLAN)
     _fold_panel_with(state, _finding("panel bug", "a.py"))
-    RD._fold(state, state["config"], RD.P_SEAMS, {"findings": [_finding("elsewhere", "z.py")]})
+    RD._fold(state, state["config"], RD.P_SEAMS, {"findings": [_finding("elsewhere", "z.py", 5)]})
     assert [f["title"] for f in state["_toVerify"]] == ["panel bug"]
-    assert [d["reason"] for d in state["rounds"]["1"]["compileDrops"]] == ["outside the round diff scope"]
+    assert state["rounds"]["1"]["compileDrops"] == []
+    assert _outside_sources(state) == [("seams check", "z.py", 5)]
 
 
 # --- the seams check runs once, in round 1 only ---------------------------------------------------------------------

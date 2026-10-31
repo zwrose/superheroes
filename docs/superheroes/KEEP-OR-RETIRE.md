@@ -594,8 +594,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** retired.
 - **Notes.** capability-gap — the stage ships without a wired caller yet; evidence is on the held
-  verification set (Cursor-family orchestrators observed on weekly-eats lanes). Retired by the
-  owner-approved review-loop spec (FR-47; Canon 2026-10-27-5692f27d-1); what the seat checked
+  verification set (Cursor-family orchestrators observed on a consuming project's lanes). Retired
+  by the owner-approved review-loop spec (FR-47; Canon 2026-10-27-5692f27d-1); what the seat checked
   moves to the advisor's vet.
 
 #### D5 — Circuit breaker + escalation
@@ -699,7 +699,7 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — lens detection is structural; deferral-heavy routing around the lenses is
-  capability-gap (Cursor-family false forfeits observed on weekly-eats lanes).
+  capability-gap (Cursor-family false forfeits observed on a consuming project's lanes).
 
 #### D11 — The `seat-result/2` envelope authentication
 
@@ -1561,7 +1561,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — the A1–D11 contract is load-bearing orchestration machinery; churn
-  evidence observed on engine-7-class dispatches at weekly-eats (the assessment record, C1/H2).
+  evidence observed on engine-7-class dispatches in a consuming project (the assessment record,
+  C1/H2).
 
 #### H3 — Other heroes (architect, discovery, detective, checkpoint…)
 
@@ -1674,8 +1675,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Decision.** retired — issue #2164, 2026-10-26 (owner ruling "385 a",
   [ruling record](https://github.com/zwrose/superheroes/issues/695#issuecomment-6405678577),
   gardening pass 5). The condition fired: every consuming project runs 0.43.0 or later, and
-  weekly-eats has no review session from before 0.43.0. The function and its test were removed
-  together. **Retired — condition fired.**
+  the consuming project has no review session from before 0.43.0. The function and its test were
+  removed together. **Retired — condition fired.**
 - **Notes.** structural — upgrade compatibility for journals written before 0.43.0, retired by its
   version condition rather than by model strength.
 
@@ -1697,8 +1698,8 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
   or retire the family.
 - **Last demonstrated benefit.** 89 cloud launches between 2026-10-17 and 2026-10-25 (gardening
   record 5, sweep A).
-- **Consumer evidence.** weekly-eats reports on the consumer-report issue (#1914), unmapped per
-  report until a pass maps them.
+- **Consumer evidence.** A consuming project reports on the consumer-report issue (#1914), unmapped
+  per report until a pass maps them.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — the setup, check and placement rules are structural (builds run where the owner
   is not); the relay and the hand-renewed reviewer pass are harness-limit (the host offers no
@@ -1813,10 +1814,10 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — external engines paste long receipts; the cap bounds what the runner
-  can grade (Cursor-family implementers observed on weekly-eats dispatches). Retired for codex
-  2026-09-19 — codex's result is a typed file on its native channel; the cap forfeit never runs for
-  a native-channel run. Retired for cursor 2026-09-19 (layer 3c) — same reason. The forfeit's code
-  is reader-less and the condition now watches only the cap as a telemetry bound.
+  can grade (Cursor-family implementers observed on a consuming project's dispatches). Retired for
+  codex 2026-09-19 — codex's result is a typed file on its native channel; the cap forfeit never runs
+  for a native-channel run. Retired for cursor 2026-09-19 (layer 3c) — same reason. The forfeit's
+  code is reader-less and the condition now watches only the cap as a telemetry bound.
 
 #### S2 — Dispatch salvage paths (retired)
 
@@ -2363,7 +2364,11 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
   `plugins/superheroes/lib/engine_adapter.py`, emitted as `permissions.allow` by
   `claude_write_sandbox_settings`. Workaround-marked (#1569). Cost: a rule list that tracks the
   harness's safety check, and a command a managed policy excludes from the sandbox that matches a
-  rule runs unprompted outside it.
+  rule runs unprompted outside it. Each family also carries two assignment-prefixed rules,
+  `Bash(*=* f *)` and `Bash(*=* f)` (#2275), so leading `NAME=value` assignments run; because the
+  leading `*` matches any characters, a command line that carries an `=` anywhere before a family's
+  name followed by a space or the line's end (e.g. `touch x=1 npx f`) also matches a rule. It still
+  runs inside the sandbox.
 - **Start date.** 2026-10-02.
 - **Condition.** Citation-based, 45 days: build records or vet receipts citing an implementer
   refusal "requires approval" on the claude write channel for a Python, pytest, echo, node toolchain
@@ -2478,7 +2483,10 @@ file, returns exactly that set.
   unstamped.)
 - `plugins/superheroes/lib/engine_adapter.py` — the claude write channel allows the Python, pytest,
   echo, node toolchain (npm, npx, node, pnpm, yarn) and `ps` command families by rule because the harness's sandbox auto-allow misses shapes its
-  safety check flags (`-X` on a Python call, `$?`). **delete-when:** `autoAllowBashIfSandboxed`
+  safety check flags (`-X` on a Python call, `$?`, leading `NAME=value` assignments), with an
+  assignment-prefixed pair of rules per family (`Bash(*=* f *)`, `Bash(*=* f)`) whose leading `*`
+  also matches a line that carries an `=` anywhere before the family's name (e.g.
+  `touch x=1 npx f`); it still runs inside the sandbox. **delete-when:** `autoAllowBashIfSandboxed`
   auto-approves every sandboxed command shape on the Claude Code version the channel runs.
 - `plugins/superheroes/lib/engine_dispatch.py` — the fold sweeps empty `.claude/.cc-writes`
   atomic-write staging dirs Claude Code creates in the worktree outside the sandbox. **delete-when:**

@@ -1,5 +1,7 @@
 # WO-D1 (#1272, layer 2d) bite-proof — CR/CRLF fold in `_order_lint_text`
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Declared guarded-element set: the two independently removable folds in
 `round_driver._order_lint_text` — BP1, the budget/verify fold (proven by the implementer, re-run
 by the orchestrator); BP2, the quoted-string loop fold for `GATE_GUIDANCE` /
@@ -44,7 +46,7 @@ __________ test_verify_command_elision_survives_carriage_returns[cr] ___________
 ...
 E                   ValueError: order-render-refused:fixer-508e7896192355de:order-lint:order-placeholder-unfilled:item
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1272-7bfe57f757a3cc6a/plugins/superheroes/lib/round_driver.py:7456: ValueError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1272-7bfe57f757a3cc6a/plugins/superheroes/lib/round_driver.py:7456: ValueError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_verify_command_elision_survives_carriage_returns[crlf]
 FAILED plugins/superheroes/lib/tests/test_round_driver_order_lint.py::test_verify_command_elision_survives_carriage_returns[cr]

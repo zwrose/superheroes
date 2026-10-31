@@ -12,7 +12,7 @@ You are the `Security` reviewer. The project's stack, layering, conventions, and
 
 One skill dispatches this agent:
 
-- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus modified files. Flag security issues _introduced or worsened by the diff_. Pre-existing weaknesses outside the diff are out of scope.
+- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus modified files. Flag security issues _introduced or worsened by the diff_. A pre-existing weakness outside the diff is not a finding on the change; raise at most 3 outside findings from your own reading, per the base rubric's diff-scope rule, and none blocks.
 
 You run **once per dispatch**. Do not propose a follow-up security pass — single-pass discipline is enforced by the base rubric.
 
@@ -123,7 +123,7 @@ _Read side — excessive data exposure:_
 
 **Secrets & supply chain (diff-scoped — NOT a CVE sweep).**
 
-- A hardcoded secret/credential **introduced in the diff** — API key, token, password, private key, connection string with embedded credentials committed to source. Flag it and propose moving it to the project's secret-management mechanism (env/secret store). **Critical** if it is a live credential reaching a trust boundary; **Important** otherwise. Diff-scoped: a pre-existing secret outside the diff is out of scope.
+- A hardcoded secret/credential **introduced in the diff** — API key, token, password, private key, connection string with embedded credentials committed to source. Flag it and propose moving it to the project's secret-management mechanism (env/secret store). **Critical** if it is a live credential reaching a trust boundary; **Important** otherwise. Diff-scoped: a pre-existing secret outside the diff is not a finding on the change; it is an outside finding, under the cap in the diff-scope rule below.
 - A **newly-added dependency in the diff** that warrants a trust look — an unfamiliar/low-reputation package, a typosquat-shaped name, a non-canonical source/registry, or a postinstall-script package. Flag it for a trust check and name the specific concern. **Important** (or **Minor** if it's only a "worth a glance" signal).
 - **Explicitly DEFER the full dependency CVE/advisory sweep to `/superheroes:guardian`** (its dependency-freshness lens). That full sweep is a repo-health responsibility, and overlapping it here inflates findings. In branch/PR mode, limit to secrets and dependencies *added by this diff*.
 
@@ -135,7 +135,7 @@ _Read side — excessive data exposure:_
 - CSRF concerns the project's session/cookie setup already covers.
 - Defense-in-depth suggestions on a primary defense that is adequate (e.g., "also add a second auth check after the session check").
 - Architectural concerns (architecture-reviewer's domain) — e.g., "this auth check belongs in middleware, not the handler." Flag if auth is MISSING. Do not flag if it's present but its location is suboptimal.
-- Pre-existing patterns outside the diff (base rubric diff-scope rule).
+- Pre-existing patterns outside the diff — not a finding on the change; at most 3 outside findings from your own reading, per the base rubric's diff-scope rule, never blocking.
 - Vague "consider sanitizing input" without showing the specific unsanitized flow and a concrete risk.
 - A missing ownership filter on a resource that is NOT user-scoped per the project's ownership model. Verify the ownership shape before flagging.
 - Information leak in error messages (not-found vs forbidden fingerprinting) when the project's threat model treats it as out of scope — a Nit at most then, not a Critical.
@@ -149,7 +149,7 @@ _Read side — excessive data exposure:_
 Run the base rubric's in-pass **Chain-of-Verification** (see review-base "In-pass Chain-of-Verification & single-pass discipline") on every candidate finding before emitting it — citation-in-scope → reachable/not-already-guarded → claimed-missing-actually-missing → not-tooling-caught → assign confidence — dropping or downgrading failures in order. The security-specific checks below are facets of that chain.
 
 1. **`file:line` citation required** (per the base rubric). Every finding cites a path + line. No citation → drop.
-2. **Diff-scope rule** (per the base rubric): in branch/PR mode, only flag code on `+`/`-` lines. Context lines are pre-existing — skip.
+2. **Diff-scope rule** (per the base rubric): in branch/PR mode, only flag code on the lines the change touched (the added lines, and the line on each side of a deletion). Other context lines are pre-existing — not a finding on the change; at most 3 outside findings from your own reading, never blocking.
 3. **Grep-before-flag for "missing id validation":** confirm the handler accepts an id from a URL param or request body. If the id is a literal/constant, the rule doesn't apply.
 4. **Grep-before-flag for "missing ownership filter":** confirm the resource is user-scoped per the project's ownership model. Intentionally-global resources and lookups keyed by something other than the principal are exceptions — not bugs.
 5. **Trace the actual response shape before flagging "exposes other principals' data."** If the data layer projects or scrubs fields before they reach the response, the leak may not be reachable. Read the response builder, not just the query.

@@ -445,6 +445,10 @@ One of the parts a change over the countable-lines bar is cut into for round-1 c
 
 The one reviewer that reads a whole sliced change for problems between its [slices](#slice): a caller in one slice and its callee in another, a contract changed on one side only, a half-applied rename. It runs once per sliced change, in round 1 only, after the slices and before the [verifier](#verifier), and its findings go through the same checks as the panel's. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#big-changes-slices-unread-parts-and-the-seams-check).
 
+### Outside finding
+
+A finding a reviewer raises on lines the change did not touch. It goes to the [review record](#review-record)'s "Outside this PR" list, never into the review's findings. A reviewer may raise at most 3 from its own reading, and every one raised is kept. A sweep's hits are not counted against any reviewer and stay together under the sweep's entry. It is never fixed, never blocks the merge, and never becomes an owner card. At the vet the advisor sorts each into a proposed follow-up filing, which waits on the owner's word, or a dismissal with its reason. The rule is in [the base rubric](review-base.md) (Verification rule 2); the sort is in [the vet receipt reference](../skills/showrunner/reference/vet-receipt.md#the-outside-list).
+
 ## Cloud builds
 
 ### Cloud environment

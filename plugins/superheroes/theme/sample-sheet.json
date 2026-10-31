@@ -1,26 +1,26 @@
 {
   "schema": "superheroes-sheet/1",
   "kind": "remainder",
-  "title": "Weekly meal planner spec review",
+  "title": "Tool-lending app spec review",
   "remainder": {
     "roundsRun": 3,
     "fixesMade": 7,
-    "unsettled": ["leftovers-handling"]
+    "unsettled": ["late-returns-handling"]
   },
   "cards": [
     {
-      "id": "leftovers-handling",
+      "id": "late-returns-handling",
       "callKind": "Open finding",
       "warning": true,
-      "question": "Should leftovers from one dinner count as lunch the next day?",
+      "question": "Should a tool returned in the evening be bookable the next morning?",
       "context": [
         {
           "title": "What you're accepting",
           "blocks": [
-            {"paragraph": "The spec fills seven dinners and seven lunches, but it never says whether last night's dinner can be tomorrow's lunch. This one is yours to call, because it depends on whether households want to plan around leftovers or cook fresh every time."},
+            {"paragraph": "The spec has seven morning pickups and seven evening returns, but it never says whether a tool returned tonight can be booked again tomorrow morning. This one is yours to call, because it depends on whether lenders want a night to check a tool or want it back out on loan straight away."},
             {"bullets": [
-              "If leftovers count, plans need fewer recipes and shopping lists get shorter.",
-              "If they do not, every meal is a new recipe, so plans stay varied but take more cooking.",
+              "If a returned tool can go straight back out, each tool is borrowed more often and fewer tools are needed.",
+              "If it cannot, every tool gets a rest day, so lenders can check it but borrowers wait longer.",
               "Either way the spec needs one clear sentence about it before the build starts."
             ]}
           ]
@@ -28,45 +28,45 @@
         {
           "title": "The line that leaves it open",
           "blocks": [
-            {"quote": "Each day has one breakfast, one lunch and one dinner slot, and every slot is filled with a different recipe."}
+            {"quote": "Each day has one pickup slot and one return slot, and every booking covers one tool for one borrower."}
           ]
         }
       ],
       "images": [],
       "options": [
         {
-          "id": "allow-leftovers",
-          "label": "Let leftovers fill a lunch slot",
-          "consequence": "Plans need fewer recipes and shopping lists get shorter, but the same recipe can show up twice in a day."
+          "id": "allow-late-returns",
+          "label": "Let a returned tool be booked the next morning",
+          "consequence": "Each tool is borrowed more often and fewer tools are needed, but a tool may go out before the lender has checked it."
         },
         {
-          "id": "fresh-only",
-          "label": "Require a different recipe for every slot",
-          "consequence": "Every meal is a new recipe, so plans stay varied but need more cooking and a longer shopping list."
+          "id": "on-time-only",
+          "label": "Require a rest day between bookings",
+          "consequence": "Every tool is checked between loans, so tools stay in good shape but borrowers wait longer and more tools are needed."
         }
       ],
       "recommendation": {
-        "text": "Let leftovers fill a lunch slot.",
-        "reason": "Most weekly planners are used to save effort, and leftover lunches are the common way to do that.",
-        "optionId": "allow-leftovers"
+        "text": "Let a returned tool be booked the next morning.",
+        "reason": "Most neighbours lend tools to save others a purchase, and a quick turnaround is the common way to do that.",
+        "optionId": "allow-late-returns"
       }
     },
     {
-      "id": "shopping-list-rounding",
+      "id": "loan-length-rounding",
       "callKind": "Wording to confirm",
       "warning": false,
-      "question": "Is the shopping list rounding rule what you meant?",
+      "question": "Is the loan-length rounding rule what you meant?",
       "context": [
         {
-          "title": "How the list is built",
+          "title": "How the days are counted",
           "blocks": [
-            {"paragraph": "When the planner builds the shopping list, it rounds each ingredient up to the next whole package. The rule decides whether the list leans toward buying too much or too little, and that is a product choice."}
+            {"paragraph": "When the app counts the days of a loan, it rounds a part day up to the next whole day. The rule decides whether a borrower is held to too many days or too few, and that is a product choice."}
           ]
         },
         {
           "title": "The rule as written",
           "blocks": [
-            {"quote": "Quantities on the shopping list are rounded up to the nearest purchasable package."}
+            {"quote": "Loan lengths on a booking are rounded up to the nearest whole day."}
           ]
         }
       ],
@@ -74,21 +74,21 @@
       "options": [],
       "recommendation": {
         "text": "Keep the rule as written.",
-        "reason": "Rounding up avoids a second trip to the store, and the spec already says amounts are shown before rounding."
+        "reason": "Rounding up avoids an argument about a late return, and the spec already says the exact hours are shown before rounding."
       }
     },
     {
-      "id": "saved-plan-history",
+      "id": "saved-booking-history",
       "callKind": "Scope note",
       "warning": false,
-      "question": "Do you want past weekly plans kept after the week ends?",
+      "question": "Do you want past bookings kept after the tool is returned?",
       "context": [
         {
-          "title": "What happens after the week",
+          "title": "What happens after the return",
           "blocks": [
-            {"paragraph": "The spec covers making and editing the current week's plan. It says nothing about what happens to that plan once the week is over."},
+            {"paragraph": "The spec covers making and editing a current booking. It says nothing about what happens to that booking once the tool is back."},
             {"bullets": [
-              "Keeping old plans means more storage.",
+              "Keeping old bookings means more storage.",
               "It also means a new screen to browse them.",
               "That makes it a call about scope, so it is yours."
             ]}
@@ -102,13 +102,13 @@
       "id": "week-start-day",
       "callKind": "Wording to confirm",
       "warning": false,
-      "question": "Which day should a weekly plan start on?",
+      "question": "Which day should a booking window start on?",
       "context": [
         {
           "title": "Where a week begins",
           "blocks": [
-            {"paragraph": "A plan covers seven days in a row, but the spec does not name the first day. That day decides where one plan ends and the next begins, and households disagree about it."},
-            {"quote": "A weekly plan covers seven consecutive days."}
+            {"paragraph": "A booking window covers seven days in a row, but the spec does not name the first day. That day decides where one window ends and the next begins, and lenders disagree about it."},
+            {"quote": "A booking window covers seven consecutive days."}
           ]
         }
       ],
@@ -117,30 +117,30 @@
         {
           "id": "monday-start",
           "label": "Start the week on Monday",
-          "consequence": "Plans line up with the working week, but a household that shops on a Sunday plans across two weeks."
+          "consequence": "Windows line up with the working week, but a lender who hands tools over on a Sunday is booked across two windows."
         },
         {
           "id": "sunday-start",
           "label": "Start the week on Sunday",
-          "consequence": "A Sunday shop covers the week ahead, but plans no longer line up with the working week."
+          "consequence": "A Sunday handover covers the week ahead, but windows no longer line up with the working week."
         }
       ],
       "recommendation": {
         "text": "Start the week on Monday.",
-        "reason": "Most calendars and work schedules begin on Monday, so plans match how people already think about the week.",
+        "reason": "Most calendars and work schedules begin on Monday, so windows match how people already think about the week.",
         "optionId": "monday-start"
       }
     },
     {
-      "id": "dietary-needs",
+      "id": "accessibility-needs",
       "callKind": "Scope note",
       "warning": false,
-      "question": "Should a plan remember a household's dietary needs?",
+      "question": "Should a booking remember a borrower's safety training?",
       "context": [
         {
-          "title": "Allergies and diets",
+          "title": "Skills and safety",
           "blocks": [
-            {"paragraph": "Today a person can pick any recipe for any slot. The spec says nothing about allergies or diets. Remembering them would add a settings screen and a filter on every recipe list, so this is a scope call."}
+            {"paragraph": "Today a person can borrow any tool on the shelf. The spec says nothing about skills or safety training. Remembering them would add a settings screen and a filter on every tool list, so this is a scope call."}
           ]
         }
       ],

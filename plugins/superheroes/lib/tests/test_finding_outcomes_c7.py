@@ -234,7 +234,7 @@ def test_aligned_counts_only_while_the_published_card_offers_no_options():
     base = _sheet("aligned")
     assert FO.sheet_answer_decides(base, ref, 9) is True
     # bites on: a saved aligned answer accepted for a card that has since gained options, or for one nothing can check
-    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": ["allow-leftovers"]}}), ref, 9) is False
+    assert FO.sheet_answer_decides(dict(base, cards={"c1": {"options": ["allow-late-returns"]}}), ref, 9) is False
     assert FO.sheet_answer_decides({"answers": base["answers"]}, ref, 9) is False
     assert FO.sheet_answer_decides(dict(base, cards={"c1": "x"}), ref, 9) is False
     assert FO.sheet_answer_decides(dict(base, cards={}), ref, 9) is False

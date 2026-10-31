@@ -1,5 +1,7 @@
 # #1745 WO-A bite-proof: calibration file names read from their owners, and the pass block's environment line
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/cloud_setup_text.py` (`_calibration`, `_store_files`) and `plugins/superheroes/lib/cloud_pass.py` (`make`), detectors in `plugins/superheroes/lib/tests/test_cloud_setup_text.py` (`TS`) and `plugins/superheroes/lib/tests/test_cloud_pass.py` (`TP`).
 
 **Status.** The implementer ran every proof (A1 to A5): each neutralization is a targeted Edit in the source file, the red is the single named test function run alone, the restore is the inverse Edit, and the green is the same function. Reds and greens below are the pytest output of each run unless a line says otherwise; absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -41,7 +43,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x1090c8470>
 >       assert "renamed-registry.json" in files and "registry.json" not in files
 E       assert ('renamed-registry.json' in {'config/core.md': b'# Core\nline two\n', 'config/review-crew.md': b'# Crew\nsecond\n', 'doc-policy.json': b'{"docs": "x"}\n', 'meta.json': b'{"schemaVersion": 1}\n', ...})
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_setup_text.py:822: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_setup_text.py:822: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_text.py::test_writer_follows_a_renamed_registry_file
 1 failed in 0.68s
@@ -83,7 +85,7 @@ E         At index 0 diff: 'config/core.md' != 'doc-policy.json'
 E         Left contains one more item: 'registry.json'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_setup_text.py:839: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_setup_text.py:839: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_text.py::test_writer_follows_a_renamed_core_file_and_config_directory
 1 failed in 0.51s
@@ -120,7 +122,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109308dd0>
 >       assert "moved-policy.json" in files and "doc-policy.json" not in files
 E       assert ('moved-policy.json' in {'config/core.md': b'# Core\nline two\n', 'config/review-crew.md': b'# Crew\nsecond\n', 'doc-policy.json': b'{"docs": "x"}\n', 'meta.json': b'{"schemaVersion": 1}\n', ...})
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_setup_text.py:853: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_setup_text.py:853: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_text.py::test_writer_follows_a_renamed_policy_file_outside_the_repository
 1 failed in 0.45s
@@ -161,7 +163,7 @@ E
 E         - refused
 E         + copied)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_pass.py:353: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_pass.py:353: AssertionError
 [... nine more failure blocks, same assertion, elided ...]
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_make_refuses_a_malformed_environment[]
@@ -208,7 +210,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1028/test_
 E       AssertionError: assert 5 == 4
 E        +  where 5 = len(['SUPERHEROES_REVIEWER_PASS=eyJhdXRoX21vZGUiOiAiY2hhdGdwdCIsICJPUEVOQUlfQVBJX0tFWSI6IG51bGwsICJ0b2tlbnMiOiB7ImlkX3Rva2...RIDE=http://127.0.0.1:9/', 'CODEX_REVOKE_TOKEN_URL_OVERRIDE=http://127.0.0.1:9/', 'SUPERHEROES_CLOUD_ENVIRONMENT=None'])
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_pass.py:311: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_pass.py:311: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_make_puts_four_line_block_on_clipboard
 1 failed in 0.15s

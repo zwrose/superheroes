@@ -1,5 +1,7 @@
 # #1744 WO-A bite-proof: the reviewer pass module (`cloud_pass.py`)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/cloud_pass.py` (`place`, `make`, `confirm`), detectors in `plugins/superheroes/lib/tests/test_cloud_pass.py` (`T`).
 
 **Status.** The implementer ran every proof (A1 to A6): each neutralization is a targeted Edit in `cloud_pass.py`, the red is the single named node run alone, the restore is the inverse Edit, and the green is the same node. Reds and greens below are the full pytest output of each run unless a line says otherwise; absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret (every token is built at run time), so nothing is redacted.
@@ -41,7 +43,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-600/test_p
                 tmp_path, _cloud_env(tmp_path, pass_value=bad),
                 {"action": "refused", "reason": "pass-can-renew"})
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:581: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:581: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-600/test_place_refuses_a_pass_that0')
@@ -60,7 +62,7 @@ E         {'reason': None} != {'reason': 'pass-can-renew'}
 E         {'action': 'placed'} != {'action': 'refused'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:554: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:554: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_place_refuses_a_pass_that_can_renew
 1 failed in 1.62s
@@ -203,7 +205,7 @@ E
 E         - refused
 E         + copied)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:352: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:352: AssertionError
 _ test_make_refuses_when_separate_sign_in_is_the_main_one[codex-home-points-at-separate] _
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-608/test_make_refuses_when_separat1')
@@ -225,7 +227,7 @@ E
 E         - refused
 E         + copied)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:352: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:352: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_make_refuses_when_separate_sign_in_is_the_main_one[symlink]
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_make_refuses_when_separate_sign_in_is_the_main_one[codex-home-points-at-separate]
@@ -260,7 +262,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-610/test_c
         result = CP.confirm(env=env, run=_fake_run(calls=calls), now=NOW)
 >       _assert_no(result, "pass-not-placed")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:657: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:657: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'schema': 'cloud-pass-confirmation/1', 'reviewerAnswered': True, 'passLapses': '2027-01-26', 'reason': None}
@@ -271,7 +273,7 @@ reason = 'pass-not-placed', lapses = None
 >       assert result["reviewerAnswered"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_confirm_pass_not_placed_when_older_sign_in_on_disk
 1 failed in 0.35s
@@ -307,7 +309,7 @@ fixture = {'stdout': ''}
     def test_confirm_unexpected_answer(tmp_path, fixture):
 >       _assert_no(_confirm(tmp_path, **fixture), "reviewer-answer-unexpected", lapses=EXP_DATE)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:708: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:708: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'schema': 'cloud-pass-confirmation/1', 'reviewerAnswered': True, 'passLapses': '2027-01-25', 'reason': None}
@@ -318,7 +320,7 @@ reason = 'reviewer-answer-unexpected', lapses = '2027-01-25'
 >       assert result["reviewerAnswered"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
 _____________ test_confirm_unexpected_answer[ready-on-stderr-only] _____________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-612/test_confirm_unexpected_answer1')
@@ -332,7 +334,7 @@ fixture = {'stdout': '', 'stderr': 'READY\n'}
     def test_confirm_unexpected_answer(tmp_path, fixture):
 >       _assert_no(_confirm(tmp_path, **fixture), "reviewer-answer-unexpected", lapses=EXP_DATE)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:708: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:708: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'schema': 'cloud-pass-confirmation/1', 'reviewerAnswered': True, 'passLapses': '2027-01-25', 'reason': None}
@@ -343,7 +345,7 @@ reason = 'reviewer-answer-unexpected', lapses = '2027-01-25'
 >       assert result["reviewerAnswered"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
 ________________ test_confirm_unexpected_answer[different-word] ________________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-612/test_confirm_unexpected_answer2')
@@ -357,7 +359,7 @@ fixture = {'stdout': 'DONE\n'}
     def test_confirm_unexpected_answer(tmp_path, fixture):
 >       _assert_no(_confirm(tmp_path, **fixture), "reviewer-answer-unexpected", lapses=EXP_DATE)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:708: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:708: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'schema': 'cloud-pass-confirmation/1', 'reviewerAnswered': True, 'passLapses': '2027-01-25', 'reason': None}
@@ -368,7 +370,7 @@ reason = 'reviewer-answer-unexpected', lapses = '2027-01-25'
 >       assert result["reviewerAnswered"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:626: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_confirm_unexpected_answer[empty-stdout]
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_confirm_unexpected_answer[ready-on-stderr-only]

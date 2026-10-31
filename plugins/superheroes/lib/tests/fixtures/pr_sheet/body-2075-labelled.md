@@ -2,7 +2,7 @@ Closes #2071.
 
 ## What's changing, and why
 
-A review seat could run programs on your machine. In a weekly-eats review, a codex auditor ran the lines of an owner-run script that reads the keychain. Review seats now run **no programs at all**. That is enforced where each seat runs, by naming what the seat may do, not by a list of forbidden commands:
+A review seat could run programs on your machine. In a consuming project's review, a codex auditor ran the lines of an owner-run script that reads the keychain. Review seats now run **no programs at all**. That is enforced where each seat runs, by naming what the seat may do, not by a list of forbidden commands:
 
 - **Codex review seats get a closed tool set.** Your codex config (MCP servers, plugins, hooks) is ignored for these seats, codex's own shell tools are off, and their one tool is a small read-only file server the plugin ships (read, list, search). This mattered beyond the shell: your codex config gives seats a `node_repl` server that ran a script through `child_process` even with the shell off. A live test against the real codex shows a seat asked to run a project script cannot, while it still reads files, including ones outside its copy.
 - **Claude review seats** already had no shell. They now also load no MCP servers.
@@ -53,7 +53,7 @@ Receipt: https://github.com/zwrose/superheroes/pull/2075#issuecomment-6368956190
 
 ### Lane, brief, and intake
 - **Lane:** full, the advisor's call recorded on #2071. Declared via `build_lane.py`.
-- **Anchor:** receipt. Both links are live (weekly-eats-hq/weekly-eats#3092, PR weekly-eats-hq/weekly-eats#3107).
+- **Anchor:** receipt. Both links are live (a consuming project's issue, and a consuming project's PR).
 - **Brief:** https://github.com/zwrose/superheroes/issues/2071#issuecomment-6340563895. Brief check: codex gpt-6.1-sol xhigh, 4 Important, all folded. Dispositions: https://github.com/zwrose/superheroes/issues/2071#issuecomment-6340687882
 - **Amended order** (from the advisor, mid-intake): the renderer emits the allowance into every seat order. Done in `round_orders.render_order`, and pinned by a golden test that runs once per phase.
 - **Preflight:** gh auth plus a real write (the brief comment); codex probe READY; dispatch vocab ok. Browser probe N/A: a plugin build, no running app. Test-pilot N/A for the same reason. Stand-in evidence: the re-run receipts and the review below.

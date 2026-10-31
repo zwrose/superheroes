@@ -34,7 +34,7 @@ seat-to-lens mapping):
   full xhigh run on one adversarial question; findings lens-attributable. Named weakness: every
   question gets exactly one model's reading (a per-question vendor blind spot has no redundant
   catch), and the lens is vendor-confounded.
-- **weekly-eats (FULL, 9 children, interlocked D1/DE/D3 core): one seat per vendor** — each seat
+- **a consuming project (FULL, 9 children, interlocked D1/DE/D3 core): one seat per vendor** — each seat
   carries all five lens questions across the whole package; every question gets two independent
   models, disagreement is signal, and the round is cheaper. Named weakness: attention dilutes
   across five questions in one run, and — the risk that matters specifically at FULL weight —
@@ -42,7 +42,7 @@ seat-to-lens mapping):
   two diluted seats can both return thin, reading as convergence when it is exhaustion of
   attention, not of findings.
 
-**Mitigations identified for per-vendor-at-full** (relayed to the weekly-eats advisor): (1) make
+**Mitigations identified for per-vendor-at-full** (relayed to a consuming project's advisor): (1) make
 the investigated list per-lens — a round is valid only when each seat's investigated entries
 demonstrate real coverage of every lens, so a diluted seat is detectable before it terminates the
 loop; (2) scope later rounds per-lens on the interlocked core, converting the topology to per-lens
