@@ -280,11 +280,15 @@ def env_tags_readable():
 
 
 # T9
-# axis: containment covers a worker in the command's own group (False) and one that left it for a new session (True).
-# A detached worker that also clears its environment is contained by the Linux reaper only.
+# axis: containment covers a worker in the command's own group on every platform, and a worker that left it for a new session on Linux only.
+# On Linux the reaper contains a detached worker with or without its environment; off Linux such a worker is refused, not killed (the test_g3a test in test_break_it_review_round2_2210.py).
 @pytest.mark.proc_containment
 @pytest.mark.parametrize("detached,clean_env", [
-    (False, False), (True, False),
+    (False, False),
+    pytest.param(True, False, marks=pytest.mark.skipif(
+        not sys.platform.startswith("linux"),
+        reason="off Linux the runner refuses, rather than kills, a detached worker it cannot attribute; "
+               "test_g3a_a_detached_worker_no_sample_saw_is_not_killed_and_the_run_is_refused covers that refusal")),
     pytest.param(True, True, marks=pytest.mark.skipif(
         not sys.platform.startswith("linux"), reason="needs the Linux child-subreaper reaper"))])
 def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env, env_tags_readable):
@@ -392,29 +396,32 @@ def test_t12_intercept_strips_a_forged_stamp_and_never_mutates(repo):
     failing = _finding("tests/test_x.py", breakItRun={"outcome": "passed"})
     original = copy.deepcopy([forged, plain, failing, "not-a-dict"])
     given = copy.deepcopy(original)
-    kept, runs, exempt = break_it.intercept(given, str(repo), "H", runner=_fake("failed"))
+    kept, runs, exempt, stamped = break_it.intercept(given, str(repo), "H", runner=_fake("failed"))
     assert given == original
     assert [k.get("title") for k in kept[:2]] == ["plain", "other"]
     assert "breakItRun" not in kept[0] and "breakItRun" not in kept[1]
     assert kept[0] is not given[0] and kept[3] == "not-a-dict"
     assert kept[2]["breakItRun"]["outcome"] == "failed"
     assert exempt == {id(kept[2])}
+    assert stamped == {id(kept[2])}
     assert len(runs) == 1 and runs[0]["title"] == "Break-it: tests/test_x.py"
     assert runs[0]["file"] == "tests/test_x.py"
 
 
-def test_t12_intercept_drops_a_passed_run_and_keeps_failed_and_not_run(repo):
+def test_t12_intercept_keeps_every_run_finding_stamped_passed_included(repo):
+    # the run judges nothing: a passing run no longer drops its finding
     findings = [_finding("t/a.py"), _finding("t/b.py"), _finding("t/c.py")]
     outcomes = {"t/a.py": "passed", "t/b.py": "failed", "t/c.py": "not-run"}
 
     def runner(repo_root, head, block, **kwargs):
         return _fake(outcomes[block["path"]])(repo_root, head, block)
 
-    kept, runs, exempt = break_it.intercept(findings, str(repo), "H", runner=runner)
-    assert [k["file"] for k in kept] == ["t/b.py", "t/c.py"]
+    kept, runs, exempt, stamped = break_it.intercept(findings, str(repo), "H", runner=runner)
+    assert [k["file"] for k in kept] == ["t/a.py", "t/b.py", "t/c.py"]
     assert [r["outcome"] for r in runs] == ["passed", "failed", "not-run"]
-    assert exempt == {id(k) for k in kept}
+    assert exempt == {id(k) for k in kept} == stamped
     assert all(k["breakItRun"]["role"] == break_it.ROLE for k in kept)
+    assert [k["breakItRuns"][0]["test"] for k in kept] == ["t/a.py", "t/b.py", "t/c.py"]
 
 
 @pytest.mark.parametrize("run", [
@@ -434,17 +441,17 @@ def test_parse_command_refuses_the_env_program(run):
 def test_t12_intercept_runs_every_finding_and_refuses_a_path_mismatch(repo):
     calls = []
     findings = [_finding("t/%d.py" % i) for i in range(4)]
-    kept, runs, exempt = break_it.intercept(findings, str(repo), "H",
-                                            runner=_fake("failed", calls))
+    kept, runs, exempt, stamped = break_it.intercept(findings, str(repo), "H",
+                                                     runner=_fake("failed", calls))
     assert calls == ["t/%d.py" % i for i in range(4)]
     assert len(kept) == 4 and len(exempt) == 4
     mismatch = _finding("t/real.py", file="t/other.py")
     calls.clear()
-    kept, runs, exempt = break_it.intercept([mismatch], str(repo), "H", runner=_fake("passed", calls))
+    kept, runs, exempt, stamped = break_it.intercept([mismatch], str(repo), "H", runner=_fake("passed", calls))
     assert calls == []
     assert kept[0]["breakItRun"]["reason"] == "path-mismatch" and id(kept[0]) not in exempt
     bad = _finding("t/real.py", suggestion="not a block")
-    kept, runs, exempt = break_it.intercept([bad], str(repo), "H", runner=_fake("passed", calls))
+    kept, runs, exempt, stamped = break_it.intercept([bad], str(repo), "H", runner=_fake("passed", calls))
     assert kept[0]["breakItRun"]["reason"] == "block-header-missing"
     assert kept[0]["breakItRun"]["sha256"] is None and calls == []
     assert id(kept[0]) not in exempt

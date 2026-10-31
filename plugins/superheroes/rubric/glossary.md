@@ -407,7 +407,7 @@ The review panel's test seat. For each changed test it asks whether the test wou
 
 ### Break-it test
 
-A test the [test role](#test-role) writes for a change that touches a risk area, to try to break the change on a named risky scenario. The review loop runs it in the build session's own working copy at the reviewed head. A failing run becomes a finding, and the test stays with the change once that finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
+A test written only by the [test role](#test-role), to try to break a change on a named risky scenario: either attached to one of its findings or as a finding of its own for a risk area. The build session runs it once, in its own working copy, on the unfixed code. The run judges nothing: its result is saved with the finding and handed to the verifiers, and a passing run does not drop the finding. The test stays with the change once its finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
 
 ### Extra audit round
 

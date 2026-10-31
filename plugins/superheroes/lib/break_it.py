@@ -48,6 +48,8 @@ SCHEMA = "break-it-run/1"
 ROLE = "test-role"
 TAXONOMY = "break-it-test"
 RUN_FIELD = "breakItRun"
+RUNS_FIELD = "breakItRuns"
+KIND_PER_AREA, KIND_ATTACHED = "per-area", "attached"
 INTERPRETER_KEY = break_it_key.INTERPRETER_KEY
 REDACTED_FIELD = "suggestionRedacted"
 DEFAULT_TIMEOUT = 300
@@ -81,7 +83,7 @@ def setup_failure_reason(text, exit_code=None):
 # reads its header, field prefixes and separator from it.
 BLOCK_TEMPLATE = "\n".join([
     "break-it-test v1",
-    "path: <the same repo-relative path as `file`>",
+    "path: <a new test file's repo-relative path, one that does not exist yet; for a per-area finding the same path as `file`; for an attached finding not the finding's `file`>",
     "run: <one command, run from the repository root, that runs only this test file>",
     "---",
     "<the complete file content>",
@@ -219,7 +221,26 @@ def _clean_env(extra=None, root=None):
 
 
 def is_break_it(finding):
+    """True for a per-area break-it finding (taxonomy ``break-it-test``); an attached test is not one."""
     return isinstance(finding, dict) and finding.get("taxonomy") == TAXONOMY
+
+
+def carried_block(finding):
+    """``(block, kind)`` for the test a finding carries, the one reader of both kinds: ``kind`` is ``"per-area"``
+    for a ``break-it-test`` finding whose suggestion parses as a block, ``"attached"`` for any other finding whose
+    suggestion does. ``(None, None)`` when the finding is no dict or its suggestion is no well-formed block."""
+    if not isinstance(finding, dict):
+        return None, None
+    block, _ = parse_block(finding.get("suggestion"))
+    if block is None:
+        return None, None
+    # axis: a block on a finding of any other taxonomy is an attached test, read by this one reader
+    return block, (KIND_PER_AREA if is_break_it(finding) else KIND_ATTACHED)
+
+
+def carries_test(finding):
+    """True for a per-area finding (even one whose block is malformed) or a finding whose suggestion parses as a block."""
+    return is_break_it(finding) or carried_block(finding)[0] is not None
 
 
 def _path_unsafe(path):
@@ -1537,45 +1558,79 @@ def _safe_run(runner, repo_root, head, block, interpreter=_UNSET, scratch=None, 
     return got
 
 
+def record_run(record, changed_why=None):
+    """A run record in the review record's per-run shape (``review_record._break_it_fault``): ``test`` is the block
+    path (the record's ``file`` when no block parsed), ``commit`` the head run on, ``status`` ``ran`` (a passed or
+    failed run, or a not-run that still exited with an int code, whose ``reason`` is kept), ``timed-out`` (a
+    ``timeout``) or ``not-started`` (every other not-run), ``exitCode`` the int for ``ran`` and null otherwise."""
+    record = record if isinstance(record, dict) else {}
+    outcome, reason, code = record.get("outcome"), record.get("reason"), record.get("exitCode")
+    has_code = isinstance(code, int) and not isinstance(code, bool)
+    if outcome in (OUTCOME_PASSED, OUTCOME_FAILED) and has_code:
+        status = "ran"
+    elif outcome == OUTCOME_NOT_RUN and reason == "timeout":
+        status = "timed-out"
+    elif outcome == OUTCOME_NOT_RUN and has_code:
+        status = "ran"
+    else:
+        status = "not-started"
+    test = record.get("path")
+    if not (isinstance(test, str) and test.strip()):
+        test = record.get("file")
+    output = record.get("output")
+    return {"test": test, "commit": record.get("head"), "status": status,
+            "exitCode": code if status == "ran" else None,
+            "output": output if isinstance(output, str) else "",
+            "reason": reason if isinstance(reason, str) else None, "changedWhy": changed_why}
+
+
 def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, scratch=None):
-    """Run every break-it finding (each run is bounded by its timeout; how many to write is the test
-    role's policy, stated in its agent file) and fold the results in. Returns ``(kept, runs, exempt_ids)``:
-    ``kept`` is the findings (copies) with the passed break-it ones left out and the failed or
-    not-run ones stamped with ``RUN_FIELD``; ``runs`` is one entry per break-it finding;
-    ``exempt_ids`` holds ``id()`` of each stamped copy. ``scratch`` is the session folder that holds each run's
-    temporary folder."""
-    kept, runs, exempt_ids = [], [], set()
+    """Run every break-it test the findings carry, exactly as written, once, and stamp what ran. The run judges
+    nothing: no finding is dropped for a passing test. Each finding is a copy; a ``RUN_FIELD`` or ``RUNS_FIELD`` the
+    seat supplied is stripped first. A per-area finding (``is_break_it``) runs its block, or is stamped a not-run
+    for a malformed block, a scrub-altered suggestion (``suggestion-redacted``) or a block path other than the
+    finding's ``file`` (``path-mismatch``). An attached finding (any other taxonomy, whose suggestion parses as a
+    block) runs the same way, with no path rule. Every run finding is stamped with ``RUN_FIELD`` (the run record)
+    and ``RUNS_FIELD`` (a one-run list in the review record's shape, ``record_run``). Returns
+    ``(kept, runs, scope_exempt_ids, stamped_ids)``: ``kept`` is every finding (copies), ``runs`` one entry per
+    run, ``scope_exempt_ids`` the ``id()`` of each stamped per-area copy whose block path is its ``file`` at line 1
+    (the only ones that skip the diff-scope check) and ``stamped_ids`` the ``id()`` of every stamped copy."""
+    kept, runs, exempt_ids, stamped_ids = [], [], set(), set()
     for finding in findings or []:
         if not isinstance(finding, dict):
             kept.append(finding)
             continue
         copy = dict(finding)
-        # axis: a seat-supplied RUN_FIELD stamp is never trusted, on any finding — see bite-proof record wo_a_1800_break-it
+        # axis: a seat-supplied RUN_FIELD or RUNS_FIELD is never trusted, on any finding — see bite-proof record wo_a_1800_break-it
         copy.pop(RUN_FIELD, None)
-        if not is_break_it(copy):
+        copy.pop(RUNS_FIELD, None)
+        per_area = is_break_it(copy)
+        block, kind = carried_block(copy)
+        if not per_area and kind is None:
             kept.append(copy)
             continue
-        block, refusal = parse_block(copy.get("suggestion"))
-        # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is never run in altered form, but its parsed block is kept so the finding still earns the scope exemption and reaches the verifier
+        refusal = None if block else parse_block(copy.get("suggestion"))[1]
+        # axis: the transport scrubs suggestions as prose; a test whose bytes it changed is never run in altered form, but its parsed block is kept so a per-area finding still earns the scope exemption and reaches the verifier
         redacted = not refusal and copy.get(REDACTED_FIELD) is True
         if redacted:
             refusal = "suggestion-redacted"
         if refusal:
             record = _not_run(head, None if redacted else block, refusal)
-        elif block["path"] != copy.get("file"):
+        elif per_area and block["path"] != copy.get("file"):
             record = _not_run(head, block, "path-mismatch")
         else:
             record = _safe_run(runner, repo_root, head, block, interpreter, scratch)
-        runs.append(dict(record, title=copy.get("title"), file=copy.get("file")))
-        # axis: a passing break-it test means the change held, so the finding is dropped — see bite-proof record wo_a_1800_break-it
-        if record["outcome"] == OUTCOME_PASSED:
-            continue
+        # axis: the round-level run entry names its kind from per_area, not from carried_block's kind (None for a malformed per-area block), so the kept-check can tell a dropped attached test from a dropped per-area one
+        runs.append(dict(record, title=copy.get("title"), file=copy.get("file"), line=copy.get("line"),
+                         kind=KIND_PER_AREA if per_area else KIND_ATTACHED))
         copy[RUN_FIELD] = record
+        copy[RUNS_FIELD] = [record_run(dict(record, file=copy.get("file")))]
         kept.append(copy)
-        # axis: only a well-formed block on its own file at line 1 buys the scope exemption; a malformed one keeps ordinary scope checking
-        if block and block["path"] == copy.get("file") and _coerce_line(copy.get("line")) == (True, 1):
+        stamped_ids.add(id(copy))
+        # axis: only a well-formed per-area block on its own file at line 1 buys the scope exemption; a malformed or attached one keeps ordinary scope checking
+        if per_area and block and block["path"] == copy.get("file") and _coerce_line(copy.get("line")) == (True, 1):
             exempt_ids.add(id(copy))
-    return kept, runs, exempt_ids
+    return kept, runs, exempt_ids, stamped_ids
 
 
 def _coerce_line(value):

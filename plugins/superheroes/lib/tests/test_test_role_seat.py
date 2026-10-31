@@ -412,3 +412,15 @@ def test_test_role_order_renders_the_break_it_grammar_and_it_parses(tmp_path):
     assert (block["path"], block["run"], block["content"]) == (
         "tests/test_x.py", "python tests/test_x.py", "assert True\n")
     assert "break-it-test v1" not in _render_panel(tmp_path, "code-reviewer")
+
+
+def test_test_role_order_break_it_grammar_path_line_names_both_kinds_of_finding(tmp_path):
+    # bites on: the rendered path line telling an attached finding its path is the finding's file
+    text = _render_panel(tmp_path, NEW)
+    fenced = text[text.index(_GRAMMAR_MARK):].split("```\n")[1].split("\n```")[0]
+    path_line = fenced.split("\n")[1]
+    assert path_line.startswith("path: <") and path_line.endswith(">")
+    assert "does not exist yet" in path_line
+    assert "for a per-area finding the same path as `file`" in path_line
+    assert "for an attached finding not the finding's `file`" in path_line
+    assert "the same repo-relative path as `file`>" not in path_line
