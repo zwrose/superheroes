@@ -665,3 +665,139 @@ def test_pass_state_cli(tmp_path, capsys, monkeypatch):
     monkeypatch.delenv("CODEX_HOME", raising=False)
     assert cb.main(["pass-state"]) == 0
     assert json.loads(capsys.readouterr().out)["state"] == "absent"
+
+
+# ---------------------------------------------------------------- a detective launch: the intake note follows the charter
+
+DETECTIVE_CMD = "/superheroes:detective"
+ADOPT_BRANCH = "feature/adopted-1"
+ADOPT_HEAD = "b" * 40
+DETECTIVE_BUDGET = "until 18:00 local, no more than 3 hours of builder time"
+
+
+def _detective_launch(**kwargs):
+    return DETECTIVE_CMD + "\n\n" + _launch(**kwargs)
+
+
+def _composed_detective_prompt():
+    composed = launcher.compose_launch(
+        ".", 1747, {"baseCommit": SHA, "charter": "detective", "budget": DETECTIVE_BUDGET},
+        model="opus", place="cloud", cloud_environment=ENV_ID, session_name="issue-1747-probe")
+    assert composed["ok"] is True, composed
+    return composed
+
+
+# E1 non-strings, E2 empty text, E3 leading blank lines, E4 spaces around the command, E5 the command not on the first non-blank line
+@pytest.mark.parametrize("text, charter", [
+    (DETECTIVE_CMD + "\n\nIssue: #1747\n", "detective"),
+    ("\n\n \n" + DETECTIVE_CMD + "\nIssue: #1747\n", "detective"),
+    (" " + DETECTIVE_CMD + " \t \nIssue: #1747\n", "detective"),
+    ("/superheroes:workhorse\n\nIssue: #1747\n", "workhorse"),
+    ("Issue: #1747\n" + DETECTIVE_CMD + "\n", "workhorse"),
+    ("Issue: #1747, see " + DETECTIVE_CMD + " for the lane\n", "workhorse"),
+    (DETECTIVE_CMD + " extra\n", "workhorse"),
+    ("", "workhorse"),
+    (" \t \n\n", "workhorse"),
+    (None, "workhorse"),
+    (7, "workhorse"),
+    (b"/superheroes:detective", "workhorse"),
+    ([DETECTIVE_CMD], "workhorse"),
+])
+def test_launch_charter_reads_the_first_non_blank_line(text, charter):
+    assert cb.launch_charter(text) == charter
+
+
+def test_launch_charter_reads_the_launchers_composed_prompts():
+    assert cb.launch_charter(_composed_detective_prompt()["prompt"]) == "detective"
+    workhorse = launcher.compose_launch(
+        ".", 1747, {"baseCommit": SHA}, model="opus", place="cloud",
+        cloud_environment=ENV_ID, session_name="issue-1747-probe")
+    assert workhorse["ok"] is True, workhorse
+    assert cb.launch_charter(workhorse["prompt"]) == "workhorse"
+
+
+def test_a_detective_intake_succeeds_with_the_detective_note_and_the_same_git_calls():
+    run = FakeRun()
+    result = _intake(run, launch=_detective_launch())
+    assert result == {"ok": True, "outcome": None, "reason": None, "startedFrom": SHA,
+                      "comment": cb.DETECTIVE_INTAKE_TEXT.format(v=VERSION, sha=SHA),
+                      "pluginVersion": VERSION, "branch": None}
+    tails = [" ".join(a[3:]) for a in run.git_calls]
+    assert tails == [SHALLOW_KEY, MAIN_FETCH_KEY, VERIFY_KEY, SHALLOW_KEY, _sha_key("fetch"),
+                     _sha_key("cat"), _sha_key("checkout")]
+
+
+def test_a_workhorse_launch_keeps_the_builders_note_byte_for_byte():
+    # axis: only a launch whose first non-blank line is the detective command gets the detective note
+    text = _launch()
+    assert cb.launch_charter(text) == "workhorse"
+    assert _intake(FakeRun(), launch=text)["comment"] == (
+        "Builder intake (cloud build). Plugin %s. Commits from this build carry the cloud's own "
+        "author name; the PR will be under the owner's name.\n\n"
+        "Started from %s, the base commit the launch named." % (VERSION, SHA))
+    later = _launch() + DETECTIVE_CMD + "\n"
+    assert _intake(FakeRun(), launch=later)["comment"] == cb.INTAKE_TEXT.format(v=VERSION, sha=SHA)
+
+
+def test_a_detective_version_mismatch_refuses_with_the_builders_refusal_and_no_git_call():
+    run = FakeRun()
+    result = _intake(run, launch=_detective_launch(version=OTHER_VERSION))
+    _assert_refusal(result, "plugin-version-mismatch")
+    assert run.git_calls == []
+    assert result["comment"] == cb._refusal_comment(
+        "plugin-version-mismatch", running=VERSION, launched=OTHER_VERSION)
+
+
+@pytest.mark.parametrize("which,reason", [("fetch", "base-commit-unfetchable"),
+                                          ("checkout", "base-checkout-failed")])
+def test_a_detective_refusal_after_the_checks_is_the_builders_refusal(which, reason):
+    # E6: the refusal tokens and wording do not depend on the launch's charter
+    detective = _intake(FakeRun({_sha_key(which): (1, "")}), launch=_detective_launch())
+    builder = _intake(FakeRun({_sha_key(which): (1, "")}))
+    _assert_refusal(detective, reason)
+    assert detective == builder
+
+
+def test_a_detective_adopt_intake_returns_the_detective_adopt_note():
+    tracking = "refs/remotes/origin/%s" % ADOPT_BRANCH
+    run = FakeRun({"rev-parse --verify %s" % tracking: (0, ADOPT_HEAD + "\n")})
+    launch = _detective_launch(extra="Adopts branch: %s at %s\n" % (ADOPT_BRANCH, ADOPT_HEAD))
+    result = _intake(run, launch=launch)
+    assert result == {"ok": True, "outcome": None, "reason": None, "startedFrom": ADOPT_HEAD,
+                      "branch": ADOPT_BRANCH, "pluginVersion": VERSION,
+                      "comment": cb.DETECTIVE_INTAKE_ADOPT_TEXT.format(
+                          v=VERSION, sha=ADOPT_HEAD, branch=ADOPT_BRANCH)}
+    assert [" ".join(a[3:]) for a in run.git_calls][-3:] == [
+        "merge-base --is-ancestor %s %s" % (SHA, ADOPT_HEAD),
+        "checkout -B %s %s" % (ADOPT_BRANCH, ADOPT_HEAD),
+        "branch --set-upstream-to=origin/%s %s" % (ADOPT_BRANCH, ADOPT_BRANCH)]
+    # the same launch under the builder's first line keeps the builder's adopt note
+    builder = _intake(FakeRun({"rev-parse --verify %s" % tracking: (0, ADOPT_HEAD + "\n")}),
+                      launch=launch.replace(DETECTIVE_CMD, "/superheroes:workhorse", 1))
+    assert builder["comment"] == cb.INTAKE_ADOPT_TEXT.format(
+        v=VERSION, sha=ADOPT_HEAD, branch=ADOPT_BRANCH)
+
+
+def test_e9_the_detective_intake_notes_open_with_no_header_the_wave_watch_reads():
+    headers = list(cb.TERMINAL_HEADERS.values()) + [
+        cb.NOTE_HEADER, cb.PROGRESS_HEADER, cb.REFUSAL_HEADER, cb.HANDOVER_HEADER]
+    for text in (cb.DETECTIVE_INTAKE_TEXT, cb.DETECTIVE_INTAKE_ADOPT_TEXT):
+        body = text.format(v=VERSION, sha=SHA, branch=ADOPT_BRANCH)
+        assert not any(body.startswith(header) for header in headers)
+        assert cb.terminal_kind(body) is None
+        assert cb.parse_progress(body) is None
+
+
+def test_the_launchers_detective_cloud_prompt_passes_intake():
+    composed = _composed_detective_prompt()
+    parsed = cb.parse_launch(composed["prompt"])
+    assert parsed == {"advisorVersion": composed["pluginVersion"],
+                      "environment": ENV_ID, "baseCommit": SHA, "adoptsBranch": None, "adoptsHead": None}
+    assert cb.launch_charter(composed["prompt"]) == "detective"
+    run = FakeRun()
+    result = cb.intake("/repo", composed["prompt"], env=_session(), run=run,
+                       running_version=composed["pluginVersion"])
+    assert result["ok"] is True
+    assert result["startedFrom"] == SHA
+    assert result["comment"] == cb.DETECTIVE_INTAKE_TEXT.format(v=composed["pluginVersion"], sha=SHA)
+    assert run.git_calls[-1][3:] == ["checkout", "--detach", SHA]

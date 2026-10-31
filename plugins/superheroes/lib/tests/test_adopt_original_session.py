@@ -10,11 +10,15 @@ are the recorded files under fixtures/cloud_sessions.
 import calendar
 import json
 import os
+import subprocess
 import time
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 
 import cloud_recover as CR
+import cloud_relay
 import launch_ledger as ll
 
 from test_launcher import (
@@ -51,27 +55,58 @@ def _fixture(name):
     return os.path.join(FIXTURES, name)
 
 
+@pytest.fixture(autouse=True)
+def _no_account_reading(monkeypatch):
+    """No account reads limited: the check asks `cloud_relay.account_limit`, which is replaced here
+    (the attribute is another order's, so it may be absent) so no test depends on a relay record."""
+    monkeypatch.setattr(
+        cloud_relay, "account_limit",
+        lambda repo_root, config_dir, *, env=None, now=None: {"ok": False, "reason": "config-dir-invalid"},
+        raising=False,
+    )
+
+
 def _write_listing(tmp_path, value, name="listing.json"):
     path = tmp_path / name
     path.write_text(value if isinstance(value, str) else json.dumps(value))
     return str(path)
 
 
+@pytest.fixture
+def first_pr(monkeypatch):
+    """Replace the read of the adopted branch's first pull request time; returns `set(value)`, whose
+    `.calls` lists every call made."""
+    calls = []
+    answer = []
+
+    def read(root, branch, env):
+        calls.append(branch)
+        return answer[0] if answer else None
+
+    def set_value(value):
+        answer[:] = [value]
+        return calls
+
+    monkeypatch.setattr(L, "_adopted_branch_first_pr_fn", read)
+    return set_value
+
+
 def _seed_lane(
     repo, launch_id=LANE_ID, *, session_id=SESSION_ID, title=SESSION_TITLE, outcome="handback",
-    issue=656, environment="env-1",
+    issue=656, environment="env-1", premise_extra=None, started_ts=LANE_STARTED_TS,
 ):
     """An earlier cloud lane for the issue that started a session, ended with `outcome` (None: still running)."""
     assert ll.append(repo, {
-        "event": "reserved", "launchId": launch_id, "ts": LANE_STARTED_TS - 60, "schema": ll.SCHEMA,
+        "event": "reserved", "launchId": launch_id, "ts": started_ts - 60, "schema": ll.SCHEMA,
         "batchId": "wave-test", "repoId": ll.repo_identity(repo), "issue": issue,
-        "surfaces": ["plugins/x-%s" % launch_id], "premise": {"issue": issue, "baseCommit": HEX40},
+        "surfaces": ["plugins/x-%s" % launch_id],
+        "premise": dict({"issue": issue, "baseCommit": HEX40}, **(premise_extra or {})),
         "preflight": {}, "argv": [], "doctrineDigest": "abc123", "model": "test-model",
         "place": ll.PLACE_CLOUD, "cloudEnvironment": environment, "pluginVersion": "1.2.3",
         "configDir": "/cfg/acct",
     })
     started = {
-        "event": "started", "launchId": launch_id, "ts": LANE_STARTED_TS, "schema": ll.SCHEMA,
+        "event": "started", "launchId": launch_id, "ts": started_ts, "schema": ll.SCHEMA,
         "attempt": 1, "pid": 999999999, "logPath": "/tmp/log", "errPath": "/tmp/err",
         "cloudSessionName": title, "cloudSessionUrl": "https://claude.ai/code/session_x",
     }
@@ -92,24 +127,31 @@ def _assess(repo, launch_id=LANE_ID, evidence="handover"):
     assert CR._record(repo, "assessed", launch_id, entry)["ok"]
 
 
-def _adoption(repo):
-    """An adoption premise that passes the head-on-base check: the checkout's head is its own base."""
-    branch = _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+def _adoption(repo, branch=None):
+    """An adoption premise that passes the head-on-base check: the checkout's head is its own base.
+
+    The adopted branch is the checkout's own unless `branch` names another."""
+    branch = branch or _git(repo, "symbolic-ref", "--short", "HEAD").strip()
     head = _head_sha(repo)
     return _valid_premise(repo, baseCommit=head, adoptsBranch=branch, adoptsHead=head)
 
 
-def _adopt(repo, tmp_path, listing=None):
+def _adopt(repo, tmp_path, listing=None, branch=None):
     calls = []
     kwargs = {} if listing is None else {"cloud_sessions_file": listing}
-    result = _launch(repo, tmp_path, _fake_spawn(calls=calls), premise=_adoption(repo), **kwargs)
+    result = _launch(
+        repo, tmp_path, _fake_spawn(calls=calls), premise=_adoption(repo, branch), **kwargs,
+    )
     return result, calls
 
 
 def _refused_unread(repo, result, calls, failed):
     _assert_refused_cloud_lane(repo, result, TOKEN_UNREAD, "original-session")
     assert result["failedRead"] == failed
-    assert result["remedy"] == L._ADOPT_ORIGINAL_REMEDY_UNREAD
+    assert result["remedy"] == (
+        L._ADOPT_ORIGINAL_REMEDY_STATE if failed in ("ledger", "recover-state")
+        else L._ADOPT_ORIGINAL_REMEDY_UNREAD
+    )
     assert calls == []
 
 
@@ -579,7 +621,7 @@ def test_a_ledger_that_cannot_be_read_refuses_ledger(tmp_path, monkeypatch):
     assert got is not None
     reason, detail = got
     assert reason == TOKEN_UNREAD
-    assert detail == {"failedRead": "ledger", "remedy": L._ADOPT_ORIGINAL_REMEDY_UNREAD}
+    assert detail == {"failedRead": "ledger", "remedy": L._ADOPT_ORIGINAL_REMEDY_STATE}
 
 
 def test_a_stamped_premise_without_adopts_branch_passes_without_reading_the_ledger(monkeypatch):
@@ -670,3 +712,554 @@ def test_the_launch_command_refuses_an_adoption_over_a_live_original_and_spawns_
     _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
     assert result["originalSessions"][0]["launchId"] == LANE_ID
     assert spawns == []
+
+
+# --- the check counts only lanes that could still write the adopted branch ---------------
+
+
+ADOPTED = "adopted/x"
+
+
+def _branch(repo):
+    return _git(repo, "symbolic-ref", "--short", "HEAD").strip()
+
+
+def _adopted_repo(tmp_path):
+    """A cloud repository whose remote also holds the adopted branch; the checkout's own branch stays
+    on the remote, as a cloud launch requires, so only the adopted branch is ever deleted."""
+    repo = _cloud_repo(tmp_path)
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/%s" % ADOPTED)
+    return repo
+
+
+def _delete_remote_branch(repo):
+    _git(repo, "push", "-q", "origin", "--delete", ADOPTED)
+
+
+def _utc_stamp(offset):
+    return datetime.fromtimestamp(time.time() + offset, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _relay_records(monkeypatch, records):
+    monkeypatch.setattr(
+        cloud_relay, "fix_orders",
+        lambda repo_root, *, env=None, include_unchecked=False: {"ok": True, "records": records},
+    )
+
+
+def test_a_lane_that_handed_back_before_the_branchs_first_pr_proceeds_with_no_listing(tmp_path, first_pr):
+    # axis: a handed-back lane with no fix order since and a first pull request on the branch after the handback writes only another branch — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_a_first_pr_on_the_branch_before_the_handback_keeps_the_lane(tmp_path, first_pr):
+    # axis: a pull request on the branch opened before the handback means the lane's own pull request may be on it, so the lane stays — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    first_pr(time.time() - 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_first_pr_inside_the_clock_skew_allowance_keeps_the_lane(tmp_path, first_pr):
+    # axis: a first pull request only seconds after the handback is inside the clock-skew allowance, so it proves nothing
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    first_pr(time.time() + 60)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_vet_not_ready_after_the_handback_keeps_the_lane(tmp_path, first_pr):
+    # axis: a vet not-ready after the handback is a fix order sent since, so the lane may write the branch again — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    time.sleep(0.01)
+    assert ll.amend(repo, LANE_ID, "vet", "not-ready", "x")["ok"]
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_vet_not_ready_recorded_during_the_first_pr_lookup_keeps_the_live_lane(tmp_path, monkeypatch):
+    # axis: the ledger is read again after the slow first-pull-request lookup, so a vet not-ready recorded during it keeps the lane and the listing then shows it live — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    lookups = []
+
+    def read_first_pr(root, branch, env):
+        lookups.append(branch)
+        time.sleep(0.01)
+        assert ll.amend(root, LANE_ID, "vet", "not-ready", "x", env=env)["ok"]
+        return time.time() + 3600
+
+    monkeypatch.setattr(L, "_adopted_branch_first_pr_fn", read_first_pr)
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_running.json"))
+    assert len(lookups) == 1
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert calls == []
+
+
+def test_a_handover_recorded_during_the_first_pr_lookup_is_honoured(tmp_path, monkeypatch):
+    # axis: the handover-stopped set is read again after the slow first-pull-request lookup, so a lane assess recorded stopped on a handover during it is exempt — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    lookups = []
+
+    def read_first_pr(root, branch, env):
+        lookups.append(branch)
+        got = ll.read(root, env=env)
+        terminal = ll.fold(got["records"])["launches"][LANE_ID]["terminalIndex"]
+        handback = got["records"][terminal]["ts"]
+        _assess(root)
+        return handback + 60
+
+    monkeypatch.setattr(L, "_adopted_branch_first_pr_fn", read_first_pr)
+    result, calls = _adopt(repo, tmp_path)
+    assert len(lookups) == 1
+    _proceeds(result, calls)
+
+
+def test_a_fix_order_relay_to_the_lane_after_the_handback_keeps_the_lane(tmp_path, first_pr):
+    # axis: a fix order composed for the lane's session after the handback, never checked, reopens the lane — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    time.sleep(0.01)
+    assert cloud_relay.compose(repo, "/cfg/acct", SESSION_TITLE, "fix it", fix_order=True)["ok"]
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_fix_order_relay_stamped_after_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a relay record for the lane's session stamped after the handback reopens it — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{"session": SESSION_TITLE, "at": _utc_stamp(60)}])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_relay_read_that_fails_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a fix-order relay read that fails keeps every handed-back lane — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    monkeypatch.setattr(
+        cloud_relay, "fix_orders",
+        lambda repo_root, *, env=None, include_unchecked=False: {"ok": False, "reason": "relay-state-unreadable"},
+    )
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_relay_record_whose_time_does_not_parse_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a relay record for the lane's session whose send time does not parse counts as an opener after the handback
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{"session": SESSION_TITLE, "at": "yesterday"}])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_relay_record_for_another_session_does_not_keep_the_lane(
+    tmp_path, first_pr, monkeypatch,
+):
+    # axis: only a fix order to this lane's own session opens it, at any compose time; one to another session does not
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [
+        {"session": "issue-656-someone-else", "at": _utc_stamp(-3600)},
+        {"session": "issue-656-someone-else", "at": _utc_stamp(60)},
+        {"session": "issue-656-unparseable", "at": "yesterday"},
+    ])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+
+
+def test_a_fix_order_delivered_before_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: any fix order to the lane's session keeps the lane, even one the relay confirmed delivered before the handback — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{
+        "session": SESSION_TITLE, "at": _utc_stamp(-3600),
+        "decision": {"delivered": True, "reason": "relay-delivered", "at": _utc_stamp(-60)},
+    }])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_fix_order_delivered_after_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a fix order whose delivery was confirmed after the handback may have reopened the lane, so it stays — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{
+        "session": SESSION_TITLE, "at": _utc_stamp(-3600),
+        "decision": {"delivered": True, "reason": "relay-delivered", "at": _utc_stamp(60)},
+    }])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_an_undecided_fix_order_composed_before_the_handback_keeps_the_lane(tmp_path, first_pr, monkeypatch):
+    # axis: a fix order with no decision may still be delivered after the handback, so it keeps the lane whatever its compose time — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    _relay_records(monkeypatch, [{"session": SESSION_TITLE, "at": _utc_stamp(-3600), "decision": None}])
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_first_pr_that_could_not_be_read_keeps_the_lane(tmp_path, first_pr):
+    # axis: a first-pull-request time that could not be read keeps the lane
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    first_pr(None)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_lane_that_parked_is_kept_whatever_the_first_pr_time(tmp_path, first_pr):
+    # axis: only a handback excuses a lane by timing; a parked lane may still be working
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, outcome="park")
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+@pytest.mark.parametrize("first_offset, proceeds", [(3600, False), (7200 + 3600, True)], ids=["before", "after"])
+def test_a_reoutcome_handback_is_timed_from_the_reoutcome(tmp_path, first_pr, monkeypatch, first_offset, proceeds):
+    # axis: a lane re-outcomed to handback is timed from the amendment, never from its first terminal record
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, outcome="park")
+    t0 = next(
+        record["ts"] for record in ll.read(repo)["records"]
+        if record.get("event") == "outcome" and record.get("launchId") == LANE_ID
+    )
+    # The amendment is stamped by `time.time()` inside launch_ledger; pin it two hours after the park.
+    with monkeypatch.context() as patched:
+        patched.setattr(ll, "time", SimpleNamespace(**{**vars(time), "time": lambda: t0 + 7200}))
+        assert ll.amend(repo, LANE_ID, "reoutcome", "handback", "re-read")["ok"]
+    first_pr(t0 + first_offset)
+    result, calls = _adopt(repo, tmp_path)
+    if proceeds:
+        _proceeds(result, calls)
+    else:
+        _refused_unread(repo, result, calls, "listing-not-given")
+        assert result["launchIds"] == [LANE_ID]
+
+
+def test_the_first_pr_is_read_once_for_every_lane_that_reaches_the_timing_test(tmp_path, first_pr, monkeypatch):
+    # axis: the first-pull-request read happens at most once per original-session check, whatever the number of
+    # lanes; the pre-spawn re-check is a second check and reads fresh, so a launch reads once per check
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo, "lane-a")
+    _seed_lane(repo, "lane-b", session_id="session_01FixtureLaneB000000000", title="issue-656-fixturelane00000b")
+    reads = first_pr(time.time() + 3600)
+    checks = []
+    real_check = L._original_session_refusal
+
+    def counting_check(*args, **kwargs):
+        checks.append(len(reads))
+        return real_check(*args, **kwargs)
+
+    monkeypatch.setattr(L, "_original_session_refusal", counting_check)
+    result, calls = _adopt(repo, tmp_path)
+    _proceeds(result, calls)
+    assert checks, "the launch ran no original-session check"
+    # each check began with `checks[i]` reads behind it; every check added exactly one
+    assert checks == list(range(len(checks)))
+    assert len(reads) == len(checks)
+
+
+def test_a_lane_bound_to_the_branch_whose_branch_is_gone_from_the_remote_refuses_unread(tmp_path, first_pr):
+    # axis: a lane bound to the adopted branch by its premise needs a session read like any other lane even when origin no longer has the branch, since deleting a branch does not stop its builder — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+@pytest.mark.parametrize("listing_name", [
+    "list_page_complete_archived.json", "list_page_complete_failed.json",
+])
+def test_a_lane_bound_to_the_branch_whose_branch_is_gone_proceeds_on_a_listing_showing_it_ended(
+    tmp_path, first_pr, listing_name,
+):
+    # axis: a bound lane whose branch is gone is cleared by session evidence, a listing showing its session archived or failed
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    result, calls = _adopt(repo, tmp_path, _fixture(listing_name), branch=ADOPTED)
+    _proceeds(result, calls)
+
+
+def test_a_gone_branch_lane_whose_session_the_listing_shows_live_refuses_live(tmp_path, first_pr):
+    # axis: a bound lane whose branch is gone is refused when a supplied listing shows its session live, since the deleted ref does not stop its builder — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_running.json"), branch=ADOPTED)
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert calls == []
+
+
+def test_a_gone_branch_lane_with_a_fix_order_relay_to_its_session_refuses_unread(tmp_path, first_pr, monkeypatch):
+    # axis: a gone-branch lane that a fix order was sent to needs session evidence like any other lane — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    _relay_records(monkeypatch, [{"session": SESSION_TITLE, "at": _utc_stamp(60)}])
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_gone_branch_lane_whose_relay_read_fails_refuses_unread(tmp_path, first_pr, monkeypatch):
+    # axis: a gone-branch lane whose fix-order relay read is not ok needs session evidence like any other lane — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    _delete_remote_branch(repo)
+    first_pr(None)
+    monkeypatch.setattr(
+        cloud_relay, "fix_orders",
+        lambda repo_root, *, env=None, include_unchecked=False: {"ok": False, "reason": "relay-state-unreadable"},
+    )
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+
+
+def test_a_lane_bound_to_the_branch_by_its_adopts_number_is_kept_whatever_the_first_pr_time(tmp_path, first_pr):
+    # axis: a lane whose premise adopts the same pull request number is bound to the branch too, so the handback timing that drops an unbound lane does not drop it (asked directly: a launch premise carrying `adopts` needs a stack)
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adopts": 77})
+    first_pr(time.time() + 3600)
+    stamped = {"adoptsBranch": ADOPTED, "adopts": 77}
+    reason, detail = L._original_session_refusal(repo, 656, stamped, None, dict(os.environ))
+    assert (reason, detail["failedRead"]) == (TOKEN_UNREAD, "listing-not-given")
+    assert detail["launchIds"] == [LANE_ID]
+    stamped = {"adoptsBranch": ADOPTED, "adopts": 78}
+    assert L._original_session_refusal(repo, 656, stamped, None, dict(os.environ)) is None
+
+
+def test_a_lane_bound_to_the_branch_whose_branch_is_on_the_remote_refuses_live(tmp_path, first_pr):
+    # axis: a bound lane is refused when the listing shows its session live, whether or not the branch is still on the remote — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path, _fixture("get_session_running.json"), branch=ADOPTED)
+    _assert_refused_cloud_lane(repo, result, TOKEN_LIVE, "original-session")
+    assert result["originalSessions"][0]["launchId"] == LANE_ID
+    assert calls == []
+
+
+def test_a_bound_lane_with_its_branch_on_the_remote_and_no_listing_refuses_unread(tmp_path, first_pr):
+    # axis: a bound lane whose branch is still on the remote stays, and with no listing refuses unread — see bite-proof record i2272_launcher
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": ADOPTED})
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+def test_a_live_fresh_lane_refuses_beside_a_bound_lane_whose_branch_is_gone(tmp_path, first_pr):
+    # axis: a bound lane never hides a different lane the listing shows live (asked directly: a running lane stops the refusal from being reserved)
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(
+        repo, "lane-bound", session_id="session_01FixtureLaneB000000000",
+        title="issue-656-fixturelane00000b", premise_extra={"adoptsBranch": ADOPTED},
+    )
+    _seed_lane(repo, LANE_ID, outcome=None)
+    _delete_remote_branch(repo)
+    first_pr(time.time() + 3600)
+    reason, detail = L._original_session_refusal(
+        repo, 656, {"adoptsBranch": ADOPTED}, _fixture("get_session_running.json"), dict(os.environ),
+    )
+    assert reason == TOKEN_LIVE
+    assert [s["launchId"] for s in detail["originalSessions"]] == [LANE_ID]
+
+
+def test_a_lane_recorded_on_another_branch_is_not_excused_by_that_alone(tmp_path, first_pr):
+    # axis: a premise naming another branch never excuses a lane; only the timing evidence does
+    repo = _adopted_repo(tmp_path)
+    _seed_lane(repo, premise_extra={"adoptsBranch": "someone/else"})
+    _delete_remote_branch(repo)
+    first_pr(time.time() - 3600)
+    result, calls = _adopt(repo, tmp_path, branch=ADOPTED)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]
+
+
+# --- every refusal's remedy is a step the advisor runs itself -----------------------------
+
+REMEDIES = (
+    L._ADOPT_ORIGINAL_REMEDY_LIVE, L._ADOPT_ORIGINAL_REMEDY_UNREAD, L._ADOPT_ORIGINAL_REMEDY_STATE,
+)
+
+
+def test_no_remedy_asks_the_owner():
+    # axis: none of the three remedies names the owner as the one who acts
+    assert all("owner" not in remedy.lower() for remedy in REMEDIES)
+    assert len(set(REMEDIES)) == 3
+
+
+@pytest.mark.parametrize("path", [
+    "live", "ledger", "recover-state", "listing-not-given", "listing-file", "listing-json",
+    "listing-shape", "listing-incomplete",
+])
+def test_every_refusal_path_carries_a_remedy_that_never_names_the_owner(tmp_path, monkeypatch, path):
+    # axis: every refusal the check can return carries one of the three remedies, none of which asks the owner
+    repo = _cloud_repo(tmp_path)
+    listing = None
+    if path == "ledger":
+        monkeypatch.setattr(L.ll, "read", lambda *args, **kwargs: {"state": "corrupt", "records": []})
+    else:
+        _seed_lane(repo)
+    if path == "recover-state":
+        state = CR._state_path(repo, os.environ)
+        os.makedirs(os.path.dirname(state), exist_ok=True)
+        with open(state, "w", encoding="utf-8") as fh:
+            fh.write("not json at all")
+    listing = {
+        "live": _fixture("get_session_running.json"),
+        "listing-file": str(tmp_path / "no-such-listing.json"),
+        "listing-json": _write_listing(tmp_path, '{"data": [', "json.json"),
+        "listing-shape": _write_listing(tmp_path, [], "shape.json"),
+        "listing-incomplete": _fixture("list_page_more.json"),
+    }.get(path)
+    if path == "recover-state":
+        listing = _fixture("list_page_complete_without.json")
+    reason, detail = L._original_session_refusal(
+        repo, 656, {"adoptsBranch": _branch(repo)}, listing, dict(os.environ),
+    )
+    assert reason == (TOKEN_LIVE if path == "live" else TOKEN_UNREAD)
+    if path != "live":
+        assert detail["failedRead"] == path
+    assert detail["remedy"] in REMEDIES
+    assert "owner" not in detail["remedy"].lower()
+    assert detail["remedy"] == (
+        L._ADOPT_ORIGINAL_REMEDY_LIVE if path == "live"
+        else L._ADOPT_ORIGINAL_REMEDY_STATE if path in ("ledger", "recover-state")
+        else L._ADOPT_ORIGINAL_REMEDY_UNREAD
+    )
+    if path.startswith("listing-"):
+        assert detail["launchIds"] == [LANE_ID]
+
+
+# --- the two reads that decide a drop -----------------------------------------------------
+
+
+def _github_origin(tmp_path):
+    repo = _cloud_repo(tmp_path)
+    _git(repo, "remote", "set-url", "origin", "https://github.com/o/r.git")
+    return repo
+
+
+def _pull(created_at="2026-10-20T10:00:00Z", ref="feature/x", full_name="o/r"):
+    return {"head": {"ref": ref, "repo": {"full_name": full_name}}, "created_at": created_at}
+
+
+def _gh_answer(monkeypatch, rows=None, returncode=0, stdout=None):
+    text = json.dumps(rows) if stdout is None else stdout
+    monkeypatch.setattr(
+        L, "_gh_branch_pulls",
+        lambda owner, repo, branch, env, timeout: subprocess.CompletedProcess([], returncode, text, ""),
+    )
+
+
+def _first_pr(repo):
+    return L._adopted_branch_first_pr(repo, "feature/x", dict(os.environ))
+
+
+def test_gh_branch_pulls_asks_for_pull_requests_in_every_state(monkeypatch):
+    # axis: the pulls query asks for every state, since a merged or closed pull request on the branch is still its first
+    argvs = []
+
+    def record(args, **kwargs):
+        argvs.append(args)
+        return subprocess.CompletedProcess(args, 0, "[]", "")
+
+    monkeypatch.setattr(L.subprocess, "run", record)
+    L._gh_branch_pulls("o", "r", "feat/x", dict(os.environ), 5)
+    assert argvs == [["gh", "api", "repos/o/r/pulls?state=all&head=o:feat%2Fx&per_page=100"]]
+
+
+def test_the_first_pr_is_the_earliest_created_of_the_branchs_pull_requests(tmp_path, monkeypatch):
+    # axis: the branch's first pull request is the minimum created_at over every pull request headed at it, merged ones included
+    repo = _github_origin(tmp_path)
+    _gh_answer(monkeypatch, [_pull("2026-10-22T10:00:00Z"), _pull("2026-10-20T10:00:00Z", full_name="O/R")])
+    assert _first_pr(repo) == calendar.timegm((2026, 10, 20, 10, 0, 0))
+
+
+@pytest.mark.parametrize("answer", [
+    {"rows": [_pull() for _ in range(100)]},
+    {"rows": [_pull(), _pull(full_name="fork/r")]},
+    {"rows": [_pull(), _pull(ref="feature/y")]},
+    {"rows": [_pull(), _pull(created_at="not-a-time")]},
+    {"rows": [_pull(), _pull(created_at="2026-10-20T10:00:00")]},
+    {"rows": [_pull(), "not a pull"]},
+    {"rows": [_pull(), {"head": None, "created_at": "2026-10-01T00:00:00Z"}]},
+    {"rows": [_pull(), {"head": "x", "created_at": "2026-10-01T00:00:00Z"}]},
+    {"rows": [_pull()], "returncode": 1},
+    {"rows": []},
+    {"rows": {"message": "Not Found"}},
+    {"stdout": "not json"},
+], ids=[
+    "full-page", "fork-head", "other-branch", "bad-created-at", "no-zone-created-at",
+    "row-not-an-object", "head-null", "head-not-an-object", "gh-failed", "no-pull-requests",
+    "not-a-list", "not-json",
+])
+def test_a_first_pr_read_that_cannot_be_trusted_is_none(tmp_path, monkeypatch, answer):
+    # axis: any page that could be incomplete or hold another repository's or branch's pull request, or a failed call, reads as unknown
+    repo = _github_origin(tmp_path)
+    _gh_answer(monkeypatch, **answer)
+    assert _first_pr(repo) is None
+
+
+def test_a_first_pr_read_with_gh_unable_to_run_or_no_github_origin_is_none(tmp_path, monkeypatch):
+    # axis: gh that could not run, and an origin that is not on github.com, read as unknown
+    repo = _github_origin(tmp_path)
+    monkeypatch.setattr(L, "_gh_branch_pulls", lambda owner, repo, branch, env, timeout: None)
+    assert _first_pr(repo) is None
+    _gh_answer(monkeypatch, [_pull()])
+    _git(repo, "remote", "set-url", "origin", str(tmp_path / "remote.git"))
+    assert _first_pr(repo) is None
+    _git(repo, "remote", "remove", "origin")
+    assert _first_pr(repo) is None
+
+
+@pytest.mark.parametrize("entry", [None, {"fixOrder": None}])
+def test_a_relay_state_with_a_malformed_pending_entry_keeps_the_lane(tmp_path, first_pr, entry):
+    # axis: a pending relay entry that is not a dict may be a damaged fix order, so the real relay read refuses and the lane stays — see bite-proof record i2254_original_session
+    repo = _cloud_repo(tmp_path)
+    _seed_lane(repo)
+    state, _ = cloud_relay._state_path(repo, cloud_relay._env(None))
+    os.makedirs(os.path.dirname(state), exist_ok=True)
+    with open(state, "w", encoding="utf-8") as fh:
+        json.dump({"relays": {}, "pending": {"m": entry}}, fh)
+    first_pr(time.time() + 3600)
+    result, calls = _adopt(repo, tmp_path)
+    _refused_unread(repo, result, calls, "listing-not-given")
+    assert result["launchIds"] == [LANE_ID]

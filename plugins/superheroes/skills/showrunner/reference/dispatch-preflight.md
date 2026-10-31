@@ -80,6 +80,7 @@ For every launch, the launcher decides where each build runs.
 - The project's cloud builds setting sets the default.
 - The owner's [launch word](../../../rubric/glossary.md#launch-word) for one build overrides that default. "This one local" keeps the build on the owner's machine, and a word naming the cloud sends it to the cloud. The word reaches the launcher as `--place local` or `--place cloud`.
 - A failed setup check pauses cloud launches for that Claude account only: its failed-check marker is the paused state. The cloud builds setting stays on, other accounts are unaffected, and launches go back to the cloud by themselves once a check passes.
+- A detective lane's place is called the same way, by the same setting, word and fallbacks.
 - A build pointed at the cloud runs on the owner's machine when it needs something only that machine has, or when the cloud is not ready. A build is never held and never dropped. The one exception is a cloud launch whose checkout is off its base: it stops with a `launch-cloud-checkout-*` refusal for the owner rather than moving to the owner's machine (see `orchestration.md`).
 
 ### The needs you check for

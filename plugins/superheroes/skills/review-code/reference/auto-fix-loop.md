@@ -398,11 +398,15 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > # A session begun before the leave-out sidecar existed (a pending panel resumed after an upgrade) has no
 > # reviewer-leave-out.json; pass the flag only when the file is there, since a missing file refuses the launch.
 > LEAVE_OUT_ARGS=(); [ -f "$SESSION_DIR/reviewer-leave-out.json" ] && LEAVE_OUT_ARGS=(--leave-out-file "$SESSION_DIR/reviewer-leave-out.json")
+> # The scoped finder reviews only the fix delta its order names (FIX_DIFF_PATH). `--diff-base "$BASE_REF"`
+> # would stage the full PR patch and tell the seat to read it first, contradicting that scope — so that
+> # seat launches without `--diff-base` (nothing staged); every other seat keeps the full-PR patch.
+> DIFF_BASE_ARGS=(--diff-base "$BASE_REF"); [ "$SEAT_KEY" = "scoped-finder" ] && DIFF_BASE_ARGS=()
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
->   --diff-base "$BASE_REF" \
+>   ${DIFF_BASE_ARGS[@]+"${DIFF_BASE_ARGS[@]}"} \
 >   ${LEAVE_OUT_ARGS[@]+"${LEAVE_OUT_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
@@ -411,7 +415,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
->   --diff-base "$BASE_REF" \
+>   ${DIFF_BASE_ARGS[@]+"${DIFF_BASE_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
@@ -623,6 +627,7 @@ Fold it on the path the session already uses, as for every other phase: a hand `
 | `fix-binding-malformed:<index>` | The `fixes` entry at that position (from 0) has a `finding` or a `commit` key without both being non-empty strings. Give both as non-empty strings, or drop the key to make it a note. |
 | `fix-finding-unknown:<value>` | A `fixes` binding names a finding outside the batch. Remove or correct it. |
 | `unfixed-finding-unknown:<value>` | An `unfixed` entry names a finding outside the batch. Remove or correct it. |
+| `finding-id-ambiguous:<value>` | A `fixes` or `unfixed` entry names a staged id that two findings of the batch share (staged ids restart in each verifier wave). Give the full finding key instead. |
 
 A step with no commit at all is not a refusal, and a PR-body-only fix makes none.
 
