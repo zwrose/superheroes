@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import review_diff_bytes  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 
@@ -37,6 +38,9 @@ REASON_DIFF_BASE_MISMATCH = "round-diff-base-mismatch"
 REASON_DIFF_BASE_UNVERIFIABLE = "round-diff-base-unverifiable"
 REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
+REASON_STACK_LOWER_UNREADABLE = "stack-lower-unreadable"
+REASON_STACK_LOWER_MOVED = "stack-lower-moved"
+REASON_STACK_LOWER_AHEAD = "stack-lower-ahead"
 
 # Closed session modes — authoritative set for check_base.
 SESSION_MODES = session_mode.MODES
@@ -361,6 +365,102 @@ def _run_git_bytes(cwd, *args):
     return r.stdout if r.returncode == 0 else None
 
 
+def _ls_remote_head(repo_root, branch):
+    """The sha ``origin`` reports for ``refs/heads/<branch>``, or None. Never raises."""
+    raw = _run_git_bytes(repo_root, "ls-remote", "origin", "refs/heads/%s" % branch)
+    if raw is None:
+        return None
+    lines = [ln for ln in raw.decode("utf-8", errors="replace").splitlines() if ln.strip()]
+    if len(lines) != 1:
+        return None
+    sha, sep, ref = lines[0].partition("\t")
+    if not sep or ref != "refs/heads/%s" % branch or not _pin_shape_ok(sha):
+        return None
+    return sha.lower()
+
+
+def _branch_name_ok(repo_root, branch):
+    if not isinstance(branch, str) or not branch.strip() or branch.startswith("-"):
+        return False
+    return _run_git_bytes(repo_root, "check-ref-format", "--branch", branch) is not None
+
+
+def check_stack_lower(session_dir, repo_root, run=None, ls_remote=None):
+    """Stacked-layer guard: the lower branch's remote head must equal the session's pin, and the
+    pin must be in HEAD's history. Fail-closed; a session that is not stacked is not checked.
+
+    ``ls_remote`` is a test seam: a callable ``(repo_root, branch) -> sha or None``.
+    """
+    if run is None:
+        run = store_core.run_git
+    if ls_remote is None:
+        ls_remote = _ls_remote_head
+
+    ok_meta, meta_or_detail = read_meta(session_dir)
+    if not ok_meta:
+        return {
+            "ok": False,
+            "reason": REASON_STACK_LOWER_UNREADABLE,
+            "detail": "session meta.json could not be read (%s); fix it and run the same command "
+                      "again" % meta_or_detail,
+        }
+    meta = meta_or_detail
+    stack_lower = meta.get("stackLower", False)
+    if stack_lower is False:
+        return {"ok": True, "stacked": False}
+    if stack_lower is not True:
+        return {
+            "ok": False,
+            "reason": REASON_STACK_LOWER_UNREADABLE,
+            "detail": "meta.stackLower must be true or false, got %r" % (stack_lower,),
+        }
+
+    branch = meta.get("baseBranch")
+    if not _branch_name_ok(repo_root, branch):
+        return {
+            "ok": False,
+            "reason": REASON_STACK_LOWER_UNREADABLE,
+            "detail": "meta.baseBranch is not a valid branch name: %r" % (branch,),
+        }
+    pin, pin_reason = _resolve_commit_reason(meta.get("baseRef"), repo_root, run)
+    if pin is None:
+        return {
+            "ok": False,
+            "reason": REASON_STACK_LOWER_UNREADABLE,
+            "detail": "meta.baseRef is not a pinned commit in this repository (%s): %r"
+                      % (pin_reason, meta.get("baseRef")),
+        }
+
+    remote_head = ls_remote(repo_root, branch)
+    if not isinstance(remote_head, str) or not _pin_shape_ok(remote_head):
+        return {
+            "ok": False,
+            "reason": REASON_STACK_LOWER_UNREADABLE,
+            "detail": "the head of the lower branch %r on origin could not be read; make "
+                      "origin reachable and run the same command again. Nothing else "
+                      "changes." % branch,
+        }
+    remote_head = remote_head.lower()
+    if remote_head != pin:
+        return {
+            "ok": False,
+            "reason": REASON_STACK_LOWER_MOVED,
+            "detail": "the lower branch %r is at %s on origin but the session is pinned to %s. "
+                      "Bring the layer current with the lower layer by a --no-ff merge, and "
+                      "start a new session; if this session had already started (its state "
+                      "file exists), first write its review record as abandoned."
+                      % (branch, remote_head, pin),
+        }
+    if _run_git_bytes(repo_root, "merge-base", "--is-ancestor", pin, "HEAD") is None:
+        return {
+            "ok": False,
+            "reason": REASON_STACK_LOWER_AHEAD,
+            "detail": "the layer does not hold the lower layer's current head %s; bring the "
+                      "layer current with the lower layer before review." % pin,
+        }
+    return {"ok": True, "stacked": True, "baseBranch": branch, "baseRef": pin}
+
+
 def _numstat_z_output(pin, repo_root, run):
     """``git diff --numstat -z`` as a string safe for ``_parse_numstat``.
 
@@ -370,11 +470,13 @@ def _numstat_z_output(pin, repo_root, run):
     on non-UTF-8 paths. If an explicit ``run`` returns ``bytes``, they are decoded the same way.
     """
     if run is None:
-        raw = _run_git_bytes(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+        raw = _run_git_bytes(
+            repo_root, "diff", *review_diff_bytes.REVIEW_NUMSTAT_ARGS, "--numstat", "-z", "%s...HEAD" % pin
+        )
         if raw is None:
             return None
         return raw.decode("utf-8", errors="surrogateescape")
-    out = run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+    out = run(repo_root, "diff", *review_diff_bytes.REVIEW_NUMSTAT_ARGS, "--numstat", "-z", "%s...HEAD" % pin)
     if isinstance(out, bytes):
         return out.decode("utf-8", errors="surrogateescape")
     return out

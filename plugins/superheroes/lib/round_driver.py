@@ -9695,6 +9695,19 @@ def _refuse_base_guard(session_dir, reason, detail=None, value=None):
     return 1
 
 
+def _refuse_stack_lower(session_dir):
+    """None to carry on, or the exit code of a stacked-layer refusal. `submit` and `advance` take no
+    `--repo-root`, so the checkout is the one the session's meta.json recorded."""
+    ok_meta, meta = review_base_guard.read_meta(session_dir)
+    repo_root = meta.get("repoRoot") if ok_meta else None
+    if not isinstance(repo_root, str) or not repo_root.strip():
+        repo_root = os.getcwd()
+    stack = review_base_guard.check_stack_lower(session_dir, repo_root)
+    if stack["ok"]:
+        return None
+    return _refuse_base_guard(session_dir, stack["reason"], stack.get("detail"))
+
+
 def _disposition_ledger_owner_refusal(session_dir, state, pending, cmd):
     """Refuse hand-out when the disposition-ledger owner is unrecognized (non-terminal only)."""
     action = pending.get("action") if isinstance(pending, dict) else None
@@ -15837,6 +15850,9 @@ def _dispatch(args):
             guard = review_base_guard.check_base(args.session_dir, repo_root, prior_pin=prior_pin)
             if not guard["ok"]:
                 return _refuse_base_guard(args.session_dir, guard["reason"], guard.get("detail"))
+            stack = review_base_guard.check_stack_lower(args.session_dir, repo_root)
+            if not stack["ok"]:
+                return _refuse_base_guard(args.session_dir, stack["reason"], stack.get("detail"))
             if fresh:
                 res = review_base_guard.check_round_diff(args.diff_path)
                 if not res["ok"]:
@@ -15916,6 +15932,9 @@ def _dispatch(args):
                                  evidence_path=args.evidence, occurrence=args.occurrence,
                                  expect_round=args.round, expect_phase=args.phase)
     elif args.cmd == "advance":
+        refused = _refuse_stack_lower(args.session_dir)
+        if refused is not None:
+            return refused
         out = cmd_advance(args.session_dir, break_lock=args.break_lock)
     elif args.cmd == "run-verify":
         out = cmd_run_verify(args.session_dir, timeout=args.timeout)
@@ -15936,6 +15955,9 @@ def _dispatch(args):
         sys.stdout.write(json.dumps(out) + "\n")
         return 1 if not out.get("ok") else 0
     else:
+        refused = _refuse_stack_lower(args.session_dir)
+        if refused is not None:
+            return refused
         try:
             with open(args.artifact, encoding="utf-8") as fh:
                 artifact = json.load(fh)
