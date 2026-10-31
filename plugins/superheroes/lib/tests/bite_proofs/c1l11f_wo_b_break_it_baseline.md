@@ -586,3 +586,126 @@ FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py::test
 ```
 
 Not separately neutralized (unproven): the `copy = committed, path` fallback when no copy of the latest run's test exists (pinned by `test_b1_a_real_content_change_of_the_reviewers_test_is_changed_unexplained`, and by `test_b1_a_relocated_replacement_with_no_reason_is_not_credited_as_the_reviewers_original` for the no-reason edge, passing); the `run_copy and current == reviewer` leg that keeps a relocated unchanged test `same`.
+
+---
+
+# C1-L12 addendum (build #2216, entries for C1-L11f's review-loop axis lines)
+
+**Provenance:** implementer WO-4, order id `c1l12-wo4`, worktree `/home/user/wo4`, branch `c1l12-wo4`, head at dispatch `86e05768`. Each entry is **re-derived at `86e05768`** by this order: the fixers' own red/green lived in their review sessions' folders on a container that has been reclaimed, and PR #2283's review records and round comments carry no break-it red/green for these lines, so none is quoted. A1 was added by fixer commit `1dffc4fe`, A10 by `377b1f7d`. Each guarded element was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`); after each restore `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`. Every run is `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/shpyc-wo4 -m pytest "<node id>" -q -p no:cacheprovider`. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. Nothing is redacted: no secrets, tokens or URLs appear (the `/tmp/claude-0/...` paths are pytest temp directories). Every capture is under 32 KiB. A9 (`93a8adb8`) has no line at the head: WO-G's rewrite of `_break_it_target_facts` (`49c0958b`) removed it, so this record gains nothing for it.
+
+| ID | Guarded element | Axis (verbatim) | Proving node |
+|---|---|---|---|
+| A1 | `_locate_in_final_diff`, the condition `and not _retention_guards_hold(` (`round_driver.py:7595`) | a renamed or relocated test is credited only where break_it.check_kept would accept it (the same collection, option-token and direct-runner guards, and a mappable command), so the audit never reads `same` for a test the convergence check parks as binding-conflict — see bite-proof record c1l11f_wo_b_break_it_baseline | `test_b1_a_renamed_test_the_kept_check_would_park_is_not_credited_as_the_reviewers_original` (added by this order) |
+| A10 | `_fix_delta_surface` removal-anchor walk, `if header_gone:` after the hunk loop (`round_driver.py:7410`) | removals waiting on a header nothing replaced anchor in the surviving hunk the PR hunks merged into — see bite-proof record c1l11f_wo_b_break_it_baseline | `test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk` |
+
+## A1
+
+**Test added by this order:** `test_b1_a_renamed_test_the_kept_check_would_park_is_not_credited_as_the_reviewers_original` in `test_c1l11f_wo_b_break_it_baseline.py`: the reviewer's test is renamed in place (`test_charge` becomes `test_charge_twice`) in a repository whose `pytest.ini` sets `python_functions = check_*`, so `break_it.check_kept` would park it as binding-conflict; the audit must read `changed-unexplained`. The second assertion is the control: the same rename with no `pytest.ini` reads `same`.
+
+**Neutralization:** `    if (found["titles"] or found["path"] != path) and not _retention_guards_hold(` became `    if (found["titles"] or found["path"] != path) and False and not _retention_guards_hold(` (the retention guards can never refuse).
+
+**Raw red** (re-run in this dispatch; the first dispatch's red output is not available to this record, so this is the only red quoted):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_b1_a_renamed_test_the_kept_check_would_park_is_not_credited_as_the_reviewers_original _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-20/test_b1_a_renamed_test_the_kep0')
+
+    def test_b1_a_renamed_test_the_kept_check_would_park_is_not_credited_as_the_reviewers_original(tmp_path):
+        # bites on: the retention guards of `_locate_in_final_diff` (A1): the reviewer's test is renamed in place and the
+        # repository declares a pytest collection override, so `break_it.check_kept` parks it as binding-conflict; the
+        # audit never reads `same` for it (the control, with no override, reads `same`)
+        renamed = ROLE_TEST.replace("test_charge", "test_charge_twice")
+        override = {"pytest.ini": "[pytest]\npython_functions = check_*\n", TEST_PATH: renamed}
+>       assert _facts(tmp_path / "a", override, C10._finding())["match"] == "changed-unexplained"
+E       AssertionError: assert 'same' == 'changed-unexplained'
+E         
+E         - changed-unexplained
+E         + same
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py:208: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py::test_b1_a_renamed_test_the_kept_check_would_park_is_not_credited_as_the_reviewers_original
+1 failed in 6.00s
+```
+
+The red is on the claimed axis: the failing assertion is the one that expects the kept check's refusal (`pytest.ini` override, renamed test) to keep the audit from reading `same`.
+
+**Restore** (the inverse Edit): `and False and not _retention_guards_hold(` back to `and not _retention_guards_hold(`. **Restore receipt:** the line is back as `    if (found["titles"] or found["path"] != path) and not _retention_guards_hold(`, and `git status --porcelain` listed only the test files this order edits.
+
+**Raw green** (the same node; both assertions run, so the control half, `same` with no override, passes here and not under the neutralization, where the run stops at the first assertion):
+
+```
+.                                                                        [100%]
+1 passed in 3.46s
+```
+
+Not separately neutralized (unproven): the `found["titles"] or found["path"] != path` disjunct (a test found at its own path with its own title skips the guards) and the `_nonempty_str(command)` fail-closed branch of `_retention_guards_hold`.
+
+## A10
+
+**Neutralization:** `        if header_gone:` (the one before `head_lines.extend(_merged_removal_anchors(head_anchors, waiting_at))`) became `        if header_gone and False:`.
+
+**Raw red** (`test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk _
+
+    def test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk():
+        # bites on: the merged-hunk anchor (B-G7): the fix bridges the gap between two PR hunks, so the second header
+        # vanishes with no header to replace it, and removes the guard from the surviving hunk; the removal anchors
+        # on the surviving line after it (head line 25, `c23`) or the surface carries the removal marker
+        gap = "".join(" g%d\n" % n for n in range(13, 19))
+        reviewed = _diff(
+            _EARLIER_HUNK,
+            "@@ -20,10 +21,11 @@\n c20\n c21\n c22\n+guard\n c23\n c24\n c25\n-old26\n+new26\n c27\n c28\n c29\n")
+        head = _diff(
+            "@@ -10,20 +10,23 @@\n a10\n a11\n+extra\n a12\n" + gap + "+bridge1\n g19\n"
+            " c20\n c21\n c22\n c23\n+bridge2\n c24\n c25\n-old26\n+new26\n c27\n c28\n c29\n")
+        entries = _surface(reviewed, head)
+        covered = [e for e in entries if not e.get("removedOnly") and e["start"] <= 25 <= e["end"]]
+>       assert covered or any(e.get("removedOnly") for e in entries), entries
+E       AssertionError: [{'start': 14, 'end': 21, 'text': '@@ -2,17 +2,24 @@
+E          index 1..2 100644
+E          --- a/f.py
+E          +++ b/f.py
+E         -@@ -10,3 +10,4 @@...n+ g15
+E         + g16
+E         + g17
+E         + g18
+E         ++bridge1
+E         + g19
+E           c20
+E           c21
+E           c22
+E         -+guard
+E           c23
+E         ++bridge2
+E           c24
+E           c25
+E          -old26'}]
+E       assert ([] or False)
+E        +  where False = any(<generator object test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk.<locals>.<genexpr> at 0x7f4884240d40>)
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py:395: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_b_break_it_baseline.py::test_b2_a_guard_removed_where_the_fix_merges_two_pr_hunks_anchors_in_the_merged_hunk
+1 failed in 1.80s
+```
+
+The red is on the claimed axis: the removed `+guard` line waits on a header nothing replaced, and with the end-of-section anchor gone no entry covers head line 25 and no `removedOnly` entry appears.
+
+**Restore** (the inverse Edit): `        if header_gone and False:` back to `        if header_gone:`. **Restore receipt:** the line is back as `        if header_gone:` above `            head_lines.extend(_merged_removal_anchors(head_anchors, waiting_at))`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 1.81s
+```
+
+Not separately neutralized (unproven): the in-loop `elif header_gone: survived = True` branch and the `waiting` accumulation that feeds `waiting_at`.

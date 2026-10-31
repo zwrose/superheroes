@@ -205,6 +205,25 @@ def test_unreadable_rounds_read_shared_never_alone(rounds):
     assert all(ALONE not in b for b in _synthetic_bullets(state).values())
 
 
+def test_an_unreadable_round_between_a_shared_fix_and_a_later_solo_binding_rejects_the_history_never_skips_it():
+    # a rejected history reads shared; a skipped round would let `a`'s round 3 binding read repaired alone after the
+    # shared round 1
+    state = _synthetic({}, ["a", "b"])
+    state["rounds"] = {
+        "1": {"fix": {"commits": [{"finding": "a", "commit": "c1"}, {"finding": "b", "commit": "c1"}]}},
+        "2": {"fix": {"commits": "not a list"}},
+        "3": {"fix": {"commits": [{"finding": "a", "commit": "c3"}]}},
+    }
+    bullets = _synthetic_bullets(state)
+    assert all(ALONE not in b for b in bullets.values()), bullets
+    assert all(SHARED in b for b in bullets.values()), bullets
+    # the same history with round 2 absent is readable in full: `a` then reads repaired alone, so the case above
+    # tells a rejected history from a skipped round
+    del state["rounds"]["2"]
+    readable = _synthetic_bullets(state)
+    assert ALONE in readable["a"] and SHARED in readable["b"] and ALONE not in readable["b"], readable
+
+
 def test_the_record_takes_repaired_alone_only_as_true_and_the_bullet_reads_it(tmp_path):
     group = {"id": "fg-1", "members": ["a", "b"], "commit": "abc1234"}
     assert REC._fix_group_fault(dict(group, repairedAlone=True)) is None

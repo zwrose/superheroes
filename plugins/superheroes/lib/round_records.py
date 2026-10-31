@@ -289,27 +289,6 @@ def _identity_key_from_mapping(ident, default_phase=None):
     return _identity_key(phase, seat, occurrence, attempt)
 
 
-def head_diff_store_path(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
-    """The driver-owned headdiff blob path for one roster slot."""
-    skey = storage_key(seat_key, occurrence)
-    spath = store_path(session_dir, rnd, phase, skey, attempt)
-    return os.path.join(os.path.dirname(spath), "%s.a%d.headdiff" % (skey, attempt))
-
-
-def head_diff_store_path_valid(store_path_value, session_dir, rnd, phase, seat_key, attempt,
-                               occurrence=0):
-    """True when `store_path_value` is exactly this session's store copy for the slot."""
-    if not isinstance(store_path_value, str) or not store_path_value:
-        return False
-    if not isinstance(session_dir, str) or not session_dir:
-        return False
-    try:
-        expected = head_diff_store_path(session_dir, rnd, phase, seat_key, attempt, occurrence)
-    except ValueError:
-        return False
-    return os.path.normpath(store_path_value) == os.path.normpath(expected)
-
-
 def _now_iso():
     return datetime.datetime.now().replace(microsecond=0).isoformat()
 

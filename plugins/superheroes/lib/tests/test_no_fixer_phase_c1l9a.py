@@ -30,7 +30,6 @@ _ALLOWED = {
     "TRANSITION.md": None,
     os.path.join("skills", "review-code", "reference", "round-driver.md"): 2,
     os.path.join("lib", "round_driver.py"): 1,
-    os.path.join("lib", "pr_body_stage.py"): 1,
 }
 
 

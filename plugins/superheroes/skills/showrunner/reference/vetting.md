@@ -361,10 +361,10 @@ visibly-working code are invisible at routing and obvious at vet.
 - the tests look thin for the size;
 - it moved a line the issue implied it would sit inside.
 
-**Proportionality:** where the doubt is narrow, a **focused read-only panel** is proportionate
-against a full panel's 15–23 — for example, `/superheroes:review-code --review-only --focus
-<notes>` passes the doubt to every specialist without the fix loop. Or dispatch a **single-seat
-reviewer** with the doubt stated. **The vet is the backstop for lane calls in both directions.**
+**Proportionality:** where the doubt is narrow, dispatch **one independent reviewer given the
+doubt** rather than a full panel: a reviewer from outside every maker's family, with the doubt stated
+in its dispatch, whose reading the review record shows. **The vet is the backstop for lane calls in
+both directions.**
 
 ## Timing follows the show-it level
 

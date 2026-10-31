@@ -684,6 +684,7 @@ def build_degraded_prose(state, form, journal=None):
                     "judgment-fail-closed (round %s): %d judgment blocker(s) had no valid owner "
                     "disposition — owner ruling not recorded; loop defaulted to fix-as-suggested"
                     % (rkey, len(fail_closed)))
+        # Nothing writes this channel now; it reads only an older session's stored disclosure.
         ggc = declared.get("gateGuidanceRowCarried")
         if ggc:
             degraded_out.append(
