@@ -1,5 +1,7 @@
 # #1771 WO-B bite-proof: the setup sitting's skill text
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for section 6 of `plugins/superheroes/skills/configure/reference/set-up.md`, detectors in `plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py` (`T`).
 
 **Status.** The implementer ran every proof (D1 to D3): each neutralization is a targeted Edit to `set-up.md`, the red is the single named test function run alone, the restore is the inverse Edit, and the green is the same function. Reds and greens below are the pytest output of each run. The worktree path is as printed. No fixture holds a real secret, so nothing is redacted.
@@ -39,7 +41,7 @@ _______________ test_section_never_asks_for_a_typed_or_pasted_id _______________
                                      "'never': %r" % sentence.strip())
 E               AssertionError: sentence asks for a typed, copied or pasted id without 'never': "If the pick cannot be read, ask the owner to paste the environment's id"
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:63: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:63: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_section_never_asks_for_a_typed_or_pasted_id
 1 failed in 0.15s
@@ -78,7 +80,7 @@ _________________ test_every_check_command_names_the_picked_id _________________
 E                   AssertionError: command line does not name '--environment <id>': '   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --cwd . [--issue <n>]'
 E                   assert '--environment <id>' in '   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --cwd . [--issue <n>]'
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:76: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:76: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_every_check_command_names_the_picked_id
 1 failed in 0.20s
@@ -115,7 +117,7 @@ _________ test_the_pick_is_read_before_and_after_and_before_the_check __________
 E           AssertionError: section 6 has no line containing 'cloud_environment.py" pick --cwd . --before'
 E           assert None is not None
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:90: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:90: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_pick_is_read_before_and_after_and_before_the_check
 1 failed in 0.18s
@@ -168,7 +170,7 @@ _______________ test_section_never_asks_for_a_typed_or_pasted_id _______________
                                          "'never': %r" % clause.strip())
 E                   AssertionError: clause asks for a typed, copied or pasted id without 'never': "ask the owner to paste the environment's id"
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:65: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:65: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_section_never_asks_for_a_typed_or_pasted_id
 1 failed in 1.04s
@@ -211,7 +213,7 @@ _________ test_the_pick_is_read_before_and_after_and_before_the_check __________
 E       AssertionError: section 6 has no line containing 'cloud_environment.py" pick --cwd . --before <the snapshot value> --confirmed <the environment now in use>'
 E       assert None is not None
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:98: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:98: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_pick_is_read_before_and_after_and_before_the_check
 1 failed in 0.68s
@@ -260,7 +262,7 @@ _________ test_the_pick_is_read_before_and_after_and_before_the_check __________
 E           AssertionError: section 6 has no line containing "a plain after-read line ending 'pick --cwd . --before <the value step 1 kept>'"
 E           assert None is not None
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:96: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:96: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_pick_is_read_before_and_after_and_before_the_check
 1 failed in 0.21s
@@ -301,7 +303,7 @@ _________ test_the_pick_is_read_before_and_after_and_before_the_check __________
 E           AssertionError: section 6 has no line containing "a plain after-read line ending 'pick --cwd . --before <the value step 1 kept>'"
 E           assert None is not None
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:96: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:96: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_the_pick_is_read_before_and_after_and_before_the_check
 1 failed in 3.32s

@@ -1,5 +1,7 @@
 # Cloud C6b bite-proof: the router judges specs by where they are, not by the storage mode
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/launch_place.py` (`_specs_outside`), detector in `plugins/superheroes/lib/tests/test_launch_place.py::test_specs_in_the_repository_whatever_the_storage_mode` (`TL`). It replaces the mode leg (G7) that `wo_a_place_call.md` recorded; that record is not edited here.
 
 **Status.** The implementer ran the one proof (F2-1): the neutralization is a targeted Edit in the source file, the red is the single named test function run alone (no `-n auto`), the restore is the inverse Edit, and the green is the same function. Reds and greens below are the pytest output of each run; the absolute `tmp_path` prefix and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -47,7 +49,7 @@ E
 E             Left contains one more item: "this project's specs"
 E             Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1777-b0308f0d510d1b2a/plugins/superheroes/lib/tests/test_launch_place.py:454: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1777-b0308f0d510d1b2a/plugins/superheroes/lib/tests/test_launch_place.py:454: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_specs_in_the_repository_whatever_the_storage_mode
 1 failed in 1.27s

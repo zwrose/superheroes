@@ -38,43 +38,43 @@ body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;backg
 <div class="cat">
 <div class="ct"><span class="cn">1</span> Who the product is for, and what it's for</div>
 <div class="cd">The people the product serves and the job it does for them, kept once per project. Every other call leans on it, so discovery reads it first.</div>
-<ul class="ex"><li>superheroes is for a product-minded owner who isn't expected to know engineering craft.</li><li>Weekly Eats is for households planning meals and shopping together, and it's headed to a paid product.</li></ul>
+<ul class="ex"><li>superheroes is for a product-minded owner who isn't expected to know engineering craft.</li><li>A tool-lending app is for neighbours who lend each other tools, and it is headed to a paid product.</li></ul>
 <div class="nw"><b>Not yours when</b> a spec just restates what's already recorded.</div>
 </div>
 <div class="cat">
 <div class="ct"><span class="cn">2</span> Who this piece of work is for, and what they're trying to do</div>
 <div class="cd">Told as user stories: <b>"As a …, I want …, so I can …"</b>, captured in each discovery. They evoke the core need, not every detail; the requirements carry the detail. It's what tells two right-looking designs apart.</div>
-<ul class="ex"><li>#1798: As a household shopper, I want to add more of something than my meal plans need, so I can stock up without losing track of what the plans need.</li><li>#1798: As a shopper mid-aisle, I want one number on each row, so I can put the right amount in the cart without doing the sums.</li></ul>
+<ul class="ex"><li>As a lender, I want to keep a tool back for myself even when no booking needs it, so I can hold it at home without losing track of what the bookings need.</li><li>As a borrower at the door, I want one return date on each tool, so I can hand it back on time without checking every booking.</li></ul>
 <div class="nw"><b>Not yours when</b> the approved board or an agreed story already shows it. Edge cases are requirements, not stories.</div>
 </div>
 <div class="cat">
 <div class="ct"><span class="cn">3</span> What a person sees or can do at a given moment</div>
 <div class="cd">The behaviour of one screen or step: what's shown, what can be tapped, what happens next, and what happens when it goes wrong.</div>
-<ul class="ex"><li>#1798: Remove on a row that plans feed refuses, and points to Plans.</li><li>#1798: a row showing ??? can't be checked off; tapping it opens its question.</li></ul>
+<ul class="ex"><li>Remove on a tool that open bookings depend on refuses, and points to the bookings.</li><li>a tool whose return date is still unknown can't be marked returned; tapping it opens its question.</li></ul>
 <div class="nw"><b>Not yours when</b> it matches an approved board or an existing pattern exactly.</div>
 </div>
 <div class="cat">
 <div class="ct"><span class="cn">4</span> Whether a thing should exist at all</div>
 <div class="cd">Scope, and whether it's worth what it costs to build and keep, including retiring something already built.</div>
-<ul class="ex"><li>#1419: no "test version" concept in any environment; document versions are just seed data.</li><li>#1798: no extra controls for the rare shop-ahead case; the on-hand check already catches it.</li></ul>
+<ul class="ex"><li>no "test version" concept in any environment; document versions are just seed data.</li><li>no extra controls for the rare lend-ahead case; the availability check already catches it.</li></ul>
 <div class="nw"><b>Not yours when</b> it's a routine split of scope you've agreed.</div>
 </div>
 <div class="cat">
 <div class="ct"><span class="cn">5</span> Risk tolerance and trust</div>
 <div class="cd">What the product defends against, who may bypass what, what's stored and for how long, and the privacy defaults.</div>
-<ul class="ex"><li>#1419: account creation is refused from the EEA and the UK.</li><li>superheroes: findings about deliberately malicious input are outside the threat model; accepted, not fixed.</li></ul>
+<ul class="ex"><li>account creation is refused from the EEA and the UK.</li><li>superheroes: findings about deliberately malicious input are outside the threat model; accepted, not fixed.</li></ul>
 <div class="nw"><b>Not yours when</b> your stated threat model already decides it.</div>
 </div>
 <div class="cat">
 <div class="ct"><span class="cn">6</span> Your own time, attention and habits</div>
 <div class="cd">What reaches you, how and when, and what an agent may commit you to.</div>
-<ul class="ex"><li>Nothing is filed without your word, Backlog included.</li><li>#1798: fixes from the advisor's vet come to you on a tap sheet before they're pushed.</li></ul>
+<ul class="ex"><li>Nothing is filed without your word, Backlog included.</li><li>fixes from the advisor's vet come to you on a tap sheet before they're pushed.</li></ul>
 <div class="nw"><b>Not yours when</b> it's only how a message to you is worded; plain language is already the rule.</div>
 </div>
 <div class="cat">
 <div class="ct"><span class="cn">7</span> A case that tests or creates a principle</div>
 <div class="cd">A case that clashes with a principle you've stated, or that no principle covers yet. Your answer becomes the principle: a <b>standing ruling in Canon</b>, which every later discovery reads.</div>
-<ul class="ex"><li>#1419: one deletion dialog shared with household delete: "I really don't want to end up with multiple implementations of the same thing."</li><li>superheroes: a proposed approval gate clashed with your autonomy principle.</li></ul>
+<ul class="ex"><li>one deletion dialog shared with group delete: "I really don't want to end up with multiple implementations of the same thing."</li><li>superheroes: a proposed approval gate clashed with your autonomy principle.</li></ul>
 <div class="nw"><b>Not yours when</b> a standing ruling in Canon plainly decides it.</div>
 </div>
 <div class="cat">
@@ -86,13 +86,13 @@ body{margin:0;font-family:'Atkinson Hyperlegible',sans-serif;color:#111111;backg
 <div class="cat">
 <div class="ct"><span class="cn">9</span> All user-facing copy</div>
 <div class="cd">Every word the product shows its users. Agents draft it; you approve it. For superheroes, that's what the plugin says to its user.</div>
-<ul class="ex"><li>#1798: "Need beyond Plans" replaced "not from a plan".</li><li>#1419: "Keep my account" instead of "Cancel", which could be misread as cancelling the subscription.</li></ul>
+<ul class="ex"><li>"Keep for myself" replaced "not for a booking".</li><li>"Keep my account" instead of "Cancel", which could be misread as cancelling the subscription.</li></ul>
 <div class="nw"><b>Not yours when</b> it's instruction text agents read, under the prose standard.</div>
 </div>
 <div class="cat">
 <div class="ct"><span class="cn">10</span> Priority and timing</div>
 <div class="cd">What ships when, when a decision gets made, and how much to invest now.</div>
-<ul class="ex"><li>#1912 was held until the #1915 work was settled.</li><li>#1419: the terms documents wait until just before go-live.</li></ul>
+<ul class="ex"><li>#1912 was held until the #1915 work was settled.</li><li>the terms documents wait until just before go-live.</li></ul>
 <div class="nw"><b>Not yours when</b> it's the order of build pieces inside an agreed stack.</div>
 </div>
 </div>

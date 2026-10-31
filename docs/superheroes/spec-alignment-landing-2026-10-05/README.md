@@ -63,7 +63,7 @@ The longest chain is C1 → C3 → C5 (two layers) → C6 → C4 (four layers). 
 advisor:** if a release cuts mid-epic, a consuming project could adopt a partial flow. Each child is
 built to leave the plugin coherent on its own (C5's retirement points today's discovery at the three
 checks, so discovery always has a review), but the advisor may prefer to hold the release until C4
-lands so weekly-eats adopts the whole flow at once.
+lands so a consuming project adopts the whole flow at once.
 
 ## Changes from the starting sketch, and why
 
@@ -115,7 +115,7 @@ The "Review-spec keeps pace" milestone named a skill C5 retires. The owner retir
 
 ## Consequences (from each child's consequence line)
 
-A consuming project (weekly-eats) keeps today's behaviour until it adopts the release that carries
+A consuming project keeps today's behaviour until it adopts the release that carries
 the children: rulings stay where it records them today, item 13 keeps its value, review-spec and the
 weight call stay, its advisor keeps delivering "ready for your approval", and owner calls arrive as
 chat prose. At adoption its item-13 value moves into Canon, its next discovery runs the new flow, and

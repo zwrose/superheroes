@@ -554,7 +554,7 @@ and tests rather than a user-visible flag.
 ## Dependencies & assumptions
 
 - The approved parent spec is
-  `/Users/zwrose/.claude/workhorse/projects/8fa39520fa839af0/docs/make-the-shared-review-and-fix-loop-converge-faste-4c45d8/spec.md`,
+  `/path/to/home/.claude/workhorse/projects/8fa39520fa839af0/docs/make-the-shared-review-and-fix-loop-converge-faste-4c45d8/spec.md`,
   with `gates.review: passed`.
 - The project calibration is single-user, no UI, stdlib-heavy helpers, with the canonical verify
   command from `config/core.md`.

@@ -1,5 +1,7 @@
 # Launch report WO-A bite-proof: the "Still on your machine" line, read from the launch ledger
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/launch_report.py` (G12, G13, G21, G22, G23, G24) and `plugins/superheroes/lib/launcher.py` (G15), detectors in `plugins/superheroes/lib/tests/test_launch_report_verbs.py` (`TLV`). Every red, restore and green below was run in the WO-8 dispatch on the worktree head `f0f362f37` plus that dispatch's changes, each as one pytest node.
 
 - **Run command.** `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc-wo8 -m pytest -p no:cacheprovider -q "<node>"`.
@@ -49,7 +51,7 @@ E           assert None is not None
 E            +  where None = <function still_line at 0x10b3dd760>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1371/test_B6_a_reported_fact_clears0/repo', readiness_fn=<function test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready.<locals>.<lambda> at 0x10b797a60>)
 E            +    where <function still_line at 0x10b3dd760> = LR.still_line
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:616: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:616: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0]
 1 failed in 4.46s
@@ -98,7 +100,7 @@ E       AssertionError: assert None is not None
 E        +  where None = <function still_line at 0x109a5d760>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1373/test_B6_a_reported_fact_clears0/repo', readiness_fn=<function test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready.<locals>.<lambda> at 0x10957ba60>)
 E        +    where <function still_line at 0x109a5d760> = LR.still_line
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:621: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:621: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B6_a_reported_fact_clears_only_on_a_check_after_the_start_day_that_reads_ready[no-pass-reported0]
 1 failed in 5.53s
@@ -143,7 +145,7 @@ E       AssertionError: assert (False)
 E        +  where False = <built-in method startswith of str object at 0x10d3f3530>('- #44 ')
 E        +    where <built-in method startswith of str object at 0x10d3f3530> = '- #55 Title 55. It needs the phone simulator, which only your machine has.'.startswith
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:218: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:218: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_I1_the_issue_order_is_its_first_reservation_not_its_last
 1 failed in 6.53s
@@ -190,7 +192,7 @@ E         Left contains 1 more item:
 E         {'/private/tmp/claude-501/pytest-of-zwrose/pytest-1377/test_B10_one_store_report_and_0/store/projects/150aa8a113e50614/state/scratch.json': b'x'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:408: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:408: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B10_one_store_report_and_still_write_nothing
 1 failed in 5.60s
@@ -226,7 +228,7 @@ world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1379/test_B3_a_confirm
 E       assert 'Still on your machine\nThis project has no cloud setup on this Claude account. Say "set up cloud builds" to fix it.' is None
 E        +  where 'Still on your machine\nThis project has no cloud setup on this Claude account. Say "set up cloud builds" to fix it.' = _line('/private/tmp/claude-501/pytest-of-zwrose/pytest-1379/test_B3_a_confirmed_cloud_laun0/repo', ready=False, reason='no-setup')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:479: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:479: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B3_a_confirmed_cloud_launch_after_a_fallback_clears_the_line
 1 failed in 7.03s
@@ -266,7 +268,7 @@ E           Still on your machine
 E         - The cloud's plugin is 0.41.0 and mine is 0.42.0. Paste the new setup text to fix it.
 E         + This project has no cloud setup on this Claude account. Say "set up cloud builds" to fix it.
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:677: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:677: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B7_a_higher_ranked_fallback_that_is_fixed_is_skipped
 1 failed in 5.81s
@@ -307,7 +309,7 @@ world = ('/private/tmp/claude-501/pytest-of-zwrose/pytest-1383/test_B3_an_unconf
                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 E       AttributeError: 'NoneType' object has no attribute 'startswith'
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:492: AttributeError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1775-73b0797ad1a5d29e/plugins/superheroes/lib/tests/test_launch_report_verbs.py:492: AttributeError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_report_verbs.py::test_B3_an_unconfirmed_cloud_launch_after_a_fallback_leaves_the_line
 1 failed in 6.02s

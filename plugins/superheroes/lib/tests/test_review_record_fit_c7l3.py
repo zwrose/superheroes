@@ -536,7 +536,7 @@ def test_edge8_without_sheet_answers_a_sheet_answer_decision_is_not_on_record():
     assert build(account(findings=[cited]), Fake())["findings"][0]["outcome"] == "left-for-owner"
     assert build(account(findings=[cited], sheetAnswers=SHEET), Fake())["findings"][0]["outcome"] == "ruling"
     # bites on: a saved aligned answer accepted after the published card gained options
-    gained = dict(SHEET, cards={"c1": {"options": ["allow-leftovers"]}})
+    gained = dict(SHEET, cards={"c1": {"options": ["allow-late-returns"]}})
     assert build(account(findings=[cited], sheetAnswers=gained), Fake())["findings"][0]["outcome"] == "left-for-owner"
     unsettled = {"answers": {"c1": {"answer": None}}}
     assert build(account(findings=[cited], sheetAnswers=unsettled), Fake())["findings"][0]["outcome"] == "left-for-owner"

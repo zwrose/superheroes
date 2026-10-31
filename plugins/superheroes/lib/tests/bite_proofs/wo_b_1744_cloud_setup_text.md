@@ -1,5 +1,7 @@
 # #1744 WO-B bite-proof: the setup text writer's secret scan, in-repository branch, file selection and substituted-value validation
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/cloud_setup_text.py` (`_scan`, `_calibration`, `_store_files`, `_compose`), detectors in `plugins/superheroes/lib/tests/test_cloud_setup_text.py` (`T`).
 
 **Status.** The implementer ran every proof (B1 to B4): each neutralization is a targeted Edit in `cloud_setup_text.py`, the red is the single named test function run alone, the restore is the inverse Edit, and the green is the same test function. No `git checkout`, `git restore`, `git reset` or `git stash` was used.
@@ -72,7 +74,7 @@ E                           b'emoteKey": "238a7b644f5fb344",\n  "createdAt": "20
 E                           b'0T22:03:49Z"\n}\n'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_setup_text.py:184: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_setup_text.py:184: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_text.py::test_inside_fixture_has_no_calibration_in_the_text
 1 failed in 0.81s
@@ -119,7 +121,7 @@ E         At index 1 diff: 'config/core.md.bak-2026-01-01' != 'config/review-cre
 E         Left contains one more item: 'registry.json'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_setup_text.py:148: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_setup_text.py:148: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_text.py::test_outside_fixture_text_carries_everything_and_nothing_else
 1 failed in 0.78s

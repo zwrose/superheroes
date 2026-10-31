@@ -1481,9 +1481,9 @@ def test_unknown_hotspot_tool_fails_without_spawning(tmp_path):
 # #2047: lizard mis-nests JSX — .tsx/.jsx complexity reads unmeasured, never a number
 # ---------------------------------------------------------------------------
 
-# The weekly-eats shape: a hyphenated JSX attribute right after a {...}-valued one. Real
+# The consuming project's shape: a hyphenated JSX attribute right after a {...}-valued one. Real
 # lizard 1.24.0 drops PickerSession from a .tsx file and reads CCN 7 (true 2) in a .jsx.
-_WEEKLY_EATS_TSX = textwrap.dedent("""\
+_CONSUMER_TSX = textwrap.dedent("""\
     export function PickerSession(props: { a: number }) {
       if (props.a > 1) {
         return <div style={{ color: "red" }} data-testid="picker">x</div>;
@@ -1498,11 +1498,11 @@ def _lizard_argv_paths(run):
             for a in call[1:] if os.path.isabs(a)]
 
 
-def test_weekly_eats_jsx_shape_reads_unmeasured_with_reason(tmp_path):
-    _write(tmp_path, "PickerSession.tsx", _WEEKLY_EATS_TSX)
-    _write(tmp_path, "Legacy.JSX", _WEEKLY_EATS_TSX)
+def test_consumer_jsx_shape_reads_unmeasured_with_reason(tmp_path):
+    _write(tmp_path, "PickerSession.tsx", _CONSUMER_TSX)
+    _write(tmp_path, "Legacy.JSX", _CONSUMER_TSX)
     _write(tmp_path, "util.ts", 20)
-    # The mis-nested figures lizard reported on weekly-eats; a lens that still hands JSX
+    # The mis-nested figures lizard reported on a consuming project; a lens that still hands JSX
     # files to lizard ranks on them.
     run = _basic_tools(
         tmp_path,
@@ -1557,7 +1557,7 @@ def test_plain_js_ts_figures_unchanged(tmp_path):
 
 
 def test_jsx_only_repo_never_runs_lizard_and_is_not_a_clean_read(tmp_path):
-    _write(tmp_path, "App.tsx", _WEEKLY_EATS_TSX)
+    _write(tmp_path, "App.tsx", _CONSUMER_TSX)
     run = _basic_tools(
         tmp_path, numstat="20\t0\tApp.tsx\n", lsfiles=["App.tsx"],
         lizard=_lizard_row("App.tsx", 88))
@@ -1574,7 +1574,7 @@ def test_jsx_only_repo_never_runs_lizard_and_is_not_a_clean_read(tmp_path):
 
 
 def test_previously_measured_tsx_turning_unmeasured_is_no_drift(tmp_path):
-    _write(tmp_path, "App.tsx", _WEEKLY_EATS_TSX)
+    _write(tmp_path, "App.tsx", _CONSUMER_TSX)
     prev = {"files": {"hotspots:App.tsx": {"score": 50.0, "ccn": 88}},
             "surfaceIds": ["hotspots:App.tsx"]}
     run = _basic_tools(tmp_path, numstat="20\t0\tApp.tsx\n", lsfiles=["App.tsx"])
@@ -1586,7 +1586,7 @@ def test_previously_measured_tsx_turning_unmeasured_is_no_drift(tmp_path):
 
 
 def test_jsx_gap_beside_a_failed_language_is_not_a_permanent_boundary(tmp_path):
-    _write(tmp_path, "App.tsx", _WEEKLY_EATS_TSX)
+    _write(tmp_path, "App.tsx", _CONSUMER_TSX)
     _write(tmp_path, "hot.js", 20)
     _write(tmp_path, "mod.py", 20)
     run = _basic_tools(

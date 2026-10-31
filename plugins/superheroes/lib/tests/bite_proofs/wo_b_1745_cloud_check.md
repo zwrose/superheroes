@@ -1,5 +1,7 @@
 # #1745 WO-B bite-proof: the setup sitting's check (`cloud_check.py`)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/cloud_check.py` (`judge` and its helpers), detectors in `plugins/superheroes/lib/tests/test_cloud_check.py` (`T`).
 
 **Status.** The implementer ran every proof (B1 to B9): each neutralization is a targeted Edit in `cloud_check.py`, the red is the single named node run alone, the restore is the inverse Edit, and the green is the same node. Reds and greens below are the full pytest output of each run, unfiltered. Absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret (the fixtures hold stamps, a fixture environment id and a fixture nonce), so nothing is redacted.
@@ -41,7 +43,7 @@ E
 E         - unread
 E         + passed)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:378: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:378: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge1_a_report_with_another_nonce_is_unread
 1 failed in 1.93s
@@ -83,7 +85,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1039/test_
                        "different environment from the one whose id you gave me, or that environment "
                        "has no pass block in it yet.")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:405: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:405: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'action': 'passed', 'results': {'versionMatches': True, 'calibrationMatches': True, 'reviewerAnswered': True, 'environmentMatches': True}, 'failedParts': [], 'recordWritten': True, ...}
@@ -98,7 +100,7 @@ E
 E         - failed
 E         + passed
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge3_a_wrong_or_missing_environment_fails_on_environment
 1 failed in 2.19s
@@ -142,7 +144,7 @@ E
 E             - failed
 E             + passed)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:417: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:417: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge4_a_different_or_missing_cloud_version_fails_on_version
 1 failed in 1.87s
@@ -181,7 +183,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1043/test_
 >       _failed_on(result, ["calibration"], "**The check failed on one part.** The cloud's calibration "
                    "doesn't match this machine's.")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:426: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:426: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'action': 'passed', 'results': {'versionMatches': True, 'calibrationMatches': True, 'reviewerAnswered': True, 'environmentMatches': True}, 'failedParts': [], 'recordWritten': True, ...}
@@ -196,7 +198,7 @@ E
 E         - failed
 E         + passed
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge5_a_different_placed_stamp_fails_on_calibration
 1 failed in 1.79s
@@ -241,7 +243,7 @@ E
 E         Right contains one more item: 'calibration'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:679: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:679: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_accepts_an_absent_stamp_file_only_when_nothing_was_placed
 1 failed in 1.79s
@@ -284,7 +286,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1047/test_
 >       _failed_on(result, ["calibration"], "**The check failed on one part.** The cloud's calibration "
                    "doesn't match this machine's.")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:666: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:666: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'action': 'passed', 'results': {'versionMatches': True, 'calibrationMatches': True, 'reviewerAnswered': True, 'environmentMatches': True}, 'failedParts': [], 'recordWritten': True, ...}
@@ -299,7 +301,7 @@ E
 E         - failed
 E         + passed
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_in_repository_project_fails_when_a_core_layer_differs
 1 failed in 1.76s
@@ -352,7 +354,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1049/test_
             result = _judge(local, _cloud_report(cloud, confirmation=confirmation))
 >           _failed_on(result, ["reviewer"], first)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:503: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:503: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'action': 'failed', 'results': {'versionMatches': True, 'calibrationMatches': True, 'reviewerAnswered': True, 'environmentMatches': True}, 'failedParts': ['record'], 'recordWritten': False, ...}
@@ -368,7 +370,7 @@ E
 E         At index 0 diff: 'record' != 'reviewer'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:123: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:123: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge6_a_reviewer_that_did_not_answer_or_a_lapsed_pass_fails_on_reviewer
 1 failed in 2.11s
@@ -415,7 +417,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1051/test_
 >           _failed_on(result, ["record"], "**The check failed on one part.** The check passed, but I "
                        "could not write the setup record on this machine.")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:541: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:541: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'action': 'passed', 'results': {'versionMatches': True, 'calibrationMatches': True, 'reviewerAnswered': True, 'environmentMatches': True}, 'failedParts': [], 'recordWritten': True, ...}
@@ -430,7 +432,7 @@ E
 E         - failed
 E         + passed
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:122: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge8_a_refused_or_raising_record_write_fails_on_record
 1 failed in 1.76s
@@ -472,7 +474,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1053/test_
 >       assert result["settingSwitchedOff"] is True and result["recordWritten"] is False
 E       assert (False is True)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:565: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:565: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_judge_edge9_a_failure_switches_an_on_setting_off
 1 failed in 1.95s
@@ -525,7 +527,7 @@ E
 E         - check-environment-invalid
 E         + check-launch-refused)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:931: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:931: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_refuses_without_an_environment_id[None]
 1 failed, 9 passed in 7.70s
@@ -575,7 +577,7 @@ E
 E         - refused
 E         + started)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
 _ test_start_never_reports_started_without_a_receipt[Created cloud session: cloud-check-zzzzzzzz\nView: https://claude.ai/code/session_01ABCdef?from=cli\nResume with: claude --teleport session_01ABCdef\n-False] _
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1065/test_start_never_reports_start1')
@@ -597,7 +599,7 @@ E
 E         - refused
 E         + started)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
 ____ test_start_never_reports_started_without_a_receipt[Starting...\n-True] ____
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1065/test_start_never_reports_start2')
@@ -618,7 +620,7 @@ E
 E         - refused
 E         + started)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:982: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_never_reports_started_without_a_receipt[-False]
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_never_reports_started_without_a_receipt[Created cloud session: cloud-check-zzzzzzzz\nView: https://claude.ai/code/session_01ABCdef?from=cli\nResume with: claude --teleport session_01ABCdef\n-False]
@@ -669,7 +671,7 @@ E
 E         At index 4 diff: '{"remote":{"defaultEnvironmentId":"env_FixedOther1"}}' != '{"remote":{"defaultEnvironmentId":"env_01ABCdef"}}'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:917: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1745-035dde805e265dbb/plugins/superheroes/lib/tests/test_cloud_check.py:917: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_check.py::test_start_names_the_environment_in_the_launch
 1 failed in 1.08s
