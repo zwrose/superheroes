@@ -1,5 +1,7 @@
 # C14 layer 1 — command-line Claude, print mode: bite-proof record (#1273, PR #1346)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Orchestrator-run record. Method: an exact-string neutralization of the guarded element with `count(old) == 1` asserted, the detector(s) run alone by exact node id (red), the file restored from the captured pre-mutation bytes (never an inverse replace and never a git discard), `git status --porcelain` asserted empty after the restore, the detector run again (green). Elements A1–A10 and B1–B13 ran in a detached probe worktree at the integration head `4da849dc`; B2 (whose discriminating test WO-D added after the first pass read NOT-RED), F1 and F2 (the review-round fixes) ran at the final code head `69651e44`. One shared green run over every A/B detector closed the first pass (`rc 0`, tree clean); B2/F1/F2 carry their own green. Raw captures are bounded to the decisive tail; scratch paths are elided as `<scratch>`. No secrets, tokens, private URLs or PII appear in the captures. **26 elements, 26 RED→GREEN.** The implementer-written records `c14_l1_wo_a.md` (WO-A, no restore receipts) and `c14_l1_wo_d.md` (WO-D) are superseded by this one for every element they name; they stay in the tree as the implementers' own receipts.
 
 ## Disclosures
@@ -679,10 +681,10 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_claude_run_en
         assert env["CLAUDE_CODE_EFFORT_LEVEL"] == "xhigh"
         assert "CLAUDE_EFFORT" not in env
 >       assert env["CLAUDE_CONFIG_DIR"] == config_dir
-E       AssertionError: assert '/Users/zwrose/.claude' == '/private/var...h0/claude-cfg'
+E       AssertionError: assert '/path/to/home/.claude' == '/private/var...h0/claude-cfg'
 E         
 E         - /private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/com.apple.shortcuts.mac-helper/pytest-of-zwrose/pytest-1649/test_claude_run_engine_files_h0/claude-cfg
-E         + /Users/zwrose/.claude
+E         + /path/to/home/.claude
 
 plugins/superheroes/lib/tests/test_engine_dispatch.py:14113: AssertionError
 =========================== short test summary info ============================

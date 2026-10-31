@@ -1,5 +1,7 @@
 # Work order A (#2053, layer 1 of #2060) bite-proof: a Python break-it test counts as kept by its body at any path
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 **Provenance:** claude / sonnet-5.5 (implementer, work order A3), maker family anthropic. Production under proof: `plugins/superheroes/lib/break_it_body.py` (`locate`, `_outside`), `plugins/superheroes/lib/break_it_body_py.py` (`parse`, `_normalise`), `plugins/superheroes/lib/break_it.py` (`check_kept`, `_selects_tests`, `_rewrite_command`). Tests: `plugins/superheroes/lib/tests/test_break_it_body_2053.py`.
 
 Declared guarded-element set (from the order): **E1**, **E2**, **E3**, **E4a**, **E4b**, **E5**, **E6**, **E7**, **E8**, **E9**, **E10**, **E11**. Each was neutralized by one targeted edit (the Edit tool, exact-text match), only its proving nodes run by exact node id (never `-k`; a bare function id selects every parametrization of that function), the inverse edit applied, `git diff --stat` taken over the file (empty: the file equals the last commit), and the same ids run again. No `git checkout`, `git restore`, `git reset` or `git stash` was used.
@@ -27,7 +29,7 @@ Declared guarded-element set (from the order): **E1**, **E2**, **E3**, **E4a**, 
 - Every neutralization is a `False and ...` guard (E2: `unparseable = False`; E6: `directives = []`; E7: `if True:`), so the guarded branch is the production call site the detector reaches, never a helper the tests assert as a precondition.
 - The restore receipt is `git diff --stat -- <file>` taken after the inverse edit, printed between `--- git diff --stat` and `--- end diff` markers: in every element it printed nothing, so the file equals its last commit. After E11 a `git status --porcelain` over the worktree also printed nothing.
 - The command shape is `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <exact node ids> -q`, followed by `echo "pytest exit: $?"` to print the exit code. The `UV_NATIVE_TLS` deprecation warning line that `scripts/pinned-python` may print is not shown; everything else is verbatim (default `--tb`, no filter).
-- Redaction: none needed; local `/Users/zwrose/...` and `/private/tmp/...` paths are kept as printed, no secret, token or private URL appears.
+- Redaction: none needed; local `/path/to/home/...` and `/private/tmp/...` paths are kept as printed, no secret, token or private URL appears.
 - All captures are under 32 KiB each and under 128 KiB together, so none is written off-repo.
 
 ---
@@ -65,7 +67,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:259: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:259: AssertionError
 _____________ test_a_copy_beside_the_changed_original_is_ambiguous _____________
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-221/test_a_copy_beside_the_changed0/repo')
@@ -78,7 +80,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:265: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:265: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_two_matching_copies_are_ambiguous
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_copy_beside_the_changed_original_is_ambiguous
@@ -138,7 +140,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:230: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:230: AssertionError
 __ test_prefilter_passing_unparseable_candidate_without_a_match_is_unresolved __
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-226/test_prefilter_passing_unparse1/repo')
@@ -152,7 +154,7 @@ E
 E         At index 0 diff: 'missing' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:237: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:237: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_prefilter_passing_unparseable_candidate_is_unresolved_beside_a_match
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_prefilter_passing_unparseable_candidate_without_a_match_is_unresolved
@@ -209,7 +211,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:271: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:271: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_host_that_lacks_an_import_the_test_binds_is_a_binding_conflict
 1 failed in 0.60s
@@ -266,7 +268,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:279: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:279: AssertionError
 _________________ test_host_star_import_is_a_binding_conflict __________________
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-234/test_host_star_import_is_a_bin0/repo')
@@ -280,7 +282,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:286: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:286: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_host_that_binds_an_imported_name_another_way_is_a_binding_conflict
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_host_star_import_is_a_binding_conflict
@@ -343,7 +345,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:298: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:298: AssertionError
 _ test_host_statement_that_rebinds_a_name_the_test_uses_is_a_binding_conflict[assignment] _
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-238/test_host_statement_that_rebin1/repo')
@@ -363,7 +365,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:298: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:298: AssertionError
 _ test_host_statement_that_rebinds_a_name_the_test_uses_is_a_binding_conflict[loop-target] _
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-238/test_host_statement_that_rebin2/repo')
@@ -383,7 +385,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:298: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:298: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_host_statement_that_rebinds_a_name_the_test_uses_is_a_binding_conflict[helper-def]
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_host_statement_that_rebinds_a_name_the_test_uses_is_a_binding_conflict[assignment]
@@ -446,7 +448,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:309: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:309: AssertionError
 _________ test_host_module_level_test_setup_is_host_setup[pytestmark] __________
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-242/test_host_module_level_test_se1/repo')
@@ -465,7 +467,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:309: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:309: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_host_module_level_test_setup_is_host_setup[autouse-fixture]
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_host_module_level_test_setup_is_host_setup[pytestmark]
@@ -522,7 +524,7 @@ E
 E         At index 0 diff: 'kept' != 'changed'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:329: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:329: AssertionError
 _ test_front_unequal_keys_for_semantic_differences[x = 1\n-x = 1  # type: ignore\n] _
 
 left = 'x = 1\n', right = 'x = 1  # type: ignore\n'
@@ -543,7 +545,7 @@ E       assert [("Assign(targets=[Name(id='x', ctx=Store())], value=Constant(val
 E        +  where [("Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1))", ())] = _keys('x = 1\n')
 E        +  and   [("Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1))", ())] = _keys('x = 1  # type: ignore\n')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
 _ test_front_unequal_keys_for_semantic_differences[x = 1  # type: ignore\n-x = 1  # noqa\n] _
 
 left = 'x = 1  # type: ignore\n', right = 'x = 1  # noqa\n'
@@ -564,7 +566,7 @@ E       assert [("Assign(targets=[Name(id='x', ctx=Store())], value=Constant(val
 E        +  where [("Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1))", ())] = _keys('x = 1  # type: ignore\n')
 E        +  and   [("Assign(targets=[Name(id='x', ctx=Store())], value=Constant(value=1))", ())] = _keys('x = 1  # noqa\n')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
 _ test_front_unequal_keys_for_semantic_differences[x = foo(\n    1,  # type: ignore\n)\n-x = foo(\n    1,\n)\n] _
 
 left = 'x = foo(\n    1,  # type: ignore\n)\n', right = 'x = foo(\n    1,\n)\n'
@@ -585,7 +587,7 @@ E       assert [("Assign(targets=[Name(id='x', ctx=Store())], value=Call(func=Na
 E        +  where [("Assign(targets=[Name(id='x', ctx=Store())], value=Call(func=Name(id='foo', ctx=Load()), args=[Constant(value=1)], keywords=[]))", ())] = _keys('x = foo(\n    1,  # type: ignore\n)\n')
 E        +  and   [("Assign(targets=[Name(id='x', ctx=Store())], value=Call(func=Name(id='foo', ctx=Load()), args=[Constant(value=1)], keywords=[]))", ())] = _keys('x = foo(\n    1,\n)\n')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
 _ test_front_unequal_keys_for_semantic_differences[@d  # noqa\ndef f(): pass\n-@d\ndef f(): pass\n] _
 
 left = '@d  # noqa\ndef f(): pass\n', right = '@d\ndef f(): pass\n'
@@ -606,7 +608,7 @@ E       assert [("FunctionDef(name='f', args=arguments(posonlyargs=[], args=[], 
 E        +  where [("FunctionDef(name='f', args=arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]), body=[Pass()], decorator_list=[Name(id='d', ctx=Load())], type_params=[])", ())] = _keys('@d  # noqa\ndef f(): pass\n')
 E        +  and   [("FunctionDef(name='f', args=arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]), body=[Pass()], decorator_list=[Name(id='d', ctx=Load())], type_params=[])", ())] = _keys('@d\ndef f(): pass\n')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:600: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_an_added_type_ignore_directive_is_not_kept
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_front_unequal_keys_for_semantic_differences[x = 1\n-x = 1  # type: ignore\n]
@@ -666,7 +668,7 @@ E
 E         At index 0 diff: 'kept' != 'changed'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:335: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:335: AssertionError
 ________________ test_front_titles_are_test_prefixed_defs_only _________________
 
     def test_front_titles_are_test_prefixed_defs_only():
@@ -678,7 +680,7 @@ E
 E         Left contains one more item: 'helper'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:613: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:613: AssertionError
 ______ test_front_a_title_does_not_change_the_key_but_any_other_name_does ______
 
     def test_front_a_title_does_not_change_the_key_but_any_other_name_does():
@@ -689,7 +691,7 @@ E       assert [("FunctionDef(name='\\x00title', args=arguments(posonlyargs=[], 
 E        +  where [("FunctionDef(name='\\x00title', args=arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]), body=[Pass()], decorator_list=[], type_params=[])", ())] = _keys('def check_a(): pass\n')
 E        +  and   [("FunctionDef(name='\\x00title', args=arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]), body=[Pass()], decorator_list=[], type_params=[])", ())] = _keys('def check_b(): pass\n')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:623: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:623: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_renamed_helper_is_not_a_title_and_reads_changed
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_front_titles_are_test_prefixed_defs_only
@@ -748,7 +750,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:350: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:350: AssertionError
 _ test_a_renamed_test_at_its_own_path_with_a_selector_is_command_selects_tests _
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-249/test_a_renamed_test_at_its_own0/repo')
@@ -763,7 +765,7 @@ E
 E         At index 0 diff: 'kept' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:358: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:358: AssertionError
 ___ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[-k foo] ____
 
 extra = '-k foo'
@@ -781,7 +783,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py -k foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 ___ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[-t foo] ____
 
 extra = '-t foo'
@@ -799,7 +801,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py -t foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 ___ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[-g foo] ____
 
 extra = '-g foo'
@@ -817,7 +819,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py -g foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 ____ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[-kfoo] ____
 
 extra = '-kfoo'
@@ -835,7 +837,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py -kfoo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 ____ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[-tfoo] ____
 
 extra = '-tfoo'
@@ -853,7 +855,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py -tfoo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 ____ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[-gfoo] ____
 
 extra = '-gfoo'
@@ -871,7 +873,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py -gfoo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--testNamePattern foo] _
 
 extra = '--testNamePattern foo'
@@ -889,7 +891,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --testNamePattern foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--grep foo] __
 
 extra = '--grep foo'
@@ -907,7 +909,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --grep foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--filter foo] _
 
 extra = '--filter foo'
@@ -925,7 +927,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --filter foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--match foo] _
 
 extra = '--match foo'
@@ -943,7 +945,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --match foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--testNamePattern=foo] _
 
 extra = '--testNamePattern=foo'
@@ -961,7 +963,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --testNamePattern=foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--grep=foo] __
 
 extra = '--grep=foo'
@@ -979,7 +981,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --grep=foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--filter=foo] _
 
 extra = '--filter=foo'
@@ -997,7 +999,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --filter=foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[--match=foo] _
 
 extra = '--match=foo'
@@ -1015,7 +1017,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py --match=foo' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 _ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[a.py::test_old] _
 
 extra = 'a.py::test_old'
@@ -1033,7 +1035,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py b.py' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 __ test_rewrite_refuses_a_renamed_test_whose_command_selects_tests[test_old] ___
 
 extra = 'test_old'
@@ -1051,7 +1053,7 @@ E
 E         At index 0 diff: 'python -m pytest b.py test_old' != None
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:564: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_renamed_moved_test_whose_command_carries_k_is_command_selects_tests
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_renamed_test_at_its_own_path_with_a_selector_is_command_selects_tests
@@ -1125,12 +1127,12 @@ repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-251/test_forma
         assert result["run"]["outcome"] == "passed"
         assert result["path"] == OWN
 >       assert [c["run"] for c in calls] == [command]
-E       assert ['/Users/zwro...ts/test_k.py'] == ["/Users/zwro...s/test_k.py'"]
+E       assert ['/path/to/...ts/test_k.py'] == ["/path/to/...s/test_k.py'"]
 E         
-E         At index 0 diff: '/Users/zwrose/.cache/uv/builds-v0/.tmpzF9R5D/bin/python -m pytest -p no:cacheprovider -q tests/test_k.py' != "/Users/zwrose/.cache/uv/builds-v0/.tmpzF9R5D/bin/python  -m pytest -p no:cacheprovider -q  'tests/test_k.py'"
+E         At index 0 diff: '/path/to/home/.cache/uv/builds-v0/.tmpzF9R5D/bin/python -m pytest -p no:cacheprovider -q tests/test_k.py' != "/path/to/home/.cache/uv/builds-v0/.tmpzF9R5D/bin/python  -m pytest -p no:cacheprovider -q  'tests/test_k.py'"
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:160: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:160: AssertionError
 ______________ test_rewrite_same_path_returns_the_original_string ______________
 
     def test_rewrite_same_path_returns_the_original_string():
@@ -1141,7 +1143,7 @@ E
 E         At index 0 diff: 'FOO=1 python a.py' != "FOO=1   python  'a.py'"
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:504: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:504: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_formatter_case_is_kept_by_body_and_runs_the_original_command_byte_for_byte
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_rewrite_same_path_returns_the_original_string
@@ -1197,15 +1199,15 @@ repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-253/test_a_rec
 >       assert _got(_check(repo, base, head, record, _stub(calls))) == ("changed", "sha256-differs")
                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:443: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:443: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:146: in _check
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:146: in _check
     return break_it.check_kept(str(repo), base, head, record, **kwargs)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/break_it.py:1085: in check_kept
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/break_it.py:1085: in check_kept
     return searched(res(KEPT_CHANGED, "sha256-differs"))
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/break_it.py:1055: in searched
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/break_it.py:1055: in searched
     return _body_search(repo_root, base, head, record, today, res, runner, interpreter)
            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
@@ -1213,7 +1215,7 @@ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 repo_root = '/private/tmp/claude-501/pytest-of-zwrose/pytest-253/test_a_record_without_content_0/repo'
 base = 'ff40b23508a46fde3456ddf4a59d01ccc193028a'
 head = 'f3b3af9e841c6f5a1a529f67cfd8576560efa7fc'
-record = {'path': 'tests/test_k.py', 'command': '/Users/zwrose/.cache/uv/builds-v0/.tmpQpMNpL/bin/python -m pytest -p no:cacheprovider -q tests/test_k.py', 'sha256': 'fbc140aeb96b17c46a0bf5f3cdecc0f50efa4d27bf2145655f6210d9e829771f'}
+record = {'path': 'tests/test_k.py', 'command': '/path/to/home/.cache/uv/builds-v0/.tmpQpMNpL/bin/python -m pytest -p no:cacheprovider -q tests/test_k.py', 'sha256': 'fbc140aeb96b17c46a0bf5f3cdecc0f50efa4d27bf2145655f6210d9e829771f'}
 today = {'path': 'tests/test_k.py', 'outcome': 'changed', 'reason': 'sha256-differs', 'run': None}
 res = <function check_kept.<locals>.res at 0x1075b3420>
 runner = <function _stub.<locals>.runner at 0x1075b31a0>
@@ -1255,7 +1257,7 @@ interpreter = <object object at 0x1066118f0>
                        ^^^^^^^^^^^^^^^^^
 E       KeyError: 'content'
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/break_it.py:1026: KeyError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/break_it.py:1026: KeyError
 ____ test_a_record_whose_content_is_not_a_string_keeps_the_byte_exact_check ____
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-253/test_a_record_whose_content_is0/repo')
@@ -1270,7 +1272,7 @@ E
 E         At index 0 diff: 'unresolved' != 'changed'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:454: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:454: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_record_without_content_keeps_the_byte_exact_check
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_record_whose_content_is_not_a_string_keeps_the_byte_exact_check
@@ -1325,7 +1327,7 @@ E
 E         At index 0 diff: None != 'python -m pytest t/test_y.py'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:522: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:522: AssertionError
 _ test_a_test_file_named_after_its_own_test_is_kept_when_the_test_is_renamed_in_place _
 
 repo = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-256/test_a_test_file_named_after_i0/repo')
@@ -1340,7 +1342,7 @@ E
 E         At index 0 diff: 'unresolved' != 'kept'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:540: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-wo-a/plugins/superheroes/lib/tests/test_break_it_body_2053.py:540: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_rewrite_a_path_token_that_contains_an_old_title_is_no_filter
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_test_file_named_after_its_own_test_is_kept_when_the_test_is_renamed_in_place
@@ -1387,7 +1389,7 @@ Declared guarded-element set (from the order): **H1**, **H2**, **H3**, **H4**. E
 - H2's first red run was printed to the session by the harness with 11291 characters cut out of its middle. That output was not reconstructed. With the neutralization still applied, the same seven ids were run once more (a spare run) with the output redirected to a file outside the repository and read back whole; the H2 red below is that second run, and its summary (`7 failed`) matches the visible head and tail of the first. The H3 and H4 reds were captured the same way from the start, to a file outside the repository, read back whole, and pasted unedited. The H1 red is the harness's own printout, untruncated. The greens are the harness's printout.
 - Scope of each neutralization: H1 drops only the decorator test on a def (a decorated class is `_plain_class`'s own check, outside this element). H2 lets only the six control-flow statement kinds through; every other forbidden shape stays refused. H3 returns `True` from `_plain_assignment` before the value test, which also lifts the lambda, walrus, comprehension, generator, await and yield refusals; the proving ids are limited to a call in the value, the axis claimed. H4 replaces the entry with a constant `False`, so no statement is ever a hook.
 - The tests' parametrized forms print their full `@pytest.mark.parametrize` decorator block above each failing assertion; it is shown as printed, once per failing id.
-- Redaction: none needed; local `/Users/zwrose/...` paths are kept as printed, no secret, token or private URL appears.
+- Redaction: none needed; local `/path/to/home/...` paths are kept as printed, no secret, token or private URL appears.
 - Test commands: 10 of the 12 budgeted (H1: 2, H2: 3 including the one re-run, H3: 2, H4: 2, and the final run of the whole file). All captures are under 32 KiB each and under 128 KiB together, so none is written off-repo as an overflow. The final run of the file:
 
 ```
@@ -1485,7 +1487,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x105de2480>(<ast.FunctionDef object at 0x104ead410>)
 E        +    where <function _allowed_host at 0x105de2480> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 _____ test_allowed_host_refuses_each_forbidden_shape[decorated-async-def] ______
 
 text = '@fx(autouse=True)\nasync def f():\n    pass\n'
@@ -1550,7 +1552,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x105de2480>(<ast.AsyncFunctionDef object at 0x104c43490>)
 E        +    where <function _allowed_host at 0x105de2480> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 _ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper] _
 
 extra = '@functools.lru_cache\ndef helper():\n    return 1\n'
@@ -1570,7 +1572,7 @@ E
 E         At index 0 diff: 'found' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[decorated-def]
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[decorated-async-def]
@@ -1676,7 +1678,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x107d87560>(<ast.If object at 0x107cefb90>)
 E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 _____________ test_allowed_host_refuses_each_forbidden_shape[try] ______________
 
 text = 'try:\n    x = 1\nexcept E:\n    pass\n'
@@ -1741,7 +1743,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x107d87560>(<ast.Try object at 0x107c02910>)
 E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 _____________ test_allowed_host_refuses_each_forbidden_shape[for] ______________
 
 text = 'for i in v:\n    pass\n'
@@ -1806,7 +1808,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x107d87560>(<ast.For object at 0x107bc5610>)
 E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 ____________ test_allowed_host_refuses_each_forbidden_shape[while] _____________
 
 text = 'while c:\n    pass\n'
@@ -1871,7 +1873,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x107d87560>(<ast.While object at 0x107cefa10>)
 E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 _____________ test_allowed_host_refuses_each_forbidden_shape[with] _____________
 
 text = 'with c:\n    pass\n'
@@ -1936,7 +1938,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x107d87560>(<ast.With object at 0x107c188d0>)
 E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 ____________ test_allowed_host_refuses_each_forbidden_shape[match] _____________
 
 text = 'match c:\n    case 1:\n        pass\n'
@@ -2001,7 +2003,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x107d87560>(<ast.Match object at 0x107c78fd0>)
 E        +    where <function _allowed_host at 0x107d87560> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 _ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[if-holding-a-def] _
 
 extra = 'if True:\n    def helper():\n        return 1\n'
@@ -2021,7 +2023,7 @@ E
 E         At index 0 diff: 'found' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[if]
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[try]
@@ -2131,7 +2133,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x105f8e980>(<ast.Assign object at 0x105f2b510>)
 E        +    where <function _allowed_host at 0x105f8e980> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 ________ test_allowed_host_refuses_each_forbidden_shape[annotated-call] ________
 
 text = 'x: int = f()\n'
@@ -2196,7 +2198,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x105f8e980>(<ast.AnnAssign object at 0x105f15d90>)
 E        +    where <function _allowed_host at 0x105f8e980> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 ____ test_allowed_host_refuses_each_forbidden_shape[class-call-assignment] _____
 
 text = 'class K:\n    x = f()\n'
@@ -2261,7 +2263,7 @@ E       assert not True
 E        +  where True = <function _allowed_host at 0x105f8e980>(<ast.ClassDef object at 0x1050c7150>)
 E        +    where <function _allowed_host at 0x105f8e980> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1007: AssertionError
 _ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-in-assignment] _
 
 extra = 'CONFIG = load()\n'
@@ -2281,7 +2283,7 @@ E
 E         At index 0 diff: 'found' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[call-value]
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_allowed_host_refuses_each_forbidden_shape[annotated-call]
@@ -2334,7 +2336,7 @@ E           assert False is not False
 E            +  where False = <function _allowed_host at 0x103d7e980>(<ast.Assign object at 0x103ceddd0>)
 E            +    where <function _allowed_host at 0x103d7e980> = front._allowed_host
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1013: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:1013: AssertionError
 _ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-statement] _
 
 extra = 'setup_things()\n'
@@ -2354,7 +2356,7 @@ E
 E         At index 0 diff: 'found' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
 _ test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[decorated-helper] _
 
 extra = '@functools.lru_cache\ndef helper():\n    return 1\n'
@@ -2374,7 +2376,7 @@ E
 E         At index 0 diff: 'found' != 'unresolved'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2053-a5acd47bf4fc84b7/plugins/superheroes/lib/tests/test_break_it_body_2053.py:919: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_front_records_hook_is_the_negation_of_allowed_host
 FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_host_that_adds_anything_but_plain_code_is_host_setup[call-statement]

@@ -30,7 +30,7 @@ DoD:
 **Consequence:** none for a consuming project until it adopts the release that carries the whole stack.
 
 **Order (advisor-launched):**
-- Launched on claude-three (owner, 2026-10-10: builds run on claude-three until its usage runs out, then claude-four, then claude-two). Every spawned claude call pins CLAUDE_CONFIG_DIR to /Users/zwrose/.claude-three. Message the advisor session **"superheroes advisor"** (seat `~/.claude`) for size, scope or premise questions, and post any ruling you receive on this issue.
+- Launched on claude-three (owner, 2026-10-10: builds run on claude-three until its usage runs out, then claude-four, then claude-two). Every spawned claude call pins CLAUDE_CONFIG_DIR to /path/to/home/.claude-three. Message the advisor session **"superheroes advisor"** (seat `~/.claude`) for size, scope or premise questions, and post any ruling you receive on this issue.
 - Review panels are codex-only (owner, 2026-10-07).
 - Do not merge. This child is layer 2 of the cloud-builders stack and merges only with the whole unit, by one `gh stack merge` once every layer is vetted (R8). Do not cut a release or ask for one.
 - Open the PR with its base on `build/1742-cloud-lane`. Link the stack as `rubric/native-stacks.md` § Each layer is a sub-issue says.

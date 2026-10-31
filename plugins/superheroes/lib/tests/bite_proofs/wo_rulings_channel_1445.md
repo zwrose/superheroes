@@ -1,5 +1,7 @@
 # WO #1445 — rulings channel bite-proofs (WO-1d)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Records per `rubric/bite-proof.md` § The record. Code surface: `plugins/superheroes/lib/round_driver.py`. Detectors: `plugins/superheroes/lib/tests/test_rulings_channel_1445.py`. Restore by inverse edit only (no `git checkout` / `git restore`).
 
 ---
@@ -76,7 +78,7 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_binding_
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________ test_out_of_scope_queue_row_absent_after_fixer_landing ____________
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1445-e50bdbe8ca139cbb/plugins/superheroes/lib/tests/test_rulings_channel_1445.py:529: in test_out_of_scope_queue_row_absent_after_fixer_landing
+/path/to/home/.superheroes-worktrees/superheroes/issue-1445-e50bdbe8ca139cbb/plugins/superheroes/lib/tests/test_rulings_channel_1445.py:529: in test_out_of_scope_queue_row_absent_after_fixer_landing
     assert key_b not in scheduled
 E   AssertionError: assert 'src/f00.py::bounds b@L3' not in {'src/f00.py::bounds a@L2', 'src/f00.py::bounds b@L3'}
 =========================== short test summary info ============================
@@ -117,7 +119,7 @@ FAILED plugins/superheroes/lib/tests/test_rulings_channel_1445.py::test_out_of_s
 F                                                                        [100%]
 =================================== FAILURES ===================================
 __________________ test_edge3_restage_reapplies_out_of_scope ___________________
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1445-e50bdbe8ca139cbb/plugins/superheroes/lib/tests/test_rulings_channel_1445.py:289: in test_edge3_restage_reapplies_out_of_scope
+/path/to/home/.superheroes-worktrees/superheroes/issue-1445-e50bdbe8ca139cbb/plugins/superheroes/lib/tests/test_rulings_channel_1445.py:289: in test_edge3_restage_reapplies_out_of_scope
     assert entry.get("disposition") == "out-of-scope"
 E   AssertionError: assert None == 'out-of-scope'
 E    +  where None = <built-in method get of dict object at 0x10432b280>('disposition')

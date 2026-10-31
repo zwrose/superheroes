@@ -14,7 +14,7 @@ and KNIP_JSON below are VERBATIM (trimmed) output captured at the command line o
   in 8 different test functions in `plugins/superheroes/lib/tests/test_guardian_lens.py`
   (excerpted to 2 of the 8 lines here).
 
-  `knip --directory /Users/zwrose/weekly-eats --reporter json` run READ-ONLY (no --fix)
+  `knip --directory /path/to/project --reporter json` run READ-ONLY (no --fix)
   against installed node_modules: exit 1, 55 file-groups, 14 unused files, 33 unused
   exports.
 
@@ -62,10 +62,10 @@ KNIP_JSON = json.dumps({
             "files": [],
         },
         {
-            "file": "scripts/lib/households-backfill-core.mjs",
+            "file": "scripts/lib/backfill-core.mjs",
             "exports": [
                 {"name": "normalizeEmail", "line": 77, "col": 17, "pos": 3736},
-                {"name": "householdMatchesPlacement", "line": 218, "col": 17, "pos": 9117},
+                {"name": "groupMatchesPlacement", "line": 218, "col": 17, "pos": 9117},
             ],
             "files": [],
         },
@@ -166,7 +166,7 @@ def _knip_tracked_files():
         "node_modules/.gitkeep",
         "scripts/audit-store-invitations.cjs",
         "scripts/docgen/lib.js",
-        "scripts/lib/households-backfill-core.mjs",
+        "scripts/lib/backfill-core.mjs",
     ]
 
 
@@ -450,9 +450,9 @@ def test_knip_parse_real_output_files_and_exports(tmp_path):
     assert cands[export_id]["lines"] == [50]
     assert cands[export_id]["metric"] == 1
 
-    multi_id = "deadcode:knip:scripts/lib/households-backfill-core.mjs:normalizeEmail"
+    multi_id = "deadcode:knip:scripts/lib/backfill-core.mjs:normalizeEmail"
     assert cands[multi_id]["kind"] == "export"
-    assert cands[multi_id]["path"] == "scripts/lib/households-backfill-core.mjs"
+    assert cands[multi_id]["path"] == "scripts/lib/backfill-core.mjs"
 
 
 def test_knip_argv_operands_are_absolute_and_path_only(tmp_path):
@@ -819,7 +819,7 @@ def test_both_ecosystems_collected(tmp_path):
         "node_modules/.gitkeep": "",
         "scripts/audit-store-invitations.cjs": "export const x = 1;\n",
         "scripts/docgen/lib.js": "export const x = 1;\n",
-        "scripts/lib/households-backfill-core.mjs": "export const x = 1;\n",
+        "scripts/lib/backfill-core.mjs": "export const x = 1;\n",
     })
     run = FakeRun([
         ("vulture", (3, VULTURE_EXCERPT, "")),

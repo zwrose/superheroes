@@ -233,6 +233,11 @@ Code comments and docstrings are outside this rule entirely: they face the maint
 reader of the shipped surface, so an issue or PR number in a comment or docstring is not
 provenance and nothing sweeps the existing ones.
 
+One project's identity is barred more widely than its history. Nothing committed under the
+plugin's folder, whether shipped prose, code, code comments and docstrings, tests, fixtures or
+bite-proof records, names a project that uses the plugin, or that project's paths, commands, data
+or stack. A neutral stand-in carries the example instead: "a consuming project", `/path/to/project`.
+
 ## Rationale, prohibitions, and claims
 
 - Rationale stays on counter-default rules: the rule a reader would not guess gets its reason in

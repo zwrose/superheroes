@@ -246,7 +246,7 @@ def test_scrub_bare_vendor_tokens_no_false_positive_on_benign_content():
     prose = "The token bucket algorithm limits requests using an access key rotation policy."
     assert s(prose) == prose
     # a file path (must not be mistaken for a token)
-    path = "/Users/zwrose/.superheroes-worktrees/594f446fe509879b/plugins/superheroes/lib/pr_comment.py"
+    path = "/path/to/home/.superheroes-worktrees/594f446fe509879b/plugins/superheroes/lib/pr_comment.py"
     assert s(f"see {path}") == f"see {path}"
 
 

@@ -44,9 +44,21 @@ no individual work item is ever named in a milestone entry.
 
 ## This repo is public
 
-Never cite another repository's issue by bare `#NNN` in an issue, PR or doc here — it
-renders as a live link to an unrelated issue in this repo. Write `owner/repo#NNN`, and leave out
-private project specifics.
+Never cite another repository's issue by bare `#NNN` in an issue, PR or doc here: it renders as a
+live link to an unrelated issue in this repo. For a public repository, write `owner/repo#NNN`. A
+consuming project's issue is never cited in a committed file in either form; cite it in GitHub text
+only (next section).
+
+## Committed files name no consuming project
+
+No committed file (code, comments, tests, fixtures, bite-proof records, docs, definition docs,
+Canon) carries anything that identifies a project that uses the plugin: its name, repository slug
+or organisation, its real paths, commands, database names or stack, its issue or PR numbers, or a
+description of its product. Describe what happened in neutral words instead: "a consuming
+project", `/path/to/project`, `app-test`. Generic placeholders such as `/Users/me` or
+`/path/to/repo`, and unnamed generic examples, are fine. GitHub issues, PRs and comments may name a
+consuming project; the repository's files may not. Never enforce this with a CI step, workflow,
+test or committed list of names: the check would itself publish the names.
 
 ## Versioning (SemVer)
 

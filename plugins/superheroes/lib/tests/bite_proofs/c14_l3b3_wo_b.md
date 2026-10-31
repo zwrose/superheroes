@@ -1,5 +1,7 @@
 # C14 layer 3b-3 WO-B — fail receipts
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Advisor-ordered fail receipts for a test-only layer; not bite-proofs.
 
 ## R-B1 — plugins/superheroes/lib/tests/test_model_registry.py::test_matrix_cells_reviewer_roles_unchanged_at_base
@@ -55,7 +57,7 @@ plugins/superheroes/lib/tests/test_model_registry.py:552: in _load_model_registr
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 ...
-E               subprocess.CalledProcessError: Command '['git', '-C', '/Users/zwrose/.superheroes-worktrees/superheroes/wo-1273-l3b3-B', 'show', '0000000000000000000000000000000000000000:plugins/superheroes/lib/model_registry.py']' returned non-zero exit status 128.
+E               subprocess.CalledProcessError: Command '['git', '-C', '/path/to/home/.superheroes-worktrees/superheroes/wo-1273-l3b3-B', 'show', '0000000000000000000000000000000000000000:plugins/superheroes/lib/model_registry.py']' returned non-zero exit status 128.
 
 /Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/subprocess.py:528: CalledProcessError
 =========================== short test summary info ============================

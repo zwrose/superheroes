@@ -25,8 +25,8 @@ The people the product serves and the job it does for them, kept once per projec
 leans on it, so discovery reads it first.
 
 Examples: A build plugin is for a product-minded owner who isn't expected to know engineering craft.
-A meal-planning app is for households planning meals and shopping together, and it is headed to a
-paid product.
+A tool-lending app is for neighbours who lend each other tools, and it is headed to a paid
+product.
 
 **Not yours when** a spec just restates what is already recorded.
 
@@ -36,9 +36,9 @@ Told as user stories, "As a …, I want …, so I can …", captured in each dis
 need, not every detail, and the requirements carry the detail. It is what tells two right-looking
 designs apart.
 
-Examples: As a household shopper, I want to add more of something than my meal plans need, so I can
-stock up without losing track of what the plans need. As a shopper mid-aisle, I want one number on
-each row, so I can put the right amount in the cart without doing the sums.
+Examples: As a lender, I want to keep a tool back for myself even when no booking needs it, so I can
+hold it at home without losing track of what the bookings need. As a borrower at the door, I want
+one return date on each tool, so I can hand it back on time without checking every booking.
 
 **Not yours when** the approved board or an agreed story already shows it. Edge cases are
 requirements, not stories.
@@ -48,8 +48,8 @@ requirements, not stories.
 The behaviour of one screen or step: what is shown, what can be tapped, what happens next, and what
 happens when it goes wrong.
 
-Examples: Remove on a shopping-list row that meal plans feed refuses, and points to the plans. A row
-whose amount is still unknown can't be checked off; tapping it opens its question.
+Examples: Remove on a tool that open bookings depend on refuses, and points to the bookings. A tool
+whose return date is still unknown can't be marked returned; tapping it opens its question.
 
 **Not yours when** it matches an approved board or an existing pattern exactly.
 
@@ -89,7 +89,7 @@ owner's answer becomes the principle, a [standing ruling](glossary.md#standing-r
 [Canon](canon-contract.md), which every later discovery reads.
 
 Examples: Asked whether account deletion gets its own dialog, the owner rules that it shares the
-household-deletion dialog: no second implementation of the same thing. A proposed approval gate
+group-deletion dialog: no second implementation of the same thing. A proposed approval gate
 clashes with the owner's stated principle of autonomy.
 
 **Not yours when** a standing ruling in Canon plainly decides it.
@@ -108,7 +108,7 @@ one more fix round instead of shipping known leftovers.
 Every word the product shows its users. Agents draft it and the owner approves it. For a plugin, that
 is what the plugin says to its user.
 
-Examples: "Need beyond Plans" replaces "not from a plan". "Keep my account" replaces "Cancel", which
+Examples: "Keep for myself" replaces "not for a booking". "Keep my account" replaces "Cancel", which
 could be misread as cancelling the subscription.
 
 **Not yours when** it is instruction text agents read, under the [prose standard](prose-standard.md).

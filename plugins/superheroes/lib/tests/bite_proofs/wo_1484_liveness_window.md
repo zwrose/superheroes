@@ -1,5 +1,7 @@
 # Bite-proof record — WO-A4 (#1484) transcript liveness quiet window
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 **Guarded-element set (declared in the work order):** (1) `_transcript_cold` treats a transcript older than `LIVENESS_QUIET_WINDOW_SECONDS` as stale — detectors `test_lane_stale_cold_transcript_ten_thousand_seconds`, `test_transcript_cold_boundary_inclusive_at_quiet_window`; (2) `_transcript_cold` fail-toward-alert when transcript mtime is None (unresolved/absent/no session id) — detector `test_lane_stale_no_session_id_on_record`.
 
 **Command:** each run used the exact node id(s) below, never `-k`:
@@ -41,7 +43,7 @@ E
 E         - lane-stale
 E         + timer
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1484-0ea554da281732f2/plugins/superheroes/lib/tests/test_wave_watch.py:1308: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1484-0ea554da281732f2/plugins/superheroes/lib/tests/test_wave_watch.py:1308: AssertionError
 ___________ test_transcript_cold_boundary_inclusive_at_quiet_window ____________
 
     def test_transcript_cold_boundary_inclusive_at_quiet_window():
@@ -50,7 +52,7 @@ ___________ test_transcript_cold_boundary_inclusive_at_quiet_window ____________
 E       assert 0 == 1
 E        +  where 0 = len([])
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1484-0ea554da281732f2/plugins/superheroes/lib/tests/test_wave_watch.py:1344: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1484-0ea554da281732f2/plugins/superheroes/lib/tests/test_wave_watch.py:1344: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_lane_stale_cold_transcript_ten_thousand_seconds
 FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_transcript_cold_boundary_inclusive_at_quiet_window
@@ -102,7 +104,7 @@ E
 E         - lane-stale
 E         + timer
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1484-0ea554da281732f2/plugins/superheroes/lib/tests/test_wave_watch.py:1319: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1484-0ea554da281732f2/plugins/superheroes/lib/tests/test_wave_watch.py:1319: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_lane_stale_no_session_id_on_record
 1 failed in 9.50s
