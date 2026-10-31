@@ -6116,6 +6116,81 @@ def _verify_via_row(config, artifact):
             else config.get("verifyCommand")}
 
 
+_VERIFY_RUN_OUTPUT_CHARS = 4000
+_VERIFY_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def _usable_verify_head(value):
+    """True for a full commit id: 40 or 64 hex digits."""
+    return isinstance(value, str) and len(value) in (40, 64) and all(c in _VERIFY_HEX for c in value)
+
+
+def _verify_execution_head(artifact, fold_head):
+    """(head, source, moved) for one verify run. The head is the one the run recorded when it holds
+    still across the run (`run`), else the head resolved at the fold (`fold`), else none
+    (`unknown`). `moved` is True when the run's own two reads disagree: a run that straddled a
+    head change ran at no single head."""
+    ran = artifact.get("headSha")
+    after = artifact.get("headShaAfter")
+    ran = ran if _usable_verify_head(ran) else None
+    after = after if _usable_verify_head(after) else None
+    if ran is not None and after is not None and after != ran:
+        return ran, "run", True
+    if ran is not None:
+        return ran, "run", False
+    if _usable_verify_head(fold_head):
+        return fold_head, "fold", False
+    return None, "unknown", False
+
+
+def _verify_run_output(artifact):
+    """The last characters of the output file a run left, or "" when none can be read."""
+    path = artifact.get("outputPath")
+    if not isinstance(path, str) or not path:
+        return ""
+    try:
+        with open(path, "rb") as fh:
+            size = fh.seek(0, os.SEEK_END)
+            fh.seek(max(0, size - 4 * _VERIFY_RUN_OUTPUT_CHARS))
+            data = fh.read()
+    except OSError:
+        return ""
+    return data.decode("utf-8", errors="replace")[-_VERIFY_RUN_OUTPUT_CHARS:]
+
+
+def _verify_run_row(artifact):
+    """One verify run as the review record's run shape: ran with its exit code, timed out, or not
+    started (the reason names the result token)."""
+    result = artifact.get("result")
+    exit_code = artifact.get("exitCode")
+    if result == "timeout":
+        return {"status": "timed-out", "exitCode": None, "output": _verify_run_output(artifact),
+                "reason": "timeout"}
+    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+        return {"status": "ran", "exitCode": exit_code, "output": _verify_run_output(artifact),
+                "reason": None}
+    return {"status": "not-started", "exitCode": None, "output": "",
+            "reason": result if isinstance(result, str) else None}
+
+
+def _verify_rerun_heads_moved(first_head, artifact, head, moved):
+    """(earlier, later) when the re-run did not run at the first run's head, else None. A re-run
+    that straddled a head change names the two heads it read; a head that is unknown on either side
+    is not a difference."""
+    if moved:
+        return artifact.get("headSha"), artifact.get("headShaAfter")
+    if first_head is not None and head is not None and first_head != head:
+        return first_head, head
+    return None
+
+
+def _verify_artifact_trees(artifact):
+    """The working-tree digests a verify run read (before and, when it moved, after); unknown
+    sides are left out."""
+    return [t for t in (artifact.get("treeSha"), artifact.get("treeShaAfter"))
+            if isinstance(t, str) and t]
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -6133,6 +6208,54 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
         verified_head = None
     result = artifact.get("result")
     _record_round(state, "verifyResult", result)
+    head, head_source, moved = _verify_execution_head(artifact, verified_head)
+    first = state.pop("_verifyRerun", None)
+    # axis: a first fail does not halt — the gate is pending again once, and the second result decides — see bite-proof record c1l9a_wo1_verify_rerun
+    if first is None:
+        if result == "fail" and not moved and artifact.get("via") != "ci-exact-head":
+            state["_verifyRerun"] = {"run": _verify_run_row(artifact), "head": head,
+                                     "headSource": head_source,
+                                     "trees": _verify_artifact_trees(artifact)}
+            _decision(state, "verify-rerun",
+                      "verify gate failed once at head %s — re-running the same check once"
+                      % (head or "unknown"))
+            return
+    else:
+        second = _verify_run_row(artifact)
+        first_run = dict(first.get("run") or {}, head=first.get("head"),
+                         headSource=first.get("headSource"))
+        second_run = dict(second, head=head, headSource=head_source)
+        if moved:
+            # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
+            second_run["headAfter"] = artifact.get("headShaAfter")
+        # axis: the record holds the first failure and the one re-run, both runs — see bite-proof record c1l9a_wo1_verify_rerun
+        _record_round_append(state, "rerunChecks", {"check": "verify", "runs": [first_run, second_run]})
+        # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun
+        moved_heads = _verify_rerun_heads_moved(first.get("head"), artifact, head, moved)
+        if result == "pass" and moved_heads is not None:
+            _set_terminal(state, "halted")
+            state["certification"] = {
+                "shape": None,
+                "reason": ("verify re-run ran at a different head (%s then %s) — halt, "
+                           "certification withheld" % moved_heads)}
+            _decision(state, "verify-rerun-head-moved",
+                      "verify re-run ran at a different head (%s then %s) — halt, certification "
+                      "withheld" % moved_heads)
+            state["step"] = P_TERMINAL
+            return
+        # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
+        trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
+        if result == "pass" and len(trees) > 1:
+            _set_terminal(state, "halted")
+            state["certification"] = {
+                "shape": None,
+                "reason": "verify re-run ran on changed working-tree contents — halt, "
+                          "certification withheld"}
+            _decision(state, "verify-rerun-tree-changed",
+                      "verify re-run ran on changed working-tree contents — halt, certification "
+                      "withheld")
+            state["step"] = P_TERMINAL
+            return
     if result == "fail":
         _set_terminal(state, "halted")
         state["certification"] = {"shape": None, "reason": "verify gate failed"}
@@ -13482,6 +13605,39 @@ def _run_in_process_group_supervised(argv, timeout, kwargs):
         return subprocess.CompletedProcess(argv, proc.returncode, out, None)
 
 
+_VERIFY_HEAD_READ_SECONDS = 30
+
+
+def _verify_run_head(cwd):
+    """The commit `git rev-parse HEAD` names in `cwd`, or None when it cannot be read. It reads
+    through `subprocess.run` directly, never the verb's injectable `run`, which carries the verify
+    command alone."""
+    try:
+        done = subprocess.run(["git", "rev-parse", "HEAD"], cwd=cwd, stdin=subprocess.DEVNULL,
+                              capture_output=True, timeout=_VERIFY_HEAD_READ_SECONDS)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    head = done.stdout.decode("utf-8", errors="replace").strip()
+    return head if _usable_verify_head(head) else None
+
+
+def _verify_run_tree(cwd):
+    """A digest of the tracked working-tree changes against HEAD in `cwd` (the empty diff digests
+    too), or None when it cannot be read. The verify command runs against the working tree, so a
+    retry at one head can still run on different contents."""
+    try:
+        done = subprocess.run(["git", "diff", "HEAD", "--binary", "--no-ext-diff"], cwd=cwd,
+                              stdin=subprocess.DEVNULL, capture_output=True,
+                              timeout=_VERIFY_HEAD_READ_SECONDS)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if done.returncode != 0:
+        return None
+    return hashlib.sha256(done.stdout).hexdigest()
+
+
 def _run_verify_execute(session_dir, claim, timeout, run):
     """Run the bound verify command outside the lock. Returns (payload, refusal)."""
     rnd, attempt = claim["slot"]
@@ -13490,6 +13646,8 @@ def _run_verify_execute(session_dir, claim, timeout, run):
     command = claim["command"]
     cwd = _gate_policy_repo_root(claim["config"])
     exit_code = None
+    head_before = _verify_run_head(cwd)
+    tree_before = _verify_run_tree(cwd)
     try:
         done = run([claim["bash"], "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
@@ -13515,9 +13673,22 @@ def _run_verify_execute(session_dir, claim, timeout, run):
         return None, _refuse_cmd(session_dir, RUN_VERIFY_CMD, "run-verify-output-unwritable",
                                  phase=P_VERIFY, rnd=rnd, attempt=attempt, path=output_path,
                                  detail=str(exc))
-    return {"result": result, "exitCode": exit_code,
-            "outputSha256": hashlib.sha256(output).hexdigest(), "outputPath": output_path,
-            "command": command, "ranBy": "round-driver"}, None
+    payload = {"result": result, "exitCode": exit_code,
+               "outputSha256": hashlib.sha256(output).hexdigest(), "outputPath": output_path,
+               "command": command, "ranBy": "round-driver"}
+    # The head the command ran at: read before it and after it, an unreadable head left out. The
+    # after-read is written only when the head moved, so a run that did not move carries one key.
+    if head_before is not None:
+        payload["headSha"] = head_before
+    head_after = _verify_run_head(cwd) if head_before is not None else None
+    if head_after is not None and head_after != head_before:
+        payload["headShaAfter"] = head_after
+    if tree_before is not None:
+        payload["treeSha"] = tree_before
+        tree_after = _verify_run_tree(cwd)
+        if tree_after is not None and tree_after != tree_before:
+            payload["treeShaAfter"] = tree_after
+    return payload, None
 
 
 def _run_verify_publish(session_dir, claim, payload, acquired):

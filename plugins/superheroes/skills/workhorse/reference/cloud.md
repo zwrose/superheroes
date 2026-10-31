@@ -381,6 +381,7 @@ off a cloud build's path:
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
 | `lib/vet_slot.py`, `--pr <n> --repo <owner/name>` | the PR body through `gh api repos/<o>/<r>/pulls/<n>` (REST); `write` also edits it with `gh pr edit` | the body read works; `write` is the advisor's, not a builder's path |
 | `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issue comes from the PR body's first line |
+| `lib/pr_body_stage.py publish` (review-code, after a `converged` terminal) | `gh api repos/{owner}/{repo}/pulls/<n>` (REST) to read the body, `gh api -X PATCH repos/{owner}/{repo}/pulls/<n>` to edit it | works |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `rubric/native-stacks.md`, linking a layer | `gh stack link` | the advisor's, at handback: § Workspace, "A stack layer" |
 | `lib/pr_comment.py`, `lib/cloud_builder.py` | `gh api` (REST) | works |

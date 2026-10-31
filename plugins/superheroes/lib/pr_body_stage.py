@@ -213,16 +213,27 @@ def _run(runner, argv):
         return 1, ""
 
 
+def _pull_endpoint(pr):
+    """The REST path of a PR; ``{owner}/{repo}`` stays literal and ``gh`` fills it from the current
+    repository. Every GitHub call goes through REST because GraphQL (``gh pr view``/``edit``) is
+    unreachable from some sessions."""
+    return "repos/{owner}/{repo}/pulls/%s" % pr
+
+
 def _read_live(runner, pr):
     """The live PR body, or None when it cannot be read as text."""
-    code, out = _run(runner, ["gh", "pr", "view", str(pr), "--json", "body"])
+    code, out = _run(runner, ["gh", "api", _pull_endpoint(pr)])
     if code != 0:
         return None
     try:
         parsed = json.loads(out)
     except (TypeError, ValueError):
         return None
-    body = parsed.get("body") if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict) or "body" not in parsed:
+        return None
+    body = parsed["body"]
+    if body is None:  # REST returns null for an empty description
+        return ""
     return body if isinstance(body, str) else None
 
 
@@ -296,7 +307,8 @@ def _publish(session_dir, pr, runner):
         return done(OUTCOME_REFUSED, REASON_NOT_AUDITED)
     if not _same_body(live, original):
         return done(OUTCOME_REFUSED, REASON_MOVED)
-    if _run(runner, ["gh", "pr", "edit", pr_text, "--body-file", p["staged"]])[0] != 0:
+    edit = ["gh", "api", "-X", "PATCH", _pull_endpoint(pr_text), "-F", "body=@%s" % p["staged"]]
+    if _run(runner, edit)[0] != 0:
         return done(OUTCOME_REFUSED, REASON_PUBLISH_FAILED)
     after = _read_live(runner, pr_text)
     if after is None or not _same_body(after, staged):
@@ -306,8 +318,17 @@ def _publish(session_dir, pr, runner):
 
 # ---- the review account's line ---------------------------------------------------------------
 
+def _has_fix_to_copy(session_dir):
+    """True when a staged copy exists and differs from the original; without one there is no
+    PR-body fix, whatever the receipt's refusal reason."""
+    p = paths(session_dir)
+    staged, original = _read_text(p["staged"]), _read_text(p["original"])
+    return staged is not None and original is not None and not _same_body(staged, original)
+
+
 def record_line(session_dir):
-    """One plain-English sentence about the publish receipt for the review account, or None."""
+    """One plain-English sentence about the publish receipt for the review account, or None.
+    A refusal is reported as a copy that was not made only when there was a fix to copy."""
     try:
         receipt = _json(paths(session_dir)["published"])
         if not isinstance(receipt, dict):
@@ -321,6 +342,8 @@ def record_line(session_dir):
                         "review had no PR-body fix to copy.")
             return None
         if outcome == OUTCOME_REFUSED and isinstance(reason, str):
+            if not _has_fix_to_copy(session_dir):
+                return None
             phrase = _REFUSAL_PHRASES.get(reason, "the copy was refused (%s)" % reason)
             return "The review did not copy its PR-body fix onto the PR: %s." % phrase
         return None

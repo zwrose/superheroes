@@ -570,7 +570,8 @@ _PAYLOAD_FIELD_BINDINGS = {
     },
     P_VERIFY: {
         "required": ["result"],
-        "optional": ["command", "exit", "outputSha256", "via", "ci", "reason"],
+        "optional": ["command", "exit", "outputSha256", "via", "ci", "reason", "exitCode",
+                     "outputPath", "headSha", "headShaAfter", "treeSha", "treeShaAfter"],
         "conditional": {},
         "enums": {"result": list(round_phases._VERIFY_RESULTS)},
         "types": {
@@ -581,6 +582,12 @@ _PAYLOAD_FIELD_BINDINGS = {
             "via": "string",
             "ci": "object",
             "reason": "string",
+            "exitCode": "any",
+            "outputPath": "string",
+            "headSha": "string",
+            "headShaAfter": "string",
+            "treeSha": "string",
+            "treeShaAfter": "string",
         },
         "elements": {},
         "predicates": [{

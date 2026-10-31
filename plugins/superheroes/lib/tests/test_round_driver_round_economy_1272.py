@@ -183,10 +183,21 @@ def test_t2_verify_fail_after_audits_halts(tmp_path):
     assert n2["phase"] == RD.P_VERIFY
     s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"], {"result": "fail"})
     assert s2["ok"], s2
+    # a first fail re-pends the gate once; the second result decides
     n3 = RD.cmd_next(d)
-    assert n3["action"] == RD.P_TERMINAL
-    assert n3["payload"]["verdict"] == "halted"
-    assert n3["payload"]["certification"]["shape"] is None
+    assert n3["ok"] and n3["phase"] == RD.P_VERIFY, n3
+    assert n3["action"] != RD.P_TERMINAL
+    ok, state = RD.load_state(d)
+    assert ok
+    assert not state.get("terminal")
+    assert state["step"] == RD.P_VERIFY
+    assert "verify-rerun" in [dec["kind"] for dec in state["decisions"]]
+    s3 = RD.cmd_submit(d, n3["phase"], n3["attempt"], n3["expectedStateHash"], {"result": "fail"})
+    assert s3["ok"], s3
+    n4 = RD.cmd_next(d)
+    assert n4["action"] == RD.P_TERMINAL
+    assert n4["payload"]["verdict"] == "halted"
+    assert n4["payload"]["certification"]["shape"] is None
 
 
 # axis: cap round with no prior gate runs verify before the round-cap hand-back
@@ -289,9 +300,20 @@ def test_t3_ceiling_gate_fail_on_post_fix_head_halts(tmp_path):
     assert n3["ok"] and n3["phase"] == RD.P_VERIFY, n3
     s2 = RD.cmd_submit(d, n3["phase"], n3["attempt"], n3["expectedStateHash"], {"result": "fail"})
     assert s2["ok"], s2
+    # a first fail re-pends the gate once; the second result decides
     n4 = RD.cmd_next(d)
-    assert n4["action"] == RD.P_TERMINAL
-    assert n4["payload"]["verdict"] == "halted"
+    assert n4["ok"] and n4["phase"] == RD.P_VERIFY, n4
+    assert n4["action"] != RD.P_TERMINAL
+    ok, state = RD.load_state(d)
+    assert ok
+    assert not state.get("terminal")
+    assert state["step"] == RD.P_VERIFY
+    assert "verify-rerun" in [dec["kind"] for dec in state["decisions"]]
+    s3 = RD.cmd_submit(d, n4["phase"], n4["attempt"], n4["expectedStateHash"], {"result": "fail"})
+    assert s3["ok"], s3
+    n5 = RD.cmd_next(d)
+    assert n5["action"] == RD.P_TERMINAL
+    assert n5["payload"]["verdict"] == "halted"
     ok, state = RD.load_state(d)
     assert ok
     assert state["rounds"]["2"]["verifyResult"] == "fail"

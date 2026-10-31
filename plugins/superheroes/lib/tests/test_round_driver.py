@@ -661,7 +661,23 @@ def test_submit_verify_recognized_token_accepted(tmp_path, token, decision_kind)
     ok, state = RD.load_state(d)
     assert ok
     kinds = [dec.get("kind") for dec in state.get("decisions", [])]
-    if decision_kind is None:
+    if token == "fail":
+        # the first `fail` does not halt: the gate is pending again (UFR-3), the second result decides
+        assert not state.get("terminal"), state.get("terminal")
+        assert state["step"] == RD.P_VERIFY
+        assert "verify-rerun" in kinds, kinds
+        assert decision_kind not in kinds, kinds
+        again = RD.cmd_next(d)
+        assert (again["phase"], again["attempt"]) == (RD.P_VERIFY, n["attempt"] + 1), again
+        out = RD.cmd_submit(d, again["phase"], again["attempt"], again["expectedStateHash"],
+                            {"result": token})
+        assert out["ok"] is True, out
+        ok, state = RD.load_state(d)
+        assert ok
+        assert state.get("terminal") == "halted", state.get("terminal")
+        kinds = [dec.get("kind") for dec in state.get("decisions", [])]
+        assert decision_kind in kinds, kinds
+    elif decision_kind is None:
         assert not any(k and k.startswith("verify-") for k in kinds), kinds
     else:
         assert decision_kind in kinds, kinds
