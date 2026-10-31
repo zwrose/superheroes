@@ -3246,15 +3246,16 @@ def test_panel_round_channels_are_all_accounted_for():
     (the deliberate not-restored list, each with its reason in the source). A NEW `_record_round`
     channel that ships without a resume path fails HERE — instead of silently under-disclosing every
     resumed run's terminal receipt, which is the defect this test exists to prevent recurring.
+    A key recorded through the wave-aware wrapper `_record_round_wave` counts exactly like `_record_round`.
     """
     tree, ast_mod = _round_driver_ast()
     fold = _fn_node(tree, ast_mod, "_fold_panel")
     recorded = set()
     for node in ast_mod.walk(fold):
         if not (isinstance(node, ast_mod.Call) and isinstance(node.func, ast_mod.Name)
-                and node.func.id == "_record_round"):
+                and node.func.id in ("_record_round", "_record_round_wave")):
             continue
-        assert len(node.args) >= 2, "_record_round must be called with (state, key, value)"
+        assert len(node.args) >= 2, "%s must be called with (state, key, value)" % node.func.id
         key = node.args[1]
         assert isinstance(key, ast_mod.Constant) and isinstance(key.value, str), (
             "a _record_round key must be a string LITERAL so the census can enumerate it")
