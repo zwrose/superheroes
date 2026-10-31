@@ -167,18 +167,6 @@ leg. Each dispatching skill names the subset it runs and assigns each agent its 
 and its `id` prefix; a leg runs one agent per dimension (e.g. the Security reviewer
 emits `security-001`, …; the Failure-Mode reviewer emits `premortem-001`, …).
 
-Separately from those five risk-domain dimensions, the review crew has one **narrow
-sixth seat — the grounding seat** (`agents/grounding-seat.md`), which is **NOT** one of
-the five code-leg risk lenses above and must not be counted as one: it adds no risk
-lens, it checks the PR's self-claims against the repo. It runs at the `reviewer` model
-tier and **never** `mechanical` — a false "the claims check out" is a silence nothing
-downstream re-checks, so it must not go to the tier whose failure mode is confident wrong
-fills. On the **code leg** it is **live-dispatched** under #609 and emits
-**verdicts** (the orchestrator mints findings from `REFUTED` rows); the retained
-orchestrator-inline PR-body honesty check remains a second leg. As a code-leg lens it is
-not part of review-code's five risk dimensions, and no code-leg drift test should read it
-as one.
-
 ## Severity caps
 
 - **Nits:** at most 5 code-quality-only Nits (`consequenceKind: code-quality`) reported per review round across all seats;

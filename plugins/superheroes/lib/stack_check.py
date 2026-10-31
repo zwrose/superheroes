@@ -18,7 +18,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import gh_pages  # noqa: E402
-import grounding_stage  # noqa: E402
+import pr_body_regions  # noqa: E402
 
 GH_TIMEOUT = 120
 DEFAULT_PAGE_SIZE = 50
@@ -1156,7 +1156,7 @@ def read_vet_verdict(body, head_sha):
 
     separator, tokens = form
 
-    region_text, region_refusal = grounding_stage.read_region(body, "advisor-vet")
+    region_text, region_refusal = pr_body_regions.read_region(body, "advisor-vet")
     if region_refusal is not None:
         # axis: more than one live advisor-vet marker
         return VET_NOT_READY, None

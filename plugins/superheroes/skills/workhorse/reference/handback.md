@@ -200,16 +200,15 @@ Every deviation, harmless or costly, keeps its bullet under `### Disclosed degra
 bullet opens with `[costly]` or `[harmless]`. A bullet with no label reads costly. Sort each one by
 this rule, in this order:
 
-1. The grounding seat not running sorts **harmless**, as named.
-2. Every other deviation is **costly** when a promised check did not run, or work bypassed its owner
+1. A deviation is **costly** when a promised check did not run, or work bypassed its owner
    engine (work the builder typed instead of an implementer is one), whatever caused it, a named
    harmless cause below included.
-3. Otherwise it is **harmless**. The named harmless causes are the prompt-file pointer, the cloud
+2. Otherwise it is **harmless**. The named harmless causes are the prompt-file pointer, the cloud
    fixer route, an unreadable host model, a classifier stop, and cloud platform limits; each sorts
-   harmless only when step 2 does not apply. Cloud platform limits are the cloud session's own
+   harmless only when step 1 does not apply. Cloud platform limits are the cloud session's own
    channel limits (no session messages, no comment deletion, no GraphQL reads), never a build check
    that could not run there.
-4. Doubt sorts costly.
+3. Doubt sorts costly.
 
 Only a costly bullet gets a consequence line under `## What we're accepting`. That line carries the costly bullet's text after its label, word for word, with its consequence around it; the merge sheet build refuses a body whose `[costly]` or unlabelled bullet has no such line, and names the bullet. On the PR body, a
 harmless one stays only in the build record: it is never a body acceptance, so the merge sheet's

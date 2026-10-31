@@ -719,8 +719,7 @@ On a full panel, the driver runs each break-it test the test role wrote before i
 ## Per-seat dispatch + the seat map
 
 The round-1 panel composes over live vendors via a per-seat **seat map** (`lib/seat_map.py`,
-computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats plus the grounding seat
-carries `{vendor, model, effort, tier, family, source}`:
+computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats carries `{vendor, model, effort, tier, family, source}`:
 
 - **Read the seat's assignment** from `$SEAT_MAP.seats[<reviewer-name>]`. Dispatch a `claude`
   seat as the named subagent with `model: <seat>.model`; dispatch a `codex`/`cursor` seat through
@@ -735,21 +734,14 @@ carries `{vendor, model, effort, tier, family, source}`:
   `skills/workhorse/reference/dispatch-entry.md`) — so the panel's
   degradation disclosure names **what** died. The persona and `$RUBRIC` are identical across engines; the only per-seat difference is
   the dispatch target.
-- **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
-  — chosen to be independent of both the author (code) and narrative (PR text) families — and that
-  assignment is recorded in the receipt. On the **read-only path** (`--review-only`) it
-  is **live-dispatched** with the PR body staged as seat-readable input — full contract:
-  `grounding-seat.md`. The driver-owned auto-fix loop does **not** run SKILL step 8 today,
-  so on that path the seat does not influence certification. The review record names the seat under
-  `seatsNotRun` with the reason `no-loop-phase`, so its absence shows.
 - **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5), and **cursor's
   first-party models are ONE family**: the token-efficient implementer and grok judge models both
   carry the `xai` independence-accounting key. A `cursor` review seat is therefore NOT independent of a
   cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
   excludes the maker family from **rotation** onto every panel seat — all five lens seats
   (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-role`,
-  `premortem-reviewer`) **and** the `grounding-seat`, not
-  merely from strong-tier, critical, and grounding. The makers are the author family plus every
+  `premortem-reviewer`), not
+  merely from strong-tier and critical. The makers are the author family plus every
   extra maker family passed to compose with `--maker-family`. A seat with no live candidate outside
   the makers' families is recorded **`unfilled`** (`vendor`, `model`, `effort` and `family` all null,
   `source: "unfilled"`) with a `seat-unfilled` degradation naming the seat: it is never filled with a

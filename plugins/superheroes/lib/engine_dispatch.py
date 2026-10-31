@@ -79,7 +79,7 @@ CREDENTIAL_TEXT_RULE = (
 # must ignore the CLI's SessionStart/skill-selection bootstrap that otherwise hijacks codex into
 # skill-selection. Every engine review dispatch is fed this preamble, so it carries the review seat
 # rule (#2071) from its one home: seats whose prompt round_orders does not render (the light-lane
-# reviewer, the grounding seat, the brief check, the spec checks) get it here. It also carries the
+# reviewer, the brief check, the spec checks) get it here. It also carries the
 # credential-text rule (#2121).
 ANTIHIJACK_PREAMBLE = (
     "You are a dispatched ONE-SHOT code reviewer. This is a headless, non-interactive dispatch. "

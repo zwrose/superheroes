@@ -35,8 +35,8 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import gh_pages  # noqa: E402
-import grounding_stage  # noqa: E402
 import md_fence  # noqa: E402
+import pr_body_regions  # noqa: E402
 
 GH_TIMEOUT = 120
 RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
@@ -147,7 +147,7 @@ def analyze_body(body):
                        "PR body is not a string")
     offsets = {}
     for name in ("advisor-vet", "build-record"):
-        found = _find_live_standalone_markers(body, grounding_stage.REGION_MARKERS[name])
+        found = _find_live_standalone_markers(body, pr_body_regions.REGION_MARKERS[name])
         # axis: a slot marker present other than exactly once refuses markers-invalid
         if len(found) != 1:
             raise _Refusal("markers-invalid", "%s marker appears %d times" % (name, len(found)))

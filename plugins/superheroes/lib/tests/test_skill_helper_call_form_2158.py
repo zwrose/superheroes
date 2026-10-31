@@ -41,7 +41,7 @@ _ROOTS = (
 )
 
 # Measured at the 2158 fix: 35 call forms across the three trees (fenced lines plus inline spans).
-POPULATION_FLOOR = 33
+POPULATION_FLOOR = 32  # the grounding stage's call forms left with it (C1-L2)
 
 _SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
 _FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)
@@ -321,20 +321,20 @@ def test_census_collects_and_flags_a_command_split_before_the_script_path():
     split = (
         "```bash\n"
         "python3 -B \\\n"
-        "  <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n"
+        "  <plugin root>/lib/review_store.py stage --session-dir <session dir>\n"
         "```\n"
     )
     forms = _call_forms_in_text("fake.md", split)
     assert len(forms) == 1, forms
     assert "spans more than one physical line" in _shape_problems(forms[0].text)
-    single = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n```\n"
+    single = "```bash\npython3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir>\n```\n"
     one = _call_forms_in_text("fake.md", single)
     assert len(one) == 1 and _shape_problems(one[0].text) == []
 
 
 def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
     session, repo = scene
-    base = "python3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>"
+    base = "python3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir>"
     assert _judge(base, _PLUGIN, session, repo) is None
     for redirect in (" < /tmp/input > /tmp/output", " </tmp/input>/tmp/output", " </tmp/in >/tmp/out",
                      " <input.txt>output.txt", " <input.txt> output.txt", " <in>out"):
@@ -344,7 +344,7 @@ def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
 
 @pytest.mark.parametrize("boundary", ["\\\n```\n", "\\\n"])
 def test_a_trailing_backslash_at_a_fence_or_eof_boundary_is_collected_and_flagged(boundary):
-    text = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir> " + boundary
+    text = "```bash\npython3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir> " + boundary
     forms = _call_forms_in_text("fake.md", text)
     assert len(forms) == 1, forms
     assert "ends in a backslash continuation" in _shape_problems(forms[0].text)

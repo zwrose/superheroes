@@ -1140,7 +1140,7 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
 @pytest.mark.parametrize("with_pr_body", [False, True])
 def test_hand_written_prompt_reaches_engine_with_review_seat_rule(tmp_path, mode, with_pr_body):
     # #2071: a seat whose prompt round_orders never rendered (light-lane reviewer, brief check,
-    # grounding seat via --pr-body-path) still gets the rule, through the preamble it is fed.
+    # a reviewer fed a PR body via --pr-body-path) still gets the rule, through the preamble it is fed.
     import round_orders as RO
     repo_root = _repo(tmp_path)
     kwargs = {}

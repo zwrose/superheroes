@@ -529,6 +529,7 @@ def _record(raw, n, problems):
             and all(isinstance(m, dict) and _text(m.get("name")) and (m.get("goAhead") is None or _go_ahead(m["goAhead"]))
                     for m in rec["missingReviews"])):
         problems.append(f"{where}: its ci, lane, rounds, reviewers or missing reviews are malformed")
+    # An earlier record may carry this key: it is validated so the record still reads, and it is never shown.
     if "seatsNotRun" in rec and not (isinstance(rec["seatsNotRun"], list) and all(
             isinstance(s, dict) and _text(s.get("name")) and _text(s.get("why")) for s in rec["seatsNotRun"])):
         problems.append(f"{where}: its seats not run are malformed")
@@ -1175,8 +1176,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             said = _go_ahead(m.get("goAhead"))
             lines.append(_fill(words["historyMissing"], name=m["name"],
                                goAhead=_fill(words["historyGoAhead"], goAhead=said) if said else words["historyNoGoAhead"]))
-        lines += [_fill(words["historyNotRun"], name=s["name"], why=s["why"]) for s in r.get("seatsNotRun") or []]
-        gaps = (r.get("whatIsMissing") or []) if not review_record.cleared(r.get("status")) else []
+        gaps =(r.get("whatIsMissing") or []) if not review_record.cleared(r.get("status")) else []
         owned = [review_record.leftover_line(f) for f in r["findings"] if f.get("outcome") == _LEFT]
         count, counted = sum(1 for m in gaps if m in owned), False
         for m in gaps:
