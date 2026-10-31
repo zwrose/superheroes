@@ -1,0 +1,98 @@
+"""Census of the surfaces that tell a panel reviewer what to do with issues in untouched lines.
+
+`rubric/review-base.md` is the one home of the rule and of its number (the cap on outside findings per
+reviewer). Every other surface states the same number beside the words "outside finding" and points at that
+home. No surface may still say such issues are only skipped.
+"""
+import re
+from pathlib import Path
+
+import pytest
+
+PLUGIN = Path(__file__).resolve().parents[2]
+
+HOME = PLUGIN / "rubric" / "review-base.md"
+PANEL_SURFACES = [
+    "agents/architecture-reviewer.md",
+    "agents/code-reviewer.md",
+    "agents/security-reviewer.md",
+    "agents/premortem-reviewer.md",
+    "agents/test-role.md",
+    "rubric/orders/dispatch-panel.md",
+]
+VET_RECEIPT = PLUGIN / "skills" / "showrunner" / "reference" / "vet-receipt.md"
+GLOSSARY = PLUGIN / "rubric" / "glossary.md"
+
+# The phrases that told a reviewer untouched-line issues are only skipped.
+OLD_SKIP_PHRASES = [
+    "Pre-existing patterns outside the diff are out of scope",
+    "Pre-existing layering smells outside the diff are out of scope",
+    "Pre-existing weaknesses outside the diff are out of scope",
+    "Pre-existing test smells outside the diff are out of scope",
+    "pre-existing — SKIP",
+    "pre-existing — skip",
+    "pre-existing → SKIP",
+    "SKIPPED, not reported",
+    "Do NOT flag pre-existing",
+    "Pre-existing test smells in context lines → SKIP",
+]
+
+_NUMBER = re.compile(r"\bat most (\d+)\b", re.IGNORECASE)
+_WINDOW = 120
+
+
+def _read(path):
+    return Path(path).read_text(encoding="utf-8")
+
+
+def cap_numbers(text):
+    """The numbers of every `at most N` that sits within a short window of `outside finding`."""
+    found = []
+    for match in _NUMBER.finditer(text):
+        window = text[max(0, match.start() - _WINDOW):match.end() + _WINDOW]
+        if re.search(r"outside\s+findings?", window, re.IGNORECASE):
+            found.append(match.group(1))
+    return found
+
+
+def _home_cap():
+    numbers = cap_numbers(_read(HOME))
+    assert numbers, "review-base.md states no cap beside the words 'outside finding'"
+    assert len(set(numbers)) == 1, f"review-base.md states more than one cap: {numbers}"
+    return numbers[0]
+
+
+def test_d1_home_states_the_cap():
+    assert _home_cap().isdigit()
+    assert len(cap_numbers(_read(HOME))) == 1, "the home states the cap in exactly one sentence"
+
+
+@pytest.mark.parametrize("surface", PANEL_SURFACES)
+def test_d2_surface_states_the_homes_cap(surface):
+    home = _home_cap()
+    numbers = cap_numbers(_read(PLUGIN / surface))
+    assert numbers, f"{surface} states no cap beside the words 'outside finding'"
+    assert set(numbers) == {home}, f"{surface} states {numbers}, the home states {home}"
+
+
+@pytest.mark.parametrize("surface", ["rubric/review-base.md"] + PANEL_SURFACES)
+def test_d3_no_surface_still_only_skips_untouched_lines(surface):
+    text = _read(PLUGIN / surface)
+    left = [phrase for phrase in OLD_SKIP_PHRASES if phrase in text]
+    assert not left, f"{surface} still says: {left}"
+
+
+def test_d4_vet_receipt_sorts_the_outside_list():
+    text = _read(VET_RECEIPT)
+    triggered = [line for line in text.splitlines() if line.startswith("|") and "outsideThisPR" in line]
+    assert triggered, "no triggered-fields row names outsideThisPR"
+    assert "## The outside list" in text
+    assert "(#the-outside-list)" in text, "the Contents or the row does not link the section"
+    assert "**Outside this PR.**" in text
+    assert "follow-up" in text and "dismissed" in text
+    assert re.search(r"[Nn]othing is filed until the owner's word", text)
+
+
+def test_d5_glossary_defines_outside_finding_and_home_links_it():
+    assert "### Outside finding" in _read(GLOSSARY)
+    assert "glossary.md#outside-finding" in _read(HOME)

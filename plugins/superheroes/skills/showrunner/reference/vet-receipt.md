@@ -5,6 +5,7 @@
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
 - [The review record checks](#the-review-record-checks)
 - [A handback with open findings](#a-handback-with-open-findings)
+- [The outside list](#the-outside-list)
 - [The claims check](#the-claims-check)
 - [Project vet checks](#project-vet-checks)
 - [The `None` convention](#the-none-convention)
@@ -215,6 +216,7 @@ are never holding the inventory in working memory.
 | the review record carries `commandRefusals`, or the build record's dispatch provenance lists a refusal | a **refusals line**: each refusal was read, and any refusal followed by the same act in another form, as the stop rule defines that, is named as a **finding**, without listing the forms. The rule's one home is `lib/command_refusals.py` |
 | the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 | the review record shows a finding still **open at handback** (the review stopped at its round cap, or handed back as it does at the cap) | the **handback with open findings** — the craft list and the cap choices, as [A handback with open findings](#a-handback-with-open-findings) says |
+| the review record carries `outsideThisPR` | the **outside-list row** — every hit sorted into a proposed follow-up filing or a dismissal with its reason, as [The outside list](#the-outside-list) says |
 | the PR body claims tests ran or passed, carries a definition-of-done table, or claims the verify command passed | the **claims check** — each such claim listed with holds or does not hold and its evidence, as [The claims check](#the-claims-check) says |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
@@ -349,6 +351,41 @@ the receipt is edited in place: a later vet's choice for the same finding, such 
 an extra audit round that did not settle it, is a new line in that vet's receipt, carrying that
 vet's ordinal. A receipt that records `leftover` for a Critical is a defect in the receipt. A vet
 with no open finding that has a real owner consequence writes no field.
+
+## The outside list
+
+A reviewer that noticed a real defect on lines the change did not touch raised it as an
+[outside finding](../../../rubric/glossary.md#outside-finding). The review record lists them under
+`outsideThisPR`, and the review never fixed them. Read the list from the latest review record and
+sort **every** hit, reviewer entries and sweep entries alike, into one of two choices:
+
+1. **A proposed follow-up filing.** A proposal only. Append it to the owner's pending calls as
+   `skills/showrunner/reference/owner-decisions.md` says for an owner call: an entry in the owner's
+   pending calls, not a card on the PR's review sheet. Nothing is filed until the owner's word; this
+   vet files nothing.
+2. **A dismissal with its reason.** The hit is not worth an issue, and the receipt says why.
+
+An outside finding never holds the PR, never becomes a cap choice, and never reaches the owner as a
+card on the PR's sheet.
+
+**The outside field.** The receipt records the sort in one fixed field, `**Outside this PR.**`, one
+bullet per hit:
+
+```markdown
+**Outside this PR.**
+- <hit id> <file>:<line> · <title> — follow-up | dismissed — <the proposed issue's one-line scope, or the reason>
+```
+
+A list not sorted in full, meaning a hit of the record that the field does not carry, is a vet
+finding. A vet whose record carries no `outsideThisPR` writes no field.
+
+A sample for a fixture PR with two hits:
+
+```markdown
+**Outside this PR.**
+- O-1 lib/cloud_check.py:212 · The retry loop never stops on a permanent error — follow-up — Stop retrying on a permanent error and report it, in `lib/cloud_check.py`
+- O-2 lib/cloud_check.py:340 · A helper's name no longer matches what it returns — dismissed — Nothing calls the helper any more, so no one is misled by its name
+```
 
 ## The claims check
 
