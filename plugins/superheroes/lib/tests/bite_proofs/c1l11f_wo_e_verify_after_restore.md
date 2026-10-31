@@ -319,3 +319,187 @@ FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py::t
 ```
 
 Not separately neutralized (unproven): the `first is None` leg (a pending retry keeps the rerun path) is pinned by `test_e1_a_retry_at_the_restored_head_that_moved_during_the_run_halts_on_the_rerun_path` passing; the `result == "pass"` leg (a moved `fail` keeps the fail path) by `test_e4_a_first_failure_that_moved_head_while_running_after_a_restore_keeps_the_fail_path` passing; the `restored is not None` leg by `test_e4_without_a_restore_a_first_pass_that_moved_head_behaves_as_today` passing. None was run under a neutralization.
+
+---
+
+# C1-L12 addendum (build #2216, entries for C1-L11f's review-loop axis lines)
+
+**Provenance:** implementer WO-4, order id `c1l12-wo4`, worktree `/home/user/wo4`, branch `c1l12-wo4`, head at dispatch `86e05768`. Each entry is **re-derived at `86e05768`** by this order: the fixers' own red/green lived in their review sessions' folders on a container that has been reclaimed, and PR #2283's review records and round comments carry no break-it red/green for these lines, so none is quoted. A6 was added by fixer commit `dd84d915`, A7 and A8 by `6f91c091`. Each guarded element was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`); after each restore `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`. Every run is `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/shpyc-wo4 -m pytest "<node id>" -q -p no:cacheprovider`. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. Nothing is redacted: no secrets, tokens or URLs appear (the `/tmp/claude-0/...` paths are pytest temp directories). Every capture is under 32 KiB. A6 and A8 are axis lines written in tests; the guarded element is the production code the test exercises.
+
+| ID | Guarded element | Axis (verbatim) | Proving node |
+|---|---|---|---|
+| A6 | the rerun decision in `round_driver.py`, `elif head_unresolved or artifact.get("result") != "pass":` (`round_driver.py:6838`); axis line at `test_c1l11f_wo_e_verify_after_restore.py:162` | the rejected retry is recorded as non-advancing, so the record never calls it a re-run on unchanged code — see bite-proof record c1l11f_wo_e_verify_after_restore | `test_e2_a_retry_pass_with_no_known_head_after_a_restore_records_both_runs_then_halts` |
+| A7 | `_run_seam`, the `P_VERIFY` key tuple `("headSha", "headShaAfter", "treeSha", "treeShaAfter")` (`round_driver.py:9692`) | the seam's after-head and tree digests reach the fold, so a run that moved the head or changed the tree is seen as one — see bite-proof record c1l11f_wo_e_verify_after_restore | `test_seam_a_dict_return_carries_the_after_head_and_the_tree_digests_to_the_fold` (added by this order) |
+| A8 | `_run_seam`, the `"headShaAfter"` member of the same tuple (`round_driver.py:9692`); axis line at `test_c1l10b_test_restore.py:387` | the seam's after-head reaches the fold, so a passing retry that straddled a head change is not called unchanged code — see bite-proof record c1l11f_wo_e_verify_after_restore | `test_c1l10b_test_restore.py::test_t2_a_retry_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback` |
+
+## A6
+
+**Neutralization:** `    elif head_unresolved or artifact.get("result") != "pass":` became `    elif artifact.get("result") != "pass":` (`head_unresolved or` dropped).
+
+**Raw red** (`test_e2_a_retry_pass_with_no_known_head_after_a_restore_records_both_runs_then_halts`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_e2_a_retry_pass_with_no_known_head_after_a_restore_records_both_runs_then_halts _
+
+    def test_e2_a_retry_pass_with_no_known_head_after_a_restore_records_both_runs_then_halts():
+        state = _restored_state()
+        _fold(state, _artifact("fail", head=None))
+        _fold(state, _artifact("pass", head=None))
+    
+        assert state["terminal"] == "halted" and _kinds(state)[-1] == "verify-unresolved"
+        assert "_verifyRerun" not in state
+        (entry,) = _entries(state)
+        assert len(entry["runs"]) == 2
+        # axis: the rejected retry is recorded as non-advancing, so the record never calls it a re-run on unchanged code — see bite-proof record c1l11f_wo_e_verify_after_restore
+>       assert entry["decision"] == "failed"
+E       AssertionError: assert 'went-on' == 'failed'
+E         
+E         - failed
+E         + went-on
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py:163: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py::test_e2_a_retry_pass_with_no_known_head_after_a_restore_records_both_runs_then_halts
+1 failed in 0.84s
+```
+
+The red is on the claimed axis: the run still halts (the earlier assertions pass) but the rejected retry's entry reads `went-on`, a re-run on unchanged code, instead of `failed`.
+
+**Restore** (the inverse Edit): `    elif artifact.get("result") != "pass":` back to `    elif head_unresolved or artifact.get("result") != "pass":`. **Restore receipt:** the line is back as `    elif head_unresolved or artifact.get("result") != "pass":` followed by `        rerun_decision = "failed"`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 0.96s
+```
+
+## A7
+
+**Test added by this order:** `test_seam_a_dict_return_carries_the_after_head_and_the_tree_digests_to_the_fold` in `test_c1l11f_wo_e_verify_after_restore.py`, beside the other `test_seam_a_*` tests: it sends `headSha`, `headShaAfter`, `treeSha` and `treeShaAfter` through the in-process verify seam (`_seam_artifact`) and expects all four back. No existing node sends the tree digests through the seam. Collected with the module (`21 tests collected`) before use.
+
+**Neutralization:** `        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):` became `        for key in ("headSha",):`.
+
+**Raw red:**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_seam_a_dict_return_carries_the_after_head_and_the_tree_digests_to_the_fold _
+
+    def test_seam_a_dict_return_carries_the_after_head_and_the_tree_digests_to_the_fold():
+        # bites on: the key tuple of the verify seam in `_run_seam` (A7): the after-head and both tree digests survive
+        returned = {"result": "pass", "headSha": H1, "headShaAfter": H2, "treeSha": "a" * 40, "treeShaAfter": "b" * 40}
+>       assert _seam_artifact(returned) == returned
+E       AssertionError: assert {'result': 'p...111111111111'} == {'result': 'p...aaaaaaa', ...}
+E         
+E         Omitting 2 identical items, use -vv to show
+E         Right contains 3 more items:
+E         {'headShaAfter': '2222222222222222222222222222222222222222',
+E          'treeSha': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+E          'treeShaAfter': 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'}
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py:223: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_e_verify_after_restore.py::test_seam_a_dict_return_carries_the_after_head_and_the_tree_digests_to_the_fold
+1 failed in 1.01s
+```
+
+The red is on the claimed axis: the after-head and both tree digests the seam was handed do not reach the artifact.
+
+**Restore** (the inverse Edit): `        for key in ("headSha",):` back to `        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):`. **Restore receipt:** the line is back as `        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 0.88s
+```
+
+Not separately neutralized (unproven): each digest on its own (`treeSha`, `treeShaAfter`); the new node drops all three together, and only `headShaAfter` has a second node (A8).
+
+## A8
+
+**Neutralization:** `        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):` became `        for key in ("headSha", "treeSha", "treeShaAfter"):` (`"headShaAfter"` dropped).
+
+**Raw red** (`test_c1l10b_test_restore.py::test_t2_a_retry_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t2_a_retry_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-33/test_t2_a_retry_pass_whose_hea0')
+
+    def test_t2_a_retry_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback(tmp_path):
+        # axis: the seam's after-head reaches the fold, so a passing retry that straddled a head change is not called unchanged code — see bite-proof record c1l11f_wo_e_verify_after_restore
+        w = World(tmp_path, cap=2)
+        moved_to = "f" * 40
+        runs = []
+
+        def fix_step(batch, rnd, payload):
+            assert payload.get("restoreOnly"), "the run must halt at the verify gate, before any settle fix"
+            w.write(TEST_PATH, payload["restores"][0]["content"])
+            _commit(w.root, "restore")
+            return {"fixes": []}
+
+        def verify(command, rnd):
+            head = _git(w.root, "rev-parse", "HEAD").strip()
+            runs.append(head)
+            if len(runs) == 1:
+                return {"result": "fail", "headSha": head}
+            return {"result": "pass", "headSha": head, "headShaAfter": moved_to}
+
+        seams = TRD._seams(auditor=lambda targets, rnd: w.audit_artifact()["results"], fix_step=fix_step,
+                           reviewer=lambda dim, tier, rnd, ctx: {"findings": [], "vendor": "codex"},
+                           verify_runner=verify)
+        seams["panel_diff"] = lambda config, head: (TRD.DIFF, None)
+>       _receipt, state = w.run_loop(seams)
+                          ^^^^^^^^^^^^^^^^^
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l10b_test_restore.py:409: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l10b_test_restore.py:204: in run_loop
+    return TRD._run_loop_capturing_state(seams, self.cfg)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/wo4/plugins/superheroes/lib/tests/test_round_driver.py:196: in _run_loop_capturing_state
+    result = RD.run_loop(seams, config)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/wo4/plugins/superheroes/lib/round_driver.py:9914: in run_loop
+    artifact = _run_seam(seams, action, step["payload"], state, state["config"])
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+/home/user/wo4/plugins/superheroes/lib/round_driver.py:9697: in _run_seam
+    return seams["fix_step"](payload.get("batch"), state["round"], payload)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+batch = [{'id': 'tests/test_charge.py::retry charges twice@L1', 'findingKey': 'tests/test_charge.py::retry charges twice@L1', 'identity': 'tests/test_charge.py::retry charges twice', 'file': 'tests/test_charge.py', ...}]
+rnd = 2
+payload = {'batch': [{'id': 'tests/test_charge.py::retry charges twice@L1', 'findingKey': 'tests/test_charge.py::retry charges t...::retry charges twice', 'file': 'tests/test_charge.py', ...}], 'startHead': '98c3e44a75f5f5767fb53ff803955422ad567364'}
+
+    def fix_step(batch, rnd, payload):
+>       assert payload.get("restoreOnly"), "the run must halt at the verify gate, before any settle fix"
+E       AssertionError: the run must halt at the verify gate, before any settle fix
+E       assert None
+E        +  where None = <built-in method get of dict object at 0x7fd205c7dd80>('restoreOnly')
+E        +    where <built-in method get of dict object at 0x7fd205c7dd80> = {'batch': [{'id': 'tests/test_charge.py::retry charges twice@L1', 'findingKey': 'tests/test_charge.py::retry charges t...::retry charges twice', 'file': 'tests/test_charge.py', ...}], 'startHead': '98c3e44a75f5f5767fb53ff803955422ad567364'}.get
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l10b_test_restore.py:393: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l10b_test_restore.py::test_t2_a_retry_pass_whose_head_moved_while_running_halts_through_the_run_loop_callback
+1 failed in 2.67s
+```
+
+The red is on the claimed axis, by its consequence: with the after-head dropped at the seam, the passing retry that straddled a head change is no longer refused, so the run goes on to the settle fix, which the test's own guard (`the run must halt at the verify gate, before any settle fix`) rejects. It is not an import error or an unrelated assertion; the `verify-rerun-head-moved` assertions after `run_loop` are not reached, so the red proves the run did not halt, not the recorded entry.
+
+**Restore** (the inverse Edit): `        for key in ("headSha", "treeSha", "treeShaAfter"):` back to `        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):`. **Restore receipt:** the line is back as `        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 2.25s
+```

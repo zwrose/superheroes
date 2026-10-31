@@ -199,6 +199,16 @@ def test_b1_a_test_found_twice_is_never_credited(tmp_path):
     assert _facts(tmp_path / "c", explained_twice, _explained())["match"] == "changed-unexplained"
 
 
+def test_b1_a_renamed_test_the_kept_check_would_park_is_not_credited_as_the_reviewers_original(tmp_path):
+    # bites on: the retention guards of `_locate_in_final_diff` (A1): the reviewer's test is renamed in place and the
+    # repository declares a pytest collection override, so `break_it.check_kept` parks it as binding-conflict; the
+    # audit never reads `same` for it (the control, with no override, reads `same`)
+    renamed = ROLE_TEST.replace("test_charge", "test_charge_twice")
+    override = {"pytest.ini": "[pytest]\npython_functions = check_*\n", TEST_PATH: renamed}
+    assert _facts(tmp_path / "a", override, C10._finding())["match"] == "changed-unexplained"
+    assert _facts(tmp_path / "b", {TEST_PATH: renamed}, C10._finding())["match"] == "same"
+
+
 def test_b1_a_language_the_body_search_does_not_read_compares_exact_bytes_only(tmp_path):
     # edge 4: `.rb` has no front, so a reformatted copy is a change
     path = "tests/charge_test.rb"

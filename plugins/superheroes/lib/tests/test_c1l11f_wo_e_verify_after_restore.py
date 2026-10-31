@@ -217,6 +217,12 @@ def test_seam_a_dict_return_gives_its_result_and_a_non_empty_string_head():
     assert _seam_artifact({"result": "pass", "headSha": H1, "extra": "x"}) == {"result": "pass", "headSha": H1}
 
 
+def test_seam_a_dict_return_carries_the_after_head_and_the_tree_digests_to_the_fold():
+    # bites on: the key tuple of the verify seam in `_run_seam` (A7): the after-head and both tree digests survive
+    returned = {"result": "pass", "headSha": H1, "headShaAfter": H2, "treeSha": "a" * 40, "treeShaAfter": "b" * 40}
+    assert _seam_artifact(returned) == returned
+
+
 def test_seam_a_bare_string_return_stays_result_only():
     assert _seam_artifact("pass") == {"result": "pass"}
 
