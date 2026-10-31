@@ -999,7 +999,9 @@ def test_t9_a_carried_block_that_cannot_be_read_keeps_today_s_expectation_and_pa
 def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reuses_the_landed_pass(
         tmp_path, monkeypatch, adapters):
     # axis: the post-restore verify takes a fresh slot — the concurrent slot's earlier pass is not the gate's result
-    w = World(tmp_path)
+    # No seat map: no reviewer outside the makers' families can be seated, so the correction is not offered and the
+    # restore goes straight to the gate (asserted below through the `break-it-correction-unseatable` decision).
+    w = World(tmp_path, seat_map=False)
     w.cfg["verifyCommand"] = "make test"
     d = TA._session(tmp_path, name="durable", verifyCommand="make test")
     state = TA._state(d)
@@ -1022,6 +1024,8 @@ def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reus
     w.audit()
     w.restore()
     restored = w.head()
+    assert "break-it-correction-unseatable" in _decisions(w.state), _decisions(w.state)
+    assert "break-it-correction-offered" not in _decisions(w.state)
     assert w.state["step"] == RD.P_VERIFY and w.state["_restoredHead"] == restored
     RD.save_state(d, w.state)
     nxt = RD.cmd_next(d)
@@ -1033,6 +1037,55 @@ def test_the_gate_after_a_restore_runs_again_at_the_restored_head_and_never_reus
     assert again["ok"] is True and len(calls) == 1, again
     landed, err = RD.round_records.read_json(again["landingPath"])
     assert err is None and landed["headSha"] == restored
+
+
+def test_the_gate_after_a_restore_never_shares_a_slot_with_a_run_verify_still_in_progress(
+        tmp_path, monkeypatch, adapters):
+    # axis: the post-restore verify skips a slot an in-progress run-verify claims, and the old runner cannot publish into the new one
+    w = World(tmp_path, seat_map=False)  # no correction is offered (see the test above), so the restore reaches the gate
+    w.cfg["verifyCommand"] = "make test"
+    d = TA._session(tmp_path, name="claimed", verifyCommand="make test")
+    state = TA._state(d)
+    for field in ("round", "rounds", "fixBatch", "findings", "_auditTargets", "_newSurface", "_fixDeltaDiff",
+                  "_verifyThen", "step"):
+        state[field] = w.state[field]
+    state["config"].update({k: v for k, v in w.cfg.items() if k != "verifyCommand"})
+    state["pending"] = None
+    RD.save_state(d, state)
+    monkeypatch.chdir(w.root)
+    out = RD.cmd_next(d)
+    assert out["ok"] and out["phase"] == RD.P_AUDITS, out
+    slot = out["payload"]["verify"]
+    rnd, old = slot["round"], slot["attempt"]
+    # a concurrent run-verify holds the slot (a live claim, nothing landed): this process stands in for its runner
+    landing_dir = RD.round_records.landing_dir(d, rnd, RD.P_VERIFY)
+    os.makedirs(landing_dir, exist_ok=True)
+    claim_path = os.path.join(landing_dir, RD.RUN_VERIFY_CLAIM_NAME % old)
+    with open(claim_path, "w", encoding="utf-8") as fh:
+        fh.write(RD.round_records.canonical({"pid": os.getpid(), "token": "t", "startedAt": "x"}))
+    w.state = TA._state(d)
+    w.state["pending"] = None
+    w.audit()
+    w.restore()
+    restored = w.head()
+    assert w.state["step"] == RD.P_VERIFY and w.state["_restoredHead"] == restored
+    RD.save_state(d, w.state)
+    nxt = RD.cmd_next(d)
+    assert nxt["ok"] and nxt["phase"] == RD.P_VERIFY, nxt
+    assert nxt["attempt"] != old, "the restored head was given the slot a live run-verify holds"
+    calls = []
+    again = RD.cmd_run_verify(d, run=TA._verb_run(0, calls=calls))
+    assert again["ok"] is True and again["attempt"] == nxt["attempt"] and len(calls) == 1, again
+    landed, err = RD.round_records.read_json(again["landingPath"])
+    assert err is None and landed["headSha"] == restored
+    # the old runner finishes after the restore: its slot is no longer the pending one, so nothing lands
+    skey = RD.round_records.storage_key("verify")
+    old_claim = {"slot": (rnd, old), "stale": False,
+                 "landingPath": RD.round_records.bare_payload_path(d, rnd, RD.P_VERIFY, skey, old),
+                 "recordPath": RD.round_records.store_path(d, rnd, RD.P_VERIFY, skey, old)}
+    refused = RD._run_verify_publish(d, old_claim, {"result": "pass", "headSha": w.fix_head}, [])
+    assert refused["ok"] is False and refused["reason"] == "run-verify-slot-moved", refused
+    assert not os.path.exists(old_claim["landingPath"])
 
 
 @pytest.mark.parametrize("head,halts", [pytest.param("0" * 40, True, id="another-head"),
@@ -1049,6 +1102,99 @@ def test_the_gate_after_a_restore_counts_only_a_run_at_the_restored_head(tmp_pat
         assert w.state["decisions"][-1]["kind"] == "verify-unresolved"
     else:
         assert not w.state.get("terminal") and "_restoredHead" not in w.state
+
+
+@pytest.mark.parametrize("moves,halts", [pytest.param(True, True, id="head-moved-during-the-run"),
+                                         pytest.param(False, False, id="head-held-still")])
+def test_the_gate_after_a_restore_refuses_a_run_that_moved_head_during_the_run(tmp_path, moves, halts):
+    # axis: the gate after a restore counts only a run that held still at the restored head — a pass that starts there and ends at another commit halts
+    w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore goes straight to the gate
+    w.audit()
+    w.restore()
+    restored = w.state["_restoredHead"]
+    later = _commit(w.root, "moved on during the run")
+    assert later != restored
+    artifact = {"result": "pass", "headSha": restored, "headShaAfter": later if moves else restored}
+    w.fold(RD.P_VERIFY, artifact, verified_head_resolution=(None, None))
+    if halts:
+        assert w.state["terminal"] == "halted" and w.state["step"] == RD.P_TERMINAL
+        assert w.state["decisions"][-1]["kind"] == "verify-unresolved"
+        assert "moved during the run" in w.state["decisions"][-1]["detail"]
+        assert w.state["certification"]["shape"] is None
+        assert "moved during the run" in w.state["certification"]["reason"]
+    else:
+        assert not w.state.get("terminal") and "_restoredHead" not in w.state
+
+
+def test_two_failing_runs_at_the_restored_head_halt_and_never_fall_back_to_an_earlier_pass(tmp_path):
+    # axis: the post-restore gate is decided by its own runs — a first failure re-runs once, a second one halts
+    w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore goes straight to the gate
+    w.audit()
+    w.restore()
+    restored = w.state["_restoredHead"]
+    failing = {"result": "fail", "headSha": restored}
+    w.fold(RD.P_VERIFY, failing, verified_head_resolution=(None, None))
+    assert not w.state.get("terminal") and "verify-rerun" in _decisions(w.state)
+    assert w.state["_restoredHead"] == restored
+    w.fold(RD.P_VERIFY, failing, verified_head_resolution=(None, None))
+    assert w.state["terminal"] == "halted" and w.state["step"] == RD.P_TERMINAL
+    assert _decisions(w.state)[-1] == "verify-fail"
+
+
+def test_two_failing_runs_after_a_restore_halt_through_run_verify_and_advance_never_counting_the_landed_pass(
+        tmp_path, monkeypatch, adapters):
+    # axis: the durable post-restore gate — two failing run-verify landings, each advanced, halt; the earlier landed pass is never the result
+    w = World(tmp_path, seat_map=False)  # no correction is offered, so the restore reaches the gate
+    w.cfg["verifyCommand"] = "make test"
+    d = TA._session(tmp_path, name="durable-fail", verifyCommand="make test")
+    state = TA._state(d)
+    for field in ("round", "rounds", "fixBatch", "findings", "_auditTargets", "_newSurface", "_fixDeltaDiff",
+                  "_verifyThen", "step"):
+        state[field] = w.state[field]
+    state["config"].update({k: v for k, v in w.cfg.items() if k != "verifyCommand"})
+    state["pending"] = None
+    RD.save_state(d, state)
+    monkeypatch.chdir(w.root)
+    out = RD.cmd_next(d)
+    assert out["ok"] and out["phase"] == RD.P_AUDITS, out
+    slot = out["payload"]["verify"]
+    first = RD.cmd_run_verify(d, run=TA._verb_run(0))
+    assert first["ok"] is True and first["result"] == "pass" and first["attempt"] == slot["attempt"], first
+    # the audits report a weakened test while that pass is landed and unaccepted; the restore is committed
+    w.state = TA._state(d)
+    w.state["pending"] = None
+    w.audit()
+    w.restore()
+    restored = w.head()
+    assert w.state["step"] == RD.P_VERIFY and w.state["_restoredHead"] == restored
+    RD.save_state(d, w.state)
+    nxt = RD.cmd_next(d)
+    assert nxt["ok"] and nxt["phase"] == RD.P_VERIFY and nxt["attempt"] != slot["attempt"], nxt
+    # the first failing run at the restored head lands in its own slot and is recorded as a re-run, not a halt
+    calls = []
+    fail1 = RD.cmd_run_verify(d, run=TA._verb_run(1, calls=calls))
+    assert fail1["ok"] is True and fail1["result"] == "fail" and len(calls) == 1, fail1
+    assert fail1["attempt"] == nxt["attempt"], fail1
+    landed1, err = RD.round_records.read_json(fail1["landingPath"])
+    assert err is None and landed1["headSha"] == restored and landed1["result"] == "fail"
+    out1 = TA._advance(d, tmp_path)
+    assert out1["ok"] is True and out1.get("terminal") is None, out1
+    mid = TA._state(d)
+    assert not mid.get("terminal") and mid["step"] == RD.P_VERIFY and mid["_restoredHead"] == restored
+    assert "verify-rerun" in _decisions(mid) and "verify-fail" not in _decisions(mid)
+    assert mid["rounds"][str(mid["round"])]["verifyResult"] == "fail"
+    # the re-run takes yet another slot, never the earlier landed pass's
+    pend = mid["pending"]
+    assert pend["phase"] == RD.P_VERIFY and pend["attempt"] not in (slot["attempt"], fail1["attempt"]), pend
+    # the second failing run at the restored head halts the round
+    fail2 = RD.cmd_run_verify(d, run=TA._verb_run(1))
+    assert fail2["ok"] is True and fail2["result"] == "fail" and fail2["attempt"] == pend["attempt"], fail2
+    out2 = TA._advance(d, tmp_path)
+    assert out2["ok"] is True and out2.get("terminal") == "halted", out2
+    end = TA._state(d)
+    assert end["terminal"] == "halted" and end["step"] == RD.P_TERMINAL
+    assert _decisions(end)[-1] == "verify-fail"
+    assert end["rounds"][str(end["round"])]["verifyResult"] == "fail"
 
 
 def test_a_used_correction_stays_used_when_the_finding_is_raised_again(tmp_path):
