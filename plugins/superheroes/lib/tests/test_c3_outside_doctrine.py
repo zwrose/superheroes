@@ -88,9 +88,31 @@ def test_d4_vet_receipt_sorts_the_outside_list():
     assert triggered, "no triggered-fields row names outsideThisPR"
     assert "## The outside list" in text
     assert "(#the-outside-list)" in text, "the Contents or the row does not link the section"
-    assert "**Outside this PR.**" in text
     assert "follow-up" in text and "dismissed" in text
     assert re.search(r"[Nn]othing is filed until the owner's word", text)
+
+
+def _outside_section(text):
+    """The text of vet-receipt.md's `## The outside list` section, up to the next `## ` heading."""
+    assert "## The outside list" in text
+    return text.split("## The outside list", 1)[1].split("\n## ", 1)[0]
+
+
+def _fenced_blocks(section):
+    """The body of each fenced code block in `section`, in order."""
+    return re.findall(r"^```[^\n]*\n(.*?)^```", section, re.MULTILINE | re.DOTALL)
+
+
+def test_d4_each_block_the_vet_receipt_emits_opens_with_the_outside_field():
+    section = _outside_section(_read(VET_RECEIPT))
+    # the prose sentence that names the field, checked on its own
+    assert re.search(r"fixed field, `\*\*Outside this PR\.\*\*`", section), "the prose does not name the field"
+    blocks = _fenced_blocks(section)
+    assert len(blocks) == 2, f"expected the template block and the sample block, found {len(blocks)}"
+    template, sample = blocks
+    for name, block in (("template", template), ("sample", sample)):
+        assert block.splitlines()[0] == "**Outside this PR.**", f"the {name} block's first line is not the field"
+    assert "<hit id>" in template and "<hit id>" not in sample, "the template and sample blocks are not in that order"
 
 
 def test_d5_glossary_defines_outside_finding_and_home_links_it():

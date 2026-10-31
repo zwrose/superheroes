@@ -316,6 +316,46 @@ def test_t9_an_abandoned_session_does_not_list_a_finding_on_the_outside_list_as_
     assert [f["title"] for f in kept["findings"]] == ["Unfolded defect"]  # a hit at another line covers nothing
 
 
+def _abandoned_in_rounds(tmp_path, reported_rounds, **state):
+    """An abandoned session whose code-reviewer stored the one unfolded finding in each of `reported_rounds`."""
+    s = Session(tmp_path, **{"terminal": None, "round": max(reported_rounds), "rounds": {str(n): {} for n in reported_rounds},
+                             **state})
+    for rnd in reported_rounds:
+        s.seat("code-reviewer", rnd=rnd)
+    session = s.save()
+    for rnd in reported_rounds:
+        put_envelope(session, "code-reviewer", {"vendor": "codex", "model": "m", "payload": {"findings": [UNFOLDED]}},
+                     rnd=rnd)
+    return session
+
+
+def _round_one_hit(world):
+    """The state after the driver sent the unfolded finding outside in round 1: the list and its round provenance."""
+    state = world.state
+    state["round"] = 1
+    assert RD._record_outside(state, [_drop(UNFOLDED["title"], file=UNFOLDED["file"], line=UNFOLDED["line"])]) == []
+    assert state["_outsideRounds"] == [
+        {"title": UNFOLDED["title"], "file": UNFOLDED["file"], "line": UNFOLDED["line"], "round": 1}]
+    return state
+
+
+def test_t9_a_later_round_report_of_the_same_hit_is_listed_open_when_the_driver_kept_the_round(world, tmp_path):
+    # axis: the driver's `_outsideRounds` provenance scopes the exclusion to the round that sent the hit outside, so a later round's report of the same title, file and line stays open — see bite-proof record c3_wo_a_outside
+    state = _round_one_hit(world)
+    carried = {"outsideThisPR": state["outsideThisPR"], "_outsideRounds": state["_outsideRounds"]}
+    both = rs.account_from_session(_abandoned_in_rounds(tmp_path / "both", [1, 2], **carried), extras(), Fake().readers(),
+                                   abandoned="stopped")
+    assert [(f["title"], f["outcome"]) for f in both["findings"]] == [("Unfolded defect", None)]  # the round-2 report
+    only_first = rs.account_from_session(_abandoned_in_rounds(tmp_path / "first", [1], **carried), extras(),
+                                         Fake().readers(), abandoned="stopped")
+    assert only_first["findings"] == [] and only_first["refused"] == []  # the round-1 report is the listed hit
+    # control: the same session without the provenance rows reads as the legacy shape, which excludes every round
+    legacy = rs.account_from_session(
+        _abandoned_in_rounds(tmp_path / "legacy", [1, 2], outsideThisPR=state["outsideThisPR"]), extras(), Fake().readers(),
+        abandoned="stopped")
+    assert legacy["findings"] == []
+
+
 # ---- T10 -----------------------------------------------------------------------------------------------------
 
 

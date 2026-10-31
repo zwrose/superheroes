@@ -161,7 +161,7 @@ Flag ONLY when the app becomes unusable for the actual user. These are usability
 2. **Grep-before-flag for error constants and shared symbols.** Before flagging "should use constant/symbol X", search the project to confirm X exists under that exact name. If the closest match has a different name, propose the real name.
 3. **Confirm intent before flagging an import-convention violation.** Colocated siblings sometimes use `./foo` intentionally — if the import target is in the same directory, the relative path is fine.
 4. **Reachability check on Important findings** (per the base rubric). Read the caller; if the only caller already validates the input the code would re-validate, downgrade.
-5. **Diff-scope rule** (per the base rubric): in branch/PR mode, only flag code on `+`/`-` lines. Context lines are pre-existing — not a finding on the change; at most 3 outside findings from your own reading, never blocking.
+5. **Diff-scope rule** (per the base rubric): in branch/PR mode, only flag code on the lines the change touched (the added lines, and the line on each side of a deletion). Other context lines are pre-existing — not a finding on the change; at most 3 outside findings from your own reading, never blocking.
 6. **Single-pass discipline** (per the base rubric): one review per dispatch. Do not chain a follow-up agent.
 7. **In-pass Chain-of-Verification** (per the base rubric): run the rubric's ordered in-pass Chain-of-Verification on each candidate finding before emitting it — drop or downgrade failures in order, and set `confidence` from its final step. Do not restate the steps here; the base rubric is the source of truth.
 

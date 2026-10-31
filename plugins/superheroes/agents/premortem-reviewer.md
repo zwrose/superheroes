@@ -12,7 +12,7 @@ You are the `Failure-Mode` reviewer. Your method is **inverse reasoning**: assum
 
 One skill dispatches this agent:
 
-- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch. Walk each changed execution path through the failure-class taxonomy below. The diff-scope rule applies in full — the trigger must originate in a `+`/`-` line.
+- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch. Walk each changed execution path through the failure-class taxonomy below. The diff-scope rule applies in full — the trigger must originate in a line the change touched (an added line, or the line on each side of a deletion).
 
 You run **once per dispatch**. Single-pass discipline is enforced by the base rubric.
 
@@ -75,14 +75,14 @@ At plan time also flag a missing **Failure-handling statement**: if the plan int
 - **Missing test cases** — `test-role`'s. A missing-test gap may inform your narrative but is not your finding to raise. **One carve-out, and only one:** the missing **end-to-end exercise through a newly added *externally invokable* entry point into an unchanged surface** (see What to Flag for the terminating test) is yours, because the untested thing is the composition of changed and unchanged code rather than a case on a changed unit. **A new internal caller of an existing helper is not that** — it is reuse, and the tests around it stay `test-role`'s (whether each changed test would fail if the code were wrong). Everything else that reads as "add a test" stays `test-role`'s too.
 - **Layering/abstraction/coupling** — `architecture-reviewer`'s.
 - Hypothetical hardware/cosmic failures, multi-region/DR concerns, and anything else the profile's scope exclusions name.
-- Pre-existing failure modes outside the diff — not a finding on the change; at most 3 outside findings from your own reading, per the base rubric's diff-scope rule, never blocking. In code mode, the trigger of a finding on the change must originate in a `+`/`-` line.
+- Pre-existing failure modes outside the diff — not a finding on the change; at most 3 outside findings from your own reading, per the base rubric's diff-scope rule, never blocking. In code mode, the trigger of a finding on the change must originate in a line the change touched (an added line, or the line on each side of a deletion).
 - Anything in the base rubric's global "Do NOT Flag" (high-signal) bar or the profile's scope exclusions.
 
 ## Verification Rules
 
 Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → reachable/not-already-guarded → claimed-missing-actually-missing → not-tooling-caught → assign confidence) on every candidate finding before emitting it. The realistic-trigger rule above is the Failure-Mode facet of that chain:
 
-1. **`file:line` citation required** (per the base rubric). Code mode: a `+`/`-` line where the chain starts. Plan mode: the plan's section heading + line number.
+1. **`file:line` citation required** (per the base rubric). Code mode: a line the change touched (an added line, or the line on each side of a deletion) where the chain starts. Plan mode: the plan's section heading + line number.
 2. **Grep-before-flag for guards** — transaction idioms, retry wrappers, idempotency keys, unique constraints, under the project's names (read the profile's canonical patterns first).
 3. **Trace the actual flow** before asserting "no compensation": the compensating write may live in a caller or a job. Read the callers.
 4. **Profile gate check** — re-read the threat model before emitting any `concurrency/race` or load-dependent finding; cite the gate in `evidence`.

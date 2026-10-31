@@ -149,7 +149,7 @@ _Read side — excessive data exposure:_
 Run the base rubric's in-pass **Chain-of-Verification** (see review-base "In-pass Chain-of-Verification & single-pass discipline") on every candidate finding before emitting it — citation-in-scope → reachable/not-already-guarded → claimed-missing-actually-missing → not-tooling-caught → assign confidence — dropping or downgrading failures in order. The security-specific checks below are facets of that chain.
 
 1. **`file:line` citation required** (per the base rubric). Every finding cites a path + line. No citation → drop.
-2. **Diff-scope rule** (per the base rubric): in branch/PR mode, only flag code on `+`/`-` lines. Context lines are pre-existing — not a finding on the change; at most 3 outside findings from your own reading, never blocking.
+2. **Diff-scope rule** (per the base rubric): in branch/PR mode, only flag code on the lines the change touched (the added lines, and the line on each side of a deletion). Other context lines are pre-existing — not a finding on the change; at most 3 outside findings from your own reading, never blocking.
 3. **Grep-before-flag for "missing id validation":** confirm the handler accepts an id from a URL param or request body. If the id is a literal/constant, the rule doesn't apply.
 4. **Grep-before-flag for "missing ownership filter":** confirm the resource is user-scoped per the project's ownership model. Intentionally-global resources and lookups keyed by something other than the principal are exceptions — not bugs.
 5. **Trace the actual response shape before flagging "exposes other principals' data."** If the data layer projects or scrubs fields before they reach the response, the leak may not be reachable. Read the response builder, not just the query.

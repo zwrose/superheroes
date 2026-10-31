@@ -310,8 +310,9 @@ on each candidate finding before emitting it, dropping (or downgrading) failures
 order:
 
 1. **Citation in scope** — `file:line` is present; in diff modes it lands on a
-   `+`/`-` line (a finding on a context or unchanged line is not a finding on the change;
-   it is an outside finding under rule 2's cap or it is dropped) (a break-it test cites its
+   touched line, as rule 2 defines it (an added line, or the line on each side of a
+   deletion; a finding on any other context or unchanged line is not a finding on the
+   change; it is an outside finding under rule 2's cap or it is dropped) (a break-it test cites its
    new file; see rule 2).
 2. **Reachable / not already guarded** — read the caller; if the only caller
    already guards the case, drop or downgrade.

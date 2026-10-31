@@ -227,7 +227,7 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
    **claim/test mismatch**; **unproven-detector** is for detectors the diff adds with no stated
    axis or an owed disclosure absent from the diff.
 7. **Before writing a break-it test (per-area or attached):** read the code the diff changed and confirm the scenario reaches it through a public path. A test that cannot reach the changed code passes for any change and proves nothing. An attached test must also fail on the unfixed code when the finding is real; if you cannot picture it failing, attach none.
-8. **Diff-scope rule** (per the base rubric): only flag code on `+`/`-` lines. Pre-existing test smells in context lines are not a finding on the change; at most 3 outside findings from your own reading, never blocking.
+8. **Diff-scope rule** (per the base rubric): only flag code on the lines the change touched (the added lines, and the line on each side of a deletion). Pre-existing test smells in other context lines are not a finding on the change; at most 3 outside findings from your own reading, never blocking.
 9. **Single-pass discipline** (per the base rubric): one review per dispatch.
 
 ## Output Format
