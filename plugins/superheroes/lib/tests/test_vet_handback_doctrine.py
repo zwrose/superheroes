@@ -22,6 +22,7 @@ _SKILL = os.path.join(_SHOWRUNNER, "SKILL.md")
 _TRIGGERED = "## Triggered fields — the artifacts raise them, not your memory"
 _OPEN_FINDINGS = "## A handback with open findings"
 _CLAIMS = "## The claims check"
+_RECORD_CHECKS = "## The review record checks"
 
 # (id, path, heading or None for the whole file, needles that must be present, needles that must be absent)
 _ELEMENTS = (
@@ -33,6 +34,14 @@ _ELEMENTS = (
     ("spelling-rethink", _VET_RECEIPT, _OPEN_FINDINGS, ("`rethink`",), ()),
     ("marker-template", _VET_RECEIPT, _OPEN_FINDINGS, ("<!-- superheroes:cap-choice choice=",), ()),
     ("key-is-finding-key", _VET_RECEIPT, _OPEN_FINDINGS, ("key=<findingKey> -->",), ()),
+    ("glossary-link-extra-audit-round", _VET_RECEIPT, _OPEN_FINDINGS,
+     ("(../../../rubric/glossary.md#extra-audit-round)",), ()),
+    ("route-extra-audit-verb", _VET_RECEIPT, _OPEN_FINDINGS, ("extra-audit --session-dir",), ()),
+    ("route-by-advisor", _VET_RECEIPT, _OPEN_FINDINGS, ("--by advisor",), ()),
+    ("offer-round-cap", _VET_RECEIPT, _OPEN_FINDINGS, ("`round-cap`",), ()),
+    ("offer-nothing-to-audit", _VET_RECEIPT, _OPEN_FINDINGS, ("`extra-audit-nothing-to-audit`",), ()),
+    ("row-proven-copies", _VET_RECEIPT, _RECORD_CHECKS, ("**The proven copies match their source**",), ()),
+    ("row-proven-copies-field", _VET_RECEIPT, _RECORD_CHECKS, ("`provenCopies`",), ()),
     ("field-cap-choices", _VET_RECEIPT, _OPEN_FINDINGS, ("`**Cap choices.**`",), ()),
     ("field-decided-for-veto", _VET_RECEIPT, _OPEN_FINDINGS, ("`**Decided for the owner's veto.**`",), ()),
     ("field-claims-checked", _VET_RECEIPT, _CLAIMS, ("`**Claims checked.**`",), ()),

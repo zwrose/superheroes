@@ -211,7 +211,7 @@ are never holding the inventory in working memory.
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 | the PR carries **iPhone evidence**, or the issue's done-definition names an **iPhone check** | the **iPhone-evidence row** — each piece valid or invalid with its reason. When the issue names the check, add whether the check is complete by the conditions in `skills/showrunner/reference/vetting.md` § iPhone evidence, and if not, the advisor's own iPhone check, recorded before the ruling |
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR), or for a stacked feature the vet `skills/showrunner/reference/closure.md#when-closure-fires` § When closure fires names | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
-| the PR carries a **build record** (a full or light build) | the **review record checks** — one line per check, saying what was read from the record and whether it held the PR; the three checks are the rows of [The review record checks](#the-review-record-checks) |
+| the PR carries a **build record** (a full or light build) | the **review record checks** — one line per check, saying what was read from the record and whether it held the PR; the four checks are the rows of [The review record checks](#the-review-record-checks) |
 | the review record carries `commandRefusals`, or the build record's dispatch provenance lists a refusal | a **refusals line**: each refusal was read, and any refusal followed by the same act in another form, as the stop rule defines that, is named as a **finding**, without listing the forms. The rule's one home is `lib/command_refusals.py` |
 | the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 | the review record shows a finding still **open at handback** (the review stopped at its round cap, or handed back as it does at the cap) | the **handback with open findings** — the craft list and the cap choices, as [A handback with open findings](#a-handback-with-open-findings) says |
@@ -236,7 +236,7 @@ Every review ends by writing a review record on the PR. The record's home, its f
 `read` verb are `skills/review-code/reference/review-record.md`; this section says only what the vet
 reads from it. At a full or light vet, read the latest record with
 `python3 -B "$ROOT_DIR/lib/review_record.py" read --pr <n>` (`$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`)
-and grade the three checks below. **A PR that any row holds is not returned as ready**, and the
+and grade the four checks below. **A PR that any row holds is not returned as ready**, and the
 receipt names the row that held it.
 
 | Check | What it reads from the record | The PR is held when |
@@ -244,6 +244,7 @@ receipt names the row that held it.
 | **The record exists** | the result of the `read` verb, and the record link in the PR's build record | `read` refuses, with `review-record-missing`, `review-record-unreadable` or any other reason; or the PR's build record names no record; or the record carries `transitDamage` or a non-empty `earlierRecordsNotChecked` and the vet has not read each named record's comments directly and confirmed that no finding went missing or changed its meaning (the receipt says what was read) |
 | **The checks ran on the final commit** | `finalCommit.sha` and `finalCommit.source`; `ci.state`, `ci.sha` and `ci.source`; `missingReviews` and `parked`; and, from the PR itself, its head now and CI on that head (spine field 1) | `finalCommit.sha` is not the PR's head now, so the record was written on an earlier commit, whatever it says about CI (one exception: when the head moved by a bring-current and spine field 1's re-pin form finds the diff digest **equal**, a record written on the head before the bring-current still counts, CI must still be green on the new head, and the receipt names both commits; on an unequal digest or `digest-unavailable`, when spine field 1's re-pin form finds every changed hunk mechanically non-semantic, a record written on the head before the bring-current likewise still counts on that field's CI and disclosure line, with no further reviewer, and the receipt names both commits and the disclosure; otherwise the row holds as written); `finalCommit.source` is not `GitHub PR`; `ci.source` is not `GitHub checks`, `ci.state` is anything other than green, pending or none, or `ci.sha` is not `finalCommit.sha` (a stored `ci.state` of pending or none only means the checks had not finished, or had no result yet, when the record was written: neither holds the PR when `ci.sha` is `finalCommit.sha`, which is the PR's head now, and CI on that head is now green by spine field 1's selection, and the receipt names the stored state and the current green); CI is not green on the PR's head now; or an entry of `missingReviews` has a null `goAhead` (`parked` is true), so a planned review did not run and the owner gave no go-ahead; or its go-ahead cannot be followed to an owner-attributed record (a standing ruling's canon entry, or the place the owner's words were said) that authorizes skipping that review |
 | **No leftover skipped the owner's review** | every entry of `findings` (its `title`, `body`, `consequence`, `outcome` and `reason`), `leftForOwner`, and the PR's owner half | a finding with a real consequence has outcome `craft`, or has no outcome; or has outcome `ruling` and its `reason` names no ruling the vet can follow to a record; or has outcome `left-for-owner` and is shown to the owner neither as a card on the PR's sheet, nor as an entry of the sheet's decided-for-you list, nor, where no sheet is built, under the owner half's `## What we're accepting`; or is an entry of the sheet's decided-for-you list and has a real consequence that none of the template's three grounds covers (another card on the same sheet carries it; a fix in another layer of the same stack, named in the ground, removed it; a Canon entry, cited by id, answers it), names no ground, or re-grades a finding the owner already answered or took back on this PR |
+| **The proven copies match their source** | the record's `provenCopies` (each `{file, source, sha256}`) | the record carries `provenCopies` and the vet has not read each named `source` where the proof names it and compared its sha256 with the entry's `sha256`, or a source cannot be read, or its sha256 does not match (the receipt says, per copy, what was found) |
 
 A `ruling` whose reason starts `owner ruling "<words>" (<url>)` is followable. The vet opens the link and checks that the comment is the owner's ruling covering that finding and that no later owner decision overturned it. If either fails, the row holds the PR.
 
@@ -267,7 +268,7 @@ mine" on this PR, so an entry for either holds the PR.
 
 **`status` is not the test.** A record whose only open lines are leftovers shown to the owner reads `awaits-owner`, and one with a go-ahead for a review that did not run reads `not-reviewed`; either can still be returned as ready. A record that reads `awaits-owner` is read exactly as `not-reviewed`: it says only that every open line is a finding left for the owner, and it clears nothing. A
 record whose finding with a real consequence was decided as craft reads `reviewed` and is held. Read
-the fields the rows name. Any line of `whatIsMissing` that the three rows do not account for is a vet
+the fields the rows name. Any line of `whatIsMissing` that the four rows do not account for is a vet
 finding. The line saying no planned reviewer ran is accounted for when every planned review that did
 not run carries a go-ahead. The line saying CI was pending or none on the final commit is accounted
 for once CI is green on that commit now. The line saying a finding waits for the owner's decision is
@@ -296,18 +297,30 @@ owner-vs-craft line, with doubt resolving upward.
 **A finding whose only consequence is code quality is yours to decide.** Decide it, and list it in
 the receipt under `**Decided for the owner's veto.**`, one line each: the finding, what you decided,
 and why. A finding the review record already settles as craft is listed for the owner's veto on the
-PR's sheet by its folded part of craft decisions put to the owner's veto. An open or left-for-owner
+PR's sheet by its folded part of craft decisions put to the owner's veto. A left-for-owner
 finding you grade as code quality only is an entry of the sheet's decided-for-you list
 ([the review template](../../../theme/review-template.md#decided-for-you)), written in the sheet
-input's craftDeterminations. Where no sheet is built it is a line under the owner half's *what
-accepting it means*, saying what you decided and that the owner can take it back. It never reaches
-the owner as a question.
+input's craftDeterminations. A finding the record shows with no outcome cannot be put on a sheet; it
+holds the PR until the record settles it. Where no sheet is built it is a line under the owner half's
+*what accepting it means*, saying what you decided and that the owner can take it back. It never
+reaches the owner as a question.
 
 **A finding with a real owner consequence takes one of three next steps, and you choose which:**
 
-1. **An extra audit round.** One more round that audits only the last round's fixes, with no panel
-   and no new search. A PR has it at most once, so it is open to you only while the PR's review
-   records show no extra audit round. You order it from the build session; nothing else runs in it.
+1. **An [extra audit round](../../../rubric/glossary.md#extra-audit-round).** One more round that
+   audits only the last round's fixes, with no panel and no new search. A PR has it at most once, so
+   it is open to you only while the PR's review records show no extra audit round. It is open to you
+   only when all three hold: the session handed back with last decision `round-cap`; the cap round
+   applied a fix no audit checked; and the build session still holds the handed-back session folder.
+   After a `fix-keeps-failing` hand-back the verb always refuses `extra-audit-nothing-to-audit`,
+   because its last fix was already audited, so the choices there are a leftover or a rethink, and an
+   open Critical leaves only by a rethink. Where the session folder is gone, or the PR's comment
+   history cannot be read cleanly (the verb refuses `extra-audit-pr-history-unreadable`), the same two
+   choices remain. You order it by message to the build session that holds the session folder. That
+   session writes the order file `{"why": "<reason>"}` and runs
+   `python3 -B <plugin root>/lib/round_driver.py extra-audit --session-dir <session dir> --order-file <order file> --by advisor --pr <N>`,
+   then continues `next` / `advance` to the terminal and the review record. The verb and its refusals
+   are in [The extra audit round](../../review-code/reference/round-driver.md#the-extra-audit-round).
 2. **A leftover for the owner.** The finding goes to the owner, framed in owner terms as
    `skills/showrunner/reference/owner-decisions.md` § The per-item spine says for a leftover. Its
    outcome in the record is `left-for-owner`, and the third row of the review record checks holds
@@ -316,7 +329,8 @@ the owner as a question.
    The record of the PR's next review session shows whether the rethink converged.
 
 **An open Critical is never a leftover.** It leaves the cap only by the extra audit round or a
-rethink, so on a PR that already had its extra audit round it goes to a rethink.
+rethink, so on a PR that already had its extra audit round, or wherever the extra audit round is not
+open (the conditions above), it goes to a rethink.
 
 **The cap-choice field.** The receipt records each choice in one fixed field, `**Cap choices.**`,
 which the gardening pass counts. Under it, each choice is a bullet followed by its own marker line:

@@ -91,11 +91,11 @@
     },
     {
       "id": "s11-principle-question",
-      "targeted_block": "D4 principle question (no-floor-green precondition and grounding-seat sentences moved -> vet-receipt.md spine field 4)",
+      "targeted_block": "D4 principle question (no-floor-green precondition and principle-only scope -> vet-receipt.md spine field 4)",
       "control": false,
-      "situation": "You are vetting PR #940. The omission-floor check is red on the PR, and a dispatched grounding seat already landed a result saying the PR's self-claims are supported. You are wondering whether you can skip asking the principle question this time.",
+      "situation": "You are vetting PR #940. The omission-floor check is red on the PR, and the review seat owns that check. You are wondering whether you can skip asking the principle question this time, or whether you must re-run the omission floor first.",
       "question": "Do you ask the principle question, and what rule governs it?",
-      "expected_rule": "Ask the principle question unconditionally (what does the owner still carry after merging that the PR's owner half does not say?); it is a mandatory receipt field with an explicit None; there is no floor-green precondition; a dispatched grounding seat does not retire it — you are the backstop for that seat being absent, vacuous, or misconfigured."
+      "expected_rule": "Ask the principle question unconditionally (what does the owner still carry after merging that the PR's owner half does not say?); it is a mandatory receipt field with an explicit None; there is no floor-green precondition; it is scoped to the principle only, so you do not re-run the omission floor's presence match, which the review seat owns; when the answer is not None, that consequence goes into the owner half too, not only the receipt."
     },
     {
       "id": "s12-slot-reminder-gone",
