@@ -1034,3 +1034,27 @@ def test_cli_compose_fix_order_flag_passes_through(world, monkeypatch):
     assert cr.main(base) == 0
     pending = json.load(open(_state_file(world)))["pending"].values()
     assert sorted("fixOrder" in entry for entry in pending) == [False, True]
+
+
+@pytest.mark.parametrize("entry", [
+    None, "x", ["y"], {"fixOrder": "yes"}, {"fixOrder": 1}, {"fixOrder": None},
+])
+def test_fix_orders_refuses_a_malformed_pending_entry_only_when_unchecked_are_included(world, entry):
+    # axis: with include_unchecked, an entry that cannot be read as a fix order or not refuses the read; the default read is unchanged — see bite-proof record i2254_original_session
+    assert cr.compose(world.repo, world.config, SESSION, "fix it", env=world.env, fix_order=True)["ok"]
+    path = _state_file(world)
+    state = json.load(open(path))
+    state["pending"]["m"] = entry
+    json.dump(state, open(path, "w"))
+    assert cr.fix_orders(world.repo, env=world.env, include_unchecked=True) == {
+        "ok": False, "reason": "relay-state-malformed"}
+    default = cr.fix_orders(world.repo, env=world.env)
+    assert default["ok"] is True and default["records"] == []
+
+
+def test_fix_orders_does_not_list_an_entry_without_a_fix_order_when_unchecked_are_included(world):
+    # axis: with include_unchecked, an entry composed without fix_order is not listed as a fix order — see bite-proof record i2254_original_session
+    out = cr.compose(world.repo, world.config, SESSION, "just a note", env=world.env)
+    assert out["ok"]
+    listed = cr.fix_orders(world.repo, env=world.env, include_unchecked=True)
+    assert listed == {"ok": True, "records": []}
