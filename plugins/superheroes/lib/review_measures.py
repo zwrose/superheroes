@@ -94,7 +94,7 @@ def _latest(recs):
 
 
 def _clean(rec):
-    return rec.get("status") == review_record.REVIEWED and not any(f.get("outcome") in _OPEN for f in rec["findings"])
+    return review_record.cleared(rec.get("status")) and not any(f.get("outcome") in _OPEN for f in rec["findings"])
 
 
 def _rows(recs):
