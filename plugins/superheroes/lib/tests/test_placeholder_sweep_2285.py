@@ -16,6 +16,7 @@ from test_engine_dispatch_write import (  # noqa: F401
     _dispatch_write,
     _ensure_claude_config_dir,
     _implementer_claude_seat,
+    _init_repo,
     _linked_worktree,
     _pin_temp_base_to_tmp_path,
 )
@@ -171,8 +172,7 @@ def test_snapshot_unreadable_subtree_is_incomplete(tmp_path, monkeypatch):
 def test_root_replaced_by_symlink_is_not_swept(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     baseline = _snapshot(wt)
-    other = tmp_path / "other"
-    other.mkdir()
+    other = _init_repo(str(tmp_path / "other"))
     victim = _placeholder_file(other, ".bashrc")
     os.rename(wt, str(tmp_path / "moved"))
     os.symlink(str(other), wt)
