@@ -831,6 +831,18 @@ def _touched_scope(diff_text):
     return diff_scope.parse_touched_lines(diff_text) if diff_text is not None else None
 
 
+def _note_outside_round(state, title, file, line, rnd):
+    """Remember that the round `rnd` sent the hit (title, file, line) to the "Outside this PR" list: one
+    `{"title", "file", "line", "round"}` row in `state["_outsideRounds"]`, never doubled. A non-list value is
+    replaced, as `_record_outside` does for its own list."""
+    rows = state.get("_outsideRounds")
+    if not isinstance(rows, list):
+        rows = state["_outsideRounds"] = []
+    row = {"title": title, "file": file, "line": line, "round": rnd}
+    if row not in rows:
+        rows.append(row)
+
+
 def _record_outside(state, drops):
     """Route every outside-scope drop to `state["outsideThisPR"]`, the review record's "Outside this PR"
     list, and return the other drops: an outside finding is never a compile drop, a refusal or a finding.
@@ -867,6 +879,8 @@ def _record_outside(state, drops):
             if src.get("name") == name and target is None:
                 target = entry
         hit = {"id": "O-%d" % (total + 1), "file": drop.get("file"), "line": drop.get("line"), "title": title}
+        # axis: the round that produced a hit is kept beside the list (never on the hit, which the record writer holds to its own fields), so an abandoned session excludes a stored report only for the round that sent it out — see bite-proof record c3_wo_a_outside
+        _note_outside_round(state, title, drop.get("file"), drop.get("line"), state.get("round"))
         if target is not None:
             if not isinstance(target.get("hits"), list):
                 target["hits"] = []  # a reviewer entry with no hit list: start one, as for a non-list top-level value
@@ -1016,7 +1030,8 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
     for f in findings:
         if not isinstance(f, dict):
             continue
-        if not isinstance(f.get("file"), str) or f.get("line") is None:
+        # axis: a blank or whitespace-only file is no citation: it stays an ordinary uncited drop and never reaches the "Outside this PR" list, whose hits the record writer requires to name a file
+        if not isinstance(f.get("file"), str) or not f["file"].strip() or f.get("line") is None:
             drops.append({"file": f.get("file"), "title": f.get("title"),
                           "reason": "uncited — no file:line"})
             continue
@@ -8785,7 +8800,7 @@ def _route_outside_new_issues(state, new_issues):
     inside, outside = [], []
     for ni in new_issues:
         ok, line = _coerce_line(ni.get("line")) if ni.get("line") is not None else (False, None)
-        if isinstance(ni.get("file"), str) and ok and not _diff_scope_ok({"file": ni["file"], "line": line}, valid):
+        if isinstance(ni.get("file"), str) and ni["file"].strip() and ok and not _diff_scope_ok({"file": ni["file"], "line": line}, valid):
             outside.append({"file": ni["file"], "line": line, "title": ni.get("title"),
                             "reason": COMPILE_DROP_OUTSIDE, "source": OUTSIDE_FIX_AUDITOR})
         else:

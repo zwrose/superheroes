@@ -799,26 +799,35 @@ def _raised_reports(session_dir, rows, pending, pending_round):
     return out
 
 
-def _outside_keys(outside):
-    """The `(title, file key, line key)` of every hit on the state's "Outside this PR" list, whatever the entry's kind."""
+def _outside_keys(outside, provenance=None):
+    """The `(title, file key, line key, round)` of every hit on the state's "Outside this PR" list, whatever the
+    entry's kind. `round` is each round the state's `_outsideRounds` says sent the hit out; a hit with no such row
+    (a session begun before the rows were kept) gets round None, which excludes a report of any round."""
+    rows = {}
+    for row in provenance if isinstance(provenance, list) else []:
+        if isinstance(row, dict):
+            rows.setdefault((row.get("title"), _file_key(row.get("file")), _line_key(row.get("line"))),
+                            set()).add(row.get("round"))
     keys = set()
     for entry in outside if isinstance(outside, list) else []:
         hits = entry.get("hits") if isinstance(entry, dict) else None
         for hit in hits if isinstance(hits, list) else []:
             if isinstance(hit, dict):
-                keys.add((hit.get("title"), _file_key(hit.get("file")), _line_key(hit.get("line"))))
+                base = (hit.get("title"), _file_key(hit.get("file")), _line_key(hit.get("line")))
+                for rnd in rows.get(base) or {None}:
+                    keys.add((*base, rnd))
     return keys
 
 
 def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_kinds=None, pending=None,
-              pending_round=None, outside=None):
+              pending_round=None, outside=None, outside_rounds=None):
     """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
     (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
     stays; a drop whose file is not a string lost its line, so it is matched by round, title and file), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
     own panel proposal is settled that way) add nothing; nor does one that is a hit on the state's `outsideThisPR`
-    list (matched by title, file and line; it stays there, not here). A listed finding already settled in a round before the
+    list (matched by title, file and line, and by the round that sent it outside when the state kept that; it stays there, not here). A listed finding already settled in a round before the
     report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
     settled_rounds = settled_rounds or {}
     settled_kinds = settled_kinds or {}  # a finding key to the kind of its recorded settlement
@@ -826,7 +835,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
     by_listed = {f["findingKey"]: f for f in findings}
     dropped = {_drop_key(d["round"], d["title"], d["file"], d["line"]) for d in _refused(rounds)}
     passed = _passed_break_it(rounds)
-    outside_keys = _outside_keys(outside)
+    outside_keys = _outside_keys(outside, outside_rounds)
     out = []
     for phase, rnd, seat, raised in _raised_reports(session_dir, rows, pending, pending_round):
         for f in raised:
@@ -841,7 +850,9 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
                 continue
             # axis: a finding on the state's "Outside this PR" list stays there and is not listed open a second time — see bite-proof record c3_wo_a_outside
-            if (f["title"], _file_key(f.get("file")), _line_key(f.get("line"))) in outside_keys:
+            # axis: only the report of the round that sent the hit outside is excluded; a later round's report of the same title, file and line (a fix may have moved the line into the PR) is not — see bite-proof record c3_wo_a_outside
+            base = (f["title"], _file_key(f.get("file")), _line_key(f.get("line")))
+            if (*base, rnd) in outside_keys or (*base, None) in outside_keys:
                 continue
             if fkey in listed:
                 held = by_listed.get(fkey)
@@ -927,7 +938,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         pending = state.get("_newIssues")
         findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds, pending,
                               state.get("round") if _int(state.get("round")) else None,
-                              state.get("outsideThisPR"))
+                              state.get("outsideThisPR"), state.get("_outsideRounds"))
     carry = None  # the lastReviewed commit of an empty returning round: its record may carry the earlier review's reviewers
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
