@@ -5542,10 +5542,7 @@ def _verify_command_configured(config):
     """True when the profile configures a REAL verify command (not absent / `none`). A configured
     command must actually PASS — a skip result then means the run did not execute, so it fails closed
     rather than advancing unverified (#507 R2 residual-2)."""
-    cmd = config.get("verifyCommand")
-    if not isinstance(cmd, str):
-        return False
-    return cmd.strip().lower() not in ("", "none")
+    return core_md.verify_command_configured(config.get("verifyCommand"))
 
 
 def _verify_via_row(config, artifact):
@@ -10505,12 +10502,6 @@ def _panel_dimension_label(seat_key):
     return review_seats.dimension_label(seat_key)
 
 
-def _session_pr_checkout_path(session_dir):
-    """Detached PR checkout path when the read-only path created one; else empty."""
-    path = os.path.join(session_dir, "repo")
-    return path if os.path.isdir(path) else ""
-
-
 def _label(value):
     return value if isinstance(value, str) else repr(value)
 
@@ -10608,13 +10599,10 @@ ORDER_SHIPPED_RESOURCE_INPUTS = frozenset({
 ORDER_OUTPUT_PLACEHOLDERS = frozenset({
     "FINDINGS_OUTPUT_PATH",
     "GROUPING_OUTPUT_PATH",
-    "PR_CHECKOUT_PATH",
 })
 # Substitution values — prose, derived blocks, or directories not file-existence-guarded here.
 ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "OUTPUT_CHANNEL_BLOCK",
-    "PR_CHECKOUT_CONTEXT_LINE",
-    "PR_CHECKOUT_INSTRUCTION_BLOCK",
     "PRIOR_COMMENTS_CONTEXT_LINE",
     "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
@@ -10986,7 +10974,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         dim_label = _panel_dimension_label(seat_key)
         if not dim_label:
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
-        pr_checkout = _session_pr_checkout_path(session_dir)
         mode_resolved = session_mode.resolve(meta, cfg)
         prior_comments_path = _resolve_prior_comments_path(session_dir, state)
         ph = {
@@ -11003,7 +10990,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "BREAK_IT_GRAMMAR_TEXT": _break_it_grammar_text(seat_key),
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
-            "PR_CHECKOUT_PATH": pr_checkout,
             "PRIOR_COMMENTS_PATH": prior_comments_path,
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim_label,

@@ -616,8 +616,7 @@ You are the fixer for one round of an auto-fix code-review loop.
    orchestrator runs that once after this round's fix batch lands, and a fixer attempt that runs it
    forfeits on the attempt cap before its work is collected). If the budget's run fails, fix the
    failure and retry ONCE. If it still fails, STOP and report CHECK_FAILED with the failing
-   output — never commit broken code. If the full verify command in the budget reads "none"
-   (unverified profile), skip the static validators and run only the referencing tests, if any.
+   output — never commit broken code.
    When you need to verify something by *running* it, choose a throwaway test file path inside
    the build worktree, named with the fixed prefix `autofix-probe-` so a leftover one is
    identifiable. **Before writing it, check that the chosen path does not already exist** — a
@@ -638,8 +637,8 @@ You are the fixer for one round of an auto-fix code-review loop.
    round may leave its own probe behind, and nothing sweeps it up: a stray `autofix-probe-*`
    file can still be present in the working tree the orchestrator inspects when it verifies.
    Delete the throwaway before step 4's commit — it must never land in the fix commit.
-4. Commit ALL changes in ONE commit (after the check passes, or immediately when
-   unverified): `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
+4. Commit ALL changes in ONE commit (after the check passes):
+   `git commit -m "Auto-fix round <N>: <count> findings (<dimensions>)"`
 5. Report back.
 
 ## Escalation
@@ -699,8 +698,8 @@ These are the base rubric's binding verification rules, restated in every subage
 | **Continuing when `$BASE_REF` is not a commit**         | An empty `$BASE_REF` makes `git diff "$BASE_REF"...HEAD` argv `...HEAD` — git reads it as `HEAD...HEAD` and emits a **zero-line diff at exit 0**, so the panel reviews nothing and the loop certifies clean. The literal string `null` (what `jq -r` prints for an absent key) is non-empty, so a `[ -n … ]` test passes it while `git diff null...HEAD` exits 128 and still leaves an empty artifact. Setup validates with `git rev-parse --verify --quiet "$BASE_REF^{commit}"` — which rejects empty, `null`, a deleted branch, and a non-commit tag — and every consumer uses the guarded diff command that halts on a failed OR empty diff. Never substitute a branch name to "recover". |
 | **Diffing against the worktree's local base branch**    | A long-lived worktree's local `main` goes stale as a matter of course; three-dot diff then walks back to a stale merge-base and drags already-merged work into the review, burying the real change. The bootstrap fetches the base and pins it to a commit; never re-resolve the base from a branch name mid-run. |
 | Using `gh pr diff` inside the loop                      | Rounds 2+ have local fix commits not on the remote. Always recompute the diff locally each round **with the guarded per-round command from the SKILL's Setup** — `git diff "$BASE_REF"...HEAD` against the **pinned remote base commit**, including its failed-diff and empty-diff halts — never a branch name and never a bare copy.                                               |
-| Auto-fixing a PR you don't have checked out             | Auto-fix needs the PR's branch as the current branch **or** an adopted build (tracks remote `origin` with merge ref `refs/heads/<PR branch>` **and** `HEAD` == the PR's `headRefOid`); anything else — detached HEAD, an unrelated branch, a stale adopted branch — stops and goes to `--review-only`.                                        |
-| Re-reviewing on a broken tree                           | If `VERIFY_CMD` fails after a fix, HALT. Never run the next review round on code that doesn't pass verification. (No gate when the profile is `mode: unverified`.) |
+| Auto-fixing a PR you don't have checked out             | Auto-fix needs the PR's branch as the current branch **or** an adopted build (tracks remote `origin` with merge ref `refs/heads/<PR branch>` **and** `HEAD` == the PR's `headRefOid`); anything else — detached HEAD, an unrelated branch, a stale adopted branch — stops: reviewing a PR that was not built in this project is not supported.                                        |
+| Re-reviewing on a broken tree                           | If `VERIFY_CMD` fails after a fix, HALT. Never run the next review round on code that doesn't pass verification. |
 | Re-raising a finding the user skipped                   | Skipped identities go in the skip-set and are excluded from every later round's effective findings AND the circuit breaker.                                        |
 | Eyeballing "are we stuck?" by hand                      | The audit-keyed stall breaker lives in `round_driver.py` — never call `circuit_breaker.py` inside the auto-fix loop.                                                 |
 | Exiting the loop early because a fix "looks done"       | Obey `round_driver.py` `next`/`submit` — never `code_loop_plan` or manual continuation. "Trivial fix / save tokens / offer optional round" are the rationalizations it overrides. |

@@ -8,8 +8,7 @@
     "Base rubric (binding) > CLAUDE.md (conventions)",
     "Never one whole-file read",
     "Set `dimension` to",
-    "at most 5 code-quality-only Nits reported per review round across all seats",
-    "This is the ONLY source of truth for verifying code"
+    "at most 5 code-quality-only Nits reported per review round across all seats"
   ],
   "dispatch-verifiers": [
     "You are the per-finding verifier for one cluster",

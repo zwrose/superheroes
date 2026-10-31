@@ -987,7 +987,7 @@ A **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing
 pass. An empty degradation list is only clean when the section body is the literal word
 **None**; marker absence and **None** are different states. Every copy-holder of this
 floor — `rubric/review-discipline.md` (Ship-phase honesty), `skills/workhorse/SKILL.md`
-§11, and `skills/review-code/SKILL.md` step 8 — restates it as an inline enumerated
+§11, and `skills/review-code/SKILL.md` step 7 — restates it as an inline enumerated
 triple in order after the omission-floor anchor, with the marker literals byte-identical
 across all three copy-holders; that enumerated shape is what makes per-row drift
 mechanically detectable rather than a judgment call, because a copy that merges the three
@@ -997,18 +997,17 @@ The hook is **severity, not disposition status**: keying on "parked" misses a ge
 **Important**-severity race dispositioned "Deferred — follow-up"; severity is already
 carried by every dispositions table, and keying on it keeps craft nits below the bar.
 
-No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step 8, the
+No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step 7, the
 existing *PR-body honesty check (PR mode only)* — already PR-gated, already reads the
 `superheroes:dod-table` marker, already emits an **Important** / `tradeoff` /
 author-resolved finding. The floor is the **same check emitting the same finding shape**.
-Step 8 catches the floor on a read-only review (`--review-only`) of an **existing** PR. A
-full-lane build's pre-handback `review-code` run now runs in PR mode on the draft PR the builder
-opens first and writes its review record against it (workhorse charter §10), but it runs the
-driver-owned auto-fix loop, which does not run step 8 today
+There is no read-only review: a full-lane build's pre-handback `review-code` run is in PR mode on
+the draft PR the builder opens first and writes its review record against it (workhorse charter
+§10), and it runs the driver-owned auto-fix loop, which does not run step 7
 (`skills/review-code/reference/auto-fix-loop.md`). So the **advisor's vet** is the ratified
 independent checker for the principle in every case (do not add a new body-aware pass here).
 
-The principle-level checker is the **advisor's vet**, not step 8 — step 8 runs in the same
+The principle-level checker is the **advisor's vet**, not step 7 — step 7 runs in the same
 session that wrote the body, so it is the author checking whether the author forgot: fine
 for presence-matching, weak for judgment. Adopted for the vet: scoped to the **principle
 only** (the vet does not re-run the floor's presence match); lands as a **mandatory receipt

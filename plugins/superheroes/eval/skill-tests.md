@@ -56,14 +56,13 @@ Shared abbreviations: **R-CODE** = `skills/review-code/SKILL.md`, **R-INIT** =
 | S5 | User dismisses / ignores the staleness nudge | Record the dismissal by writing the doctor's `signal_hash` into the profile's `nudge-ack` map (the only profile write the nudge makes, and only on dismissal). | LOOP "Recording a dismissal (shared)" | yes | already correct |
 | S6 | Profile `status: provisional` during a review run | The end-of-run **provisional-profile confirmation** step is **not run** — the profile stays `provisional`. Confirmation happens only when the owner explicitly confirms via `/superheroes:configure` fix path (FR-18). | R-CODE §"Learning Loop & Staleness Nudge" (via LOOP "Provisional-profile confirmation"); CONFIGURE FR-18; configure/reference/fix.md §4 | yes | reframed for shipped flow |
 
-## 3. Verify-mode (review-code)
+## 3. Verify command (review-code)
 
 | # | Trigger | Expected behavior | Implements (file:section) | Verified | Fix |
 |---|---------|-------------------|----------------------------|----------|-----|
 | V1 | Profile `## Verify` has `command: <cmd>` | `VERIFY_CMD="<cmd>"`. The orchestrator's **verify gate** AND the **fixer** both run `VERIFY_CMD` from the user's working tree, non-interactively, with a timeout. **Non-zero exit = HALT / `CHECK_FAILED`** — surface failing output, do not re-review on a broken tree. | review-code reference/setup.md § "Read the verify story from core calibration"; R-CODE §"The verify command" (`command:` branch); auto-fix-loop.md fixer prompt step 3 | yes | already correct |
-| V2 | Profile `## Verify` has `mode: unverified` | No verify command. The **verify gate is SKIPPED**; the fixer is told the verify command is `"none"` and runs no checks (cannot return `CHECK_FAILED`); commits proceed **ungated**. The dispatch summary AND the End-of-Loop summary both **warn** that fixes were committed without a verify gate. | R-CODE §Dispatch Summary ("Verify: … unverified") + §End-of-Loop Summary + §"The verify command" (`unverified` branch) | yes | already correct |
-| V3 | Profile `## Verify` has `mode: review-only`, default invocation (no `--review-only`) | The default auto-fix path **degrades up front** to a **single review pass + the `--review-only` presentation** (no triage, no fixer, no commits, no loop). The degrade is **stated in the dispatch summary**, not buried. | R-CODE §Dispatch Summary ("Verify: … review-only — auto-fix disabled — this run degrades to a single pass + presentation") + §Auto-Fix Loop (gating: "verify story is not `mode: review-only`") + §Read-Only Path (profile `mode: review-only` degrades into this presentation) + §"The verify command" (`review-only` branch) | yes | already correct |
-| V4 | `mode: unverified` AND a fixer escalation/verify path | Because there is no command, the fixer's step-3 check is skipped and `CHECK_FAILED` cannot arise from a verify failure on this path. | R-CODE §"The verify command" (`unverified` branch); auto-fix-loop.md fixer prompt step 3 ("verify command is \"none\" … skip this check entirely") | yes | already correct |
+| V2 | The project sets no verify command, or the profile's `## Verify` says `mode: unverified` (a profile saying so reads as no command) | review-code **refuses at Setup, before any dispatch**: no reviewer runs, nothing is committed. It prints "Code review is not available until a verify command is set. Code review needs a command that verifies this project's code; set one with /superheroes:configure." | review-code `plugins/superheroes/skills/review-code/reference/setup.md` (the paragraph beginning "Read the verify story from core calibration") + `plugins/superheroes/skills/review-code/SKILL.md` § The verify command | yes | rewritten for shipped flow |
+| V3 | Profile `## Verify` has `mode: review-only` | Same as V2: a profile saying `mode: review-only` reads as no command, so review-code **refuses at Setup before any dispatch** and prints the same message. There is no single-pass or read-only fallback. | review-code `plugins/superheroes/skills/review-code/reference/setup.md` (the paragraph beginning "Read the verify story from core calibration") + `plugins/superheroes/skills/review-code/SKILL.md` § The verify command | yes | rewritten for shipped flow |
 
 ## 4. review-init branches
 
@@ -71,7 +70,7 @@ Shared abbreviations: **R-CODE** = `skills/review-code/SKILL.md`, **R-INIT** =
 |---|---------|-------------------|----------------------------|----------|-----|
 | I1 | `review-init`, no profile (`LOCATION == none`) | **Create** mode: detect (Step 1) → provisional defaults without interview (Step 3) → seed canonical patterns and write (Step 4). Always writes `status: provisional`; `confirmed` is reached only via `/superheroes:configure`. | R-INIT §2 "Choose mode" → §3 "Create: detection + defaults (no interview)" → §4 | yes | rewritten for shipped flow |
 | I3 | Create mode, **no `CLAUDE.md`** present | Record a minimal conventions pointer in `## Conventions` (point at `CLAUDE.md` once the owner adds one); do not generate or commit `CLAUDE.md` here. | R-INIT §3 (no `CLAUDE.md` branch) | yes | rewritten for shipped flow |
-| I4 | Create mode, **no verify command detected** | Apply provisional default `mode: review-only` when detection + `CLAUDE.md` did not answer. | R-INIT §3 defaults (#2 Verify command) | yes | rewritten for shipped flow |
+| I4 | Create mode, **no verify command detected** | Record no verify command (`verifyCommand` left unset) when detection + `CLAUDE.md` did not answer, and disclose the resolver's message (`verifyRefusal.message`: code review is not available until a verify command is set) in `## Setup disclosures`. | R-INIT §3 defaults (#2 Verify command) | yes | rewritten for shipped flow |
 | I5 | `review-init`, **profile exists** | **Reconcile** mode: re-read CLAUDE.md + re-detect → apply migration steps → diff → preserve hand-edits. **Do not apply by default** — write proposed-changes diff as disclosure; profile written only when owner applies via `/superheroes:configure`. `status` stays `provisional` until configure confirms with a real verify story. | R-INIT §5 Reconcile (steps 6–7) | yes | rewritten for shipped flow |
 | I6 | Reconcile, profile's `rubric-version` < engine's | Flag **rubric-version drift** in the proposed-changes diff ("rubric-version M→N: the review rubric has advanced; recalibrating") and update it on write. This is the same signal `repo_doctor.py` surfaces as a staleness nudge; reconcile is where it gets cleared. | R-INIT §5 step 4 ("Detect `rubric-version` drift") + step 7 (refresh rubric-version, clearing drift) | yes | already correct |
 | I7 | Reconcile, profile has a `nudge-ack` map | **Preserve `nudge-ack` verbatim** across the reconcile (don't reset acks the user already dismissed); add the field as empty `{}` only if an older profile predates it. | R-INIT §5 step 5 + step 7 ("Preserve the `nudge-ack` map") | yes | already correct |
@@ -91,18 +90,18 @@ Shared abbreviations: **R-CODE** = `skills/review-code/SKILL.md`, **R-INIT** =
 
 ## Coverage summary
 
-- **Cells:** **25 prose-verified** — Profile presence (3: P1–P3) + Profile status (6:
-  S1–S6) + Verify-mode/review-code (4: V1–V4) + review-init branches (9: I1,
+- **Cells:** **24 prose-verified** — Profile presence (3: P1–P3) + Profile status (6:
+  S1–S6) + Verify command/review-code (3: V1–V3) + review-init branches (9: I1,
   I3–I10) + Strict fallback (3: F1–F3) = 3 + 6 +
-  4 + 9 + 3 = **25**.
-- **Verified against prose:** 25 of 25 (each cited section opened and read on
+  3 + 9 + 3 = **24**.
+- **Verified against prose:** 24 of 24 (each cited section opened and read on
   2026-08-25).
-- **Rewritten for shipped flow:** 7 (P1, S2, S6, I1, I3, I4, I5).
+- **Rewritten for shipped flow:** 9 (P1, S2, S6, V2, V3, I1, I3, I4, I5).
 - **Citation updated at re-verify:** 3 (P3, F2, F3).
-- **Already correct (carried forward):** 15 (P2, S1, S3–S5, V1–V4, I6–I10, F1).
+- **Already correct (carried forward):** 12 (P2, S1, S3–S5, V1, I6–I10, F1).
 
 Every required dimension from the spec is covered: profile-presence (P1–P3) ×
-status (S1–S6) × verify-mode (V1–V4) × review-init-branches (I1, I3–I10) ×
+status (S1–S6) × verify command (V1–V3) × review-init-branches (I1, I3–I10) ×
 strict-fallback (F1–F3). Each cell cites the implementing `file:section`.
 
 Dropped from this matrix (named in implementer report): **P4** (retired
@@ -113,7 +112,7 @@ and `eval/RESULTS.md`).
 
 ## Prose fixes applied
 
-**Seven rows rewritten** in this file to match shipped flow (see Coverage
+**Nine rows rewritten** in this file to match shipped flow (see Coverage
 summary). The review skill (`review-code`) covers the shared mechanisms (profile bootstrap, staleness self-check, end-of-run
 nudge/learning-loop, calibration precedence via `reference/review-loop.md`),
 and `review-init` covers create (detection + defaults, no interview),

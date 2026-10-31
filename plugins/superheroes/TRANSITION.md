@@ -24,6 +24,8 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 
 - **After switching.** **Nothing is owed at once: code review composes no grounding seat; remove a saved `grounding-seat` seat pin, which now reads as a pin for an unknown seat.** See [Review: the grounding seat is gone](#review-the-grounding-seat-is-gone).
 
+- **Before switching.** **A project whose review profile says `mode: review-only` or `mode: unverified`, or that has no verify command, sets one first, or code review refuses to start.** See [Review: runs only as the loop, with a verify command](#review-runs-only-as-the-loop-with-a-verify-command).
+
 - **After switching.** **Nothing is owed: a launch whose ledger append reports failure is now read back, so a line that did land is no longer treated as lost and a worktree is removed only when no live reservation can name it.** See [Launcher: a reservation whose append reports failure is read back](#launcher-a-reservation-whose-append-reports-failure-is-read-back).
 
 - **After switching.** **Nothing is owed: the review setup's verify-command doctor no longer calls a profile stale over a path its verify command may not run.** See [Verify-command doctor: check 6 fails safe](#verify-command-doctor-check-6-fails-safe).
@@ -68,12 +70,21 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 ### Review: the grounding seat is gone
 
 - **The seat.** Code review's grounding seat, its agent (`agents/grounding-seat.md`), its stage (the `grounding_stage` module, all of its `stage`/`check`/`attest` verbs) and its reference are gone; no roster composes it.
-- **What checks the PR's claims instead.** The advisor's vet checks the PR's self-claims (the DoD table, the degradations list, the receipts claimed); code review's step 8 keeps its inline DoD-table check.
+- **What checks the PR's claims instead.** The advisor's vet checks the PR's self-claims (the DoD table, the degradations list, the receipts claimed); code review's step 7 keeps its inline DoD-table check.
 - **The record.** A new review record has no `seatsNotRun` list and no "Not run:" line; an account row carrying `notRunReason` is refused `review-account-invalid` (the writer's existing account refusal; `test_grounding_retired_c1l2.py` pins it). An earlier record that carries `seatsNotRun` still reads, and no merge sheet shows it. The merge-sheet word `historyNotRun` is gone.
 - **The region reader.** A caller that imported `REGION_MARKERS` or `read_region` from `grounding_stage` imports them from `lib/pr_body_regions.py`, unchanged.
 - **Seat pins.** A saved pin keyed `grounding-seat` is reported as a pin for an unknown seat; remove it.
 - **The script allowlist.** `grounding_stage.py` is off the plugin-scripts hook's approved list (eight scripts).
 - **Unchanged.** The spec checks' grounding reviewer.
+
+### Review: runs only as the loop, with a verify command
+
+- **The flag.** `--review-only` (one review pass, then a written presentation) is gone, with its presentation contract; passing it prints that it was removed and runs nothing. `--post` is answered the same way.
+- **No verify command.** A project with no verify command, or whose profile's `## Verify` says `mode: review-only` or `mode: unverified`, can no longer run code review: review-code refuses at Setup, before any reviewer is dispatched, with "Code review is not available until a verify command is set. Code review needs a command that verifies this project's code; set one with /superheroes:configure." Set one with `/superheroes:configure` (or the `verifyCommand` field of the project's core calibration). Setup on a project with no detectable command now records none and shows the owner that message.
+- **Someone else's PR.** A PR whose base repository is not this project's (`base-repo-mismatch`), or a branch-guard refusal, now says plainly that reviewing it is not supported; no read-only route is offered.
+- **The resolver.** `lib/review_code_config.py`'s output drops `verifyMode` and adds `verifyRefusal` (null, or `{reason: "verify-command-required", message}`); a caller that read `verifyMode` reads `verifyRefusal` instead.
+- **Panel orders.** The PR-checkout lines (`PR_CHECKOUT_*` placeholders) are gone from the panel order; nothing created the checkout once the read-only path went.
+- **In flight.** A review session already running when the project adopts this release is not stopped by this change.
 
 ### Launcher: a reservation whose append reports failure is read back
 

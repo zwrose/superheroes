@@ -31,9 +31,7 @@ runs again only on the confirmation re-arm triggers (Critical surfaced since the
 cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). On
 the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
 calls `next`, dispatches the emitted order (or fulfills a gate action), and `submit`s the
-artifact. **Prose-driven review** on the read-only path (`--review-only`) is a different
-lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
-is not governed by this loop contract.
+artifact.
 
 Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
 keys of the previous round's fix batch>]}` for a delta round, or `{"on": "wider", "why": "<the

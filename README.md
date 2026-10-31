@@ -158,7 +158,7 @@ its consequence, and a leftover with a real consequence comes to the owner.
 
 | Command | Use it to… |
 | --- | --- |
-| `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. |
+| `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. Needs the project's verify command, and reviews only the project's own PRs. |
 
 ## Test-Pilot
 

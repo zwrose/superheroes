@@ -82,7 +82,6 @@ def _panel_placeholders():
         "CORE_PATH": "(Core calibration not resolved for this project)",
         "LAYER_PATH": "(Review-crew layer calibration not resolved for this project)",
         "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
-        "PR_CHECKOUT_PATH": "",
         "PRIOR_COMMENTS_PATH": os.path.join(_SESSION, "prior-comments.json"),
         "FOCUS_NOTES": "touch auth paths carefully",
         "DIMENSION": "Code",

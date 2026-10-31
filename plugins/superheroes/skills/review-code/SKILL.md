@@ -10,11 +10,9 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 Run a multi-dimensional code review on either an open pull request or a local branch (vs the default branch), then **autonomously fix what it finds**. The main context is an **orchestrator** — it fetches metadata, dispatches the panel's specialist agents in parallel, compiles their findings, triages each into auto-fixable vs needs-your-judgment, applies fixes via a fixer subagent, and re-reviews — looping until no Critical/Important findings remain or a circuit breaker halts. Subagents do all heavy reading and write structured results to disk; it never loads the full diff or any agent's raw output into its own conversation.
 
-The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the panel the seat map composes from the lane call (the code reviewer and the test role on every change; the security and premortem reviewers when a risk area is touched or risk is unclear) so coverage follows the change's risk, enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — by default — drives an auto-fix loop that commits fixes locally (never pushes). One read-only behavior is preserved as a flag.
+The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the panel the seat map composes from the lane call (the code reviewer and the test role on every change; the security and premortem reviewers when a risk area is touched or risk is unclear) so coverage follows the change's risk, enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — drives an auto-fix loop that commits fixes locally (never pushes).
 
-There are two top-level paths, chosen at invocation:
-- **`--review-only`** → one review pass, then the presentation written to `$SESSION_DIR/round-1/presentation.md`. No commits. No questions that block waiting for an answer.
-- **otherwise (default)** → the auto-fix loop: review → triage → fix → re-review, committing locally until clean or halted.
+There is one path: the auto-fix loop — review → triage → fix → re-review, committing locally until clean or halted. It runs on the project's own PR or branch and needs a verify command.
 
 The specialist agents a panel may seat are bundled plugin agents (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-role`, `premortem-reviewer`); the orchestrator dispatches each reviewer by name (resolve dispatch via the host tool map). Each agent's review methodology lives in its own system prompt; the orchestrator's dispatch passes it the base rubric (severity/verification/format), the project calibration (`core.md` for threat model + canonical patterns, `review-crew.md` layer for scope/focus/conventions), `CLAUDE.md`, the diff, and the findings output path. Every finding they emit must cite a `file:line` and target a `+`/`-` line in the diff — context-line and unchanged-code findings are dropped at compile time. Each specialist runs once per round; the orchestrator never re-runs a specialist or chains a second **finder** pass within a round, because a finder that has exhausted the real issues starts fabricating (base rubric, "In-pass Chain-of-Verification & single-pass discipline"). It does run a fail-closed **per-finding verification** pass over the *already-emitted* findings at compile time — 3-state CONFIRMED/PLAUSIBLE/REFUTED verdicts with quoted evidence that never searches for new issues, distinct from re-running a finder (see `## Compile + Dedupe`). The loop re-reviews from scratch each round on a fresh diff, which is different from re-running a specialist on its own output.
 
@@ -23,14 +21,39 @@ The specialist agents a panel may seat are bundled plugin agents (`architecture-
 | Form                                       | Behavior                                                                                                                                                              |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/superheroes:review-code`                 | **Auto-fix loop (default).** Review → triage → fix → re-review until no Critical/Important findings remain, or a halt condition fires. Commits locally; never pushes. |
-| `/superheroes:review-code --review-only`   | One review pass, presentation written to `$SESSION_DIR/round-1/presentation.md`, no commits. Never a stall on a question nobody can answer.       |
-| `/superheroes:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`.                                                                |
+| `/superheroes:review-code branch` / `pr <N>` | Force branch or PR mode; runs the auto-fix loop.                                                                |
 | `/superheroes:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
 | `/superheroes:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
 
 **Auto-detection rule.** Run `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number,headRefOid,headRefName --limit 1`. If the result is non-empty, default to PR mode. Otherwise default to branch mode. If the user passed `branch` explicitly, skip the lookup. If the user passed `pr <N>` explicitly, use `<N>` and don't auto-detect.
 
-**`--post` was removed (#1121) and is not a flag.** It posted a review pass to GitHub as inline comments and had zero recorded invocations. If the user passes `--post`, stop and point them at `--review-only` — the read-only path, whose write scope is stated where that path is defined (§ Read-Only Path → `--review-only`, and the Session Directory and Setup sections it depends on) — rather than silently running the auto-fix loop, which commits.
+**Two flags were removed and are not flags:** `--review-only` (one review pass, then a written presentation) and `--post` (posted a review pass to GitHub), because code review runs only as its one review-and-fix loop. Run this block first on every invocation, before Setup, with `REVIEW_CODE_ARGS` set to the invocation's arguments. The block reads the arguments with their quoting kept, so a word inside the value of `--focus` or `--result-file` is never read as a flag. It prints nothing and exits 0 unless a removed flag is passed as an argument of its own; when it exits non-zero, stop: do nothing else, do not start the loop.
+
+```bash
+ARG=$(python3 -B -c '
+import shlex, sys
+text = sys.argv[1]
+try:
+    words = shlex.split(text)
+except ValueError:
+    words = text.split()  # unbalanced quote: plain whitespace split, still skipping the word after --focus or --result-file
+skip = False
+for word in words:
+    if skip:
+        skip = False
+    elif word in ("--focus", "--result-file"):
+        skip = True
+    elif word in ("--review-only", "--post"):
+        print(word)
+        break
+' "${REVIEW_CODE_ARGS:-}")
+if [ -n "$ARG" ]; then
+  echo "review-code: $ARG was removed. Code review runs only as its one review-and-fix loop, so nothing ran. Run /superheroes:review-code without $ARG."
+  exit 1
+fi
+```
+
+Open no `AskUserQuestion` on any review-code path, for any purpose.
 
 ## Session Directory
 
@@ -40,7 +63,7 @@ All review artifacts live in a per-invocation temp directory so parallel reviews
 SESSION_DIR=$(mktemp -d /tmp/review-XXXXXXXX)
 ```
 
-Files written during the review. **Per-round artifacts live under `$SESSION_DIR/round-<N>/`** in the auto-fix loop (round 1, 2, …); the read-only path (`--review-only`) runs a single pass and writes that pass's artifacts under `round-1/` as well. Only `meta.json` lives at the session-dir root.
+Files written during the review. **Per-round artifacts live under `$SESSION_DIR/round-<N>/`** in the auto-fix loop (round 1, 2, …). Only `meta.json` lives at the session-dir root.
 
 The full artifact table — every path, the component that writes it, and its purpose — is in `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/setup.md` § Session artifacts.
 
@@ -50,11 +73,11 @@ The full artifact table — every path, the component that writes it, and its pu
 
 ### 1. Setup
 
-Decide mode (auto-detected or explicit, per `## Invocation`). Create the session directory.
+Run the removed-flags block from `## Invocation` first. Then decide mode (auto-detected or explicit, per `## Invocation`). Create the session directory.
 
 **Resolve the run's inputs before dispatching anything.** In order: the base rubric path, repo root, the calibration paths, the plugin and rubric versions, the model tiers, the per-role engine, then the staleness self-check, the profile bootstrap, the verify story, and the post-bootstrap refresh of the dispatch paths. The exact commands, the variable each one sets, and the tier→model dispatch mapping are in `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/setup.md` § Setup resolution — read it and run the blocks in the order given.
 
-Everything below depends on the variables that file sets: `$ROOT_DIR`, `$RUBRIC`, `$REPO_ROOT`, `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`, `$PLUGIN_VERSION`, `$RUBRIC_VERSION`, `$REVIEWER_MODEL`, `$DEEP_MODEL`, `$MECH_MODEL`, `$SYNTH_MODEL`, `$VERIFIER_MODEL`, `$FIXER_MODEL`, `$EP`, `$REVIEWER_ENGINE`, `$IMPL_ENGINE`, `$CONFIGURED`, `$DOCTOR_JSON`, `$VERIFY_JSON`, `$VERIFY_CMD`, `$BREAK_IT_ARGS`, `$VERIFY_MODE`, `$REFUSAL`, and `$SEAT_MAP` and `$AUTHOR_FAMILY`, which the seat-map compose step sets right after the base pin. A step below that reads one of these without that file having been run is a bug in the step; the shell defaults that do appear (`${VERIFY_CMD:-unverified}`, `${VERIFY_CMD:-none}`) are deliberate value fallbacks for an unset-but-legitimate verify story, not a licence to skip the setup file.
+Everything below depends on the variables that file sets: `$ROOT_DIR`, `$RUBRIC`, `$REPO_ROOT`, `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`, `$PLUGIN_VERSION`, `$RUBRIC_VERSION`, `$REVIEWER_MODEL`, `$DEEP_MODEL`, `$MECH_MODEL`, `$SYNTH_MODEL`, `$VERIFIER_MODEL`, `$FIXER_MODEL`, `$EP`, `$REVIEWER_ENGINE`, `$IMPL_ENGINE`, `$CONFIGURED`, `$DOCTOR_JSON`, `$VERIFY_JSON`, `$VERIFY_CMD`, `$BREAK_IT_ARGS`, `$REFUSAL`, and `$SEAT_MAP` and `$AUTHOR_FAMILY`, which the seat-map compose step sets right after the base pin. A step below that reads one of these without that file having been run is a bug in the step; the shell default that does appear (`${VERIFY_CMD:-none}`) is a deliberate value fallback, not a licence to skip the setup file.
 
 **PR mode:**
 
@@ -76,15 +99,9 @@ REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
   --jq '[.[] | {id, in_reply_to_id, path, line, position, body, user: .user.login}]' \
   > "$SESSION_DIR/prior-comments.json"
-
-# Read-only path ONLY (--review-only): a detached worktree at the PR head
-# gives subagents a clean source of truth to verify against. NOT used on the
-# auto-fix path — that path edits and commits on the current branch directly.
-git fetch origin "$PR_BRANCH"
-git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --review-only ONLY
 ```
 
-**Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be in one of two accepted states so fix commits land where they belong: **standing on the PR's branch** (name match only — **no** `HEAD` freshness check, so a behind checkout still passes), or **an adopted build** (invoke `review-code pr <N>` — auto-detection matches `--head` by branch name, so a renamed local branch never reaches this guard on a bare invocation) tracking remote `origin` with merge ref `refs/heads/<PR branch>` (read from `branch.<name>.remote` / `branch.<name>.merge`, not `@{upstream}` — spoofable by a local-tracking ref) and `HEAD` exactly `$HEAD_SHA`. The fenced block below is extracted by `plugins/superheroes/lib/tests/test_review_code_branch_guard.py` (first `bash` fence after this paragraph). Adopted path only: the config leg proves tracking **`origin`'s** branch of that name with `HEAD` at the PR head — assuming the PR head lives in `origin` (same as `git fetch origin "$PR_BRANCH"` above); a fork PR whose head name collides with an `origin` branch is not distinguished. The SHA leg refuses a stale adopted copy and does **not** apply to the name path.
+**Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be in one of two accepted states so fix commits land where they belong: **standing on the PR's branch** (name match only — **no** `HEAD` freshness check, so a behind checkout still passes), or **an adopted build** (invoke `review-code pr <N>` — auto-detection matches `--head` by branch name, so a renamed local branch never reaches this guard on a bare invocation) tracking remote `origin` with merge ref `refs/heads/<PR branch>` (read from `branch.<name>.remote` / `branch.<name>.merge`, not `@{upstream}` — spoofable by a local-tracking ref) and `HEAD` exactly `$HEAD_SHA`. The fenced block below is extracted by `plugins/superheroes/lib/tests/test_review_code_branch_guard.py` (first `bash` fence after this paragraph). Adopted path only: the config leg proves tracking **`origin`'s** branch of that name with `HEAD` at the PR head — assuming the PR head lives in `origin`; a fork PR whose head name collides with an `origin` branch is not distinguished. The SHA leg refuses a stale adopted copy and does **not** apply to the name path.
 
 ```bash
 CURRENT_BRANCH=$(git symbolic-ref --quiet HEAD); case "$CURRENT_BRANCH" in refs/heads/?*) CURRENT_BRANCH=${CURRENT_BRANCH#refs/heads/};; *) CURRENT_BRANCH=;; esac
@@ -92,12 +109,12 @@ LOCAL_HEAD=$(git rev-parse HEAD); TRACK_REMOTE=$(git config --get "branch.$CURRE
 case "$PR_BRANCH" in ""|null) echo "Auto-fix: pr.json has no head branch — refusing (fail closed)."; exit 1;; esac
 case "$HEAD_SHA"   in ""|null) echo "Auto-fix: pr.json has no head SHA — refusing (fail closed)."; exit 1;; esac
 if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] && ! { [ -n "$CURRENT_BRANCH" ] && [ "$TRACK_REMOTE" = origin ] && [ "$TRACK_MERGE" = "refs/heads/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
-  echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '${CURRENT_BRANCH:-<detached HEAD>}'). An ADOPTED build also qualifies, but only when ALL hold: this branch tracks remote 'origin' (found '${TRACK_REMOTE:-none}') and merge ref 'refs/heads/$PR_BRANCH' (found '${TRACK_MERGE:-none}'), AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
-  echo "Otherwise check out the branch, or re-run with --review-only (read-only terminal)."; exit 1
+  echo "Code review runs only on this project's own PR, from the PR's branch '$PR_BRANCH' (currently on '${CURRENT_BRANCH:-<detached HEAD>}'). An ADOPTED build also qualifies, but only when ALL hold: this branch tracks remote 'origin' (found '${TRACK_REMOTE:-none}') and merge ref 'refs/heads/$PR_BRANCH' (found '${TRACK_MERGE:-none}'), AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
+  echo "If this is your PR, check out its branch and run again. Reviewing a PR that was not built in this project is not supported."; exit 1
 fi
 ```
 
-If the guard fails (detached HEAD, an unrelated branch, or you're reviewing someone else's PR), STOP — do not create the detached worktree and do not enter the loop. A **stale** adopted branch — right tracking config, wrong `HEAD` — refuses; the name path has no freshness check. Missing `pr.json` metadata (`$PR_BRANCH` or `$HEAD_SHA` empty or `null`) refuses fail-closed. Tell the user to use `--review-only`. The detached `git worktree add --detach` step above is for the `--review-only` PR path ONLY, never for the auto-fix path. The auto-fix loop **never pushes**; an adopted build must push its fix commits itself with an explicit refspec — `git push origin HEAD:$PR_BRANCH` — because a bare `git push` from an adopted branch fails under git's default `push.default=simple` when the local branch name differs from its upstream (`fatal: The upstream branch of your current branch does not match the name of your current branch.`).
+If the guard fails (detached HEAD, an unrelated branch, or you're reviewing someone else's PR), STOP — do not enter the loop. Tell the user plainly that reviewing a PR not built in this project is not supported, and offer no other way to review it. A **stale** adopted branch — right tracking config, wrong `HEAD` — refuses; the name path has no freshness check. Missing `pr.json` metadata (`$PR_BRANCH` or `$HEAD_SHA` empty or `null`) refuses fail-closed. The auto-fix loop **never pushes**; an adopted build must push its fix commits itself with an explicit refspec — `git push origin HEAD:$PR_BRANCH` — because a bare `git push` from an adopted branch fails under git's default `push.default=simple` when the local branch name differs from its upstream (`fatal: The upstream branch of your current branch does not match the name of your current branch.`).
 
 **Branch mode:**
 
@@ -125,7 +142,7 @@ printf '%s' "$BASE_REF" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' && VERIFY_CMD
 
 **The base must RESOLVE TO A COMMIT — validated once at Setup, and every consumer uses the guarded command.** This is the only validation, and it is deliberately not a non-emptiness test: `$BASE_REF` reaching `git diff` as an empty string makes argv `...HEAD`, which git reads as `HEAD...HEAD` — a **zero-line diff at exit 0** the loop would certify clean — and reaching it as the literal string `null` (what `jq -r` prints for an absent key) passes any `[ -n … ]` check while `git diff null...HEAD` exits 128 and *still* leaves an empty `diff.txt`. `git rev-parse --verify --quiet "$BASE_REF^{commit}"` rejects both, plus a deleted branch and a non-commit tag. **Every** producer of `$BASE_REF` — the fetch/pin above, the local fallback, the `meta.json` restore below — routes through it; never add a second, weaker guard beside it, and never let a caller "recover" by substituting a branch name. On every auto-fix `next`, `round_driver.py` independently re-checks in code that the base is a *pinned commit id* and that the pin has not moved mid-session, refusing with `base-not-pinned`, `base-unresolved`, or `base-pin-moved` if not (see `reference/round-driver.md` § Base guard).
 
-**Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; in PR mode the driver now refuses a fork whose PR base repository differs from `origin` with `base-repo-mismatch` (full fork *support* — resolving or fetching the base by URL — is still deliberately not built).
+**Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, and record it in `meta.json`. Both modes assume `origin` is the base branch's repository; in PR mode the driver now refuses a fork whose PR base repository differs from `origin` with `base-repo-mismatch` (full fork *support* — resolving or fetching the base by URL — is still deliberately not built).
 
 **Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above. On fresh state the round-1 artifact passed to the driver is refused in code (`round-diff-unreadable`, `round-diff-empty`, `round-diff-malformed`, `round-diff-required`); rounds 2+ rely on the shell halt above.
 
@@ -136,8 +153,6 @@ git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt.tmp" && mv "$
 
 **If `$BASE_REF` is not in scope** — a resumed or compacted orchestrator, or a fresh shell — restore the pin from the session record rather than re-deriving it: `BASE_REF=$(jq -r '.baseRef // empty' "$SESSION_DIR/meta.json")`, then **re-run the resolve-to-a-commit check from the setup block** (`BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || exit 1`) before any diff. Use `// empty`, never a bare `.baseRef`: `jq -r` prints the literal string `null` for an absent key, which is non-empty and would sail past a naive check. Re-running the setup block instead would silently re-pin to a moved `origin/<base>`.
 
-The read-only path runs a single pass and computes the same local diff into `round-1/diff.txt`.
-
 Then write `meta.json` in both modes:
 
 ```bash
@@ -147,9 +162,9 @@ PR_ARG=$(printf '%s' "${PR_NUMBER:-null}" | jq -cs 'if length == 1 and (.[0]|typ
 STORAGE_MODE_ARG=$(printf '%s' "${LOC:-}" | jq -Rsc 'if type == "string" and length > 0 then . else null end' 2>/dev/null); [ -n "$STORAGE_MODE_ARG" ] || STORAGE_MODE_ARG=null
 STORAGE_SOURCE_ARG=$(printf '%s' "${SOURCE:-}" | jq -Rsc 'if type == "string" and length > 0 then . else null end' 2>/dev/null); [ -n "$STORAGE_SOURCE_ARG" ] || STORAGE_SOURCE_ARG=null
 STORAGE_PROVISIONAL_ARG=$(printf '%s' "${PROVISIONAL:-}" | jq -cs 'if length == 1 and .[0] == true then true elif length == 1 and .[0] == false then false else null end' 2>/dev/null); [ -n "$STORAGE_PROVISIONAL_ARG" ] || STORAGE_PROVISIONAL_ARG=null
-jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg branch "$BRANCH" \
+jq -n --arg mode "$MODE" --arg path loop --arg repo "$REPO" --arg branch "$BRANCH" \
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" --arg repoRoot "$REPO_ROOT" \
-  --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "${VERIFY_CMD:-unverified}" \
+  --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "$VERIFY_CMD" \
   --argjson pr "$PR_ARG" --argjson focusNotes "$FOCUS_ARG" \
   --argjson storageMode "$STORAGE_MODE_ARG" --argjson storageSource "$STORAGE_SOURCE_ARG" --argjson storageProvisional "$STORAGE_PROVISIONAL_ARG" \
   '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes,storageMode:$storageMode,storageSource:$storageSource,storageProvisional:$storageProvisional}' \
@@ -158,7 +173,7 @@ jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg bran
   || { rm -f "$SESSION_DIR/meta.json.tmp"; echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
 ```
 
-`REVIEW_PATH` is `loop` (default) or `review-only`, decided from the flags at invocation. `post` was a third value and was removed with the mode (#1121) — never re-add it: a resumed `post` run has no flow left to continue. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story. `storageMode`, `storageSource`, and `storageProvisional` record storage-bootstrap disclosure when bootstrap ran (`$LOC`, `$SOURCE`, `$PROVISIONAL`); when bootstrap did not run they are JSON `null` — not empty strings — so a reader can tell no storage decision was taken this run.
+The `path` field is always `loop`. `post` was once a value and was removed with its mode — never re-add it; `review-only` was removed the same way. A resumed run carrying either has no flow left to continue. The `verify` field is the verify command string, so a cold-resumed orchestrator recovers the verify story. `storageMode`, `storageSource`, and `storageProvisional` record storage-bootstrap disclosure when bootstrap ran (`$LOC`, `$SOURCE`, `$PROVISIONAL`); when bootstrap did not run they are JSON `null` — not empty strings — so a reader can tell no storage decision was taken this run.
 
 Size the round-1 diff for the dispatch summary (after writing it to `round-1/diff.txt` per the command above):
 
@@ -178,7 +193,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
 - **Repo:** `<owner>/<repo>`
 - **Head SHA:** short hash
 - **Diff size:** `<DIFF_LINES>` lines
-- **Verify:** `VERIFY_CMD` (the command string), or `unverified` (no gate), or `review-only` (auto-fix disabled — this run degrades to a single pass + presentation)
+- **Verify:** `VERIFY_CMD` (the command string)
 - **Specialists to dispatch (round 1: the seat map's roster at `reviewer-deep`, in parallel; later rounds: obey `round_driver.py` `next` — delta audits + scoped finder, or a full panel on #174/unknown):**
   - `code-reviewer` → `findings-code.json`
   - `test-role` → `findings-test.json`
@@ -187,7 +202,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
   - `architecture-reviewer` → `findings-architecture.json` (only when a roster names it)
 - **Session directory:** `$SESSION_DIR` (round 1 artifacts under `round-1/`)
 - **Focus notes:** the `--focus` argument, if any
-- **Path:** default → auto-fix loop (`round_driver.py` next/submit until terminal); `--review-only` → one pass, then the presentation written to `$SESSION_DIR/round-1/presentation.md`
+- **Path:** the auto-fix loop (`round_driver.py` next/submit until terminal)
 - **What happens after dispatch (default loop):** obey `next`/`submit` — panel/verify/synthesis → fixer → verify gate → delta audits/scoped finder → terminal with certification + receipt. The auto-fix runs on `$IMPL_ENGINE` (FR-15): when it is `codex`/`cursor`, the fix is written by the external engine via `engine_adapter.py` (workspace-write) and committed by the adapter, then the same verify gate runs; when it is `claude`, the fixer subagent runs as today. This standalone path has no run-time `engine_authz.py test-dispatch` preflight (that lives only in the native build leg's `_implWriteAuthorized`); instead it relies on the host classifier's `autoMode.allow` deny to fall open behaviorally — an ungranted external-engine dispatch is denied by the host, the write never happens, and the fix falls open to **the host model**.
 
 Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` baseline; rounds 2+ are **delta rounds** (fix audits + scoped finder) unless the #174 triggers or an unknown changed surface schedule a full panel. A full `reviewer-deep` confirmation panel is mandatory before certifying exit when economics require it. Obey `round_driver.py` `next`/`submit`; never tier, skip, or exit by eye. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/round-driver.md`.
@@ -209,7 +224,7 @@ On every `next` whose `phase` starts with `dispatch-`, `round_driver.py` **emits
 No seat is ever asked to transcribe an `orderSha256`, `manifestSha256`, or storage path — those ride in the stub the driver emitted. After landings exist, either **`record-result` (or `record-missing`) + `advance`**, or a hand **`submit`** — **mutually exclusive, per SESSION** (the first path used is the path the session keeps; see `reference/round-driver.md` § Durable-record path).
 
 For the full `dispatch-review` argument surface, read `skills/workhorse/reference/dispatch-entry.md`.
-Launch the round's scheduled specialists (round 1: the seat map's roster) **by channel** — see `reference/round-driver.md` § Batch concurrency. **Native-subagent** seats (a `claude` seat) go out as **parallel dispatches in one message**; the harness runs them concurrently and owns their lifecycle. **External-engine** seats (`codex`/`cursor`, through `dispatch-review`) each get their own `--run-dir` (**the runner creates it** on first `dispatch-review`; a leaf `--run-dir` symlink is refused `run-dir-is-symlink`; keep `--progress-file` and result JSON **outside** the run dir or get `run-dir-not-empty-unopened`; continuation reuses the same dir), are launched with a short positive slice, then the originating verb is re-invoked on every non-terminal run in rotation until each is terminal — issuing those calls together in one message does not make them concurrent. Dispatch each seat through **its seat-map-assigned engine+model** (`$SEAT_MAP.seats[<reviewer>]` → `.vendor`/`.model`): a `claude` seat runs the named subagent at its tier model with the **order file contents** as the prompt; a `codex`/`cursor` seat dispatches through `engine_dispatch.py dispatch-review` (read-only sandbox) with that seat's resolved `.model`. An unreadable or missing slot is the same `cannot-certify` signal: the orchestrator re-runs a forfeited panel seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat), and when no such vendor is live the seat is recorded missing (`record-missing`) and counts as not run; it is never re-run on the host model when the host's family is a maker. A seat the seat map records as `unfilled` (`source: "unfilled"`, no vendor or model) is never dispatched and never re-run on the host model; it stays in the record as a planned reviewer that did not run. The same holds on the hand-submit and `--review-only` paths. On the hand path, submit the panel with `ranManifest: {<dim>: <vendor>}` built from your OWN dispatch records **and** the composed `$SEAT_MAP` JSON as `seatMap`. Per-seat dispatch detail: `reference/auto-fix-loop.md`.
+Launch the round's scheduled specialists (round 1: the seat map's roster) **by channel** — see `reference/round-driver.md` § Batch concurrency. **Native-subagent** seats (a `claude` seat) go out as **parallel dispatches in one message**; the harness runs them concurrently and owns their lifecycle. **External-engine** seats (`codex`/`cursor`, through `dispatch-review`) each get their own `--run-dir` (**the runner creates it** on first `dispatch-review`; a leaf `--run-dir` symlink is refused `run-dir-is-symlink`; keep `--progress-file` and result JSON **outside** the run dir or get `run-dir-not-empty-unopened`; continuation reuses the same dir), are launched with a short positive slice, then the originating verb is re-invoked on every non-terminal run in rotation until each is terminal — issuing those calls together in one message does not make them concurrent. Dispatch each seat through **its seat-map-assigned engine+model** (`$SEAT_MAP.seats[<reviewer>]` → `.vendor`/`.model`): a `claude` seat runs the named subagent at its tier model with the **order file contents** as the prompt; a `codex`/`cursor` seat dispatches through `engine_dispatch.py dispatch-review` (read-only sandbox) with that seat's resolved `.model`. An unreadable or missing slot is the same `cannot-certify` signal: the orchestrator re-runs a forfeited panel seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat), and when no such vendor is live the seat is recorded missing (`record-missing`) and counts as not run; it is never re-run on the host model when the host's family is a maker. A seat the seat map records as `unfilled` (`source: "unfilled"`, no vendor or model) is never dispatched and never re-run on the host model; it stays in the record as a planned reviewer that did not run. The same holds on the hand-submit path. On the hand path, submit the panel with `ranManifest: {<dim>: <vendor>}` built from your OWN dispatch records **and** the composed `$SEAT_MAP` JSON as `seatMap`. Per-seat dispatch detail: `reference/auto-fix-loop.md`.
 
 **Per-agent substitutions** (reviewer name → findings filename stem → dimension label):
 
@@ -226,20 +241,15 @@ A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/finding
 
 ### 4. Compile + Dedupe (main context)
 
-On the **read-only path** (`--review-only`), the orchestrator compiles in main context — a **prose-driven review** (sanctioned lane; not a shortcut and not available inside the auto-fix loop). It owes a substitute receipt instead of the driver's `round-receipt.json`: the dispositions table plus the durable receipt the workhorse charter requires (`skills/workhorse/SKILL.md` §10 — link review results on the PR). Branch mode has no PR: write both to `$SESSION_DIR/dispositions.md`; when the branch later becomes a PR, that file's content is what the PR body carries. Full contract: `rubric/review-discipline.md` § Prose-driven review.
-
-On the **auto-fix loop**, compile is driver-owned — obey `next`/`submit` instead of reimplementing compile by hand.
-
-Collect findings (read-only path only) from file-channel seats at `$SESSION_DIR/round-<round>/findings-*.json` and from stdout-channel seats via their folded `dispatch-review` results. Apply, in order:
+Compile is driver-owned on the loop — obey `next`/`submit` instead of reimplementing compile by hand. The numbered steps below are the compile contract the driver applies to the findings it collects from the file-channel seats at `$SESSION_DIR/round-<round>/findings-*.json` and from the stdout-channel seats' folded `dispatch-review` results. In order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
 2. **Diff-scope verification.** Parse `$SESSION_DIR/round-<round>/diff.txt` for `+`/`-` anchor lines (same hunk-walking as `diff_scope.py`). Drop out-of-scope findings. Then drop any finding that states no consequence: it is recorded as a compile drop with the reason `no stated consequence` and is not taken into the review.
-3. **Reachability pre-check (read-only path only).** For each remaining `severity == "Important"` finding, confirm the edge case is reachable; when in doubt, downgrade to Minor rather than drop.
-4. **Dedupe by `(file, line)`.** Merge same-anchor findings: higher severity wins, dimensions unioned, stable `file::normalized-title` identity, `tradeoff: true` if either input is. The absorbed duplicate is recorded as a compile drop with its merge reason.
-5. **Nit cap.** After dedupe, keep at most 5 Nits whose `consequenceKind` is `code-quality`; the overflow collapses to one summary entry and each collapsed Nit is recorded as `craft` at once. A Nit with a real consequence is never collapsed.
-6. **Per-finding verification + synthesis merge** (never the session model). Stage ids, cluster, dispatch one verifier per cluster (`model: $VERIFIER_MODEL`, reviewer engine; #230 immunity), apply `verification.apply_verdicts`, then one synthesis judge (`model: $SYNTH_MODEL`) groups root causes and `verification.merge_and_rank` merges under a coverage guarantee — synthesis drops nothing. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/verification-pass.md`.
-7. **Author-justification post-filter (PR mode only, after verification).** Cross-reference `prior-comments.json`. May drop **only** a finding whose verifier `verdict` is present and not **CONFIRMED**, recording the prior justification quoted. A **CONFIRMED** finding with a prior justification **survives**, stamped `challenge: "author-justified"` (ledger-visible). A finding with no verdict is never dropped here. Rules: `round-driver.md`.
-8. **PR-body honesty check (PR mode only).** From `pr.json`'s `body`, the review seat verifies the PR body carries a valid **DoD disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each `done` (with an evidence pointer) or `deferred` (with a filed issue `#NNN` and a one-line reason). Append an **Important** finding (cited at the PR body, `tradeoff: true`, author-resolved — it is a judgment call the author closes by writing the table, not a mechanical fix) when the table is missing, or a row's evidence or deferral is empty or hollow. A **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing** `<!-- superheroes:degradations -->` section is the same finding shape — not a silent pass; an empty degradation list is only clean when that section says the literal **None** (absence and **None** differ). The seat also checks the owner half (above `<!-- superheroes:build-record -->`) under `## What we're accepting` carries the **omission floor** (CONVENTIONS §10.7): enumerate (1) each deferred DoD row, (2) each blocking or important dispositions-table finding not fixed (by severity, not disposition label), and (3) each costly disclosed degradation under `<!-- superheroes:degradations -->` (bullets, or **None** when empty) — each must have a matching consequence line in that section; same **Important** / `tradeoff: true` / author-resolved finding when one is missing. A bullet labelled [harmless] needs none; an unlabelled one reads costly. Branch mode has no PR body — skip. Contract: CONVENTIONS `§10.7`, `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`.
+3. **Dedupe by `(file, line)`.** Merge same-anchor findings: higher severity wins, dimensions unioned, stable `file::normalized-title` identity, `tradeoff: true` if either input is. The absorbed duplicate is recorded as a compile drop with its merge reason.
+4. **Nit cap.** After dedupe, keep at most 5 Nits whose `consequenceKind` is `code-quality`; the overflow collapses to one summary entry and each collapsed Nit is recorded as `craft` at once. A Nit with a real consequence is never collapsed.
+5. **Per-finding verification + synthesis merge** (never the session model). Stage ids, cluster, dispatch one verifier per cluster (`model: $VERIFIER_MODEL`, reviewer engine; #230 immunity), apply `verification.apply_verdicts`, then one synthesis judge (`model: $SYNTH_MODEL`) groups root causes and `verification.merge_and_rank` merges under a coverage guarantee — synthesis drops nothing. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/verification-pass.md`.
+6. **Author-justification post-filter (PR mode only, after verification).** Cross-reference `prior-comments.json`. May drop **only** a finding whose verifier `verdict` is present and not **CONFIRMED**, recording the prior justification quoted. A **CONFIRMED** finding with a prior justification **survives**, stamped `challenge: "author-justified"` (ledger-visible). A finding with no verdict is never dropped here. Rules: `round-driver.md`.
+7. **PR-body honesty check (PR mode only).** From `pr.json`'s `body`, the review seat verifies the PR body carries a valid **DoD disposition table** (the `superheroes:dod-table` marker) against the issue/spec — one row per Definition-of-Done bullet, each `done` (with an evidence pointer) or `deferred` (with a filed issue `#NNN` and a one-line reason). Append an **Important** finding (cited at the PR body, `tradeoff: true`, author-resolved — it is a judgment call the author closes by writing the table, not a mechanical fix) when the table is missing, or a row's evidence or deferral is empty or hollow. A **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing** `<!-- superheroes:degradations -->` section is the same finding shape — not a silent pass; an empty degradation list is only clean when that section says the literal **None** (absence and **None** differ). The seat also checks the owner half (above `<!-- superheroes:build-record -->`) under `## What we're accepting` carries the **omission floor** (CONVENTIONS §10.7): enumerate (1) each deferred DoD row, (2) each blocking or important dispositions-table finding not fixed (by severity, not disposition label), and (3) each costly disclosed degradation under `<!-- superheroes:degradations -->` (bullets, or **None** when empty) — each must have a matching consequence line in that section; same **Important** / `tradeoff: true` / author-resolved finding when one is missing. A bullet labelled [harmless] needs none; an unlabelled one reads costly. Branch mode has no PR body — skip. Contract: CONVENTIONS `§10.7`, `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`.
 
 Determine the verdict per the base rubric's "Verdict labels & mapping" (count post-dedupe, post-synthesis findings). For `/superheroes:review-code` the labels are **READY FOR PR** / **FIX BEFORE PR** / **MAJOR FIXES NEEDED**:
 
@@ -269,7 +279,7 @@ Order findings: Critical → Important → Minor → Nit, then by file path, the
 
 ## Auto-Fix Loop (default path)
 
-Runs when `--review-only` is not set and the profile's verify story is not `mode: review-only`. The loop is **driver-owned**: every per-round step is a `round_driver.py` call, `python3 -B <plugin root>/lib/round_driver.py next --session-dir <session dir>` or `python3 -B <plugin root>/lib/round_driver.py submit --session-dir <session dir>` (plus the fold flags shown below) — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/round-driver.md`.
+The loop is the only path. It is **driver-owned**: every per-round step is a `round_driver.py` call, `python3 -B <plugin root>/lib/round_driver.py next --session-dir <session dir>` or `python3 -B <plugin root>/lib/round_driver.py submit --session-dir <session dir>` (plus the fold flags shown below) — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/round-driver.md`.
 
 **Call form.** Call `round_driver.py`, `break_it.py`, `review_store.py`, `mode_reconcile.py`, `calibration_resolve.py`, `size_count.py`, `order_lint.py` and `dispatch_guard.py` as one plain line, `python3 -B <plugin root>/lib/<script>.py <verb> <args>`, with the resolved plugin root (the session bootstrap prints it as "Plugin root (absolute)") and the literal session folder written out. Substitute the real paths; never set shell variables that feed these calls (`ROOT_DIR=…`, `SESSION_DIR=…`) or continue the call over lines (assignments that only parse a call's printed output, as in `reference/setup.md`, are not covered). The plugin's approval hook approves only that one form and sends every other form to the normal permission check.
 
@@ -327,52 +337,19 @@ python3 -B "$ROOT_DIR/lib/review_result.py" write \
 
 (`$ACTION`, `$ROUND`, and `$REASON` are set on **every** terminal exit from the driver (`converged` → `exit_clean`; other terminal verdicts → `halt` with the receipt reason). `$RESULT_FILE` is the path supplied via `--result-file`. When absent, skip this step.)
 
-Print: final verdict, rounds run, commits created, findings fixed by severity, **the driver receipt's `certification` block** (shape, `fullPanel`, `independence`, any `note` — scoped certifying finish vs full-panel-confirmed, degraded disclosures), **the seat map** (`$SEAT_MAP` — per-seat tiers + resolved models + any pin/degradation disclosures), **`scriptRan` from the journal** (`round-receipt.json` → `scriptRan.invocations` and `byPhase` — the vet that the driver actually ran), **findings verification dropped (REFUTED)** as unsubstantiated, `was_blocking_tagged` drops, **findings downgraded from blocking to non-blocking** (`downgrades`; show `from → to`), **PLAUSIBLE-Critical `advisory: true` skips** (disclosed unproven blockers), auto-handled Minor/Nit, `unmatched`/`unverified`/`ambiguous`, and fixer `newIssuesNoticed`. If verify was `unverified`, state fixes were committed without a verify gate. Offer to push locally; do not push without confirmation.
+Print: final verdict, rounds run, commits created, findings fixed by severity, **the driver receipt's `certification` block** (shape, `fullPanel`, `independence`, any `note` — scoped certifying finish vs full-panel-confirmed, degraded disclosures), **the seat map** (`$SEAT_MAP` — per-seat tiers + resolved models + any pin/degradation disclosures), **`scriptRan` from the journal** (`round-receipt.json` → `scriptRan.invocations` and `byPhase` — the vet that the driver actually ran), **findings verification dropped (REFUTED)** as unsubstantiated, `was_blocking_tagged` drops, **findings downgraded from blocking to non-blocking** (`downgrades`; show `from → to`), **PLAUSIBLE-Critical `advisory: true` skips** (disclosed unproven blockers), auto-handled Minor/Nit, `unmatched`/`unverified`/`ambiguous`, and fixer `newIssuesNoticed`. Offer to push locally; do not push without confirmation.
 
 In PR mode, after a `converged` terminal and before writing the review record, run `python3 -B "$ROOT_DIR/lib/pr_body_stage.py" publish --session-dir "$SESSION_DIR" --pr "$PR_NUMBER"` (any other terminal skips it; the contract is in `reference/round-driver.md` § PR-body findings). In PR mode, on every terminal verdict, the loop ends by writing the review record from the session: `python3 -B "$ROOT_DIR/lib/review_record_session.py" write --session-dir "$SESSION_DIR" --extras <extras file> --repo-root <repo root>`, per the full-lane section of `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/review-record.md`. A PR-mode session abandoned before a terminal writes its record the same way with `--abandoned "<why>"`, per the same reference. Branch mode writes none. Put the record's URL in the summary.
 
 **Then, after the summary**, run the non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false). The **learning-loop proposal** and the **provisional-profile confirmation** are not run — the learning loop learns from decisions a human made, and a gate nobody answered produced none.
 
-## Read-Only Path
-
-This path runs a **single review pass** (loop steps 1-3, writing artifacts under `round-1/`) and stops there. It does not triage, fix, commit, or loop.
-
-### `--review-only`
-
-After the single pass, write the presentation to `$SESSION_DIR/round-1/presentation.md` and print a terminal report. No commits. (A profile with `mode: review-only` makes the default path degrade into exactly this presentation.)
-
-**If context was compacted between dispatch and presentation**, re-read `$SESSION_DIR/round-1/compiled.json` and `$SESSION_DIR/meta.json` to restore state (§ Session Directory). The skill is resumable from disk.
-
-**Write the presentation artifact — the only path.** Follow `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/headless-presentation.md`. Presence is an event, not a state a run can detect — the run never branches on whether a human is present and never opens a question that could block waiting for an answer. Never open `AskUserQuestion` on this path or any review-code path.
-
-**Form the orchestrator POV before writing.** Per the base rubric's "Orchestrator POV", for each Critical/Important finding open the cited file at the cited line (in `$SESSION_DIR/repo/` for the PR path, working tree otherwise) and form a **Fix / Skip / Defer + one-sentence rationale + High/Low confidence** take. This is the coordinator's own judgment from a small targeted read — not a re-review. For batched Minor/Nit, derive the POV from the finding text (read the file only if the text is insufficient).
-
-**Apply the review gate.** Partition findings by POV: `auto-include` = `recommendation == Fix` (these land under **Approved — POV `Fix`** in the artifact); `ask-set` = `recommendation` is `Skip` or `Defer` (these land under **Undecided — needs a human call**). The `ask-set` is neither approved nor dropped — listed in full for the human who reads the artifact.
-
-Write `$SESSION_DIR/round-1/presentation.md` per `headless-presentation.md` § The artifact:
-
-1. Verdict banner and one-line summary (including any base-fetch degradation line).
-2. **Approved — POV `Fix`.** The `auto-include` set. Per finding: severity tag, `file:line`, title, body, and the POV line.
-3. **Undecided — needs a human call.** The `ask-set`, listed in full:
-   - **Critical and Important findings (ask-set) — individually.** For each: severity tag, dimension(s), `file:line`, the finding text, the suggested fix, and — on its own line — the **POV** (e.g. `→ POV: Skip (Low confidence) — correct in theory but this path is never hit concurrently under the profile's threat model`).
-   - **Minor and Nit findings (ask-set) — batched for readability.** Group in batches of 4. For each finding: severity, `file:line`, a 2-3 sentence summary, and a compact POV tag (e.g. `POV: Skip (Low)`).
-4. A count summary that states the two sets separately (e.g. `"3 Critical, 5 Important approved; 2 Important, 4 Minor undecided"`).
-
-Print the artifact's path and a terminal report for the **approved** set only — grouped by severity, verdict label in bold. For each approved finding: severity tag, `file:line`, title, body, and the orchestrator POV line. State in one line that the `ask-set` went undecided because the review gate went unanswered. `compiled.json` already holds the full record; the artifact is the durable presentation.
-
-In PR mode, end the review by writing the review record per `${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/review-record.md`. Branch mode has no PR, so it writes no record.
-
-**Record no `decisions.py` entries on this path.** The learning loop learns from decisions a human made; a gate nobody answered produced none. Then run the end-of-run steps from `## Learning Loop & Staleness Nudge`: the **staleness nudge** only. The **learning-loop proposal** and **provisional-profile confirmation** are not run — the learning loop learns from decisions a human made, and a gate nobody answered produced none.
-
 ## The verify command
 
-The orchestrator's verify gate (loop step 12, run through `round_driver.py run-verify`, which runs the command and lands the result itself) and the fixer (prompt step 3) both run the project's own verify command, read from the resolved profile (`$PROFILE`)'s `## Verify` section during Setup. There are three branches:
+The orchestrator's verify gate (loop step 12, run through `round_driver.py run-verify`, which runs the command and lands the result itself) and the fixer (prompt step 3) both run the project's own verify command, read from the resolved profile (`$PROFILE`)'s `## Verify` section during Setup. There is one branch: **`command: <cmd>` →** `VERIFY_CMD="<cmd>"`. Both the orchestrator's gate and the fixer run `VERIFY_CMD` from the user's own working tree (never the PR head), non-interactively, with a timeout. A non-zero exit is a **HALT / `CHECK_FAILED`** — the orchestrator surfaces the failing output and does not re-review on a broken tree.
 
-- **`command: <cmd>` →** `VERIFY_CMD="<cmd>"`. Both the orchestrator's gate and the fixer run `VERIFY_CMD` from the user's own working tree (never the PR head), non-interactively, with a timeout. A non-zero exit is a **HALT / `CHECK_FAILED`** — the orchestrator surfaces the failing output and does not re-review on a broken tree.
-- **`mode: unverified` →** there is no verify command. SKIP the verify gate (step 12); tell the fixer to skip checks (verify command `"none"`); commits proceed ungated. State "unverified" in the dispatch summary and the End-of-Loop summary.
-- **`mode: review-only` →** the project opted out of auto-fix. The default path degrades to a single review pass + the `--review-only` presentation (no triage, no fixer, no commits, no loop). Note this in the dispatch summary.
+When no verify command resolves, review-code refuses at Setup before any dispatch and prints the refusal's message (`reference/setup.md`).
 
-`meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile. A `{baseRef}` token in the command is bound to the pinned base commit at Setup and in the driver's `run-verify` payload (`reference/setup.md`), so a touched-tests gate on a stacked branch diffs against the PR base, not main; with no full-hex pin the token stays and the gate refuses loudly.
+`meta.json` records only the command string (`verify`) so a cold-resumed orchestrator recovers it without re-reading the profile. A `{baseRef}` token in the command is bound to the pinned base commit at Setup and in the driver's `run-verify` payload (`reference/setup.md`), so a touched-tests gate on a stacked branch diffs against the PR base, not main; with no full-hex pin the token stays and the gate refuses loudly.
 
 Test-receipt evidence policy: `rubric/test-receipt-evidence.md`.
 

@@ -85,21 +85,13 @@ def test_rule_prose_is_pinned_to_the_approved_text():
         "command stays the driver's.")
 
 
-@pytest.mark.parametrize("phase", [RP.P_VERIFIERS, RP.P_SYNTHESIS])
-def test_read_only_hand_dispatch_prints_the_rule_from_its_one_home(phase):
-    # verification-pass.md's read-only path hand-composes verifier and synthesis orders; the
-    # command it gives must print the renderer's own block for that phase.
+def test_verification_pass_hand_composes_no_verifier_or_synthesis_order():
+    # The only verifier and synthesis orders are the driver's emitted ones, which carry the rule
+    # from the renderer; verification-pass.md gives no hand command that composes one.
     with open(_VERIFICATION_PASS, encoding="utf-8") as fh:
         doc = fh.read()
-    commands = re.findall(r'`(python3 -B -c "[^`]*seat_rule_block[^`]*")`', doc)
-    assert len(commands) == 1
-    assert "'%s'" % phase in doc
-    command = commands[0].replace("'dispatch-verifiers'", "'%s'" % phase)
-    command = command.replace("$ROOT_DIR", os.path.dirname(_LIB_DIR))
-    out = subprocess.run(["bash", "-c", command.replace("python3", sys.executable, 1)],
-                         capture_output=True, text=True, timeout=60, stdin=subprocess.DEVNULL)
-    assert out.returncode == 0, out.stderr
-    assert out.stdout.rstrip("\n") == RO.seat_rule_block(phase)
+    assert "seat_rule_block" not in doc
+    assert "hand-composed order" not in doc
 
 
 def test_rules_and_order_blocks_list_no_programs():

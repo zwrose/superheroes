@@ -105,7 +105,7 @@ shape is wrong and the thinking wins.
    **The PR's self-claims are checked against the diff, unconditionally.** On every full or light
    vet, read the PR body's claims against the diff and the artifacts by hand — the DoD table's `done`
    rows, the degradations it states, and every receipt or test run it claims — whether or not a
-   review seat ran. The auto-fix loop does not run review-code's step 8 honesty check, so this read
+   review seat ran. The auto-fix loop does not run review-code's step 7 honesty check, so this read
    is the only one. The receipt says what was read and names any claim the artifacts do not support.
 3. **Calls accepted, with reasons.** Every builder judgment call you are letting stand, each with
    why. Silence here reads as *not noticed*, not as *endorsed*.
