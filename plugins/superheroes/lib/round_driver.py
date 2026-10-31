@@ -1395,13 +1395,24 @@ def new_state(config=None):
     return state
 
 
-def _slice_security(dims, repo_root, parts):
-    """True when a slice seats the security lens: the panel holds it and the slice's files touch a risk area, or the risk areas
-    are not set (an unclear risk counts as touching). An exception reads as touching."""
+def _rename_sources(diff_text):
+    """``{destination path: source path}`` for the renamed or copied sections of ``diff_text``; empty when it cannot be read."""
+    try:
+        return {s["file"]: s["oldFile"] for s in countable_lines.parse_sections(diff_text)
+                if isinstance(s.get("oldFile"), str) and s["oldFile"] != s["file"]}
+    except Exception:
+        return {}
+
+
+def _slice_security(dims, repo_root, parts, sources=None):
+    """True when a slice seats the security lens: the panel holds it and the slice's files (a renamed file by both its paths,
+    ``sources`` mapping destination to source) touch a risk area, or the risk areas are not set (an unclear risk counts as
+    touching). An exception reads as touching."""
     if "security-reviewer" not in dims:
         return False
     try:
-        files = sorted({p["file"] for p in parts if isinstance(p, dict) and isinstance(p.get("file"), str)})
+        named = {p["file"] for p in parts if isinstance(p, dict) and isinstance(p.get("file"), str)}
+        files = sorted(named | {sources[f] for f in named if f in (sources or {})})
         found = risk_areas.touched(repo_root, files)
         return found.get("riskAreas") == "not-set" or bool(found.get("touched"))
     except Exception:  # fail toward seating the lens
@@ -1427,10 +1438,11 @@ def _plan_slices(state, cfg):
         state["slicePlan"] = {"sliced": False, "countable": plan["countable"], "bar": plan["bar"], "slices": []}
         return
     dims = round_phases.panel_dimensions(cfg)
+    sources = _rename_sources(diff_text)
     state["slicePlan"] = {
         "sliced": True, "countable": plan["countable"], "bar": plan["bar"],
         "slices": [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
-                    "security": _slice_security(dims, repo_root, sl["parts"])}
+                    "security": _slice_security(dims, repo_root, sl["parts"], sources)}
                    for sl in plan["slices"]],
     }
 
@@ -4812,8 +4824,9 @@ def _open_unread_wave(state, config, unread, wave, this_wave):
     repo_root = config.get("repoRoot") or os.getcwd()
     count = state.get("sliceCount")
     cut = _cut_wave(_wave_slices(state), unread, nxt, count)
+    sources = _rename_sources(state.get("reviewedDiff"))
     marked = [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
-               "security": _slice_security(dims, repo_root, sl["parts"]), "wave": nxt} for sl in cut]
+               "security": _slice_security(dims, repo_root, sl["parts"], sources), "wave": nxt} for sl in cut]
     risky = [sl for sl in marked if sl["security"]]
     roster = round_phases.wave_roster(dims, marked, with_whole=bool(risky))
     if not marked or not roster:

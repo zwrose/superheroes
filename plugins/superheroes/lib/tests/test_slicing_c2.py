@@ -577,6 +577,17 @@ def test_unread_selection_keeps_each_cut_runs_original_deletion_anchor():
     assert sum(s["diff"].count("\n-old ") for s in got) == 1800
 
 
+def test_unread_follow_up_slices_each_keep_the_shared_deletion_anchor():
+    fx = _fx_deletion_heavy()
+    pl = _plan_of(fx)
+    got = slicing.slice_parts_for([{"file": "del.py", "lines": [[4, 13]]}], pl, fx["cr"])
+    holding = [s for s in got if "\n-old " in s["diff"]]
+    assert len(holding) > 1
+    for s in holding:
+        covered = [rng for p in s["parts"] if p["file"] == "del.py" for rng in p["lines"]]
+        assert any(a <= 4 <= b for a, b in covered), s["parts"]
+
+
 def test_unread_replacement_is_cut_by_changed_lines_not_unique_head_lines():
     fx = _fx_replacement()
     pl = _plan_of(fx)

@@ -209,6 +209,20 @@ def test_a_slice_touching_a_configured_risk_area_gets_a_security_seat_and_one_th
     assert "security-reviewer" not in roster
 
 
+def test_a_file_renamed_out_of_a_risk_area_still_gets_its_slice_a_security_seat(tmp_path):
+    moved = "src/other/charge.py"
+    rename = ("diff --git a/%s b/%s\nsimilarity index 90%%\nrename from %s\nrename to %s\nindex 1111111..2222222 100644\n"
+              "--- a/%s\n+++ b/%s\n@@ -1,1 +1,2 @@\n ctx\n+added\n" % (PAYMENTS, moved, PAYMENTS, moved, PAYMENTS, moved))
+    state = _state(_repo(tmp_path, RISK_AREAS), rename + _added(OTHER, BAR + 100))
+    slices = state["slicePlan"]["slices"]
+    assert len(slices) > 1
+    holding = [s for s in slices if any(p["file"] == moved for p in s["parts"])]
+    assert holding
+    roster = RP.panel_roster(state, state["config"])
+    for s in holding:
+        assert s["security"] is True and "security-reviewer:" + s["id"] in roster
+
+
 def test_with_risk_areas_not_set_every_slice_gets_a_security_seat(tmp_path):
     state = _state(_repo(tmp_path), _risk_diff())
     roster = RP.panel_roster(state, state["config"])
@@ -239,6 +253,12 @@ def test_a_native_slice_seat_is_given_a_diff_holding_only_its_slice_and_a_scope_
         text = _read(ph["DIFF_PATH"])
         files = {p["file"] for p in sl["parts"]}
         assert _files_of(text) == files
+        # the delivered lines of each file are exactly the lines its part owns (a same-file chunk cannot stand in for another)
+        delivered = {s["file"]: s["addedLines"] for s in cl.parse_sections(text)}
+        for part in sl["parts"]:
+            expected = [os.path.basename(part["file"]) + " line " + str(n - 1)
+                        for start, end in part["lines"] for n in range(start, end + 1)]
+            assert delivered[part["file"]] == expected
         assert ph["SLICE_SCOPE_LINE"].startswith("Your slice: %s. Review only these parts of the change" % sl["id"])
         for part in sl["parts"]:
             assert part["file"] in ph["SLICE_SCOPE_LINE"]

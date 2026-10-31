@@ -158,10 +158,12 @@ def _cut_runs(hunk_text, bar):
 # Units and slices
 # --------------------------------------------------------------------------------------------
 
-def _unit(weight, file, ranges, key, header, hunks, heads=()):
+def _unit(weight, file, ranges, key, header, hunks, heads=(), origin=None):
     """One packable piece: ``ranges`` its coverage obligation (``[]`` if file-level), ``hunks`` its ``(order, text)`` pieces,
-    ``heads`` the head line of each of its changed lines (one head line repeats when many removals share it)."""
-    return {"weight": weight, "file": file, "ranges": ranges, "key": key, "header": header, "hunks": hunks, "heads": list(heads)}
+    ``heads`` the head line of each of its changed lines (one head line repeats when many removals share it). ``origin``, when
+    set, names the hunk the piece was cut from: pieces of one origin share head coordinates and do not subtract each other."""
+    return {"weight": weight, "file": file, "ranges": ranges, "key": key, "header": header, "hunks": hunks, "heads": list(heads),
+            "origin": origin}
 
 
 def _weigh(section, row, unsettled, readable):
@@ -238,7 +240,9 @@ def _assemble(packed, prefix):
             if ranges:
                 # A hunk cut into runs shares head coordinates across its runs (many removals sit at one head line);
                 # each run keeps its own anchors, since its diff text is only in its own slice.
-                origin = (unit["key"], unit["hunks"][0][0][0]) if unit["hunks"] and isinstance(unit["hunks"][0][0], tuple) else None
+                origin = unit.get("origin")
+                if origin is None and unit["hunks"] and isinstance(unit["hunks"][0][0], tuple):
+                    origin = (unit["key"], unit["hunks"][0][0][0])
                 taken = [r for o, rs in claimed.get(unit["file"], []) if origin is None or o != origin for r in rs]
                 claimed.setdefault(unit["file"], []).append((origin, ranges))
                 ranges = countable_lines._subtract(ranges, _merge_ranges(taken))
@@ -480,7 +484,8 @@ def slice_parts_for(unread_parts, plan_obj, count_result):
             for i, (text, heads) in enumerate(view["hunks"].items()):
                 mine = [n for n in heads if any(s <= n <= e for s, e in wanted)]
                 if mine:
-                    per_run.append(_unit(len(mine), file, countable_lines._merge_numbers(mine), file, view["header"], [((i, 0), text)], mine))
+                    per_run.append(_unit(len(mine), file, countable_lines._merge_numbers(mine), file, view["header"], [((i, 0), text)], mine,
+                                         origin=(file, "unread")))
             if per_run:
                 units.extend(per_run)
                 continue
