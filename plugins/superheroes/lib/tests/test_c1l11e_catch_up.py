@@ -250,6 +250,11 @@ def _compare(behind=0, **over):
     return lambda argv: SimpleNamespace(returncode=0, stdout=json.dumps(row), stderr="")
 
 
+def _catch_up_calls(fake):
+    """The PR and compare reads; the comments read the leftover check makes after them (#2280) is tested on its own."""
+    return [c for c in fake.calls if "/comments?" not in c[2]]
+
+
 class FakeGh:
     """Serves the PR read, and the compare read through ``compare`` (None: the read must never be made)."""
 
@@ -265,6 +270,14 @@ class FakeGh:
             if self.compare is None:
                 raise AssertionError("a compare read was made for a PR that is not stacked: %r" % (argv,))
             return self.compare(argv)
+        if argv[:2] == ["gh", "api"] and "/issues/%d/comments?" % PR in argv[2]:
+            # a caught-up PR goes on to the leftover check (#2280): serve one review record that leaves nothing
+            record = {"schema": "review-record/1", "leftForOwner": [], "findings": []}
+            text = ("<!-- superheroes:review-record -->\n\n<details>\n\n```json\n" + json.dumps(record)
+                    + "\n```\n</details>\n")
+            rows = [] if not argv[2].endswith("page=1") else [
+                {"id": 1, "body": text, "created_at": "2026-10-31T00:00:00Z", "user": {"login": "b"}}]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(rows), stderr="")
         raise AssertionError("unexpected argv %r" % (argv,))
 
 
@@ -281,14 +294,14 @@ def test_a_head_behind_its_lower_branch_refuses_stack_not_caught_up():
     assert HEAD[:12] in detail and HEAD[:13] not in detail and "2 commit" in detail and LOWER in detail
     assert "--no-ff" in detail and "push" in detail and "calibrated verify" in detail
     assert "returning review-code session" in detail and "native-stacks.md" in detail and "handback again" in detail
-    assert fake.calls == [list(PULL), COMPARE]
+    assert _catch_up_calls(fake) == [list(PULL), COMPARE]
 
 
 def test_a_head_that_holds_its_lower_branch_passes():
     # axis: behind_by 0 is caught up; the handback body check then runs and passes
     result, fake = _handback(_payload(), _compare(0))
     assert result == {"ok": True, "verb": "handback", "followups": ["FU1", "FU2"]}
-    assert fake.calls == [list(PULL), COMPARE]
+    assert _catch_up_calls(fake) == [list(PULL), COMPARE]
 
 
 def test_a_head_ahead_of_its_lower_branch_is_caught_up():
@@ -301,7 +314,7 @@ def test_a_pr_on_the_default_branch_is_not_stacked_and_makes_no_compare_read():
     # axis: base.ref == default_branch is not a stacked PR: no refusal and no further gh call
     result, fake = _handback(_payload(base_ref="main", default="main"), compare=None)
     assert result["ok"] is True
-    assert fake.calls == [list(PULL)]
+    assert _catch_up_calls(fake) == [list(PULL)]
 
 
 def test_the_catch_up_check_runs_before_the_body_check():
@@ -397,7 +410,7 @@ def test_e1_a_payload_without_base_base_repo_or_head_objects_refuses_unreadable(
     payload = _payload()
     mutate(payload)
     _result, fake = _unreadable(payload)
-    assert fake.calls == [list(PULL)]
+    assert _catch_up_calls(fake) == [list(PULL)]
 
 
 @pytest.mark.parametrize("name,mutate", E2, ids=[n for n, _ in E2])
@@ -406,7 +419,7 @@ def test_e2_a_base_ref_or_default_branch_that_is_not_a_non_empty_string_refuses_
     payload = _payload()
     mutate(payload)
     _result, fake = _unreadable(payload)
-    assert fake.calls == [list(PULL)]
+    assert _catch_up_calls(fake) == [list(PULL)]
 
 
 @pytest.mark.parametrize("name,mutate", E3, ids=[n for n, _ in E3])
@@ -415,7 +428,7 @@ def test_e3_a_head_sha_that_is_not_forty_hex_characters_refuses_unreadable(name,
     payload = _payload()
     mutate(payload)
     _result, fake = _unreadable(payload)
-    assert fake.calls == [list(PULL)]
+    assert _catch_up_calls(fake) == [list(PULL)]
 
 
 def _raising(exc):
@@ -442,7 +455,7 @@ def test_e4_a_compare_read_that_fails_or_is_not_an_object_refuses_unreadable(nam
     # axis: e4 — the compare gh call fails, times out, raises OSError, or prints JSON that is bad or not an object: refuses stack-lower-unreadable with the original detail — see bite-proof record c1l11e_wo_a_catch_up
     result, fake = _unreadable(_payload(), compare)
     assert detail in result["detail"], result
-    assert fake.calls == [list(PULL), COMPARE]
+    assert _catch_up_calls(fake) == [list(PULL), COMPARE]
 
 
 E5 = [("missing", None), ("null", None), ("string", "2"), ("float", 2.0), ("bool-true", True), ("bool-false", False),
