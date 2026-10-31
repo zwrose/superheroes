@@ -14,12 +14,15 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of eleven reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of thirteen reasons (``bad-argument``, ``read-failed``,
 ``markers-invalid``, ``slot-span-foreign-content`` (another ``superheroes:`` marker line
 inside the slot span, which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
 ``disposition-unknown``, ``none-over-list``, ``write-failed``,
 ``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
-names a database tool or a Keychain read)) and a detail naming what was wrong; no edit is made, except
+names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
+over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
+named, by record id and title, under What we're accepting, or that record cannot be read; the rule's one home is
+``leftover_accepting.py``)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
 on ok, 1 on refusal."""
@@ -38,8 +41,10 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import gh_pages  # noqa: E402
+import leftover_accepting  # noqa: E402
 import md_fence  # noqa: E402
 import pr_body_regions  # noqa: E402
+import review_record  # noqa: E402
 
 GH_TIMEOUT = 120
 RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
@@ -350,6 +355,28 @@ def _handback_file(body_file):
     return check_handback(body)
 
 
+def check_leftovers(pr, repo, body, comments):
+    """Refuse while the latest review record among ``comments`` leaves a finding for the owner that the body's What we're
+    accepting does not name (``leftover_accepting``, the rule's one home), or while that record cannot be read."""
+    rows = [{"id": c.get("id"), "author": c["user"]["login"], "body": c["body"], "url": c.get("html_url")}
+            for c in comments]
+    record = review_record.read(pr, repo, readers={"list_comments": lambda _pr, _repo: rows})
+    try:
+        gaps = leftover_accepting.missing(record, body)
+    except leftover_accepting.Unreadable as exc:
+        # axis: a review record that is missing or cannot be read refuses review-record-unreadable, never passes
+        raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
+    # axis: a leftover What we're accepting does not name by id and title refuses leftover-not-accepted
+    if gaps:
+        raise _Refusal("leftover-not-accepted", leftover_accepting.describe(gaps))
+
+
+def reads_ready(slot_text):
+    """Whether the slot's verdict line (its first non-empty line) carries the READY token."""
+    first = next((line for line in slot_text.splitlines() if line.strip()), "")
+    return first.lstrip().startswith("**Verdict: READY**")
+
+
 def check_slot_text(slot_text):
     if not isinstance(slot_text, str) or not slot_text.strip():
         raise _Refusal("write-failed", "slot text is empty")
@@ -577,7 +604,11 @@ def _run_verb(verb, pr, repo, slot_file, run):
     payload = _read_pr(run, pr, repo)
     if verb == "handback":
         check_caught_up(run, repo, payload)
-        return check_handback(_body_of(payload))
+        body = _body_of(payload)
+        result = check_handback(body)
+        if result["ok"]:
+            check_leftovers(pr, repo, body, _read_comments(run, pr, repo))
+        return result
     body = _body_of(payload)
     analyze_body(body)
     slot_text = None
@@ -593,6 +624,8 @@ def _run_verb(verb, pr, repo, slot_file, run):
     result = evaluate(verb, body, comments, slot_text, advisor_login=advisor_login)
     if not result["ok"] or verb == "check":
         return result
+    if reads_ready(slot_text):
+        check_leftovers(pr, repo, body, comments)
     new_body = result.pop("newBody")
     if _read_body(run, pr, repo) != body:
         raise _Refusal("write-failed", "PR body changed between the read and the push")
