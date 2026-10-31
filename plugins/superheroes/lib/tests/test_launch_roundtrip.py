@@ -6,6 +6,8 @@ premise builder, spawn factory, launcher module).
 import os
 import random
 import signal
+import subprocess
+import sys
 import time
 
 import pytest
@@ -22,6 +24,16 @@ from test_launcher import (  # noqa: E402
     _make_spawn_fn,
     _valid_premise,
 )
+
+
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))))))
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_claude_pid(monkeypatch):
+    # The launcher's instance-pin gate reads CLAUDE_PID; inside the claude write sandbox the seat's pid is invisible.
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
 
 
 def _read_ledger(repo):
@@ -545,6 +557,20 @@ def test_roundtrip_scenario(tmp_path, monkeypatch, scenario_fn):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     scenario_fn(repo, log_dir, ["plugins/superheroes/lib"], "wave-rt", monkeypatch)
+
+
+def test_roundtrip_scenario_passes_with_a_stale_ambient_claude_pid():
+    # #2275: the scenario must pass whatever CLAUDE_PID the seat exports, here a pid whose process has exited.
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    env = dict(os.environ, CLAUDE_PID=str(gone.pid))
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "-p", "no:cacheprovider", "-q",
+         "plugins/superheroes/lib/tests/test_launch_roundtrip.py::test_roundtrip_scenario[compose-refusal]"],
+        cwd=_REPO_ROOT, env=env, capture_output=True, text=True, check=False)
+    output = done.stdout + done.stderr
+    assert done.returncode == 0, output
+    assert "1 passed" in output, output
 
 
 # --- Part 3: batch accounting (P3) ------------------------------------------

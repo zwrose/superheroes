@@ -243,6 +243,8 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 
 - **After switching.** **Nothing is owed, unless a spec package keeps its breakdown bodies outside `children/`, `seams/` and `epic.md`: then move them into that home and re-pin them before its spec PR's sheet is built.** A spec PR now gets a merge sheet without a code review record. See [Spec PRs: a merge sheet without a review record, and a fixed home for breakdown bodies](#spec-prs-a-merge-sheet-without-a-review-record-and-a-fixed-home-for-breakdown-bodies).
 
+- **Before switching.** **Finish or abandon in-flight claude write runs.** A claude write run opened by an older plugin refuses its continuation: the spawn argv check rebuilds the sandbox settings from the current allow rules, and the run's stored settings lack the new assignment-prefixed rules. Open a fresh dispatch. See [Claude write channel: leading NAME=value assignments run](#claude-write-channel-leading-namevalue-assignments-run).
+
 ### Verify-command doctor: check 6 fails safe
 
 - `lib/repo_doctor.py` check 6 reports a missing path only when the verify command certainly runs it from the project root; a path in an `if`/`while`/`for`/`case` construct, a subshell or group, on either side of `&&` or `||`, after a `cd`-like builtin, in a comment, or in a shape the walk does not model now reads "verify command path(s) could not be checked", a note that never marks the profile stale.
@@ -307,6 +309,13 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 - **`cloud_recover.py helper-read`.** `helper-read --repo O/N --issue N --session-id S [--session-id S …]` prints the cloud helper's prompt. The helper posts only the five fields `cloud_recover.HELPER_READ_FIELDS` names for each session, never usage or cost data: the issue is public.
 - **The launcher.** The original-session check reads the limit: while the builders' account is at its usage limit, a lane that started before the limit needs no session read until the reset time, and a listing that shows it live still refuses. The deleted-branch exemption is removed: a bound lane whose branch is gone from the remote now needs the session read, because deleting a branch does not stop its builder. An adoption's cloud launch is checked against `adoptsHead` (a refusal's detail key `checkedAgainst` names what the checkout was checked against), so no pointer branch at the premise's `baseCommit` is needed.
 - **`cloud_builder.py superseded`.** `superseded --repo O/N --issue N --launch-id L` tells a cloud builder that woke after the reset whether a newer launch took its issue over (a supersession notice that names its own launch id `L`, `launch-<hash>` from its session name `issue-<n>-<hash>`, as a whole token, whatever its time; intake comments never order launches); its result carries `superseded`, `newerLaunch` and the `comment` to post. The comment is headed `Builder stand-down (cloud build).`, is not a terminal comment, and the builder pushes nothing after it. `cloud_builder.py superseded-notice --launch-id L` prints the `Builder superseded (cloud build).` comment the advisor posts on the issue before it launches any successor, so a successor on the owner's machine also stops an earlier builder that wakes.
+
+### Claude write channel: leading NAME=value assignments run
+
+- **What now runs.** A command whose leading `NAME=value` assignments precede one of the allowed families (`python`, `python3`, `pytest`, `scripts/pinned-python`, `echo`, `npm`, `npx`, `node`, `pnpm`, `yarn`, `ps`), for example `DB_URL=… SKIP_SETUP=true npx --no-install vitest run …`, now runs in a sandboxed Claude implementer, still inside the sandbox. Before, it was refused with "This command requires approval" and the implementer handed back untested work. Each family gains two rules in `permissions.allow`, `Bash(*=* <family> *)` and `Bash(*=* <family>)`, in `CLAUDE_WRITE_BASH_FAMILIES` / `CLAUDE_WRITE_BASH_ALLOW` in `lib/engine_adapter.py`. Every project's claude write sandbox settings gain these rules; nothing else in the default settings changes.
+- **Still refused.** A leading assignment before any other command (`FOO=1 touch f`, `FOO=1 rm -rf x`) is still denied.
+- **A wider match.** Because the rule's leading `*` matches any characters, a command line that carries an `=` anywhere before an allowed family's name followed by a space or the line's end (for example `touch x=1 npx f`) also matches a rule. It still runs inside the sandbox, and only a command that managed policy excludes from the sandbox runs unprompted outside it.
+- **In-flight runs.** A claude write run opened by an older plugin refuses its continuation, because the spawn argv check (`_canonical_spawn_argv` / `_spawn_argv_coherence` in `lib/engine_dispatch.py`) rebuilds the settings from the current allow rules and the run's stored settings lack the new ones. Open a fresh dispatch.
 
 ## 0.46.2
 
@@ -2199,7 +2208,7 @@ shorter of its stamped TTL and that value.
 
 ### Registered consumers
 
-**weekly-eats write dispatches** omit effort today. After this release they must pass `--seat` as the
+**A registered consumer's write dispatches** omit effort today. After this release they must pass `--seat` as the
 four-key JSON object on every write dispatch, with vendor, model, effort, and role supplied inside
 the seat bundle.
 
