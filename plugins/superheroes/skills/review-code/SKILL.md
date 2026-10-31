@@ -10,7 +10,7 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 Run a multi-dimensional code review on either an open pull request or a local branch (vs the default branch), then **autonomously fix what it finds**. The main context is an **orchestrator** — it fetches metadata, dispatches the panel's specialist agents in parallel, compiles their findings, triages each into auto-fixable vs needs-your-judgment, applies the fixes itself, and re-reviews — looping until a round leaves nothing blocking; a session stops at the first such round, and at 4 rounds at most it hands back with what is still open. Subagents do all heavy reading and write structured results to disk; it never loads the full diff or any agent's raw output into its own conversation.
 
-The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the panel the seat map composes from the lane call (the code reviewer and the test role on every change; the security and premortem reviewers when a risk area is touched or risk is unclear) so coverage follows the change's risk, enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — drives an auto-fix loop that commits fixes locally (never pushes).
+The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the panel the seat map composes from the lane call (the code reviewer and the test role on every change; the security and premortem reviewers when a risk area is touched or risk is unclear) so coverage follows the change's risk (a change over the countable-lines bar is reviewed in [slices](../../rubric/glossary.md#slice), with one [seams check](../../rubric/glossary.md#seams-check); the details are in `reference/round-driver.md`), enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — drives an auto-fix loop that commits fixes locally (never pushes).
 
 There is one path: the auto-fix loop — review → triage → fix → re-review, committing locally until clean or halted. It runs on the project's own PR or branch and needs a verify command.
 
@@ -198,7 +198,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
 - **Head SHA:** short hash
 - **Diff size:** `<DIFF_LINES>` lines
 - **Verify:** `VERIFY_CMD` (the command string)
-- **Specialists to dispatch (round 1: the seat map's roster at `reviewer-deep`, in parallel; later rounds: obey `round_driver.py` `next` — delta audits + scoped finder only, never a panel):**
+- **Specialists to dispatch (round 1: the seat map's roster at `reviewer-deep`, in parallel; later rounds: obey `round_driver.py` `next` — delta audits + scoped finder only, never a panel):** A change over the countable-lines bar is reviewed in round 1 in [slices](../../rubric/glossary.md#slice), each with its own seats, plus one [seams check](../../rubric/glossary.md#seams-check); dispatch the seats `payload.dimensions` names and see `reference/round-driver.md` § Big changes for the rest.
   - `code-reviewer` → `findings-code.json`
   - `test-role` → `findings-test.json`
   - `security-reviewer` → `findings-security.json` (when the roster seats it)
