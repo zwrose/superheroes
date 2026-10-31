@@ -1,5 +1,7 @@
 # WO-1 (#1600) — claude write sandbox toolchains and defaults: bite-proof record
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Implementer-run record. Method: a targeted Edit on the guarded element, the detector run alone by its exact node id (red), the inverse Edit, the detector again (green), and the restored lines quoted back. Declared guarded-element set: E1, E2, E3, E4. **4 elements, 4 RED→GREEN.** Receipts are unredacted: they carry no secrets, tokens, URLs or PII. Pytest invocation for every run: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <node id> -q -p no:cacheprovider`. The red runs predate the one-line `# axis:` comments added to three detectors, so the traceback line numbers in the red captures are from before those comments.
 
 ## E1 — dropping a command family
@@ -32,7 +34,7 @@ E         Differing items:
 E         {'allow': ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...]} != {'allow': ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...]}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:53: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:53: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py::test_allow_list_is_the_eleven_literal_rules
 1 failed in 0.51s
@@ -92,7 +94,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x106c10860>
 >       assert journaled["localBinding"] is True
 E       assert False is True
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:116: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:116: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py::test_open_journals_the_defaults_on_macos
 1 failed in 0.67s
@@ -142,7 +144,7 @@ E
 E         Right contains 2 more items, first extra item: '/tmp'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:115: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:115: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py::test_open_journals_the_defaults_on_macos
 1 failed in 0.60s
@@ -208,7 +210,7 @@ E         At index 4 diff: '/x/extra' != '/tmp'
 E         Right contains 2 more items, first extra item: '/private/tmp'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:75: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1600-4c4462399c4eff62/plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py:75: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_claude_write_defaults_1600.py::test_tmp_defaults_reach_allow_write_in_order
 1 failed in 0.28s

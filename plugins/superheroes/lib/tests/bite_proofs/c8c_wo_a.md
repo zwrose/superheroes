@@ -1,5 +1,7 @@
 # Bite-proof record: C8c WO-A (issue #1862)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Declared guarded-element set (the order's): A1, A2a, A2b, A2c, A2d, A3, A4 (plus A4's second test, separately neutralizable and run as A4b), A5, A6a, A6b, A6c, A6d, plus the A7 entries, which went to `c8_cloud_cleanup.md` entries 15-17 (the record the three `# axis:` comments name).
 
 Every proof: the neutralization is one targeted edit; the detector is run alone as one node (a parametrized test counts as one node and runs all its cases); the restore is the inverse edit; the restore receipt quotes the restored line back; the green is the same node after the restore.
@@ -24,7 +26,7 @@ All paths below are under `plugins/superheroes/lib/` and `plugins/superheroes/li
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_the_slug_lookup_skipped_for_a_spent_budget_is_resolved_by_a_later_reader _
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch_builder_note.py:586: in test_the_slug_lookup_skipped_for_a_spent_budget_is_resolved_by_a_later_reader
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch_builder_note.py:586: in test_the_slug_lookup_skipped_for_a_spent_budget_is_resolved_by_a_later_reader
     assert cell[0] is ww._SLUG_UNRESOLVED
 E   assert None is <object object at 0x101eb1ca0>
 E    +  where <object object at 0x101eb1ca0> = ww._SLUG_UNRESOLVED
@@ -53,7 +55,7 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_builder_note.py::test_the_s
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ______ test_run_on_an_absent_ledger_root_refuses_and_creates_no_directory ______
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch.py:970: in test_run_on_an_absent_ledger_root_refuses_and_creates_no_directory
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch.py:970: in test_run_on_an_absent_ledger_root_refuses_and_creates_no_directory
     assert not absent.exists()
 E   AssertionError: assert not True
 E    +  where True = exists()
@@ -83,7 +85,7 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_run_on_an_absent_l
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ___ test_watch_arm_on_an_absent_ledger_root_refuses_and_creates_no_directory ___
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch.py:959: in test_watch_arm_on_an_absent_ledger_root_refuses_and_creates_no_directory
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch.py:959: in test_watch_arm_on_an_absent_ledger_root_refuses_and_creates_no_directory
     assert not absent.exists()
 E   AssertionError: assert not True
 E    +  where True = exists()
@@ -113,7 +115,7 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch.py::test_watch_arm_on_an_ab
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ______ test_run_on_an_absent_ledger_root_refuses_and_creates_no_directory ______
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch.py:970: in test_run_on_an_absent_ledger_root_refuses_and_creates_no_directory
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch.py:970: in test_run_on_an_absent_ledger_root_refuses_and_creates_no_directory
     assert not absent.exists()
 E   AssertionError: assert not True
 E    +  where True = exists()
@@ -145,7 +147,7 @@ Note on A2a and A2c: the run test goes red under either neutralization, as the t
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _______ test_the_note_read_on_an_absent_ledger_root_creates_no_directory _______
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch_builder_note.py:626: in test_the_note_read_on_an_absent_ledger_root_creates_no_directory
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_wave_watch_builder_note.py:626: in test_the_note_read_on_an_absent_ledger_root_creates_no_directory
     assert not absent.exists()
 E   AssertionError: assert not True
 E    +  where True = exists()
@@ -175,7 +177,7 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_builder_note.py::test_the_n
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ______ test_a_send_quoting_this_messages_header_mid_text_is_not_its_send _______
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_relay.py:372: in test_a_send_quoting_this_messages_header_mid_text_is_not_its_send
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_relay.py:372: in test_a_send_quoting_this_messages_header_mid_text_is_not_its_send
     assert out["delivered"] is False and out["reason"] == "relay-silent"
 E   AssertionError: assert (False is False and 'relay-text-mismatch' == 'relay-silent'
 E     
@@ -206,7 +208,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_send_quoting_th
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_a_send_opening_with_the_header_minus_its_colon_is_not_this_messages_send _
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_relay.py:384: in test_a_send_opening_with_the_header_minus_its_colon_is_not_this_messages_send
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_relay.py:384: in test_a_send_opening_with_the_header_minus_its_colon_is_not_this_messages_send
     assert out["delivered"] is False and out["reason"] == "relay-silent"
 E   AssertionError: assert (False is False and 'relay-text-mismatch' == 'relay-silent'
 E     
@@ -238,7 +240,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_send_opening_wi
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_a_send_whose_header_line_carries_more_text_is_attributed_and_a_mismatch _
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_relay.py:395: in test_a_send_whose_header_line_carries_more_text_is_attributed_and_a_mismatch
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_relay.py:395: in test_a_send_whose_header_line_carries_more_text_is_attributed_and_a_mismatch
     assert out["delivered"] is False and out["reason"] == "relay-text-mismatch"
 E   AssertionError: assert (False is False and 'relay-silent' == 'relay-text-mismatch'
 E     
@@ -269,7 +271,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_send_whose_head
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ___________ test_cloud_setup_does_not_import_the_check_orchestrator ____________
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:267: in test_cloud_setup_does_not_import_the_check_orchestrator
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:267: in test_cloud_setup_does_not_import_the_check_orchestrator
     assert "cloud_check" not in imported, imported
 E   AssertionError: ['argparse', 'datetime', 'hashlib', 'json', 'os', 're', ...]
 E   assert 'cloud_check' not in ['argparse', 'datetime', 'hashlib', 'json', 'os', 're', ...]
@@ -354,7 +356,7 @@ FAILED ...::test_a_marker_whose_failed_parts_is_not_a_list_of_strings_is_damaged
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____ test_with_the_setting_on_a_repair_line_says_cloud_builds_are_still_on _____
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:341: in test_with_the_setting_on_a_repair_line_says_cloud_builds_are_still_on
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:341: in test_with_the_setting_on_a_repair_line_says_cloud_builds_are_still_on
     assert got["line"] == "Cloud reviewer pass: the last cloud check failed on version. " + STILL_ON
 E   AssertionError: assert 'Cloud review... check again.' == 'Cloud review... check again.'
 E     
@@ -385,7 +387,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_setup_gardening.py::test_with_th
 ```
 E     + on version, so cloud builds stay off until a check passes. Run the setup check again.      (case answer0, last line only)
 ______ test_an_unreadable_setting_is_claimed_neither_on_nor_off[answer1] _______
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:381: in test_an_unreadable_setting_is_claimed_neither_on_nor_off
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-a/plugins/superheroes/lib/tests/test_cloud_setup_gardening.py:381: in test_an_unreadable_setting_is_claimed_neither_on_nor_off
     assert got["line"] == ("Cloud reviewer pass: the last cloud check failed on version. "
 E   AssertionError: assert 'Cloud review... check again.' == 'Cloud review... check again.'
 E     

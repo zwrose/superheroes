@@ -1,5 +1,7 @@
 # WO-CENSUS (#1269) bite-proof — entry-refusal reason census
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 **Provenance:** cursor / composer-2.5 (implementer). **All three elements were re-run by the
 orchestrator on 2026-09-17** in a detached probe worktree (`/private/tmp/wh1269o5-bp` at
 `e79c7aa8`), red and green, with the neutralization applied and reverted through targeted edits.
@@ -43,10 +45,10 @@ tmp_path = PosixPath('/private/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/p
         """Every declared entry-refusal reason carries run provenance at the chokepoint."""
 >       assert ED.dispatch_outcome.REASON_UNRUNNABLE in ED.seat_bundle.ENTRY_REFUSAL_REASONS
 E       AssertionError: assert 'unrunnable' in frozenset({'allowlist-malformed', 'allowlist-raised', 'allowlist-refused', 'effort-invalid', 'effort-key-absent', 'effort-token-conflict', ...})
-E        +  where 'unrunnable' = <module 'dispatch_outcome' from '/Users/zwrose/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/dispatch_outcome.py'>.REASON_UNRUNNABLE
-E        +    where <module 'dispatch_outcome' from '/Users/zwrose/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/dispatch_outcome.py'> = ED.dispatch_outcome
-E        +  and   frozenset({'allowlist-malformed', 'allowlist-raised', 'allowlist-refused', 'effort-invalid', 'effort-key-absent', 'effort-token-conflict', ...}) = <module 'seat_bundle' from '/Users/zwrose/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/seat_bundle.py'>.ENTRY_REFUSAL_REASONS
-E        +    where <module 'seat_bundle' from '/Users/zwrose/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/seat_bundle.py'> = ED.seat_bundle
+E        +  where 'unrunnable' = <module 'dispatch_outcome' from '/path/to/home/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/dispatch_outcome.py'>.REASON_UNRUNNABLE
+E        +    where <module 'dispatch_outcome' from '/path/to/home/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/dispatch_outcome.py'> = ED.dispatch_outcome
+E        +  and   frozenset({'allowlist-malformed', 'allowlist-raised', 'allowlist-refused', 'effort-invalid', 'effort-key-absent', 'effort-token-conflict', ...}) = <module 'seat_bundle' from '/path/to/home/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/seat_bundle.py'>.ENTRY_REFUSAL_REASONS
+E        +    where <module 'seat_bundle' from '/path/to/home/.superheroes-worktrees/superheroes/issue-1269-b8b9f9e4d3861fcf/plugins/superheroes/lib/seat_bundle.py'> = ED.seat_bundle
 
 plugins/superheroes/lib/tests/test_engine_dispatch.py:9086: AssertionError
 =========================== short test summary info ============================

@@ -52,7 +52,7 @@ Each of these three is **run for real**, once, right now — never config-inspec
 
 **Connect → navigate to the project's dev origin → snapshot.** One probe, three things proven at
 once: the MCP/extension connection exists, the per-origin approval is in place, and the dev
-server is actually reachable on the port this project is configured to use (the weekly-eats
+server is actually reachable on the port this project is configured to use (a consuming project's
 run-13 port-mismatch class of failure — the spine probing one port while the dev server binds
 another). The Playwright MCP **browser profile is a single-holder resource across concurrent
 sessions** — a second session gets a **hard refusal, not a queue**. When a browser probe fails under
@@ -145,8 +145,8 @@ built, then delete it** — both the create and the delete are writes, so a prob
 deletes cleanly proves the write class end to end. Keep the probe to a **comment** — never a label or
 other board write (§E forbids the preflight touching the board). The create fires a watcher
 notification before the delete lands, so the probe is not entirely invisible; that is the cheap cost
-of proving the write, against a blocked write discovered headless hours later (weekly-eats
-we#498/we#499 both cleared preflight, then lost their intake receipt when a `gh` write was blocked
+of proving the write, against a blocked write discovered headless hours later (two of a consuming project's
+issues both cleared preflight, then lost their intake receipt when a `gh` write was blocked
 immediately after a green preflight; #526 permission-surface evidence).
 
 A blocked write here **fails the preflight loudly** — fold its outcome into the go/no-go aggregation

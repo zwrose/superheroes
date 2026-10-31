@@ -38,7 +38,7 @@ def _without(key):
     return entry
 
 
-# the weekly-eats PR 3356 shape (#2167): the cloud sandbox's own refusal message named its step
+# a consuming project's PR shape (#2167): the cloud sandbox's own refusal message named its step
 _SANDBOX_ROUTE_ENTRY = {
     "command": "cd app && npm test", "refusedBy": "sandbox", "hook": None,
     "route": "split into plain commands", "next": "ran cd and npm test as plain commands",

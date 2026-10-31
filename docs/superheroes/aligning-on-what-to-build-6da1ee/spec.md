@@ -10,7 +10,7 @@ approved: "2026-10-04"
 gates: {review: passed}
 producedBy: "the-architect@0.33.0"
 created: "2026-10-03"
-updated: "2026-10-09"
+updated: "2026-10-31"
 ---
 # Aligning on what to build
 
@@ -488,7 +488,7 @@ summarizes)
 - **For the owner:** decisions come one question at a time, then by board; review is a few tap
   sheets of unruled items instead of reading specs; approval comes after the vet, on a final
   sheet. Canon needs no upkeep from the owner; sessions write it. (source: ruling 8; FR-15)
-- **For each project using superheroes (weekly-eats too):** nothing changes until it adopts the
+- **For each project using superheroes (a consuming project too):** nothing changes until it adopts the
   release; at adoption its item 13 value moves into Canon, its next discovery runs the new flow,
   and specs get the three checks instead of review-spec. (source: FR-18, FR-21 to FR-40, FR-49a;
   ruling 43)
@@ -533,6 +533,7 @@ summarizes)
   Claude Design clauses of 2026-10-05-3dbeb858-2 and -3. The package this spec landed through is
   delivered and closed (accepted 2026-10-08), so no register entry or unstarted child needs
   re-injection; the build is issue #1729's scope. Sections touched: FR-29a, FR-29b, Amendments.
+- **2026-10-31 (owner-stamped, wording):** replaced the name of a consuming project with neutral words, on the owner's ruling that committed files name no consuming project ("447 clean up", collector zwrose/superheroes#695 item 447, 2026-10-31). Sections touched: Consequences of accepting this spec. Decides nothing a builder could build differently against.
 
 ## Coverage
 

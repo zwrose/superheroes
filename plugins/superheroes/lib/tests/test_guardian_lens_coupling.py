@@ -2964,7 +2964,7 @@ def test_digest_argv_summarizes_file_operands(tmp_path):
 # 20. permanent boundary (#1960): only a flat Python layout is structural
 # ======================================================================================
 
-def _weekly_eats_repo(tmp_path, pairs=2):
+def _consumer_repo(tmp_path, pairs=2):
     """Flat Python (`lib/one.py`, no __init__ anywhere) beside a two-cluster TS tree."""
     repo = init_calibrated_repo(tmp_path)
     write(repo, "lib/one.py", "x = 1\n")
@@ -3012,7 +3012,7 @@ def _coupling_flat_layout_lines(report_path):
 
 def test_flat_python_beside_collected_js_is_a_permanent_boundary(tmp_path):
     # axis: the lens sets permanentBoundary on a partial whose only degraded half is flat Python
-    repo = _weekly_eats_repo(tmp_path)
+    repo = _consumer_repo(tmp_path)
     out = lens().collect(ctx(repo, tmp_path, run=_cross_cluster_run(2)))
     assert st(out) == "partial"
     assert out["permanentBoundary"] is True
@@ -3055,7 +3055,7 @@ def test_an_absent_js_tool_beside_collected_python_is_transient(tmp_path):
 def test_a_permanent_partial_seeds_the_js_baseline_and_drift_runs_against_it(tmp_path):
     # axis: through the sweep a first-seed flat-Python partial saves the JS baseline, and the
     # second sweep reads it back as prevDigest and reports coupling drift against it
-    repo = _weekly_eats_repo(tmp_path, pairs=2)
+    repo = _consumer_repo(tmp_path, pairs=2)
     root = store(tmp_path)
     the_lens = _RecordingLens()
 
@@ -3088,7 +3088,7 @@ def test_a_permanent_partial_seeds_the_js_baseline_and_drift_runs_against_it(tmp
 
 def test_the_module_count_cliff_arms_against_a_baseline_saved_past_flat_python(tmp_path):
     # axis: the JS module-count cliff fires on sweep two because sweep one saved a baseline
-    repo = _weekly_eats_repo(tmp_path, pairs=12)
+    repo = _consumer_repo(tmp_path, pairs=12)
     root = store(tmp_path)
     the_lens = glc.CouplingLens()
     # 24 JS sources on disk; 4 parsed is above the collapse floor and below the cliff line.

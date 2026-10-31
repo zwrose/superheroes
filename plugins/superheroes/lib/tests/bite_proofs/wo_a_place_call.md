@@ -1,5 +1,7 @@
 # Place call WO-A bite-proof: the readiness reader, the routing decision, the launch report and the "Still on your machine" line
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/cloud_ready.py` (G1 to G5, G13) and `plugins/superheroes/lib/launch_place.py` (G6 to G11), detectors in `plugins/superheroes/lib/tests/test_cloud_ready.py` (`TR`) and `plugins/superheroes/lib/tests/test_launch_place.py` (`TL`).
 
 **Status.** The implementer ran every proof (G1 to G13): each neutralization is a targeted Edit in the source file, the red is the single named test function run alone, the restore is the inverse Edit, and the green is the same function. Reds and greens below are the pytest output of each run unless a line says otherwise; the absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -36,7 +38,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1116/test_
 >       assert _read(repo, store)["ready"] is True
 E       assert False is True
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:220: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:220: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_pass_that_lapses_today_is_still_live
 1 failed in 9.75s
@@ -69,7 +71,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1118/test_
 >       assert got["ready"] is True and got["cloudVersion"] == ADVISOR
 E       assert (False is True)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:274: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:274: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_reported_version_ignores_the_record_and_its_pickup
 1 failed in 7.02s
@@ -100,7 +102,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1120/test_
         repo, store = _ready(tmp_path)
 >       _only_false(_read(repo, store, stamp_fn=lambda cwd, root: OTHER_STAMP), "calibration")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:302: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:302: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'ready': True, 'reason': None, 'conditions': {'setup': True, 'passPresent': True, 'passLive': True, 'version': True, ...}, 'setting': False, ...}
@@ -116,7 +118,7 @@ E         Differing items:
 E         {'calibration': True} != {'calibration': False}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_calibration_that_differs_is_not_ready
 1 failed in 5.25s
@@ -155,7 +157,7 @@ E         {'platform': True} != {'platform': False}
 E         {'passPresent': True} != {'passPresent': False}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:184: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:184: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_E2_missing_record_forces_every_later_condition_false
 1 failed in 4.55s
@@ -191,7 +193,7 @@ E
 E         - no-pass
 E         + pass-lapsed
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:360: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:360: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_order_pass_present_before_pass_live
 1 failed in 5.14s
@@ -232,7 +234,7 @@ E
 E             Right contains one more item: "this project's specs"
 E             Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:416: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:416: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_specs_leg_visibility_must_be_committed
 1 failed in 1.81s
@@ -267,7 +269,7 @@ E
 E         Right contains one more item: "this project's specs"
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:421: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:421: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_specs_leg_mode_must_be_in_repo
 1 failed in 1.73s
@@ -302,7 +304,7 @@ E
 E         Right contains one more item: "this project's specs"
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:426: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:426: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_specs_leg_store_must_hold_no_spec
 1 failed in 2.04s
@@ -343,7 +345,7 @@ E
 E         Right contains one more item: "this project's Canon"
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:353: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:353: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_E9_a_canon_lookup_that_raises_counts_as_outside
 1 failed in 1.42s
@@ -375,7 +377,7 @@ E       AssertionError: assert ('local' == 'local'
 E         
 E           local and None == 'local-word')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:470: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:470: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_route_local_word_wins_over_a_need
 1 failed in 0.65s
@@ -408,7 +410,7 @@ E
 E         - local
 E         + cloud)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:476: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:476: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_route_cloud_word_never_overrides_a_need
 1 failed in 0.41s
@@ -447,7 +449,7 @@ reported = []
 >       assert got["ready"] is False and got["reason"] == "no-setup"
 E       assert (True is False)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:330: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:330: AssertionError
 [... seven more failure blocks, same assertion, elided ...]
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_E8_invalid_reported_is_never_ready[reported0]

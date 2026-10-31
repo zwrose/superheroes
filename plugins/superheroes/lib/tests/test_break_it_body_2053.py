@@ -162,7 +162,7 @@ def test_formatter_case_is_kept_by_body_and_runs_the_original_command_byte_for_b
     assert calls[0]["path"] == OWN
 
 
-# ---- 2. moved and renamed (the weekly-eats shape) -----------------------------------------------
+# ---- 2. moved and renamed (the consuming project's shape) -----------------------------------------------
 
 def test_moved_and_renamed_test_is_kept_and_the_run_names_the_new_path(repo):
     host = _host(imports="import fractions\n" + IMPORTS, body=BODY.replace("test_x", "test_x_moved"),
