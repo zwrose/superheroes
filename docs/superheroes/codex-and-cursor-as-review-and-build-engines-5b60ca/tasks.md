@@ -39,7 +39,7 @@ Verbatim project-wide rules every task in this doc must honor:
   python3 .github/scripts/validate_marketplace.py && python3 .github/scripts/validate_hosts.py && python3 .github/scripts/validate_skills.py && python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
   ```
 - **Test loading idiom:** `plugins/superheroes/lib/tests/conftest.py` already inserts `lib/` onto `sys.path`, so lib tests `import engine_pref` (etc.) directly; run pytest with cwd anywhere the conftest is discovered. Effectful git tests mirror `test_buildtree_effectful.py`.
-- **Repo root** for all commands below: `/Users/zwrose/superheroes/.claude/worktrees/adoring-lehmann-b2cf0b`.
+- **Repo root** for all commands below: `/path/to/home/superheroes/.claude/worktrees/adoring-lehmann-b2cf0b`.
 
 ---
 

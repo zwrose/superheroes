@@ -1,7 +1,7 @@
 # Verification-strategy adoption plan — superheroes lanes (plugin + project)
 
 **Status:** advisor-reviewed and owner-ruled (2026-08-28, walk-11): the advisor's five findings and
-the weekly-eats consumer read were folded into this text (review record on the carrying PR), and the
+the consumer read by a consuming project were folded into this text (review record on the carrying PR), and the
 owner ruled the P-lane gets the full epic decomposition machinery (coverage map + contract register
 + light-weight non-Anthropic package read). **Amended 2026-10-02** with the spec's amendment #5
 (the owner's rulings "8 a"–"11 a", record:
@@ -13,29 +13,29 @@ the waves below are dependency order, not a milestone schedule. The issues are f
 
 **Anchors:** the approved spec beside this file
 ([spec.md](spec.md), `status: approved`, owner approval 2026-08-28 recorded in its Amendments and
-gate, amended 2026-10-02); the weekly-eats spec
-(`weekly-eats-hq/weekly-eats` → `docs/superheroes/verification-strategy-for-an-ai-first-codebase-ear-f47285/spec.md`,
+gate, amended 2026-10-02); a consuming project's spec
+(in its own repository → `docs/superheroes/verification-strategy-for-an-ai-first-codebase-ear-f47285/spec.md`,
 approved the same sitting); the owner's six adoption rulings (2026-08-27) and acceptance sitting
 (2026-08-28), receipts on
 [#1105](https://github.com/zwrose/superheroes/issues/1105) and
-[weekly-eats-hq/weekly-eats#1109](https://github.com/weekly-eats-hq/weekly-eats/issues/1109); and
+a consuming project's investigation issue; and
 the 2026-10-02 ruling record on
 [#695](https://github.com/zwrose/superheroes/issues/695#issuecomment-5951960566).
-The weekly-eats lane's plan lives in that repo (same folder as its spec); it cites this file for
+That consuming project's lane plan lives in that repo (same folder as its spec); it cites this file for
 every plugin dependency. This file is the canonical home of the plugin work items.
 
 ## The six owner rulings this plan encodes
 
 1. **Rails:** the plugin ships the rail *concept* (exempt from delete-because-it-never-fired, never
    exempt from bite-proofing); each project keeps its own classifier.
-2. **CI posture:** weekly-eats skips its tooling lane at PR CI (measured ~12-min CI); superheroes
+2. **CI posture:** a consuming project skips its tooling lane at PR CI (measured ~12-min CI); superheroes
    never reduces CI (~5-min CI; the win is local). Both blessed as deliberate — neither is to be
    "harmonized" toward the other.
 3. **Fix-naming:** the plugin ships the unbounded shape (name the merged change, or state the defect
    pre-dates any single change, vet-checked); a 7-day window is only ever a ledger measurement
    heuristic, project-side.
-4. **Weekly-eats flake block:** gained its merge exceptions before approval (encoded in its spec).
-5. **Machine-written receipts:** a weekly-eats follow-on after its D1, not a spec requirement now.
+4. **A consuming project's flake block:** gained its merge exceptions before approval (encoded in its spec).
+5. **Machine-written receipts:** a follow-on in a consuming project after its D1, not a spec requirement now.
 6. **Framework F1 includes scope-override** — the capability that lets a named binding project rule
    widen review scope (e.g. whole-touched-file), which the base rubric's diff-scope rule otherwise
    forbids calibration from doing.
@@ -47,13 +47,13 @@ Since 2026-10-02: ruling 5's machine-written receipts stay held with the gate dr
 | # | Item | What it is | Size | Needs | Status (2026-10-02) |
 | --- | --- | --- | --- | --- | --- |
 | F1 | Binding project rules | A review-calibration section carrying rules reviewers **must** enforce — seat-keyed, severity floors within the existing closed enum, and per-named-rule **scope-override**. The keystone: without it, both projects' review-carried rules (FR-18 families) land as soft focus hints. | small–medium | rulings 1/3/6 (recorded) | parked (review hold) |
-| F2 | Gate-receipt schema | An optional structured receipt (`gate-receipt/1`) a project's `verifyCommand` can emit — run id, source state, lanes run/skipped with reasons, result, **plus attempt history, wall time, and machine/runner identity** (required by weekly-eats D1's FR-11/FR-24a ten-field receipt and read by its D2 ledger; this repo's FR-9 receipt carries the same data — named optional fields). Lanes are opaque strings, so both projects' different lane sets fit. | small | — | shipped (#1237, PR #1551); `gate-receipt/1` is optional |
+| F2 | Gate-receipt schema | An optional structured receipt (`gate-receipt/1`) a project's `verifyCommand` can emit — run id, source state, lanes run/skipped with reasons, result, **plus attempt history, wall time, and machine/runner identity** (required by a consuming project's D1 FR-11/FR-24a ten-field receipt and read by its D2 ledger; this repo's FR-9 receipt carries the same data — named optional fields). Lanes are opaque strings, so both projects' different lane sets fit. | small | — | shipped (#1237, PR #1551); `gate-receipt/1` is optional |
 | F3 | Vet-checks section | A calibration section enumerating checks the advisor's vet must run and record — the enforcement home for every rule whose evidence lives in the PR body, which review seats structurally cannot read. | small | — | shipped (#1238) |
 | PA | Rail concept | The retention exemption + bite-proof obligation, concept only (ruling 1). | small | — | parked (review hold) |
 | PB | Deletion evidence | A deletion on the cannot-bite basis carries its evidence (structural or demonstrated); FR-1's other bases — obsolete expectation under a stamped keep list, retired subject, owner-authorized flake removal — carry their own bars; the shipped test lens has no deletion rule today. | small | — | parked (review hold) |
 | PC | Flake integrity | Never weaken/skip a flaky test for green. | small | — | parked (review hold) |
 | PD | Fixes name what they fix | The unbounded naming duty with the vet-checked pre-dates arm (ruling 3). | small | — | parked (review hold) |
-| LP | Ledger into the plugin? | **Deferred decision, not a build**: whether the catch/escape ledger becomes a shipped framework — decided only after weekly-eats' ledger shows ~60 days of validated operation (weekly-eats is the named consumer proving the shape). | decision | weekly-eats D2 + ~60 days | withdrawn — the ledger it would have moved into the plugin is declined (Spec A FR-F6 change 1) |
+| LP | Ledger into the plugin? | **Deferred decision, not a build**: whether the catch/escape ledger becomes a shipped framework — decided only after a consuming project's ledger shows ~60 days of validated operation (that project is the named consumer proving the shape). | decision | a consuming project's D2 + ~60 days | withdrawn — the ledger it would have moved into the plugin is declined (Spec A FR-F6 change 1) |
 
 PA–PD are parked under the owner's review hold; they land in base surfaces (test-reviewer agent,
 review-base, bite-proof rubric) and are independent of F1 when they unpark. F1 is parked under the
@@ -81,7 +81,7 @@ own small spec round before build. F2 and F3 shipped.
 - **On the owner's word:** P9 (P1 shipped).
 - **Parked under the review hold:** P5's test-lens slice, F1, PA–PD — until the review overhaul
   takes shape.
-- Cross-repo: weekly-eats adopts `gate-receipt/1` at its own pace (optional; nothing here waits on it).
+- Cross-repo: a consuming project adopts `gate-receipt/1` at its own pace (optional; nothing here waits on it).
 - Board note: survivors in Backlog as machinery under the dial; ROADMAP drops the milestone row in
   its own PR.
 
