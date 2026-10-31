@@ -12,6 +12,7 @@ import copy
 import hashlib
 import os
 import sys
+from unittest import mock
 
 import pytest
 
@@ -28,7 +29,7 @@ import round_driver as RD  # noqa: E402
 import round_phases as RP  # noqa: E402
 from test_review_record_session import Fake, Session, extras, put_envelope  # noqa: E402
 from test_sliced_panel_c2 import (  # noqa: E402,F401  (`_pin_git` is an autouse fixture)
-    BAR, OTHER, PAYMENTS, RISK_AREAS, _added, _git, _pin_git, _placeholders, _read, _repo, _risk_diff, _session_dir,
+    BAR, OTHER, PAYMENTS, RISK_AREAS, _added, _core_md, _git, _pin_git, _placeholders, _read, _repo, _risk_diff, _session_dir,
     _slice_ids, _state, _three_thousand,
 )
 
@@ -286,6 +287,82 @@ def test_the_account_built_from_a_two_wave_session_carries_the_unread_share_and_
     assert rows["test-role:w2u1 (round 1)"]["readParts"] == _slice(state, "s2")["parts"]
     built = rr.build_record(account, Fake().readers())
     assert built is not None
+
+
+def test_a_real_driven_sliced_session_runs_an_unread_wave_and_records_both(tmp_path, monkeypatch):
+    import test_round_driver_integration as drive
+    silent = "test-role:s1"
+    # The real planner cuts the fixture diff (21 files, 2 added lines each) at a lowered bar, so the unread wave is cut from
+    # slices the change really has: the fixture's hand-made plan (`sliced=True`) cannot be re-cut, since a wave re-derives its
+    # slices from the reviewed diff, which the fixture's bar leaves in one piece.
+    monkeypatch.setattr(cl, "COUNTABLE_LINES_BAR", 20)
+    # Risk areas are configured and none of the fixture's files falls in one, so no slice, and no wave slice, is a security slice.
+    real_repo = drive._fixture_repo
+
+    def repo_with_risk_areas(tmp, name):
+        root = real_repo(tmp, name)
+        core = os.path.join(root, ".claude", "superheroes", "core.md")
+        os.makedirs(os.path.dirname(core), exist_ok=True)
+        with open(core, "wb") as fh:
+            fh.write(_core_md(RISK_AREAS))
+        return root
+
+    monkeypatch.setattr(drive, "_fixture_repo", repo_with_risk_areas)
+    session_dir, gitdir, head_path = drive._bootstrap(tmp_path)
+    assert drive._state(session_dir)["slicePlan"]["sliced"] is True
+    real_payload = drive._payload_for
+    landed = {}  # panel attempt -> {slice seat: readParts it landed}
+
+    def payload_with_reads(sdir, state, pend, seat, panel_findings, head_diff_path):
+        body = real_payload(sdir, state, pend, seat, panel_findings, head_diff_path)
+        if pend["phase"] == drive.round_driver.P_PANEL and RP.is_slice_seat(seat):
+            parts = _slice(state, seat.partition(":")[2])["parts"]
+            body["readParts"] = [] if seat == silent else copy.deepcopy(parts)
+            landed.setdefault(pend["attempt"], {})[seat] = body["readParts"]
+        return body
+
+    dispatched = []  # (phase, attempt, roster) for each phase the driver emitted, in order
+    findings = [drive._blocking_finding("missing bounds guard", 2)]
+    with mock.patch.object(drive, "_payload_for", payload_with_reads):
+        for _ in range(30):
+            state = drive._state(session_dir)
+            if state.get("terminal"):
+                break
+            pend = state["pending"]
+            roster, reason = drive.round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+            assert reason is None, (pend["phase"], reason)
+            dispatched.append((pend["phase"], pend["attempt"], list(roster)))
+            # a refused `record-result` (manifest-anchor-mismatch, stale-landing, ...) fails inside the driver's own assert
+            phase, out = drive._drive_one_phase(session_dir, gitdir, findings, head_path)
+            assert out["ok"], (phase, out)
+        else:
+            raise AssertionError("no terminal in 30 phases: %s" % [d[:2] for d in dispatched])
+    state = drive._state(session_dir)
+    assert state["terminal"]
+    phases = [d[0] for d in dispatched]
+    panel = [d for d in dispatched if d[0] == drive.round_driver.P_PANEL]
+    assert phases.count(drive.round_driver.P_PANEL) == 2 and len(panel) == 2
+    assert phases.index(drive.round_driver.P_SEAMS) > max(i for i, p in enumerate(phases) if p == drive.round_driver.P_PANEL)
+    (_, a1, wave1), (_, b1, wave2) = panel
+    assert silent in wave1 and wave2 and all(":w2u" in seat for seat in wave2)
+    assert (a1, b1) == (0, 1), "wave 2 dispatches under attempt 1"
+    assert set(landed[0]) <= set(wave1) and set(landed[1]) == set(wave2)
+    for attempt, wave in ((0, wave1), (1, wave2)):
+        for seat in wave:
+            if RP.is_slice_seat(seat):
+                assert os.path.exists(drive.round_records.store_path(
+                    session_dir, 1, drive.round_driver.P_PANEL, drive.round_records.storage_key(seat), attempt)), (seat, attempt)
+    account = rs.account_from_session(session_dir, extras(), Fake().readers())
+    assert account["unreadShare"]["unreadLines"] == 0
+    rows = [r for r in account["reviewers"] if r["name"].endswith("(round 1)") and RP.is_slice_seat(r["name"].split(" ")[0])]
+    names = [r["name"] for r in rows]
+    assert len(names) == len(set(names))
+    assert sorted(names) == sorted("%s (round 1)" % s for s in [*wave1, *wave2] if RP.is_slice_seat(s))
+    by_name = {r["name"]: r for r in rows}
+    assert by_name["%s (round 1)" % silent]["readParts"] == []
+    for attempt, reads in landed.items():
+        for seat, parts in reads.items():
+            assert by_name["%s (round 1)" % seat]["readParts"] == parts, seat
 
 
 # --- what stays as it was ------------------------------------------------------------------------------------------

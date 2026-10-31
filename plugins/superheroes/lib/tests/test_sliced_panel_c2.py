@@ -311,7 +311,9 @@ def test_a_slice_seat_takes_its_lenss_vendor_from_the_seat_map(tmp_path):
 def test_a_hand_submit_keyed_by_the_sliced_roster_folds_and_a_key_outside_it_is_refused(tmp_path):
     state = _state(_repo(tmp_path), _three_thousand())
     roster = RP.panel_roster(state, state["config"])
-    seats = {key: {"findings": []} for key in roster}
+    by_id = {sl["id"]: sl for sl in state["slicePlan"]["slices"]}
+    seats = {key: {"findings": [], **({"readParts": by_id[key.partition(":")[2]]["parts"]} if RP.is_slice_seat(key) else {})}
+             for key in roster}
     assert RD.panel_seat_key_fault(roster, {"seats": seats}) is None
     fault = RD.panel_seat_key_fault(roster, {"seats": dict(seats, **{"code-reviewer": {"findings": []}})})
     assert fault and "unknown seat key(s): code-reviewer" in fault
