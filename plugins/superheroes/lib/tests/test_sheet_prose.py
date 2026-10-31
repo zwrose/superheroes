@@ -173,9 +173,9 @@ def test_prose_prints_sender_sections_without_fixed_headings():
         assert fixed not in result.stdout
     items = re.split(r"^\d+\. \*\*", result.stdout, flags=re.M)[1:]
     sample = json.loads(SAMPLE.read_text(encoding="utf-8"))
-    quoteless = [card for card in sample["cards"] if card["id"] == "saved-plan-history"]
+    quoteless = [card for card in sample["cards"] if card["id"] == "saved-booking-history"]
     assert len(quoteless) == 1 and not any("quote" in b for s in quoteless[0]["context"] for b in s["blocks"])
-    position = [card["id"] for card in sample["cards"]].index("saved-plan-history")
+    position = [card["id"] for card in sample["cards"]].index("saved-booking-history")
     assert not [line for line in items[position].split("\n") if line.lstrip().startswith(">")]
 
 

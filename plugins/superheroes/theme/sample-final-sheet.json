@@ -25,7 +25,7 @@
   },
   "cards": [
     {
-      "id": "leftovers-handling",
+      "id": "late-returns-handling",
       "callKind": "Open finding",
       "warning": true,
       "question": "Should a tool returned in the evening be bookable the next morning?",
@@ -50,12 +50,12 @@
       "images": [],
       "options": [
         {
-          "id": "allow-leftovers",
+          "id": "allow-late-returns",
           "label": "Let a returned tool be booked the next morning",
           "consequence": "Each tool is borrowed more often and fewer tools are needed, but a tool may go out before the lender has checked it."
         },
         {
-          "id": "fresh-only",
+          "id": "on-time-only",
           "label": "Require a rest day between bookings",
           "consequence": "Every tool is checked between loans, so tools stay in good shape but borrowers wait longer and more tools are needed."
         }
@@ -63,11 +63,11 @@
       "recommendation": {
         "text": "Let a returned tool be booked the next morning.",
         "reason": "Most neighbours lend tools to save others a purchase, and a quick turnaround is the common way to do that.",
-        "optionId": "allow-leftovers"
+        "optionId": "allow-late-returns"
       }
     },
     {
-      "id": "saved-plan-history",
+      "id": "saved-booking-history",
       "callKind": "Scope note",
       "warning": false,
       "question": "Do you want past bookings kept after the tool is returned?",

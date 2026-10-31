@@ -3084,7 +3084,7 @@ def test_template_outside_script_and_style_is_only_markup():
 
 # The final sheet: its history, its last card, the next-step line and the verdict.
 FINAL_SAMPLE = json.loads((THEME / "sample-final-sheet.json").read_text(encoding="utf-8"))
-FIRST_CARD, SECOND_CARD = "leftovers-handling", "saved-plan-history"
+FIRST_CARD, SECOND_CARD = "late-returns-handling", "saved-booking-history"
 WORDS = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
 DONE_STEP = WORDS["doneStep"]
 
@@ -3369,15 +3369,15 @@ def test_a_reopened_sheet_shows_each_restored_answer_and_the_verdict_as_saved():
     sheet["cards"].append(third)
     digest = _sheet_digest(sheet)
     docs = [
-        {"id": "leftovers-handling", "data": _doc("option", "allow-leftovers")},
-        {"id": "saved-plan-history", "data": _doc("aligned", None, "agreed")},
+        {"id": "late-returns-handling", "data": _doc("option", "allow-late-returns")},
+        {"id": "saved-booking-history", "data": _doc("aligned", None, "agreed")},
     ]
 
     def reopen(verdict):
         return _sheet_page(sheet, """
           await t.advance(200);
           const saves = {};
-          for (const id of ["leftovers-handling", "saved-plan-history", "third-one"]) {
+          for (const id of ["late-returns-handling", "saved-booking-history", "third-one"]) {
             t.open(id);
             saves[id] = t.saveText(id);
           }
@@ -3385,7 +3385,7 @@ def test_a_reopened_sheet_shows_each_restored_answer_and_the_verdict_as_saved():
         """, host={"fakeTimers": True, "collections": {"answers": docs, "verdict": [{"id": digest, "data": verdict}]}})
 
     signed = reopen(_verdict("approve", "Looks right", sheet=digest))
-    assert signed["saves"] == {"leftovers-handling": "Saved", "saved-plan-history": "Saved", "third-one": ""}
+    assert signed["saves"] == {"late-returns-handling": "Saved", "saved-booking-history": "Saved", "third-one": ""}
     assert signed["last"] == "Saved"
     assert signed["sets"] == [], "reopening wrote something"
 
@@ -3401,19 +3401,19 @@ def test_an_edit_undone_inside_the_pause_still_shows_saved():
     third["id"] = "third-one"
     sheet["cards"].append(third)
     digest = _sheet_digest(sheet)
-    docs = [{"id": "saved-plan-history", "data": _doc("aligned", None, "agreed")}]
+    docs = [{"id": "saved-booking-history", "data": _doc("aligned", None, "agreed")}]
     collections = {"answers": docs, "verdict": [{"id": digest, "data": _verdict("approve", "Looks right", sheet=digest)}]}
 
     result = _sheet_page(sheet, """
       await t.advance(200);
       const out = {};
-      t.open("saved-plan-history");
-      const note = t.note("saved-plan-history");
+      t.open("saved-booking-history");
+      const note = t.note("saved-booking-history");
       t.type(note, "agreed!", "input");
-      out.typedOver = t.saveText("saved-plan-history");
+      out.typedOver = t.saveText("saved-booking-history");
       t.type(note, "agreed", "input");
       await t.advance(1500);
-      out.card = t.saveText("saved-plan-history");
+      out.card = t.saveText("saved-booking-history");
       out.cardSets = t.setLog();
 
       const verdictNote = t.lastNote();
@@ -3499,7 +3499,7 @@ def test_without_a_digest_the_last_card_stays_off_and_says_why():
       t.lastNote().value = "sneaky";
       fire(t.lastNote());
       await t.advance(1500);
-      return { caption: t.digestCaption(), last: t.lastState(), sets: t.setLog(), reads: t.reads.map((read) => read.name), cards: t.state("leftovers-handling").disabled };
+      return { caption: t.digestCaption(), last: t.lastState(), sets: t.setLog(), reads: t.reads.map((read) => read.name), cards: t.state("late-returns-handling").disabled };
     """, host={"fakeTimers": True, "noCrypto": True})
     assert result["caption"] == {"hidden": False, "text": NO_DIGEST_LINE}
     assert all(result["last"]["disabled"]) and result["last"]["pressed"] == ["false", "false"]
@@ -3698,7 +3698,7 @@ def test_a_schema_without_a_verdict_shape_keeps_the_last_card_off(mutate):
       t.lastButtons().forEach(fire);
       fire(t.lastNote());
       await t.advance(1500);
-      return { last: t.lastState(), sets: t.setLog(), cardControls: t.state("leftovers-handling").disabled, gate: t.gate().hidden, caption: t.digestCaption().hidden };
+      return { last: t.lastState(), sets: t.setLog(), cardControls: t.state("late-returns-handling").disabled, gate: t.gate().hidden, caption: t.digestCaption().hidden };
     """, host={"fakeTimers": True})
     assert page["settled"] and page["errors"] == [], page
     result = page["result"]
@@ -4139,8 +4139,8 @@ def test_a_gesture_begun_before_the_fingers_never_zooms_with_the_pinch():
     assert len(result["prevented"]) == 2 and all(result["prevented"]), result["prevented"]
 
 
-# The sample sheet's own cards: leftovers-handling has two options; shopping-list-rounding and saved-plan-history have none.
-LEFTOVERS_LABELS = ["Let a returned tool be booked the next morning", "Require a rest day between bookings"]
+# The sample sheet's own cards: late-returns-handling has two options; loan-length-rounding and saved-booking-history have none.
+LATE_RETURNS_LABELS = ["Let a returned tool be booked the next morning", "Require a rest day between bookings"]
 OPEN_PILL = ["sh-pill sh-pill--open", "Open"]
 SOMETHING_ELSE_PILL = ["sh-pill sh-pill--discuss", "Something else"]
 
@@ -4154,29 +4154,29 @@ def _page_of_the_sample(scenario, host=None, sheet=None):
 # Bites on: a card with options offering Aligned or Discuss beside its options, a card without options offering anything but Aligned and Discuss, or the options losing their order or labels.
 def test_options_card_offers_its_options_and_something_else_only():
     result = _page_of_the_sample("""
-      return { options: t.state("leftovers-handling").labels, plain: t.state("shopping-list-rounding").labels };
+      return { options: t.state("late-returns-handling").labels, plain: t.state("loan-length-rounding").labels };
     """)
-    assert result["options"] == LEFTOVERS_LABELS + ["Something else"]
+    assert result["options"] == LATE_RETURNS_LABELS + ["Something else"]
     assert result["plain"] == ["Aligned", "Discuss"]
 
 
 # Bites on: Something else saving as anything but its own whole document, its row not showing the Something else pill (live, after a restore, or on an expanded remainder row), or a restore writing.
 def test_something_else_saves_as_its_own_answer():
     written = _page_of_the_sample("""
-      t.click(t.button("leftovers-handling", "Something else"));
+      t.click(t.button("late-returns-handling", "Something else"));
       await t.tick();
-      return { sets: t.setLog(), pressed: t.state("leftovers-handling").pressed, pill: t.rows()[0].pill };
+      return { sets: t.setLog(), pressed: t.state("late-returns-handling").pressed, pill: t.rows()[0].pill };
     """)
-    assert written["sets"] == [_write("leftovers-handling", "something-else", None, "")]
+    assert written["sets"] == [_write("late-returns-handling", "something-else", None, "")]
     assert written["sets"][0]["body"] == {"answer": "something-else", "optionId": None, "note": ""}
     assert written["pressed"] == ["false", "false", "true"]
     assert written["pill"] == SOMETHING_ELSE_PILL
 
     restored = _page_of_the_sample("""
-      const before = { pressed: t.state("leftovers-handling").pressed, pill: t.rows()[0].pill, folded: t.rows()[0].folded };
+      const before = { pressed: t.state("late-returns-handling").pressed, pill: t.rows()[0].pill, folded: t.rows()[0].folded };
       t.click(t.control("fold"));
       return { before: before, expanded: t.fold().listExpanded, pill: t.rows()[0].pill, folded: t.rows()[0].folded, sets: t.setLog(), count: t.count() };
-    """, host={"docs": [{"id": "leftovers-handling", "data": written["sets"][0]["body"]}]})
+    """, host={"docs": [{"id": "late-returns-handling", "data": written["sets"][0]["body"]}]})
     assert restored["before"] == {"pressed": ["false", "false", "true"], "pill": SOMETHING_ELSE_PILL, "folded": True}
     assert restored["expanded"] is True and restored["folded"] is True and restored["pill"] == SOMETHING_ELSE_PILL
     assert restored["sets"] == [], "reopening wrote something"
@@ -4190,9 +4190,9 @@ def test_something_else_pill_reads_its_words_from_the_wording_file():
     files = _sample_files()
     files["sheet-words.json"] = {"status": 200, "body": json.dumps(words)}
     page = _run_page(files, scenario="""
-      t.click(t.button("leftovers-handling", "Another way"));
+      t.click(t.button("late-returns-handling", "Another way"));
       await t.tick();
-      return { labels: t.state("leftovers-handling").labels, pill: t.rows()[0].pill };
+      return { labels: t.state("late-returns-handling").labels, pill: t.rows()[0].pill };
     """)
     assert page["settled"] and page["errors"] == [], page
     assert page["result"]["labels"][-1] == "Another way"
@@ -4201,8 +4201,8 @@ def test_something_else_pill_reads_its_words_from_the_wording_file():
 
 # Bites on: the Aligned or Discuss row pill retyping its words in the page instead of reading them from sheet-words.json, so editing that file changes the button but not the item's pill.
 @pytest.mark.parametrize("answer,label,card_id,index", [
-    pytest.param("aligned", "Agree", "shopping-list-rounding", 1, id="aligned"),
-    pytest.param("discuss", "Talk it over", "saved-plan-history", 2, id="discuss"),
+    pytest.param("aligned", "Agree", "loan-length-rounding", 1, id="aligned"),
+    pytest.param("discuss", "Talk it over", "saved-booking-history", 2, id="discuss"),
 ])
 def test_plain_answer_pills_read_their_words_from_the_wording_file(answer, label, card_id, index):
     words = json.loads((THEME / "sheet-words.json").read_text(encoding="utf-8"))
@@ -4267,17 +4267,17 @@ def test_a_stalled_wording_file_does_not_hold_the_sheet_on_loading(sheet):
 # Bites on: an answer or note failing to come back onto its own card when the sheet is republished with new question wording and a new card order, or the reload writing.
 def test_answers_restore_across_a_republish():
     first = _page_of_the_sample("""
-      t.click(t.button("leftovers-handling", "Let a returned tool be booked the next morning"));
+      t.click(t.button("late-returns-handling", "Let a returned tool be booked the next morning"));
       await t.tick();
-      t.type(t.note("leftovers-handling"), "fits our week", "change");
+      t.type(t.note("late-returns-handling"), "fits our week", "change");
       await t.tick();
-      t.click(t.button("shopping-list-rounding", "Aligned"));
+      t.click(t.button("loan-length-rounding", "Aligned"));
       await t.tick();
-      t.type(t.note("shopping-list-rounding"), "round up", "change");
+      t.type(t.note("loan-length-rounding"), "round up", "change");
       await t.tick();
-      t.click(t.button("saved-plan-history", "Discuss"));
+      t.click(t.button("saved-booking-history", "Discuss"));
       await t.tick();
-      t.type(t.note("saved-plan-history"), "how long?", "change");
+      t.type(t.note("saved-booking-history"), "how long?", "change");
       await t.tick();
       return t.setLog();
     """)
@@ -4285,9 +4285,9 @@ def test_answers_restore_across_a_republish():
     for call in first:
         last[call["path"].split("/")[1]] = call["body"]
     assert last == {
-        "leftovers-handling": _body("option", "allow-leftovers", "fits our week"),
-        "shopping-list-rounding": _body("aligned", None, "round up"),
-        "saved-plan-history": _body("discuss", None, "how long?"),
+        "late-returns-handling": _body("option", "allow-late-returns", "fits our week"),
+        "loan-length-rounding": _body("aligned", None, "round up"),
+        "saved-booking-history": _body("discuss", None, "how long?"),
     }
     revised = json.loads((THEME / "sample-sheet.json").read_text(encoding="utf-8"))
     revised["cards"].reverse()
@@ -4295,11 +4295,11 @@ def test_answers_restore_across_a_republish():
         card["question"] = "Revised wording %d" % (index + 1)
     docs = [{"id": card_id, "data": body} for card_id, body in last.items()]
     second = _page_of_the_sample("""
-      const ids = ["leftovers-handling", "shopping-list-rounding", "saved-plan-history"];
+      const ids = ["late-returns-handling", "loan-length-rounding", "saved-booking-history"];
       return { states: ids.map((id) => t.state(id)), sets: t.setLog() };
     """, host={"docs": docs}, sheet=revised)
-    leftovers, rounding, history = second["states"]
-    assert leftovers["pressed"] == ["true", "false", "false"] and leftovers["note"] == "fits our week"
+    late_returns, rounding, history = second["states"]
+    assert late_returns["pressed"] == ["true", "false", "false"] and late_returns["note"] == "fits our week"
     assert rounding["pressed"] == ["true", "false"] and rounding["note"] == "round up"
     assert history["pressed"] == ["false", "true"] and history["note"] == "how long?"
     assert second["sets"] == [], "the reload wrote something"
@@ -4307,10 +4307,10 @@ def test_answers_restore_across_a_republish():
 
 # Bites on: a stored answer the card does not offer now (Aligned or Discuss on a card with options, an option or Something else on a card without) restoring as a pick, losing its note, or the reload writing.
 @pytest.mark.parametrize("card_id,index,answer,option_id", [
-    pytest.param("leftovers-handling", 0, "aligned", None, id="aligned"),
-    pytest.param("leftovers-handling", 0, "discuss", None, id="discuss"),
-    pytest.param("shopping-list-rounding", 1, "option", "allow-leftovers", id="option"),
-    pytest.param("shopping-list-rounding", 1, "something-else", None, id="something-else"),
+    pytest.param("late-returns-handling", 0, "aligned", None, id="aligned"),
+    pytest.param("late-returns-handling", 0, "discuss", None, id="discuss"),
+    pytest.param("loan-length-rounding", 1, "option", "allow-late-returns", id="option"),
+    pytest.param("loan-length-rounding", 1, "something-else", None, id="something-else"),
 ])
 def test_an_answer_the_card_no_longer_offers_restores_unanswered(card_id, index, answer, option_id):
     scenario = "return { state: t.state(__CARD__), pill: t.rows()[__INDEX__].pill, sets: t.setLog() };"
