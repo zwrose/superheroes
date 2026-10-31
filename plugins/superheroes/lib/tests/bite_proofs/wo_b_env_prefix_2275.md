@@ -32,35 +32,47 @@ CLAUDE_WRITE_BASH_ALLOW = (
 ## G1 — `Bash(*=* f *)` derivation
 
 - **neutralization:** deleted the line `    + tuple(f"Bash(*=* {family} *)" for family in CLAUDE_WRITE_BASH_FAMILIES)` from `CLAUDE_WRITE_BASH_ALLOW`.
-- **raw red** (files: `test_claude_write_env_prefix_2275.py`, `test_claude_write_channel_1569.py`; `--tb=line`; exit 1; assertion bodies elided with `…`):
+- **raw red, re-run 2026-10-31 (#2275 fix round, builder):** the two 2275 tests were renamed to neutral names and the fixture command replaced by a neutral one of the same shape, so G1 was re-run by the builder on head `5157cf63` with the same neutralization and the same two files (`--tb=line -rf`; exit 1). The capture below is that run, unedited except paths shortened to `…/` and the `uv` warning omitted; the same six detectors went red. Restore by the inverse edit; the green re-run printed `12 passed`.
 
 ```
 FF.F..FF...F                                                             [100%]
+=================================== FAILURES ===================================
 E   AssertionError: python
     assert 'Bash(*=* python *)' in ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...]
-…/test_claude_write_env_prefix_2275.py:77: AssertionError: python
+…/test_claude_write_env_prefix_2275.py:79: AssertionError: python
 E   AssertionError: assert []
-     +  where [] = _matching([…], 'MONGODB_URI=mongodb://localhost:27017/weekly-eats-test SKIP_DB_SETUP=true npx --no-install vitest run --reporter=dot')
-…/test_claude_write_env_prefix_2275.py:85: AssertionError: assert []
+     +  where [] = _matching(['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...], 'DB_URL=postgres://localhost/app-test SKIP_SETUP=true npx --no-install vitest run --reporter=dot')
+     +    where ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...] = _allow()
+…/test_claude_write_env_prefix_2275.py:87: AssertionError: assert []
 E   AssertionError: assert []
-     +  where [] = _matching([…], 'PYTHONDONTWRITEBYTECODE=1 scripts/pinned-python -B -m pytest x -q')
-…/test_claude_write_env_prefix_2275.py:95: AssertionError: assert []
+     +  where [] = _matching(['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...], 'PYTHONDONTWRITEBYTECODE=1 scripts/pinned-python -B -m pytest x -q')
+     +    where ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...] = _allow()
+…/test_claude_write_env_prefix_2275.py:97: AssertionError: assert []
 E   AssertionError: assert []
-     +  where [] = _matching([…], 'touch x=1 npx f')
-…/test_claude_write_env_prefix_2275.py:112: AssertionError: assert []
+     +  where [] = _matching(['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...], 'touch x=1 npx f')
+     +    where ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...] = _allow()
+…/test_claude_write_env_prefix_2275.py:114: AssertionError: assert []
 E   AssertionError: assert {'allow': ['B... 'WebSearch']} == {'allow': ['B... 'WebSearch']}
-…/test_claude_write_channel_1569.py:47: AssertionError: …
+      
+      Omitting 1 identical items, use -vv to show
+      Differing items:
+      {'allow': ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...]} != {'allow': ['Bash(python:*)', 'Bash(python3:*)', 'Bash(pytest:*)', 'Bash(scripts/pinned-python:*)', 'Bash(echo:*)', 'Bash(npm:*)', ...]}
+      Use -v to get more diff
+…/test_claude_write_channel_1569.py:47: AssertionError: assert {'allow': ['B... 'WebSearch']} == {'allow': ['B... 'WebSearch']}
 E   AssertionError: assert ['Bash(python...(npm:*)', ...] == ['Bash(python...(npm:*)', ...]
+      
       At index 11 diff: 'Bash(*=* python)' != 'Bash(*=* python *)'
       Right contains 11 more items, first extra item: 'Bash(*=* python)'
-…/test_claude_write_channel_1569.py:96: AssertionError: …
+      Use -v to get more diff
+…/test_claude_write_channel_1569.py:96: AssertionError: assert ['Bash(python...(npm:*)', ...] == ['Bash(python...(npm:*)', ...]
+=========================== short test summary info ============================
 FAILED …/test_claude_write_env_prefix_2275.py::test_every_family_carries_both_assignment_rules
-FAILED …/test_claude_write_env_prefix_2275.py::test_weekly_eats_shape_matches_a_new_rule
+FAILED …/test_claude_write_env_prefix_2275.py::test_leading_assignments_shape_matches_a_new_rule
 FAILED …/test_claude_write_env_prefix_2275.py::test_pinned_python_with_assignment_matches_a_new_rule
 FAILED …/test_claude_write_env_prefix_2275.py::test_equals_before_a_family_word_is_a_known_match
 FAILED …/test_claude_write_channel_1569.py::test_settings_allow_is_the_eleven_targeted_rules
 FAILED …/test_claude_write_channel_1569.py::test_argv_stays_sandboxed_and_carries_rules
-6 failed, 6 passed in 0.82s
+6 failed, 6 passed in 1.20s
 ```
 
 - **restore:** re-inserted the deleted line after the first tuple by the inverse edit.
