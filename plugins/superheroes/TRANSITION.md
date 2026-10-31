@@ -52,6 +52,10 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
 
+### Review: a ruling refuses an id that names more than one finding
+
+- **Ambiguous ids.** `round_driver.py rule` refuses `ruling-target-ambiguous` when the ruling's id names more than one finding across the session's verifier attempts (a staged id like `v0` is reused every round and by the second-test pass). The refusal lists the candidate findings and their `findingKey`, and nothing is written. A ruling that names the finding by its `findingKey` binds; a unique id binds as before. Nothing is owed by a consuming project.
+
 ### Claude write channel: sandbox placeholders are removed at fold
 
 - **What changes.** On Linux a claude write run no longer leaves the sandbox's empty, read-only placeholders (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, the `.claude` settings files and the rest of `SANDBOX_PLACEHOLDERS`) at the root of the build worktree. The run records which of those paths exist when it opens, and its fold removes one only when it is new, empty and read-only; it removes nothing else. The folded result gains `placeholderSweep`. See [Supervised write dispatch](skills/workhorse/reference/dispatch-mechanics.md).
