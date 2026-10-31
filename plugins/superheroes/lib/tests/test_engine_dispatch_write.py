@@ -984,6 +984,7 @@ def test_dispatch_write_cli_effort_key_absent_refuses(tmp_path, capsys):
 # --- process-group liveness + abandon confirmation -----------------------------
 
 
+@pytest.mark.process_listing
 def test_process_group_alive_zombie_only_is_dead():
     proc = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(120)"],
@@ -1039,6 +1040,7 @@ def test_process_group_alive_none_and_zero_never_killpg_zero(monkeypatch):
     assert all(c[0] != 0 for c in calls)
 
 
+@pytest.mark.process_listing
 def test_dispatch_abandon_alive_engine_releases_lease(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")

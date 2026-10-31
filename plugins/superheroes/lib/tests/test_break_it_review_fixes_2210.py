@@ -65,6 +65,7 @@ def test_a_branch_another_worktree_has_checked_out_is_not_rewound(repo, tmp_path
 
 
 @pytest.mark.skipif(not os.path.exists("/bin/sleep"), reason="needs a system sleep")
+@pytest.mark.process_listing
 def test_descendant_watch_stops_a_detached_system_worker(tmp_path):
     parent = subprocess.Popen([sys.executable, "-c",
                                "import subprocess, sys, time\n"
