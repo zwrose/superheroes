@@ -2016,9 +2016,16 @@ def _extra_audit_line(rounds, compact):
             f"rounds: {why}.")
 
 
+# the not-run reason break_it.py (REASON_TRANSIT_REDACTED) stamps on a test whose text carries a transit redaction placeholder; spelled here because this module does not import break_it
+_TRANSIT_REDACTED_REASON = "transit-redacted"
+
+
 def _run_result(run):
     if run.get("status") == "ran":
         return "passed" if run.get("exitCode") == 0 else f"failed (exit {run.get('exitCode')})"
+    # axis: a test never run because transit redaction damaged it reads as that, not as a run that failed to start — see bite-proof record wo_a_2284_transit_redacted
+    if run.get("status") == "not-started" and run.get("reason") == _TRANSIT_REDACTED_REASON:
+        return f"not run: {_TRANSIT_REDACTED_REASON}"
     return "timed out" if run.get("status") == "timed-out" else "did not start"
 
 

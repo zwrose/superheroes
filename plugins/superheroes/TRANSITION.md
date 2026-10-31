@@ -63,6 +63,15 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Saved sessions.** A session saved at the gap-sweep step continues past it when loaded.
 - **Read lists.** An engine reviewer's `readParts` in the record is the list the dispatch runner graded for that run. A landed list that differs is refused `evidence-read-parts-mismatch`, and a landing with no list takes the runner's.
 
+### Review: a ruling refuses an id that names more than one finding
+
+- **Ambiguous ids.** `round_driver.py rule` refuses `ruling-target-ambiguous` when the ruling's id names more than one finding across the session's verifier attempts (a staged id like `v0` is reused every round and by the second-test pass). The refusal lists the candidate findings and their `findingKey`, and nothing is written. A ruling that names the finding by its `findingKey` binds; a unique id binds as before. Nothing is owed by a consuming project.
+
+### Claude write channel: sandbox placeholders are removed at fold
+
+- **What changes.** On Linux a claude write run no longer leaves the sandbox's empty, read-only placeholders (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, the `.claude` settings files and the rest of `SANDBOX_PLACEHOLDERS`) at the root of the build worktree. The run records which of those paths exist when it opens, and its fold removes one only when it is new, empty and read-only; it removes nothing else. The folded result gains `placeholderSweep`. See [Supervised write dispatch](skills/workhorse/reference/dispatch-mechanics.md).
+- **Nothing is owed.** A run opened by an older plugin has no snapshot, so its fold removes nothing and reports `incomplete` with `baseline-missing`. A run that is abandoned rather than folded is not swept.
+
 ### Review: a finding that repeats an earlier one keeps its outcome
 
 - **Repeat marks.** Code review marks a finding that repeats one of the PR's earlier findings and keeps the earlier outcome, unless the verifier finds it no longer holds. The rule is in [Repeats](skills/review-code/reference/synthesis-pass.md#repeats).

@@ -586,7 +586,9 @@ first slice settles via empty-batch convergence.
 **Rule before the call that sets `apply-fixes`.** Record every ruling on a round's findings before
 the call that sets the step. A finding can be ruled on from the fold that staged it: staging seeds its
 disposition-ledger row, and `rule` resolves it there by the `findingKey` the verifiers and synthesis
-orders carry (a bare staged id does not resolve). On the durable-record path `advance` folds the
+orders carry. A bare staged id resolves only when every store and every recorded verifier attempt binds
+it to the same finding; an id that names more than one finding is refused `ruling-target-ambiguous`,
+and the refusal lists the candidates and says to name the finding by its `findingKey`. On the durable-record path `advance` folds the
 phase and then sets the next step through `next` in the same call, so the `advance` whose fold
 queues a fix batch returns the `apply-fixes` payload itself: record rulings before any `advance` that
 folds synthesis, the seams check, or the scoped finder. On the hand path

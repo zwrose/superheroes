@@ -3273,6 +3273,179 @@ def _fold_cc_writes_sweep(state):
         return {"removed": [], "incomplete": True, "error": type(exc).__name__}
 
 
+PLACEHOLDER_BASELINE_NAME = "placeholder-baseline.json"
+
+# The paths Claude Code's Linux sandbox protects in the shell's working directory, where it can
+# leave an empty, read-only placeholder: the file and directory lists in Claude Code 2.1.314's
+# sandbox (read from its bundle in the #2285 cloud build, `.git` left out), the `.claude` settings
+# files the vet-740 receipt on PR #2281 saw, and `.claude` itself. Children come before their
+# parent, so a placeholder dir its children's removal empties goes too.
+SANDBOX_PLACEHOLDERS = (
+    ".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
+    ".ripgreprc", ".mcp.json", ".vscode", ".idea",
+    ".claude/settings.json", ".claude/settings.local.json", ".claude/commands", ".claude/agents",
+    ".claude",
+)
+_DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+
+
+def _open_dir_nofollow(root_fd, rel):
+    """An fd for the dir ``rel`` under ``root_fd``, opened one component at a time, never through
+    a symlink."""
+    fd = os.dup(root_fd)
+    for part in rel.split("/") if rel else ():
+        try:
+            nxt = os.open(part, _DIR_NOFOLLOW, dir_fd=fd)
+        finally:
+            os.close(fd)
+        fd = nxt
+    return fd
+
+
+def _exists_at(root_fd, rel):
+    """Whether ``rel`` exists under ``root_fd``, never looking through a symlink; doubt raises."""
+    parent, _sep, name = rel.rpartition("/")
+    try:
+        fd = _open_dir_nofollow(root_fd, parent)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    try:
+        os.stat(name, dir_fd=fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(fd)
+
+
+def _placeholder_snapshot(cwd_real):
+    """Which ``SANDBOX_PLACEHOLDERS`` exist before a claude write run, and the worktree root's
+    identity. Anything short of a complete read is not ok, and the fold then removes nothing.
+    Never raises."""
+    root_fd = None
+    try:
+        root_fd = os.open(cwd_real, _DIR_NOFOLLOW)
+        root = os.fstat(root_fd)
+        present = [rel for rel in SANDBOX_PLACEHOLDERS if _exists_at(root_fd, rel)]
+        return {"status": "ok", "root": [root.st_dev, root.st_ino], "present": present}
+    except Exception as exc:
+        return {"status": "incomplete", "reason": type(exc).__name__}
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
+
+
+def _is_placeholder(st, mode=None):
+    """Empty and read-only: a zero-length regular file or a directory, with no write bit set in
+    ``mode`` (default: its own)."""
+    return ((st.st_mode if mode is None else mode) & 0o222) == 0 and (
+        stat.S_ISDIR(st.st_mode) or (stat.S_ISREG(st.st_mode) and st.st_size == 0))
+
+
+def _remove_lending(remove, name, dirfd, parent, present, modes):
+    """``remove(name, dir_fd=dirfd)``; a non-root sweep refused inside a new placeholder dir lends
+    that dir alone owner write, recording its mode in ``modes`` to put back if it stays."""
+    try:
+        remove(name, dir_fd=dirfd)
+    except PermissionError:
+        if parent not in SANDBOX_PLACEHOLDERS or parent in present:
+            raise
+        modes.setdefault(parent, os.fstat(dirfd).st_mode)
+        os.fchmod(dirfd, modes[parent] | stat.S_IWUSR)
+        remove(name, dir_fd=dirfd)
+
+
+def _remove_placeholder(root_fd, rel, present, modes):
+    """Remove ``rel`` when it is an empty, read-only file or dir; True when it went."""
+    parent, _sep, name = rel.rpartition("/")
+    fd = _open_dir_nofollow(root_fd, parent)
+    try:
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        # judged by the mode it had before the sweep lent it owner write; rmdir refuses a non-empty dir
+        if not _is_placeholder(st, modes.get(rel)):
+            return False
+        remove = os.rmdir if stat.S_ISDIR(st.st_mode) else os.unlink
+        _remove_lending(remove, name, fd, parent, present, modes)
+        modes.pop(rel, None)
+        return True
+    finally:
+        os.close(fd)
+
+
+# WORKAROUND: on Linux the claude write sandbox can leave empty, read-only placeholders of the
+# paths it protects (`SANDBOX_PLACEHOLDERS`) in the worktree after a run (#2285).
+# delete-when: the Claude Code version the channel runs no longer leaves sandbox placeholders in the
+# worktree on Linux.
+# axis: removes only a `SANDBOX_PLACEHOLDERS` path that the before-run snapshot shows absent and that
+# is now empty and read-only, relative to a root fd checked against the snapshot and never through a
+# symlink; no complete snapshot removes nothing.
+def _sweep_placeholders(cwd_real, baseline):
+    """Remove the sandbox placeholders a claude write run left. Never raises."""
+    removed, modes = [], {}
+    out = {"removed": removed, "incomplete": False, "error": None}
+    root_fd = None
+    try:
+        if (not isinstance(baseline, dict) or baseline.get("status") != "ok"
+                or not isinstance(baseline.get("present"), list)):
+            reason = baseline.get("reason") if isinstance(baseline, dict) else None
+            out.update(incomplete=True, error="baseline-" + (reason or "missing"))
+            return out
+        try:
+            root_fd = os.open(cwd_real, _DIR_NOFOLLOW)
+            root = os.fstat(root_fd)
+        except OSError:
+            root = None
+        if root is None or [root.st_dev, root.st_ino] != baseline.get("root"):
+            out.update(incomplete=True, error="root-changed")
+            return out
+        present = set(baseline["present"])
+        for rel in SANDBOX_PLACEHOLDERS:
+            if rel in present:
+                continue
+            try:
+                if _remove_placeholder(root_fd, rel, present, modes):
+                    removed.append(rel)
+            except OSError:
+                pass
+    except Exception as exc:
+        out.update(incomplete=True, error=type(exc).__name__)
+    finally:
+        if root_fd is not None:
+            for rel, mode in modes.items():
+                try:
+                    fd = _open_dir_nofollow(root_fd, rel)
+                    try:
+                        os.fchmod(fd, stat.S_IMODE(mode))
+                    finally:
+                        os.close(fd)
+                except OSError:
+                    pass
+            os.close(root_fd)
+    return out
+
+
+def _fold_placeholder_sweep(run_dir_real, state):
+    """Sweep a claude write run's worktree of sandbox placeholders at fold. None for any other run."""
+    try:
+        opened = state.get("opened") or {}
+        if opened.get("runKind") != RUN_KIND_WRITE or opened.get("engine") != "claude":
+            return None
+        cwd = opened.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            return _sweep_placeholders("", {"status": "incomplete",
+                                            "reason": "run-context-incomplete"})
+        try:
+            with open(os.path.join(run_dir_real, PLACEHOLDER_BASELINE_NAME),
+                      encoding="utf-8") as fh:
+                baseline = json.load(fh)
+        except (OSError, ValueError):
+            baseline = None
+        # never realpath here: a root replaced by a symlink must fail the identity check
+        return _sweep_placeholders(cwd, baseline)
+    except Exception as exc:
+        return {"removed": [], "incomplete": True, "error": type(exc).__name__}
+
+
 def _fold_size_tripwire(state):
     """Count a write run's worktree against the base journaled at open, or against its merge
     base with the journaled base ref when that is newer. None for a review run or a run opened
@@ -3332,6 +3505,10 @@ def _fold_run(run_dir_real, state, result):
     if cc_writes is not None:
         result = dict(result)
         result["ccWritesSweep"] = cc_writes
+    placeholders = _fold_placeholder_sweep(run_dir_real, state)
+    if placeholders is not None:
+        result = dict(result)
+        result["placeholderSweep"] = placeholders
     size_tripwire = _fold_size_tripwire(state)
     opened = state.get("opened") or {}
     if size_tripwire is not None:
@@ -6582,6 +6759,13 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             return False, "config-dir-unusable:unresolvable"
         if not os.path.isdir(cfg):
             return False, "config-dir-unusable:not-a-directory"
+        try:
+            # in the run dir, which the sandbox cannot write; the fold sweeps only paths absent here
+            with open(os.path.join(run_dir_real, PLACEHOLDER_BASELINE_NAME), "w",
+                      encoding="utf-8") as fh:
+                json.dump(_placeholder_snapshot(os.path.realpath(cwd)), fh)
+        except OSError:
+            pass
     else:
         cfg = None
 

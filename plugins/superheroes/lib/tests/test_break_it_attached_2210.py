@@ -413,9 +413,13 @@ def test_an_attached_test_keeps_ordinary_scope_checking_and_has_no_path_rule(fx,
 
 
 def test_a_scrub_altered_attached_block_is_stamped_not_run(fx, spy):
-    content = "request = {'token': '" + "sk-" + "a" * 48 + "'}\nassert False\n"
-    accepted, _ = engine_adapter._scrub_findings([_attached(content)])
-    assert accepted[0]["suggestion"] != _attached(content)["suggestion"]
+    # the credential-shaped value sits in the run: header line (built from pieces); the scrub leaves the content alone
+    raw = _attached()
+    raw["suggestion"] = "break-it-test v1\npath: %s\nrun: %s %s --token %s\n---\n%s" % (
+        ATTACHED_TEST, PY, shlex.quote(ATTACHED_TEST), "sk-" + "a" * 48, _TEST_FAILING)
+    accepted, _ = engine_adapter._scrub_findings([raw])
+    assert accepted[0]["suggestion"] != raw["suggestion"]
+    assert accepted[0]["suggestion"].split("\n", 4)[4] == _TEST_FAILING
     assert accepted[0][break_it.REDACTED_FIELD] is True
     fx.fold_panel(test_role=[accepted[0]])
     assert spy.calls == []
