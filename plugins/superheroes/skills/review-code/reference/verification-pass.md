@@ -53,7 +53,7 @@ attempt must never be globbed and honored.
    that vendor's own verifier model (and effort) from the registry cell
    `model_registry.matrix_config("verifier", <vendor>)` and dispatch that pair instead — the
    manifest carries the vendor, not its model, and `dispatch_guard check` with role `verifier`
-   validates the vendor/model pair, so a Claude alias on another vendor is refused. The driver seats a non-panel reviewer only on a vendor whose dispatched cell for the phase (the verifier cell here, the reviewer-deep cell for gap sweep and scoped) the seat map proves live, and a native host seat takes the host's family. Each verifier reads the cluster's findings (with their staged
+   validates the vendor/model pair, so a Claude alias on another vendor is refused. The driver seats a non-panel reviewer only on a vendor whose dispatched cell for the phase (the verifier cell here, the reviewer-deep cell for seams check and scoped) the seat map proves live, and a native host seat takes the host's family. Each verifier reads the cluster's findings (with their staged
    `id`s), the round diff, and the repo — the working tree. It must **never** read the PR's own
    description or narrative (the #230 immunity). The clusters' verifiers run in **parallel**,
    so each writes its **OWN** file — `$SESSION_DIR/round-<N>/verdicts-<cluster-index>.json`,

@@ -1859,8 +1859,8 @@ _ROUNDS_WORD = {"rounds": "round cap", "ceiling": "round ceiling"}
 _PANEL_LENS = {"code-reviewer": "code", "test-role": "test", "security-reviewer": "security",
                "premortem-reviewer": "premortem", "architecture-reviewer": "architecture"}
 _STEM_ROLE = {"verifiers ": "verifier", "audits ": "fix auditor", "scoped-finder ": "scoped finder",
-              "gap-sweep ": "gap sweep", "second-test ": "second test"}
-_ROLE_ORDER = ("verifier", "synthesis", "fix auditor", "scoped finder", "gap sweep", "second test")
+              "seams-check ": "seams check", "second-test ": "second test"}
+_ROLE_ORDER = ("verifier", "synthesis", "fix auditor", "scoped finder", "seams check", "second test")
 _OUTCOME_PHRASES = ("fixed", "shown wrong", "craft call", "left for the owner", "settled by a ruling")
 assert len(rfs.OUTCOMES) == len(_OUTCOME_PHRASES), "every outcome needs its words in _OUTCOME_PHRASES"
 _OUTCOME_WORDS = dict(zip(rfs.OUTCOMES, _OUTCOME_PHRASES))
@@ -2079,8 +2079,8 @@ def _roles(r):
         stem = next((role for prefix, role in _STEM_ROLE.items() if seat.startswith(prefix)), None)
         if stem:
             roles.add(stem)
-        elif seat in _PANEL_LENS and _PANEL_LENS[seat] not in lenses:
-            lenses.append(_PANEL_LENS[seat])
+        elif round_phases.seat_lens(seat) in _PANEL_LENS and _PANEL_LENS[round_phases.seat_lens(seat)] not in lenses:
+            lenses.append(_PANEL_LENS[round_phases.seat_lens(seat)])
     if r.get("synthesisRounds"):
         roles.add("synthesis")
     return " · ".join(([", ".join(lenses)] if lenses else []) + [role for role in _ROLE_ORDER if role in roles])

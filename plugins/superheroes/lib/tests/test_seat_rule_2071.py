@@ -49,7 +49,7 @@ def _denylist_faults(text):
 def test_every_seat_phase_is_rendered_and_covered():
     assert set(_GOLDEN_CONTEXTS) == set(RO.ORDER_PHASES)
     assert set(RO.ORDER_PHASES) == {
-        RP.P_PANEL, RP.P_SCOPED, RP.P_GAPSWEEP, RP.P_SECOND_TEST, RP.P_VERIFIERS, RP.P_SYNTHESIS,
+        RP.P_PANEL, RP.P_SCOPED, RP.P_SEAMS, RP.P_SECOND_TEST, RP.P_VERIFIERS, RP.P_SYNTHESIS,
         RP.P_AUDITS}
 
 

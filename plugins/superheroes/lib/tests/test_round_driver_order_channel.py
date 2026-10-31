@@ -365,7 +365,7 @@ def test_seat_channel_folds_the_vendor_fact_on_every_read_only_phase(phase, vend
 
     Bite axis: an implementation that got P_PANEL right (the only phase the prior truth table
     covered) but returned `CHANNEL_FILE` for an engine or unresolved vendor on verifiers, audits,
-    synthesis, gap-sweep, or scoped would pass every previously-existing test here and still emit a
+    synthesis, seams-check, or scoped would pass every previously-existing test here and still emit a
     forbidden write contract to a sandboxed engine seat dispatched through one of those phases
     (review finding, #1035 round 2).
     """
@@ -437,7 +437,7 @@ def test_a_configured_engine_vendor_keeps_the_configured_marker(monkeypatch, tmp
     assert RD._reviewer_engine_vendor(str(tmp_path)) == ("codex", RD.VENDOR_SOURCE_CONFIGURED)
 
 
-@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED])
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED])
 def test_reviewer_phase_transport_row_carries_the_vendor_source(monkeypatch, phase, tmp_path):
     """The marker reaches the transport row — the seam `_seat_channel` and the gap collector read."""
     monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
@@ -451,7 +451,7 @@ def test_reviewer_phase_transport_row_carries_the_vendor_source(monkeypatch, pha
     assert RD._seat_channel(phase, row) == RD.CHANNEL_STDOUT
 
 
-@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED])
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED])
 def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path, monkeypatch,
                                                                        phase):
     """Safe is not the same as silent — the defaulted fallback owes a receipt (#1037 rider).
@@ -486,7 +486,7 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     assert row["vendorSource"] == RD.VENDOR_SOURCE_DEFAULTED, row
 
 
-@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED])
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED])
 def test_a_configured_reviewer_vendor_is_not_disclosed_as_a_gap(tmp_path, monkeypatch, phase):
     """A/B for the disclosure above: a vendor the driver really RESOLVED is not a gap.
 
@@ -530,6 +530,7 @@ _DERIVED_PLACEHOLDER_NAMES = frozenset({
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
     "BREAK_IT_GRAMMAR_BLOCK",
+    "SLICE_SCOPE_LINE",
 })
 
 # Auxiliary inputs consumed by derivation but not declared in the template body.
@@ -538,7 +539,7 @@ _FIXTURE_AUX_INPUTS = {
                            "ROLE_BRIEF_PATH", "RISK_AREAS_TEXT", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_VERIFIERS: frozenset({"CHANNEL"}),
     RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
-    RD.P_GAPSWEEP: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
+    RD.P_SEAMS: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
     RD.P_SECOND_TEST: frozenset({"CHANNEL", "ROLE_BRIEF_PATH", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_AUDITS: frozenset({"CHANNEL"}),
     RD.P_SCOPED: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
@@ -578,14 +579,15 @@ _KNOWN_REALISTIC_VALUES = {
         "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
         "GROUPING_OUTPUT_PATH": SESSION + "/round-1/grouping.json",
     },
-    RD.P_GAPSWEEP: {
+    RD.P_SEAMS: {
         "DIFF_PATH": _DIFF,
+        "SLICES_PATH": SESSION + "/round-1/seams-slices.json",
         "RUBRIC_PATH": "/plugin/rubric/review-base.md",
         "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
         "VERIFICATION_ROOT": "/proj",
-        "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/gap-sweep-findings.json",
+        "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/seams-check-findings.json",
     },
     RD.P_SECOND_TEST: {
         "HELD_FINDINGS_PATH": SESSION + "/round-1/second-test-held.json",

@@ -20,18 +20,18 @@ import round_phases  # noqa: E402
 P_PANEL = round_phases.P_PANEL
 P_VERIFIERS = round_phases.P_VERIFIERS
 P_SYNTHESIS = round_phases.P_SYNTHESIS
-P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_SEAMS = round_phases.P_SEAMS
 P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
 P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 
-ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_SECOND_TEST, P_AUDITS,
+ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_SEAMS, P_SECOND_TEST, P_AUDITS,
                   P_SCOPED, P_VERIFY, P_APPLY_FIXES)
 
 SEAT_SYNTHESIS = "synthesis"
-SEAT_GAPSWEEP = "gap-sweep"
+SEAT_SEAMS = "seams-check"
 SEAT_SECOND_TEST = "second-test"
 SEAT_SCOPED = "scoped-finder"
 SEAT_VERIFY = "verify"
@@ -383,9 +383,9 @@ def _synthesis_payload_fault(payload, seat_key):
     return _payload_fault_from_contract(payload, P_SYNTHESIS, seat_key)
 
 
-def _gap_sweep_payload_fault(payload, seat_key):
-    """The gap-sweep candidate list."""
-    return _payload_fault_from_contract(payload, P_GAPSWEEP, seat_key)
+def _seams_payload_fault(payload, seat_key):
+    """The seams-check candidate list."""
+    return _payload_fault_from_contract(payload, P_SEAMS, seat_key)
 
 
 def _second_test_payload_fault(payload, seat_key):
@@ -430,7 +430,7 @@ _PAYLOAD_CHECKERS = {
     P_PANEL: _panel_payload_fault,
     P_VERIFIERS: _verifiers_payload_fault,
     P_SYNTHESIS: _synthesis_payload_fault,
-    P_GAPSWEEP: _gap_sweep_payload_fault,
+    P_SEAMS: _seams_payload_fault,
     P_SECOND_TEST: _second_test_payload_fault,
     P_SCOPED: _scoped_payload_fault,
     P_APPLY_FIXES: _apply_fixes_payload_fault,
@@ -516,7 +516,7 @@ _PAYLOAD_FIELD_BINDINGS = {
             "rule": "each group member_ids must be a non-empty list of non-empty strings",
         }],
     },
-    P_GAPSWEEP: {
+    P_SEAMS: {
         "required": ["findings"],
         "optional": ["reviewerVendor"],
         "conditional": {},

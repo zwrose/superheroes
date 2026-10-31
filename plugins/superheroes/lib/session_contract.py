@@ -150,7 +150,7 @@ RUN_KIND_BY_PHASE = {
     "dispatch-synthesis": RUN_KIND_REVIEW,
     AUDITS_PHASE: RUN_KIND_REVIEW,
     "dispatch-scoped-finder": RUN_KIND_REVIEW,
-    "dispatch-gap-sweep": RUN_KIND_REVIEW,
+    "dispatch-seams-check": RUN_KIND_REVIEW,
     "dispatch-second-test": RUN_KIND_REVIEW,
 }
 

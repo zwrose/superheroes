@@ -1,7 +1,7 @@
 """C1-L4b: a review session handed back at its round cap can be reopened once, by the advisor's order, for
 one extra audit round.
 
-The round audits only the cap round's fixes. It dispatches no panel, scoped finder, gap sweep, fixer or verify
+The round audits only the cap round's fixes. It dispatches no panel, scoped finder, seams check, fixer or verify
 run, it is labelled in the record, and it is never counted in the cap. A PR gets at most one, across all its
 sessions. No session begins round `cap + 1` except through the `extra-audit` verb.
 

@@ -12,6 +12,8 @@ and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and
 conventions. Apply the diff-scope rule: only flag code in `+` or
 `-` lines.
 
+{{SLICE_SCOPE_LINE}}
+
 ## Context files
 - Diff: {{DIFF_PATH}}
 - Base rubric (severity, verification rules, panel output format): {{RUBRIC_PATH}}

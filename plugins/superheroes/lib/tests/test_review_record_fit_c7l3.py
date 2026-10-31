@@ -30,7 +30,7 @@ def panel_rows(seats, rounds, gap=0):
                 rows.append(reviewer(name))
             else:
                 rows.append(reviewer(name, runDir=None, commit=HEAD))
-    rows += [reviewer(f"gapsweep {seats[n % len(seats)]} (round {n})") for n in range(1, gap + 1)]
+    rows += [reviewer(f"seamscheck {seats[n % len(seats)]} (round {n})") for n in range(1, gap + 1)]
     return rows
 
 

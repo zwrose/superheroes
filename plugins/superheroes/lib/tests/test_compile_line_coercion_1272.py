@@ -96,7 +96,7 @@ def test_t5_bool_line_refused():
     assert drops[0]["line"] is True
 
 
-def test_t6_gapsweep_appends_compile_drops_without_overwriting_panel():
+def test_t6_seams_check_appends_compile_drops_without_overwriting_panel():
     state = _state()
     panel_drop = {
         "file": "f.py",
@@ -105,8 +105,8 @@ def test_t6_gapsweep_appends_compile_drops_without_overwriting_panel():
         "reason": "outside the round diff scope",
     }
     RD._record_round(state, "compileDrops", [panel_drop])
-    candidate = dict(_FINDING, line="x", title="gap candidate")
-    RD._fold_gapsweep(state, state["config"], {"findings": [candidate]})
+    candidate = dict(_FINDING, line="x", title="seams candidate")
+    RD._fold_seams(state, state["config"], {"findings": [candidate]})
     drops = state["rounds"][str(state["round"])]["compileDrops"]
     assert len(drops) == 2
     assert drops[0] == panel_drop

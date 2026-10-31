@@ -367,7 +367,7 @@ def test_a_runner_channel_seat_without_evidence_is_still_ignored(tmp_path):
     assert set(art["verifierSeatVendors"].values()) == {""}, art
 
 
-# --- #1797 gap-sweep / scoped finder: the executed vendor must be the vendor recorded at emission ------
+# --- #1797 seams-check / scoped finder: the executed vendor must be the vendor recorded at emission ------
 
 def _finder_envelope(seat, source=None, wrapped=False, schema_over=None):
     env = {"schema": RR.SEAT_RESULT_SCHEMA_V2, "seat": seat, "attempt": 0, "vendor": "codex",
@@ -388,7 +388,7 @@ def _finder_manifest(seat, channel="stdout", vendor="codex"):
     return {"seats": {RR.storage_key(seat, 0): {"vendor": vendor, "channel": channel}}}
 
 
-@pytest.mark.parametrize("phase,seat", [(RD.P_GAPSWEEP, round_adapters.SEAT_GAPSWEEP),
+@pytest.mark.parametrize("phase,seat", [(RD.P_SEAMS, round_adapters.SEAT_SEAMS),
                                         (RD.P_SCOPED, round_adapters.SEAT_SCOPED)])
 def test_a_finder_executed_by_the_maker_family_does_not_count_as_run(phase, seat):
     state = _finder_state()
@@ -398,7 +398,7 @@ def test_a_finder_executed_by_the_maker_family_does_not_count_as_run(phase, seat
     assert "executed=claude" in why and "recorded=codex" in why
 
 
-@pytest.mark.parametrize("phase,seat", [(RD.P_GAPSWEEP, round_adapters.SEAT_GAPSWEEP),
+@pytest.mark.parametrize("phase,seat", [(RD.P_SEAMS, round_adapters.SEAT_SEAMS),
                                         (RD.P_SCOPED, round_adapters.SEAT_SCOPED)])
 def test_a_finder_executed_by_the_recorded_vendor_counts_as_run(phase, seat):
     state = _finder_state()
@@ -407,7 +407,7 @@ def test_a_finder_executed_by_the_recorded_vendor_counts_as_run(phase, seat):
     assert why is None and art["findings"] == []
 
 
-@pytest.mark.parametrize("phase,seat", [(RD.P_GAPSWEEP, round_adapters.SEAT_GAPSWEEP),
+@pytest.mark.parametrize("phase,seat", [(RD.P_SEAMS, round_adapters.SEAT_SEAMS),
                                         (RD.P_SCOPED, round_adapters.SEAT_SCOPED)])
 def test_a_driver_wrapped_host_seat_finder_authenticates_by_its_manifest_vendor(phase, seat):
     state = _finder_state()
@@ -427,8 +427,8 @@ def test_a_driver_wrapped_host_seat_finder_authenticates_by_its_manifest_vendor(
 def test_a_hand_submitted_finder_needs_the_recorded_vendor_claim(tmp_path):
     state = _state()
     fault = RD._finder_hand_claim_fault
-    assert fault(state, None, RD.P_GAPSWEEP, {"findings": []}) is not None
-    assert fault(state, None, RD.P_GAPSWEEP, {"findings": [], "reviewerVendor": "claude"}) is not None
+    assert fault(state, None, RD.P_SEAMS, {"findings": []}) is not None
+    assert fault(state, None, RD.P_SEAMS, {"findings": [], "reviewerVendor": "claude"}) is not None
     assert fault(state, None, RD.P_SCOPED, {"findings": [], "reviewerVendor": "codex"}) is None
 
 

@@ -106,7 +106,7 @@ SYNTHESIS_SEATABLE = {"fixerVendor": "codex", "seatMap": dict(SEAT_MAP, hostFami
 class FakeAdapters(object):
     """A stand-in for the parallel `round_adapters` module, exactly at the pinned interface."""
 
-    ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
+    ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_SEAMS, RD.P_AUDITS,
                       RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def __init__(self):
@@ -1588,7 +1588,7 @@ def test_orchestrator_fulfilled_phase_census():
     import round_adapters as RA
 
     seat_phases = {
-        RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_AUDITS, RP.P_SCOPED, RP.P_GAPSWEEP,
+        RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_AUDITS, RP.P_SCOPED, RP.P_SEAMS,
         RP.P_SECOND_TEST,
     }
     orchestrator_phases = {RP.P_VERIFY, RP.P_APPLY_FIXES}
@@ -1896,18 +1896,18 @@ def test_vendor_gap_rows_from_two_phases_do_not_collide(tmp_path, adapters):
     it collide, and a dropped row means a fallback folded with no receipt."""
     state = {"round": 1, "rounds": {}}
     RD._disclose_order_vendor_provenance_gaps(state, [
-        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_PANEL, "vendorSource": None},
+        {"seat": "seams-check", "occurrence": 0, "phase": RD.P_PANEL, "vendorSource": None},
     ])
     RD._disclose_order_vendor_provenance_gaps(state, [
-        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_GAPSWEEP,
+        {"seat": "seams-check", "occurrence": 0, "phase": RD.P_SEAMS,
          "vendorSource": RD.VENDOR_SOURCE_DEFAULTED},
     ])
     rows = state["rounds"]["1"]["orderVendorProvenanceGaps"]
     assert len(rows) == 2, rows
-    assert {r["phase"] for r in rows} == {RD.P_PANEL, RD.P_GAPSWEEP}
+    assert {r["phase"] for r in rows} == {RD.P_PANEL, RD.P_SEAMS}
     # A/B: a genuine repeat of the SAME phase+slot is still deduplicated.
     RD._disclose_order_vendor_provenance_gaps(state, [
-        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_GAPSWEEP,
+        {"seat": "seams-check", "occurrence": 0, "phase": RD.P_SEAMS,
          "vendorSource": RD.VENDOR_SOURCE_DEFAULTED},
     ])
     assert len(state["rounds"]["1"]["orderVendorProvenanceGaps"]) == 2
