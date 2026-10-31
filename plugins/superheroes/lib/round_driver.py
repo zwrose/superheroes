@@ -40,6 +40,7 @@ home) and receipt validation (`panel_tally._valid_final_receipt`, consumed bit-c
 modified) are reused, not re-implemented.
 """
 import argparse
+import collections
 import copy
 import difflib
 import errno
@@ -1595,6 +1596,37 @@ def _returning_diffs(state, cfg):
     return countable_lines.reviewer_diff(baseline, left_out), countable_lines.reviewer_diff(head_diff, left_out)
 
 
+def _changed_sections_only(baseline, head_diff):
+    """``(baseline', head')``: both diffs with every per-file section whose exact text the other diff also holds
+    cut out of both (matched as a multiset: a section held twice here and once there is cut once from each), the
+    preamble and every other byte kept in order. A section only one diff holds (a file added or removed since the
+    last review) stays. For a parser that reads the diffs, so a file unchanged since the last review (a binary or
+    a rename no hunk parser reads) is no reason to leave the surface unworked-out. A non-``str`` diff, or one
+    whose sections do not add back up to its text, is returned as it came."""
+    if not isinstance(baseline, str) or not isinstance(head_diff, str):
+        return baseline, head_diff
+    split = []
+    for text in (baseline, head_diff):
+        texts = [section["text"] for section in countable_lines.parse_sections(text)]
+        joined = "".join(texts)
+        if not text.endswith(joined):
+            return baseline, head_diff
+        split.append((text[:len(text) - len(joined)], texts))
+    (base_pre, base_texts), (head_pre, head_texts) = split
+    common = collections.Counter(base_texts) & collections.Counter(head_texts)
+
+    def kept(texts):
+        left, out = collections.Counter(common), []
+        for text in texts:
+            if left[text] > 0:
+                left[text] -= 1
+                continue
+            out.append(text)
+        return "".join(out)
+
+    return base_pre + kept(base_texts), head_pre + kept(head_texts)
+
+
 def _returning_surface(state, cfg):
     """``(surface, text)`` of what changed since the last reviewed commit, or ``(None, why)``: the fix-delta
     surface between ``base...lastReviewed`` and the round-1 diff, no proven copy in either diff."""
@@ -1604,7 +1636,8 @@ def _returning_surface(state, cfg):
     changed = (cfg.get("returning") or {}).get("changedFiles")
     only = set(changed) if isinstance(changed, list) and all(isinstance(f, str) for f in changed) else None
     try:
-        delta = _fix_delta_surface(state, baseline, head_diff, only=only)
+        # axis: a file whose section is the same in both diffs never reaches a parser, so an unchanged binary or rename cannot force the full panel — see bite-proof record c1_followups_2288
+        delta = _fix_delta_surface(state, *_changed_sections_only(baseline, head_diff), only=only)
     except Exception as exc:  # noqa: BLE001 — a surface nobody could work out is a full panel, never a hand-back
         return None, "the change since the last reviewed commit failed on %s: %s" % (type(exc).__name__, exc)
     if delta is None:
@@ -1640,7 +1673,8 @@ def _seed_carried(state, cfg, returning):
         baseline, head_diff = _returning_diffs(state, cfg)
     usable = [f for f in rows.values() if isinstance(f.get("file"), str) and f["file"] and _coerce_line(f.get("line"))[0]]
     if baseline is not None and usable:
-        split = delta_surface.split_fix_surface(baseline, head_diff, usable)
+        # axis: the carried findings' hunk split reads only the sections that changed; the audit's own delta below stays on the unfiltered pair — see bite-proof record c1_followups_2288
+        split = delta_surface.split_fix_surface(*_changed_sections_only(baseline, head_diff), usable)
         hunks = {} if split.get("unknown") else split.get("auditTargets") or {}
     for key, finding in rows.items():
         # a carried finding is audited only where the change since the last reviewed commit touches its line
@@ -1656,6 +1690,7 @@ def _seed_carried(state, cfg, returning):
     # the audit reads the round-1 diff as the head the change since the last reviewed commit ended on
     state["headDiff"] = state.get("reviewedDiff")
     state["fixBatch"] = list(audited.values())
+    # axis: the audit's fixer delta diffs the unfiltered baseline against the head, so a file unchanged between the two never shows as an addition — see bite-proof record c1_followups_2288
     state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
     state["fixBatch"] = []
     return True
@@ -1702,6 +1737,7 @@ def _with_carried(state, compiled):
             rest.append(c)
             continue
         # axis: a fresh report that matches a carried finding is merged into it and its evidence survives, under the carried key — see bite-proof record c1l11b_wo_h_carried_merge
+        held_key = _finding_identity_key(rows[id(h)])
         merged = _merge_same_finding(rows[id(h)], c)
         fresh_key = _finding_identity_key(c)
         for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
@@ -1719,7 +1755,28 @@ def _with_carried(state, compiled):
             for run in state.get("rounds", {}).get(str(state.get("round")), {}).get("breakItRuns") or []:
                 if isinstance(run, dict) and run.get("findingKey") == fresh_key:
                     run["findingKey"] = new_key
+        # axis: a parent link bound to either key the merge replaced moves to the key the merged row keeps; two different parents leave no link — see bite-proof record c1_followups_2288
+        _move_audit_spawned(state, (fresh_key, held_key), new_key)
     return rest + [rows[id(h)] for h in held]
+
+
+def _move_audit_spawned(state, old_keys, new_key):
+    """Move the spawn-map entries of ``old_keys`` onto ``new_key``, the key a merged row keeps. Entries that name
+    different parents (with one another, or with the entry already at ``new_key``) leave no link at all: an
+    uncertain link is not kept (`_bind_audit_spawned`). A state with no spawn map dict is left as it is."""
+    spawned = state.get(AUDIT_SPAWNED_KEY) if isinstance(state, dict) else None
+    if not isinstance(spawned, dict) or not new_key:
+        return
+    moving = [k for k in dict.fromkeys(old_keys) if k and k != new_key and k in spawned]
+    if not moving:
+        return
+    parents = [spawned.pop(k) for k in moving]
+    if new_key in spawned:
+        parents.append(spawned[new_key])
+    if all(p == parents[0] for p in parents):
+        spawned[new_key] = parents[0]
+    else:
+        spawned.pop(new_key, None)
 
 
 def _seed_returning_round(state, cfg):
@@ -4088,6 +4145,8 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 "expected": selected, "ran": claimed if claimed is not None else selected,
                 "outcome": "verdicts-folded"})
     staged = verification.stage_ids(state.get("_toVerify") or [])
+    # axis: the ids this attempt minted are kept, so a ruling id reused by a later attempt is ambiguous, never bound to the earlier finding — #2157
+    _record_staged_id_bindings(state, state.get("_toVerify") or [], staged, "verifiers")
     applied = verification.apply_verdicts(staged, verdicts)
     second_pass = state.get("_secondTestPass") is True
     survivors = list(applied["findings"])
@@ -4173,6 +4232,9 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         carried_refuted = carried_refuted if isinstance(carried_refuted, list) else []
         # axis: the first pass's survivors and refuted findings and this pass's are staged afresh together, so the round's two lists carry unique ids and its refuted list holds both passes' — see bite-proof record c1l8_wo_a_repeat_marks
         restaged = verification.stage_ids(carried + survivors + carried_refuted + refuted)
+        # axis: the second pass renumbers every row, so the renumbering is recorded as an attempt too — #2157
+        _record_staged_id_bindings(state, carried + survivors + carried_refuted + refuted,
+                                   restaged, "second-pass-restage")
         split = len(carried) + len(survivors)
         state["_verified"], state["_refuted"] = restaged[:split], restaged[split:]
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
@@ -4539,7 +4601,15 @@ def _stamp_fix_groups(state, fix_groups, kept):
             if row is not None:
                 row[verification.FIX_GROUP_FIELD] = {"id": group_id, "members": list(keys)}
         stamped.append({"id": group_id, "members": list(keys)})
-    _record_round(state, "fixGroups", stamped)
+    # axis: a round's `fixGroups` lists every group that governed its fixes, so a second synthesis wave of the round appends to the first wave's groups and never replaces them — see bite-proof record c1_followups_2288
+    current = state["rounds"].setdefault(str(state["round"]), {}).get("fixGroups")
+    recorded = list(current) if isinstance(current, list) else []
+    have = {g.get("id") for g in recorded if isinstance(g, dict)}
+    for group in stamped:
+        if group["id"] not in have:
+            have.add(group["id"])
+            recorded.append(group)
+    _record_round(state, "fixGroups", recorded)
 
 
 def _fold_synthesis(state, config, artifact, session_dir=None, exact_only=None):
@@ -8344,8 +8414,10 @@ def _after_audits(state, config):
         # a returning round 1 that reads in full: the carried findings were audited first, and the panel round 1 always ran
         # follows. What the audits raised is compiled as a scoped finder's candidates are and waits with the carried findings
         # sent back, to join the panel's candidates at the verifier.
-        raised, drops = mechanical_compile([ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)],
-                                           state.get("reviewedDiff"))
+        new_issues = [ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)]
+        raised, drops = mechanical_compile(new_issues, state.get("reviewedDiff"))
+        # axis: a child an audit raised on the full returning path is linked to its parent here, as `_fold_scoped` links it, so a later audit of the parent carries it — see bite-proof record c1_followups_2288
+        _bind_audit_spawned(state, new_issues, raised)
         _record_compile_drops(state, drops)
         state["_carriedToVerify"] = (state.get("_carriedToVerify") or []) + raised
         state["step"] = P_PANEL
@@ -10607,45 +10679,145 @@ def _row_matches_ruling_finding_key(row, ruling_id):
     return derived == ruling_id if derived else False
 
 
+STAGED_ID_BINDINGS_FIELD = "_stagedIdBindings"
+RULING_TARGET_AMBIGUOUS_HINT = (
+    "the id names more than one finding across verifier attempts; name the finding by its "
+    "findingKey (one of the candidates' findingKey values)")
+
+
+def _record_staged_id_bindings(state, originals, staged, source):
+    """Append one verifier attempt's staged-id -> finding-key bindings to the history."""
+    if not isinstance(originals, list) or not isinstance(staged, list):
+        return
+    bindings = {}
+    for original, numbered in zip(originals, staged):
+        if not isinstance(original, dict) or not isinstance(numbered, dict):
+            continue
+        key = _finding_identity_key(original)
+        sid = numbered.get("id")
+        if key and isinstance(sid, str) and sid:
+            bindings[sid] = key
+    if not bindings:
+        return
+    history = state.get(STAGED_ID_BINDINGS_FIELD)
+    if not isinstance(history, list):
+        history = []
+        state[STAGED_ID_BINDINGS_FIELD] = history
+    history.append({"round": state.get("round"), "source": source, "bindings": bindings})
+
+
+def _staged_view_rows(originals):
+    """The staged copies of the dict rows in ``originals`` (a non-dict original is skipped)."""
+    if not isinstance(originals, list):
+        return []
+    rows = []
+    for numbered, original in zip(verification.stage_ids(originals), originals):
+        if isinstance(original, dict):
+            rows.append(numbered)
+    return rows
+
+
+def _ruling_candidate_rows(state, ledger_entries=None, before_ledger_only=False):
+    """``[(key, row)]`` a ruling id may name; ``before_ledger_only`` is the ledger-unreadable set."""
+    candidates = []
+
+    def take(rows, keyer):
+        if not isinstance(rows, list):
+            return
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            key = keyer(row)
+            if isinstance(key, str) and key:
+                candidates.append((key, row))
+
+    take(state.get("findings"), _finding_key_of)
+    combined = []
+    for store in ("_fixBatch", "_fixQueue", "fixBatch"):
+        rows = state.get(store)
+        if isinstance(rows, list):
+            combined += rows
+    take(combined, _fix_batch_row_key)
+    if before_ledger_only:
+        return candidates
+    if ledger_entries is None:
+        ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+        ledger_entries = list(ledger_by_key.values()) if ledger_fault is None else []
+    take(ledger_entries, _finding_identity_key)
+    for store in ("_verified", "_refuted", "_secondTestCarry", "_secondTestRefutedCarry"):
+        take(state.get(store), _finding_key_of)
+    held = state.get("_secondTestHeld")
+    if isinstance(held, list):
+        take([row.get("finding") for row in held if isinstance(row, dict)], _finding_key_of)
+    # axis: the current attempt's staged ids are candidates too — a staged v0 names the finding now staged as v0 — #2157
+    take(_staged_view_rows(state.get("_toVerify")), _finding_key_of)
+    return candidates
+
+
+def _ruling_id_matches(state, rid, candidates):
+    """``{key: row}`` of each distinct finding ``rid`` names (rows, attempt history, log)."""
+    by_key = {}
+
+    def row_for(key):
+        for cand_key, cand_row in candidates:
+            if cand_key == key:
+                return dict(cand_row)
+        return {session_contract.FINDING_KEY_FIELD: key}
+
+    for key, row in candidates:
+        if row.get("id") == rid:
+            by_key[key] = dict(row)
+    history = state.get(STAGED_ID_BINDINGS_FIELD)
+    if isinstance(history, list):
+        # axis: a ruling id reused across verifier attempts is ambiguous, never bound to the earlier finding — #2157
+        for attempt in history:
+            if not isinstance(attempt, dict) or not isinstance(attempt.get("bindings"), dict):
+                continue
+            key = attempt["bindings"].get(rid)
+            if isinstance(key, str) and key and key not in by_key:
+                by_key[key] = row_for(key)
+    log_rows, log_fault = _read_rulings_log(state)
+    if log_fault is None:
+        for logged in log_rows:
+            key = logged.get("findingKey")
+            if logged.get("id") == rid and isinstance(key, str) and key and key not in by_key:
+                by_key[key] = row_for(key)
+    return by_key
+
+
 def _resolve_ruling_target(state, ruling_id):
     if not isinstance(ruling_id, str) or not ruling_id.strip():
         return None, None, None
     rid = ruling_id.strip()
-    for finding in state.get("findings") or []:
-        if _row_matches_ruling_finding_key(finding, rid):
-            return _finding_key_of(finding), dict(finding), None
-    combined = ((state.get("_fixBatch") or []) + (state.get("_fixQueue") or [])
-                + (state.get("fixBatch") or []))
-    for row in combined:
-        if _row_matches_ruling_finding_key(row, rid):
-            return _fix_batch_row_key(row), dict(row), None
     ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
     if ledger_fault is not None:
+        for key, row in _ruling_candidate_rows(state, before_ledger_only=True):
+            if _row_matches_ruling_finding_key(row, rid):
+                return key, dict(row), None
         return None, None, RULING_FILE_UNREADABLE
-    ledger_entries = list(ledger_by_key.values())
-    for entry in ledger_entries:
-        if isinstance(entry, dict) and _row_matches_ruling_finding_key(entry, rid):
-            return _finding_identity_key(entry), dict(entry), None
-    id_matches = []
-    for finding in state.get("findings") or []:
-        if isinstance(finding, dict) and finding.get("id") == rid:
-            id_matches.append((_finding_key_of(finding), dict(finding)))
-    for row in combined:
-        if isinstance(row, dict) and row.get("id") == rid:
-            id_matches.append((_fix_batch_row_key(row), dict(row)))
-    for entry in ledger_entries:
-        if isinstance(entry, dict) and entry.get("id") == rid:
-            id_matches.append((_finding_identity_key(entry), dict(entry)))
-    by_key = {}
-    for key, row in id_matches:
-        if isinstance(key, str) and key:
-            by_key[key] = row
+    candidates = _ruling_candidate_rows(state, list(ledger_by_key.values()))
+    for key, row in candidates:
+        if _row_matches_ruling_finding_key(row, rid):
+            return key, dict(row), None
+    by_key = _ruling_id_matches(state, rid, candidates)
     if len(by_key) > 1:
         return None, None, RULING_TARGET_AMBIGUOUS
     if len(by_key) == 1:
         key = next(iter(by_key))
         return key, by_key[key], None
     return None, None, None
+
+
+def _ruling_target_candidates(state, rid):
+    """The distinct findings ``rid`` names, as ``{findingKey, file, line, title}`` sorted by key."""
+    if not isinstance(rid, str):
+        return []
+    rid = rid.strip()
+    ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
+    ledger_entries = list(ledger_by_key.values()) if ledger_fault is None else []
+    by_key = _ruling_id_matches(state, rid, _ruling_candidate_rows(state, ledger_entries))
+    return [{"findingKey": key, "file": row.get("file"), "line": row.get("line"),
+             "title": row.get("title")} for key, row in sorted(by_key.items())]
 
 
 def _load_ruling_file(path):
@@ -10759,7 +10931,9 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     for entry in parsed:
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
-            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"],
+                               candidates=_ruling_target_candidates(state, entry["id"]),
+                               hint=RULING_TARGET_AMBIGUOUS_HINT)
         if target_fault == RULING_FILE_UNREADABLE:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
         if key is None:
@@ -10780,7 +10954,9 @@ def _cmd_rule_locked(session_dir, ruling_file, by):
     for entry in parsed:
         key, candidate, target_fault = _resolve_ruling_target(state, entry["id"])
         if target_fault == RULING_TARGET_AMBIGUOUS:
-            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"])
+            return _refuse_cmd(session_dir, RULE_CMD, RULING_TARGET_AMBIGUOUS, id=entry["id"],
+                               candidates=_ruling_target_candidates(state, entry["id"]),
+                               hint=RULING_TARGET_AMBIGUOUS_HINT)
         if target_fault == RULING_FILE_UNREADABLE:
             return _refuse_cmd(session_dir, RULE_CMD, RULING_FILE_UNREADABLE)
         if key is None:
