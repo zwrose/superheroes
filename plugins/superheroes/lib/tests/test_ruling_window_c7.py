@@ -436,12 +436,6 @@ def _merged_into_session(tmp_path, monkeypatch):
         tmp_path, [_finding("bounds F1", 2), _finding("bounds F2", 3)],
         to_phase=RD.P_SEAMS, name="c7-merge", fixerVendor="cursor",
         seatMap=dict(_TRI.SEAT_MAP, hostFamily="anthropic"))
-    state = _state(session_dir)
-    kept = _finding_key_by_title(state, "bounds F1")
-    member = _finding_key_by_title(state, "bounds F2")
-    RD._record_merged_into(state, member, kept)
-    RD._set_findings(state, [f for f in state["findings"] if _key(f) == kept])
-    RD.save_state(session_dir, state)
     _drive_to_phase(session_dir, gitdir, [], head_path, P_APPLY_FIXES)
     state = _state(session_dir)
     batch = _batch_keys(state)

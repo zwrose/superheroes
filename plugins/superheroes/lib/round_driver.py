@@ -3891,8 +3891,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
         elif not placed:
             kept.extend(intercepted)
             placed = True
-    for g in intercepted:
-        seat_sources[id(g)] = break_it.ROLE  # the intercept's copies are new dicts: they came from the test role's seat
+    # axis: an intercepted copy keeps its original finding's roster-key source (`test-role:s1`, not plain `test-role`), so an outside hit stored under it is the one abandoned-session recovery looks for — see bite-proof record c2_wo8_merge_scoped_fixes
+    # intercept returns exactly one copy per input finding, in order
+    for original, g in zip(break_it_raw, intercepted):
+        seat_sources[id(g)] = seat_sources.get(id(original), break_it.ROLE)  # the copies are new dicts: they came from the original's seat
     compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped,
                                          sources=seat_sources)
     if runs:

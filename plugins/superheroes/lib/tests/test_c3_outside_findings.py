@@ -398,10 +398,23 @@ def test_t9_an_audit_candidate_matching_a_settled_ledger_row_on_an_untouched_lin
             assert row["outcome"] is None and row["reason"] == rs.UNFOLDED_OPEN and recovered == []
 
 
-def _test_role_account(tmp_path, proposal):
-    session = Session(tmp_path, terminal=None, reviewedDiff=DIFF).seat("test-role").save()
-    put_envelope(session, "test-role", {"vendor": "codex", "model": "m", "payload": {"findings": [proposal]}})
+def _test_role_account(tmp_path, proposal, seat="test-role"):
+    session = Session(tmp_path, terminal=None, reviewedDiff=DIFF).seat(seat).save()
+    put_envelope(session, seat, {"vendor": "codex", "model": "m", "payload": {"findings": [proposal]}})
     return rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
+
+
+@pytest.mark.parametrize("seat", ["test-role:s1", "test-role:w2u1"])
+def test_t9_a_sliced_test_seats_unfolded_break_it_proposal_stays_open_like_the_whole_change_seats(tmp_path, seat):
+    # axis: a sliced test seat (`test-role:<id>`) is the test role for the break-it scope exemption, by its lens, so its valid proposal stays open and is never recovered outside — see bite-proof record c2_wo8_merge_scoped_fixes
+    valid = BL._break_it_finding(file=BL.TEST_PATH, line=1)
+    account = _test_role_account(tmp_path / "valid", valid, seat)
+    assert [f["title"] for f in account["findings"]] == [valid["title"]] and "outsideThisPR" not in account
+    # control: the seat's lens only buys the exemption, so a proposal the intercept would not exempt is still outside
+    off_line = _test_role_account(tmp_path / "off", dict(valid, line=8), seat)
+    assert off_line["findings"] == []
+    assert [(e["source"]["name"], [h["title"] for h in e["hits"]]) for e in off_line["outsideThisPR"]] == [
+        (seat, [valid["title"]])]
 
 
 def test_t9_an_unfolded_break_it_proposal_stays_open_only_when_the_intercept_would_exempt_it(tmp_path):

@@ -407,3 +407,20 @@ def test_an_unsliced_session_has_no_unread_share_and_goes_straight_to_the_verifi
     ("premortem-reviewer:w2", False), ("premortem-reviewer", False), ("architecture-reviewer", False)])
 def test_only_a_lens_colon_slice_key_is_a_slice_seat(key, slice_seat):
     assert RP.is_slice_seat(key) is slice_seat
+
+
+def test_a_sliced_test_seats_outside_hit_keeps_its_seat_key_so_abandoned_recovery_does_not_add_it_twice(tmp_path):
+    # axis: the break-it intercept's copy keeps its original finding's roster-key source (`test-role:s1`, not plain `test-role`), so the outside hit is stored under the key recovery looks for — see bite-proof record c2_wo8_merge_scoped_fixes
+    diff = _three_thousand()
+    state = _state(_repo(tmp_path), diff)
+    state["reviewedDiff"] = diff
+    outside = dict(_finding("Outside the change", file="src/other.py", line=3), body="the body")
+    _wave(state, findings={"test-role:s1": [outside]})
+    names = [(e["source"]["name"], [h["title"] for h in e["hits"]]) for e in state["outsideThisPR"]]
+    assert names == [("test-role:s1", ["Outside the change"])]
+    session = Session(tmp_path / "abandoned", terminal=None, reviewedDiff=diff, outsideThisPR=state["outsideThisPR"],
+                      _outsideRounds=state.get("_outsideRounds") or []).seat("test-role:s1").save()
+    put_envelope(session, "test-role:s1", {"vendor": "codex", "model": "m", "payload": {"findings": [outside]}})
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
+    assert account["findings"] == [] and account["refused"] == []
+    assert [(e["source"]["name"], [h["title"] for h in e["hits"]]) for e in account["outsideThisPR"]] == names
