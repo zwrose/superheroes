@@ -174,12 +174,21 @@ def _read(d, name):
         return fh.read()
 
 
-def _refused(d, order, token, **kw):
-    """The order is refused with `token`, journals exactly one refusal row, and changes nothing else."""
+def _refused(d, order, token, posts=0, **kw):
+    """The order is refused with `token`, journals exactly one refusal row, changes nothing else, and posts
+    exactly `posts` reservation comments (none unless the refusal comes after the reservation is posted)."""
     before, rows = _files(d), len(RD.read_journal(d))
-    kw.setdefault("readers", _readers())
-    out = RD.cmd_extra_audit(d, order, "advisor", PR, **kw)
+    readers = dict(kw.pop("readers", None) or _readers())
+    create, posted = readers["create_comment"], []
+
+    def counting(pr, repo, body):
+        posted.append(body)
+        return create(pr, repo, body)
+
+    readers["create_comment"] = counting
+    out = RD.cmd_extra_audit(d, order, "advisor", PR, readers=readers, **kw)
     assert out["ok"] is False and out["reason"] == token, out
+    assert len(posted) == posts, posted
     assert _files(d) == before
     journal = RD.read_journal(d)
     assert len(journal) == rows + 1, journal[rows:]
@@ -432,7 +441,7 @@ def test_t4g_two_sessions_that_both_read_an_empty_history_elect_the_lower_commen
         reads.append(1)
         return [] if len(reads) == 1 else list(store)
 
-    out = _refused(d, _order(tmp_path), "extra-audit-already-run-on-pr",
+    out = _refused(d, _order(tmp_path), "extra-audit-already-run-on-pr", posts=1,
                    readers=_readers(list_comments=listing, create_comment=create_for(700)))
     assert out["sessionId"] == "s-other" and len(reads) == 2
     assert any(c["id"] == 700 for c in store)  # the loser's reservation stays
@@ -469,7 +478,7 @@ def test_t4i_a_failed_reread_after_the_reservation_refuses_with_nothing_written_
         reads.append(1)
         return [] if len(reads) == 1 else None
 
-    _refused(d, _order(tmp_path), "extra-audit-pr-history-unreadable",
+    _refused(d, _order(tmp_path), "extra-audit-pr-history-unreadable", posts=1,
              readers=_readers(list_comments=listing))
     assert len(reads) == 2 and "extraAudit" not in _state(d)
 
@@ -479,13 +488,13 @@ def test_t4d_a_reservation_that_cannot_be_posted_refuses_with_nothing_written(tm
     d = _capped(tmp_path)
     _pin_head(monkeypatch, d)
     order = _order(tmp_path)
-    _refused(d, order, "extra-audit-reservation-failed",
+    _refused(d, order, "extra-audit-reservation-failed", posts=1,
              readers=_readers(create_comment=lambda pr, repo, body: None))
 
     def boom(pr, repo, body):
         raise RuntimeError("post exploded")
 
-    _refused(d, order, "extra-audit-reservation-failed", readers=_readers(create_comment=boom))
+    _refused(d, order, "extra-audit-reservation-failed", posts=1, readers=_readers(create_comment=boom))
     assert "extraAudit" not in _state(d)
 
 
@@ -752,7 +761,8 @@ def test_t8_a_superseded_copy_that_differs_from_the_receipt_refuses_receipt_faul
     _pin_head(monkeypatch, d)
     with open(os.path.join(d, SUPERSEDED), "wb") as fh:
         fh.write(b"another receipt")
-    _refused(d, _order(tmp_path), "extra-audit-receipt-faulted")
+    # the copy is made after the reservation is posted, so this refusal follows one post
+    _refused(d, _order(tmp_path), "extra-audit-receipt-faulted", posts=1)
 
 
 # --- T9: the loaded-state guard ----------------------------------------------------------------------

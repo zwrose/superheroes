@@ -116,6 +116,32 @@ def test_b1_an_unchanged_reviewer_test_only_relocated_is_same(tmp_path):
     assert facts["match"] == "same" and facts["committedTest"] == ROLE_TEST
 
 
+def test_b1_a_reformatted_run_copy_of_a_held_reviewer_test_with_no_reason_is_same_through_the_reviewers_version(
+        tmp_path):
+    # bites on: the reviewer's-version fallback (vet 742, 1a). The carried block holds the reformatted test and the
+    # commit holds that same reformatting at the recorded path, so the copy is the run's and its bytes are not the
+    # reviewer's (`copy[0] == reviewer` is false); the run's content is not the reviewer's (`current == reviewer` is
+    # false); no reason is recorded (`why` is None). Only the reviewer's `ROLE_TEST`, found in the final diff at the
+    # copy's own path, makes it `same`.
+    finding = C10._finding(content=ROLE_TEST_REFORMATTED, reviewer_test=ROLE_TEST)
+    facts = _facts(tmp_path, {TEST_PATH: ROLE_TEST_REFORMATTED}, finding)
+    assert facts["match"] == "same", facts
+    assert facts["reviewerTest"] == ROLE_TEST and facts["committedTest"] == ROLE_TEST_REFORMATTED
+    assert facts["changedWhy"] is None and "committedPath" not in facts
+
+
+def test_b1_a_run_copy_equal_to_the_reviewers_version_stays_same_over_a_recorded_reason(tmp_path):
+    # bites on: the `run_copy and current == reviewer` clause (vet 742, 1b). No `reviewerTest` is held, so the
+    # reviewer's version is the carried block (`ROLE_TEST`); a reason is recorded; the commit holds a body-equivalent
+    # reformatting at the recorded path, so the located copy's bytes are not the reviewer's. Without the clause the
+    # recorded reason would read `changed-explained`; the run's test is the reviewer's, so nothing changed.
+    finding = C10._finding(content=ROLE_TEST, changed_why=WHY)
+    facts = _facts(tmp_path, {TEST_PATH: ROLE_TEST_REFORMATTED}, finding)
+    assert facts["match"] == "same", facts
+    assert facts["reviewerTest"] == ROLE_TEST and facts["committedTest"] == ROLE_TEST_REFORMATTED
+    assert facts["changedWhy"] == WHY
+
+
 def test_b1_the_exact_bytes_stay_same_and_changed_explained_without_a_base(tmp_path):
     # no `baseRef`: no body search, the exact comparison the audit always made
     root, head = C10._repo_with(tmp_path, ROLE_TEST)
