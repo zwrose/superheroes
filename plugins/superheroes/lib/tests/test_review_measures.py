@@ -11,12 +11,14 @@ _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import review_findings_schema  # noqa: E402
 import review_learning  # noqa: E402
 import review_measures as RM  # noqa: E402
 
 D = datetime.date.fromisoformat
 FROM, UNTIL = D("2026-10-01"), D("2026-10-07")
 U = RM.UNMEASURED
+SRC = "gardening pass sample of 12 PRs"
 
 
 def _row(name, commit="c1", ran="engine-record", tokens=100, minutes=1.5):
@@ -36,13 +38,18 @@ def _f(key, outcome="fixed", reviewer="Security"):
 def _full(**over):
     inp = {"records": [_rec(1)], "ciRuns": [{"pr": 1, "minutes": 4, "suiteMinutes": 3}], "escapes": [],
            "vetReceipts": [], "capChoicesSince": "2026-09-01",
-           "costly": {"lateFindsOnUnchangedCode": {"basis": "monthly", "value": 0}}}
+           "costly": {"lateFindsOnUnchangedCode": {"basis": "monthly", "value": 0, "source": SRC}}}
     inp.update(over)
     return inp
 
 
 def _why(row):
     return {u["measure"]: u["reason"] for u in row["unmeasured"]}
+
+
+def _filled(**counts):
+    """A seat's outcomes as the row shows them: every outcome in schema order, then open, 0 where none."""
+    return {**dict.fromkeys((*review_findings_schema.OUTCOMES, "open"), 0), **counts}
 
 
 def test_the_row_shape_is_pinned():
@@ -80,7 +87,7 @@ def test_a_full_window_is_measured():
     assert m["ci"] == {"runsPerPr": {"median": 1, "p90": 1}, "minutesPerPr": {"median": 4, "p90": 4},
                        "suiteMedianMinutes": 3}
     assert m["escapes"] == {"missed": 0, "seenAndLeft": 0, "falsePrClaims": 0}
-    assert m["lateFindsOnUnchangedCode"] == {"basis": "monthly", "value": 0}
+    assert m["lateFindsOnUnchangedCode"] == {"basis": "monthly", "value": 0, "source": SRC}
     assert m["panels"] == {"sizes": {"1": 1}, "withoutGrounding": 1, "sessions": 1}
     assert set(_why(row)) == {"repeatFindingLocations"}
 
@@ -141,12 +148,14 @@ def test_finding_outcomes_by_lens_key_an_undecided_finding_open_and_feed_the_sea
     rows = [_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)", tokens=7, minutes=0.2)]
     row = RM.compute(_full(records=[_rec(1, rows=rows, findings=findings)]), FROM, UNTIL)
     seats = row["measures"]["seats"]
-    assert seats["security-reviewer"]["outcomes"] == {"fixed": 1, "open": 1}
-    assert seats["premortem-reviewer"]["outcomes"] == {"craft": 1}
-    assert seats["unattributed"] == {"outcomes": {"fixed": 1}, "tokens": U, "minutes": U}
+    assert seats["security-reviewer"]["outcomes"] == _filled(fixed=1, open=1)
+    assert seats["premortem-reviewer"]["outcomes"] == _filled(craft=1)
+    assert seats["unattributed"] == {"outcomes": _filled(fixed=1), "tokens": U, "minutes": U}
+    assert all(list(s["outcomes"]) == [*review_findings_schema.OUTCOMES, "open"] for s in seats.values())
     shown = review_learning.seating(row["seatingRow"])["seats"]
     assert shown["security"]["tokens"] == 100 and shown["premortem"]["minutes"] == 0.2
     assert shown["security"]["outcomes"]["fixed"] == 1
+    assert shown["security"]["outcomes"]["craft"] == 0 and shown["premortem"]["outcomes"]["fixed"] == 0  # never had: 0, not unmeasured
 
 
 def test_ci_reads_unmeasured_when_a_window_pr_has_no_receipt_or_a_receipt_is_damaged():
@@ -212,6 +221,132 @@ def test_an_unknown_cap_choice_spelling_reads_unmeasured():
     vets = [{"pr": 1, "at": "2026-10-04T00:00:00Z", "sentBack": False, "body": _cap("redo")}]
     row = RM.compute(_full(vetReceipts=vets), FROM, UNTIL)
     assert row["measures"]["capChoices"] == U and _why(row)["capChoices"] == "incomplete-evidence"
+
+
+def _vet(body, pr=1, at="2026-10-04T00:00:00Z"):
+    return {"pr": pr, "at": at, "sentBack": False, "body": body}
+
+
+def _audit(at, session, *findings, count=3):
+    """A record from an extra audit round: its rounds hold the `extraAudit` key."""
+    return dict(_rec(1, session, at, findings=findings, count=count), rounds={"count": count, "extraAudit": {}})
+
+
+def _caps(choice, recs, key="k1", **over):
+    row = RM.compute(_full(records=recs, vetReceipts=[_vet(_cap(choice, key))], **over), FROM, UNTIL)
+    return row["measures"]["capChoices"][choice]["outcomes"]
+
+
+def test_leftover_outcomes_need_the_misses_log_and_a_false_pr_claim_is_no_escape():
+    missing = _full(vetReceipts=[_vet(_cap("leftover"))])
+    del missing["escapes"]  # never a TypeError and never not-escaped
+    damaged = _full(vetReceipts=[_vet(_cap("leftover"))], escapes=[{"call": "missed"}])
+    for inp, reason in ((missing, "no-misses-log-input"), (damaged, "incomplete-evidence")):
+        row = RM.compute(inp, FROM, UNTIL)
+        assert row["measures"]["capChoices"] == U and _why(row)["capChoices"] == reason == _why(row)["escapes"]
+    claim = [{"reviewedAt": "2026-10-03", "call": "missed", "pr": 1, "key": "k1", "marker": "false-pr-claim"}]
+    assert _caps("leftover", [_rec(1)], escapes=claim) == {"not-escaped": 1}
+    plain = [{k: v for k, v in claim[0].items() if k != "marker"}]
+    assert _caps("leftover", [_rec(1)], escapes=plain) == {"escaped": 1}  # without the marker it is an escape and counts
+
+
+def test_each_cap_choice_reads_the_follow_up_record_it_names():
+    after = lambda session, at, *f: _rec(1, session, at, findings=f)  # noqa: E731
+    audit = "extra-audit-round"
+    # an extra audit with a later non-audit record only is still pending
+    assert _caps(audit, [_rec(1), after("b", "2026-10-05T00:00:00Z", _f("k1"))]) == {"pending": 1}
+    # the earliest record holding extraAudit settles it, whatever is written before or after
+    recs = [_rec(1), after("b", "2026-10-05T00:00:00Z", _f("k1", None)), _audit("2026-10-06T00:00:00Z", "c", _f("k1")),
+            after("b", "2026-10-07T00:00:00Z", _f("k1", None))]
+    assert _caps(audit, recs) == {"settled": 1}
+    recs = [_audit("2026-10-05T00:00:00Z", "c", _f("k1", None)), _audit("2026-10-06T00:00:00Z", "d", _f("k1"))]
+    assert _caps(audit, recs) == {"not-settled": 1}
+    # a rethink reads the latest record of the session whose record was written first after the vet
+    clean, open_ = after("x", "2026-10-05T00:00:00Z"), after("y", "2026-10-06T00:00:00Z", _f("k1", None))
+    assert _caps("rethink", [_rec(1), clean, open_]) == {"converged": 1}
+    assert _caps("rethink", [_rec(1), open_ | {"sessionId": "x", "writtenAt": "2026-10-05T00:00:00Z"},
+                             clean | {"sessionId": "y", "writtenAt": "2026-10-06T00:00:00Z"}]) == {"not-converged": 1}
+    assert _caps("rethink", [_rec(1)]) == {"pending": 1}
+
+
+def test_a_follow_up_outside_the_window_settles_a_cap_choice_and_nothing_else_reads_it():
+    late = _audit("2026-10-09T00:00:00Z", "b", _f("k1"), count=9)
+    body = "\n".join([_cap("extra-audit-round"), _cap("rethink", "k2")])
+    row = RM.compute(_full(records=[_rec(1), late], vetReceipts=[_vet(body)]), FROM, UNTIL)
+    cap = row["measures"]["capChoices"]
+    assert cap["extra-audit-round"]["outcomes"] == {"settled": 1} and cap["rethink"]["outcomes"] == {"converged": 1}
+    assert row["leftOut"]["outsideWindow"] == 1 and row["prs"] == 1
+    assert row["measures"]["roundsPerPr"] == {"median": 2, "p90": 2}
+    assert row["measures"]["sessionsPerPr"]["median"] == 1 and row["measures"]["panels"]["sessions"] == 1
+
+
+@pytest.mark.parametrize("extra", [{"ok": False}, {"unreadFiles": ["a.json"]}, {"unreadFiles": "a.json"}])
+def test_a_record_its_producer_marked_incomplete_makes_every_record_measure_unmeasured(extra):
+    ci = [{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]
+    row = RM.compute(_full(records=[_rec(1), dict(_rec(2), **extra)], ciRuns=ci), FROM, UNTIL)
+    gone = ("roundsPerPr", "sessionsPerPr", "reviewerCostPerPr", "seats", "panels", "ci", "vetSendBacksOnCleanLoops", "capChoices")
+    assert all(row["measures"][k] == U and _why(row)[k] == "incomplete-evidence" for k in gone)
+    assert row["leftOut"]["malformed"] == 1 and row["prs"] == U
+    for fine in ({"ok": True}, {"unreadFiles": []}, {"unreadFiles": None}):
+        row = RM.compute(_full(records=[_rec(1), dict(_rec(2), **fine)], ciRuns=ci), FROM, UNTIL)
+        assert row["prs"] == 2 and row["measures"]["roundsPerPr"] != U
+
+
+def test_a_costly_measure_counts_only_with_its_source_and_names_it():
+    good = {"basis": "sample", "value": 3, "source": SRC}
+    row = RM.compute(_full(costly={"lateFindsOnUnchangedCode": good,
+                                   "repeatFindingLocations": {"basis": "sample", "value": 3}}), FROM, UNTIL)
+    assert row["measures"]["lateFindsOnUnchangedCode"] == good and RM.problems(row) == []
+    assert list(row["measures"]["lateFindsOnUnchangedCode"]) == ["basis", "value", "source"]
+    assert row["measures"]["repeatFindingLocations"] == U and _why(row)["repeatFindingLocations"] == "not-run-this-pass"
+    for bad in ("", None, 7):
+        row = RM.compute(_full(costly={"lateFindsOnUnchangedCode": dict(good, source=bad)}), FROM, UNTIL)
+        assert row["measures"]["lateFindsOnUnchangedCode"] == U
+        assert _why(row)["lateFindsOnUnchangedCode"] == "not-run-this-pass"
+
+
+def test_a_nested_unmeasured_leaf_needs_its_reason():
+    old = [{"name": "code-reviewer (round 1)", "ran": "engine-record", "commit": "c1"}]  # a record from before the cost field
+    row = RM.compute(_full(records=[_rec(1, rows=old)]), FROM, UNTIL)
+    assert row["measures"]["reviewerCostPerPr"]["tokens"] == U and RM.problems(row) == []
+    named = list(row["unmeasured"])
+    row["unmeasured"] = [u for u in named if "." not in u["measure"]]  # the nested leaves lose their reasons
+    assert any("reviewerCostPerPr.tokens" in p for p in RM.problems(row))
+    row["unmeasured"] = [u for u in named if not u["measure"].startswith(("reviewerCostPerPr.", "seats."))] + [
+        {"measure": "reviewerCostPerPr", "reason": "cost-not-recorded"}, {"measure": "seats", "reason": "cost-not-recorded"}]
+    assert RM.problems(row) == []  # a dotted prefix names every leaf under it
+    row["unmeasured"] = [dict(u, measure="reviewerCostPer") if u["measure"] == "reviewerCostPerPr" else u
+                         for u in row["unmeasured"]]
+    assert RM.problems(row)  # a bare string prefix is not a dotted prefix
+
+
+@pytest.mark.parametrize("damage", [
+    lambda r: r.update(window=None),
+    lambda r: r.update(window={"from": "2026-10-08", "until": "2026-10-07"}),
+    lambda r: r.update(window={"from": "2026-10-01", "until": "soon"}),
+    lambda r: r["measures"].update(roundsPerPr={}),
+    lambda r: r["measures"].update(roundsPerPr={"median": 2}),
+    lambda r: r["measures"]["panels"].update(extra=1),
+    lambda r: r["measures"]["capChoices"].pop("rethink"),
+    lambda r: r["measures"].update(lateFindsOnUnchangedCode={"basis": "monthly", "value": 0}),
+    lambda r: r["measures"].update(seats={"security-reviewer": 1})])
+def test_the_row_shape_check_reaches_the_window_and_the_fixed_keys(damage):
+    row = RM.compute(_full(), FROM, UNTIL)
+    assert RM.problems(row) == []
+    damage(row)
+    assert RM.problems(row)
+
+
+def test_a_damaged_cap_receipt_makes_the_cap_choices_unmeasured():
+    vet = _vet(_cap("rethink"))
+    del vet["body"]  # a receipt with no body is damaged input, not an empty one
+    row = RM.compute(_full(vetReceipts=[vet]), FROM, UNTIL)
+    assert row["measures"]["vetSendBacksOnCleanLoops"] == U and row["measures"]["capChoices"] == U
+    assert _why(row)["vetSendBacksOnCleanLoops"] == _why(row)["capChoices"] == "incomplete-evidence"
+    torn = "\n".join([_cap("rethink"), "<!-- superheroes:cap-choice choice=rethink vet=7 -->"])
+    row = RM.compute(_full(vetReceipts=[_vet(torn)]), FROM, UNTIL)
+    assert row["measures"]["capChoices"] == U and _why(row)["capChoices"] == "incomplete-evidence"
+    assert row["measures"]["vetSendBacksOnCleanLoops"] != U  # only the cap choices lose their evidence
 
 
 @pytest.fixture
