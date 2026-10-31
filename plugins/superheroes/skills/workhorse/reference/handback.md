@@ -32,7 +32,8 @@ The owner half is the close line, then three fixed headings in this order, then 
   any direct question the builder has for the owner. The omission floor's three rows are keyed on
   severity, not on the disposition label. Each finding the review record leaves for the owner (its
   `leftForOwner` list) gets one line here that carries its record id, byte for byte, and its title, with
-  its consequence around them: a paraphrase that drops the id does not name it. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
+  its consequence around them: a paraphrase that drops the id does not name it. Every break-it test the review record shows as
+  `not run: transit-redacted` is named here as a missing proof. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
 - **`## How to see it`.** On a show-it PR, read the project's `## Show-it surface` declaration in
   `core.md` for the level and shape, then carry the concrete instance here. An absent declaration
   means level `none`, disclosed. The section carries the entry point (the URL or the command) and
