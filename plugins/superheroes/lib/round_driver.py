@@ -3638,6 +3638,9 @@ def _fold_panel(state, config, artifact, session_dir=None):
     never silently dropped (coordination note 2)."""
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
+    # A later unread wave folds into the round's existing record: what the first wave recorded stays and this wave adds to it.
+    wave = _slice_wave(state)
+    later = wave > 1
     # A submitted map never releases a seat the map already governing this round left unfilled.
     roster = round_phases.panel_roster(state, config)
     unfilled = receipt_disclosures.unfilled_seats(
@@ -3696,13 +3699,13 @@ def _fold_panel(state, config, artifact, session_dir=None):
             if round_phases.seat_lens(dim) == break_it.ROLE:
                 break_it_raw.append(g)
     if vacuous_dims:
-        _record_round(state, "vacuousSeats", list(vacuous_dims))
+        _record_round_wave(state, "vacuousSeats", list(vacuous_dims), later)
         _decision(state, "seat-vacuous",
                   "%d seat(s) returned no findings and no verifiable investigation record (%s) — "
                   "classed as never-ran; certification cannot rest on them"
                   % (len(vacuous_dims), ", ".join(vacuous_dims)))
     if engaged_artifact_dims:
-        _record_round(state, "engagedArtifactSeats", list(engaged_artifact_dims))
+        _record_round_wave(state, "engagedArtifactSeats", list(engaged_artifact_dims), later)
         _decision(state, "seat-engaged-artifact",
                   "%d seat(s) produced a review our transport could not carry (%s) — they do "
                   "not count toward certification; salvaged artifacts are available for "
@@ -3728,29 +3731,36 @@ def _fold_panel(state, config, artifact, session_dir=None):
     compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped)
     if runs:
         runs = _break_it_run_keys(runs, compiled)
-        _record_round(state, "breakItRuns", runs)
+        _record_round_wave(state, "breakItRuns", runs, later)
         _decision(state, "break-it-run",
                   "%d run: %d exited 0, %d exited non-zero, %d not run"
                   % (len(runs),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_PASSED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
-    _record_round(state, "seatStatus", seat_status)
+    prior_rec = state["rounds"].get(str(state["round"])) if later else None
+    prior_rec = prior_rec if isinstance(prior_rec, dict) else {}
+    # axis: a later wave's seat statuses are added to the first wave's, never written over them
+    prior_status = prior_rec.get("seatStatus") if isinstance(prior_rec.get("seatStatus"), dict) else {}
+    _record_round(state, "seatStatus", {**prior_status, **seat_status})
     _panel_dims = roster
     _expected = len(_panel_dims)
     if _expected > 0:
         _ran = sum(1 for d in _panel_dims if seat_status.get(d) == "run")
+        prior_cov = prior_rec.get("lensCoverage") if isinstance(prior_rec.get("lensCoverage"), dict) else {}
         _record_round(state, "lensCoverage",
-                      {"ran": _ran, "expected": _expected, "floor": incomplete})
+                      {"ran": _ran + (prior_cov.get("ran") if _is_plain_int(prior_cov.get("ran")) else 0),
+                       "expected": _expected + (prior_cov.get("expected") if _is_plain_int(prior_cov.get("expected")) else 0),
+                       "floor": incomplete or prior_cov.get("floor") is True})
     # #563 DoD1 — loud fall-open by MACHINERY, not builder discipline: compare the trusted ranManifest
     # against the #510 seat map's configured vendors and record a per-round dispatch-provenance row for
     # any `run` seat that fell open to a different vendor; disclose an omitted manifest too (below).
     ran_manifest = artifact.get("ranManifest") if isinstance(artifact.get("ranManifest"), dict) else None
     fell_open, prov_missing = _fell_open_rows(_sm_latest_with_seats(state), ran_manifest, seat_status)
     if fell_open:
-        _record_round(state, "fellOpen", fell_open)
+        _record_round_wave(state, "fellOpen", fell_open, later)
     if prov_missing:
-        _record_round(state, "fellOpenProvenanceMissing", prov_missing)
+        _record_round_wave(state, "fellOpenProvenanceMissing", prov_missing, later)
     # #563 DoD1 v7 / #681: an ABSENT seat-map baseline would silently disable all fall-open detection
     # (both outputs anchor on the configured seat map). If no seat map was submitted, disclose
     # provenance-unavailable for the whole panel — regardless of which panel vendors are live.
@@ -3778,25 +3788,26 @@ def _fold_panel(state, config, artifact, session_dir=None):
             _parts.append("%s@%s" % (c, s) if s else c)
         _decision(state, "seat-map-constraint-violated",
                   "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
-    _record_round(state, "compileDrops", drops)
+    _record_round_wave(state, "compileDrops", drops, later)
     if unverified:
-        _record_round(state, "unverified", unverified)
+        _record_round_wave(state, "unverified", unverified, later)
         _decision(state, "receipt-missing-seat",
                   "%d finding(s) carried unverified from receipt-missing seat(s)" % len(unverified))
     if incomplete:
         if missing_dims:
-            _record_round(state, "missingSeats", list(missing_dims))
+            _record_round_wave(state, "missingSeats", list(missing_dims), later)
             _decision(state, "panel-seat-missing",
                       "panel incomplete — %d configured lens(es) did not run (%s); certification cannot "
                       "be full-panel-confirmed" % (len(missing_dims), ", ".join(missing_dims)))
     # Only a COMPLETE panel can anchor a full-panel-confirmed certification. A missing seat leaves
     # fullPanelRan False so a clean finish downgrades to audited-chain and names the gap.
-    state["fullPanelRan"] = not incomplete
+    # axis: the full panel ran only when every wave's seats ran
+    state["fullPanelRan"] = not incomplete and (state.get("fullPanelRan") is True if later else True)
     # Track the OUTSTANDING coverage gap across the loop: an incomplete panel arms it (a converge
     # resting on it is withheld — a lens never ran); a COMPLETE panel recovers coverage and clears it
     # (#507 R2 residual-1). A scoped delta round leaves it untouched, so a round-1 gap never silently
     # clears on a delta finish.
-    state["_incompletePanel"] = incomplete
+    state["_incompletePanel"] = incomplete or (later and state.get("_incompletePanel") is True)
     # In-memory review record for the challenged-coverage / recurrence breaker: only round 1 runs a
     # full panel, so its record is the `baseline`.
     kind = "baseline"
@@ -3817,8 +3828,17 @@ def _fold_panel(state, config, artifact, session_dir=None):
             s_findings = seat
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
-    _append_review_record(state, state["round"], kind, dim_map, compiled)
-    _after_panel_findings(state, config, _with_carried(state, compiled))  # a returning round's carried findings go to the verifier with the panel's
+    record_findings = compiled
+    if later:
+        # a later wave adds its seats and findings to the round's record, the first wave's stay
+        first = next((r for r in state.get("_records") or [] if r.get("round") == state["round"]), None)
+        if isinstance(first, dict):
+            dim_map = {**(first.get("dimensions") or {}), **dim_map}
+            record_findings = list(first.get("findings") or []) + list(compiled)
+    _append_review_record(state, state["round"], kind, dim_map, record_findings)
+    # a returning round's carried findings go to the verifier with the panel's; only the first wave takes them, once
+    this_wave = _with_carried(state, compiled) if wave == 1 else compiled
+    _after_panel_wave(state, config, roster, seats, seat_status, this_wave)
 
 
 def _staged_by_id_map(staged):
@@ -4654,6 +4674,108 @@ def _seams_slices(state):
             if isinstance(parts, list) else set()
         out.append({"id": sl.get("id"), "files": sorted(files)})
     return out
+
+
+# The most panel waves one sliced round 1 runs: the first wave plus at most two waves over what the slice readers left unread.
+UNREAD_WAVE_BOUND = 3
+
+
+def _slice_wave(state):
+    """The panel wave a sliced round 1 stands in: 1 for the first, one more for each unread wave opened."""
+    wave = state.get("_sliceWave")
+    return wave if _is_plain_int(wave) and wave >= 1 else 1
+
+
+def _record_round_wave(state, key, value, later):
+    """Record a per-round list; a later wave's list is added to the one the round already holds, the first wave's stay."""
+    held = state["rounds"].get(str(state["round"]), {}).get(key)
+    _record_round(state, key, held + value if later and isinstance(held, list) and isinstance(value, list) else value)
+
+
+def _cut_wave(plan_slices, unread, wave, count):
+    """The slices of wave ``wave`` (ids ``w<wave>u<k>``, each with its diff text) cut from ``unread`` parts, from the
+    slices of ``plan_slices`` that show those parts' hunks."""
+    cut = slicing.slice_parts_for(unread, {"slices": plan_slices}, count)
+    return [dict(sl, id="w%du%d" % (wave, k)) for k, sl in enumerate(cut, 1)]
+
+
+def _wave_slices(state):
+    """Every slice of the sliced round-1 change with its diff text: the planned slices re-derived from the round's inputs (the
+    plan is deterministic), then each unread wave already opened re-cut from the unread parts it recorded."""
+    derived = slicing.plan(state.get("reviewedDiff"), state.get("sliceCount"), proven=state.get("provenCopies") or [])
+    slices = list(derived["slices"])
+    for rec in state.get("_sliceWaves") or []:
+        slices.extend(_cut_wave(slices, rec.get("unread") or [], rec.get("wave"), state.get("sliceCount")))
+    return slices
+
+
+def _unread_of_wave(state, roster, seats, seat_status):
+    """The parts of the change this wave's slice seats were given and did not list as read, each seat held to its own list:
+    ``slicing.unread_obligations`` over ``{seat: parts of its slice}`` and ``{seat: its payload's readParts}``. A seat
+    that did not run has no list, so it read nothing."""
+    by_id = {s["id"]: s for s in state["slicePlan"].get("slices") or []
+             if isinstance(s, dict) and isinstance(s.get("id"), str)}
+    assigned, read_lists = {}, {}
+    for seat in roster:
+        if not round_phases.is_slice_seat(seat):
+            continue
+        sl = by_id.get(seat.partition(":")[2])
+        if sl is None:
+            continue
+        assigned[seat] = sl.get("parts") or []
+        payload = seats.get(seat) if isinstance(seats, dict) else None
+        if seat_status.get(seat) == "run" and isinstance(payload, dict):
+            read_lists[seat] = payload.get("readParts")
+    return slicing.unread_obligations(assigned, read_lists)
+
+
+def _open_unread_wave(state, config, unread, wave, this_wave):
+    """Open wave ``wave + 1`` over ``unread``: cut it into slices, add them to the plan (without their diff text), seat them,
+    keep this wave's findings, and send the round back to the panel. False, with nothing changed, when no slice or seat results."""
+    nxt = wave + 1
+    dims = round_phases.panel_dimensions(config)
+    repo_root = config.get("repoRoot") or os.getcwd()
+    count = state.get("sliceCount")
+    cut = _cut_wave(_wave_slices(state), unread, nxt, count)
+    marked = [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
+               "security": _slice_security(dims, repo_root, sl["parts"]), "wave": nxt} for sl in cut]
+    risky = [sl for sl in marked if sl["security"]]
+    roster = round_phases.wave_roster(dims, marked, with_whole=bool(risky))
+    if not marked or not roster:
+        return False
+    state.setdefault("_sliceWaves", []).append(
+        {"wave": nxt, "unread": unread, "riskParts": slicing.merge_parts([p for sl in risky for p in sl["parts"]])})
+    state["slicePlan"]["slices"].extend(marked)
+    # axis: the findings of every wave already folded are kept for the one hand-on after the last wave
+    state["_sliceCarry"] = (state.get("_sliceCarry") or []) + this_wave
+    state["_sliceWave"] = nxt
+    state["_sliceWaveRoster"] = roster
+    state["step"] = P_PANEL
+    return True
+
+
+def _after_panel_wave(state, config, roster, seats, seat_status, this_wave):
+    """Where one panel wave's findings go. On a sliced round 1 whatever the wave's slice seats left unread is cut into slices and
+    reviewed in a next wave, up to ``UNREAD_WAVE_BOUND`` waves; what is still unread then, or cannot be cut into a slice, is
+    recorded and shown. The change's unread share is always filled. The waves' findings reach the verifiers together, once."""
+    if not (_round_is_sliced(state) and state["round"] == 1 and not state.get("_seamsChecked")):
+        _after_panel_findings(state, config, this_wave)
+        return
+    wave = _slice_wave(state)
+    unread = _unread_of_wave(state, roster, seats, seat_status)
+    # axis: the bound stops the waves; one past it would review without end
+    if unread and wave < UNREAD_WAVE_BOUND and _open_unread_wave(state, config, unread, wave, this_wave):
+        return
+    residual = unread
+    state["unreadShare"] = slicing.unread_share(residual, state["slicePlan"], state.get("sliceCount"))
+    if residual:
+        share = state["unreadShare"]
+        _decision(state, "unread-after-waves",
+                  "%d countable line(s) in %d file(s) of the change were left unread by the slice reviewers after %d panel wave(s)"
+                  % (share["unreadLines"], len(share["parts"]), wave))
+    state.pop("_sliceWave", None)
+    state.pop("_sliceWaveRoster", None)
+    _after_panel_findings(state, config, (state.pop("_sliceCarry", None) or []) + this_wave)
 
 
 def _after_panel_findings(state, config, staged):
@@ -13600,8 +13722,8 @@ def _panel_findings_stem(seat_key, occurrence):
     return AGENT_SUFFIX.get(seat_key, seat_key)
 
 
-def _slice_scope_line(slice_id, parts):
-    """The one paragraph that tells a slice seat which parts of the change are its own."""
+def _parts_text(parts):
+    """``file: a-b, c-d; other-file`` for the parts of a change (a file with no range is listed by name)."""
     entries = []
     for part in parts if isinstance(parts, list) else []:
         file = part.get("file") if isinstance(part, dict) else None
@@ -13609,9 +13731,23 @@ def _slice_scope_line(slice_id, parts):
             continue
         ranges = [r for r in part.get("lines") or [] if isinstance(r, (list, tuple)) and len(r) == 2]
         entries.append("%s: %s" % (file, ", ".join("%s-%s" % (r[0], r[1]) for r in ranges)) if ranges else file)
+    return "; ".join(entries)
+
+
+def _slice_scope_line(slice_id, parts):
+    """The one paragraph that tells a slice seat which parts of the change are its own."""
     return ("Your slice: %s. Review only these parts of the change, and return in your read list only what you "
             "read: %s. A file listed with no range is a whole-file change (a deletion or a binary file)."
-            % (slice_id, "; ".join(entries)))
+            % (slice_id, _parts_text(parts)))
+
+
+def _wave_whole_scope_line(state, wave_id):
+    """The scope line of a later wave's whole-change seat: it reads the whole change and covers the wave's risk-touching unread parts too."""
+    rec = next((r for r in state.get("_sliceWaves") or [] if isinstance(r, dict) and "w%s" % r.get("wave") == wave_id), None)
+    if rec is None:
+        raise ValueError("order-render-refused:unknown-wave:%s" % wave_id)
+    return ("Read the whole change. Make sure your read list covers these parts too: %s."
+            % _parts_text(rec.get("riskParts")))
 
 
 def _slice_seat_scope(state, session_dir, rnd, seat_key, occurrence, reviewer_diff_path, native):
@@ -13622,6 +13758,8 @@ def _slice_seat_scope(state, session_dir, rnd, seat_key, occurrence, reviewer_di
     if round_phases.seat_lens(seat_key) == seat_key:
         return reviewer_diff_path, ""
     slice_id = seat_key.partition(":")[2]
+    if not round_phases.is_slice_seat(seat_key):
+        return reviewer_diff_path, _wave_whole_scope_line(state, slice_id)
     plan = state.get("slicePlan") if isinstance(state, dict) else None
     stored = next((s for s in (plan.get("slices") if isinstance(plan, dict) else None) or []
                    if isinstance(s, dict) and s.get("id") == slice_id), None)
@@ -13630,8 +13768,7 @@ def _slice_seat_scope(state, session_dir, rnd, seat_key, occurrence, reviewer_di
     scope_line = _slice_scope_line(slice_id, stored.get("parts"))
     if not native:
         return reviewer_diff_path, scope_line
-    derived = slicing.plan(state.get("reviewedDiff"), state.get("sliceCount"), proven=state.get("provenCopies") or [])
-    found = next((s for s in derived["slices"] if s["id"] == slice_id), None)
+    found = next((s for s in _wave_slices(state) if s["id"] == slice_id), None)
     # axis: a slice seat reads its own diff only when the re-derived plan holds that slice with the stored parts; any mismatch gives the reviewer diff
     if found is None or found["parts"] != stored.get("parts"):
         return reviewer_diff_path, scope_line

@@ -67,6 +67,7 @@ DECISION_KINDS = (
     "synthesis-no-survivors",
     "synthesis-unseatable",
     "unknown-surface",
+    "unread-after-waves",
     "verifier-not-executed",
     "verifier-refuted",
     "verify-fail",

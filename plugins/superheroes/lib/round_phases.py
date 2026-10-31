@@ -66,9 +66,16 @@ def panel_roster(state, config):
     # axis: only a round-1 plan that says it was sliced and lists slices changes the roster; anything else keeps the configured dimensions
     if not (isinstance(plan, dict) and plan.get("sliced") is True) or (isinstance(rnd, int) and rnd > 1):
         return dims
+    # axis: while a later unread wave is open the panel seats only that wave's seats, never the first wave's again
+    wave = state.get("_sliceWave")
+    wave_roster = state.get("_sliceWaveRoster")
+    if (isinstance(wave, int) and not isinstance(wave, bool) and wave > 1 and isinstance(wave_roster, list)
+            and wave_roster and all(isinstance(k, str) and k for k in wave_roster)):
+        return list(wave_roster)
     slices = plan.get("slices")
-    slices = [s for s in slices if isinstance(s, dict) and isinstance(s.get("id"), str) and s["id"]] \
-        if isinstance(slices, list) else []
+    # axis: a slice cut for a later unread wave carries a `wave` mark and is seated only by that wave's roster, never by the first wave's
+    slices = [s for s in slices if isinstance(s, dict) and isinstance(s.get("id"), str) and s["id"]
+              and "wave" not in s] if isinstance(slices, list) else []
     if not slices:
         return dims
     roster = [d for d in dims if d not in SLICED_LENSES]
@@ -80,6 +87,34 @@ def panel_roster(state, config):
         # axis: a slice seats the security lens only when its plan row says it touches a risk area (a row with no `security` key reads as not touching)
         if "security-reviewer" in dims and sl.get("security") is True:
             roster.append("security-reviewer:" + sl["id"])
+    return roster
+
+
+# The lens whose later-wave seat reads the whole change rather than a slice.
+WAVE_WHOLE_LENS = "premortem-reviewer"
+
+
+def is_slice_seat(key):
+    """True for a seat key `<lens>:<slice id>` of a slice seat; the premortem's whole-change wave seat is not one."""
+    return seat_lens(key) != key and seat_lens(key) != WAVE_WHOLE_LENS
+
+
+def wave_roster(dims, new_slices, with_whole):
+    """The seats of one later unread wave: each new slice's own code, test and (when its `security` is true) security seat, then,
+    when ``with_whole``, the one whole-change premortem seat of that wave (`premortem-reviewer:<wave id>`, the wave id being the
+    first part of the slices' ids before `u`)."""
+    roster = []
+    wave_id = ""
+    for sl in new_slices:
+        wave_id = wave_id or sl["id"].partition("u")[0]
+        if "code-reviewer" in dims:
+            roster.append("code-reviewer:" + sl["id"])
+        if "test-role" in dims:
+            roster.append("test-role:" + sl["id"])
+        if "security-reviewer" in dims and sl.get("security") is True:
+            roster.append("security-reviewer:" + sl["id"])
+    if with_whole and wave_id and WAVE_WHOLE_LENS in dims:
+        roster.append("%s:%s" % (WAVE_WHOLE_LENS, wave_id))
     return roster
 
 
