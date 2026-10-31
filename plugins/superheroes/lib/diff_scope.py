@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Map a unified diff to the RIGHT-side line numbers a finding may be anchored to.
 
-`round_driver.mechanical_compile` uses this to drop findings that cite a line
-outside the round diff's hunks (SKILL.md § Compile + Dedupe, step 2). It walks
-`@@` hunk headers so a diff line number is never mistaken for a file line
-number.
+`round_driver.mechanical_compile` uses `parse_touched_lines` to route findings that cite a
+line the PR did not touch to the review record's "Outside this PR" list (SKILL.md § Compile
++ Dedupe, step 2): the touched lines are the added lines plus the head line just before and
+just after each run of deleted lines; context lines are not touched. `parse_diff_lines`
+(added AND context lines) is kept for its other readers. Both walk `@@` hunk headers so a
+diff line number is never mistaken for a file line number.
 
 Provenance, quoted from the deleted module: this parser was carved out of
 `lib/resolve_diff_lines.py` when that module was removed with `--post` (#1121),
@@ -61,3 +63,74 @@ def parse_diff_lines(diff_text):
             else:
                 in_hunk = False
     return valid
+
+
+def parse_touched_lines(diff_text):
+    """Map each RIGHT-side file path to the set of head line numbers the PR touched: every
+    added '+' line, plus, for each run of one or more deleted '-' lines, the head line just
+    before the run (when the hunk has one) and the head line just after it (the line the
+    new-file counter holds when the run ends — it may not exist in the file, which is
+    harmless). Context ' ' lines are NOT touched. Same hunk walking, CRLF handling and
+    '+++ b/' recognition as `parse_diff_lines`."""
+    touched = {}
+    current_file = None
+    new_line = None
+    in_hunk = False
+    have_prev = False  # a head-side line (added or context) already seen in this hunk
+    in_run = False  # inside a run of deleted lines
+
+    def close_run():
+        nonlocal in_run
+        # axis: the head line just after a deletion run counts as touched — see bite-proof record c3_wo_a_outside
+        if in_run and current_file is not None and new_line is not None:
+            touched[current_file].add(new_line)
+        in_run = False
+
+    for raw in diff_text.split("\n"):
+        line = raw[:-1] if raw.endswith("\r") else raw  # CRLF-safe
+        if line.startswith("diff --git"):
+            close_run()
+            in_hunk = False
+            current_file = None
+        elif line.startswith("+++ b/"):
+            close_run()
+            current_file = line[6:]
+            touched.setdefault(current_file, set())
+            in_hunk = False
+        elif line.startswith("+++ "):
+            close_run()
+            current_file = None
+            in_hunk = False
+        elif line.startswith("@@ "):
+            close_run()
+            m = _HUNK_NEWSTART.search(line)
+            if m and current_file:
+                new_line = int(m.group(1))
+                in_hunk = True
+                have_prev = False
+            else:
+                in_hunk = False
+        elif in_hunk and current_file is not None and new_line is not None:
+            if line.startswith("+"):
+                close_run()
+                touched[current_file].add(new_line)
+                new_line += 1
+                have_prev = True
+            elif line.startswith("-"):
+                if not in_run:
+                    in_run = True
+                    # axis: the head line just before a deletion run counts as touched, only when the hunk has one — see bite-proof record c3_wo_a_outside
+                    if have_prev:
+                        touched[current_file].add(new_line - 1)
+            elif line.startswith("\\"):
+                pass  # "\ No newline at end of file" belongs to the line above; it ends nothing
+            elif line.startswith(" "):
+                # axis: a context line is never touched, only the line just after a deletion run is (close_run) — see bite-proof record c3_wo_a_outside
+                close_run()
+                new_line += 1
+                have_prev = True
+            else:
+                close_run()
+                in_hunk = False
+    close_run()
+    return touched
