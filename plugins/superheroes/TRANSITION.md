@@ -52,6 +52,10 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
 
+### Review: a ruling refuses an id that names more than one finding
+
+- **Ambiguous ids.** `round_driver.py rule` refuses `ruling-target-ambiguous` when the ruling's id names more than one finding across the session's verifier attempts (a staged id like `v0` is reused every round and by the second-test pass). The refusal lists the candidate findings and their `findingKey`, and nothing is written. A ruling that names the finding by its `findingKey` binds; a unique id binds as before. Nothing is owed by a consuming project.
+
 ### Review: a finding that repeats an earlier one keeps its outcome
 
 - **Repeat marks.** Code review marks a finding that repeats one of the PR's earlier findings and keeps the earlier outcome, unless the verifier finds it no longer holds. The rule is in [Repeats](skills/review-code/reference/synthesis-pass.md#repeats).
