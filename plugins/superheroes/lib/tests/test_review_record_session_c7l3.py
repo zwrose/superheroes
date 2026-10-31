@@ -408,9 +408,9 @@ def _stopped(tmp_path, cfg, terminal="halted", kind="round-ceiling"):
 
 @pytest.mark.parametrize("cfg,cap", [
     pytest.param({"maxRounds": 3, "maxRoundsAbsolute": 5}, 5, id="named-ceiling"),
-    pytest.param({"maxRounds": 3}, circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE, id="default-ceiling"),
-    pytest.param({"maxRounds": 3, "maxRoundsAbsolute": None}, circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE,
-                 id="unnamed-ceiling"),
+    # 10 is the earlier version's default ceiling, which review_record_session._ceiling reads as a literal
+    pytest.param({"maxRounds": 3}, 10, id="default-ceiling"),
+    pytest.param({"maxRounds": 3, "maxRoundsAbsolute": None}, 10, id="unnamed-ceiling"),
 ])
 def test_a_round_ceiling_stop_names_the_ceiling_not_the_configured_cap(tmp_path, cfg, cap):
     session = _stopped(tmp_path, cfg)

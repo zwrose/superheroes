@@ -580,10 +580,13 @@ def _unit_finding(key, line, severity, *, tradeoff=False, kind="real"):
                 tradeoff=tradeoff, consequenceKind=kind)
 
 
-def _unit_round(findings):
-    """A state with `findings` routed through the driver's own settle entry point."""
+def _unit_round(findings, rulings=()):
+    """A state with `findings` (and any `rulings`, given before the round settles) routed through the
+    driver's own settle entry point."""
     state = RD.new_state()
     RD._set_findings(state, [dict(f) for f in findings])
+    if rulings:
+        _unit_rulings(state, *rulings)
     RD._after_findings_settled(state, state["config"])
     return state
 
@@ -597,50 +600,42 @@ def _unit_batch(state):
     return [row["findingKey"] for row in state.get("_fixBatch") or []]
 
 
-def _unit_gate_ids(state):
-    return RD._judgment_row_ids(state["_judgmentFindings"])
-
-
-@pytest.mark.parametrize("blocker_is_tradeoff", [False, True], ids=["mechanical", "gate-blocker"])
+@pytest.mark.parametrize("blocker_is_tradeoff", [False, True], ids=["mechanical", "held-blocker"])
 def test_an_undecided_product_choice_is_left_for_the_owner(blocker_is_tradeoff):
-    """axis: NO AUTONOMOUS LIFT — an undecided below-blocking product choice never enters the owner
-    gate or a fix batch, and the end-of-loop settle leaves it for the owner."""
+    """axis: NO AUTONOMOUS LIFT — an undecided below-blocking product choice never enters a fix batch,
+    and the end-of-loop settle leaves it for the owner; a blocking one is held and handed back."""
     state = _unit_round([_unit_finding("B", 1, "Important", tradeoff=blocker_is_tradeoff),
                          _unit_finding("M", 2, "Minor", tradeoff=True)])
     if blocker_is_tradeoff:
-        assert state["step"] == RD.P_JUDGMENT
-        assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["B"]
-        RD._fold_judgment(state, state["config"], {"dispositions": [
-            {"id": _unit_gate_ids(state)[0], "disposition": "fix-as-suggested"}]})
-    assert state["step"] == P_FIXER
-    assert _unit_batch(state) == ["B"] and not state.get("_fixQueue")
-    RD._set_terminal(state, "converged")
+        assert state["terminal"] == "handed-back" and state["ownerChoiceHeld"] == ["B"]
+        assert not state.get("_fixBatch")
+    else:
+        assert state["step"] == P_FIXER
+        assert _unit_batch(state) == ["B"] and not state.get("_fixQueue")
+        RD._set_terminal(state, "converged")
     ledger, fault = RD._disposition_ledger_by_key(state)
     assert fault is None
     assert ledger["M"]["disposition"] == "left-for-owner", ledger["M"]
 
 
-def test_a_guided_choice_survives_skipping_the_only_gate_blocker():
-    """axis: OWNER-NAMED — with the gate's only blocker skipped, a product choice a `guidance` ruling
-    names still reaches a fixer through the one resolution point."""
+def test_a_guided_choice_survives_the_only_blocker_being_held():
+    """axis: OWNER-NAMED — with the round's only blocker held for the owner, a product choice a
+    `guidance` ruling names still reaches a fixer through the one resolution point."""
     state = _unit_round([_unit_finding("J", 1, "Important", tradeoff=True),
-                         _unit_finding("M", 2, "Minor", tradeoff=True)])
-    assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["J"]
-    _unit_rulings(state, dict(findingKey="M", ruling="guidance", guidance="apply it"))
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+                         _unit_finding("M", 2, "Minor", tradeoff=True)],
+                        rulings=[dict(findingKey="M", ruling="guidance", guidance="apply it")])
+    assert state["ownerChoiceHeld"] == ["J"]
     assert state["step"] == P_FIXER and _unit_batch(state) == ["M"]
     assert not state.get("terminal")
 
 
-def test_an_undecided_choice_does_not_survive_skipping_the_only_gate_blocker():
-    """axis: NO AUTONOMOUS LIFT — with the gate's only blocker skipped and nothing owner-named, the
-    round settles as it always did: no fix batch, nothing counted as excluded."""
+def test_an_undecided_choice_does_not_survive_the_only_blocker_being_held():
+    """axis: NO AUTONOMOUS LIFT — with the round's only blocker held and nothing owner-named, no fix
+    batch is built, nothing is counted as excluded, and the PR is handed back."""
     state = _unit_round([_unit_finding("J", 1, "Important", tradeoff=True),
                          _unit_finding("M", 2, "Minor", tradeoff=True)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
-    assert state.get("terminal") == "converged"
+    assert state.get("terminal") == "handed-back"
+    assert state["decisions"][-1]["kind"] == "owner-choice-open"
     assert state["step"] != P_FIXER and not state.get("_fixBatch")
     assert "fixBatchExcludedByDischarge" not in state["rounds"]["1"]
     assert not any(d["kind"] == "fix-batch-ruled" for d in state["decisions"])
@@ -648,19 +643,16 @@ def test_an_undecided_choice_does_not_survive_skipping_the_only_gate_blocker():
 
 @pytest.mark.parametrize("target,other", [("Q", "M"), ("M", "Q")], ids=["quality", "choice"])
 def test_the_fixer_receives_only_the_owner_named_minor(target, other):
-    """axis: OWNER-NAMED — with the mechanical blocker ruled out and the gate's blocker skipped, the
+    """axis: OWNER-NAMED — with the mechanical blocker ruled out and the other blocker held, the
     fixer batch holds the one Minor an owner decision names and never the other."""
     state = _unit_round([
         _unit_finding("B", 1, "Important"),
         _unit_finding("J", 2, "Important", tradeoff=True),
         _unit_finding("M", 3, "Minor", tradeoff=True),
-        _unit_finding("Q", 4, "Minor", kind="code-quality")])
-    assert [r["findingKey"] for r in state["_judgmentFindings"]] == ["J"]
-    assert [r["findingKey"] for r in state["_judgmentMechanical"]] == ["B"]
-    _unit_rulings(state, dict(findingKey="B", ruling="out-of-scope"),
-                  dict(findingKey=target, ruling="guidance", guidance="apply it"))
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _unit_gate_ids(state)[0], "disposition": "skip", "reason": "keep current"}]})
+        _unit_finding("Q", 4, "Minor", kind="code-quality")],
+        rulings=[dict(findingKey="B", ruling="out-of-scope"),
+                 dict(findingKey=target, ruling="guidance", guidance="apply it")])
+    assert state["ownerChoiceHeld"] == ["J"]
     assert state["step"] == P_FIXER
     assert _unit_batch(state) == [target]
     assert other not in _unit_batch(state) + [r["findingKey"] for r in state.get("_fixQueue") or []]

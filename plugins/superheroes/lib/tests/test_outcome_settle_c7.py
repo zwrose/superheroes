@@ -145,7 +145,7 @@ def _capped_seams():
 
 def test_t2_real_important_open_at_the_round_cap_is_left_for_owner(sources_calls):
     result, state = TRD._run_loop_capturing_state(_capped_seams(), TRD._cfg_cert(maxRounds=1))
-    assert state["terminal"] == "capped-with-open-blocker"
+    assert state["terminal"] == "handed-back"
     row = _row(state, "Bug")
     assert row["disposition"] == "left-for-owner"
     assert "round cap" in row["settledReason"]
@@ -193,7 +193,7 @@ def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
     assert second["disposition"] != "fixed", (second, state["rounds"])
     assert second["disposition"] == "left-for-owner", second
     assert "round cap" in second["settledReason"]
-    assert state["terminal"] == "capped-with-open-blocker"
+    assert state["terminal"] == "handed-back"
 
 
 # --- T3 / T10: rulings that cite a decision ---------------------------------------------------
@@ -636,8 +636,8 @@ def test_an_unreadable_ledger_settles_nothing_and_records_why(monkeypatch):
 
 def test_a_cap_stop_states_the_round_cap_whatever_the_verdict(sources_calls):
     state = _staged_state([_finding("Real", 1, "Important", "real")])
-    RD._park_round_ceiling(state, "ceiling")
-    assert state["terminal"] == "halted"
+    RD._hand_back(state, "round-cap", "cap", cap=True)
+    assert state["terminal"] == "handed-back"
     assert _row(state, "Real")["settledReason"] == "still open when the loop reached its round cap"
 
 

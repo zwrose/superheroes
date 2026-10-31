@@ -93,20 +93,6 @@ def _drive_until_audits_round(session_dir, gitdir, findings, head_path, target_r
         if pend["phase"] == P_AUDITS:
             out = _complete_audits_not_discharged(session_dir, gitdir)
             assert out["ok"], out
-        elif pend["phase"] == round_driver.P_STALL:
-            art = {"choice": round_driver.ONE_MORE_ROUND_CHOICE}
-            path = os.path.join(session_dir, "stall-artifact.json")
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(art, fh)
-            out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir),
-                                          owner_artifact_path=path)
-            if not out.get("ok") and out.get("reason") == "fold-refused":
-                art = {"choice": round_driver.HOLD_CHOICE}
-                with open(path, "w", encoding="utf-8") as fh:
-                    json.dump(art, fh)
-                out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir),
-                                              owner_artifact_path=path)
-            assert out["ok"], out
         else:
             phase, out = _drive_one_phase(session_dir, gitdir, findings, head_path)
             assert out["ok"], (phase, out)

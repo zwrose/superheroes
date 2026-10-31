@@ -602,8 +602,9 @@ def test_refusals(tmp_path, make, reason):
 @pytest.mark.parametrize("terminal,decision,max_rounds,cap,kind,stopped", [
     ("capped-with-open-blocker", None, 3, 3, "rounds", True),
     ("capped-with-open-critical", None, None, None, "rounds", True),
-    # a round-ceiling stop names the ceiling the driver applied (the default one here), not the configured cap
-    ("halted", "round-ceiling", 3, circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE, "ceiling", True),
+    # a round-ceiling stop names the ceiling the driver applied (the default one here), not the configured cap;
+    # 10 is the earlier version's default ceiling, which review_record_session._ceiling reads as a literal
+    ("halted", "round-ceiling", 3, 10, "ceiling", True),
     ("halted", "something-else", 3, 3, "rounds", False),
     ("converged", None, True, None, "rounds", False)])
 def test_rounds_report_the_count_the_cap_and_whether_the_cap_stopped_it(tmp_path, terminal, decision, max_rounds, cap,

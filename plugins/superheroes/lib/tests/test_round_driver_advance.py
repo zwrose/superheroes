@@ -1706,12 +1706,8 @@ def test_orchestrator_fulfilled_phase_census():
         RP.P_FIXER,
     }
     orchestrator_phases = {RP.P_VERIFY}
-    owner_gate_phases = {RP.P_JUDGMENT, RP.P_STALL}
     terminal_phases = {RP.P_TERMINAL}
     for phase in RP.ALL_PHASES:
-        if phase in owner_gate_phases:
-            assert not RA.is_orchestrator_fulfilled(phase)
-            continue
         if phase in terminal_phases:
             assert not RA.is_orchestrator_fulfilled(phase)
             continue
@@ -1723,7 +1719,7 @@ def test_orchestrator_fulfilled_phase_census():
             continue
         raise AssertionError("unclassified phase %r — extend the census" % phase)
     assert len(RP.ALL_PHASES) == (len(seat_phases) + len(orchestrator_phases)
-                                  + len(owner_gate_phases) + len(terminal_phases))
+                                  + len(terminal_phases))
 
 
 def test_advance_folds_run_verify_from_host_payload_without_manifest(tmp_path, adapters):
@@ -2529,477 +2525,6 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     assert _advance(d, tmp_path)["ok"] is True
 
 
-@pytest.mark.parametrize("phase,reason", [
-    (RD.P_JUDGMENT, "advance-judgment-park"),
-    (RD.P_STALL, "advance-stall-park"),
-], ids=["judgment", "stall"])
-def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, phase, reason):
-    """A/B — the same `advance` on a dispatch phase folds; without a calibration overlay the two
-    OWNER gates park because the shipped default pre-authorizes nothing."""
-    ok_session = _session(tmp_path, name="folds-" + reason)
-    _record_all_panel_seats(ok_session)
-    assert _advance(ok_session, tmp_path)["ok"] is True
-
-    d = _session(tmp_path, name="park-" + reason)
-    state = _state(d)
-    state["step"] = phase
-    state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
-    state["config"]["repoRoot"] = _repo_without_gate_policy(tmp_path)
-    if phase == RD.P_JUDGMENT:
-        state["_judgmentFindings"] = [
-            {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
-             "tradeoff": True}]
-        state["_judgmentMechanical"] = []
-    if phase == RD.P_STALL:
-        state["_stallChoices"] = [c for c in RD.STALL_CHOICES if c != "accept-the-disclosed-risk"]
-        state["_acceptRiskEligible"] = False
-    RD.save_state(d, state)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == reason
-    if phase == RD.P_JUDGMENT:
-        assert out["detail"] == "gate-policy-unmatched-class:judgment:important"
-    else:
-        assert out["detail"] == "gate-policy-unmatched-class:stall:accept-risk-ineligible"
-    parks = [e for e in _journal(d) if e.get("reason") == reason]
-    assert parks and parks[-1]["fault"] == RD.FAULT_CALLER
-
-
-def test_run_loop_judgment_default_is_unchanged(tmp_path):
-    """The advance-path park is a change on the ADVANCE path only. `run_loop`'s library default —
-    no judgment gate wired → fix every judgment finding as suggested — must still do exactly that."""
-    payload = {"findings": [{"id": "f1"}, {"id": "f2"}]}
-    assert RD._run_seam({"io": {}}, RD.P_JUDGMENT, payload, RD.new_state(_cfg()), _cfg()) == {
-        "dispositions": [{"id": "f1", "disposition": "fix-as-suggested"},
-                         {"id": "f2", "disposition": "fix-as-suggested"}]}
-
-
-# =============================================================================================
-# §4b gate-policy auto-advance (#723 WO-7)
-# =============================================================================================
-
-def _load_core_md():
-    path = os.path.join(_LIB, "core_md.py")
-    spec = importlib.util.spec_from_file_location("core_md_advance", path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-def _repo_with_gate_policy(tmp_path, rules):
-    cm = _load_core_md()
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo)
-    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
-    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
-    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
-    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
-    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
-    in_repo = os.path.join(repo, ".claude", "superheroes", "core.md")
-    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
-    with open(in_repo, "w", encoding="utf-8") as fh:
-        fh.write(cm.render_core(facts, "confirmed", "2026-01-01", "2026-01-01"))
-    policy = {"schema": "gate-policy/1", "default": "park", "rules": rules}
-    assert cm.write_review_gate_policy(repo, policy, root=None)["action"] == "written"
-    return repo
-
-
-def _repo_without_gate_policy(tmp_path):
-    cm = _load_core_md()
-    repo = str(tmp_path / "repo-no-policy")
-    os.makedirs(repo)
-    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
-    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
-    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
-    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
-    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
-    in_repo = os.path.join(repo, ".claude", "superheroes", "core.md")
-    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
-    with open(in_repo, "w", encoding="utf-8") as fh:
-        fh.write(cm.render_core(facts, "confirmed", "2026-01-01", "2026-01-01"))
-    return repo
-
-
-def _parked_at_owner_gate(tmp_path, adapters, phase, name=None):
-    label = name or ("park-" + phase)
-    d = _session(tmp_path, name=label)
-    state = _state(d)
-    state["step"] = phase
-    state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
-    if phase == RD.P_JUDGMENT:
-        state["_judgmentFindings"] = [
-            {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
-             "tradeoff": True}]
-        state["_judgmentMechanical"] = []
-    if phase == RD.P_STALL:
-        state["_stallChoices"] = list(RD.STALL_CHOICES)
-        state["_acceptRiskEligible"] = False
-    RD.save_state(d, state)
-    return d
-
-
-def _judgment_session_with_repo(tmp_path, adapters, repo, severity="Important", name="judgment"):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_JUDGMENT, name=name)
-    state = _state(d)
-    state["config"]["repoRoot"] = repo
-    state["_judgmentFindings"] = [
-        {"title": "widen the API", "severity": severity, "file": "f.py", "line": 1, "tradeoff": True}]
-    RD.save_state(d, state)
-    return d
-
-
-def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    assert out.get("policyApplied") is not None
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
-    assert out["policyApplied"]["action"] == {"dispositions": [
-        {"findingClass": "judgment:important", "disposition": "skip"}]}
-    assert _state(d)["terminal"] == "converged"
-    found = [p for p in os.listdir(os.path.join(d, "round-1")) if p.startswith("gate-policy.")]
-    assert found, "expected gate-policy archive under round-1"
-    receipt = RD.build_receipt(_state(d), d)
-    assert receipt.get("policyApplied")
-
-
-def test_advance_judgment_colliding_identity_severity_policy_dispositions_not_collapse(
-        tmp_path, adapters):
-    """Fixtures are two tradeoff findings at one location whose long titles agree past the title
-    clamp (alpha/bravo suffixes) and separate by the content-hash disambiguator; severity is what
-    the assertion then reads per row — severity is not the distinguishing axis."""
-    repo = _repo_with_gate_policy(tmp_path, [
-        {"gate": "present-judgment", "findingClass": "judgment:critical",
-         "disposition": "fix-as-suggested"},
-        {"gate": "present-judgment", "findingClass": "judgment:important",
-         "disposition": "skip"},
-    ])
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_JUDGMENT, name="judgment-collide")
-    state = _state(d)
-    state["config"]["repoRoot"] = repo
-    state["_judgmentFindings"] = [
-        {"title": "widen the API " + "x" * 205 + " alpha", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
-        {"title": "widen the API " + "x" * 205 + " bravo", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
-    ]
-    RD.save_state(d, state)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    after = _state(d)
-    assert after["step"] == RD.P_FIXER
-    assert [f["severity"] for f in after["_fixBatch"]] == ["Critical"]
-    assert [s["severity"] for s in after.get("_skippedBlockers") or []] == ["Important"]
-
-
-def test_advance_judgment_partial_match_parks(tmp_path, adapters):
-    """Fail-closed edge 1: some rows match and some do not → park with advance-judgment-park."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo)
-    state = _state(d)
-    state["_judgmentFindings"].append(
-        {"title": "other", "severity": "Minor", "file": "g.py", "line": 2, "tradeoff": True})
-    RD.save_state(d, state)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    assert out["detail"] == "gate-policy-unmatched-class:judgment:minor"
-
-
-def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters):
-    """Fail-closed edge 3: unreadable calibration overlay → park."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    core_path = os.path.join(repo, ".claude", "superheroes", "core.md")
-    with open(core_path, "w", encoding="utf-8") as fh:
-        fh.write("{{{corrupt core\n")
-    d = _judgment_session_with_repo(tmp_path, adapters, repo)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    assert out["detail"].startswith("gate-policy-calibration-unreadable")
-
-
-def test_advance_judgment_calibration_absent_parks(tmp_path, adapters):
-    """Calibration absent (no core.md) → park with gate-policy-calibration-absent."""
-    repo = str(tmp_path / "repo-no-core")
-    os.makedirs(repo)
-    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
-    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
-    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
-    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="judgment-absent")
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    assert out["detail"] == "gate-policy-calibration-absent"
-
-
-def test_advance_judgment_calibration_refused_parks(tmp_path, adapters, monkeypatch):
-    """Unregistered calibration refusal status → park with gate-policy-calibration-refused."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="judgment-refused")
-    cm = _load_core_md()
-    unknown_status = "unregistered-calibration-refusal"
-    with pytest.raises(KeyError):
-        cm.gate_refusal_reason_for_status(unknown_status)
-
-    def fake_overlay(_config):
-        return cm.ReviewGatePolicyGate(unknown_status, None, None)
-
-    monkeypatch.setattr(RD, "_gate_policy_overlay_from_config", fake_overlay)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    assert out["detail"] == "gate-policy-calibration-refused"
-
-
-def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monkeypatch):
-    """Fail-closed edge 4: shipped policy file missing with no overlay → park."""
-    repo = _repo_without_gate_policy(tmp_path)
-    d = _judgment_session_with_repo(tmp_path, adapters, repo)
-    import review_gate_policy as rgp
-
-    def missing_layer(path=None):
-        return {"ok": False, "reason": "gate-policy-shipped-missing", "layer": None}
-
-    monkeypatch.setattr(rgp, "load_shipped_layer", missing_layer)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    assert out["detail"] == "gate-policy-no-valid-layer"
-
-
-_CONFIRMED_STALL_TARGET = {"id": "v0", "title": "bug", "severity": "Important", "file": "f.py",
-                           "line": 1, "verdict": "CONFIRMED", "evidence": "tests pass"}
-
-
-def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
-    """Stall gate authorized advance via accept-the-disclosed-risk when eligible."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-stall-menu",
-        "findingClass": "stall:accept-risk-eligible",
-        "disposition": "accept-the-disclosed-risk",
-    }])
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL)
-    state = _state(d)
-    state["config"]["repoRoot"] = repo
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = [dict(_CONFIRMED_STALL_TARGET)]
-    RD.save_state(d, state)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    assert out.get("policyApplied") is not None
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
-    assert out["policyApplied"]["action"] == {"choice": "accept-the-disclosed-risk"}
-    assert _state(d)["terminal"] == "converged"
-    receipt_path = os.path.join(d, RD.RECEIPT_FILE)
-    with open(receipt_path, encoding="utf-8") as fh:
-        on_disk = json.load(fh)
-    assert on_disk.get("policyApplied")
-    assert on_disk["policyApplied"][-1]["action"] == {"choice": "accept-the-disclosed-risk"}
-
-
-def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):
-    """Fail-closed edge 2: accept-the-disclosed-risk is not offerable for ineligible stall class."""
-    cm = _load_core_md()
-    repo = _repo_with_gate_policy(tmp_path, [])
-    invalid = {
-        "schema": "gate-policy/1",
-        "default": "park",
-        "rules": [{
-            "gate": "present-stall-menu",
-            "findingClass": "stall:accept-risk-ineligible",
-            "disposition": "accept-the-disclosed-risk",
-        }],
-    }
-    assert cm.write_review_gate_policy(repo, invalid, root=None)["action"] == "refused"
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL)
-    state = _state(d)
-    state["config"]["repoRoot"] = repo
-    RD.save_state(d, state)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-stall-park"
-    assert out["detail"] == "gate-policy-unmatched-class:stall:accept-risk-ineligible"
-
-
-def _allowed_gate_policy_layer_sources(repo):
-    cm = _load_core_md()
-    import review_gate_policy as rgp
-    return {cm.core_path(repo, root=None), rgp.gate_policy_path()}
-
-
-def test_advance_has_no_caller_supplied_policy_route(tmp_path, adapters):
-    """Gate policy is calibration-only — no advance flag may inject rules."""
-    parser = RD.build_parser()
-    for _path, action in __import__("cli_contract").iter_caller_supplied_actions(parser):
-        assert "policy" not in action.dest
-        for opt in action.option_strings:
-            assert "policy" not in opt.lower()
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="policy-sources")
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    allowed = _allowed_gate_policy_layer_sources(repo)
-    for layer in out["policyApplied"]["layers"]:
-        assert layer.get("source") in allowed, layer
-
-
-def test_advance_owner_gate_policy_applied_commits_state_and_journal(tmp_path, adapters, monkeypatch):
-    """Policy-applied durable record bundles state + journal in one commit."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="policy-commit")
-    seen = []
-    real_begin = RD.round_commit.begin
-
-    def track_begin(session_dir, kind, **kw):
-        commit = real_begin(session_dir, kind, **kw)
-        seen.append((kind, commit))
-        return commit
-
-    monkeypatch.setattr(RD.round_commit, "begin", track_begin)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    commit_kinds = [kind for kind, _commit in seen]
-    assert "advance-policy-applied" not in commit_kinds
-    accepts = [c for kind, c in seen if kind == "submit-accept"]
-    assert len(accepts) == 1, commit_kinds
-    journals = [p for p in accepts[0]._parts if p.get("type") == "journal-append"]
-    assert any((j.get("entry") or {}).get("outcome") == "accepted" for j in journals), journals
-    assert any((j.get("entry") or {}).get("outcome") == "advanced"
-               and (j.get("entry") or {}).get("policyApplied") for j in journals), journals
-
-
-def test_policy_applied_records_match_and_action_not_identities_only(tmp_path, adapters):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "fix-as-suggested",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True
-    applied = out["policyApplied"]
-    assert applied["matches"]
-    assert applied["matches"][0].get("rule")
-    assert applied["action"]
-    assert _state(d)["step"] == RD.P_FIXER
-
-
-def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adapters, monkeypatch):
-    """Policy staging is durable only after a successful fold — refused folds keep submit open."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "fix-as-suggested",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="fold-refused")
-    real_submit = RD.cmd_submit
-
-    def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-                    _pending_policy_applied=None, _policy_journal_entry=None, _durable_record=None):
-        if _via_advance:
-            return {"ok": False, "reason": "test-fold-refused"}
-        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
-                           _via_advance=_via_advance,
-                           _pending_policy_applied=_pending_policy_applied,
-                           _policy_journal_entry=_policy_journal_entry,
-                           _durable_record=_durable_record)
-
-    monkeypatch.setattr(RD, "cmd_submit", refuse_once)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "fold-refused"
-    assert out["detail"] == "test-fold-refused"
-    state = _state(d)
-    assert state.get("_advanceUsed") is not True
-    assert not state.get("_policyApplied")
-    receipt = RD.build_receipt(state, d)
-    assert not receipt.get("policyApplied")
-    pend = RD.cmd_next(d)
-    hand = RD.cmd_submit(d, pend["phase"], pend["attempt"], pend["expectedStateHash"],
-                         {"dispositions": [
-                             {"id": RD._finding_key_of(state["_judgmentFindings"][0]),
-                              "disposition": "fix-as-suggested"},
-                         ]})
-    assert hand["ok"] is True, hand
-
-
-def test_stall_accept_risk_terminal_receipt_on_disk_carries_policy_applied(tmp_path, adapters):
-    """FX-4B-4 detector 1: stall accept-the-disclosed-risk converges inside the fold and the
-    write-once terminal receipt must carry policyApplied — assert against the on-disk file, not
-    in-memory state."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-stall-menu",
-        "findingClass": "stall:accept-risk-eligible",
-        "disposition": "accept-the-disclosed-risk",
-    }])
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="stall-receipt-provenance")
-    state = _state(d)
-    state["config"]["repoRoot"] = repo
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = [dict(_CONFIRMED_STALL_TARGET)]
-    RD.save_state(d, state)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    assert _state(d)["terminal"] == "converged"
-    receipt_path = os.path.join(d, RD.RECEIPT_FILE)
-    assert os.path.isfile(receipt_path), "terminal receipt must be on disk"
-    with open(receipt_path, encoding="utf-8") as fh:
-        on_disk = json.load(fh)
-    policy = on_disk.get("policyApplied")
-    assert policy, "on-disk round-receipt.json must carry policyApplied"
-    assert policy[-1]["phase"] == RD.P_STALL
-    assert policy[-1]["action"] == {"choice": "accept-the-disclosed-risk"}
-
-
-def test_owner_gate_fold_refused_leaves_no_policy_applied_durable_record(tmp_path, adapters,
-                                                                         monkeypatch):
-    """FX-4B-4 detector 2: a fold-refused owner-gate advance must leave no durable record claiming
-    policy was applied — not in state, not in any receipt, not in the journal."""
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "fix-as-suggested",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="fold-refused-no-claim")
-    real_submit = RD.cmd_submit
-
-    def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-                    _pending_policy_applied=None, _policy_journal_entry=None, _durable_record=None):
-        if _via_advance:
-            return {"ok": False, "reason": "test-fold-refused"}
-        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
-                           _via_advance=_via_advance,
-                           _pending_policy_applied=_pending_policy_applied,
-                           _policy_journal_entry=_policy_journal_entry,
-                           _durable_record=_durable_record)
-
-    monkeypatch.setattr(RD, "cmd_submit", refuse_once)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "fold-refused"
-    state = _state(d)
-    assert not state.get("_policyApplied")
-    assert not RD.build_receipt(state, d).get("policyApplied")
-    assert not _receipt_on_disk_policy_applied(d)
-    assert not _journal_events_claiming_policy_applied(d)
-
-
 def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):
     """A/B — a pure-advance session advances, and a pure-submit session submits; MIXING the two
     within one session is refused loudly and journalled, in both directions."""
@@ -3020,227 +2545,6 @@ def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):
     RD.cmd_next(submitted)
     out = _advance(submitted, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
-
-
-# =============================================================================================
-# §4c advance --owner-artifact (#1061 WO-B)
-# =============================================================================================
-
-def _write_owner_artifact(tmp_path, artifact, name="owner-artifact.json"):
-    path = str(tmp_path / name)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(artifact, fh)
-    return path
-
-
-def _judgment_dispositions_artifact(state):
-    finding = state["_judgmentFindings"][0]
-    return {"dispositions": [{"id": RD._finding_key_of(finding),
-                              "disposition": "fix-as-suggested"}]}
-
-
-def _set_advance_used(session_dir):
-    state = _state(session_dir)
-    state["_advanceUsed"] = True
-    RD.save_state(session_dir, state)
-
-
-def test_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters):
-    repo = _repo_without_gate_policy(tmp_path)
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="owner-artifact-judgment")
-    _set_advance_used(d)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    artifact = _judgment_dispositions_artifact(_state(d))
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
-    assert out["ok"] is True, out
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
-    assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
-        RD._canonical(artifact).encode("utf-8")).hexdigest()
-    assert _state(d)["step"] == RD.P_FIXER
-    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
-    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
-
-
-def test_advance_owner_artifact_well_formed_provenance_yields_owner_supplied(tmp_path, adapters):
-    repo = _repo_without_gate_policy(tmp_path)
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="owner-artifact-judgment-provenance")
-    _set_advance_used(d)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    artifact = _judgment_dispositions_artifact(_state(d))
-    artifact["_provenance"] = {
-        "ruledBy": "owner",
-        "ruledAt": "2026-08-26T00:00:00Z",
-        "records": ["gate-ruling.json"],
-    }
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
-    assert out["ok"] is True, out
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
-    assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
-        RD._canonical(artifact).encode("utf-8")).hexdigest()
-    assert _state(d)["step"] == RD.P_FIXER
-    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
-    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
-
-
-def test_main_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters, capsys):
-    """``advance --owner-artifact`` through ``main()`` argv, not only ``cmd_advance`` kwargs."""
-    repo = _repo_without_gate_policy(tmp_path)
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="main-owner-artifact-judgment")
-    _set_advance_used(d)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
-    artifact = _judgment_dispositions_artifact(_state(d))
-    path = _write_owner_artifact(tmp_path, artifact)
-    rc = RD.main(["advance", "--session-dir", d, "--owner-artifact", path])
-    captured = capsys.readouterr()
-    out = json.loads(captured.out.strip())
-    assert rc == 0, (rc, out)
-    assert out["ok"] is True, out
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
-    assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
-        RD._canonical(artifact).encode("utf-8")).hexdigest()
-    assert _state(d)["step"] == RD.P_FIXER
-    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
-    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
-
-
-def test_advance_owner_artifact_stall_closes_dead_end(tmp_path, adapters):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-stall")
-    _set_advance_used(d)
-    artifact = {"choice": RD.HOLD_CHOICE}
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
-    assert out["ok"] is True, out
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_UNATTRIBUTED
-    assert _state(d)["terminal"] == "held"
-
-
-def test_advance_owner_artifact_runs_stall_chokepoint(tmp_path, adapters):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-stall-guard")
-    _set_advance_used(d)
-    bad = {"choice": "not-on-menu"}
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
-    assert out["ok"] is False and out["reason"] == "fold-refused"
-    assert out["detail"] == "%snot-on-menu" % RD.STALL_CHOICE_NOT_OFFERED_PREFIX
-    assert _state(d)["pending"]["phase"] == RD.P_STALL
-    good = {"choice": RD.HOLD_CHOICE}
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, good, "good.json"))
-    assert out["ok"] is True, out
-
-
-@pytest.mark.parametrize("bad_artifact", [
-    pytest.param({}, id="absent"),
-    pytest.param({"choice": None}, id="null"),
-    pytest.param({"choice": 5}, id="non-string"),
-])
-def test_advance_owner_artifact_missing_choice_refused_not_folded(tmp_path, adapters, bad_artifact):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-missing-choice")
-    _set_advance_used(d)
-    out = _advance(d, tmp_path,
-                   owner_artifact_path=_write_owner_artifact(tmp_path, bad_artifact, "bad.json"))
-    assert out["ok"] is False and out["reason"] == "fold-refused"
-    assert out["detail"] == RD.STALL_CHOICE_MISSING
-    assert not _state(d).get("terminal")
-    assert _state(d)["pending"]["phase"] == RD.P_STALL
-    good = {"choice": RD.HOLD_CHOICE}
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, good, "good.json"))
-    assert out["ok"] is True, out
-
-
-def test_advance_owner_artifact_retired_choice_still_wins(tmp_path, adapters):
-    retired = RD.RETIRED_STALL_CHOICES[0]
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-retired-choice")
-    _set_advance_used(d)
-    bad = {"choice": retired}
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
-    assert out["ok"] is False and out["reason"] == "fold-refused"
-    assert out["detail"] == "%s%s" % (RD.RETIRED_STALL_CHOICE_PREFIX, retired)
-
-
-def test_advance_owner_artifact_off_menu_choice_still_wins(tmp_path, adapters):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-off-menu-choice")
-    _set_advance_used(d)
-    bad = {"choice": "not-on-menu"}
-    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
-    assert out["ok"] is False and out["reason"] == "fold-refused"
-    assert out["detail"] == "%snot-on-menu" % RD.STALL_CHOICE_NOT_OFFERED_PREFIX
-
-
-def test_advance_owner_artifact_terminal_refusal(tmp_path, adapters):
-    gitdir = _gitdir(tmp_path, "owner-artifact-terminal")
-    d = _session(tmp_path, name="owner-artifact-terminal", **SYNTHESIS_SEATABLE)
-    _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
-    path = _write_owner_artifact(tmp_path, {"choice": RD.HOLD_CHOICE})
-    out = _advance(d, tmp_path, owner_artifact_path=path)
-    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_TERMINAL_REFUSAL
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True and out.get("idempotent") is True
-
-
-def test_advance_owner_artifact_submit_used_refuses_before_io(tmp_path, adapters):
-    d = _session(tmp_path, name="owner-artifact-submit-used")
-    state = _state(d)
-    state["_submitUsed"] = True
-    state["step"] = RD.P_STALL
-    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL, "attempt": 0,
-                        "payload": {}}
-    state["_stallChoices"] = list(RD.STALL_CHOICES)
-    RD.save_state(d, state)
-    missing = str(tmp_path / "does-not-exist.json")
-    assert not os.path.exists(missing)
-    out = _advance(d, tmp_path, owner_artifact_path=missing)
-    assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
-    assert not os.path.exists(missing)
-
-
-def test_advance_owner_artifact_seat_phase_refuses_before_io(tmp_path, adapters):
-    d = _session(tmp_path, name="owner-artifact-seat")
-    _set_advance_used(d)
-    missing = str(tmp_path / "does-not-exist-seat.json")
-    assert not os.path.exists(missing)
-    out = _advance(d, tmp_path, owner_artifact_path=missing)
-    assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
-    assert not os.path.exists(missing)
-
-
-def test_advance_owner_artifact_unreadable_missing_file(tmp_path, adapters):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-missing")
-    missing = str(tmp_path / "missing-owner-artifact.json")
-    out = _advance(d, tmp_path, owner_artifact_path=missing)
-    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_UNREADABLE_REFUSAL
-
-
-def test_advance_owner_artifact_unreadable_invalid_json(tmp_path, adapters):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-bad-json")
-    path = str(tmp_path / "bad.json")
-    with open(path, "w", encoding="utf-8") as fh:
-        fh.write("{not json")
-    out = _advance(d, tmp_path, owner_artifact_path=path)
-    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_UNREADABLE_REFUSAL
-
-
-def test_advance_owner_artifact_shape_refusal_json_list(tmp_path, adapters):
-    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-list")
-    path = _write_owner_artifact(tmp_path, [1, 2, 3], "list.json")
-    out = _advance(d, tmp_path, owner_artifact_path=path)
-    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_SHAPE_REFUSAL
-
-
-def test_advance_calibration_path_policy_applied_source_gate_policy(tmp_path, adapters):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="gate-policy-source")
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
-    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
-    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
-    on_disk = _receipt_on_disk_policy_applied(d)
-    assert on_disk[-1]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
 
 
 # =============================================================================================
@@ -3958,15 +3262,15 @@ def test_receipt_state_writes_census_red_on_post_fold_probe_write():
     receipt_keys = _literal_state_keys_read_in_function(build_receipt, ast_mod, func_index)
     assert probe_key in receipt_keys
     bad = _functions_assigning_state_key(probed_tree, ast_mod, probe_key) & post_fold_callers
-    assert bad == {"_advance_owner_gate"}, bad
+    assert bad == {"_advance_orchestrator_fulfilled_locked"}, bad
 
 
 # =============================================================================================
-# round-ceiling advance park — honest notFolded receipts (#1030, ruling 23-b)
+# round-cap advance hand-back — honest notFolded receipts (#1030, ruling 23-b)
 # =============================================================================================
 
-_CEILING_FIXTURE_CEILING = 10
-_CEILING_FIXTURE_REACHED = 11
+_CEILING_FIXTURE_CEILING = 4
+_CEILING_FIXTURE_REACHED = 5
 
 
 def _above_ceiling_state_baseline(state, reached_round):
@@ -3980,8 +3284,7 @@ def _above_ceiling_state_baseline(state, reached_round):
 def _above_ceiling_orchestrator_session(tmp_path, adapters,
                                         ceiling=_CEILING_FIXTURE_CEILING,
                                         reached_round=_CEILING_FIXTURE_REACHED):
-    d = _session(tmp_path, name="ceil-orch",
-                 maxRoundsAbsolute=ceiling, maxRounds=7)
+    d = _session(tmp_path, name="ceil-orch", maxRounds=ceiling)
     state = _state(d)
     _above_ceiling_state_baseline(state, reached_round)
     state["step"] = RD.P_VERIFY
@@ -3992,27 +3295,10 @@ def _above_ceiling_orchestrator_session(tmp_path, adapters,
     return d
 
 
-def _above_ceiling_owner_gate_session(tmp_path, adapters, phase=RD.P_JUDGMENT,
-                                      ceiling=_CEILING_FIXTURE_CEILING,
-                                      reached_round=_CEILING_FIXTURE_REACHED):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="ceil-owner")
-    state = _state(d)
-    state["round"] = reached_round
-    state["pending"]["round"] = reached_round
-    RD.save_state(d, state)
-    return d
-
-
 def _above_ceiling_panel_session(tmp_path, adapters,
                                  ceiling=_CEILING_FIXTURE_CEILING,
                                  reached_round=_CEILING_FIXTURE_REACHED):
-    d = _session(tmp_path, name="ceil-panel",
-                 maxRoundsAbsolute=ceiling, maxRounds=7)
+    d = _session(tmp_path, name="ceil-panel", maxRounds=ceiling)
     state = _state(d)
     _above_ceiling_state_baseline(state, reached_round)
     state["step"] = RD.P_PANEL
@@ -4029,8 +3315,8 @@ def _advance_rows_for_step(session_dir, phase, rnd, attempt):
             and e.get("round") == rnd and e.get("attempt") == attempt]
 
 
-def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
-    """Loaded state above the ceiling parks through _advance_orchestrator_fulfilled_locked honestly."""
+def test_orchestrator_fulfilled_locked_hands_back_honestly_above_round_cap(tmp_path, adapters):
+    """Loaded state above the cap hands back through _advance_orchestrator_fulfilled_locked honestly."""
     ceiling = _CEILING_FIXTURE_CEILING
     reached_round = _CEILING_FIXTURE_REACHED
     assert reached_round == ceiling + 1, "fixture must distinguish ceiling from round reached"
@@ -4041,17 +3327,17 @@ def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_pa
     phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
     last_accepted_before = copy.deepcopy(state.get("lastAccepted"))
     config = state.get("config") or {}
-    assert config["maxRoundsAbsolute"] == ceiling
+    assert config["maxRounds"] == ceiling
     assert rnd == reached_round
     out = RD._advance_orchestrator_fulfilled_locked(
         d, state, phase, rnd, attempt, config, git=_fake_git(_gitdir(tmp_path)))
     assert out["ok"] is True
     assert "folded" not in out
-    assert out["notFolded"]["reason"] == "round-ceiling"
+    assert out["notFolded"]["reason"] == "round-cap"
     assert out["notFolded"]["phase"] == phase
     assert out["notFolded"]["round"] == rnd
     assert out["notFolded"]["attempt"] == attempt
-    assert out["terminal"] == "halted"
+    assert out["terminal"] == "handed-back"
     reloaded = _state(d)
     assert reloaded["certification"]["shape"] is None
     rows = _advance_rows_for_step(d, phase, rnd, attempt)
@@ -4063,26 +3349,8 @@ def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_pa
     assert not os.path.exists(_verify_store_path(d, rnd=rnd))
 
 
-def test_advance_owner_gate_parks_honestly_above_round_ceiling(tmp_path, adapters):
-    """Loaded state above the ceiling parks through _advance_owner_gate without a folded receipt."""
-    d = _above_ceiling_owner_gate_session(tmp_path, adapters)
-    state = _state(d)
-    pend = state["pending"]
-    phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
-    config = state.get("config") or {}
-    out = RD._advance_owner_gate(d, state, phase, rnd, attempt, config,
-                                 git=_fake_git(_gitdir(tmp_path)))
-    assert out["ok"] is True
-    assert "folded" not in out
-    assert out["notFolded"]["reason"] == "round-ceiling"
-    assert out["terminal"] == "halted"
-    assert "durableRecord" not in out
-    rows = _advance_rows_for_step(d, phase, rnd, attempt)
-    assert not any(r.get("outcome") == "advanced" for r in rows)
-
-
-def test_advance_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
-    """Loaded state above the ceiling parks through _advance_locked without a folded receipt."""
+def test_advance_locked_hands_back_honestly_above_round_cap(tmp_path, adapters):
+    """Loaded state above the cap hands back through _advance_locked without a folded receipt."""
     d = _above_ceiling_panel_session(tmp_path, adapters)
     state = _state(d)
     pend = state["pending"]
@@ -4090,8 +3358,8 @@ def test_advance_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
     out = RD._advance_locked(d, state, git=_fake_git(_gitdir(tmp_path)))
     assert out["ok"] is True
     assert "folded" not in out
-    assert out["notFolded"]["reason"] == "round-ceiling"
-    assert out["terminal"] == "halted"
+    assert out["notFolded"]["reason"] == "round-cap"
+    assert out["terminal"] == "handed-back"
     assert "durableRecord" not in out
     rows = _advance_rows_for_step(d, phase, rnd, attempt)
     assert not any(r.get("outcome") == "advanced" for r in rows)
@@ -4138,25 +3406,17 @@ def _commit_dirs_with_done(session_dir):
     ]
 
 
-def _judgment_submit_artifact(session_dir):
-    state = _state(session_dir)
-    return {"dispositions": [
-        {"id": RD._finding_key_of(state["_judgmentFindings"][0]), "disposition": "skip"},
-    ]}
+def _panel_submit_artifact():
+    return {"seats": {dim: {"findings": []} for dim in RD.DIMENSIONS}}
 
 
 def test_cmd_submit_cleanup_failure_carries_foldLanded(tmp_path, adapters, monkeypatch):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="cleanup-fold")
+    d = _session(tmp_path, name="cleanup-fold")
     pend = _pending(d)
     last_accepted_before = copy.deepcopy(_state(d).get("lastAccepted"))
     _patch_cleanup_rename_failure(monkeypatch)
     out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
-                        _judgment_submit_artifact(d), _via_advance=True)
+                        _panel_submit_artifact(), _via_advance=True)
     assert out["ok"] is False
     assert out["reason"] == "commit-cleanup-failed"
     assert out["foldLanded"] is True
@@ -4173,52 +3433,20 @@ def test_cmd_submit_cleanup_failure_carries_foldLanded(tmp_path, adapters, monke
         assert la["artifactHash"] == last_accepted_before["artifactHash"]
     else:
         assert isinstance(la.get("artifactHash"), str) and la["artifactHash"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_VERIFIERS
     done_dirs = _commit_dirs_with_done(d)
     assert len(done_dirs) == 1
     assert os.path.isfile(os.path.join(done_dirs[0], "DONE"))
 
 
 def test_cmd_submit_apply_failure_does_not_carry_foldLanded(tmp_path, adapters, monkeypatch):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="apply-fold")
+    d = _session(tmp_path, name="apply-fold")
     pend = _pending(d)
     _patch_submit_accept_run(monkeypatch, "commit-apply-failed")
     out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
-                        _judgment_submit_artifact(d), _via_advance=True)
+                        _panel_submit_artifact(), _via_advance=True)
     assert out["ok"] is False and out["reason"] == "commit-apply-failed"
     assert "foldLanded" not in out
-
-
-def test_advance_owner_gate_propagates_receipt_fault_and_exits_nonzero(tmp_path, adapters,
-                                                                       monkeypatch):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="receipt-fault-owner")
-    real_submit = RD.cmd_submit
-
-    def submit_receipt_fault(session_dir, phase, attempt, state_hash_arg, artifact,
-                             _via_advance=False, **_kw):
-        if _via_advance:
-            return {"ok": False, "reason": "receipt-fault", "detail": "simulated fault",
-                    "foldLanded": True}
-        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
-                           _via_advance=_via_advance, **_kw)
-
-    monkeypatch.setattr(RD, "cmd_submit", submit_receipt_fault)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "receipt-fault"
-    assert out["reason"] != "fold-refused"
-    assert out.get("foldLanded") is True
-    rc = RD.main(["advance", "--session-dir", d])
-    assert rc == 1
 
 
 def test_advance_locked_propagates_receipt_fault_and_exits_nonzero(tmp_path, adapters,
@@ -4243,12 +3471,8 @@ def test_advance_locked_propagates_receipt_fault_and_exits_nonzero(tmp_path, ada
 
 
 def test_advance_fold_refused_still_wraps_non_receipt_fault(tmp_path, adapters, monkeypatch):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="ordinary-refusal")
+    d = _session(tmp_path, name="ordinary-refusal")
+    _record_all_panel_seats(d)
     real_submit = RD.cmd_submit
 
     def submit_refused(session_dir, phase, attempt, state_hash_arg, artifact,
@@ -4265,12 +3489,8 @@ def test_advance_fold_refused_still_wraps_non_receipt_fault(tmp_path, adapters, 
 
 
 def test_advance_fold_refused_carries_foldLanded_from_submit(tmp_path, adapters, monkeypatch):
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="cleanup-advance")
+    d = _session(tmp_path, name="cleanup-advance")
+    _record_all_panel_seats(d)
     real_submit = RD.cmd_submit
 
     def submit_cleanup_failed(session_dir, phase, attempt, state_hash_arg, artifact,
@@ -4286,42 +3506,6 @@ def test_advance_fold_refused_carries_foldLanded_from_submit(tmp_path, adapters,
     assert out["ok"] is False and out["reason"] == "fold-refused"
     assert out["detail"] == "commit-cleanup-failed"
     assert out.get("foldLanded") is True
-
-
-def test_owner_gate_policy_applied_rides_the_folds_own_commit_intent(tmp_path, adapters,
-                                                                     monkeypatch):
-    """ONE submit-accept carries state advance, policyApplied state, and advanced journal row.
-
-    axis: ATOMICITY — the `advanced` row bearing `policyApplied` must share the fold's commit, not
-    a second `advance-policy-applied` commit whose journal row could be lost after the fold lands.
-    """
-    repo = _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }])
-    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="policy-atomicity")
-    seen = []
-    real_begin = RD.round_commit.begin
-
-    def spy(session_dir, kind, **kw):
-        commit = real_begin(session_dir, kind, **kw)
-        seen.append((kind, commit))
-        return commit
-
-    monkeypatch.setattr(RD.round_commit, "begin", spy)
-    assert _advance(d, tmp_path)["ok"] is True
-    commit_kinds = [kind for kind, _commit in seen]
-    assert "advance-policy-applied" not in commit_kinds
-    accepts = [c for kind, c in seen if kind == "submit-accept"]
-    assert len(accepts) == 1, commit_kinds
-    parts = accepts[0]._parts
-    targets = [p.get("target") for p in parts if p.get("type") == "replace-file"]
-    journals = [p for p in parts if p.get("type") == "journal-append"]
-    assert any(t.endswith(RD.STATE_FILE) for t in targets), targets
-    assert any((j.get("entry") or {}).get("outcome") == "accepted" for j in journals), journals
-    assert any((j.get("entry") or {}).get("outcome") == "advanced"
-               and (j.get("entry") or {}).get("policyApplied") for j in journals), journals
 
 
 # --- cmd_submit foldLanded caller census ---------------------------------------

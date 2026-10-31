@@ -81,12 +81,6 @@ def _cfg(tmp_path):
     return {"repoRoot": str(tmp_path), "verifyCommand": "none"}
 
 
-def _judgment_state():
-    state = RD.new_state(_cfg(os.path.join("/tmp", "judgment-probe")))
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    return state
-
-
 def _minimal_paths(session_dir):
     return {
         "storage_key": "probe.a0",
@@ -179,20 +173,6 @@ def test_auto_fix_loop_reference_points_at_canonical_fixer_template():
             "duplicated guidance-matching clause (whitespace-normalized) on %s: %r"
             % (_AUTO_FIX_LOOP_REFERENCE, token)
         )
-
-
-# --- guidance emission (bite axis: fold writes GATE_GUIDANCE_RECORD_KEY on record) ---------
-
-
-def test_fold_judgment_writes_user_guidance_key():
-    # axis: fix-with-guidance folds owner text into judgmentDispositions, not the batch row
-    state = _judgment_state()
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "keep it backward compatible"}]})
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
 
 
 # --- gate guidance block (WO #1221) ------------------------------------------------------

@@ -34,6 +34,7 @@ import review_loop_plan as RLP  # noqa: E402
 import review_memory as RM  # noqa: E402
 import review_telemetry as RT  # noqa: E402
 import round_driver as RD  # noqa: E402
+import round_phases  # noqa: E402
 import seat_map as SM  # noqa: E402
 
 
@@ -92,6 +93,7 @@ _TERMINAL_MAP = {
     "stalled": "halted",
     "capped-with-open-critical": "halted",
     "cannot-certify": "halted",
+    "handed-back": "halted",
 }
 
 # INV-15: the harness's simulated maker vendor must not be seated on its review panel —
@@ -293,7 +295,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
 
     name = fixture.get("name") or (fixture_path.stem if fixture_path else "fixture")
     reviewer_set = list(fixture.get("reviewerSet") or RD.DIMENSIONS)
-    max_rounds = int(fixture.get("maxRounds") or 7)
+    max_rounds = int(fixture.get("maxRounds") or round_phases.ROUND_CAP)
     events = [dict(e) for e in (fixture.get("reviewerEvents") or [])]
     fix_events = list(fixture.get("fixEvents") or [])
     own_dir = run_dir is None
@@ -622,7 +624,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
 
     RD._fold_panel = _fold_panel_persist
     try:
-        io = {"stall_menu": lambda payload: "hold"}
+        io = {}
         fixer_vendor = fixture.get("fixerVendor") or _EVAL_FIXER_VENDOR
         _validate_fixer_vendor_override(fixer_vendor)
         seat_map_obj = None
@@ -654,7 +656,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
                 dict(config, seatMap=seat_map_obj) if seat_map_obj is not None else config)
             selected = {phase: RD._nonpanel_selection(selection_state, None, phase)[0]
                         for phase in (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_SYNTHESIS)}
-        except (RD.RoundCeilingRefusal, RD.FixBatchCapRefusal):
+        except (RD.MaxRoundsRefusal, RD.FixBatchCapRefusal):
             selected = {}  # run_loop parks the same refusal itself
         for phase, vendor in selected.items():
             if vendor is not None:

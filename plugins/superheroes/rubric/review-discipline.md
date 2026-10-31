@@ -201,7 +201,7 @@ The advisor must say what could go wrong before the owner decides.
 
 **Re-review to convergence.** After the advisor resolves reviewer findings, the
 **reviewer outside the maker's family re-reviews the final head**, with the review record showing its
-reading on each re-review, until no blocking findings remain — or the change **parks**. When the
+reading on each re-review, until no blocking findings remain — or the loop hits its 4-round cap and hands back what is open. When the
 contract under review is **prose**, the bounded acceptance bar in
 `### Bounded acceptance — prose-contract DoDs` below is the scoped exception to this paragraph.
 
@@ -220,12 +220,13 @@ fast-follow):
   free. The driver mandate below names this citation class. **The light and micro lanes**
   run **one** independent reviewer outside every [maker's](glossary.md#maker) family instead, whose reading the review record
   shows (see above). The loop is cheap on small diffs —
-  scoped rounds, capped confirmations — so "too small to review" is never a reason to
+  scoped rounds, at most 4 of them — so "too small to review" is never a reason to
   skip. The evidence behind this rule: the worst defects in the plugin's own history
   shipped in exactly the handful of PRs that skipped review, not in the large reviewed
   ones.
-- **A review that halts with an open blocker** (circuit breaker, park) is resolved
-  or explicitly owner-accepted in the PR body — never quietly merged.
+- **The loop stops at 4 rounds, with no ceiling above them, and hands back what is open.** It has
+  no stall menu and puts nothing to the owner mid-review. A PR handed back with an open blocker is
+  resolved at the vet — a leftover or a send-back — never quietly merged.
 
 **And one independent read *after* handback: the advisor's vet.** Review-before-handback checks the
 **code**; the vet checks the **PR** — the last independent read before the owner's one irreversible

@@ -226,11 +226,10 @@ def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
     RD._stage_findings(state, [tradeoff])
     batch = [_fix_row(discharged), _fix_row(tradeoff)]
     config = _cfg()
-    assert RD._route_judgment_blockers(state, batch)
-    row_id = RD._judgment_row_ids(state["_judgmentFindings"])[0]
-    RD._fold_judgment(state, config, {"dispositions": [
-        {"id": row_id, "disposition": "skip", "reason": "owner accepts tradeoff"},
-    ]})
+    remainder = RD._hold_owner_choice(state, batch)  # the tradeoff is held out of the batch
+    assert [RD._fix_batch_row_key(r) for r in remainder] == [discharged_key]
+    assert state["ownerChoiceHeld"] == [tradeoff_key]
+    assert RD._queue_fix_batch(state, config, remainder) == "excluded"
     assert state["step"] == RD.P_PANEL
     assert state.get("terminal") is None
     assert state["rounds"]["2"]["confirmationFollowup"]["rearm"] is True
@@ -656,11 +655,10 @@ def test_l3_a3_advance_round_writes_the_baseline_before_the_head_overwrite(monke
     assert state["rounds"]["2"]["roundKind"] == "delta"
 
 
-def test_l3_a3_ceiling_refusal_writes_no_baseline():
-    state = RD.new_state(_cfg(maxRoundsAbsolute=1, maxRounds=1))
+def test_l3_a3_cap_refusal_writes_no_baseline():
+    state = RD.new_state(_cfg(maxRounds=1))
     state["round"] = 1
-    assert RD._advance_round(state, _cfg(maxRoundsAbsolute=1, maxRounds=1),
-                             reason="test-ceiling") is False
+    assert RD._advance_round(state, _cfg(maxRounds=1), reason="test-cap") is False
     assert "deltaBaseline" not in state
 
 

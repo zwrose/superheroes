@@ -148,7 +148,7 @@ def test_receipt_kind_recognizes_interim_before_certified():
 
 
 def test_validate_interim_rejects_certification_keys():
-    interim = RD.build_interim_receipt(RD.new_state(_cfg()), None, "held")
+    interim = RD.build_interim_receipt(RD.new_state(_cfg()), None, "park")
     interim["certification"] = {"shape": "smuggled"}
     ok, reason = RD.validate_receipt(interim)
     assert ok is False
@@ -225,29 +225,18 @@ def test_checkpoint_refuses_unknown_stop_reason(tmp_path):
 
 def test_checkpoint_journals_event(tmp_path):
     d = _session(tmp_path)
-    assert RD.cmd_checkpoint(d, "held")["ok"] is True
+    assert RD.cmd_checkpoint(d, "park")["ok"] is True
     entries = list(RD.read_journal(d))
     assert any(e.get("cmd") == "checkpoint" and e.get("outcome") == "checkpointed"
                for e in entries)
 
 
-def test_checkpoint_stop_reason_held_succeeds_non_terminal(tmp_path):
-    # axis: held is reachable at the stall menu before the hold fold sets terminal.
+def test_checkpoint_refuses_the_retired_held_stop_reason(tmp_path):
+    # axis: held was the stall menu's hold; with the menu retired it is an unknown stop reason.
     d = _session(tmp_path)
     out = RD.cmd_checkpoint(d, "held")
-    assert out["ok"] is True
-    with open(os.path.join(d, RD.RECEIPT_INTERIM_FILE), encoding="utf-8") as fh:
-        receipt = json.load(fh)
-    assert receipt["stop"]["reason"] == "held"
-
-
-def test_checkpoint_stop_reason_held_refuses_terminal(tmp_path):
-    d = _session(tmp_path)
-    state = _state(d)
-    state["terminal"] = "held"
-    RD.save_state(d, state)
-    out = RD.cmd_checkpoint(d, "held")
-    assert out["ok"] is False and out["reason"] == "checkpoint-session-terminal"
+    assert out["ok"] is False and out["reason"] == "checkpoint-stop-reason-unknown"
+    assert not os.path.exists(os.path.join(d, RD.RECEIPT_INTERIM_FILE))
 
 
 def _checkpoint_which_stops_paragraph():

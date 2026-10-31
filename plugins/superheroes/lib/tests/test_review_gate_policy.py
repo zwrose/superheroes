@@ -3,7 +3,6 @@ import hashlib
 import importlib.util
 import json
 import os
-import sys
 
 import panel_tally
 import pytest
@@ -243,14 +242,14 @@ def test_fail_closed_stall_accept_risk_on_ineligible_class():
             "schema": RGP.GATE_POLICY_SCHEMA,
             "default": "park",
             "rules": [
-                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, round_phases.ACCEPT_RISK_CHOICE),
+                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, RGP.ACCEPT_RISK_CHOICE),
             ],
         }
     )
     loaded = RGP.parse_overlay(overlay)
     assert loaded["ok"] is False
     assert loaded["reason"] == "layer-disposition-not-allowed"
-    assert round_phases.ACCEPT_RISK_CHOICE in round_phases.STALL_CHOICES
+    assert RGP.ACCEPT_RISK_CHOICE in RGP.STALL_CHOICES
 
 
 def test_stall_eligible_can_accept_disclosed_risk():
@@ -258,11 +257,11 @@ def test_stall_eligible_can_accept_disclosed_risk():
         {
             "schema": RGP.GATE_POLICY_SCHEMA,
             "default": "park",
-            "rules": [_stall_rule(RGP.STALL_CLASS_ELIGIBLE, round_phases.ACCEPT_RISK_CHOICE)],
+            "rules": [_stall_rule(RGP.STALL_CLASS_ELIGIBLE, RGP.ACCEPT_RISK_CHOICE)],
         }
     )
     result = RGP.resolve_stall(RGP.STALL_CLASS_ELIGIBLE, overlay)
-    assert result["action"] == {"choice": round_phases.ACCEPT_RISK_CHOICE}
+    assert result["action"] == {"choice": RGP.ACCEPT_RISK_CHOICE}
 
 
 def test_stall_ineligible_matching_accept_risk_rule_drops_layer():
@@ -277,7 +276,7 @@ def test_stall_ineligible_matching_accept_risk_rule_drops_layer():
                     "findingClass": RGP.STALL_CLASS_INELIGIBLE,
                     "disposition": "hold",
                 },
-                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, round_phases.ACCEPT_RISK_CHOICE),
+                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, RGP.ACCEPT_RISK_CHOICE),
             ],
         }
     )
@@ -341,7 +340,7 @@ def test_fail_closed_policy_rule_fix_with_guidance_refused():
 
 def test_policy_judgment_dispositions_derived_from_home():
     """Policy-eligible judgment dispositions are home minus owner-input-only members."""
-    home = set(round_phases.JUDGMENT_DISPOSITIONS)
+    home = set(RGP.JUDGMENT_DISPOSITIONS)
     policy = set(RGP.POLICY_JUDGMENT_DISPOSITIONS)
     assert policy <= home
     assert home - policy == {"fix-with-guidance"}
@@ -351,37 +350,21 @@ def test_policy_judgment_dispositions_derived_from_home():
 
 def test_policy_judgment_dispositions_red_on_home_member_rename():
     """Bite-axis: renaming a home disposition must fail the derived-policy binding."""
-    home_path = os.path.join(_HERE, "..", "round_phases.py")
-    with open(home_path, encoding="utf-8") as fh:
-        source = fh.read()
-    probed = source.replace('"skip"', '"skip-renamed-for-census"', 1)
-    spec = importlib.util.spec_from_file_location("round_phases_probe", home_path)
-    probe_phases = importlib.util.module_from_spec(spec)
-    exec(compile(probed, home_path, "exec"), probe_phases.__dict__)  # noqa: S102
-
+    # axis: POLICY_JUDGMENT_DISPOSITIONS must derive from JUDGMENT_DISPOSITIONS, not copy it — see bite-proof record c1l4_wo_e
     policy_path = _MOD
     with open(policy_path, encoding="utf-8") as fh:
-        policy_source = fh.read()
+        source = fh.read()
+    home_def = 'JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")'
+    assert source.count(home_def) == 1
+    probed = source.replace(home_def, home_def.replace('"skip"', '"skip-renamed-for-census"'), 1)
+    assert probed != source
 
-    saved_round_phases = sys.modules.get("round_phases")
-    saved_review_gate_policy = sys.modules.get("review_gate_policy")
+    # The probe execs into its own namespace; it imports only the real panel_tally/session_contract,
+    # so no sys.modules entry is swapped.
     probe_policy = importlib.util.module_from_spec(
         importlib.util.spec_from_file_location("review_gate_policy_probe", policy_path)
     )
-    try:
-        sys.modules["round_phases"] = probe_phases
-        if "review_gate_policy" in sys.modules:
-            del sys.modules["review_gate_policy"]
-        exec(compile(policy_source, policy_path, "exec"), probe_policy.__dict__)  # noqa: S102
-        derived = probe_policy.POLICY_JUDGMENT_DISPOSITIONS
-        assert "skip" not in derived
-        assert "skip-renamed-for-census" in derived
-    finally:
-        if saved_round_phases is not None:
-            sys.modules["round_phases"] = saved_round_phases
-        elif "round_phases" in sys.modules:
-            del sys.modules["round_phases"]
-        if saved_review_gate_policy is not None:
-            sys.modules["review_gate_policy"] = saved_review_gate_policy
-        elif "review_gate_policy" in sys.modules:
-            del sys.modules["review_gate_policy"]
+    exec(compile(probed, policy_path, "exec"), probe_policy.__dict__)  # noqa: S102
+    derived = probe_policy.POLICY_JUDGMENT_DISPOSITIONS
+    assert "skip" not in derived
+    assert "skip-renamed-for-census" in derived

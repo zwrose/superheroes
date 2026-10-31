@@ -20,21 +20,23 @@ DECISION_KINDS = (
     "capped-with-open-critical",
     "confirmation-rearm",
     "converged",
+    "extra-audit-open",
     "fix-batch-excluded",
     "fix-batch-ruled",
     "fix-batch-split",
-    "judgment-fail-closed",
-    "judgment-gate",
-    "judgment-skip",
+    "fix-keeps-failing",
     LANE_EXPANDED_RECOMPOSE,
     "not-discharged",
     "out-of-scope-fix-spent",
+    "owner-choice-held",
+    "owner-choice-open",
     "panel-seat-missing",
     "receipt-missing-seat",
     "ruling-carried",
     "ruling-carry-revoked",
     "ruling-no-live-finding",
     "ruling-recorded",
+    "round-cap",
     "round-ceiling",
     "scoped-finder-skipped",
     "seat-engaged-artifact",
@@ -58,17 +60,20 @@ DECISION_KINDS = (
 CERTIFIED_VERDICTS = (
     "converged",
     "halted",
+    # held and stalled: read-only, for sessions an earlier version finished
     "held",
     "stalled",
     "cannot-certify",
     "capped-with-open-critical",
     "capped-with-open-blocker",
+    "handed-back",
 )
 ATTESTED_VERDICT = "uncertified-manual"
 ALL_VERDICTS = CERTIFIED_VERDICTS + (ATTESTED_VERDICT,)
 
 VERDICT_TO_TERMINAL_STATE = {
     "converged": "certified",
+    "handed-back": "cap",
     "capped-with-open-critical": "cap",
     "capped-with-open-blocker": "cap",
     "cannot-certify": "cannot-certify",
@@ -94,6 +99,12 @@ _TERMINAL_CAUSE_TABLE = {
     ("halted", "verify-unresolved"): {"kind": "loop", "reason": "detector"},
     ("halted", LANE_EXPANDED_RECOMPOSE): {"kind": "loop", "reason": "detector"},
     ("halted", "round-ceiling"): {"kind": "non-loop", "reason": "budget"},
+    # The handed-back rows: the PR goes back to its owner with the review's findings still open.
+    ("handed-back", "round-cap"): {"kind": "non-loop", "reason": "open-findings"},
+    ("handed-back", "fix-keeps-failing"): {"kind": "loop", "reason": "fixer-cycle"},
+    ("handed-back", "owner-choice-open"): {"kind": "non-loop", "reason": "open-findings"},
+    ("handed-back", "extra-audit-open"): {"kind": "non-loop", "reason": "open-findings"},
+    # read-only, for sessions an earlier version finished (the driver never writes held or stalled again)
     ("held", "stall-choice"): {"kind": "loop", "reason": "latch"},
     ("stalled", "stall-choice"): {"kind": "loop", "reason": "latch"},
     ("stalled", "stall-menu"): {"kind": "loop", "reason": "latch"},
