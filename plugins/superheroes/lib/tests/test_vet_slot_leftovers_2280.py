@@ -311,3 +311,35 @@ def test_visible_keeps_fenced_text_and_marker_lines_and_drops_an_unclosed_commen
     assert la._visible("```\n<!-- shown -->\n```\n") == "```\n<!-- shown -->\n```\n"
     assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
     assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "a \n\n e\nf "
+
+
+# --- review round 3 fixes ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("accepting", [
+    "- None `<!-- f-1 the retry loop never backs off -->``\n",  # code-006: a longer run does not close the span
+    "- None \\`<!-- f-1 the retry loop never backs off -->`\n",  # code-006: an escaped backtick opens no span
+    "```None```\n- None <!-- f-1 the retry loop never backs off -->\n",  # code-007: an inline run opens no fence
+])
+def test_a_comment_outside_any_real_code_span_or_fence_stays_hidden(accepting, tmp_path):
+    hidden = body(accepting)
+    assert [g["id"] for g in la.missing(read_ok(F1), hidden)] == ["f-1"]
+    assert handback(hidden, [record_comment([F1])])["reason"] == "leftover-not-accepted"
+    result, fake = write(hidden, [RECEIPT, record_comment([F1])], tmp_path)
+    assert result["reason"] == "leftover-not-accepted" and fake.edited == []
+
+
+def test_an_escaped_comment_opener_is_shown_text():
+    assert la._visible("a \\<!-- b --> c\n") == "a \\<!-- b --> c\n"
+
+
+def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
+    assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` <!-- b --> c`` y\n"
+
+
+def test_ready_write_checks_the_body_it_will_publish(tmp_path):
+    """code-008: an id named only in the old slot text, which the write replaces, does not count."""
+    shaped = ("Closes #1.\n\n## What we're accepting\n\nNone\n\n<!-- superheroes:advisor-vet -->\n"
+              "- f-1 the retry loop never backs off: merging accepts it.\n\n<!-- superheroes:build-record -->\n"
+              "<details><summary>Build record</summary>\n\n<!-- superheroes:followups none -->\n</details>\n")
+    result, fake = write(shaped, [RECEIPT, record_comment([F1])], tmp_path)
+    assert result["reason"] == "leftover-not-accepted" and fake.edited == []

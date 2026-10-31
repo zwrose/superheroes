@@ -632,7 +632,8 @@ def _run_verb(verb, pr, repo, slot_file, run):
     if not result["ok"] or verb == "check":
         return result
     if reads_ready(slot_text):
-        check_leftovers(pr, repo, body, comments)
+        # axis: the READY check reads the body the write will publish, never the old slot text it replaces
+        check_leftovers(pr, repo, result["newBody"], comments)
     new_body = result.pop("newBody")
     if _read_body(run, pr, repo) != body:
         raise _Refusal("write-failed", "PR body changed between the read and the push")

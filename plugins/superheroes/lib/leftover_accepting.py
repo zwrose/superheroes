@@ -15,6 +15,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import md_fence  # noqa: E402
 import pr_sheet  # noqa: E402
 import review_record  # noqa: E402
 
@@ -51,27 +52,32 @@ def _leftovers(record):
     return out
 
 
-_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 _MARKER_LINE = re.compile(r"^<!-- superheroes:[^>]*-->\s*$")
 _TICKS = re.compile(r"`+")
 
 
+def _code_span_end(line, i):
+    """Where the inline code span opening with the backtick run at ``i`` ends, or None when no run of exactly the
+    same length closes it on this line (CommonMark: the run is then literal backticks). A span that runs onto a later
+    line is not followed, so a comment inside it is cut: the check fails toward a refusal, never a pass."""
+    run = _TICKS.match(line, i).group(0)
+    for close in _TICKS.finditer(line, i + len(run)):
+        if len(close.group(0)) == len(run):
+            return close.end()
+    return None
+
+
 def _visible(body):
     """The body as it renders, for matching: every HTML comment (one that spans lines included) is cut out, while a
-    comment delimiter inside a fenced block or an inline code span is shown text and stays. A whole-line
-    ``superheroes:`` marker is kept, so the section reader still finds the build-record boundary."""
-    out, fence, inside = [], None, False
-    for line in body.splitlines(keepends=True):
-        opening = None if inside else _FENCE.match(line)
-        if fence is not None:
-            fence = None if opening and opening.group(1)[0] == fence[0] and len(opening.group(1)) >= len(fence) else fence
-            out.append(line)
-            continue
-        if opening:
-            fence = opening.group(1)
-            out.append(line)
-            continue
-        if not inside and _MARKER_LINE.match(line):
+    comment delimiter inside a fenced block (``md_fence``'s CommonMark rules), an inline code span, or after a
+    backslash escape is shown text and stays. A whole-line ``superheroes:`` marker is kept, so the section reader still
+    finds the build-record boundary."""
+    lines = body.splitlines(keepends=True)
+    fenced = md_fence.scan([line.rstrip("\n") for line in lines]).inert
+    out, inside = [], False
+    for n, line in enumerate(lines):
+        # axis: a fenced line (by md_fence's rules) is shown text; a comment open across it stays open
+        if (fenced[n] and not inside) or (not inside and _MARKER_LINE.match(line)):
             out.append(line)
             continue
         kept, i = [], 0
@@ -83,21 +89,23 @@ def _visible(body):
                     i = len(line)
                     break
                 inside, i = False, end + 3
-                continue
-            ticks = _TICKS.match(line, i)
-            if ticks:
-                # axis: a comment delimiter inside an inline code span is shown text and stays
-                close = line.find(ticks.group(0), ticks.end())
-                end = close + len(ticks.group(0)) if close >= 0 else ticks.end()
-                kept.append(line[i:end])
-                i = end
+            elif line[i] == "\\" and i + 1 < len(line):
+                # axis: an escaped character (a backtick or a `<`) is literal text, never a delimiter
+                kept.append(line[i:i + 2])
+                i += 2
+            elif line[i] == "`":
+                # axis: a code span closes only on a backtick run of exactly its own length
+                end = _code_span_end(line, i)
+                run = len(_TICKS.match(line, i).group(0))
+                kept.append(line[i:end if end is not None else i + run])
+                i = end if end is not None else i + run
             elif line.startswith("<!--", i):
                 inside, i = True, i + 4
             else:
                 kept.append(line[i])
                 i += 1
         text = "".join(kept)
-        out.append(text if text.endswith("\n") or not line.endswith("\n") else text + "\n")
+        out.append(text + "\n" if line.endswith("\n") and not text.endswith("\n") else text)
     return "".join(out)
 
 
