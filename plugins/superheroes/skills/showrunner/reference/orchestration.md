@@ -409,7 +409,10 @@ such a step to the owner first.
   `script -q /dev/null …` on macOS. A cloud session's tools include `get_session`, `list_sessions`
   and `archive_session`; a background helper has none of them. The prompt names the session ids,
   asks for `get_session` on each, and asks the helper to post the raw results as one JSON array on
-  the lane's issue in a fenced block, since a cloud session cannot message back. The advisor reads
+  the lane's issue in a fenced block, since a cloud session cannot message back. The prompt comes
+  from `cloud_recover.py helper-read --repo O/N --issue N --session-id S …`, and the helper posts
+  only the five fields `cloud_recover.HELPER_READ_FIELDS` names (the fields the takeover check reads) per session (never usage or cost data:
+  the issue is public). The advisor reads
   that comment through REST, saves the array to a file, and passes it with `--cloud-sessions-file`.
   The posted copy is the helper's transcription of its tool output. A row that clears a lane
   (archived or failed) counts only when a second helper read of that session, posted as its own
@@ -421,7 +424,9 @@ such a step to the owner first.
   the row that clears it). Only a complete page the advisor's own session read itself proves a
   session gone, and only when its rows carry `environment_id` and meet the checks in § Adoption
   mechanics; when they do not, read each lane with `get_session`. When a live lane never answers the fix order or the ask-to-push, the same
-  helper archives it; an archive is reversible with `unarchive_session`. This is the advisor's own
+  helper archives it; an archive is reversible with `unarchive_session`. At the reset time of a
+  limited account, the advisor has the cloud helper archive the superseded sessions on that account
+  (the ones whose lanes were recorded `died` and adopted). This is the advisor's own
   step: never hand a session read or this archive to the owner.
 - **Anything else** (reading a background session's permission mode, messaging or stopping a
   background session) goes to a one-off background helper: a named background session started on
@@ -467,10 +472,14 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
 - **Recover a cloud lane** in exactly these steps, each naming a verb or record that exists. The
   verbs are `python3 -B <plugin root>/lib/cloud_recover.py <verb> --repo-root <root> …`.
   1. Read the session's state in the host's session listing, and the lane's activity age from the
-     wave watch.
+     wave watch. When the builders' account is at its usage limit (the wave watch reports
+     `account-limited`, or the relay check reports it), the session state is read as `unread` and
+     `assess` reads the limit itself. The relay writes the limit only when it next runs, so send a
+     status ping through the relay first.
   2. Run `assess`. Its answer is `working`, `unresolved`, `parked`, `awaiting-handover`,
-     `ask-to-push` or `stopped`. `working`, `unresolved`, `parked` and `awaiting-handover` never
-     recover. `parked` means the lane's issue holds a builder stop or park comment newer than its last
+     `ask-to-push` or `stopped`. `assess` returns `stopped` with evidence `account-limited` for a
+     lane that started before the limit was recorded, while the limit holds. `working`,
+     `unresolved`, `parked` and `awaiting-handover` never recover. `parked` means the lane's issue holds a builder stop or park comment newer than its last
      pushed work, and the answer names that comment (`parkComment`). An alive session that
      never hands over is resolved by the cloud helper archiving it (§ Acting on the builders'
      account), which then reads `archived`.
@@ -480,10 +489,23 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
      `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
      Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at
      all after a definite failure.
-  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, run `successor`, then
-     launch that premise with `launcher.py launch`. The routing step places it: cloud when cloud is
-     ready, the owner's machine otherwise. Until that launch starts, `assess` keeps answering `stopped`, so an
-     interrupted recovery is rerun, never lost.
+  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, post
+     `cloud_builder.py superseded-notice --launch-id <the stopped lane>`'s `comment` on the issue,
+     then run `successor` and launch that premise with `launcher.py launch`. The notice comes before
+     `successor`: a stamped original that wakes after the reset sees the notice (it names its launch
+     id) and stands down, which covers a never-pushed lane too, and the notice stops it even when the
+     successor runs on the owner's machine. `successor` reads the limit again just before it records
+     the supersession and refuses `stop-evidence-expired` if the limit no longer holds. The routing
+     step places the launch: cloud when cloud is ready, the owner's machine otherwise. Until that
+     launch starts, `assess` keeps answering `stopped`, so an interrupted recovery is rerun, never lost:
+     a takeover interrupted after the notice is resumed from the limit while it holds. After the
+     reset the old builder has stood down (its stand-down comment names the notice), but that comment
+     is not stop evidence: have the cloud helper archive that session (§ Acting on the builders'
+     account), after which `assess` reads `archived` (positive stop evidence) and the launcher's
+     session read shows it archived.
+     `successor` passes over a pushed branch whose head another of the issue's pushed branches
+     already contains (it names it in `passedOver`); a branch holding work found nowhere else still
+     refuses `pushed-branch-ambiguous`.
   5. Tell the owner with `message`'s text.
 
   The state is `cloud-recover.json`, beside the launch ledger. Recovery never leaves two builders on
@@ -526,10 +548,19 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   order since (no `vet not-ready` after the handback, and no fix order to its session).
   A handed-back lane had opened its own pull request before its handback, so a pull request on the
   adopted branch opened before then would itself be the branch's first; the lane's pull request was
-  on another branch, and with no fix order since it writes only that branch. A bound lane whose
-  branch is gone from the remote needs no session listing, but a listing you supply that shows its
-  session live still refuses `adopt-original-session-live`: a deleted branch does not stop its
-  builder. Every read the launcher makes for this fails closed:
+  on another branch, and with no fix order since it writes only that branch. A lane bound to the
+  adopted branch needs the session read like any other, whether or not its branch still exists
+  (deleting a branch does not stop its builder). While the builders' account is at its usage limit,
+  a lane that started before the limit needs no session read until the reset time
+  `cloud_relay.py limit` names, and a listing that shows it live still refuses; after the reset the
+  session read is needed again, as for any lane. The relief also needs a supersession notice on the
+  issue that names the lane's launch id (post `cloud_builder.py superseded-notice --launch-id <lane>`'s
+  comment first), so the original builder stands down when it wakes. A lane launched before the stand-down check
+  existed (its reserved premise lacks the launcher's `standDown` stamp) still needs the session
+  read, limit or not. An adoption's cloud launch runs from a checkout at
+  its adopted head (`adoptsHead`), so no pointer branch at the premise's `baseCommit` is needed; a
+  launch that is not an adoption keeps the base rule. Every read the launcher makes for this fails
+  closed:
   one that fails or is ambiguous keeps the lane in the check.
   `adopt-original-session-live` means a lane that could still write the branch has a session still
   listed live; `originalSessions` names each one, and the fix order goes to it.
