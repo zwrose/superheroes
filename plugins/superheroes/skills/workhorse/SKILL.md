@@ -619,6 +619,12 @@ whether the PR moved after the review. The owner-ratified scope rule (§1) defer
 unrelated to the behavior the diff introduces or worsens. A blocking correctness or security finding
 on that behavior is fixed or honestly parked, never deferred as out of scope.
 
+**A stacked layer catches up before handback.** The review session keeps the lower-layer commit it
+pinned, and a lower-layer move never restarts it. Before the PR is marked ready, the layer is caught up
+(`rubric/native-stacks.md` § How a stack stays current), verified on the caught-up head, and its
+catch-up reviewed as a returning review; `vet_slot.py handback --pr <n> --repo <owner/name>` refuses
+`stack-not-caught-up` until it is.
+
 When the owner rules on a leftover during the build, record the ruling as the standard chat-ruling record
 composed by `lib/canon.py ruling-record`. Hand its permalink and the owner's words to the next record write in `ownerRulings`, as
 `skills/review-code/reference/review-record.md` says, so the PR sheet files it as already decided. A ruling with no resolvable link stays a card.
@@ -726,10 +732,11 @@ reviewed, as `skills/review-code/reference/review-record.md` says. The new recor
 finding the earlier record listed, with its outcome, plus the scoped pass's own. The vet reads only
 the latest record, so a scoped pass with no record of its own reaches its re-vet held on paperwork.
 
-**A stacked layer's review runs on the lower layer's current head.** Bring the layer current before the
-session. When the review driver refuses because the lower layer moved, bring the layer current and
-start a new session, first writing the refused session's record as abandoned if that session had
-already started (`rubric/native-stacks.md` § How a stack stays current).
+**A stacked layer catches up between review sessions, never inside one.** When the lower layer moves
+after handback, bring the layer current by a local `--no-ff` merge, run the calibrated verify on the
+merged head, review the catch-up as a returning review, and re-run the handback check
+(`vet_slot.py handback --pr <n> --repo <owner/name>`, which refuses `stack-not-caught-up` until the
+pushed head holds the lower layer's current head; `rubric/native-stacks.md` § How a stack stays current).
 
 **Keep the PR body correct as you go.** Every body edit here carries the advisor's vet write forward
 byte-for-byte (§11). **When you are blocked on the owner**, by a consequential flag, an ambiguous
