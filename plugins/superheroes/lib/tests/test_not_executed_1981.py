@@ -72,6 +72,8 @@ def test_t1_setup_failure_reason_table(text, code, expected):
 
 
 # T2
+@pytest.mark.proc_containment
+@pytest.mark.process_listing
 def test_t2_e1_exit_127_with_empty_output_is_command_not_found(repo):
     record = _run(repo, "import sys\nsys.exit(127)\n")
     assert (record["outcome"], record["reason"], record["exitCode"]) == ("not-run", "command-not-found", 127)
