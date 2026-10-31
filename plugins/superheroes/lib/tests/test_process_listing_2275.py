@@ -178,6 +178,8 @@ _ITEM_440_PROCESS_LISTING_IDS = {
     "test_g3a_a_detached_worker_no_sample_saw_is_not_killed_and_the_run_is_refused",
     "plugins/superheroes/lib/tests/test_not_executed_1981.py::"
     "test_t2_e1_exit_127_with_empty_output_is_command_not_found",
+    "plugins/superheroes/lib/tests/test_break_it_review_round2_2210.py::"
+    "test_g3a_the_proc_reader_finds_the_detached_worker_and_the_run_is_refused_without_killing_it",
 }
 _ITEM_440_PROC_CONTAINMENT_IN_1981 = {
     "plugins/superheroes/lib/tests/test_not_executed_1981.py::"
