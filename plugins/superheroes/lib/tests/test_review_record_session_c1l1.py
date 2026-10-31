@@ -368,7 +368,8 @@ def test_dod_a_session_that_drops_a_carried_finding_is_refused_and_posts_nothing
 def test_dod_the_carried_parts_render_in_the_summary(tmp_path):
     # axis: grade, repeat mark, break-it words, re-run line, extra-audit line and the synthesis role reach the posted summary
     check = {"check": "pytest -q tests/test_a.py", "runs": [{"status": "ran", "exitCode": 1, "output": "RUN-OUTPUT", "reason": None},
-                                                            {"status": "ran", "exitCode": 0, "output": "", "reason": None}]}
+                                                            {"status": "ran", "exitCode": 0, "output": "", "reason": None}],
+             "decision": "went-on"}
     s = Session(tmp_path, config={"maxRounds": 7}, rounds={"1": {}, "2": {"rerunChecks": [check]}},
                 extraAudit={"why": "the advisor ordered one audit of round 2's fixes"},
                 dispositionLedger=[ledger_row(grade=GRADE, repeatOf=REPEAT, breakItRuns=[RUN_1], kindOfMistake=KIND)])

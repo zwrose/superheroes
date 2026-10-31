@@ -594,6 +594,8 @@ When `next` returns `apply-fixes`, the build session fixes the batch itself, in 
 6. Never push, merge or write to GitHub.
 7. When a run needs a throwaway test file, choose a path inside the working tree named with the prefix `autofix-probe-`, check on the filesystem (not with git) that the path does not exist, and delete only that file before you commit. If you cannot show the path is new, do not write there; report it instead. A probe file must never land in a fix commit.
 
+**A restore-only step.** When the payload carries `restoreOnly: true`, the fix auditor found a break-it test missing, changed without a reason or weakened, and the step puts the test role's version back. It carries `restores` and no batch. Write each `restores` entry's `content` at its `path`, byte for byte, and commit; a commit that carries only those files is right here. Make no other change, fix nothing, edit nothing to make a test pass, and run no formatter or autofix over the files. Submit `{"fixes": []}`; the report takes no `unfixed` entry and no `{finding, commit}` binding, and the driver reads the commit from git. A second restore-only step may follow when the test role corrects its test: it is the same step, with the corrected `content`.
+
 **The report** is a JSON object. `fixes` is required and is a list; `unfixed` and `coverageDecisions` are optional lists:
 
 ```json

@@ -120,11 +120,24 @@ def seat_rule_block(phase: str) -> str:
 
 
 def order_template_path(phase: str, root: str | None = None) -> str:
-    """Absolute path to ``rubric/orders/<phase>.md``."""
+    """Absolute path to ``rubric/orders/<phase>.md`` (``phase`` is a template name: see ``_template_name``)."""
     if root is None:
         base = os.path.dirname(os.path.abspath(__file__))
         return os.path.normpath(os.path.join(base, "..", "rubric", "orders", phase + ".md"))
     return os.path.normpath(os.path.join(root, "rubric", "orders", phase + ".md"))
+
+
+SECOND_TEST_CORRECTION_TEMPLATE = "dispatch-second-test-correction"
+
+
+def _template_name(phase: str, context: dict) -> str:
+    """The template a phase's order is read from: the phase's own, except the second-test phase's
+    correction form (payload ``correction`` exactly ``true``), which has a template of its own."""
+    payload = context.get("payload")
+    if (phase == round_phases.P_SECOND_TEST and isinstance(payload, dict)
+            and payload.get("correction") is True):
+        return SECOND_TEST_CORRECTION_TEMPLATE
+    return phase
 
 
 def _refuse(reason: str) -> tuple[None, str]:
@@ -554,7 +567,7 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if phase not in ORDER_PHASES:
             return _refuse("no-template:%s" % phase)
 
-        template, reason = _read_template(phase)
+        template, reason = _read_template(_template_name(phase, context))
         if reason:
             return _refuse(reason)
 
