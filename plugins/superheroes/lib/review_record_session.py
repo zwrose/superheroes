@@ -203,7 +203,7 @@ def _step(rnd, phase):
 
 def _reviewer(state, rnd, seat, stem, ran, env=None, ev=None, commit=None, run_dir=None, phase=None):
     seat_map = seat_map_receipts.round_governing_map(state, rnd).get("seats")
-    entry = (seat_map.get(seat) if isinstance(seat_map, dict) else None) or {}
+    entry = (seat_map.get(round_phases.seat_lens(seat)) if isinstance(seat_map, dict) else None) or {}
     env, ev = env or {}, ev or {}
     return {"name": f"{stem}{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}", "planned": True, "ran": ran,
             "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",

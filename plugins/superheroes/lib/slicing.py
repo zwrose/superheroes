@@ -158,9 +158,10 @@ def _cut_runs(hunk_text, bar):
 # Units and slices
 # --------------------------------------------------------------------------------------------
 
-def _unit(weight, file, ranges, key, header, hunks):
-    """One packable piece: ``ranges`` its coverage obligation (``[]`` if file-level), ``hunks`` its ``(order, text)`` pieces."""
-    return {"weight": weight, "file": file, "ranges": ranges, "key": key, "header": header, "hunks": hunks}
+def _unit(weight, file, ranges, key, header, hunks, heads=()):
+    """One packable piece: ``ranges`` its coverage obligation (``[]`` if file-level), ``hunks`` its ``(order, text)`` pieces,
+    ``heads`` the head line of each of its changed lines (one head line repeats when many removals share it)."""
+    return {"weight": weight, "file": file, "ranges": ranges, "key": key, "header": header, "hunks": hunks, "heads": list(heads)}
 
 
 def _weigh(section, row, unsettled, readable):
@@ -205,7 +206,7 @@ def _section_units(idx, section, weight, copy_lines, bar):
             pieces = _cut_runs(hunk, bar)
         for r, (piece, heads) in enumerate(pieces):
             ranges = [] if file_level else countable_lines._merge_numbers(heads)
-            units.append(_unit(_changed_count(piece), file, ranges, idx, header, [((h, r), piece)]))
+            units.append(_unit(_changed_count(piece), file, ranges, idx, header, [((h, r), piece)], heads))
     return units
 
 
@@ -235,9 +236,12 @@ def _assemble(packed, prefix):
         for unit in units:
             ranges = unit["ranges"]
             if ranges:
-                taken = claimed.get(unit["file"], [])
-                claimed[unit["file"]] = _merge_ranges(taken + ranges)
-                ranges = countable_lines._subtract(ranges, taken)
+                # A hunk cut into runs shares head coordinates across its runs (many removals sit at one head line);
+                # each run keeps its own anchors, since its diff text is only in its own slice.
+                origin = (unit["key"], unit["hunks"][0][0][0]) if unit["hunks"] and isinstance(unit["hunks"][0][0], tuple) else None
+                taken = [r for o, rs in claimed.get(unit["file"], []) if origin is None or o != origin for r in rs]
+                claimed.setdefault(unit["file"], []).append((origin, ranges))
+                ranges = countable_lines._subtract(ranges, _merge_ranges(taken))
             obligations.append({"file": unit["file"], "lines": ranges})
             group = groups.setdefault(unit["key"], {"header": unit["header"], "hunks": {}})
             for order, hunk in unit["hunks"]:
@@ -248,12 +252,20 @@ def _assemble(packed, prefix):
             if text and not text.endswith("\n"):
                 text += "\n"
             pieces.append(text)
-        out.append({
+        sl = {
             "id": "%s%d" % (prefix, k),
             "weight": sum(u["weight"] for u in units),
             "parts": merge_parts(obligations),
             "diff": "".join(pieces),
-        })
+        }
+        if prefix == "s":  # the planned slices own each changed line once: they carry the per-head-line counts
+            heads = {}
+            for unit in units:
+                for n in unit["heads"]:
+                    per = heads.setdefault(unit["file"], {})
+                    per[n] = per.get(n, 0) + 1
+            sl["heads"] = heads
+        out.append(sl)
     return out
 
 
@@ -343,7 +355,8 @@ def unread_share(unread_parts, plan_obj, count_result):
     if isinstance(plan_obj, dict) and _is_int(plan_obj.get("countable")) and plan_obj["countable"] >= 0:
         countable = plan_obj["countable"]
     zero = _zero_files(count_result)
-    unread = sum(_count_lines(part["lines"]) for part in parts if part["file"] not in zero)
+    views = _file_views(plan_obj)
+    unread = sum(_weigh_ranges(part["lines"], views.get(part["file"])) for part in parts if part["file"] not in zero)
     return {"unreadLines": min(unread, countable), "countableLines": countable, "parts": parts}
 
 
@@ -357,7 +370,13 @@ def _file_views(plan_obj):
     for entry in slices:
         diff = entry.get("diff") if isinstance(entry, dict) else None
         for section in countable_lines.parse_sections(diff):
-            view = views.setdefault(section["file"], {"header": None, "hunks": {}, "copied": False})
+            view = views.setdefault(section["file"], {"header": None, "hunks": {}, "copied": False, "weights": {}})
+            # a planned slice records the head line of each changed line it owns, in the plan's own coordinates
+            counts = entry.get("heads", {}).get(section["file"]) if isinstance(entry.get("heads"), dict) else None
+            if isinstance(counts, dict) and not view.setdefault("_counted", set()) & {id(entry)}:
+                view["_counted"].add(id(entry))
+                for n, c in counts.items():
+                    view["weights"][int(n)] = view["weights"].get(int(n), 0) + c
             header, hunks = _split_hunks(section["text"])
             if view["header"] is None:
                 view["header"] = header
@@ -368,17 +387,47 @@ def _file_views(plan_obj):
     return views
 
 
-def _chunk_ranges(ranges, bar):
+def _heavy(view):
+    """``{head line: extra changed lines}`` for head lines carrying more than one changed line; empty for a copy or no view."""
+    if view is None or view["copied"]:
+        return {}
+    return {n: c - 1 for n, c in view["weights"].items() if c > 1}
+
+
+def _weigh_ranges(ranges, view):
+    """The changed lines the ``ranges`` hold: their length plus the extra changed lines sharing a head line."""
+    total = _count_lines(ranges)
+    for n, extra in _heavy(view).items():
+        if any(s <= n <= e for s, e in ranges):
+            total += extra
+    return total
+
+
+def _chunk_ranges(ranges, bar, heavy=None):
+    """``ranges`` cut into chunks of at most ``bar`` changed lines; a head line in ``heavy`` weighs 1 + its extra, and one that
+    alone outweighs the bar stands in a chunk of its own."""
+    heavy = heavy or {}
     chunks = []
     cur = []
     room = bar
     for start, end in ranges:
         while start <= end:
-            take = min(room, end - start + 1)
-            cur.append([start, start + take - 1])
-            start += take
-            room -= take
-            if room == 0:
+            if start in heavy:
+                weight = 1 + heavy[start]
+                if cur and weight > room:
+                    chunks.append(cur)
+                    cur = []
+                    room = bar
+                cur.append([start, start])
+                room -= weight
+                start += 1
+            else:
+                stop = min([end] + [n - 1 for n in heavy if n > start])
+                take = min(room, stop - start + 1)
+                cur.append([start, start + take - 1])
+                start += take
+                room -= take
+            if room <= 0:
                 chunks.append(cur)
                 cur = []
                 room = bar
@@ -403,13 +452,13 @@ def slice_parts_for(unread_parts, plan_obj, count_result):
         if not part["lines"]:
             units.append(_unit(0, file, [], file, view["header"], everything))
             continue
-        chunks = [part["lines"]] if file in zero else _chunk_ranges(part["lines"], bar)
+        chunks = [part["lines"]] if file in zero else _chunk_ranges(part["lines"], bar, _heavy(view))
         for chunk in chunks:
             picked = [
                 (i, text)
                 for i, (text, heads) in enumerate(view["hunks"].items())
                 if view["copied"] or any(s <= n <= e for n in heads for s, e in chunk)
             ]
-            weight = 0 if file in zero else _count_lines(chunk)
+            weight = 0 if file in zero else _weigh_ranges(chunk, view)
             units.append(_unit(weight, file, chunk, file, view["header"], picked or everything))
     return _assemble(_pack(units, bar), "u")

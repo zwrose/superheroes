@@ -4842,7 +4842,9 @@ def _after_panel_wave(state, config, roster, seats, seat_status, this_wave):
     if unread and wave < UNREAD_WAVE_BOUND and _open_unread_wave(state, config, unread, wave, this_wave):
         return
     residual = unread
-    state["unreadShare"] = slicing.unread_share(residual, state["slicePlan"], state.get("sliceCount"))
+    # the slice diffs show how many changed lines share a head line, so the share weighs removals too
+    state["unreadShare"] = slicing.unread_share(residual, dict(state["slicePlan"], slices=_wave_slices(state)),
+                                                state.get("sliceCount"))
     if residual:
         share = state["unreadShare"]
         _decision(state, "unread-after-waves",
@@ -9195,7 +9197,20 @@ def _finish_retired_extra_pass(state):
     if isinstance(pending, dict):
         held += [pending.get("action"), pending.get("phase")]
     if RETIRED_EXTRA_PASS_PHASE not in held:
-        return False
+        # A state past the retired pass (at its verifiers or synthesis) still holds the panel's
+        # already-verified findings in `_verifiedCarry`; nothing merges them back now, so continuing
+        # could converge without fixing them. Hand it back with the findings still open.
+        if state.get("_verifiedCarry") is None:
+            return False
+        state["pending"] = None
+        for name in RETIRED_EXTRA_PASS_FIELDS:
+            state.pop(name, None)
+        _hand_back(state, "retired-gap-sweep",
+                   "The review was waiting past an extra pass over a big change that this version no "
+                   "longer runs, with findings already verified and held for a merge this version no "
+                   "longer makes. The PR is handed back with its findings still open; certification "
+                   "is withheld.", cap=False)
+        return True
     config = state.get("config")
     if not isinstance(config, dict) or not _is_plain_int(state.get("round")):
         return False

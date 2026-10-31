@@ -137,8 +137,13 @@ def _check_plan(pl, diff, proven=(), copies=None):
         else:
             expected = set(section["headLines"])
         # 3. every changed head line is in exactly one slice's parts
+        # (a head line shared by several changed lines, as removals share one, is kept by each run that holds one)
+        shared = {n for n in expected if section["headLines"].count(n) > 1}
         for n in expected:
-            assert seen.get((file, n)) == 1, (file, n, seen.get((file, n)))
+            if n in shared:
+                assert seen.get((file, n), 0) >= 1, (file, n)
+            else:
+                assert seen.get((file, n)) == 1, (file, n, seen.get((file, n)))
     # 5. no proven copy is in any slice or slice diff
     proven_files = {p if isinstance(p, str) else p["file"] for p in proven}
     for s in slices:
@@ -291,6 +296,19 @@ def test_a_deletion_heavy_hunk_weighs_removed_lines_and_is_cut():
     removed = sum(sec["removed"] for s in pl["slices"] for sec in cl.parse_sections(s["diff"]))
     assert removed == 1800
     _check_plan(pl, fx["diff"])
+
+
+def test_every_run_of_a_cut_deletion_hunk_keeps_its_anchor_and_unread_work_is_weighed_by_changed_lines():
+    fx = _fx_deletion_heavy()
+    pl = _plan_of(fx)
+    for sl in pl["slices"]:
+        owed = {n for p in sl["parts"] for s, e in p["lines"] for n in range(s, e + 1)}
+        assert 4 in owed, sl["id"]  # the removals' shared anchor is owed to each run that holds some
+    unread = [{"file": "del.py", "lines": [[4, 13]]}]
+    share = slicing.unread_share(unread, pl, fx["cr"])
+    assert share["unreadLines"] == 1810
+    cut = slicing.slice_parts_for(unread, pl, fx["cr"])
+    assert cut and sum(s["weight"] for s in cut) == 1810
 
 
 def test_a_replacement_hunk_is_cut_so_no_slice_exceeds_the_bar():
