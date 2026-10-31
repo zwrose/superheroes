@@ -3095,7 +3095,7 @@ def test_the_declaration_reader_reads_a_missing_declaration_as_absent(tmp_path):
     assert rr._ci_workflow(write_core(tmp_path)) == ("absent", None)
     other = tmp_path / "other"
     other.mkdir()
-    assert rr._ci_workflow(write_core(other, {"projectConfiguration": {"budgetN": 3}})) == ("absent", None)
+    assert rr._ci_workflow(write_core(other, {"projectConfiguration": {"stackingTool": "gh-stack"}})) == ("absent", None)
 
 
 def test_the_declaration_reader_reads_a_non_mapping_configuration_as_unreadable(tmp_path):
