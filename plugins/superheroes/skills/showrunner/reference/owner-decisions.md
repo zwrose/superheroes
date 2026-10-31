@@ -808,7 +808,7 @@ say how it changes and what the advisor says when the owner finds a review slow.
   trust half the proposal changes. A **project focus hint** (`kind: focus-hint`, its one line in
   `hint`) joins the Focus hints section of the review settings' layer. A **CLAUDE.md rule**
   (`kind: claude-md-rule`, its one line in `rule`) joins the project's CLAUDE.md, which the command
-  leaves uncommitted; the advisor lands it on the same branch as the Canon entry. Neither file is
+  leaves uncommitted. When Canon lives in the project's repository, the advisor lands the line on the same branch as the Canon entry; when Canon lives in the project store, the Canon entry stays in the store's own commit and the advisor lands the CLAUDE.md line through an ordinary project PR. Neither file is
   created: with no such file the proposal is refused `target-missing`, a file that is not UTF-8 text is refused `target-unreadable`, and in a cloud session a focus hint is refused `calibration-write-in-cloud-session`, each before anything is written. A proposal that replaces an earlier Canon ruling names it in an
   optional `supersedes` entry id, which the command carries into the new entry. A standing ruling
   about leftovers is the Canon entry alone. The Canon

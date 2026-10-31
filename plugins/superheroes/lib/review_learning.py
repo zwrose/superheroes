@@ -347,7 +347,8 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     rather than recording the approval in one store and the calibration in another.
 
     A focus hint joins the Focus hints section of the review settings' layer; a CLAUDE.md rule joins the
-    project's CLAUDE.md, left uncommitted for the advisor to land with the Canon entry. Neither file is
+    project's CLAUDE.md, left uncommitted for the advisor to land (on the Canon entry's branch when
+    Canon is in the project's repository, otherwise through a project PR). Neither file is
     created: with no such file the proposal is refused (`target-missing`), a file that is not UTF-8 text is refused
     (`target-unreadable`), and a cloud session's calibration write is refused (`calibration-write-in-cloud-session`), each
     before anything is written.
