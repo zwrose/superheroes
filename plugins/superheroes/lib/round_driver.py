@@ -9207,7 +9207,19 @@ RETIRED_EXTRA_PASS_PHASE = "dispatch-gap-sweep"
 RETIRED_EXTRA_PASS_FIELDS = ("_gapSweptRound", "_gapMerge", "_verifiedCarry")
 
 
-def _finish_retired_extra_pass(state):
+def _retired_pass_result_recorded(session_dir, rnd):
+    """True when any result is stored for the retired pass in `rnd`. Fail closed: a store directory
+    that cannot be listed counts as recorded."""
+    try:
+        path = round_records.store_dir(session_dir, rnd, RETIRED_EXTRA_PASS_PHASE)
+        return bool(os.listdir(path))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+
+
+def _finish_retired_extra_pass(state, session_dir=None):
     """Drop the retired extra pass from a saved, unfinished state of the current generation that
     stands at it (as its step, or as the action or phase it has pending) and carry on. Returns True when
     it did; the caller persists the state.
@@ -9248,6 +9260,14 @@ def _finish_retired_extra_pass(state):
     state["pending"] = None
     for name in RETIRED_EXTRA_PASS_FIELDS:
         state.pop(name, None)
+    # axis: a result already recorded for the retired pass may hold a blocker nothing reads now; hand back, never settle clean
+    if session_dir and _retired_pass_result_recorded(session_dir, state["round"]):
+        _hand_back(state, "retired-gap-sweep",
+                   "The review was waiting at an extra pass over a big change that this version no "
+                   "longer runs, and a result for that pass was already recorded. Nothing now reads "
+                   "that result, so its findings cannot be checked. The PR is handed back with its "
+                   "findings still open; certification is withheld.", cap=False)
+        return True
     _decision(state, "retired-gap-sweep",
               "The review was waiting at an extra pass over a big change that this version no longer "
               "runs. Round %s's findings were already verified and settled, so the review continues "
@@ -12613,7 +12633,7 @@ def _drop_saved_extra_pass(session_dir, cmd):
     if not ok or not isinstance(state, dict):
         return
     retired = state.get("step")
-    if not _finish_retired_extra_pass(state):
+    if not _finish_retired_extra_pass(state, session_dir):
         return
     save_state(session_dir, state)
     _journal_append(session_dir, {"cmd": cmd, "phase": retired if isinstance(retired, str) else None,
