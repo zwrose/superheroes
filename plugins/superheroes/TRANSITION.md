@@ -18,6 +18,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **Each review escape and false PR claim the advisor logs now ends with a `caught by: <kind> — <the exact fix>` line, and the gardening pass tallies escapes by kind and routes each kind to its home.** Nothing is owed at once: entries logged before this release carry no kind and read as unmeasured for kind. See [Showrunner: each escape names what would have caught it](#showrunner-each-escape-names-what-would-have-caught-it).
+
 - **After switching.** **A PR whose review left findings for the owner names each one, by record id and title, under What we're accepting before it is marked ready or vetted READY.** `vet_slot.py handback --pr` and a READY `vet_slot.py write` now refuse `leftover-not-accepted` or `review-record-unreadable`. See [Vet slot: findings left for the owner are named before ready](#vet-slot-findings-left-for-the-owner-are-named-before-ready).
 
 - **After switching.** **A light- or micro-lane review record over four rounds (five with the extra audit round) is refused `review-record-round-cap-exceeded`; a session that wrote one now parks instead.** See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
@@ -53,6 +55,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A caller that passes `dispatch-write --landing-dir`, reads a `sandbox-landing-dir-*` refusal, imports `observed_refusals` or `record_paths.is_landing_dir`, or reads `$FIXER_MODEL` drops it; a saved `code-fixer` or `fixer` tier override is dropped and a saved codex pin under either key takes no effect and is listed as invalid; both are safe to remove.** See [Review: the fixer-only machinery is removed](#review-the-fixer-only-machinery-is-removed).
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
+
+### Showrunner: each escape names what would have caught it
+
+- **The escape line.** A review escape's misses-log entry, and a false PR claim's, ends with one line spelled `caught by: <kind> — <the exact fix>`. The kind is one of eight: `claude-md-rule`, `focus-hint`, `plugin-reviewer-instruction`, `one-time-sweep`, `permanent-check`, `environment-test`, `risk-setting-or-leftover-rule` or `nothing-reachable`. The fix is the sentence to add or the search to run. The act that logs the escape decides the kind by six questions asked in order (`skills/showrunner/reference/owner-decisions.md` § Every grading keeps its scoring, and the misses log).
+- **At the gardening pass.** The advisor adds each escape's `kind` to the tally's escape input. `review_learning.py tally` returns a new key, `escapesByKind`, beside the per-seat tally: a count for each of the eight kinds plus `unmeasured` for an escape with no kind, and `null` wherever the escape counts are `null`. A `kind` outside the eight reads malformed, so the tally reads `incomplete-evidence`. The owner can veto each call, and duty 3 routes each kind to its home. A single escape with a determinate fix may produce a proposal without waiting for the seat windows.
+- **Two new proposal kinds.** `review_learning.py apply` accepts `kind: focus-hint` (keys `schema`, `kind`, `hint`, `ruling`) and `kind: claude-md-rule` (keys `schema`, `kind`, `rule`, `ruling`), through the same owner-yes and Canon path as `risk-and-trust` and `standing-ruling`. The hint or rule is one plain line. A focus hint joins the review settings' Focus hints section; a CLAUDE.md rule joins the project's CLAUDE.md, left uncommitted for the advisor to land beside the Canon entry. With no such file, `apply` refuses `target-missing` and writes nothing. An applied result carries `calibration: "focus-hint"` or `"claude-md-rule"` and `set: {action, path}`, where `action` is `written` or `noop`.
 
 ### Review: a ruling refuses an id that names more than one finding
 

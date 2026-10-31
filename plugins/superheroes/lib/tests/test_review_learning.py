@@ -1165,3 +1165,174 @@ def test_owner_decisions_spells_the_marker_line_and_the_tally_marker():
     assert '`"marker": "%s"`' % RL.FALSE_CLAIM_MARKER in text and RL.FALSE_CLAIM_MARKER == "false-pr-claim"
     assert "The false-claim check." in text and "The seating check." in text
     assert "falsePrClaims" in text and "seating --row" in text
+
+
+# --- #2190: each escape names what would have caught it; two text proposal kinds ---
+
+def _kind_escapes():
+    return [{"pr": 2, "reviewedAt": D, "call": "missed", "kind": "focus-hint", "fix": "look for x"},
+            {"pr": 2, "reviewedAt": D, "call": "missed", "kind": "focus-hint", "fix": "look for y"},
+            {"pr": 3, "reviewedAt": D, "call": "seen-and-left", "kind": "risk-setting-or-leftover-rule", "fix": "z"},
+            {"pr": 3, "reviewedAt": D, "call": "missed", "kind": "nothing-reachable"},
+            {"pr": 4, "reviewedAt": D, "call": "missed"},  # logged before #2190: no kind
+            {"pr": 4, "reviewedAt": D, "call": "missed", "kind": None}]
+
+
+def test_tally_counts_escapes_by_kind_beside_the_seat_tally():
+    got = RL.tally(_truth_table_records(), _kind_escapes(), D, until="2026-10-11")
+    assert got["measured"] is True
+    assert got["escapes"] == {"missed": 5, "seenAndLeft": 1}
+    assert set(got["escapesByKind"]) == set(RL.ESCAPE_KINDS) | {RL.UNMEASURED} and len(RL.ESCAPE_KINDS) == 8
+    assert {k: n for k, n in got["escapesByKind"].items() if n} == {
+        "focus-hint": 2, "risk-setting-or-leftover-rule": 1, "nothing-reachable": 1, RL.UNMEASURED: 2}
+    assert sum(got["escapesByKind"].values()) == sum(got["escapes"].values())
+    assert got["seats"] == RL.tally(_truth_table_records(), _escapes(), D, until="2026-10-11")["seats"]  # the per-seat tally stays
+
+
+# axis: the guarding test for a missing kind — it reads unmeasured, never as nothing reachable
+def test_tally_an_escape_with_no_kind_reads_unmeasured_never_nothing_reachable():
+    got = RL.tally([], [{"pr": 1, "reviewedAt": D, "call": "missed"}], D, until=D)
+    assert got["escapesByKind"]["nothing-reachable"] == 0
+    assert got["escapesByKind"][RL.UNMEASURED] == 1
+
+
+@pytest.mark.parametrize("kind", ["unmeasured", "", "CLAUDE.md rule", 3, ["focus-hint"]])
+def test_tally_an_unknown_kind_reads_malformed_and_unmeasured(kind):
+    got = RL.tally([], [{"pr": 1, "reviewedAt": D, "call": "missed", "kind": kind}], D, until=D)
+    assert (got["measured"], got["reason"]) == (False, "incomplete-evidence")
+    assert got["escapesByKind"] is None and got["escapes"] == {"missed": None, "seenAndLeft": None}
+    assert got["leftOut"]["malformed"] == 1
+
+
+def test_tally_a_false_pr_claim_with_a_kind_is_not_an_escape_by_kind():
+    claim = {"pr": 1, "reviewedAt": D, "call": "missed", "kind": "permanent-check", "marker": RL.FALSE_CLAIM_MARKER}
+    got = RL.tally([], [claim], D, until=D)
+    assert got["falsePrClaims"] == 1 and not any(got["escapesByKind"].values())
+
+
+LAYER_BODY = "## Scope exclusions\n\n- vendor/\n\n## Focus hints\n\n- check the retry path\n\n## Conventions\n\n- none\n"
+HINT = "Look for a cache read that skips the owner check."
+CLAUDE_RULE = "Every new CLI verb gets a round-trip test through main()."
+
+
+def _text_proposal(kind, text, **over):
+    field = {"focus-hint": "hint", "claude-md-rule": "rule"}[kind]
+    base = {"schema": "calibration-proposal/1", "kind": kind, field: text, "ruling": "Adopt this %s." % kind}
+    base.update(over)
+    return base
+
+
+def _layer(proj_):
+    repo, store = proj_
+    return core_md.layer_path(repo, "review-crew", store)
+
+
+def _with_layer(proj_):
+    repo, store = proj_
+    assert core_md.write_layer(repo, "review-crew", LAYER_BODY, "confirmed", root=store, now="2026-06-26")["action"] == "written"
+
+
+def _claude_md(proj_):
+    return os.path.join(proj_[0], "CLAUDE.md")
+
+
+def _canon_lines(canon_):
+    return [l for l in _git(canon_, "show", "HEAD:" + CANON_REL).splitlines() if l.startswith("- **")]
+
+
+def test_focus_hint_joins_the_focus_hints_section_and_canon(proj, canon_root):
+    _with_layer(proj)
+    got = _apply(proj, canon_root, _text_proposal("focus-hint", HINT), APPROVAL)
+    assert (got["ok"], got["outcome"], got["calibration"]) == (True, "applied", "focus-hint")
+    assert got["set"] == {"action": "written", "path": _layer(proj)}
+    assert _canon_lines(canon_root) == [got["canonEntry"]] and "Adopt this focus-hint." in got["canonEntry"]
+    text = open(_layer(proj), encoding="utf-8").read()
+    focus = text.split("## Focus hints", 1)[1].split("## Conventions", 1)[0]
+    assert focus.strip().splitlines() == ["- check the retry path", "- " + HINT]
+    assert "- vendor/" in text and "- none" in text
+    again = _apply(proj, canon_root, _text_proposal("focus-hint", HINT), APPROVAL)
+    assert again["set"]["action"] == "noop" and open(_layer(proj), encoding="utf-8").read() == text
+
+
+def test_claude_md_rule_is_appended_once_and_left_uncommitted(proj, canon_root):
+    with open(_claude_md(proj), "w", encoding="utf-8") as fh:
+        fh.write("# CLAUDE.md\n\n- an existing rule\n")
+    got = _apply(proj, canon_root, _text_proposal("claude-md-rule", CLAUDE_RULE), APPROVAL)
+    assert (got["ok"], got["outcome"], got["calibration"]) == (True, "applied", "claude-md-rule")
+    assert os.path.realpath(got["set"]["path"]) == os.path.realpath(_claude_md(proj))
+    assert open(_claude_md(proj), encoding="utf-8").read() == "# CLAUDE.md\n\n- an existing rule\n\n%s\n" % CLAUDE_RULE
+    assert got["canonEntry"] in _canon_lines(canon_root)
+    assert "CLAUDE.md" in _git(proj[0], "status", "--porcelain")  # the advisor lands it; apply commits only Canon
+    assert _apply(proj, canon_root, _text_proposal("claude-md-rule", CLAUDE_RULE), APPROVAL)["set"]["action"] == "noop"
+
+
+# axis: the guarding test for a missing home — a text kind with no file to join writes nothing, Canon included
+@pytest.mark.parametrize("kind, text", [("focus-hint", HINT), ("claude-md-rule", CLAUDE_RULE)])
+def test_text_kind_with_no_home_file_writes_nothing(proj, canon_root, kind, text):
+    before = _state(proj, canon_root)
+    got = _apply(proj, canon_root, _text_proposal(kind, text), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "refused", "target-missing")
+    assert _state(proj, canon_root) == before
+    assert not os.path.exists(_layer(proj)) and not os.path.exists(_claude_md(proj))
+
+
+@pytest.mark.parametrize("kind", ["focus-hint", "claude-md-rule"])
+def test_text_kind_needs_the_owners_yes(proj, canon_root, kind):
+    _with_layer(proj)
+    with open(_claude_md(proj), "w", encoding="utf-8") as fh:
+        fh.write("# CLAUDE.md\n")
+    before = (_state(proj, canon_root), _bytes(_layer(proj)), _bytes(_claude_md(proj)))
+    got = _apply(proj, canon_root, _text_proposal(kind, HINT), dict(APPROVAL, answer="no"))
+    assert (got["ok"], got["reason"]) == (False, "no-owner-yes")
+    assert (_state(proj, canon_root), _bytes(_layer(proj)), _bytes(_claude_md(proj))) == before
+
+
+# axis: the guarding test for the one-line shape — a hint or rule never adds a heading or a second line
+@pytest.mark.parametrize("kind", ["focus-hint", "claude-md-rule"])
+@pytest.mark.parametrize("text", ["", " ", "two\nlines", "cr\rline", " padded", "## A heading", None, 7])
+def test_text_kind_line_must_be_one_plain_line(proj, canon_root, kind, text):
+    _with_layer(proj)
+    before = (_state(proj, canon_root), _bytes(_layer(proj)))
+    got = _apply(proj, canon_root, _text_proposal(kind, text), APPROVAL)
+    assert (got["ok"], got["reason"]) == (False, "proposal-invalid")
+    assert (_state(proj, canon_root), _bytes(_layer(proj))) == before
+
+
+@pytest.mark.parametrize("proposal", [
+    _text_proposal("focus-hint", HINT, rule=CLAUDE_RULE),
+    _text_proposal("claude-md-rule", CLAUDE_RULE, half="riskAreas"),
+    {"schema": "calibration-proposal/1", "kind": "focus-hint", "rule": HINT, "ruling": "r"},
+])
+def test_text_kind_carries_exactly_its_keys(proj, canon_root, proposal):
+    got = _apply(proj, canon_root, proposal, APPROVAL)
+    assert (got["ok"], got["reason"]) == (False, "proposal-invalid")
+
+
+def test_text_kind_write_failure_after_canon_reads_partial(proj, canon_root, monkeypatch):
+    _with_layer(proj)
+    def boom(path, text):
+        raise OSError("disk full")
+    monkeypatch.setattr(RL.store_core, "atomic_write", boom)
+    got = _apply(proj, canon_root, _text_proposal("focus-hint", HINT), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "partial", "calibration-not-written")
+    assert got["canonEntry"] in _canon_lines(canon_root) and "disk full" in got["detail"]
+
+
+@pytest.mark.parametrize("layer, expected", [
+    ("<!-- p -->\n\n## Focus hints\n## Conventions\n", "<!-- p -->\n\n## Focus hints\n\n- h\n\n## Conventions\n"),
+    ("<!-- p -->\n", "<!-- p -->\n\n## Focus hints\n\n- h\n"),
+    ("<!-- p -->\n\n## Focus hints\n\n- a\n", "<!-- p -->\n\n## Focus hints\n\n- a\n- h\n"),
+])
+def test_focus_hint_placement(layer, expected):
+    assert RL._with_focus_hint(layer, "- h") == expected
+
+
+def test_owner_decisions_states_the_kinds_and_six_questions_once():
+    text = _doctrine("owner-decisions")
+    for kind in RL.ESCAPE_KINDS:
+        assert "`%s`" % kind in text, kind
+    assert text.count("Could reading code see it, or only running it?") == 1
+    q = [text.index(s) for s in ("Could reading code see it", "Was the line in the diff?", "Did a reviewer flag it and leave it?",
+                                 "a rule a builder could follow up front", "about this project's domain", "Has the class escaped before?")]
+    assert q == sorted(q)
+    assert "escapesByKind" in text and "may produce a proposal without waiting" in text

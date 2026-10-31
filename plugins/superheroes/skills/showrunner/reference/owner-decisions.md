@@ -259,7 +259,36 @@ declined with a trigger by default.
      record names the bug. It is **seen and left** when a finding names it and its outcome let it
      through: shown wrong, a craft call, left for the owner, or a ruling. A finding whose outcome is
      fixed but whose fix did not hold counts as **missed**, because the review did not stop the bug;
-     the entry then names that finding and says its fix did not hold.
+     the entry then names that finding and says its fix did not hold. The entry ends with one more
+     line, spelled ``caught by: <kind> — <the exact fix>``, naming what would have caught it: one of
+     the eight kinds below and the exact fix, the sentence to add or the search to run, never "be
+     more careful".
+   - **The eight kinds.** Each has one spelling, the one the line and the tally use:
+     1. `claude-md-rule`: a CLAUDE.md rule, one a builder can follow up front, which builders and
+        reviewers both read;
+     2. `focus-hint`: a project focus hint, in the review settings' Focus hints, for something only
+        a reviewer can look for;
+     3. `plugin-reviewer-instruction`: a plugin reviewer instruction, for a lesson any project would
+        hit;
+     4. `one-time-sweep`: a one-time sweep;
+     5. `permanent-check`: a permanent check, only once the same class has escaped, or come back, a
+        second time;
+     6. `environment-test`: an environment test, for example extending `cloud_check.py` or adding a
+        live smoke test;
+     7. `risk-setting-or-leftover-rule`: a risk setting or leftover rule, for a seen-and-left escape;
+     8. `nothing-reachable`: nothing reachable.
+   - **How the kind is decided.** The act that logs the escape decides it from the PR's records, by
+     asking these questions in this order:
+     1. Could reading code see it, or only running it?
+     2. Was the line in the diff?
+     3. Did a reviewer flag it and leave it?
+     4. Is it a rule a builder could follow up front (CLAUDE.md), or only something to look for
+        (hint)?
+     5. Is it about this project's domain, or would any project hit it? When unclear, start at the
+        project level, and promote it to the plugin when a second project shows it.
+     6. Has the class escaped before? Only then is it a permanent check.
+   - **The owner's veto.** The owner sees each call at the gardening pass and can veto it. A repeat
+     escape of the same class after its fix reopens the call.
    - **Counting starts at adoption.** A review escape counts only when the review it traces to is dated
      on or after the project's [adoption day](#calibration-changes-and-time-complaints), so no reviewer
      seat is judged on reviews from before the project adopted this way of learning. An escape traced
@@ -278,7 +307,8 @@ declined with a trigger by default.
      It is **seen and left** when a finding named it and its outcome let it through. The entry adds two
      lines. The marker line is spelled exactly
      ``false PR claim: <the claim> — shown false by <what showed it false>``, and a second line names
-     what would have caught it. **The marker is what the tally reads.**
+     what would have caught it, the same ``caught by: <kind> — <the exact fix>`` line a review escape
+     ends with, its kind decided the same way. **The marker is what the tally reads.**
    - **Counting starts at adoption.** Counting starts at the adoption day exactly as it does for an
      escape. A false PR claim dated earlier is still logged, marked as before adoption, and never
      counted. **A false PR claim is counted apart from review escapes**: it never adds to the missed or
@@ -585,7 +615,8 @@ advisor run together to keep calibration honest.
    - **The counts come from `lib/review_learning.py tally`.** It reads review records and logged
      escapes only, and decides nothing. Its input is one review record per PR, the latest, as the
      record writer's `read --pr <n>` returns it, and each review escape as its review's date
-     (`reviewedAt`) and its call (`missed` or `seen-and-left`). The advisor builds that escape input
+     (`reviewedAt`), its call (`missed` or `seen-and-left`) and its kind (`kind`, spelled as in the
+     entry's caught-by line). The advisor builds that escape input
      from the misses log at the pass, one item per review escape in the log, before-adoption ones
      included (the tally applies the dates), writing "seen and left" as `seen-and-left`. A PR is
      dated by that record and counts only when the date is on or after the adoption day and inside
@@ -599,6 +630,26 @@ advisor run together to keep calibration honest.
      credited to every seat whose lens the finding names (a fixed finding in the security lens
      counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
      in that seat's lens.
+   - **The tally counts escapes by kind as well as by seat**, as `escapesByKind`, and the per-seat
+     tally stays. An escape with no kind, every escape logged before the caught-by line existed
+     among them, counts as `unmeasured` for kind, never as `nothing-reachable`; a kind outside the
+     eight reads malformed. With no by-kind tally in a gardening record, either no pass has run since
+     escapes were logged or none were logged, and the record says which.
+   - **Each kind is routed to its home.** The owner sees each escape's call here and can veto it
+     before anything is routed.
+     - A `focus-hint` or a `claude-md-rule` becomes a gardening-sheet card. On the owner's yes the
+       advisor applies it with `lib/review_learning.py apply`, which records it in Canon
+       ([Calibration changes](#calibration-changes-and-time-complaints)).
+     - A `plugin-reviewer-instruction` becomes a filing proposal. In a consumer project the
+       instruction goes to the plugin's advisor as a field report instead.
+     - A `one-time-sweep` is run by the advisor at once, and its hits become follow-ups.
+     - A `permanent-check` becomes a filing proposal.
+     - An `environment-test` becomes a filing proposal.
+     - A `risk-setting-or-leftover-rule` becomes a calibration proposal, as above.
+     - A `nothing-reachable` is recorded and routes nowhere.
+
+     **One escape with a determinate fix may produce a proposal without waiting for the seat
+     windows**: a single escape whose exact fix is already settled needs no count behind it.
 4. **Record the decisions-asked count** for the window. List the window's declines with their
    triggers, one per line.
 5. **Report the [workaround markers](../../../rubric/glossary.md#workaround-marker)**, whose inventory
@@ -720,7 +771,7 @@ ninth duty.
 - the guardian staleness read and any pending triage;
 - the reviewer-pass line, or lines, from duty 8 with any `Renew now` mark, for a project with a cloud setup;
 - the open questions the passes carry until settled;
-- and **the misses-log appends made**, the review escapes among them, and the calibration proposals the pass brought.
+- and **the misses-log appends made**, the review escapes among them, the escapes tallied by kind beside the per-seat tally, and the calibration proposals the pass brought.
 
 **What the decisions-asked count counts.** The decisions that needed the owner's word in the window:
 P0 rulings, batched P1 words, launch go-aheads, retirement rulings, and recalibration stamps. **Nothing
@@ -754,7 +805,11 @@ say how it changes and what the advisor says when the owner finds a review slow.
   the owner's recorded yes: the answer, the owner's exact words, and where and when they were given. The
   command records the approval in Canon by Canon's write procedure
   ([Writing a ruling](../../../rubric/canon-contract.md#writing-a-ruling)), then writes the Risk and
-  trust half the proposal changes. A proposal that replaces an earlier Canon ruling names it in an
+  trust half the proposal changes. A **project focus hint** (`kind: focus-hint`, its one line in
+  `hint`) joins the Focus hints section of the review settings' layer. A **CLAUDE.md rule**
+  (`kind: claude-md-rule`, its one line in `rule`) joins the project's CLAUDE.md, which the command
+  leaves uncommitted; the advisor lands it on the same branch as the Canon entry. Neither file is
+  created: with no such file the proposal is refused `target-missing` before anything is written. A proposal that replaces an earlier Canon ruling names it in an
   optional `supersedes` entry id, which the command carries into the new entry. A standing ruling
   about leftovers is the Canon entry alone. The Canon
   entry goes on the branch Canon's rule names for a ruling taken outside a PR the advisor is working on,
