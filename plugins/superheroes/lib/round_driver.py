@@ -1509,7 +1509,9 @@ def _returning_overrides(session_dir, overrides):
     head = _resolve_head_commit(repo_root) if repo_root else None
     try:
         proven, _ = _proven_copies_at(overrides, head)
-        answer = _returning_decide(repo_root, base, head, earlier, proven=proven)
+        # axis: the driver hands the decider a CI reader, so an earlier record written with CI pending can count as finished — see bite-proof record c1l11d_wo_c_fold
+        reader = {"ci_state": returning_review.production_ci_state(repo_root)} if repo_root else {}
+        answer = _returning_decide(repo_root, base, head, earlier, proven=proven, **reader)
     except Exception as exc:  # noqa: BLE001 — a decision nobody could take is a full read, never a changed one
         stored = _returning_full(RETURNING_FAILED, "the decision failed on %s: %s" % (type(exc).__name__, exc))
     else:

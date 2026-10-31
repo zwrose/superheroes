@@ -58,6 +58,10 @@ ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
 UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded are listed as open findings"
 UNFOLDED_OPEN = "recorded by a reviewer but never taken into the loop before it was closed"
 NO_SEAT_RESULT = "the session recorded no seat result or seat status"
+RETURNING_ROUND_KIND = "returning"  # round_driver.RETURNING_KIND: the driver's `roundKind` for a returning round (not imported here)
+SKIPPED_EMPTY_SURFACE = "skipped-empty-surface"  # the driver's `scopedFinder` value for an empty change
+CARRIED_WHY = ("the change since the last reviewed commit %s held nothing countable — catch-up merges and proven copies "
+               "only — so no reviewer ran in this round")
 UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
 _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an earlier version wrote
@@ -323,6 +327,29 @@ def _status_reviewers(state, setup=None, rows=()):
     if not any(status.values()) and not out:
         raise Refusal(UNSUPPORTED, NO_SEAT_RESULT)
     return out
+
+
+def _empty_returning_round(state):
+    """The `lastReviewed` commit when the session is exactly the empty returning round, else None: it converged in its
+    one round, which was a returning round whose change left an empty surface, and ran nothing: no audit, no verifier,
+    no carried finding, no finding at all."""
+    rounds, cfg = state.get("rounds"), state.get("config")
+    if state.get("terminal") != "converged" or not isinstance(rounds, dict) or list(rounds) != ["1"] \
+            or not isinstance(cfg, dict) or not isinstance(rounds["1"], dict):
+        return None
+    rec, returning = rounds["1"], cfg.get("returning")
+    last = returning.get("lastReviewed") if isinstance(returning, dict) else None
+    if rec.get("roundKind") != RETURNING_ROUND_KIND or rec.get("scopedFinder") != SKIPPED_EMPTY_SURFACE \
+            or not review_record._full_sha(last) or returning.get("read") != "changed":
+        return None
+    # axis: a round that carried a finding, audited, or ran a verifier is not the empty round — see bite-proof record c1l11d_wo_a_carried_review
+    if any(rec.get(k) for k in ("carried", "audits", "verifyPasses")):
+        return None
+    # axis: a session holding a carried finding, a finding or a ledger row ran something, so it is not the empty round — see bite-proof record c1l11d_wo_a_carried_review
+    if cfg.get("returningCarried") or state.get("findings") \
+            or any(sc.read_disposition_ledger(state, required=False)):  # rows or a fault: either way not the empty round
+        return None
+    return last
 
 
 def _slot_ran(state, key, row, env):
@@ -818,12 +845,17 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         pending = state.get("_newIssues")
         findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds, pending,
                               state.get("round") if _int(state.get("round")) else None)
+    carry = None  # the lastReviewed commit of an empty returning round: its record may carry the earlier review's reviewers
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
             reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
         except Refusal as refusal:
             # an abandoned session may have run no seat yet: it lists no reviewer, and any other refusal still stands
-            if abandoned is None or refusal.args[:2] != (UNSUPPORTED, NO_SEAT_RESULT):
+            if refusal.args[:2] != (UNSUPPORTED, NO_SEAT_RESULT):
+                raise
+            # so may the empty returning round: it lists none either, and the writer decides whether the earlier review stands
+            carry = _empty_returning_round(state) if abandoned is None else None
+            if abandoned is None and carry is None:
                 raise
             reviewers, raw = [], []
     else:
@@ -872,7 +904,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     # the extra audit round is labelled, never counted: it is a round of `rounds` the cap did not allow
     # axis: the extra audit round does not count toward rounds.count — see bite-proof record c1l4b_wo_a
     counted = len(rounds) - (1 if isinstance(extra, dict) and str(extra.get("round")) in rounds else 0)
-    return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
+    account = {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
@@ -888,6 +920,11 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
             "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked,
             **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {})}
+    if carry is not None:
+        account["_carry"] = carry  # private: `write_from_session` settles it and strips it before the account is dumped
+        # axis: the carry check reads the session's pinned review base (the driver's full sha), never extras.baseRef, which may be a symbolic ref — see bite-proof record c1l11d_wo_c_fold
+        account["carryBase"] = cfg["baseRef"] if review_record._full_sha(cfg.get("baseRef")) else None
+    return account
 
 
 def _verify_via_checked(rounds):
@@ -942,6 +979,35 @@ def _earlier(account, extras, repo_root, readers):
     return earlier
 
 
+def _carry_review(account, last_reviewed, extras, repo_root, readers):
+    """Give an empty returning round's account the earlier record's covering reviewers, marked carried, or refuse.
+
+    The earlier record is read whole, and `review_record.carry_refusal` (the same check the record writer repeats)
+    says whether it may be carried; a refusal is `review-session-unsupported` and nothing is posted."""
+    rd = review_record._readers(readers)
+    repo = extras.get("repo") or rd["repo_name"](repo_root)
+    prior = review_record.read(account["pr"], repo, readers)
+    if not prior.get("ok"):
+        raise Refusal(UNSUPPORTED, "the empty returning round has no earlier review record to carry: %s" % (prior.get("detail"),))
+    # a rewrite of this session's own carried record is judged against the record that one carried from
+    source = review_record.carry_source(prior, last_reviewed, account.get("sessionId"),
+                                        review_record.read_history(account["pr"], repo, readers))
+    if not review_record._full_sha(account.get("carryBase")):
+        raise Refusal(UNSUPPORTED, "the session's pinned review base is not a full commit sha, so the carry cannot be checked")
+    why = review_record.carry_refusal(source, last_reviewed, repo_root, account["carryBase"], account["finalCommit"],
+                                      account.get("provenCopies") or [], rd["returning_decide"],
+                                      lambda sha: review_record._ci(rd, repo, sha, repo_root)["state"])
+    if why is not None:
+        raise Refusal(UNSUPPORTED, why)
+    account["carriedReview"] = {"lastReviewed": last_reviewed, "why": CARRIED_WHY % last_reviewed[:7]}
+    account["reviewers"] = [
+        {"name": v.get("name"), "vendor": v.get("vendor"), "model": v.get("model"), "planned": True, "ran": True, "runDir": None,
+         "commit": last_reviewed, "step": None, "carriedFrom": last_reviewed,
+         **{k: v[k] for k in ("ownerWord", "notIndependent") if k in v}}
+        for v in source["reviewers"]
+        if isinstance(v, dict) and v.get("coversFinalCommit") is True and v.get("ran") in review_record._RAN_STATES]
+
+
 def _fill(account, earlier):
     """Give each account finding the parts the earlier record held for it and the session's row lacks.
 
@@ -994,6 +1060,9 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         except (OSError, ValueError, TypeError):
             raise Refusal(BAD_EXTRAS, "extras file")
         account = account_from_session(session_dir, extras, readers, tmp[0], abandoned)
+        carry = account.pop("_carry", None)
+        if carry is not None:
+            _carry_review(account, carry, extras, repo_root, readers)
         earlier = _earlier(account, extras, repo_root, readers)
         # the findings the driver's verifier fold closed as wrong in this session (`_decide` reads shown-wrong on no other ground)
         verifier_closed = {review_record._key(f) for f in account["findings"] if f.get("outcome") == _SHOWN_WRONG}

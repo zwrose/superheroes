@@ -13,10 +13,13 @@ The rule, in order; the first step that applies answers ``full``, otherwise the 
   2. The final commit of the earlier review is not an ancestor of the head: full.
   3. No reviewer row of the earlier record covers that final commit: full.
   4. The earlier record's ``status`` is not ``reviewed`` or ``awaits-owner``, or it carries ``abandoned``
-     (the earlier review did not finish): full.
-  5. The changed files are those whose section differs between ``base...lastReviewed`` and ``base...head``
-     (proven copies left out); a diff git cannot produce is full; no changed file is changed, with nothing
-     read.
+     (the earlier review did not finish): full. One gap is let through to step 5: a record whose only gap is
+     CI pending on its final commit (it is normally written before CI finishes). It then counts as finished
+     only when a CI reader (``ci_state``) says CI has since passed on that commit, or on a head with no
+     changed file; otherwise full.
+  5. The changed files are those whose section's own change differs between ``base...lastReviewed`` and
+     ``base...head`` (proven copies left out; ``index`` lines and hunk-header line numbers are not part of a
+     file's own change); a diff git cannot produce is full; no changed file is changed, with nothing read.
   6. The incremental diff is ``lastReviewed head`` (two-dot) over the changed files; the files a catch-up
      with the base also changed are named in ``overlap``, which can only raise the count.
   7. The countable lines of the incremental diff, counting every file the counter could not settle, are over
@@ -64,9 +67,10 @@ WHY_BASIS_UNUSABLE = "earlier-basis-unusable"
 WHY_OVERLAP = "catch-up-overlap"
 WHY_UNCLEAR_AS_BEFORE = "unclear-as-before"
 WHY_CHANGED_ONLY = "changed-only"
+WHY_CI_SETTLED = "ci-settled-since"
 WHY_TOKENS = (WHY_NO_EARLIER, WHY_EARLIER_UNUSABLE, WHY_NOT_ANCESTOR, WHY_NOT_COVERED, WHY_INCOMPLETE,
               WHY_DIFF_UNREADABLE, WHY_OVER_BAR, WHY_UNSETTLED, WHY_NEW_AREA, WHY_RISK_UNCLEAR, WHY_BASIS_UNUSABLE, WHY_OVERLAP,
-              WHY_UNCLEAR_AS_BEFORE, WHY_CHANGED_ONLY)
+              WHY_UNCLEAR_AS_BEFORE, WHY_CHANGED_ONLY, WHY_CI_SETTLED)
 
 _SHA_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
 _UNCLEAR_PREFIXES = (lane_call.WHY_NOT_SET, lane_call.WHY_UNMATCHABLE, lane_call.WHY_NO_PATHS)
@@ -159,6 +163,51 @@ def _sections_by_file(diff_text, sources=None):
     return out
 
 
+_INDEX_LINE = "index "
+_BINARY_MARKERS = ("Binary files ", "GIT binary patch")
+_HUNK_HEADER_RE = re.compile(r"@@ -\S+ \+\S+ @@")
+
+
+def _own_change(section_text):
+    """``section_text`` as the change the pull request itself made to the file: without its ``index`` lines and with
+    each hunk header cut to ``@@`` and whatever follows its closing ``@@``, so the blob ids and the line numbers a
+    moved base shifts are no part of it. Every other line (the ``diff --git``, mode, rename, copy, binary and
+    ``---``/``+++`` lines and each hunk body line) is kept exactly."""
+    lines = section_text.splitlines(keepends=True)
+    # axis: a binary section has no hunk text to tell versions apart, so its index line (the blob ids) is its content identity and is kept — see bite-proof record c1l11d_wo_c_fold
+    binary = any(line.startswith(_BINARY_MARKERS) for line in lines)
+    out = []
+    for line in lines:
+        if line.startswith(_INDEX_LINE) and not binary:
+            continue
+        hunk = _HUNK_HEADER_RE.match(line)
+        out.append("@@" + line[hunk.end():] if hunk else line)
+    return "".join(out)
+
+
+def _merge_reproduces_head(run, base, last_reviewed, head, path):
+    """True only when git proves the pull request's own lines in ``path`` did not change since ``last_reviewed``:
+    a three-way merge of the file (ours = the last reviewed commit's blob, ancestor = the blob at the merge base of
+    the last reviewed commit and the base, theirs = the base's blob) equals the head's file byte for byte. A file
+    missing from one side, a conflict, a non-zero exit, a binary file or any git failure is False."""
+    code, text = run(["merge-base", last_reviewed, base])
+    fork = text.strip()
+    if code != 0 or not _is_sha(fork):
+        return False
+    blobs = []
+    for rev in (last_reviewed, fork, base, head):
+        code, text = run(["rev-parse", "--verify", "--quiet", "%s:%s" % (rev, path)])
+        blob = text.strip()
+        if code != 0 or not _is_sha(blob):
+            return False
+        blobs.append(blob)
+    code, merged = run(["merge-file", "-p", "--object-id", *blobs[:3]])
+    if code != 0:
+        return False
+    code, expected = run(["cat-file", "blob", blobs[3]])
+    return code == 0 and merged == expected
+
+
 def _covers_final_commit(earlier):
     reviewers = earlier.get("reviewers")
     if not isinstance(reviewers, list):
@@ -199,20 +248,75 @@ def _catch_up_files(run, base, last_reviewed):
     return {name for name in text.split("\0") if name}
 
 
-def decide(repo_root, base, head, earlier, proven=(), git=None):
+_CI_PENDING_PREFIX = "CI is pending on "
+_CI_GREEN = "green"
+
+
+def _ci_pending_only(earlier, last_reviewed):
+    """True when ``earlier`` did not finish for one reason only: CI was pending on its final commit when it was
+    written. It is a ``not-reviewed`` record that is not abandoned, whose ``ci`` is pending on ``last_reviewed``,
+    and whose ``whatIsMissing`` is the one line the record writer words for that."""
+    import review_record
+    # axis: only the writer's not-reviewed status, never abandoned, is let through unfinished — see bite-proof record c1l11d_wo_c_fold
+    if not review_record.unfinished(earlier.get("status")) or "abandoned" in earlier:
+        return False
+    ci = earlier.get("ci")
+    if not (isinstance(ci, dict) and ci.get("state") == "pending" and ci.get("sha") == last_reviewed):
+        return False
+    missing = earlier.get("whatIsMissing")
+    if not (isinstance(missing, list) and len(missing) == 1 and isinstance(missing[0], str)):
+        return False
+    line = _CI_PENDING_PREFIX + last_reviewed[:7]
+    return missing[0] == line or missing[0].startswith(line + " ")
+
+
+def _ci_read(ci_state, sha):
+    """What the CI reader says of ``sha``: its state, or None when there is no reader, it raises, or it answers
+    anything but a string."""
+    if not callable(ci_state):
+        return None
+    try:
+        state = ci_state(sha)
+    except Exception:  # noqa: BLE001 — a reader that fails is a CI nobody read
+        return None
+    return state if isinstance(state, str) else None
+
+
+def _ci_settled(ci_state, last_reviewed, head, files):
+    """``(True, why text)`` when CI has since passed on ``last_reviewed``, or on ``head`` that has no changed file
+    (it was reached from ``last_reviewed`` by catch-up merges only); otherwise ``(False, text)`` naming the CI state
+    read, which makes the decision full."""
+    state = _ci_read(ci_state, last_reviewed)
+    # Axis: only CI "green" settles an earlier record written with CI pending; red, pending, unreadable and no reader do not — see bite-proof record c1l11d_wo_c_fold
+    if state == _CI_GREEN:
+        return True, "CI has since passed on the last reviewed commit %s" % last_reviewed[:7]
+    read = [state]
+    # Axis: CI green on the head settles an earlier record only when the head has no changed file — see bite-proof record c1l11d_wo_c_fold
+    if not files:
+        head_state = _ci_read(ci_state, head)
+        if head_state == _CI_GREEN:
+            return True, "CI has since passed on the head %s, reached from the last reviewed commit by catch-up merges only" % head[:7]
+        read.append(head_state)
+    return False, ("the earlier review was written with CI pending on %s and CI has not since passed (CI read: %s)"
+                   % (last_reviewed[:7], ", ".join(s if s is not None else "unreadable" for s in read)))
+
+
+def decide(repo_root, base, head, earlier, proven=(), git=None, ci_state=None):
     """What a returning review reads: ``{"read": "full" | "changed", ...}``. Never raises: every fault reads
     ``full`` with a reason in ``why``. ``git`` is a test seam, ``git(argv) -> (returncode, stdout_text)`` with
-    ``argv`` the arguments after ``git -C <repo_root>``; production leaves it None."""
+    ``argv`` the arguments after ``git -C <repo_root>``; production leaves it None. ``ci_state(sha) -> str | None``
+    reads CI's state on a commit; only ``"green"`` settles an earlier record written with CI pending (step 4), and
+    no reader, a reader that raises or any other answer leaves that record unfinished."""
     result = _result()
     try:
-        return _decide(result, repo_root, base, head, earlier, proven, git)
+        return _decide(result, repo_root, base, head, earlier, proven, git, ci_state=ci_state)
     except Exception as exc:  # total: a fault nobody foresaw is still a full read
         result["read"] = READ_FULL
         result["why"].append(_line(WHY_DIFF_UNREADABLE, "the decision failed on %s: %s" % (type(exc).__name__, exc)))
         return result
 
 
-def _decide(result, repo_root, base, head, earlier, proven, git):
+def _decide(result, repo_root, base, head, earlier, proven, git, ci_state=None):
     # 1. the earlier record
     if earlier is None or (isinstance(earlier, dict) and earlier.get("ok") is False
                            and earlier.get("reason") == _MISSING_RECORD):
@@ -242,9 +346,13 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
 
     # 4. the earlier session finished
     # Axis: an earlier review that was abandoned or never reviewed reads full — see bite-proof record c1l11b_wo_d1_returning_session
+    ci_pending = False
     if earlier.get("status") not in _FINISHED_STATUSES or "abandoned" in earlier:
-        return _full(result, WHY_INCOMPLETE, "the earlier review did not finish (status %r%s)"
-                     % (earlier.get("status"), ", abandoned" if "abandoned" in earlier else ""))
+        # Axis: an earlier record is let through unfinished only for CI pending on its final commit and nothing else — see bite-proof record c1l11d_wo_c_fold
+        ci_pending = _ci_pending_only(earlier, last_reviewed)
+        if not ci_pending:
+            return _full(result, WHY_INCOMPLETE, "the earlier review did not finish (status %r%s)"
+                         % (earlier.get("status"), ", abandoned" if "abandoned" in earlier else ""))
 
     # 5. the changed files
     if not _is_sha(base):
@@ -258,9 +366,19 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     if reviewed is None or current is None:
         return _full(result, WHY_DIFF_UNREADABLE, "git could not produce the diff of the earlier review or of the head against the base")
     proven_files = _proven_files(proven)
-    files = sorted(f for f in set(reviewed) | set(current) if reviewed.get(f) != current.get(f))
+    # Axis: a file is changed when its own change differs, never for an index line or a hunk header's line numbers — see bite-proof record c1l11d_wo_c_fold
+    # axis: stripped coordinates may say "unchanged" only when a three-way merge of the file reproduces the head byte for byte, so an edit moved between identical blocks is a changed file — see bite-proof record c1l11d_wo_c_fold
+    files = sorted(f for f in set(reviewed) | set(current)
+                   if _own_change(reviewed.get(f, "")) != _own_change(current.get(f, ""))
+                   or (reviewed.get(f, "") != current.get(f, "")
+                       and not _merge_reproduces_head(run, base, last_reviewed, head, f)))
     # Axis: a proven copy is never a changed file, so it is neither read, counted nor matched against a risk area.
     files = [f for f in files if f not in proven_files]
+    if ci_pending:
+        settled, text = _ci_settled(ci_state, last_reviewed, head, files)
+        if not settled:
+            return _full(result, WHY_INCOMPLETE, text)
+        result["why"].append(_line(WHY_CI_SETTLED, text))
     result["changedFiles"] = files
     if not files:
         result["countable"] = 0
@@ -292,7 +410,7 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
         # Axis: a binary section has no line count (git reports none), so it is never counted as zero lines.
         if any(item.get("reason") == "binary" for item in result["unsettled"]):
             return _full(result, WHY_DIFF_UNREADABLE, "a changed file is binary to git, so its lines cannot be counted")
-        countable +=sum(row["lines"] for row in left)
+        countable += sum(row["lines"] for row in left)
         result["why"].append(_line(WHY_UNSETTLED, "%d file(s) the counter could not settle are counted by their lines" % len(result["unsettled"])))
     result["countable"] = countable
     if countable > countable_lines.COUNTABLE_LINES_BAR:
@@ -337,6 +455,20 @@ def _read_earlier(path):
         return {"ok": False, "reason": "earlier-record-unreadable"}
 
 
+def production_ci_state(repo_root):
+    """The CI reader for ``decide(ci_state=...)`` over ``repo_root``: ``sha -> CI's state on that commit``
+    (``"green"``, ``"red"``, ``"pending"``, ``"none"``), read as the review record writer reads it. Any fault
+    answers None. ``review_record`` is imported here because it imports this module."""
+    def read(sha):
+        try:
+            import review_record
+            rd = review_record._readers(None)
+            return review_record._ci(rd, rd["repo_name"](repo_root), sha, repo_root)["state"]
+        except Exception:  # noqa: BLE001 — a CI nobody could read is no CI answer
+            return None
+    return read
+
+
 def _cli_proven(repo_root, base, head, proof):
     code, current = _production_git(repo_root)(
         ["diff", *_DIFF_ARGS, "%s...%s" % (base, head)])
@@ -347,6 +479,7 @@ def _cli_proven(repo_root, base, head, proof):
 
 
 def _decide_cli(args):
+    """Run ``decide`` for the CLI. It passes no CI reader, so an earlier record written with CI pending reads full."""
     repo_root = args.repo_root
     if not os.path.isdir(repo_root):
         return _usage_error("--repo-root is not a directory: %s" % repo_root)
