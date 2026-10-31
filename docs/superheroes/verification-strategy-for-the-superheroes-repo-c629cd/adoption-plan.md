@@ -14,7 +14,7 @@ the waves below are dependency order, not a milestone schedule. The issues are f
 **Anchors:** the approved spec beside this file
 ([spec.md](spec.md), `status: approved`, owner approval 2026-08-28 recorded in its Amendments and
 gate, amended 2026-10-02); a consuming project's spec
-(in its own repository → `docs/superheroes/verification-strategy-for-an-ai-first-codebase-ear-f47285/spec.md`,
+(in its own repository,
 approved the same sitting); the owner's six adoption rulings (2026-08-27) and acceptance sitting
 (2026-08-28), receipts on
 [#1105](https://github.com/zwrose/superheroes/issues/1105) and

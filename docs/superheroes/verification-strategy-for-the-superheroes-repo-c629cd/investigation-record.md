@@ -418,9 +418,8 @@ flake-block authority and release conditions, escape-candidate attribution and b
 burndown bound — the owner ruled: *"if there is a way to make an equivalent ruling as what's
 already encoded there [the consuming project's spec], please do that; if there is still a genuine call
 for me, please re-present it."* All three resolved by porting a consuming project's shape
-(FR-24a/24b/26a/26b, FR-19a/19b, UFR-6, FR-15/FR-18d of
-`docs/superheroes/verification-strategy-for-an-ai-first-codebase-ear-f47285/spec.md` in
-the consuming project's repository) with this repo's
+(FR-24a/24b/26a/26b, FR-19a/19b, UFR-6, FR-15/FR-18d of the consuming project's spec, in its own
+repository) with this repo's
 own numbers (baseline 17.4% by the mechanical rule, §4.7); no genuine call remained.
 
 ## 7. Receipts
