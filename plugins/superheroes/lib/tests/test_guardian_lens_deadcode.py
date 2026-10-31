@@ -14,7 +14,7 @@ and KNIP_JSON below are VERBATIM (trimmed) output captured at the command line o
   in 8 different test functions in `plugins/superheroes/lib/tests/test_guardian_lens.py`
   (excerpted to 2 of the 8 lines here).
 
-  `knip --directory /Users/zwrose/weekly-eats --reporter json` run READ-ONLY (no --fix)
+  `knip --directory /path/to/project --reporter json` run READ-ONLY (no --fix)
   against installed node_modules: exit 1, 55 file-groups, 14 unused files, 33 unused
   exports.
 

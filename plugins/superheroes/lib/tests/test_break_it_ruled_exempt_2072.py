@@ -68,7 +68,7 @@ def _owes_the_check(world, spy):
     assert (row["outcome"], row["reason"]) == ("missing", "not-in-head")
 
 
-# ---- the exemption: the weekly-eats#3186 shape -----------------------------------------------
+# ---- the exemption: a consuming project's issue shape -----------------------------------------------
 
 def test_a_ruled_out_of_scope_and_discharged_test_is_exempt_from_the_kept_check(world, monkeypatch):
     key = _shape(world)

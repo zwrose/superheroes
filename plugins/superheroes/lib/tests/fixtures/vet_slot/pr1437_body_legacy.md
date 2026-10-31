@@ -13,7 +13,7 @@ What ships:
 - the list on `configure`'s one-screen view;
 - the vet-receipt doctrine that tells the advisor how to act on it.
 
-No project's actual checks ship here; those encodings belong to P5 and the weekly-eats DE work.
+No project's actual checks ship here; those encodings belong to P5 and the consuming project's DE work.
 
 Round 3 (after vet 304) brings the branch up to date with `main` and fixes three command lines that still used the old way of locating the plugin. It also closes the checker gap that let them through: the skill validator now refuses that old form anywhere in shipped docs, not only when a file path follows it.
 
@@ -115,7 +115,7 @@ Posted on the issue: [brief](https://github.com/zwrose/superheroes/issues/1238#i
 | Rework scope: read through the core read path; absent = none; malformed refuses, never "none" | done | `read_vet_checks` legs; bite-proofs E7, E9, E11; tests `test_read_vet_checks_*` |
 | Rework scope: write through the core write/confirm path; an unrelated core write preserves the key | done | `test_preservation_matrix` (10 writers × valid / malformed / empty seeds); bite-proofs E8, E13 |
 | Configure shows the checks; vet-receipt names the home and the triggered field | done | `configure_view._vet_checks_view_lines`; `vet-receipt.md` § Project vet checks + triggered-fields row; `view-and-tune.md` recipe; `CONVENTIONS.md` core.md bullet; `LEDGERS.md` row |
-| The two repos' first encodings are NOT this issue's (P5 and weekly-eats DE own them), stated as scope boundary | done | `vet-receipt.md`: "This section defines the shape only. Encoding checks is the project's work, done through `configure`." |
+| The two repos' first encodings are NOT this issue's (P5 and the consuming project's DE work own them), stated as scope boundary | done | `vet-receipt.md`: "This section defines the shape only. Encoding checks is the project's work, done through `configure`." |
 | Validators green; citation-resolution green | done | the four validators green on `5ced489f` and again on the r3 head `ce922817` (`validate_skills.py` carries the §11.4 citation resolution): see Receipts |
 
 ### Receipts (all re-run by me)

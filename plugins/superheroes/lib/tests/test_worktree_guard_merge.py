@@ -1,4 +1,4 @@
-"""Merge-in-progress tests for lib/worktree_guard.py (#2054, field case weekly-eats#3186).
+"""Merge-in-progress tests for lib/worktree_guard.py (#2054, field case in a consuming project's issue).
 
 During ``git merge main`` the merge stages main's changes and leaves one file conflicted.
 ``git checkout --theirs <conflicted file>`` was refused because the whole-tree probe counted
