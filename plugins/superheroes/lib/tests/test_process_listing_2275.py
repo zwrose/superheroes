@@ -166,6 +166,42 @@ def test_the_mark_selects_exactly_the_three_census_tests():
     assert selected == _CENSUS_IDS, output
 
 
+_ITEM_440_FILES = (
+    "test_break_it_review_fixes_2210.py",
+    "test_break_it_review_round2_2210.py",
+    "test_not_executed_1981.py",
+)
+_ITEM_440_PROCESS_LISTING_IDS = {
+    "plugins/superheroes/lib/tests/test_break_it_review_fixes_2210.py::"
+    "test_descendant_watch_stops_a_detached_system_worker",
+    "plugins/superheroes/lib/tests/test_break_it_review_round2_2210.py::"
+    "test_g3a_a_detached_worker_no_sample_saw_is_not_killed_and_the_run_is_refused",
+    "plugins/superheroes/lib/tests/test_not_executed_1981.py::"
+    "test_t2_e1_exit_127_with_empty_output_is_command_not_found",
+}
+_ITEM_440_PROC_CONTAINMENT_IN_1981 = {
+    "plugins/superheroes/lib/tests/test_not_executed_1981.py::"
+    "test_t2_e1_exit_127_with_empty_output_is_command_not_found",
+}
+
+
+def _collect_selected(marker, file_names):
+    done = subprocess.run(
+        [sys.executable, "-m", "pytest", "--collect-only", "-q", "-m", marker, "-p", "no:cacheprovider"]
+        + [os.path.join(_TESTS_DIR, name) for name in file_names],
+        cwd=_REPO_ROOT, capture_output=True, text=True, check=False)
+    output = done.stdout + done.stderr
+    return {line for line in done.stdout.splitlines() if "::" in line}, output
+
+
+# axis: census (item 440), collected sets - process_listing over the three item-440 files selects exactly the three named tests, and proc_containment over test_not_executed_1981.py selects exactly the one; catches a missing mark or a mark on any other test in those files.
+def test_the_item_440_marks_select_exactly_their_census():
+    selected, output = _collect_selected(PROCESS_LISTING_MARKER, _ITEM_440_FILES)
+    assert selected == _ITEM_440_PROCESS_LISTING_IDS, output
+    selected, output = _collect_selected("proc_containment", ("test_not_executed_1981.py",))
+    assert selected == _ITEM_440_PROC_CONTAINMENT_IN_1981, output
+
+
 _CHILD = """\
 import os
 
