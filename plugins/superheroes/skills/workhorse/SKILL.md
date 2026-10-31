@@ -732,9 +732,11 @@ pre-handback review (§10, always the full loop):
 
 | Delta since the last review | Re-review |
 |---|---|
-| docs / comments / mechanical | receipts only |
+| docs / comments / mechanical: only hunks that change no meaning (prose or comments that change no claim and state no rule, mechanical moves or renames with no behaviour change) | receipts only |
 | a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review, ending with a review record written on the head it reviewed |
 | new surface/behavior, or anything that invalidates a prior review conclusion | full `review-code` loop again |
+
+**"Receipts only" is checked, not trusted.** A change that touches product code, a test's assertions or fixtures' expected values, prose that states a rule a session or a gate follows, or a claim the PR makes is the second row, never the first, and a hunk you cannot clearly call meaningless resolves upward to the second row. A receipts-only change still needs a green CI run on its head. The check this grade must satisfy is the vet's final-commit row (`skills/showrunner/reference/vet-receipt.md` § The review record checks, **The checks ran on the final commit**): it lets the earlier review record count across a receipts-only round only when the vet's own reading of every hunk since that record finds none that changes meaning, so a mis-graded hunk reaches its re-vet held.
 
 **A returning light-lane PR is re-reviewed for what changed.** The returning-review decider answers `full` or `changed`; on `changed` the new session reads only what changed since the last reviewed commit.
 
