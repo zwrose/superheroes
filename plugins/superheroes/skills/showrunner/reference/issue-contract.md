@@ -5,10 +5,10 @@
 - [The Anchor slot](#the-anchor-slot)
 - [The build-ready block](#the-build-ready-block)
 - [Verifying board membership](#verifying-board-membership)
-- [The four routing-time calls](#the-four-routing-time-calls)
+- [The three routing-time calls](#the-three-routing-time-calls)
 - [The priority tiers and what each commits to](#the-priority-tiers-and-what-each-commits-to)
 - [The size-consideration slot](#the-size-consideration-slot)
-- [Machinery, product, and the two kind labels](#machinery-product-and-the-two-kind-labels)
+- [Machinery and product](#machinery-and-product)
 - [Craft calls, owner calls, and the material-consequence line](#craft-calls-owner-calls-and-the-material-consequence-line)
 - [Anchor resolution](#anchor-resolution)
 - [Pre-doctrine issues](#pre-doctrine-issues)
@@ -140,9 +140,9 @@ Never list the board with `gh project item-list` and a large limit to check one 
 `item-list` call costs about 850 GraphQL points against a 5,000-point hourly budget that every
 session on the account shares.
 
-## The four routing-time calls
+## The three routing-time calls
 
-Four calls are recorded together in the routed issue body, at the same moment. They are:
+Three calls are recorded together in the routed issue body, at the same moment. They are:
 
 1. The **lane call**, full, light, or micro. Its rules live in the showrunner charter
    ([`../SKILL.md`](../SKILL.md)) and in
@@ -151,14 +151,11 @@ Four calls are recorded together in the routed issue body, at the same moment. T
    two homes.
 3. The **size-consideration slot**, [The size-consideration slot](#the-size-consideration-slot)
    below.
-4. The **kind label**, [Machinery, product, and the two kind labels](#machinery-product-and-the-two-kind-labels)
-   below.
 
-The first three are recorded in the issue body and the fourth is a label on the issue, one record
-plus one label, written at the same moment. For micro work the record lives in the pull request
-instead, because micro carries no routed issue body.
+All three are recorded in the issue body, one record written at the same moment. For micro work the
+record lives in the pull request instead, because micro carries no routed issue body.
 
-A routed issue that carries the four is gradable at vet without asking anyone what was decided.
+A routed issue that carries the three is gradable at vet without asking anyone what was decided.
 
 ## The priority tiers and what each commits to
 
@@ -216,7 +213,7 @@ its roadmap, and a project extends it rather than minting a second one.
 4. Mid-build growth is covered by the size rule in
    [review-discipline.md](../../../rubric/review-discipline.md#size) § Size.
 5. **The slot is recorded in the issue body beside the lane call and the presentation call**, at the
-   same moment the kind label is applied.
+   same moment.
 6. **An advisor-launched build order names the advisor session; a light order also carries an
    estimate.** The order written into a build-ready issue names the advisor session the builder
    messages at the size step, by the name the host's session listing shows; a build the owner drives
@@ -225,7 +222,7 @@ its roadmap, and a project extends it rather than minting a second one.
    receives only the command, the issue pointer and the standing rulings, so the launch premise adds
    nothing here.
 
-## Machinery, product, and the two kind labels
+## Machinery and product
 
 **Machinery** is work whose **subject is the development process itself** rather than the product's
 behavior: guards, detectors, censuses, review and dispatch and launch tooling, continuous-integration
@@ -240,26 +237,15 @@ are **product** even when what they ship is tooling. The substrate serves the pr
 is machinery. **Work that exercises the product classifies as product**, because it exercises the
 product and not the machine.
 
-**A routing that cannot classify a lane records the call and its reason.** An unclassifiable lane is
-**a naming defect to fix**, never a silent exemption.
-
 **The judgment-only rule.** The classification is the advisor's judgment, applied when it is needed
 and **never by a tool**. **No classifier, script, census, or check makes or verifies it**, and a
 filing to build one is declined at the door with a registry line. A classifier for this is the
 framework growing machinery of its own, which is the thing the classification exists to hold down.
 
-**The two labels.** The call is made visible as a label on the issue: **`kind:machinery`** or
-**`kind:product`**. The advisor applies it **at routing**, with a one-line reason in the body **only
-when the call was close**. The owner applies it to an **epic at ratification**. A milestone, which
-cannot carry a label, **says it in its description**. The gardening pass reads the window's share off
-those labels **by hand**.
-
-**The labels are plugin doctrine, not one project's habit.** Every calibrated project uses the same
-two labels and its own dial value. The labels are created in a consuming project's repository at
-calibration; see [`../../configure/reference/set-up.md`](../../configure/reference/set-up.md).
-
-Everywhere the [dial](../../../rubric/glossary.md#dial), N, and the forward share read the word
-"machinery", this is the definition they read.
+**The call is not recorded.** The front door makes it at entry
+([`owner-decisions.md`](owner-decisions.md#the-front-door)) to pick the branch an item takes, and no
+label, body line, or count carries it afterward. Everywhere the doctrine reads the word
+"machinery", this is the definition it reads.
 
 ## Craft calls, owner calls, and the material-consequence line
 

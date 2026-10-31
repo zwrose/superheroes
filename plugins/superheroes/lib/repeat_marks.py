@@ -119,6 +119,11 @@ def session_entry(row, round_no, inputs):
     if outcome is None or not key or not _plain_int(decided) or decided >= round_no:
         return None
     grade = row.get("grade")
+    rep_grade = rep.get("grade") if isinstance(rep, dict) and rep is not row else None
+    # axis: a member merged into a representative the verifier closed wrong carries that representative's wrong grade, so its repeat restores a closure the record can publish — see bite-proof record c1l8_wo_a_repeat_marks
+    if isinstance(rep_grade, dict) and rep_grade.get("verdict") == "wrong" \
+            and not (isinstance(grade, dict) and grade.get("verdict") == "wrong"):
+        grade = rep_grade
     return _entry("session", key, row, outcome, round=decided,
                   family=copy.deepcopy(session_contract.disposition_family_snapshot(row)),
                   grade=dict(grade) if isinstance(grade, dict) else None)
