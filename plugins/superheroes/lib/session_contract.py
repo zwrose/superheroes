@@ -25,6 +25,9 @@ __all__ = (
     "WRITE_RESULT_KIND",
     "RECORD_RESULT_KINDS",
     "REVIEW_LIST_RESULT_KINDS",
+    "OUTSIDE_FIX_AUDITOR",
+    "OUTSIDE_GAP_SWEEP",
+    "OUTSIDE_SCOPED_FINDER",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
     "DISPOSITIONS",
@@ -174,6 +177,12 @@ def run_kind_for_phase(phase):
 
 RECORD_RESULT_KINDS = ("ruling",)   # kinds whose seat payload IS the record the runner hashed
 REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
+
+# the source names of an outside hit raised outside the panel: the driver persists them as the finding's
+# source name and the record writer matches them back, so both read this one home
+OUTSIDE_FIX_AUDITOR = "fix auditor"
+OUTSIDE_GAP_SWEEP = "gap sweep"
+OUTSIDE_SCOPED_FINDER = "scoped finder"
 
 STATE_FILE = "loop-state.json"
 MIRROR_FILE = "loop-state.mirror.json"

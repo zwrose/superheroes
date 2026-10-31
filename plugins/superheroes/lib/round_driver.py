@@ -815,9 +815,9 @@ def _diff_scope_ok(finding, valid):
 COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
 COMPILE_DROP_OUTSIDE = "outside the round diff scope"
 OUTSIDE_SOURCE_DEFAULT = "reviewer"  # the source name of an outside drop no caller named
-OUTSIDE_FIX_AUDITOR = "fix auditor"
-OUTSIDE_GAP_SWEEP = "gap sweep"
-OUTSIDE_SCOPED_FINDER = "scoped finder"
+OUTSIDE_FIX_AUDITOR = session_contract.OUTSIDE_FIX_AUDITOR
+OUTSIDE_GAP_SWEEP = session_contract.OUTSIDE_GAP_SWEEP
+OUTSIDE_SCOPED_FINDER = session_contract.OUTSIDE_SCOPED_FINDER
 COMPILE_DROP_NO_CONSEQUENCE = "no stated consequence"
 
 

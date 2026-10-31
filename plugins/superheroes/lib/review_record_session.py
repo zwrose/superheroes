@@ -69,10 +69,10 @@ _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an ea
 _HANDED_BACK = "handed-back"
 _HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
-# the source names the driver gives an outside hit raised outside the panel (round_driver.OUTSIDE_GAP_SWEEP,
-# OUTSIDE_SCOPED_FINDER, OUTSIDE_FIX_AUDITOR; not imported here); a panel seat's hit is named by the seat itself
-_OUTSIDE_STAGE_SOURCES = {round_phases.P_GAPSWEEP: "gap sweep", round_phases.P_SCOPED: "scoped finder",
-                          round_phases.P_AUDITS: "fix auditor"}
+# the source names the driver gives an outside hit raised outside the panel, read from their one home in
+# session_contract (the driver reads the same); a panel seat's hit is named by the seat itself
+_OUTSIDE_STAGE_SOURCES = {round_phases.P_GAPSWEEP: sc.OUTSIDE_GAP_SWEEP, round_phases.P_SCOPED: sc.OUTSIDE_SCOPED_FINDER,
+                          round_phases.P_AUDITS: sc.OUTSIDE_FIX_AUDITOR}
 # the second-test seat is a test reviewer run on the held findings: it reads before the round's fix, and
 # its results are tests for findings already raised, so it is listed as a reviewer but never as a raw report
 _PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS,
@@ -827,14 +827,6 @@ def _outside_keys(outside, provenance=None):
     return keys
 
 
-def _scope_exempt(f):
-    """True when compile would skip the diff-scope check for the test role's finding `f`: the same eligibility as
-    `break_it.intercept`, a per-area (`break-it-test`) finding whose suggestion parses as a block, whose block path is
-    its cited file, and whose citation coerces to line 1. A malformed block, another path or another line is not."""
-    block, kind = break_it.carried_block(f)
-    return kind == break_it.KIND_PER_AREA and block["path"] == f.get("file") and sc.coerce_line(f.get("line")) == (True, 1)
-
-
 def _round_scope(session_dir, rnd, current_round, reviewed_diff):
     """The touched-lines map of round `rnd`'s diff (`diff_scope.parse_touched_lines`, the map compile reads), or None
     when no diff of that round is held (nothing is outside then, as in compile). The round's stored `diff.txt` is the
@@ -925,7 +917,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 continue
             # axis: a report the loop never folded that cites a line its round's diff did not touch is an outside finding, listed on the account's outside list and never as open work, so abandoning before the fold does not change how it is treated — see bite-proof record c3_wo_a_outside
             # axis: the test role's own break-it proposal is scope-exempt at compile only when its block parses, names the cited file and cites line 1 (break_it.intercept's rule), so only such a proposal is never classified outside here — see bite-proof record c3_wo_a_outside
-            exempt = phase == round_phases.P_PANEL and seat == break_it.ROLE and _scope_exempt(f)
+            exempt = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.scope_exempt(f)
             if fkey not in listed and not exempt and recovered is not None:
                 if rnd not in scopes:
                     scopes[rnd] = _round_scope(session_dir, rnd, pending_round, reviewed_diff)
