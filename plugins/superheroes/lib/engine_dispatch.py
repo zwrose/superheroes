@@ -3273,6 +3273,154 @@ def _fold_cc_writes_sweep(state):
         return {"removed": [], "incomplete": True, "error": type(exc).__name__}
 
 
+PLACEHOLDER_BASELINE_NAME = "placeholder-baseline.json"
+PLACEHOLDER_LEFT_CAP = 100
+
+
+def _walk_kept(root, skip_rels, deadline, clock):
+    """Yield (prefix, dirnames, filenames, dirfd, pruned) under ``root`` top-down, pruning `.git`,
+    the ``skip_rels`` subtrees and other devices, never following symlinks. Raises TimeoutError
+    once ``deadline`` passes."""
+    root_dev = None
+    walker = os.fwalk(root, topdown=True, follow_symlinks=False)
+    try:
+        for dirpath, dirnames, filenames, dirfd in walker:
+            if clock() > deadline:
+                raise TimeoutError
+            if root_dev is None:
+                root_dev = os.fstat(dirfd).st_dev
+            rel = os.path.relpath(dirpath, root)
+            prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
+            kept, pruned = [], []
+            for name in dirnames:
+                try:
+                    dev = os.stat(name, dir_fd=dirfd, follow_symlinks=False).st_dev
+                except OSError:
+                    dev = None
+                if name == ".git" or prefix + name in skip_rels or dev != root_dev:
+                    pruned.append(prefix + name)
+                else:
+                    kept.append(name)
+            dirnames[:] = kept
+            yield prefix, kept, filenames, dirfd, pruned
+    finally:
+        walker.close()
+
+
+def _nested_rels(cwd_real):
+    """Registered worktrees nested under ``cwd_real``, relative and '/'-joined, or None."""
+    nested = _registered_nested_worktree_roots(cwd_real)
+    if nested is None:
+        return None
+    return {os.path.relpath(p, cwd_real).replace(os.sep, "/") for p in nested}
+
+
+def _placeholder_snapshot(cwd_real, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
+                          clock=time.monotonic):
+    """Every path under the worktree before a claude write run, and the subtrees not walked.
+
+    Anything short of a complete walk is not ok, and the fold then removes nothing. Never raises."""
+    try:
+        skip = _nested_rels(cwd_real)
+        if skip is None:
+            return {"status": "incomplete", "reason": "worktree-enumeration-failed"}
+        paths, pruned = [], sorted(skip)
+        for prefix, dirnames, filenames, _fd, cut in _walk_kept(
+                cwd_real, skip, clock() + budget_seconds, clock):
+            paths.extend(prefix + name for name in dirnames + filenames)
+            pruned.extend(cut)
+        return {"status": "ok", "paths": paths, "pruned": pruned}
+    except TimeoutError:
+        return {"status": "incomplete", "reason": "budget-exhausted"}
+    except Exception as exc:
+        return {"status": "incomplete", "reason": type(exc).__name__}
+
+
+def _is_placeholder(st):
+    """Empty and read-only: a zero-length regular file or a directory, with no write bit set."""
+    return (st.st_mode & 0o222) == 0 and (
+        stat.S_ISDIR(st.st_mode) or (stat.S_ISREG(st.st_mode) and st.st_size == 0))
+
+
+# WORKAROUND: on Linux the claude write sandbox can leave empty, read-only placeholder files and
+# dirs (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, files under `.claude/`) in the
+# worktree after a run (#2285).
+# delete-when: the Claude Code version the channel runs no longer leaves sandbox placeholders in the
+# worktree on Linux.
+# axis: removes only paths absent from the before-run snapshot that are empty and read-only; a path
+# the snapshot holds, or a subtree it did not walk, is never touched, and no snapshot removes nothing.
+def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
+                        clock=time.monotonic):
+    """Remove the placeholders a claude write run left; report every other new path. Never raises."""
+    removed, new, dirs = [], [], []
+    out = {"removed": removed, "left": [], "leftCount": 0, "incomplete": False, "error": None}
+    try:
+        if not isinstance(baseline, dict) or baseline.get("status") != "ok":
+            reason = baseline.get("reason") if isinstance(baseline, dict) else None
+            out.update(incomplete=True, error="baseline-" + (reason or "missing"))
+            return out
+        before = set(baseline.get("paths") or ())
+        skip = _nested_rels(cwd_real)
+        if skip is None:
+            out.update(incomplete=True, error="worktree-enumeration-failed")
+            return out
+        skip |= set(baseline.get("pruned") or ())
+        for prefix, dirnames, filenames, dirfd, _cut in _walk_kept(
+                cwd_real, skip, clock() + budget_seconds, clock):
+            for name in filenames:
+                if prefix + name in before:
+                    continue
+                try:
+                    if _is_placeholder(os.stat(name, dir_fd=dirfd, follow_symlinks=False)):
+                        os.unlink(name, dir_fd=dirfd)
+                        removed.append(prefix + name)
+                        continue
+                except OSError:
+                    pass
+                new.append(prefix + name)
+            dirs.extend(prefix + name for name in dirnames if prefix + name not in before)
+        # deepest first, so a placeholder dir the removals above emptied goes too
+        for rel in sorted(dirs, key=lambda p: p.count("/"), reverse=True):
+            path = os.path.join(cwd_real, *rel.split("/"))
+            try:
+                if _is_placeholder(os.lstat(path)):
+                    os.rmdir(path)
+                    removed.append(rel)
+                    continue
+            except OSError:
+                pass
+            new.append(rel)
+    except TimeoutError:
+        out["incomplete"] = True
+    except Exception as exc:
+        out.update(incomplete=True, error=type(exc).__name__)
+    new.sort()
+    out.update(left=new[:PLACEHOLDER_LEFT_CAP], leftCount=len(new))
+    return out
+
+
+def _fold_placeholder_sweep(run_dir_real, state):
+    """Sweep a claude write run's worktree of sandbox placeholders at fold. None for any other run."""
+    try:
+        opened = state.get("opened") or {}
+        if opened.get("runKind") != RUN_KIND_WRITE or opened.get("engine") != "claude":
+            return None
+        cwd = opened.get("cwd")
+        if not isinstance(cwd, str) or not cwd:
+            return _sweep_placeholders("", {"status": "incomplete",
+                                            "reason": "run-context-incomplete"})
+        try:
+            with open(os.path.join(run_dir_real, PLACEHOLDER_BASELINE_NAME),
+                      encoding="utf-8") as fh:
+                baseline = json.load(fh)
+        except (OSError, ValueError):
+            baseline = None
+        return _sweep_placeholders(os.path.realpath(cwd), baseline)
+    except Exception as exc:
+        return {"removed": [], "left": [], "leftCount": 0, "incomplete": True,
+                "error": type(exc).__name__}
+
+
 def _fold_size_tripwire(state):
     """Count a write run's worktree against the base journaled at open, or against its merge
     base with the journaled base ref when that is newer. None for a review run or a run opened
@@ -3332,6 +3480,10 @@ def _fold_run(run_dir_real, state, result):
     if cc_writes is not None:
         result = dict(result)
         result["ccWritesSweep"] = cc_writes
+    placeholders = _fold_placeholder_sweep(run_dir_real, state)
+    if placeholders is not None:
+        result = dict(result)
+        result["placeholderSweep"] = placeholders
     size_tripwire = _fold_size_tripwire(state)
     opened = state.get("opened") or {}
     if size_tripwire is not None:
@@ -6582,6 +6734,13 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             return False, "config-dir-unusable:unresolvable"
         if not os.path.isdir(cfg):
             return False, "config-dir-unusable:not-a-directory"
+        try:
+            # in the run dir, which the sandbox cannot write; the fold sweeps only paths absent here
+            with open(os.path.join(run_dir_real, PLACEHOLDER_BASELINE_NAME), "w",
+                      encoding="utf-8") as fh:
+                json.dump(_placeholder_snapshot(os.path.realpath(cwd)), fh)
+        except OSError:
+            pass
     else:
         cfg = None
 
