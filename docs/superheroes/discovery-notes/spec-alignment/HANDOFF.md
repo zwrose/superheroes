@@ -34,7 +34,7 @@ Owner corrections during the session (binding on how the problem is framed):
 2. **Shape of the loss.** Both kinds occur: individual sentences still true but the gestalt
    drifted (definitely happens), and the actual words of a decision changed (owner worries about
    it). Not sure which dominates.
-3. **Where confidence has felt real.** In weekly-eats: reviewing design boards. But the pipeline
+3. **Where confidence has felt real.** In a consuming project: reviewing design boards. But the pipeline
    boards → spec words → implementation has been "full of unhappy surprises." Grounding in
    specific use cases (via an "eli5" skill) has helped. On the superheroes project (no UI) the
    owner has never felt very confident in what is being aligned on up front, and it gets worse as
@@ -50,7 +50,7 @@ Owner corrections during the session (binding on how the problem is framed):
    things humans use to align with each other) would help them make the right decisions. A light
    research pass was consented and run (see `rationale_grounding_for_builders.md` if present).
 8. **New data source.** The owner's local machine holds many session transcripts of working with
-   specs and advisors on both superheroes and weekly-eats. The owner wants to use that data in
+   specs and advisors on both superheroes and a consuming project. The owner wants to use that data in
    this discovery. That is the reason for the handoff.
 
 ## Provenance idea (raised by the assistant, owner pushed back, still open)
@@ -118,7 +118,7 @@ Candidate requirements surfaced but not yet elicited or approved:
 - A first-class "needs clarification" object the author must write instead of choosing a default.
 - A product-level grounding doc (purpose, target user, principles, non-goals) routed to every
   builder and reviewer. This repo has PHILOSOPHY.md but the builder skill never references it;
-  weekly-eats likely has nothing.
+  a consuming project likely has nothing.
 - A provenance filter (see above; owner has not accepted).
 - A coarse visual map of the spec, integrated with the text, for the many-things-at-once case.
 
@@ -136,9 +136,9 @@ Candidate requirements surfaced but not yet elicited or approved:
 ## Next steps when resumed locally
 
 1. Read this file and the report.
-2. Read the owner's local transcripts of spec/advisor sessions (superheroes and weekly-eats) with
+2. Read the owner's local transcripts of spec/advisor sessions (superheroes and a consuming project) with
    the owner's consent on scope, looking for: where drift entered, what the owner pushed back on
-   at step 8, what defaults were chosen silently, what the "unhappy surprises" in weekly-eats
+   at step 8, what defaults were chosen silently, what the "unhappy surprises" in a consuming project
    were.
 3. Resume the requirements dialogue (one question at a time) toward a framing for the experiment.
 4. Run the discovery's coverage checklist before the framing gate.
@@ -157,7 +157,7 @@ Candidate requirements surfaced but not yet elicited or approved:
   to me what this line actually is" and he cannot articulate it from whole cloth.
 - The Sep 6–7 before/after-by-feature-area format "felt ok at best"; he has no sense of how well
   those artifacts track the dense underlying specs, and by definition does not know what is
-  lurking in them that he disagrees with. Unlike weekly-eats, on superheroes he has less ability
+  lurking in them that he disagrees with. Unlike a consuming project, on superheroes he has less ability
   to notice and call foul because of subject matter vs expertise.
 - Too-terse is a real limit but the rare direction; the "one word" complaints were about zero
   context.
@@ -166,9 +166,9 @@ Candidate requirements surfaced but not yet elicited or approved:
 - Design-intent-lost-in-build is real but a different issue from spec amendments.
 - The "three shapes" of missing context read as superheroes-only.
 
-**Amendment volume (checked):** weekly-eats verification-strategy spec: 18 numbered amendments
+**Amendment volume (checked):** a consuming project's verification-strategy spec: 18 numbered amendments
 plus two full re-reads since Aug 28 approval (mostly process churn; the "guards guarding guards"
-spec). Four weekly-eats product specs approved Sep 6: 7, 7, 4, 4 amendments each, nearly all
+spec). Four product specs of a consuming project approved Sep 6: 7, 7, 4, 4 amendments each, nearly all
 ruled "during the owner's walk of the preview". Superheroes front-half core: 7. The approval gate
 is the wrong place to expect disagreements to surface; they surface at first contact with the
 running thing, and the amendments log is the receipt.
@@ -213,7 +213,7 @@ line rather than adding a second one. "Doubt goes to the owner" stays.
 reviewable, or stop needing the owner to read it? The owner's worry: a walk written about the
 spec is a translation, and things get lost in translation.
 
-**New input the owner asked to be studied: two weekly-eats discoveries** run in parallel,
+**New input the owner asked to be studied: two discoveries in a consuming project** run in parallel,
 09-25 to 09-28 (#1798 "Need beyond Plans"; #1419 legal terms, Specs A and C), plus the
 advisor seats that vetted their spec PRs. Both converged, independently, on the same practice:
 

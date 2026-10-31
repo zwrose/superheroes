@@ -29,7 +29,7 @@ updated: "2026-07-01"
 
 ## Global Constraints
 
-- Work only from an isolated worktree, not `/Users/zwrose/superheroes`.
+- Work only from an isolated worktree, not `/path/to/home/superheroes`.
 - Keep the repo's control-flow posture: `review_panel_shell.js` detects events and forwards state; pure deciders own decisions.
 - Preserve Python/JS parity for every bundled pure helper by updating `plugins/superheroes/lib/tests/test_parity.py`, fixture directories, and `plugins/superheroes/lib/bundle_showrunner.js`.
 - Never let a partial, skipped, low-confidence, malformed, stale, or corrupt review state certify as passed.
@@ -3782,7 +3782,7 @@ Run:
 
 ```bash
 ROOT=$(git rev-parse --show-toplevel)
-python3 /Users/zwrose/.codex/plugins/cache/superheroes/superheroes/0.3.0/lib/definition_doc.py read-gate --doc tasks --work-item make-the-shared-review-and-fix-loop-converge-faste-4c45d8 --root "$ROOT"
+python3 /path/to/home/.codex/plugins/cache/superheroes/superheroes/0.3.0/lib/definition_doc.py read-gate --doc tasks --work-item make-the-shared-review-and-fix-loop-converge-faste-4c45d8 --root "$ROOT"
 ```
 
 Expected before Build starts: `passed`.

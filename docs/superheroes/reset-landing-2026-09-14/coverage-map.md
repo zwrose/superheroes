@@ -158,10 +158,10 @@ Children: C1 founding texts · C2 front-door references (issue-contract.md, the 
 | A | FR-F6 | n2 | numbered | No day count for bulk removal.** Bulk removal of behavior tests is an… | outside the epic: the verification-strategy spec's own children (#1105), reciprocal seam R28 |
 | A | FR-F6 | n3 | numbered | Delete on contact; the keep list is the only record** *(simplified 202… | **split:** outside the epic (#1105's children) owns the keep-list seed and the verification spec's FR-1 amendment; C3 owns the builder's at-contact classification step as review-discipline text, which every child carries through R28 |
 | A | FR-F6 | n4 | numbered | Mutation testing goes forward.** Bought, not built (mutmut or cosmic-r… | outside the epic: the verification-strategy spec's own children (#1105), reciprocal seam R28 |
-| A | FR-F6 | n5 | numbered | The receipt fields land now; what runs where waits on weekly-eats' les… | outside the epic: the verification-strategy spec's own children (#1105), reciprocal seam R28 |
+| A | FR-F6 | n5 | numbered | The receipt fields land now; what runs where waits on a consuming project's les… | outside the epic: the verification-strategy spec's own children (#1105), reciprocal seam R28 |
 | A | FR-F6 | n6 | numbered | No guards on guards.** FR-B1 records it; the one check the sitting kep… | outside the epic: the verification-strategy spec's own children (#1105), reciprocal seam R28 |
 | A | FR-F6 | n7 | numbered | Stable slugs.** FR-B6 records it.… | **C1** |
-| A | FR-F7 | 1 | Acceptance (rule, guardian): | the guardian hold is lifted: weekly-eats ran three sweeps and consumed two decisions before the hold… | done at the stamp (2026-09-14), nothing owed |
+| A | FR-F7 | 1 | Acceptance (rule, guardian): | the guardian hold is lifted: a consuming project ran three sweeps and consumed two decisions before the hold… | done at the stamp (2026-09-14), nothing owed |
 | A | FR-F7 | 2 | Acceptance (record, the rest): | the detective earns its keep (four dispatches, three fixes); test-pilot is product (ruled at E); the… | done at the stamp (2026-09-14), nothing owed |
 | B | FR-M1 | 1 | Acceptance (rule): | a KEEP row citing none of the three grounds is a defect of the derivation; "it could matter" keeps n… | **CLOSED-DERIVATION** |
 | B | FR-M1 | 2 | Acceptance (rule, closed row-kind list): | the demand kinds are required key, exact enum value, mandatory sequence step, refusal condition, and… | **CLOSED-DERIVATION** |
@@ -202,7 +202,7 @@ Children: C1 founding texts · C2 front-door references (issue-contract.md, the 
 | B | FR-D4 | 2 | Acceptance (rule, fail-closed leg): | any disposition of the guidance-channel row other than ground-(b) KEEP (leaving the contract, downgr… | **C13** |
 | B | FR-D5 | 1 | Acceptance (rule): | no loop-state field is removed before the loop leaves under FR-D9. The store is what the driver writ… | **C12** |
 | B | FR-D5 | 2 | Acceptance (record, what was cut and why | this FR formerly specified a storage shrink executed as a state-version migration, with a halt-integ… | **C12** |
-| B | FR-D5 | 3 | Acceptance (rule, consumer-visible shape | consumers key vets on certification shapes (weekly-eats keys on `full-panel-confirmed`), so D1-029's… | **C12** |
+| B | FR-D5 | 3 | Acceptance (rule, consumer-visible shape | consumers key vets on certification shapes (a consuming project keys on `full-panel-confirmed`), so D1-029's… | **C12** |
 | B | FR-D6 | 1 | Acceptance (rule): | the comparator: the driver hub's self-repair churn after the shrink, measured as the driver-core (ce… | **C12** |
 | B | FR-D6 | 2 | Acceptance (rule, the question changed s | the structural split is no longer the successor. FR-D9's successor removes the loop's state machine… | **C12** |
 | B | FR-D8 | 1 | Acceptance (rule, the concept): | a review certifies when every finding raised has a disposition and every disposition has a receipt o… | **split:** C12 owns what the receipt writer derives, checks, and refuses; C13 owns what the loop records and bounds (rounds, dispositions given, the canary leaving the gate) |

@@ -10,10 +10,10 @@ title: Verification-strategy investigation — the superheroes repo's own suite,
 # Verification-strategy investigation (2026-08-23)
 
 > Frozen investigation record for [#1105](https://github.com/zwrose/superheroes/issues/1105).
-> It imports the **foundational, project-independent** layer of the weekly-eats investigation
+> It imports the **foundational, project-independent** layer of a consuming project's verification-strategy investigation
 > (frozen at `docs/decisions/audits/2026-08-18-verification-strategy-investigation.md` in
-> [weekly-eats-hq/weekly-eats](https://github.com/weekly-eats-hq/weekly-eats), kicked off by
-> [weekly-eats-hq/weekly-eats#1109](https://github.com/weekly-eats-hq/weekly-eats/issues/1109)),
+> the consuming project's repository, kicked off by
+> a consuming project's issue),
 > re-measures everything project-specific on this repo's own history, and gives each of the
 > issue's four hypotheses an explicit verdict on cited evidence. The policy itself is the
 > work-item's `spec.md` beside this file — its approval is recorded by its own gate, not here.
@@ -52,8 +52,8 @@ title: Verification-strategy investigation — the superheroes repo's own suite,
 5. **Defects here are found in the field, not by tests.** 36% of all merged PRs are
    `fix:`/`revert:` commits (45% in July). The twelve dated escapes in the qualitative
    ledger were surfaced by live runs, field use of a later build, an owner-commissioned
-   audit, or repeated incidents — none by a pre-existing test. The weekly-eats-style loose
-   escape floor (a fix citing a PR merged ≤7 days earlier) reads 13–17% of merges here vs
+   audit, or repeated incidents — none by a pre-existing test. The loose
+   escape floor as a consuming project measures it (a fix citing a PR merged ≤7 days earlier) reads 13–17% of merges here vs
    4.6% there, but the method over-matches in this repo (PR bodies cross-cite constantly),
    so that number is a bounded floor, not a rate.
 6. **Flakes are rare and well-handled; infra reds are rarer still.** Flake rate 0.30% of
@@ -73,7 +73,7 @@ title: Verification-strategy investigation — the superheroes repo's own suite,
    binaries on PATH, git identity in temp repos, stale Apple bytecode, pre-satisfied gates,
    sanitized-view stripping — each has bitten, each lives only in memory notes or a documented
    flag. The owner's own "named risks get mechanical tripwires" rule is unmet for all six.
-9. **Maintenance surface is real but not the weekly-eats shape.** No seed-literal class
+9. **Maintenance surface is real but not a consuming project's shape.** No seed-literal class
    exists here; the analogous classes are **count pins** (663 `len(...) == N`), **byte-pinned
    prose asserts** (150, in 46 files), and one true golden-fixture file. Structural can't-bite
    tests: effectively none (33 weak no-raise tests, 0 tautologies, 0 mock-shape-only, 0
@@ -129,10 +129,10 @@ by topic: pilot 29.9k LOC, guardian 20.5k, round_driver 14.7k, dispatch/engine 1
 ## 3. Leg A — import register
 
 Each imported claim is used only after its **licensing condition** was checked against this
-repo. Source: the weekly-eats record §3 (full Leg-A report in that repo's bundle) plus the
+repo. Source: a consuming project's record §3 (full Leg-A report in that repo's bundle) plus the
 delta report `legA/legA-delta.md` in this repo's bundle.
 
-| # | Imported claim (weekly-eats §3 / delta) | Licensing condition | Holds here? |
+| # | Imported claim (a consuming project's §3 / delta) | Licensing condition | Holds here? |
 | --- | --- | --- | --- |
 | A1 | Economics inverted: scarce resources are gate latency × runs, flake surface, refactor tax; mainstream prescription is shrink-what-runs, not delete | A repo where agents write nearly all tests | **Yes** — 63% median test share of added lines over the last 60 PRs (§4.6) |
 | A2 | Mutation testing is the one hard-evidence instrument on AI-written test quality; incremental per-PR + scheduled full | A Python tool exists and can run on an available interpreter | **Conditionally** — mutmut 3.7 needs ≥3.10: runs in CI (3.12) and the calibration venv (3.14), not on `/usr/bin/python3`; no `--diff` flag, wrapper needed; xdist composition unproven; covers only the Python libs, not the markdown product |
@@ -143,8 +143,8 @@ delta report `legA/legA-delta.md` in this repo's bundle.
 | A7 | Deletion: redundancy improves catch rate; sharp criterion is structural cannot-fail; LLM suites keep 18% of tests through a pure refactor | The suite has structural can't-bite tests to find | **Mostly absent** — 0 tautologies, 0 mock-shape-only, 0 permanent skips (§4.5); the July rewrite (−55.8k test lines) is the refactor-tax specimen |
 | A8 | Agent-trust rails: fitness functions, invariant tests routed to a human, shadow → gating | — | **Yes, this is the product** — and the only layer with a CI catch record (§4.4) |
 | A9 | Visual/board conformance | A UI | **N/A** |
-| A10 | Weekly-eats 44% mocked-route-vs-real-DB redundancy | A DB and a mocked layer over it | **Does not port** — no DB. The analogous redundancy class here is **doc↔code drift tests that pin the same fact from both sides** (count pins + byte-pinned prose, §4.5); not measured as a redundancy rate, named as the class to assess |
-| A11 | Weekly-eats numbers (1% flake budget, 4.6% escape baseline, 8-min bar, 30-observation window) and rulings (single-flake blocks, no quarantine, narrow deletion mandate) | — | **Do not port** by the issue's rule; re-derived or re-decided in the sitting (§6) |
+| A10 | A consuming project's 44% mocked-route-vs-real-DB redundancy | A DB and a mocked layer over it | **Does not port** — no DB. The analogous redundancy class here is **doc↔code drift tests that pin the same fact from both sides** (count pins + byte-pinned prose, §4.5); not measured as a redundancy rate, named as the class to assess |
+| A11 | A consuming project's numbers (1% flake budget, 4.6% escape baseline, 8-min bar, 30-observation window) and rulings (single-flake blocks, no quarantine, narrow deletion mandate) | — | **Do not port** by the issue's rule; re-derived or re-decided in the sitting (§6) |
 | A12 (delta) | Agents add mocks in 36% of commits vs 26% for humans; guidance belongs in agent config files (arXiv 2602.00409, strong) | Agent-authored tests | **Yes** — grounding for a mock-density rule in the rubric surface, though self-mocking measured here is tiny (4 hits / 3 files) |
 | A13 (delta) | No maintained Python linter detects the four can't-bite classes; ~150 lines of AST in-repo | Willingness to own a validator over a declared grammar | **Yes** — safe because it validates Python AST, not prose (memory `gotcha-hand-rolled-validator-over-hand-editable-doc` does not apply) |
 | A14 (delta) | `uv run --python 3.12 -m pytest` as the cross-version receipt; `vermin --target=3.9` static complement; or move local dev to uv-managed 3.12 and the exposure disappears | `uv` available locally | **Yes** — `uv` is already a CI dependency and test-pilot's |
@@ -179,7 +179,7 @@ cost 348 min; the most expensive feature PR 175 min over 35 runs. Runner: 100%
 **The wall is volume.** The slowest test is 31.2 s and the stable slow tail (22 tests present in
 ≥8 of 10 recent runs, all real `git worktree` / subprocess timing tests) sums to roughly 2–3
 minutes of *per-worker* time across 4 workers; the rest of the 308 s is 12,500 cases. File-level
-concentration like weekly-eats' "65% in ten files" does not exist here.
+concentration like a consuming project's "65% in ten files" does not exist here.
 
 ### 4.2 Per-file runtime
 
@@ -260,7 +260,7 @@ something no builder can verify locally. `validate_marketplace.py` has never fir
   15 clustered in `test_pilot_policy.py` / `test_pilot_contract.py`); **0** tautologies (2
   flagged, both determinism checks); **0** mock-shape-only; **0** permanent skips / xfails
   (35 `skipif`s, all environment-conditional).
-- **Redundancy class:** no DB here, so weekly-eats' 44% figure does not port. The analogous
+- **Redundancy class:** no DB here, so a consuming project's 44% figure does not port. The analogous
   class is a fact pinned from both sides (a drift test *and* a count/prose pin in a behavior
   test). Not measured as a rate; named for the cut list to assess.
 
@@ -278,11 +278,11 @@ with 454 adds). 179 of 499 merged PRs (36%) are fix-typed.
 
 ### 4.7 Escapes (B3 + synthesis)
 
-- **Loose floor, weekly-eats method** (fix/revert commit citing a PR merged ≤7 days earlier):
+- **Loose floor, a consuming project's method** (fix/revert commit citing a PR merged ≤7 days earlier):
   **87 / 499 = 17.4%** (tightened to bodies naming a regression-shaped phrase: 65 / 499 =
   13.0%). **Over-matches here:** PR bodies in this repo cite related PRs as context routinely,
   and `fix:` is used for mid-build design tightening, not only post-merge defects. Carry as a
-  bounded floor that is not comparable to weekly-eats' 4.6% without the same over-match.
+  bounded floor that is not comparable to a consuming project's 4.6% without the same over-match.
 - **Qualitative ledger** (`legB/escapes-ledger.csv`, 12 rows): 2 silently-degraded validators
   ([#815](https://github.com/zwrose/superheroes/issues/815): coupling-lens collectors never
   installed in CI, its positive control skipped silently on every run; an omission-floor drift
@@ -395,7 +395,7 @@ Framing approved 2026-08-23 ("Write it up"). Full-weight review called by the ow
 day ("Full").
 
 **Post-review rulings (2026-08-23, after the cross-spec comparison):** (i) local receipts
-follow the weekly-eats approach — PR-body at handback, no live ledger feed; observation and
+follow a consuming project's approach — PR-body at handback, no live ledger feed; observation and
 flake visibility computed over handed-back receipts; unhanded-back local runs an accepted
 invisible floor ("update ours to use their approach"). (ii) The advisor's competing
 next-dispatch obligations carry **no precedence order** — the review panel's ordering was
@@ -405,9 +405,9 @@ residual, not a defect.
 
 **Cross-spec reconciliation rulings (2026-08-24, differences 1–4):** (1) instrument-authority
 fork ratified as one tier principle — gate-tier evidence blocks, instrument-tier evidence gets
-a human first; neither spec changes ("a"). (2) Fix-naming: weekly-eats adopts this spec's
+a human first; neither spec changes ("a"). (2) Fix-naming: a consuming project adopts this spec's
 explicit pre-dates claim + vet check (prompt handed to that session). (3) Review-receipt
-authenticity: weekly-eats adopts this spec's machine-written traceable receipts + nightly
+authenticity: a consuming project adopts this spec's machine-written traceable receipts + nightly
 check (prompt handed to that session). (4) Risk profile: this spec adopts a normative 5-row
 risk profile (§ Risk profile, FR-4b), depth-follows-consequence, seeded from the escape
 classes in §4.7. Also ruled: FR-9's receipt obligation attaches only with P3's gate driver,
@@ -416,11 +416,11 @@ never as a standalone build.
 **Ruling by reference (2026-08-23):** on the review panel's three open policy questions —
 flake-block authority and release conditions, escape-candidate attribution and baseline,
 burndown bound — the owner ruled: *"if there is a way to make an equivalent ruling as what's
-already encoded there [the weekly-eats spec], please do that; if there is still a genuine call
-for me, please re-present it."* All three resolved by porting the weekly-eats shape
+already encoded there [the consuming project's spec], please do that; if there is still a genuine call
+for me, please re-present it."* All three resolved by porting a consuming project's shape
 (FR-24a/24b/26a/26b, FR-19a/19b, UFR-6, FR-15/FR-18d of
 `docs/superheroes/verification-strategy-for-an-ai-first-codebase-ear-f47285/spec.md` in
-[weekly-eats-hq/weekly-eats](https://github.com/weekly-eats-hq/weekly-eats)) with this repo's
+the consuming project's repository) with this repo's
 own numbers (baseline 17.4% by the mechanical rule, §4.7); no genuine call remained.
 
 ## 7. Receipts
