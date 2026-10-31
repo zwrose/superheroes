@@ -226,3 +226,47 @@ bringing up nodes...
 .                                                                        [100%]
 1 passed in 0.94s
 ```
+
+---
+
+## W3-E5 — a retried publish recognizes its own earlier success under the cloud footer
+
+**guarded element:** the footer-aware `or _same_body(cloud_builder.strip_cloud_footer(live), cloud_builder.strip_cloud_footer(staged))` half of the already-published clause in `_publish` (`pr_body_stage.py`, lines 299-300). Axis: a second publish of an audited staged fix, when the cloud egress appended its footer to the live body on the first, reports `published` / `already-published`, keeps the receipt a success, and `record_line()` does not say the fix was not copied. Detector: `test_4_a_retried_publish_recognizes_its_own_earlier_success_under_the_footer` in `plugins/superheroes/lib/tests/test_c1l10b_verify_rerun_seam.py`.
+
+**neutralization** (`pr_body_stage.py`, `_publish`; the clause compares the raw bodies only):
+```diff
+-    if _same_body(live, staged) or _same_body(cloud_builder.strip_cloud_footer(live),
+-                                              cloud_builder.strip_cloud_footer(staged)):
++    if _same_body(live, staged):
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo7-pyc -m pytest plugins/superheroes/lib/tests/test_c1l10b_verify_rerun_seam.py -q -p no:cacheprovider -k retried_publish_recognizes --tb=line` (the `--tb=line` flag was added to the order's command form to keep the capture short)
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert (False, 'refu...r-body-moved') == (True, 'publi...dy-published')
+      
+      At index 0 diff: False != True
+      Use -v to get more diff
+/home/user/sh-2264/plugins/superheroes/lib/tests/test_c1l10b_verify_rerun_seam.py:454: AssertionError: assert (False, 'refu...r-body-moved') == (True, 'publi...dy-published')
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l10b_verify_rerun_seam.py::test_4_a_retried_publish_recognizes_its_own_earlier_success_under_the_footer
+1 failed, 54 deselected in 3.79s
+```
+
+**restore:** the inverse edit, back to the two-line comparison with `cloud_builder.strip_cloud_footer(...)` on each side.
+
+**restore receipt:** `grep -n "_same_body(live, staged)" -A1 plugins/superheroes/lib/pr_body_stage.py` printed
+```
+299:    if _same_body(live, staged) or _same_body(cloud_builder.strip_cloud_footer(live),
+300-                                              cloud_builder.strip_cloud_footer(staged)):
+```
+and `git status --porcelain -- plugins/superheroes/lib/pr_body_stage.py` printed nothing (the file is byte-identical to `109af679`).
+
+**raw green:** same command as the raw red.
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 54 deselected in 3.31s
+```

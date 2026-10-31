@@ -668,6 +668,20 @@ def test_m_a_park_while_held_closes_nothing(tmp_path):
     assert [f["title"] for f in state["_toVerify"]] == [_HELD["title"]]
 
 
+def test_m_a_park_on_an_unauthenticated_second_test_seat_keeps_the_held_and_carried_findings_on_the_receipt(tmp_path):
+    # the held finding and the first pass's survivor live only in the private second-test keys until synthesis
+    r = Round(tmp_path, plain=[_PLAIN])
+    r.to_second_test()
+    state = r.state()
+    assert not state.get("findings")
+    RD._retain_second_test_pending_findings(state)
+    RD._park_cannot_certify(state, "nonpanel-finder-unauthenticated:%s" % RD.P_SECOND_TEST)
+    rows = {f["title"]: f for f in RD._driver_receipt(state)["findings"]}
+    assert set(rows) == {_HELD["title"], _PLAIN["title"]}
+    assert rows[_HELD["title"]]["unverified"] is True
+    assert rows[_PLAIN["title"]]["unverified"] is None and rows[_PLAIN["title"]]["verdict"] == "CONFIRMED"
+
+
 # ---- S: the strict verdicts schema ----------------------------------------------------------------------------
 
 def test_s_the_strict_verdicts_schema_lists_path_reached_required_and_nullable():

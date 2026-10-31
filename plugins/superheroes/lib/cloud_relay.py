@@ -11,6 +11,8 @@ relay's own session record, matches the advisor's text exactly.
                         the message to send to the relay, and the pending record of it
   cloud_relay.py check --repo-root R --msg-id X [--wait S] [--interval I]
                         whether message X was delivered, waiting up to S seconds
+  cloud_relay.py limit --repo-root R --config-dir D
+                        whether account D is at its usage limit, read from the relay's session record
 
 Stdlib plus plugin imports. A function that runs a command or reads the environment takes
 `env=None` (a mapping; default the process environment), and one that runs a command also takes
@@ -41,6 +43,8 @@ NAME_PREFIX = "superheroes-relay-"
 _NAME_HASH_LENGTH = 8
 # A session id opens with this; the relay sends by name, so a send to an id finds no agent and fails late.
 SESSION_ID_PREFIX = "session_"
+# The limit types that stop every builder on the account; a model-scoped limit (seven_day_opus, …) does not.
+ACCOUNT_WIDE_LIMIT_TYPES = ("five_hour", "seven_day")
 SESSION_ID_NOT_NAME_MESSAGE = (
     "The relay addresses a cloud session by its name, issue-<n>-<hash>, not its session_... id. "
     "Read the name from the lane's cloudSessionName in the launch ledger (the launch result or the "
@@ -245,24 +249,45 @@ def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
 
 
 # The verdicts after which the text may have reached the builder: a send that was made, or that no result
-# contradicts. `relay-send-failed` is absent: nothing reached the builder.
-_MAY_HAVE_REACHED = ("relay-silent", "relay-text-mismatch", "relay-send-unconfirmed")
+# contradicts. `account-limited` is a silent relay on a limited account: the message was handed to the relay and
+# may still be processed after the reset, so the lane stays watched. `relay-send-failed` is absent: nothing
+# reached the builder.
+_MAY_HAVE_REACHED = ("relay-silent", "account-limited", "relay-text-mismatch", "relay-send-unconfirmed")
 
 
-def fix_orders(repo_root, *, env=None):
+def _readable_pending_entry(entry):
+    """True when a pending entry has the one readable shape: a dict whose `fixOrder`, when the key is present
+    (an explicit null included), is a bool."""
+    if not isinstance(entry, dict):
+        return False
+    # axis: key presence, not value, decides whether the marker is checked, so an explicit null is damage — see bite-proof record i2254_original_session
+    if "fixOrder" not in entry:
+        return True
+    return isinstance(entry["fixOrder"], bool)
+
+
+def fix_orders(repo_root, *, env=None, include_unchecked=False):
     """{"ok": True, "records": [...]} of the fix orders whose text may have reached the builder, else
     {"ok": False, "reason": ...}. A record is `msgId`, `session`, `configDir` and `at` (the message's `sentAfter`, written once at
     compose: a stable send boundary that a later check or re-check never moves). A fix order never checked
-    (a draft) or whose send failed is left out; the decision only decides eligibility. Reads only; never writes."""
+    (a draft) or whose send failed is left out; the decision only decides eligibility. With `include_unchecked`
+    every composed fix order is listed whatever its decision, one that may have been sent but was never checked included,
+    and a pending entry that is not a dict, or whose `fixOrder` is present but not a bool (null included),
+    refuses the read with `relay-state-malformed` since a damaged record may be a fix order.
+    Reads only; never writes."""
     _path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return refusal
     records = []
     for msg_id, entry in sorted(state["pending"].items()):
+        # axis: with include_unchecked, an entry that cannot be read as a fix order or not refuses the read, since a damaged record may be a fix order — see bite-proof record i2254_original_session
+        if include_unchecked and not _readable_pending_entry(entry):
+            return _refuse("relay-state-malformed")
         decision = entry.get("decision") if isinstance(entry, dict) else None
         # axis: only a fix order the check decided delivered, or may have reached the builder, opens the watch — see bite-proof record wo_2148_fix_order.md
-        if (isinstance(entry, dict) and entry.get("fixOrder") is True and isinstance(decision, dict)
-                and (decision.get("delivered") is True or decision.get("reason") in _MAY_HAVE_REACHED)):
+        if (isinstance(entry, dict) and entry.get("fixOrder") is True
+                and (include_unchecked or (isinstance(decision, dict) and (
+                    decision.get("delivered") is True or decision.get("reason") in _MAY_HAVE_REACHED)))):
             # axis: the window opens at the message's own sentAfter, never at the decision's check time, which a later check moves — see bite-proof record wo_2148_fix_order.md
             records.append({"msgId": msg_id, "session": entry.get("session"),
                             "configDir": entry.get("configDir"), "at": entry.get("sentAfter")})
@@ -304,6 +329,90 @@ def _blocks(rec):
     msg = rec.get("message")
     content = msg.get("content") if isinstance(msg, dict) else None
     return [b for b in content if isinstance(b, dict)] if isinstance(content, list) else []
+
+
+def reset_iso(epoch):
+    """The UTC ISO stamp (`…Z`) of an epoch-seconds time; None for a value no clock can show."""
+    try:
+        when = datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc)
+    except (OverflowError, OSError, ValueError, TypeError):
+        return None
+    return when.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _usable_reset(info):
+    """Whether a limit info dict carries a `resetsAt` that reads as a time: a finite number above 0, not a bool."""
+    value = info.get("resetsAt")
+    # axis: a reset time must be a real finite positive number — a missing, string, bool, negative or NaN one is no reading — see bite-proof record i2272_account_limit.md
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value) and value > 0)
+
+
+def _limit_record(rec):
+    """(limit type, resetsAt, aware datetime of the record) when `rec` is exactly the recorded usage-limit
+    line of an account-wide limit, else None. Never reads the message text."""
+    # axis: only a line the host marks as an API error is a limit record — see bite-proof record i2272_account_limit.md
+    if rec.get("type") != "assistant" or rec.get("isApiErrorMessage") is not True:
+        return None
+    params = rec.get("apiErrorParams")
+    candidates = (rec.get("quotaLimits"), params.get("rate_limit_info") if isinstance(params, dict) else None)
+    info = next((c for c in candidates if isinstance(c, dict) and _usable_reset(c)), None)
+    if info is None:
+        return None
+    # axis: the usage-limit error, or a rate-limit error whose info says rejected — a rate-limit error that was not rejected is no limit — see bite-proof record i2272_account_limit.md
+    if not (rec.get("apiError") == "usage_limit_reached"
+            or (rec.get("error") == "rate_limit" and info.get("status") == "rejected")):
+        return None
+    limit_type = info.get("rateLimitType")
+    # axis: only an account-wide type proves every builder on the account cannot run; a missing, unknown or model-scoped type is no reading — see bite-proof record i2272_account_limit.md
+    if limit_type not in ACCOUNT_WIDE_LIMIT_TYPES:
+        return None
+    when = _time(rec.get("timestamp"))
+    if when is None:
+        return None
+    return limit_type, info["resetsAt"], when
+
+
+def account_limit(repo_root, config_dir, *, env=None, now=None):
+    """Whether the account at `config_dir` is at its usage limit, read from its relay's session record.
+
+    {"ok": True, "limited": bool, "configDir", "relay", "limitType", "resetsAt", "recordedAt"}, or a
+    refusal (`config-dir-invalid`, or the relay state's own). `limited` is True only while the newest
+    limit record is the newest word on the record (no assistant reply strictly later) and `now` (epoch
+    seconds; default the clock) is before its `resetsAt`. The three limit fields describe the newest
+    limit record whether or not it still holds, and are None when there is none. Anything that is not
+    exactly the recorded limit shape is no reading: `limited` False."""
+    name = relay_name(config_dir) if isinstance(config_dir, str) and config_dir else None
+    if name is None:
+        return _refuse("config-dir-invalid")
+    path, state, refusal = _open_state(repo_root, env)
+    if refusal:
+        return refusal
+    out = {"ok": True, "limited": False, "configDir": config_dir, "relay": name,
+           "limitType": None, "resetsAt": None, "recordedAt": None}
+    relay = state["relays"].get(name)
+    relay_id = relay.get("sessionId") if isinstance(relay, dict) else None
+    if not (isinstance(relay_id, str) and relay_id):
+        return out
+    _paths, records = _records(config_dir, relay_id)
+    newest = None
+    for rec in records:
+        found = _limit_record(rec)
+        if found and (newest is None or found[2] > newest[2]):
+            newest = found
+    if newest is None:
+        return out
+    limit_type, resets_at, recorded = newest
+    out.update(limitType=limit_type, resetsAt=resets_at, recordedAt=recorded.timestamp())
+    # axis: a reply from the account after the limit record means the limit no longer holds — see bite-proof record i2272_account_limit.md
+    answered = any(
+        rec.get("type") == "assistant" and rec.get("isApiErrorMessage") is not True
+        and (when := _time(rec.get("timestamp"))) is not None and when > recorded
+        for rec in records)
+    now = time.time() if now is None else now
+    # axis: the limit holds only before its reset time — see bite-proof record i2272_account_limit.md
+    out["limited"] = not answered and now < resets_at
+    return out
 
 
 def _to_session(to, session):
@@ -399,6 +508,10 @@ def _decide(msg, relay_id, final):
 def _say(verdict, msg_id, wait, detail):
     if verdict == "delivered":
         return "Message %s was delivered to the cloud session." % msg_id
+    if verdict == "account-limited":
+        return ("The relay's account is at its usage limit (%s) until %s, so message %s was not sent; "
+                "it was not delivered." % ((detail or {}).get("limitType"),
+                                           (detail or {}).get("resetsAtIso"), msg_id))
     # axis: a mismatch names only what check observes, the relay's send against the stored text, never which step changed it — see bite-proof record wo_2124_relay_say.md
     if verdict == "relay-text-mismatch" and (detail or {}).get("headerDropped"):
         return ("The relay's send of message %s is the stored text with its header line dropped; "
@@ -445,9 +558,11 @@ def _number(value, low_open):
     return n if ok else None
 
 
-def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep=None):
+def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep=None, wall=None):
     """Whether message `msg_id` was delivered: the text the relay actually sent, read from its own
-    session record, equals the forward text exactly and the send succeeded."""
+    session record, equals the forward text exactly and the send succeeded. A relay that sent nothing
+    while its account is at its usage limit reads `account-limited`, not `relay-silent`; `wall` is the
+    epoch-seconds clock that reading is made against (default `time.time`)."""
     wait_s, step = _number(wait, False), _number(interval, True)
     if wait_s is None or step is None:
         return _check_refusal(msg_id, _refuse("wait-invalid"))
@@ -468,6 +583,13 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
         if verdict:
             break
         sleep(max(0, min(step, end - clock())))
+    # axis: a silent relay on an account at its usage limit reads account-limited, and only a silent relay does — any other verdict means the relay sent something — see bite-proof record i2272_account_limit.md
+    if verdict == "relay-silent":
+        limit = account_limit(repo_root, msg["configDir"], env=env, now=(wall or time.time)())
+        if limit.get("ok") is True and limit.get("limited") is True:
+            verdict = "account-limited"
+            detail = {"limitType": limit["limitType"], "resetsAt": limit["resetsAt"],
+                      "resetsAtIso": reset_iso(limit["resetsAt"])}
     delivered, saved = verdict == "delivered", True
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
@@ -491,7 +613,8 @@ def _build_parser():
     verbs = parser.add_subparsers(dest="verb", required=True)
     for name, options in (("ensure", ("--repo-root", "--config-dir")),
                           ("compose", ("--repo-root", "--config-dir", "--session", "--text-file")),
-                          ("check", ("--repo-root", "--msg-id"))):
+                          ("check", ("--repo-root", "--msg-id")),
+                          ("limit", ("--repo-root", "--config-dir"))):
         sub = verbs.add_parser(name)
         for option in options:
             sub.add_argument(option, required=True)
@@ -508,6 +631,8 @@ def _dispatch(args):
         return ensure(args.repo_root, args.config_dir)
     if args.verb == "check":
         return check(args.repo_root, args.msg_id, wait=args.wait, interval=args.interval)
+    if args.verb == "limit":
+        return account_limit(args.repo_root, args.config_dir)
     try:
         with open(args.text_file, encoding="utf-8") as fh:
             text = fh.read()

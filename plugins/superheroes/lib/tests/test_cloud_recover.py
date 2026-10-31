@@ -161,7 +161,8 @@ def _premise(w, issue):
             "layerPosition": 2, "maxRunMinutes": 240, "bashMaxTimeoutMs": 900000,
             "grantScope": {"applicable": False, "reason": "no grant in this lane"},
             "ownerCapability": {"applicable": False, "reason": "no owner capability in this lane"},
-            "placeCall": {"place": "cloud", "pointedAtCloud": True}, "standingExclusions": {"merge": True}}
+            "placeCall": {"place": "cloud", "pointedAtCloud": True}, "standingExclusions": {"merge": True},
+            "standDown": 1}
 
 
 def _lane(w, launch_id, issue=17, *, premise=None, start_age=7200):
@@ -566,7 +567,7 @@ def test_t1_the_successor_premise_adopts_the_pushed_branch_and_passes_the_launch
     premise = got["premise"]
     assert premise["baseCommit"] == w.base != sha  # the lane's own base is kept; the pushed work rides beside it
     assert premise["adoptsBranch"] == BRANCH and premise["adoptsHead"] == sha
-    assert "placeCall" not in premise and "standingExclusions" not in premise
+    assert "placeCall" not in premise and "standingExclusions" not in premise and "standDown" not in premise
     original = _premise(w, 17)
     for key in set(original) - set(CR._LAUNCHER_STAMPED):
         assert premise[key] == original[key]
@@ -1106,6 +1107,7 @@ _CENSUS = {
     "asked": ["--repo-root", "{root}", "--launch-id", "l-none", "--uncertain"],
     "successor": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
     "relaunch-refusal": ["--repo-root", "{root}", "--launch-id", "l-none", "--repo", REPO],
+    "helper-read": ["--repo", REPO, "--issue", "17", "--session-id", "session_abc"],
     "message": ["--issue", "17", "--place", "cloud", "--stopped-at", "1760000000", "--pushed-at", "1759999000"],
 }
 
