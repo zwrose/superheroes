@@ -437,6 +437,14 @@ The reviewer that, in every round after the first, looks for new problems only i
 
 The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
 
+### Slice
+
+One of the parts a change over the countable-lines bar is cut into for round-1 code review, cut by size and never by folder. A slice stays at or under the bar, and a copy proven identical to its source is in no slice. Each slice has its own code reviewer and test reviewer, and a security reviewer when the panel seats security and the slice touches a risk area or its risk is unclear. Every part a slice reviewer was given and did not read becomes a new slice, in up to two further waves. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#big-changes-slices-unread-parts-and-the-seams-check).
+
+### Seams check
+
+The one reviewer that reads a whole sliced change for problems between its [slices](#slice): a caller in one slice and its callee in another, a contract changed on one side only, a half-applied rename. It runs once per sliced change, in round 1 only, after the slices and before the [verifier](#verifier), and its findings go through the same checks as the panel's. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#big-changes-slices-unread-parts-and-the-seams-check).
+
 ## Cloud builds
 
 ### Cloud environment
