@@ -277,6 +277,21 @@ def test_a_recorded_result_for_the_retired_pass_is_handed_back_not_settled_clean
     assert state.get("pending") is None
 
 
+def test_a_landed_but_unrecorded_result_for_the_retired_pass_is_handed_back_not_settled_clean(tmp_path):
+    session_dir = _saved_at_retired_step(tmp_path, "pending")
+    landing = os.path.join(session_dir, "round-1", "landing", RETIRED_STEP)
+    os.makedirs(landing)
+    with open(os.path.join(landing, "seat.a0.payload.json"), "w") as fh:
+        fh.write("{}")
+    assert not os.path.exists(os.path.join(session_dir, "round-1", "seats", RETIRED_STEP))
+    assert RD._commit_recover_or_refuse(session_dir, "next") is None
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    assert state["terminal"] == "handed-back"
+    assert state["certification"]["shape"] is None
+    assert state.get("pending") is None
+
+
 def test_the_retired_step_handler_leaves_other_states_as_they_are():
     base = RD.new_state(dict(CFG))
     base["step"] = RETIRED_STEP

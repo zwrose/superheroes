@@ -9209,15 +9209,33 @@ RETIRED_EXTRA_PASS_FIELDS = ("_gapSweptRound", "_gapMerge", "_verifiedCarry")
 
 
 def _retired_pass_result_recorded(session_dir, rnd):
-    """True when any result is stored for the retired pass in `rnd`. Fail closed: a store directory
-    that cannot be listed counts as recorded."""
+    """True when the session holds any trace of the retired pass's work in `rnd`: a stored result,
+    a landing under the round's landing directory, an emitted order or manifest, or a journal row
+    naming the phase. Fail closed: a directory that cannot be listed, or a journal that cannot be
+    read, counts as a trace. Nothing is reconstructed."""
+    phase = RETIRED_EXTRA_PASS_PHASE
     try:
-        path = round_records.store_dir(session_dir, rnd, RETIRED_EXTRA_PASS_PHASE)
-        return bool(os.listdir(path))
-    except FileNotFoundError:
-        return False
-    except (OSError, ValueError):
+        dirs = (round_records.store_dir(session_dir, rnd, phase),
+                round_records.landing_dir(session_dir, rnd, phase),
+                os.path.join(round_records.round_dir(session_dir, rnd), ORDERS_DIRNAME, phase))
+    except ValueError:
         return True
+    for path in dirs:
+        try:
+            if os.listdir(path):
+                return True
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return True
+    try:
+        journal, lossy = read_journal(session_dir, report_lossy=True)
+    except (OSError, UnicodeError):
+        return True
+    if lossy:
+        return True
+    return any(not isinstance(row, dict) or (row.get("phase") == phase and row.get("round") == rnd)
+               for row in journal)
 
 
 def _finish_retired_extra_pass(state, session_dir=None):
