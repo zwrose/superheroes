@@ -4369,6 +4369,11 @@ def _fold_second_test(state, config, artifact, session_dir=None):
                 copy_[break_it.REDACTED_FIELD] = True  # the transport altered the test's bytes: it is never run altered
             else:
                 copy_.pop(break_it.REDACTED_FIELD, None)
+            # axis: the transit-redaction stamp is carried the same way, so a placeholder-bearing second test is never run — see bite-proof record wo_a_2284_transit_redacted
+            if result.get(break_it.TRANSIT_FIELD) is True:
+                copy_[break_it.TRANSIT_FIELD] = True
+            else:
+                copy_.pop(break_it.TRANSIT_FIELD, None)
             stamped, runs, _exempt, _stamped = break_it.intercept(
                 [copy_], repo_root, head, interpreter=break_it.resolve_interpreter(config), scratch=session_dir)
             copy_ = stamped[0]
@@ -6405,7 +6410,7 @@ def _fold_test_correction(state, config, artifact):
         if rid in by_id:
             duplicated.add(rid)
         by_id[rid] = result
-    landed, none = [], []
+    landed, none, transit = [], [], []
     for item in pending["items"]:
         key = item["findingKey"]
         result = by_id.get(key)
@@ -6418,6 +6423,9 @@ def _fold_test_correction(state, config, artifact):
             reason = "no-block"
         elif block["path"] != item["path"]:
             reason = "other-path"
+        elif result.get(break_it.TRANSIT_FIELD) is True:
+            # axis: a correction whose text carries a transit redaction placeholder is no correction, and is named so — see bite-proof record wo_a_2284_transit_redacted
+            reason = break_it.REASON_TRANSIT_REDACTED
         elif result.get(break_it.REDACTED_FIELD) is True:
             reason = "redacted"
         elif block["content"] == item["reviewerTest"]:
@@ -6431,14 +6439,16 @@ def _fold_test_correction(state, config, artifact):
         if reason is not None:
             entry["reason"] = reason
             none.append(key)
+            if reason == break_it.REASON_TRANSIT_REDACTED:
+                transit.append(key)
         else:
             landed.append({"findingKey": key, "path": item["path"], "content": block["content"],
                            "sha256": _sha256(block["content"]), "weakened": False})
         _record_round_append(state, "testCorrection", entry)
     if none:
         _decision(state, "break-it-correction-none",
-                  "the test reviewer returned no correction, so its restored test stands: %s"
-                  % ", ".join(none))
+                  "the test reviewer returned no correction, so its restored test stands: %s%s"
+                  % (", ".join(none), "; transit-redacted: " + ", ".join(transit) if transit else ""))
     if not landed:
         _finish_test_restore(state, pending.get("restoredHead"))
         return
@@ -11067,8 +11077,9 @@ def _cmd_break_it_change_locked(session_dir, finding_ref, content_file, why):
     config = state["config"]
     changed = {"path": block["path"], "run": block["run"], "content": content, "sha256": sha}
     repo_root, head = _break_it_scope(session_dir, state, config)
-    record = break_it.run_one(repo_root, head, changed, scratch=session_dir,
-                              interpreter=break_it.resolve_interpreter(config))
+    # axis: a changed block whose text carries a transit redaction placeholder is recorded not-run and the runner is never called — see bite-proof record wo_a_2284_transit_redacted
+    record = break_it.transit_not_run(head, changed) or break_it.run_one(
+        repo_root, head, changed, scratch=session_dir, interpreter=break_it.resolve_interpreter(config))
     text = _break_it_block_text(changed, content)
     # axis: the changed text and the old run's stamp are replaced together on the staged copy and its ledger entry, so what the verifiers read, what the fixer commits and what the record shows are the one test
     _rewrite_break_it_copy(staged, text, record, why)
