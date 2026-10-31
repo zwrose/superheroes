@@ -50,12 +50,12 @@ def repo(tmp_path):
     root.mkdir()
     _git(root, "init", "-q")
     _write(root, "README.md", "fixture\n")
-    _write(root, "web/weekly.ts", "export const weeklyTotal = (kcal: number[]) => kcal.reduce((a, b) => a + b, 0);\n")
+    _write(root, "web/weekly.ts", "export const weeklyTotal = (days: number[]) => days.reduce((a, b) => a + b, 0);\n")
     _commit(root, "base")
     return root
 
 
-OWN = "web/eats.test.ts"
+OWN = "web/loans.test.ts"
 HOST = "web/weekly.test.ts"
 COMMAND = "npx vitest run %s" % OWN
 # The test as the loop wrote it: single quotes, no trailing commas, and a semicolon only where a line break does not
@@ -63,12 +63,12 @@ COMMAND = "npx vitest run %s" % OWN
 ORIG = """import { describe, it, expect } from 'vitest'
 import { weeklyTotal } from './weekly'
 
-const eats = [{ day: 'mon', kcal: 500 }, { day: 'tue', kcal: 700 }]
-const kcal = eats.map(e => e.kcal)
+const loans = [{ day: 'mon', days: 500 }, { day: 'tue', days: 700 }]
+const days = loans.map(e => e.days)
 
-describe('meal plan', () => {
-  it('sums a week of eats', () => {
-    expect(weeklyTotal(kcal)).toBe(1200);
+describe('tool shelf', () => {
+  it('sums a week of loans', () => {
+    expect(weeklyTotal(days)).toBe(1200);
   });
 })
 """
@@ -76,16 +76,16 @@ describe('meal plan', () => {
 FORMATTED = """import { describe, it, expect } from "vitest";
 import { weeklyTotal } from "./weekly";
 
-const eats = [
-  { day: "mon", kcal: 500 },
-  { day: "tue", kcal: 700 },
+const loans = [
+  { day: "mon", days: 500 },
+  { day: "tue", days: 700 },
 ];
-const kcal = eats.map((e) => e.kcal);
+const days = loans.map((e) => e.days);
 
-describe("meal plan", () => {
-  it("sums a week of eats", () => {
+describe("tool shelf", () => {
+  it("sums a week of loans", () => {
     expect(
-      weeklyTotal(kcal),
+      weeklyTotal(days),
     ).toBe(
       1200,
     );
@@ -95,7 +95,7 @@ describe("meal plan", () => {
 HOST_IMPORTS = 'import { describe, expect, it } from "vitest";\nimport { planWeek, weeklyTotal } from "./weekly";\n'
 HOST_OWN = '\nit("plans seven days", () => {\n  expect(planWeek()).toHaveLength(7);\n});\n\n'
 HOST_BODY = FORMATTED.split('import { weeklyTotal } from "./weekly";\n\n', 1)[1].replace(
-    '"meal plan"', '"meal plan (folded)"').replace('"sums a week of eats"', '"sums a week of eats (folded)"')
+    '"tool shelf"', '"tool shelf (folded)"').replace('"sums a week of loans"', '"sums a week of loans (folded)"')
 
 
 def _host(imports=HOST_IMPORTS, before=""):
@@ -148,7 +148,7 @@ def test_a_ts_test_folded_into_a_host_with_merged_vitest_imports_is_kept_and_run
     assert [c["run"] for c in calls] == ["npx vitest run %s" % HOST]
     assert calls[0]["path"] == HOST
     assert break_it_body.locate(ORIG, OWN, [(HOST, _host())])["titles"] == [
-        ("meal plan", "meal plan (folded)"), ("sums a week of eats", "sums a week of eats (folded)")]
+        ("tool shelf", "tool shelf (folded)"), ("sums a week of loans", "sums a week of loans (folded)")]
 
 
 # ---- (a2) the pytest rename rules are the Python front's alone ---------------------------------------------
@@ -201,7 +201,7 @@ def test_a_prettier_reformat_at_its_own_path_is_kept_and_the_command_is_unchange
 
 CHANGES = {
     "assertion-value": lambda t: t.replace("1200", "1201"),
-    "fixture-value": lambda t: t.replace("kcal: 700", "kcal: 701"),
+    "fixture-value": lambda t: t.replace("days: 700", "days: 701"),
 }
 
 
@@ -239,7 +239,7 @@ def test_a_prefilter_passing_unparseable_candidate_without_a_match_is_unresolved
 
 
 def test_two_matching_copies_are_ambiguous(repo):
-    base, head = _stage(repo, {"web/a.test.ts": ORIG.replace("meal plan", "copy a"), "web/b.test.ts": FORMATTED})
+    base, head = _stage(repo, {"web/a.test.ts": ORIG.replace("tool shelf", "copy a"), "web/b.test.ts": FORMATTED})
     calls = []
     assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "match-ambiguous")
     assert calls == []
@@ -340,24 +340,24 @@ def test_a_setup_import_added_to_a_host_whose_original_had_none_reads_host_setup
 
 
 def test_a_runtime_host_import_that_rebinds_a_name_the_test_uses_reads_binding_conflict():
-    host = _host(imports=HOST_IMPORTS + 'import { eats } from "./fixtures";\n')
+    host = _host(imports=HOST_IMPORTS + 'import { loans } from "./fixtures";\n')
     assert _located(host, ORIG) == ("unresolved", "binding-conflict")
 
 
 def test_a_runtime_host_import_that_rebinds_a_name_the_test_uses_reads_binding_conflict_beside_a_setup_import():
-    host = 'import "./setup";\n' + _host(imports=HOST_IMPORTS + 'import { eats } from "./fixtures";\n')
+    host = 'import "./setup";\n' + _host(imports=HOST_IMPORTS + 'import { loans } from "./fixtures";\n')
     assert _located(host) == ("unresolved", "binding-conflict")
 
 
 def test_a_type_only_import_does_not_make_a_same_named_value_declaration_a_rebinding():
-    content = ORIG.replace("const eats", 'const Model = { id: 1 };\nconst eats', 1)
+    content = ORIG.replace("const loans", 'const Model = { id: 1 };\nconst loans', 1)
     content = 'import type { Model } from "./types";\n' + content
     host = HOST_IMPORTS + 'import type { Model } from "./types";\n' + HOST_OWN + "const Model = { id: 1 };\n" + HOST_BODY
     assert _located(host, content) == ("found", None)
 
 
 def test_a_runtime_import_and_a_value_declaration_of_one_name_reads_binding_conflict():
-    content = ORIG.replace("const eats", 'const Model = { id: 1 };\nconst eats', 1)
+    content = ORIG.replace("const loans", 'const Model = { id: 1 };\nconst loans', 1)
     content = 'import { Model } from "./types";\n' + content
     host = HOST_IMPORTS + 'import { Model } from "./types";\n' + HOST_OWN + "const Model = { id: 1 };\n" + HOST_BODY
     assert _located(host, content) == ("unresolved", "binding-conflict")
@@ -384,7 +384,7 @@ def test_a_type_alias_is_harmless_only_when_nothing_executable_can_follow_it(ali
 
 def _with_model(import_line, extra=""):
     """The original and a host that both carry ``import_line`` and a ``const Model`` value (plus ``extra``)."""
-    content = import_line + ORIG.replace("const eats", "const Model = { id: 1 };\n" + extra + "const eats", 1)
+    content = import_line + ORIG.replace("const loans", "const Model = { id: 1 };\n" + extra + "const loans", 1)
     host = HOST_IMPORTS + import_line + HOST_OWN + "const Model = { id: 1 };\n" + extra + HOST_BODY
     return content, host
 
@@ -482,8 +482,8 @@ def test_a_ts_rename_whose_command_carries_only_env_pairs_and_runner_words_is_ke
     assert [c["run"] for c in calls] == ["CI=1 pnpm exec vitest run %s" % HOST]
 
 
-MOVED = "web/eats-moved.test.ts"
-RETITLED = FORMATTED.replace('"meal plan"', '"meal plan renamed"')
+MOVED = "web/loans-moved.test.ts"
+RETITLED = FORMATTED.replace('"tool shelf"', '"tool shelf renamed"')
 _SHAPES = {
     "move-same-title": lambda: {MOVED: FORMATTED},
     "retitle-same-path": lambda: {OWN: RETITLED},

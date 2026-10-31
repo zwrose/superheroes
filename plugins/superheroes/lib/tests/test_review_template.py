@@ -92,7 +92,7 @@ def _sheet(kind="plain", cards=None, **extra):
     sheet = {
         "schema": "superheroes-sheet/1",
         "kind": kind,
-        "title": "Weekly plan",
+        "title": "Weekly bookings",
         "cards": cards if cards is not None else [_card("plan-day"), _card("fridge-check")],
     }
     sheet.update(extra)
@@ -3101,8 +3101,8 @@ NEXT_TEXT = (
     "checks, a new vet and a new approval first."
 )
 DECLINED_ITEMS = [
-    ["li", "Add a calorie count to every recipe on the plan. (why declined: Nothing in your framing asks for nutrition numbers, so adding them would be new scope.)"],
-    ["li", "Let two people edit the same plan at once. (why declined: You said the planner is for one household cook, so sharing a plan is out of scope.)"],
+    ["li", "Add a condition rating to every tool on the shelf. (why declined: Nothing in your framing asks for condition scores, so adding them would be new scope.)"],
+    ["li", "Let two people edit the same booking at once. (why declined: You said the app is for one lender per tool, so sharing a booking is out of scope.)"],
 ]
 NO_DIGEST_LINE = "This browser can't tell which version of the sheet this is, so the verdict can't be saved here."
 LEAVING_LINE = "Once every answer shows it is saved, go back to the chat and say you're done."
@@ -4140,7 +4140,7 @@ def test_a_gesture_begun_before_the_fingers_never_zooms_with_the_pinch():
 
 
 # The sample sheet's own cards: leftovers-handling has two options; shopping-list-rounding and saved-plan-history have none.
-LEFTOVERS_LABELS = ["Let leftovers fill a lunch slot", "Require a different recipe for every slot"]
+LEFTOVERS_LABELS = ["Let a returned tool be booked the next morning", "Require a rest day between bookings"]
 OPEN_PILL = ["sh-pill sh-pill--open", "Open"]
 SOMETHING_ELSE_PILL = ["sh-pill sh-pill--discuss", "Something else"]
 
@@ -4267,7 +4267,7 @@ def test_a_stalled_wording_file_does_not_hold_the_sheet_on_loading(sheet):
 # Bites on: an answer or note failing to come back onto its own card when the sheet is republished with new question wording and a new card order, or the reload writing.
 def test_answers_restore_across_a_republish():
     first = _page_of_the_sample("""
-      t.click(t.button("leftovers-handling", "Let leftovers fill a lunch slot"));
+      t.click(t.button("leftovers-handling", "Let a returned tool be booked the next morning"));
       await t.tick();
       t.type(t.note("leftovers-handling"), "fits our week", "change");
       await t.tick();

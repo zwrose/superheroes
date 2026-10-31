@@ -612,7 +612,7 @@ def _plant_ref_with_sibling(schema):
 
 def _plant_standalone_conditional(schema):
     schema["if"] = {"properties": {"kind": {"const": "remainder"},
-                                   "title": {"const": "Weekly meal planner spec review"}},
+                                   "title": {"const": "Tool-lending app spec review"}},
                     "required": ["kind", "title"]}
     schema["then"] = {"properties": {"title": {"const": "x"}}}
 

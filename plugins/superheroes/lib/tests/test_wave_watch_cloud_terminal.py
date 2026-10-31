@@ -473,7 +473,7 @@ def _only_park(comments):
 
 
 _RECORDED_PARKS = [
-    pytest.param(5, "parked on a second owner gate", "Expected: 240 minutes", 600, id="consumer-1996"),
+    pytest.param(5, "parked on a second owner gate", "Expected: 240 minutes", 600, id="second-owner-gate"),
     pytest.param(
         3, "stopped on the advisor's order (see the park comment below)", "Expected: 60 minutes", 1490,
         id="superheroes-2071",
@@ -512,7 +512,7 @@ def test_p10_a_progress_edit_301_seconds_after_the_park_with_a_building_phase_su
 
 
 def test_p10_the_real_resume_two_hours_forty_three_minutes_later_supersedes_the_park():
-    # axis: resum exception — the #3293 shape: a phase that names the park but says it resumed supersedes it
+    # axis: resum exception — the field resume shape: a phase that names the park but says it resumed supersedes it
     park, progress = _park_then_progress(9780, phase="resumed after the park; building")
     assert _terminals([park, progress], lane_age=_WIDE) == []
 

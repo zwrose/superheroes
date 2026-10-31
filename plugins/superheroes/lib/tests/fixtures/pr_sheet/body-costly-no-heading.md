@@ -1,4 +1,4 @@
-Closes #3303.
+Closes #100.
 
 ## What's changing, and why
 

@@ -450,7 +450,7 @@ def test_set_item_14_writes_only_its_own_key(tmp_path):
     core = CM.core_path(repo, store)
     before = open(core, encoding="utf-8").read()
     prose_before, block_before, tail_before = _split_json_block(before)
-    got = PC.set_item(repo, "whoItsFor", "Home cooks who want one weeknight recipe.", root=store)
+    got = PC.set_item(repo, "whoItsFor", "Neighbours who want to borrow a tool for the weekend.", root=store)
     assert got["action"] == "written"
     after = open(core, encoding="utf-8").read()
     prose_after, block_after, tail_after = _split_json_block(after)
@@ -459,11 +459,11 @@ def test_set_item_14_writes_only_its_own_key(tmp_path):
     cfg_after = block_after.pop("projectConfiguration")
     cfg_before = block_before.pop("projectConfiguration")
     assert block_after == block_before
-    assert cfg_after.pop("whoItsFor") == "Home cooks who want one weeknight recipe."
+    assert cfg_after.pop("whoItsFor") == "Neighbours who want to borrow a tool for the weekend."
     assert cfg_after == cfg_before
     stored = PC.get_item(repo, "whoItsFor", root=store)
     assert stored["source"] == "stamped"
-    assert stored["raw"] == "Home cooks who want one weeknight recipe."
+    assert stored["raw"] == "Neighbours who want to borrow a tool for the weekend."
 
 
 # axis: item 14 refuses an empty or whitespace-only value — wo_a_1618_who-its-for-non-empty
