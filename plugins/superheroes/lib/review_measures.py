@@ -22,10 +22,10 @@ read it unmeasured, with that reason, never zero:
 Counting rules (written fresh: the post-0.43 assessment's counting scripts did not reach this build):
   - A PR is in the window when one of its review records is dated (`writtenAt`) inside it; only in-window records count.
   - A session's figures come from its latest record. Rounds per PR sum the sessions' `rounds.count`.
-  - Reviewer cost sums `reviewers[].cost` over every record of the PR, each row once per (record `sessionId`, `name`,
-    `commit`), rows that did not run and rows carried from an earlier review (a `carried` key) left out; any null
-    among them makes that PR's (or that seat's) figure unmeasured. A PR's sum is per session; a session whose latest
-    record has no row `cost` key reads its record-level `cost` instead. A seat's figure is per-row only.
+  - Reviewer cost: within one record every run counts, a run repeated across a session's records counts once; a run's
+    figure is its `cost`, else its `observation`; a trimmed pre-per-row session reads its record-level `cost` (a
+    seat never does); a session with no run adds zero. A run with no figure makes that PR (or seat) unmeasured; the
+    window's figures are over the measured PRs, and `prsLeftOut` counts the rest: "a run that ran has no cost figure".
   - Finding outcomes by lens read each PR's latest record, one per finding key, merged members left out; an
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
@@ -63,10 +63,11 @@ CAP_CHOICES = ("extra-audit-round", "leftover", "rethink")
 COSTLY = ("lateFindsOnUnchangedCode", "repeatFindingLocations")
 COSTLY_BASES = ("monthly", "sample")
 MEASURE_KEYS = {"roundsPerPr": ("median", "p90"), "sessionsPerPr": ("median", "p90", "shareOverOne"),
-                "reviewerCostPerPr": ("tokens", "minutes"), "ci": ("runsPerPr", "minutesPerPr", "suiteMedianMinutes"),
+                "reviewerCostPerPr": ("tokens", "minutes", "prsLeftOut"), "ci": ("runsPerPr", "minutesPerPr", "suiteMedianMinutes"),
                 "panels": ("sizes", "withoutGrounding", "sessions"), "vetSendBacksOnCleanLoops": ("sentBack", "cleanLoopsVetted"),
                 "escapes": ("missed", "seenAndLeft", "falsePrClaims"), "capChoices": CAP_CHOICES,
                 **dict.fromkeys(COSTLY, ("basis", "value", "source"))}
+LEFT_OUT_WHY = "a run that ran has no cost figure"
 _CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
 _OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
 _day = review_learning._day
@@ -107,15 +108,27 @@ def _clean(rec):
     return review_record.cleared(rec.get("status")) and not any(f.get("outcome") in _OPEN for f in rec["findings"])
 
 
+def _by_session(rs):
+    by = collections.defaultdict(list)
+    for r in rs:
+        by[r["sessionId"]].append(r)
+    return list(by.values())
+
+
 def _rows(recs):
-    """Every reviewer row that ran, once per (sessionId, name, commit), across the given records; a row the record
-    carried from an earlier review (it has a `carried` key) is left out, its cost counted where it was incurred."""
-    out = {}
+    """The runs of one session (`recs` are its records): reviewer rows that ran, minus rows carried from an earlier
+    review (a `carried` key). Within a record every run counts; across records a (name, commit) counts as many times
+    as the most any one record holds it, the rows taken from that record (a tie: the latest by `writtenAt`)."""
+    held = {}
     for r in recs:
+        mine = collections.defaultdict(list)
         for row in r["reviewers"]:
             if row["ran"] != review_record.RAN_NOT_RUN and "carried" not in row:
-                out.setdefault((r["sessionId"], row["name"], row.get("commit")), row)
-    return list(out.values())
+                mine[(row["name"], row.get("commit"))].append(row)
+        for key, rows in mine.items():
+            if key not in held or (len(rows), r["writtenAt"]) >= (len(held[key][0]), held[key][1]):
+                held[key] = (rows, r["writtenAt"])
+    return [row for rows, _ in held.values() for row in rows]
 
 
 def _cost(row, k):
@@ -123,31 +136,52 @@ def _cost(row, k):
     return _num(c.get(k)) if isinstance(c, dict) else None
 
 
-def _sum(vals, k):
-    """The sum, or None when any value is unmeasured (or there is none to sum)."""
+def _figure(row, k):
+    """A run's figure for `k` (tokens | minutes): its `cost`, else (a row with no `cost` key) its `observation`."""
+    if "cost" in row:
+        return _cost(row, k)
+    o = row.get("observation")
+    if not isinstance(o, dict):
+        return None
+    if k == "tokens":
+        t = o.get("tokens")
+        return t if isinstance(t, int) and not isinstance(t, bool) and t >= 0 else None
+    return round(o["wallSeconds"] / 60, 1) if _num(o.get("wallSeconds")) is not None else None
+
+
+def _sum(vals, k, exact=False):
+    """The sum, or None when any value is unmeasured (or there is none to sum); minutes round to one decimal."""
     if not vals or any(v is None for v in vals):
         return None
-    return round(sum(vals), 1) if k == "minutes" else sum(vals)
+    return round(sum(vals), 1) if k == "minutes" and not exact else sum(vals)
+
+
+def _r1(spread):
+    """A minute figure's median, p90 and total, each rounded to one decimal."""
+    return {**spread, **{x: round(spread[x], 1) for x in ("median", "p90", "total") if x in spread}}
 
 
 def _pr_cost(rs, k):
-    """A PR's reviewer cost for `k`, the sum of its sessions' (`rs` is its in-window records). A session whose latest
-    record has no row `cost` key (written before per-row cost) reads that record's record-level `cost` instead, and
-    only when it counted every row that ran and has tokens; per-seat cost never reads it."""
-    by = collections.defaultdict(list)
-    for r in rs:
-        by[r["sessionId"]].append(r)
+    """A PR's reviewer cost for `k`, the sum of its sessions' (`rs` is its in-window records). A session with no run
+    adds zero. A session with a run that has neither `cost` nor `observation`, and no row `cost` key anywhere, is a
+    trimmed pre-per-row one and reads its latest record's record-level `cost`, only when that counted every row that
+    ran and has tokens. Otherwise it sums its runs' figures. Per-seat cost never reads the record-level `cost`."""
     figures = []
-    for recs in by.values():
-        last = _latest(recs)
-        c, ran = last.get("cost"), [x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN]
-        if any("cost" in x for x in last["reviewers"]):
-            figures.append(_sum([_cost(row, k) for row in _rows(recs)], k))
-        elif isinstance(c, dict) and _num(c.get("tokens")) is not None and isinstance(c.get("notCounted"), list) and not any(n in ran for n in c["notCounted"]):
-            figures.append(_sum([_num(c.get(k))], k))
+    for recs in _by_session(rs):
+        runs = _rows(recs)
+        if not runs:
+            figures.append(0.0 if k == "minutes" else 0)
+        elif (any("cost" not in x and not isinstance(x.get("observation"), dict) for x in runs)
+              and not any("cost" in x for r in recs for x in r["reviewers"])):
+            last = _latest(recs)
+            c, ran = last.get("cost"), [x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN]
+            sound = (isinstance(c, dict) and _num(c.get("tokens")) is not None and isinstance(c.get("notCounted"), list)
+                     and not any(n in ran for n in c["notCounted"]))
+            v = _num(c.get(k)) if sound else None
+            figures.append(round(v, 1) if k == "minutes" and v is not None else v)
         else:
-            figures.append(None)
-    return _sum(figures, k)
+            figures.append(_sum([_figure(row, k) for row in runs], k, exact=True))
+    return _sum(figures, k, exact=True)
 
 
 def _cap_outcome(choice, key, pr, later, escapes):
@@ -208,15 +242,18 @@ def compute(inp, start, end, written_at=None):
         m["roundsPerPr"] = _spread([sum(r["rounds"]["count"] for r in ss) for ss in per])
         n = [len(ss) for ss in per]
         m["sessionsPerPr"] = dict(_spread(n), shareOverOne=round(sum(x > 1 for x in n) / len(n), 3))
-        m["reviewerCostPerPr"] = {}
+        m["reviewerCostPerPr"], out = {}, {}
         for k in ("tokens", "minutes"):
             totals = [_pr_cost(rs, k) for rs in prs.values()]
-            if any(t is None for t in totals):
-                m["reviewerCostPerPr"][k] = miss("reviewerCostPerPr." + k, "cost-not-recorded")
+            measured = [t for t in totals if t is not None]
+            out[k] = {"count": len(totals) - len(measured), "why": LEFT_OUT_WHY}
+            if not measured:
+                m["reviewerCostPerPr"][k] = miss("reviewerCostPerPr." + k, "no-measured-pr")
                 continue
-            top, total = sorted(totals, reverse=True)[:math.ceil(len(totals) / 10)], sum(totals)
-            m["reviewerCostPerPr"][k] = dict(_spread(totals), total=total,
-                                             topTenthShare=round(sum(top) / total, 3) if total else 0)
+            top, total = sorted(measured, reverse=True)[:math.ceil(len(measured) / 10)], sum(measured)
+            shown = dict(_spread(measured), total=total, topTenthShare=round(sum(top) / total, 3) if total else 0)
+            m["reviewerCostPerPr"][k] = _r1(shown) if k == "minutes" else shown
+        m["reviewerCostPerPr"]["prsLeftOut"] = out
         outcomes, costs = collections.defaultdict(collections.Counter), collections.defaultdict(lambda: ([], []))
         for rs in prs.values():
             keyed = {}
@@ -228,10 +265,11 @@ def compute(inp, start, end, written_at=None):
             for outcome, seats in keyed.values():
                 for s in seats or ("unattributed",):
                     outcomes[s][outcome] += 1
-            for row in _rows(rs):
-                for s in review_learning._seats(row["name"]):
-                    costs[s][0].append(_cost(row, "tokens"))
-                    costs[s][1].append(_cost(row, "minutes"))
+            for recs in _by_session(rs):
+                for row in _rows(recs):
+                    for s in review_learning._seats(row["name"]):
+                        costs[s][0].append(_figure(row, "tokens"))
+                        costs[s][1].append(_figure(row, "minutes"))
         m["seats"] = {}
         for s in sorted(set(outcomes) | set(costs)):
             shown = {"outcomes": {o: outcomes[s][o] for o in (*review_findings_schema.OUTCOMES, "open")}}
@@ -263,8 +301,8 @@ def compute(inp, start, end, written_at=None):
             m["ci"] = miss("ci", "incomplete-evidence" if bad else "pr-without-ci-receipt")
         else:
             m["ci"] = {"runsPerPr": _spread([len(v) for v in runs.values()]),
-                       "minutesPerPr": _spread([round(sum(v), 1) for v in runs.values()]),
-                       "suiteMedianMinutes": (statistics.median(suite) if suite
+                       "minutesPerPr": _r1(_spread([round(sum(v), 1) for v in runs.values()])),
+                       "suiteMedianMinutes": (round(statistics.median(suite), 1) if suite
                                               else miss("ci.suiteMedianMinutes", "no-suite-time"))}
 
     esc = inp.get("escapes")

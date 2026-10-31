@@ -59,6 +59,9 @@ def test_the_row_shape_is_pinned():
     assert RM.ROW_KEYS == ("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "leftOut", "unmeasured")
     row = RM.compute(_full(), FROM, UNTIL)
     assert tuple(row) == RM.ROW_KEYS and tuple(row["measures"]) == RM.MEASURES and RM.problems(row) == []
+    assert RM.MEASURE_KEYS["reviewerCostPerPr"] == ("tokens", "minutes", "prsLeftOut")
+    none_left = {"count": 0, "why": "a run that ran has no cost figure"}
+    assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"] == {"tokens": none_left, "minutes": none_left}
 
 
 @pytest.mark.parametrize("damage", [lambda r: r.pop("seatingRow"), lambda r: r["measures"].pop("ci"),
@@ -116,7 +119,8 @@ def test_reviewer_cost_dedupes_by_session_name_and_commit_and_skips_rows_that_di
     rows_a = [_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)", ran="not-run", tokens=None)]
     rows_b = [dict(_row("security-reviewer (round 1)"), carried=True),
               _row("security-reviewer (round 1)", commit="c2", tokens=50, minutes=0.5)]
-    recs = [_rec(1, "a", rows=rows_a), _rec(1, "b", "2026-10-04T00:00:00Z", rows=rows_b)]
+    recs = [_rec(1, "a", rows=rows_a), _rec(1, "a", "2026-10-03T11:00:00Z", rows=rows_a),
+            _rec(1, "b", "2026-10-04T00:00:00Z", rows=rows_b)]
     row = RM.compute(_full(records=recs), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 150 and cost["minutes"]["total"] == 2.0
@@ -177,6 +181,74 @@ def test_a_record_written_before_per_row_cost_gives_its_pr_cost_from_the_record_
     # a record with per-row cost keys never reads its record-level cost
     both = dict(_rec(1, rows=[_row("security-reviewer (round 1)")]), cost={"tokens": 999, "minutes": 9, "notCounted": []})
     assert RM.compute(_full(records=[both]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"]["total"] == 100
+
+
+def _pr_cost(*recs, **over):
+    return RM.compute(_full(records=list(recs), **over), FROM, UNTIL)["measures"]["reviewerCostPerPr"]
+
+
+def test_a_session_whose_records_list_only_their_own_runs_sums_them():
+    one = {"name": "security-reviewer (round 1)", "ran": "engine-record", "commit": "h1",
+           "observation": {"tokens": 100, "wallSeconds": 60}}  # no `cost` key: read from its observation
+    two = dict(one, commit="h2", observation={"tokens": 200, "wallSeconds": 120})
+    cost = _pr_cost(_rec(1, "s1", "2026-10-03T10:00:00Z", rows=[one]), _rec(1, "s1", "2026-10-04T10:00:00Z", rows=[two]))
+    assert cost["tokens"]["total"] == 300 and cost["minutes"]["total"] == 3.0
+
+
+def test_a_trimmed_pre_row_cost_session_reads_its_session_total():
+    row = {"name": "security-reviewer (round 1)", "ran": "engine-record", "commit": "c1"}  # no cost, no observation
+
+    def cost(**over):
+        return _pr_cost(dict(_rec(1, rows=[row]), cost=dict({"tokens": 500, "minutes": 4.0, "notCounted": []}, **over)))
+    got = cost()
+    assert got["tokens"]["total"] == 500 and got["minutes"]["total"] == 4.0
+    got = cost(notCounted=[row["name"]])
+    assert got["tokens"] == U and got["minutes"] == U
+
+
+def test_a_session_where_no_reviewer_ran_adds_zero():
+    carried = _rec(1, rows=[dict(_row("security-reviewer (round 1)"), carried=True)])
+    got = _pr_cost(carried)
+    assert got["tokens"]["total"] == 0 and got["minutes"]["total"] == 0.0
+    idle = dict(_rec(1, "b", rows=[{"name": "grounding-seat", "ran": "not-run", "commit": "c1"}], count=0),
+                cost={"tokens": None, "minutes": None, "notCounted": ["grounding-seat"]})
+    assert _pr_cost(idle)["tokens"]["total"] == 0
+    got = _pr_cost(_rec(1, "a"), idle)
+    assert got["tokens"]["total"] == 100 and got["minutes"]["total"] == 1.5
+    bare = _rec(1, "c", rows=[{"name": "code-reviewer (round 1)", "ran": "engine-record", "commit": "c1"}])
+    assert _pr_cost(_rec(1, "a"), bare)["tokens"] == U  # a run that ran with no figure still reads unmeasured
+
+
+def test_two_runs_in_one_record_both_count_and_a_rewritten_record_counts_them_once():
+    rows = [_row("security-reviewer (round 1)", tokens=100), _row("security-reviewer (round 1)", tokens=50)]
+    once = [_rec(1, rows=rows)]
+    for recs in (once, once + [_rec(1, at="2026-10-03T11:00:00Z", rows=rows)]):
+        m = RM.compute(_full(records=recs), FROM, UNTIL)["measures"]
+        assert m["reviewerCostPerPr"]["tokens"]["total"] == 150 and m["seats"]["security-reviewer"]["tokens"] == 150
+
+
+def test_the_window_cost_is_over_measured_prs_and_names_those_left_out():
+    ci = [{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]
+    good, bad = _row("code-reviewer (round 1)", tokens=100), _row("code-reviewer (round 1)", tokens=None)
+    row = RM.compute(_full(records=[_rec(1, rows=[good]), _rec(2, rows=[bad])], ciRuns=ci), FROM, UNTIL)
+    cost = row["measures"]["reviewerCostPerPr"]
+    assert cost["tokens"]["total"] == 100
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": "a run that ran has no cost figure"}
+    assert cost["prsLeftOut"]["minutes"]["count"] == 0 and RM.problems(row) == []
+    row = RM.compute(_full(records=[_rec(1, rows=[bad]), _rec(2, rows=[bad])], ciRuns=ci), FROM, UNTIL)
+    cost = row["measures"]["reviewerCostPerPr"]
+    assert cost["tokens"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
+    assert cost["prsLeftOut"]["tokens"]["count"] == 2 and cost["minutes"]["total"] == 3.0 and RM.problems(row) == []
+
+
+def test_minute_medians_and_totals_are_rounded_to_one_decimal():
+    recs = [_rec(n, rows=[_row("code-reviewer (round 1)", minutes=mins)]) for n, mins in ((1, 0.1), (2, 0.2), (3, 0.25))]
+    ci = [{"pr": n, "minutes": 1} for n in (1, 2, 3)]
+    cost = RM.compute(_full(records=recs, ciRuns=ci), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["minutes"]
+    assert cost["median"] == 0.2 and cost["p90"] == 0.2 and cost["total"] == 0.6
+    runs = [{"pr": 1, "minutes": 1.25, "suiteMinutes": 1.25}, {"pr": 2, "minutes": 1.35, "suiteMinutes": 1.35}]
+    shown = RM.compute(_full(records=[_rec(1), _rec(2)], ciRuns=runs), FROM, UNTIL)["measures"]["ci"]
+    assert shown["minutesPerPr"] == {"median": 1.3, "p90": 1.4} and shown["suiteMedianMinutes"] == 1.3
 
 
 def test_the_top_tenth_share_is_the_costliest_tenth_of_prs():
@@ -310,7 +382,8 @@ def test_a_leftover_outcome_is_escaped_not_escaped_or_unattributed_by_what_the_l
 
 
 def test_a_vet_reads_a_clean_record_written_before_the_window():
-    recs = [_rec(1, at="2026-09-30T10:00:00Z"), _rec(1, "b", "2026-10-02T10:00:00Z")]
+    recs = [_rec(1, at="2026-09-30T10:00:00Z"),
+            _rec(1, "b", "2026-10-02T10:00:00Z", findings=[_f("late", None)], status="not-reviewed")]
     vets = [{"pr": 1, "at": "2026-10-01T10:00:00Z", "sentBack": True, "body": ""}]
     m = RM.compute(_full(records=recs, vetReceipts=vets), FROM, UNTIL)["measures"]
     assert m["vetSendBacksOnCleanLoops"] == {"sentBack": 1, "cleanLoopsVetted": 1}
