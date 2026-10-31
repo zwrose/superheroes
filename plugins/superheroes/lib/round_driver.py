@@ -3076,6 +3076,9 @@ def _seed_findings_before_record_park(state):
     held = state.get("_panelStaged")
     if isinstance(held, list) and held:  # the panel's candidates held at the seams-check step
         fresh = list(held) + (fresh if isinstance(fresh, list) else [])
+    carry = state.get("_sliceCarry")  # the findings of unread waves already folded, held until the last wave
+    if isinstance(carry, list) and carry:
+        fresh = list(carry) + (fresh if isinstance(fresh, list) else [])
     if not isinstance(fresh, list) or not fresh:
         return
     existing = state.get("findings") or []
@@ -4836,6 +4839,10 @@ def _open_unread_wave(state, config, unread, wave, this_wave):
     state["slicePlan"]["slices"].extend(marked)
     # axis: the findings of every wave already folded are kept for the one hand-on after the last wave
     state["_sliceCarry"] = (state.get("_sliceCarry") or []) + this_wave
+    # axis: a folded wave's findings are on the ledger before the next wave opens, so a session stopped between waves
+    # still shows them; the verifiers are still held until the last wave (`_toVerify` is cleared again)
+    _stage_findings(state, _compile_by_anchor(state["_sliceCarry"]))
+    state.pop("_toVerify", None)
     state["_sliceWave"] = nxt
     state["_sliceWaveRoster"] = roster
     state["step"] = P_PANEL

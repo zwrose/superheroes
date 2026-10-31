@@ -160,6 +160,18 @@ def test_the_waves_stop_at_the_bound_and_what_is_still_unread_is_recorded_with_e
     assert len(state["_toVerify"]) == 3
 
 
+def test_a_folded_waves_findings_are_on_the_ledger_and_in_a_park_receipt_before_the_next_wave_finishes(tmp_path):
+    state = _state(_repo(tmp_path), _three_thousand())
+    _wave(state, reads={"test-role:s1": []}, findings={"code-reviewer:s1": [_finding("wave one bug")]})
+    assert state["step"] == RD.P_PANEL and state["_sliceWave"] == 2
+    # the verifiers are still held until the last wave
+    assert not state.get("_toVerify")
+    ledger_titles = [e.get("title") for e in RD._ensure_disposition_ledger_for_write(state)]
+    assert "wave one bug" in ledger_titles
+    RD._seed_findings_before_record_park(state)
+    assert "wave one bug" in [f.get("title") for f in state.get("findings") or []]
+
+
 def test_unread_parts_no_slice_ever_showed_are_recorded_and_shown_not_dropped(tmp_path):
     state = _state(_repo(tmp_path), _added("pkg/one.py", 3))
     state["slicePlan"] = {"sliced": True, "countable": 3, "bar": BAR, "slices": [
