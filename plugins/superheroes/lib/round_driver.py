@@ -862,7 +862,7 @@ def _merge_same_finding(existing, incoming):
     carriers = [s for s in (existing, incoming)
                 if break_it.carries_test(s) and isinstance(s.get(break_it.RUN_FIELD), dict)]
     if len(carriers) == 1:
-        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins
+        # axis: an attached test, its stamp and its runs survive a same-anchor merge the other finding wins — see bite-proof record c1l11f_wo_e_verify_after_restore
         for field in ("suggestion", break_it.RUN_FIELD, break_it.RUNS_FIELD, REVIEWER_TEST_FIELD,
                       TEST_CORRECTION_FIELD):
             if field in carriers[0]:
@@ -1961,13 +1961,16 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
     fresh_block, _fresh_kind = break_it.carried_block(entry)
     if (isinstance(existing, dict) and break_it.carries_test(existing) and fresh_block is not None
             and break_it.carried_block(existing)[0] != fresh_block):
-        # axis: a finding raised again with a fresh test block takes that block as its baseline; a change reason recorded against the old test version does not carry onto it
-        entry[REVIEWER_TEST_FIELD] = fresh_block["content"]
-        runs = entry.get(break_it.RUNS_FIELD)
-        if isinstance(runs, list):
-            entry[break_it.RUNS_FIELD] = [
-                {k: v for k, v in run.items() if k != "changedWhy"} if isinstance(run, dict) else run
-                for run in runs]
+        # axis: a finding raised again with a fresh test block holds no reviewer original of the old test; the fresh test's own run marks the baseline, so a change reason recorded against the old version does not carry onto it — see bite-proof record c1l11f_wo_b_break_it_baseline
+        entry.pop(REVIEWER_TEST_FIELD, None)
+        if _changed_why(entry) is not None:
+            # axis: with no run of the fresh test yet, the old reason would still read as current — the fresh block becomes the baseline and the old reasons are dropped
+            entry[REVIEWER_TEST_FIELD] = fresh_block["content"]
+            runs = entry.get(break_it.RUNS_FIELD)
+            if isinstance(runs, list):
+                entry[break_it.RUNS_FIELD] = [
+                    {k: v for k, v in run.items() if k != "changedWhy"} if isinstance(run, dict) else run
+                    for run in runs]
     elif (isinstance(existing, dict) and break_it.carries_test(existing) and fresh_block is not None
             and existing.get(REVIEWER_TEST_FIELD) is not None
             and entry.get(REVIEWER_TEST_FIELD) is None):
@@ -4315,8 +4318,11 @@ def _fold_second_test(state, config, artifact, session_dir=None):
             copy_ = stamped[0]
             first_runs = held.get(break_it.RUNS_FIELD)
             first_runs = list(first_runs) if isinstance(first_runs, list) else []
-            copy_[break_it.RUNS_FIELD] = first_runs + [r for r in copy_.get(break_it.RUNS_FIELD, [])
-                                                       if r not in first_runs]
+            # axis: the second test is the test role's latest version: the first test's reviewer baseline is dropped (the carried block is the baseline now) and the second test's own run marks where the first test's explanations stop counting — see bite-proof record c1l11f_wo_b_break_it_baseline
+            copy_.pop(REVIEWER_TEST_FIELD, None)
+            second_runs = [dict(r, **{SECOND_TEST_FIELD: True}) for r in copy_.get(break_it.RUNS_FIELD, [])
+                           if isinstance(r, dict)]
+            copy_[break_it.RUNS_FIELD] = first_runs + [r for r in second_runs if r not in first_runs]
             for run in runs:
                 # axis: the second test's run joins the round's history as the finding's latest, so the kept-check reads it — see bite-proof record c1l7_wo_c_second_test
                 _record_round_append(state, "breakItRuns", dict(run, findingKey=key))
@@ -6907,6 +6913,44 @@ def _verify_artifact_trees(artifact):
             if isinstance(t, str) and t]
 
 
+def _verify_rerun_entry(first, artifact, head, head_source, moved, force_head_moved=False,
+                        head_unresolved=False):
+    """(entry, moved_heads) for the retry of a pending verify re-run: the `rerunChecks` entry holding both
+    runs and the driver's decision on them. `force_head_moved` is the restore gate's halt on a retry that
+    ran at another head: the decision is `head-moved` with the two heads whatever the result.
+    `head_unresolved` is the restore gate's halt on a passing retry whose head is unknown: the retry is
+    rejected, so the decision is the non-advancing `failed`, never `went-on`."""
+    second = _verify_run_row(artifact)
+    first_run = dict(first.get("run") or {}, head=first.get("head"),
+                     headSource=first.get("headSource"))
+    second_run = dict(second, head=head, headSource=head_source)
+    if moved:
+        # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
+        second_run["headAfter"] = artifact.get("headShaAfter")
+    # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun
+    moved_heads = _verify_rerun_heads_moved(first.get("head"), artifact, head, moved)
+    if force_head_moved and moved_heads is None:
+        moved_heads = (first.get("head"), head)
+    # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
+    trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
+    # The decision is made here, once; the review record reads it off the entry and never re-derives it.
+    if force_head_moved:
+        rerun_decision = "head-moved"
+    elif head_unresolved or artifact.get("result") != "pass":
+        rerun_decision = "failed"
+    elif moved_heads is not None:
+        rerun_decision = "head-moved"
+    elif len(trees) > 1:
+        rerun_decision = "tree-changed"
+    else:
+        rerun_decision = "went-on"
+    # axis: the record holds the first failure and the one re-run, both runs, and the driver's decision on them — see bite-proof record c1l9a_wo1_verify_rerun
+    entry = {"check": "verify", "runs": [first_run, second_run], "decision": rerun_decision}
+    if rerun_decision == "head-moved":
+        entry["heads"] = list(moved_heads)
+    return entry, moved_heads
+
+
 def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
@@ -6926,19 +6970,51 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     _record_round(state, "verifyResult", result)
     head, head_source, moved = _verify_execution_head(artifact, verified_head)
     restored = state.get("_restoredHead")
-    # axis: the gate after a restore counts only a run at the restored head that held still — a result taken at another head, or one whose head moved during the run, halts, see bite-proof record c1l10b_wo2_test_restore
-    if restored is not None and (moved or (head is not None and head != restored)):
-        how = ("HEAD moved during the run (from %s to %s)" % (artifact.get("headSha"), artifact.get("headShaAfter"))
-               if moved else "ran at %s, not the restored head %s" % (head, restored))
+    first = state.pop("_verifyRerun", None)
+    # axis: the gate after a restore counts only a run at the restored head — a result taken at another head halts, see bite-proof record c1l10b_wo2_test_restore
+    if restored is not None and head is not None and head != restored:
+        if first is not None:
+            # axis: the rerun entry with both runs is recorded before the restore gate's halt — see bite-proof record c1l11f_wo_e_verify_after_restore
+            _record_round_append(state, "rerunChecks", _verify_rerun_entry(
+                first, artifact, head, head_source, moved, force_head_moved=True)[0])
         _set_terminal(state, "halted")
         state["certification"] = {
             "shape": None,
-            "reason": "verify %s — halt, certification withheld" % how}
+            "reason": ("verify ran at %s, not the restored head %s — halt, certification withheld"
+                       % (head, restored))}
         _decision(state, "verify-unresolved",
-                  "verify result: %s — fail closed, certification withheld" % how)
+                  "verify result ran at head %s, not the restored head %s — fail closed, "
+                  "certification withheld" % (head, restored))
         state["step"] = P_TERMINAL
         return
-    first = state.pop("_verifyRerun", None)
+    # axis: after a restore a pass whose head is unknown on both sides halts, never advances — see bite-proof record c1l11f_wo_e_verify_after_restore
+    if restored is not None and head is None and result == "pass":
+        if first is not None:
+            _record_round_append(state, "rerunChecks", _verify_rerun_entry(
+                first, artifact, head, head_source, moved, head_unresolved=True)[0])
+        _set_terminal(state, "halted")
+        state["certification"] = {
+            "shape": None,
+            "reason": ("verify passed at an unknown head, not the restored head %s — halt, "
+                       "certification withheld" % restored)}
+        _decision(state, "verify-unresolved",
+                  "verify result passed at an unknown head, not the restored head %s — fail closed, "
+                  "certification withheld" % restored)
+        state["step"] = P_TERMINAL
+        return
+    # axis: after a restore a first result other than a fail whose head moved during the run halts, never advances — a pass or a skip alike (a fail keeps the fail path) — see bite-proof record c1l11f_wo_e_verify_after_restore
+    if restored is not None and first is None and moved and result != "fail":
+        _set_terminal(state, "halted")
+        ran, ended = artifact.get("headSha"), artifact.get("headShaAfter")
+        state["certification"] = {
+            "shape": None,
+            "reason": ("verify HEAD moved during the run (from %s to %s), not the restored head %s — halt, "
+                       "certification withheld" % (ran, ended, restored))}
+        _decision(state, "verify-unresolved",
+                  "verify result: HEAD moved during the run (from %s to %s), not the restored head %s — "
+                  "fail closed, certification withheld" % (ran, ended, restored))
+        state["step"] = P_TERMINAL
+        return
     # axis: a first fail does not halt — the gate is pending again once, and the second result decides — see bite-proof record c1l9a_wo1_verify_rerun
     if first is None:
         if result == "fail" and not moved and artifact.get("via") != "ci-exact-head":
@@ -6950,30 +7026,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                       % (head or "unknown"))
             return
     else:
-        second = _verify_run_row(artifact)
-        first_run = dict(first.get("run") or {}, head=first.get("head"),
-                         headSource=first.get("headSource"))
-        second_run = dict(second, head=head, headSource=head_source)
-        if moved:
-            # axis: a re-run whose own head moved records where it ended, so the record never calls it unchanged code — see bite-proof record c1l9b_wod_head_after
-            second_run["headAfter"] = artifact.get("headShaAfter")
-        # axis: a re-run that passed counts only at the head the first run ran at — see bite-proof record c1l9a_wo1_verify_rerun
-        moved_heads = _verify_rerun_heads_moved(first.get("head"), artifact, head, moved)
-        # axis: a re-run that passed counts only on the working-tree contents the first run saw — see bite-proof record c1l9a_wo1_verify_rerun
-        trees = set(first.get("trees") or []) | set(_verify_artifact_trees(artifact))
-        # The decision is made here, once; the review record reads it off the entry and never re-derives it.
-        if result != "pass":
-            rerun_decision = "failed"
-        elif moved_heads is not None:
-            rerun_decision = "head-moved"
-        elif len(trees) > 1:
-            rerun_decision = "tree-changed"
-        else:
-            rerun_decision = "went-on"
-        # axis: the record holds the first failure and the one re-run, both runs, and the driver's decision on them — see bite-proof record c1l9a_wo1_verify_rerun
-        entry = {"check": "verify", "runs": [first_run, second_run], "decision": rerun_decision}
-        if rerun_decision == "head-moved":
-            entry["heads"] = list(moved_heads)
+        entry, moved_heads = _verify_rerun_entry(first, artifact, head, head_source, moved)
+        rerun_decision = entry["decision"]
         _record_round_append(state, "rerunChecks", entry)
         if rerun_decision == "head-moved":
             _set_terminal(state, "halted")
@@ -7342,12 +7396,15 @@ def _head_line_anchors(section):
     return anchors
 
 
-def _removal_anchor(head_anchors, here):
+def _removal_anchor(head_anchors, here, replaced_header=False):
     """The head line a line removed at section position ``here`` (between ``head_anchors[here - 1]`` and
     ``head_anchors[here]``) anchors on: the nearest anchorable line after it in the same PR hunk, else the
-    nearest before it in that hunk, else None. It never crosses a hunk header."""
+    nearest before it in that hunk, else None. It never crosses a hunk header. ``replaced_header`` says the
+    line's own hunk header was removed and ``here`` is the position of the header that replaces it, so the
+    line's hunk is the one that follows ``here``, not the one before it."""
     ahead, behind = head_anchors[here:], head_anchors[:here]
-    hunk = behind[-1][0] if behind else None
+    # axis: a removal whose hunk header the group replaces takes its hunk from the surviving (following) hunk, never the preceding one — see bite-proof record c1l11f_wo_b_break_it_baseline
+    hunk = None if replaced_header else (behind[-1][0] if behind else None)
     if hunk is None and ahead:
         hunk = ahead[0][0]
     if hunk is None:
@@ -7363,6 +7420,30 @@ def _removal_anchor(head_anchors, here):
         if number is not None:
             return number
     return None
+
+
+def _merged_removal_anchor(head_anchors, here, preceded=False):
+    """The head line a body line removed together with its PR hunk's header anchors on when no header
+    replaced that one. The seam: when a body line of the merged hunk survived before the removal
+    (``preceded``), the removal anchors on the nearest anchorable line there within that hunk
+    (``_removal_anchor``), whatever follows it: a header, the end of the section, or a line of another hunk.
+    When nothing of the hunk survived before it, the removal anchors only when the head lines on both sides
+    of ``here`` sit in one hunk (the hunk merged into the one before it). Otherwise None: the hunk did not
+    survive, so the entry is marked removal-only and never borrows another hunk's line."""
+    behind, ahead = head_anchors[:here], head_anchors[here:]
+    # axis: a body line of the hunk survived before the removal, so it anchors on that line whatever follows — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if behind and preceded:
+        return _removal_anchor(head_anchors, here)
+    if behind and ahead and behind[-1][0] == ahead[0][0]:
+        return _removal_anchor(head_anchors, here)
+    return None
+
+
+def _merged_removal_anchors(head_anchors, positions):
+    """The head lines every pending removal in ``positions`` (``(position, preceded)`` pairs) anchors on
+    (``_merged_removal_anchor``), in order; a removal whose hunk did not survive anchors on none."""
+    found = (_merged_removal_anchor(head_anchors, here, preceded) for here, preceded in positions)
+    return [anchor for anchor in found if anchor is not None]
 
 
 _FIX_DELTA_OLD_START = re.compile(r"^@@ -(\d+),")
@@ -7414,14 +7495,31 @@ def _fix_delta_groups(delta, head_numbers, head_anchors, before=(), after=()):
         old = _FIX_DELTA_OLD_START.match(lines[0])
         before_index = int(old.group(1)) - 1 if old else -1
         head_lines, content = [], False
+        # `header_gone`: a PR hunk header this group removed, not yet replaced; `waiting`: the removed body
+        # lines of that hunk, which anchor in the hunk the replacing header opens
+        # `waiting_at`: the head position of every one of those removed lines, none dropped, each with whether
+        # a body line of that hunk survived ahead of it; `survived`: such a line has been seen
+        header_gone, waiting, waiting_at, survived = False, 0, [], False
         for ln in lines[1:]:
             mark, text = ln[0], ln[1:]
             if mark in (" ", "-"):
                 before_index += 1
+            if mark in (" ", "-") and text.startswith("@@"):
+                # an earlier removed header that nothing replaced was a hunk that did not survive, or merged
+                # into the hunk before it
+                if header_gone:
+                    head_lines.extend(_merged_removal_anchors(head_anchors, waiting_at))
+                header_gone, waiting, waiting_at, survived = mark == "-", 0, [], False
+            elif header_gone and mark in (" ", "+"):
+                survived = True
             if mark == "-":
                 content = content or not text.startswith("@@")
                 if (text[:1] in (" ", "+", "-") and not text.startswith(("+++ ", "--- "))
                         and before_index - 1 not in vanished):
+                    if header_gone:
+                        waiting_at.append((min(max(index, 0), len(head_anchors)), survived))
+                        waiting += 1
+                        continue
                     # A removed hunk-body line anchors on a line a finding can cite in its own PR hunk;
                     # one whose PR hunk the fix removed whole has none, and never borrows a sibling's.
                     anchor = _removal_anchor(head_anchors, min(max(index, 0), len(head_anchors)))
@@ -7432,6 +7530,14 @@ def _fix_delta_groups(delta, head_numbers, head_anchors, before=(), after=()):
                 if index < 0 or index >= len(head_numbers):
                     return None
                 content = content or not text.startswith("@@")
+                if header_gone and text.startswith("@@"):
+                    # axis: removed lines whose hunk header the group replaces anchor in the surviving hunk that header opens, not the one before it — see bite-proof record c1l11f_wo_b_break_it_baseline
+                    anchor = _removal_anchor(head_anchors, index, replaced_header=True) if waiting else None
+                    if anchor is not None:
+                        head_lines.append(anchor)
+                    header_gone, waiting, waiting_at, survived = False, 0, [], False
+                elif header_gone:
+                    survived = True
                 if text.startswith("-") and not text.startswith("--- "):
                     # A newly introduced deletion (`+-guard`) sits on no head line of its own: it anchors
                     # on a line a finding can cite in its PR hunk, never on the line past the file's end.
@@ -7441,6 +7547,9 @@ def _fix_delta_groups(delta, head_numbers, head_anchors, before=(), after=()):
                 elif head_numbers[index] is not None and not text.startswith("@@"):
                     head_lines.append(head_numbers[index])
             index += 1
+        # axis: removals waiting on a header nothing replaced anchor in the surviving hunk the PR hunks merged into — see bite-proof record c1l11f_wo_b_break_it_baseline
+        if header_gone:
+            head_lines.extend(_merged_removal_anchors(head_anchors, waiting_at))
         if content:
             kept.append((lines, head_lines))
     return kept
@@ -7559,9 +7668,15 @@ def _reported_unnamed_changes(state):
 
 def _changed_why(finding):
     """The build session's reason for changing the finding's break-it test: the latest non-blank
-    `changedWhy` on its run list, else None."""
+    `changedWhy` on its run list recorded after the test role's latest version was set, else None. A
+    second test replaces the first as the test role's version, and its own run (marked `secondTest`)
+    ends the earlier test's explanations."""
     runs = finding.get(break_it.RUNS_FIELD)
-    for run in reversed(runs if isinstance(runs, list) else []):
+    runs = runs if isinstance(runs, list) else []
+    # axis: an explanation counts only when it was recorded after the baseline (the second test's run) was set — see bite-proof record c1l11f_wo_b_break_it_baseline
+    start = max((i + 1 for i, run in enumerate(runs)
+                 if isinstance(run, dict) and run.get(SECOND_TEST_FIELD) is True), default=0)
+    for run in reversed(runs[start:]):
         why = run.get("changedWhy") if isinstance(run, dict) else None
         if isinstance(why, str) and why.strip():
             return why.strip()
@@ -7582,14 +7697,77 @@ def _audit_head(state, config):
     return _resolve_head_commit(repo_root) if _nonempty_str(repo_root) else None
 
 
+def _final_diff_files(repo_root, base, head):
+    """``{path: text}`` for the files the final diff (``base...head``) carries that a break-it body search
+    reads, collected by ``break_it.final_diff_candidates`` (the one collection ``break_it._body_search`` also
+    reads; a text git cannot decode is None); None when git cannot list or read them, so the search is not made."""
+    def audit_git(root, *args):
+        # the audit's own git run, as `_git_bytes` makes it: a 30-second timeout and the inherited environment
+        return subprocess.run(["git", "-C", root, *args], capture_output=True, timeout=30)
+
+    try:
+        candidates, failure = break_it.final_diff_candidates(repo_root, base, head, git=audit_git)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None if failure else dict(candidates)
+
+
+def _locate_in_final_diff(config, head, content, path, cache, command=None):
+    """``(text, where)``: the file of the final diff that holds the break-it test ``content`` (the file at
+    ``path``) unchanged up to formatting and its title, once, as ``break_it.check_kept`` reads it
+    (``break_it_body.locate``), and where it sits; None when it is not so found. Fails closed: a language
+    the search does not read, no match, more than one, any status but ``found`` and a git read that fails
+    are all None, and ``cache`` (one list, filled on first use) holds the diff's files for the audit."""
+    # imported late: break_it's import closure is pinned (test_payload_contracts_layering), and so is this one's
+    from break_it_body import locate
+    repo_root, base = config.get("repoRoot"), config.get("baseRef")
+    if not (_nonempty_str(repo_root) and _nonempty_str(base) and _nonempty_str(head) and _nonempty_str(path)
+            and isinstance(content, str)) or base.startswith("-") or head.startswith("-"):
+        return None
+    if not cache:
+        cache.append(_final_diff_files(repo_root, base, head))
+    files = cache[0]
+    if files is None:
+        return None
+    found = locate(content, path, list(files.items()))
+    # axis: a test found away from its path (relocated within the final diff) is credited as at its path, only where locate finds it whole and once — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if found["status"] != "found" or not isinstance(files.get(found["path"]), str):
+        return None
+    # axis: a renamed or relocated test is credited only where break_it.check_kept would accept it (the same collection, option-token and direct-runner guards, and a mappable command), so the audit never reads `same` for a test the convergence check parks as binding-conflict — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if (found["titles"] or found["path"] != path) and not _retention_guards_hold(
+            repo_root, head, path, found, command):
+        return None
+    return files[found["path"]], found["path"]
+
+
+def _retention_guards_hold(repo_root, head, path, found, command):
+    """True when ``break_it.retention_command`` (the one definition ``break_it._body_search`` also reads) accepts the located test ``found`` (``break_it_body.locate``'s
+    ``found`` result) for the recorded ``path`` and run ``command``: no pytest or JS collection override at
+    ``head`` for a renamed test, no option token and a direct runner for a JS/TS test, and a command that maps
+    onto the new path and titles. Fails closed: an unreadable git or a missing command is False."""
+    if not _nonempty_str(command):
+        return False
+    return break_it.retention_command(repo_root, head, path, command, found)[1] is None
+
+
 def _break_it_target_facts(state, config, finding, head):
     """The `breakIt` block of an audit target: the test role's test, the test committed at the audited
     head, the build session's reason for a change, and how the two compare (`audits.BREAK_IT_MATCHES`).
-    Fails closed: a committed test git cannot read is `missing`, and a recorded change with no kept
-    original reads `changed-unexplained` (never `same`)."""
+    The reviewer's version is the latest test a test-role seat wrote for the finding (`reviewerTest` when
+    held, else the carried block); a committed test equals a version when its bytes do or when
+    ``break_it_body.locate`` finds it in the final diff up to formatting and title, at its path or
+    relocated. The audit judges the one copy ``break_it.check_kept`` will run: the carried block's test
+    (after a restore, ``_restored_run_record`` takes the record's bytes from that same block), held at the
+    recorded path or found in the final diff; that copy is `same` as the reviewer's version, `changed-explained`
+    with a reason recorded after the baseline, else `changed-unexplained`. A reviewer's copy elsewhere is
+    never credited for a different test. With no such copy the file at the recorded path is compared with
+    the reviewer's version alone. Fails closed: with no copy at all, or a committed test git cannot read,
+    the match is `missing`. A recorded change with no kept
+    original reads `changed-unexplained` (never `same`): it has no baseline."""
     block, _kind = break_it.carried_block(finding)
     path = block["path"] if block is not None else None
     current = block["content"] if block is not None else None
+    command = block["run"] if block is not None else None
     kept = finding.get(REVIEWER_TEST_FIELD)
     if isinstance(kept, str):
         reviewer = kept
@@ -7607,30 +7785,41 @@ def _break_it_target_facts(state, config, finding, head):
         except UnicodeDecodeError:
             committed = None
     why = _changed_why(finding)
-    if committed is None:
+    diff_files = []
+
+    def held_as(version):
+        """``(text, where)`` of the committed test equal to ``version``, else None."""
+        if version is None:
+            return None
+        if committed is not None and committed == version:
+            return committed, path
+        return _locate_in_final_diff(config, head, version, path, diff_files, command)
+
+    # axis: the audit resolves the copy the final kept check runs first (the file at the recorded path when it holds the latest run's test, else that test found in the final diff, as break_it.check_kept reads it) and classifies that one copy, so a reviewer's copy elsewhere is never credited for a different test — see bite-proof record c1l11f_wo_b_break_it_baseline
+    copy = held_as(current)
+    run_copy = copy is not None
+    if copy is None and committed is not None:
+        # no copy of the run's test: the file at the recorded path is judged against the reviewer's version alone
+        copy = committed, path
+    # axis: the reviewer's version matches the copy up to formatting, title and relocation, not by exact bytes alone — see bite-proof record c1l11f_wo_b_break_it_baseline
+    if copy is None:
         match = audits.MATCH_MISSING
     elif reviewer is None:
         match = audits.MATCH_CHANGED_UNEXPLAINED
-    elif committed == reviewer:
+    elif copy[0] == reviewer or (run_copy and current == reviewer):
         match = audits.MATCH_SAME
-    elif committed == current and why is not None:
+    elif run_copy and why is not None:
+        # axis: the explained version matches up to the same equivalence, and only with a reason recorded after the baseline — see bite-proof record c1l11f_wo_b_break_it_baseline
         match = audits.MATCH_CHANGED_EXPLAINED
     else:
-        match = audits.MATCH_CHANGED_UNEXPLAINED
-    # axis: a test that differs from the reviewer's original only in formatting or title, or that moved, is the same test — the kept check's own body rule decides, never an exact-text compare
-    if (match in (audits.MATCH_MISSING, audits.MATCH_CHANGED_UNEXPLAINED) and isinstance(reviewer, str)
-            and block is not None and _nonempty_str(repo_root) and _nonempty_str(head)
-            and _nonempty_str(config.get("baseRef"))):
-        kept = break_it.check_kept(
-            repo_root, config.get("baseRef"), head,
-            {"path": path, "command": block["run"], "content": reviewer,
-             "sha256": hashlib.sha256(reviewer.encode("utf-8")).hexdigest()},
-            runner=lambda *_args, **_kwargs: {"outcome": break_it.OUTCOME_PASSED})
-        if kept.get("outcome") == break_it.KEPT and kept.get("reason") == "body-match":
-            match = audits.MATCH_SAME
-            committed = reviewer
-    return {"path": path, "reviewerTest": reviewer, "committedTest": committed,
-            "changedWhy": why, "match": match}
+        as_reviewer = held_as(reviewer)
+        match = (audits.MATCH_SAME if as_reviewer is not None and as_reviewer[1] == copy[1]
+                 else audits.MATCH_CHANGED_UNEXPLAINED)
+    facts = {"path": path, "reviewerTest": reviewer, "committedTest": copy[0] if copy is not None else committed,
+             "changedWhy": why, "match": match}
+    if copy is not None and copy[1] != path:
+        facts["committedPath"] = copy[1]
+    return facts
 
 
 def _audit_fix_group(finding, key):
@@ -9042,8 +9231,21 @@ def _break_it_kept_step(state, config):
                     % (run.get("path"), str(run.get("output") or "")[-200:]))
                 return True
     # axis: a carried finding whose test was lost and never re-attached withholds certification, though no round-level run registers it — see bite-proof record c1l11b_wo_k_carried_lost_test
-    lost = _carried_test_lost_unresolved(state)
+    # axis: a carried lost-test finding the owner ruled out of scope with an audit-cleared, attributed ruling owes no park; every other one still parks — see bite-proof record c1l11b_wo_k_carried_lost_test
+    lost, exempt_rows = [], []
+    for key in _carried_test_lost_unresolved(state):
+        ruled = _break_it_ruled_exempt(state, key)
+        if ruled is None:
+            lost.append(key)
+            continue
+        # axis: an exempt carried lost-test finding gets its ruled-out-of-scope row, so the record reports the owner's ruling and never "fixed and audited" — see bite-proof record c1l11b_wo_k_carried_lost_test
+        exempt_rows.append({"findingKey": key, "path": None, "outcome": "ruled-out-of-scope",
+                            "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
+                            "ruledAt": ruled["provenance"]["ruledAt"]})
     if lost:
+        # axis: the exempt rows are persisted before a mixed-case park, so the record reports the owner's ruling for the waived finding whatever happens next — see bite-proof record c1l11b_wo_k_carried_lost_test
+        if exempt_rows:
+            _record_round(state, "breakItKept", exempt_rows)
         _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
         return True
     latest, latest_round = {}, {}
@@ -9054,13 +9256,15 @@ def _break_it_kept_step(state, config):
                 latest[run["findingKey"]] = run
                 latest_round[run["findingKey"]] = _round_number(rkey)
     if not latest:
+        if exempt_rows:
+            _record_round(state, "breakItKept", exempt_rows)
         return False
     _, by_key, fault = _fixed_ledger_rows(state)
     if fault is not None:
         _park_cannot_certify(state, "break-it test not kept: disposition ledger fault (%s)" % fault)
         return True
     head = config.get(FIX_FOLD_HEAD_KEY) or config.get("headSha")
-    rows, failed = [], []
+    rows, failed = list(exempt_rows), []
     for key, run in latest.items():
         entry = by_key.get(key)
         disposition = entry.get("disposition") if isinstance(entry, dict) else None
@@ -9700,7 +9904,16 @@ def _run_seam(seams, action, payload, state, config):
         return {"results": seams["auditor"](payload.get("targets"), state["round"]),
                 "collectionManifest": manifest}
     if action == P_VERIFY:
-        return {"result": seams["verify_runner"](payload.get("command"), state["round"])}
+        ran = seams["verify_runner"](payload.get("command"), state["round"])
+        if not isinstance(ran, dict):
+            return {"result": ran}
+        artifact = {"result": ran.get("result")}
+        # axis: the in-process verify seam may report the head the run ran at, a non-empty string only — see bite-proof record c1l11f_wo_e_verify_after_restore
+        # axis: the seam's after-head and tree digests reach the fold, so a run that moved the head or changed the tree is seen as one — see bite-proof record c1l11f_wo_e_verify_after_restore
+        for key in ("headSha", "headShaAfter", "treeSha", "treeShaAfter"):
+            if isinstance(ran.get(key), str) and ran[key]:
+                artifact[key] = ran[key]
+        return artifact
     if action == P_APPLY_FIXES:
         return seams["fix_step"](payload.get("batch"), state["round"], payload)
     return {}

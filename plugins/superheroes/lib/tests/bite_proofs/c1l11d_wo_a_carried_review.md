@@ -739,3 +739,335 @@ The red is on the axis: the three cases that put a carried finding in the config
 ......                                                                   [100%]
 6 passed in 3.61s
 ```
+
+---
+
+# Appended by C1-L11f (WO-A, build #2279, vet 737 item 1): entries for the guards whose axis comments cite this record and held none
+
+These are proofs of existing guards: no lasting source change. Each element was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`). Run from the worktree root under `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-wo-a -m pytest "<node id>" -q -p no:cacheprovider --tb=short`, on the tree at build base `4f350065` plus WO-A's `_ci_pending_only` change (E8 alone ran with `--tb=line`). `--tb=short` and `--tb=line` are the runner's own options; the `UV_NATIVE_TLS` deprecation warning line is dropped from each capture; nothing else is filtered and nothing is redacted (no secret appears). Line numbers are those of that tree. Elements: E3 (two pieces, E3a the function `revalidated_copies` and E3b its `carryBase` argument), E5 (two pieces, E5a never demote and E5b always demote), E6, E7 (the ledger operand's rows half), E8 (its fault half). The E4 pair (`carryBase` validation and the session writer's pinned base) cites `c1l11d_wo_c_fold` and is recorded there.
+
+## E3a — `review_record.revalidated_copies`
+
+**axis:** the carry check hears only the copies git still proves at the final commit; the account's word is never taken (`review_record.py:1527` axis comment, call at `:1528`).
+
+**neutralization** (`review_record.py:1528`, one Edit: the account's copies are passed on as given, no recheck):
+```python
+-                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("carryBase"), fc["sha"]),
++                           list(a.get("provenCopies") or []),
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_e6_a_stale_copy_proof_over_a_real_source_change_does_not_widen_the_empty_round" "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_proven_copy_only_returning_round_with_a_symbolic_base_ref_writes_a_carried_record_that_reads_reviewed" -q -p no:cacheprovider --tb=short`
+```
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_e6_a_stale_copy_proof_over_a_real_source_change_does_not_widen_the_empty_round _
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:269: in test_e6_a_stale_copy_proof_over_a_real_source_change_does_not_widen_the_empty_round
+    assert out["ok"] is True and out["status"] == "not-reviewed", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is True and 'reviewed' == 'not-reviewed'
+E     
+E     - not-reviewed
+E     ? ----
+E     + reviewed)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_e6_a_stale_copy_proof_over_a_real_source_change_does_not_widen_the_empty_round
+1 failed, 1 passed in 2.34s
+```
+The red is on the axis: with the account's copies taken unchecked, a stale proof over a real source change widens the empty round and the record reads `reviewed` where the test requires `not-reviewed`. The second test stayed green: its copy proof is genuine.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record.py:1528` by Grep):
+```
+1528:                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("carryBase"), fc["sha"]),
+```
+
+**raw green:** same command.
+```
+..                                                                       [100%]
+2 passed in 1.88s
+```
+
+## E3b — `review_record.revalidated_copies`, its `carryBase` argument
+
+**axis:** the copies are rechecked against the session's pinned full-sha review base (`carryBase`), never the symbolic `baseRef`.
+
+**neutralization** (`review_record.py:1528`, one Edit: the recheck is given `baseRef`):
+```python
+-                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("carryBase"), fc["sha"]),
++                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("baseRef"), fc["sha"]),
+```
+
+**raw red:** same command (both node ids).
+```
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_a_proven_copy_only_returning_round_with_a_symbolic_base_ref_writes_a_carried_record_that_reads_reviewed _
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:563: in test_a_proven_copy_only_returning_round_with_a_symbolic_base_ref_writes_a_carried_record_that_reads_reviewed
+    assert out["ok"] is True and out["status"] == "reviewed", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is True and 'not-reviewed' == 'reviewed'
+E     
+E     - reviewed
+E     ? ++++)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_proven_copy_only_returning_round_with_a_symbolic_base_ref_writes_a_carried_record_that_reads_reviewed
+1 failed, 1 passed in 2.00s
+```
+The red is on the axis: with the symbolic `baseRef` given to the recheck, a genuine copy proof cannot be rechecked (the recheck needs a full sha), is dropped, and the proven-copy-only round reads `not-reviewed` where the test requires `reviewed`. The stale-proof test stayed green: dropping every copy is the safe direction.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record.py:1528` by Grep):
+```
+1528:                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("carryBase"), fc["sha"]),
+```
+
+**raw green:** same command.
+```
+..                                                                       [100%]
+2 passed in 2.08s
+```
+
+## E5a — the light-lane `reading` check, never demote
+
+**axis:** a carried row has no observation of its own; it counts outside the full lane exactly when the earlier record's matching row itself read engaged, else it stays demoted (`review_record.py:1201` axis comment, check at `:1202`).
+
+**neutralization** (`review_record.py:1202`, one Edit: the demotion never fires):
+```python
+-            if carried_reading != "engaged":
++            if False:
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_light_lane_carry_over_an_earlier_engaged_row_is_carried_and_counts" "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted" -q -p no:cacheprovider --tb=short`
+```
+.FF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted[not-shown] _
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:608: in test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted
+    assert out["ok"] is True and out["status"] == "not-reviewed", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is True and 'reviewed' == 'not-reviewed'
+E     
+E     - not-reviewed
+E     ? ----
+E     + reviewed)
+__ test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted[absent] __
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:608: in test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted
+    assert out["ok"] is True and out["status"] == "not-reviewed", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is True and 'reviewed' == 'not-reviewed'
+E     
+E     - not-reviewed
+E     ? ----
+E     + reviewed)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted[not-shown]
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_light_lane_carry_over_an_earlier_row_not_engaged_is_demoted[absent]
+2 failed, 1 passed in 2.28s
+```
+The red is on the axis: with the demotion gone, a carried row over an earlier row that did not read engaged (`not-shown` or absent) counts and the record reads `reviewed` where the test requires `not-reviewed`. The engaged-row test stayed green.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record.py:1202` by Grep):
+```
+1202:            if carried_reading != "engaged":
+```
+
+**raw green:** same command.
+```
+...                                                                      [100%]
+3 passed in 2.42s
+```
+
+## E5b — the light-lane `reading` check, always demote
+
+**axis:** the same: an earlier row that did read engaged still counts.
+
+**neutralization** (`review_record.py:1202`, one Edit: the demotion always fires):
+```python
+-            if carried_reading != "engaged":
++            if True:
+```
+
+**raw red:** same command (both node ids).
+```
+F..                                                                      [100%]
+=================================== FAILURES ===================================
+__ test_a_light_lane_carry_over_an_earlier_engaged_row_is_carried_and_counts ___
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:595: in test_a_light_lane_carry_over_an_earlier_engaged_row_is_carried_and_counts
+    assert out["ok"] is True and out["status"] == "reviewed", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is True and 'not-reviewed' == 'reviewed'
+E     
+E     - reviewed
+E     ? ++++)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_light_lane_carry_over_an_earlier_engaged_row_is_carried_and_counts
+1 failed, 2 passed in 2.34s
+```
+The red is on the axis: with every carried row demoted outside the full lane, the engaged carried row no longer counts and the record reads `not-reviewed` where the test requires `reviewed`. The two not-engaged cases stayed green.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record.py:1202` by Grep):
+```
+1202:            if carried_reading != "engaged":
+```
+
+**raw green:** same command.
+```
+...                                                                      [100%]
+3 passed in 2.33s
+```
+
+## E6 — `review_record._seat_bullet`, the carried branch
+
+**axis:** a carried row says it was carried and from which commit, never that it ran, whether or not its name carries a round suffix (`review_record.py:1915` axis comment, branch at `:1914`).
+
+**neutralization** (`review_record.py:1914`, one Edit: the branch never fires):
+```python
+-        if state != "not-run" and isinstance(v.get("carried"), dict):
++        if False and state != "not-run" and isinstance(v.get("carried"), dict):
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran" -q -p no:cacheprovider --tb=short`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran _____
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:345: in test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran
+    assert bullets and all("carried from %s" % s.reviewed[:7] in b and "ran" not in b.split("findings:")[0] for b in bullets), bullets
+E   AssertionError: ['- code-reviewer: ran in round 1 (reported by the session) on ccc8865; findings: reported by the session']
+E   assert (['- code-reviewer: ran in round 1 (reported by the session) on ccc8865; findings: reported by the session'] and False)
+E    +  where False = all(<generator object test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran.<locals>.<genexpr> at 0x7f6d665f7e60>)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_carried_round_suffixed_reviewer_renders_carried_and_never_ran
+1 failed in 1.91s
+```
+The red is on the axis: with the branch gone, the carried row's bullet says it ran in round 1 (reported by the session) where the test requires `carried from <commit>` and no "ran".
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record.py:1914` by Grep):
+```
+1914:        if state != "not-run" and isinstance(v.get("carried"), dict):
+```
+
+**raw green:** same command.
+```
+.                                                                        [100%]
+1 passed in 2.07s
+```
+
+## E7 — `review_record_session._empty_returning_round`, the ledger operand's rows half
+
+**axis:** a session holding a carried finding, a finding or a ledger row ran something, so it is not the empty round (`review_record_session.py:348` axis comment, operand at `:350`). The operand is `any(sc.read_disposition_ledger(state, required=False))`: that function answers `(rows, fault)`, so the operand is true for rows (this entry) or for a fault (E8).
+
+**neutralization** (`review_record_session.py:350`, one Edit: only the fault slot is read):
+```python
+-            or any(sc.read_disposition_ledger(state, required=False)):  # rows or a fault: either way not the empty round
++            or any(sc.read_disposition_ledger(state, required=False)[1:]):  # rows or a fault: either way not the empty round
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_e5_a_session_that_ran_anything_still_refuses_as_it_did[a-ledger-row]" -q -p no:cacheprovider --tb=short`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_e5_a_session_that_ran_anything_still_refuses_as_it_did[a-ledger-row] ___
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:226: in test_e5_a_session_that_ran_anything_still_refuses_as_it_did
+    assert out == {"ok": False, "reason": RS.UNSUPPORTED, "detail": RS.NO_SEAT_RESULT}, out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert {'ok': True, ...arts': 0, ...} == {'ok': False,... seat status'}
+E     
+E     Differing items:
+E     {'ok': True} != {'ok': False}
+E     Left contains 6 more items:
+E     {'action': 'created',
+E      'parked': False,
+E      'parts': 0,...
+E     
+E     ...Full output truncated, use '-vv' to show
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_e5_a_session_that_ran_anything_still_refuses_as_it_did[a-ledger-row]
+1 failed in 1.64s
+```
+The red is on the axis: with the ledger rows unread, a session holding one ledger row is taken for the empty round and a record is written (`'ok': True, 'action': 'created'`) where the unedited test requires the refusal `review-session-unsupported`.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record_session.py:350` by Grep):
+```
+350:            or any(sc.read_disposition_ledger(state, required=False)):  # rows or a fault: either way not the empty round
+```
+
+**raw green:** same command.
+```
+.                                                                        [100%]
+1 passed in 1.61s
+```
+
+## E8 — `review_record_session._empty_returning_round`, the ledger operand's fault half
+
+**axis:** a ledger that cannot be read is not "no rows", so the round it belongs to is never the empty round (`review_record_session.py:348` axis comment, operand at `:350`).
+
+**Unreachable through this entry point** (the disclosure shape): `write_from_session` cannot deliver a malformed ledger to this operand, because the session reader refuses it first with `review-session-unreadable` / `disposition-ledger-malformed` (shown by `test_e5_an_otherwise_empty_session_whose_ledger_is_malformed_is_not_the_empty_round`, `test_c1l11d_carried_review.py:230`, whose own axis comment says it is not a bite for this operand). The proof that does bite is the direct unit test `test_e8_a_malformed_disposition_ledger_is_never_the_empty_round` (`plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py`, WO-A of build #2279), which calls `_empty_returning_round(state)` on a real empty-round session state with five malformed ledgers (a string, a dict, a list holding `None`, a list holding a string, an int) and requires `None`; it first asserts that the unedited state is the empty round (`== s.reviewed`). The operand is therefore reachable by a direct call, and it was not removed.
+
+**neutralization** (`review_record_session.py:350`, one Edit: only the rows slot is read, so a fault reads as "no rows"):
+```python
+-            or any(sc.read_disposition_ledger(state, required=False)):  # rows or a fault: either way not the empty round
++            or any(sc.read_disposition_ledger(state, required=False)[:1]):  # rows or a fault: either way not the empty round
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py::test_e8_a_malformed_disposition_ledger_is_never_the_empty_round" -q -p no:cacheprovider --tb=line` (this one with `--tb=line`; the same run with `--tb=short` was made first with a sixth case, `[{}]`, which stayed green because an empty-dict row is not a fault: `finding_identity_key({})` is truthy; that case was removed from the test as mislabelled and the red below is the run of the final test)
+```
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert 'cb4e3507c2e8e9196386f2d384209a39a14a2cc0' is None
+     +  where 'cb4e3507c2e8e9196386f2d384209a39a14a2cc0' = <function _empty_returning_round at 0x7f9a88c3b560>({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...})
+     +    where <function _empty_returning_round at 0x7f9a88c3b560> = RS._empty_returning_round
+     +    and   {'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...} = dict({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...}, dispositionLedger='not-a-ledger')
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py:159: AssertionError: assert 'cb4e3507c2e8e9196386f2d384209a39a14a2cc0' is None
+E   AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+     +  where '05a3937c0f9c08bfe80e012f362f0ebf38102b27' = <function _empty_returning_round at 0x7f9a88c3b560>({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...})
+     +    where <function _empty_returning_round at 0x7f9a88c3b560> = RS._empty_returning_round
+     +    and   {'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...} = dict({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...}, dispositionLedger={'rows': []})
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py:159: AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+E   AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+     +  where '05a3937c0f9c08bfe80e012f362f0ebf38102b27' = <function _empty_returning_round at 0x7f9a88c3b560>({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...})
+     +    where <function _empty_returning_round at 0x7f9a88c3b560> = RS._empty_returning_round
+     +    and   {'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...} = dict({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...}, dispositionLedger=[None])
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py:159: AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+E   AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+     +  where '05a3937c0f9c08bfe80e012f362f0ebf38102b27' = <function _empty_returning_round at 0x7f9a88c3b560>({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...})
+     +    where <function _empty_returning_round at 0x7f9a88c3b560> = RS._empty_returning_round
+     +    and   {'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...} = dict({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...}, dispositionLedger=['row'])
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py:159: AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+E   AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+     +  where '05a3937c0f9c08bfe80e012f362f0ebf38102b27' = <function _empty_returning_round at 0x7f9a88c3b560>({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...})
+     +    where <function _empty_returning_round at 0x7f9a88c3b560> = RS._empty_returning_round
+     +    and   {'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...} = dict({'_auditTargets': [], '_coverage': [], '_fixDeltaDiff': '', '_incompletePanel': False, ...}, dispositionLedger=3)
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py:159: AssertionError: assert '05a3937c0f9c08bfe80e012f362f0ebf38102b27' is None
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py::test_e8_a_malformed_disposition_ledger_is_never_the_empty_round[string]
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py::test_e8_a_malformed_disposition_ledger_is_never_the_empty_round[dict]
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py::test_e8_a_malformed_disposition_ledger_is_never_the_empty_round[none-row]
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py::test_e8_a_malformed_disposition_ledger_is_never_the_empty_round[string-row]
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_a_returning.py::test_e8_a_malformed_disposition_ledger_is_never_the_empty_round[int]
+5 failed in 2.29s
+```
+The red is on the axis: with a fault read as "no rows", `_empty_returning_round` answers the last reviewed commit sha (the empty round) for every malformed ledger, where the test requires `None`.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record_session.py:350` by Grep):
+```
+350:            or any(sc.read_disposition_ledger(state, required=False)):  # rows or a fault: either way not the empty round
+```
+
+**raw green:** same command.
+```
+.....                                                                    [100%]
+5 passed in 2.55s
+```

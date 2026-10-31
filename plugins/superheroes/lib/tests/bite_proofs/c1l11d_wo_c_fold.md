@@ -507,3 +507,220 @@ The red is on the axis: with the `abandoned` test gone, the record carrying an e
 .                                                                        [100%]
 1 passed in 3.08s
 ```
+
+---
+
+# Appended by C1-L11f (WO-A, build #2279, vet 737 item 1): entries for the guards whose axis comments cite this record and held none
+
+These are proofs of existing guards: no lasting source change. Each element was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`). Run from the worktree root under `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-wo-a -m pytest "<node id>" -q -p no:cacheprovider --tb=short`, on the tree at build base `4f350065` plus WO-A's `_ci_pending_only` change. `--tb=short` is the runner's own option; the `UV_NATIVE_TLS` deprecation warning line is dropped from each capture; nothing else is filtered and nothing is redacted (no secret appears). Line numbers are those of that tree. Elements: E1 (two pieces, E1a the call leg and E1b the function body), E2, E4 (two pieces, E4a the `carryBase` validation and E4b the session writer's pinned base).
+
+## E1a — `_decide`, the `not _merge_reproduces_head(…)` leg
+
+**axis:** stripped coordinates may say "unchanged" only when a three-way merge of the file reproduces the head byte for byte, so an edit moved between identical blocks is a changed file (`returning_review.py:378`, the `or (… and not _merge_reproduces_head(…))` leg).
+
+**neutralization** (`returning_review.py:382`, one Edit: the leg can never hold):
+```python
+-                       and not _merge_reproduces_head(run, base, last_reviewed, head, f)))
++                       and False))
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py::test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed" -q -p no:cacheprovider --tb=short`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed _____
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py:408: in test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed
+    assert got["changedFiles"] == [SHARED], got
+E   AssertionError: {'read': 'changed', 'lastReviewed': '0fbe0a82483dc8efc4879f3bb77d115c7af80996', 'countable': 0, 'bar': 1000, ...}
+E   assert [] == ['src/shared.py']
+E     
+E     Right contains one more item: 'src/shared.py'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py::test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed
+1 failed in 1.92s
+```
+The red is on the axis: with the leg gone, a file whose raw sections differ only by coordinates is never a changed file, so the moved edit reads no changed file (`[]`) where the test requires `['src/shared.py']`.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `returning_review.py:382` by Grep):
+```
+382:                       and not _merge_reproduces_head(run, base, last_reviewed, head, f)))
+```
+
+**raw green:** same command.
+```
+.                                                                        [100%]
+1 passed in 2.22s
+```
+
+## E1b — `returning_review._merge_reproduces_head`, the merge-equals-head comparison
+
+**axis:** the same: git must prove the three-way merge of the file equals the head's file byte for byte.
+
+**neutralization** (`returning_review.py:208`, one Edit: the comparison always holds):
+```python
+-    return code == 0 and merged == expected
++    return True
+```
+
+**raw red:** same command.
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed _____
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py:408: in test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed
+    assert got["changedFiles"] == [SHARED], got
+E   AssertionError: {'read': 'changed', 'lastReviewed': 'ee973001c4361fd63d13617ccf56aff2f7a057cb', 'countable': 0, 'bar': 1000, ...}
+E   assert [] == ['src/shared.py']
+E     
+E     Right contains one more item: 'src/shared.py'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py::test_c1_an_edit_moved_between_identical_blocks_reads_the_file_changed
+1 failed in 2.13s
+```
+The red is on the axis: with the function answering True, the moved edit reads no changed file, as in E1a. (The edit also left the `merged`/`expected` reads unused; it is a probe, restored below.)
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `returning_review.py:208` by Grep):
+```
+208:    return code == 0 and merged == expected
+```
+
+**raw green:** same command.
+```
+.                                                                        [100%]
+1 passed in 1.98s
+```
+
+## E2 — `returning_review._own_change`, the binary `index`-line keep
+
+**axis:** a binary section has no hunk text to tell versions apart, so its `index` line (the blob ids) is its content identity and is kept (`returning_review.py:177` axis comment, `binary` flag at `:178`).
+
+**neutralization** (`returning_review.py:181`, one Edit: the `index` line is dropped from a binary section too):
+```python
+-        if line.startswith(_INDEX_LINE) and not binary:
++        if line.startswith(_INDEX_LINE):
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py::test_c1_a_binary_file_whose_bytes_changed_is_a_changed_file_and_reads_full" -q -p no:cacheprovider --tb=short`
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_c1_a_binary_file_whose_bytes_changed_is_a_changed_file_and_reads_full __
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py:155: in test_c1_a_binary_file_whose_bytes_changed_is_a_changed_file_and_reads_full
+    assert "Binary files" in new and R._own_change(old) != R._own_change(new)
+E   AssertionError: assert ('Binary files' in 'diff --git a/src/blob.bin b/src/blob.bin\nnew file mode 100644\nindex 0000000..e8ca2f4\nBinary files /dev/null and b/src/blob.bin differ' and 'diff --git a/src/blob.bin b/src/blob.bin\nnew file mode 100644\nBinary files /dev/null and b/src/blob.bin differ' != 'diff --git a/src/blob.bin b/src/blob.bin\nnew file mode 100644\nBinary files /dev/null and b/src/blob.bin differ')
+E    +  where 'diff --git a/src/blob.bin b/src/blob.bin\nnew file mode 100644\nBinary files /dev/null and b/src/blob.bin differ' = <function _own_change at 0x7f7c23cff7e0>('diff --git a/src/blob.bin b/src/blob.bin\nnew file mode 100644\nindex 0000000..6541b88\nBinary files /dev/null and b/src/blob.bin differ')
+E    +    where <function _own_change at 0x7f7c23cff7e0> = R._own_change
+E    +  and   'diff --git a/src/blob.bin b/src/blob.bin\nnew file mode 100644\nBinary files /dev/null and b/src/blob.bin differ' = <function _own_change at 0x7f7c23cff7e0>('diff --git a/src/blob.bin b/src/blob.bin\nnew file mode 100644\nindex 0000000..e8ca2f4\nBinary files /dev/null and b/src/blob.bin differ')
+E    +    where <function _own_change at 0x7f7c23cff7e0> = R._own_change
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_fold_returning.py::test_c1_a_binary_file_whose_bytes_changed_is_a_changed_file_and_reads_full
+1 failed in 1.86s
+```
+The red is on the axis: with the `index` line dropped from a binary section, the sections of the old and the new bytes (which differ only by blob id) become equal, so the changed binary file reads as unchanged where the test requires the two own-changes to differ.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `returning_review.py:181` by Grep):
+```
+181:        if line.startswith(_INDEX_LINE) and not binary:
+```
+
+**raw green:** same command.
+```
+.                                                                        [100%]
+1 passed in 1.75s
+```
+
+## E4a — `review_record._validate`, the `carryBase` validation
+
+**axis:** a carried account names the session's pinned review base as a full sha for the carry check, never the residual-lookup `baseRef` (`review_record.py:716` axis comment, check at `:717`).
+
+**neutralization** (`review_record.py:717`, one Edit: the check always holds):
+```python
+-    chk("carriedReview" not in a or _full_sha(a.get("carryBase")), "carryBase")
++    chk(True, "carryBase")
+```
+
+**raw red:** `... -m pytest "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_carried_account_without_a_full_sha_carry_base_is_refused" "plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_symbolic_extras_base_ref_still_writes_a_carried_record_that_reads_reviewed" -q -p no:cacheprovider --tb=short`
+```
+FFF.                                                                     [100%]
+=================================== FAILURES ===================================
+___ test_a_carried_account_without_a_full_sha_carry_base_is_refused[absent] ____
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:307: in test_a_carried_account_without_a_full_sha_carry_base_is_refused
+    assert out["ok"] is False and out["reason"] == "review-account-invalid", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is False)
+__ test_a_carried_account_without_a_full_sha_carry_base_is_refused[symbolic] ___
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:307: in test_a_carried_account_without_a_full_sha_carry_base_is_refused
+    assert out["ok"] is False and out["reason"] == "review-account-invalid", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is False)
+____ test_a_carried_account_without_a_full_sha_carry_base_is_refused[short] ____
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:307: in test_a_carried_account_without_a_full_sha_carry_base_is_refused
+    assert out["ok"] is False and out["reason"] == "review-account-invalid", out
+E   AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/2', 'parts': 0, ...}
+E   assert (True is False)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_carried_account_without_a_full_sha_carry_base_is_refused[absent]
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_carried_account_without_a_full_sha_carry_base_is_refused[symbolic]
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_carried_account_without_a_full_sha_carry_base_is_refused[short]
+3 failed, 1 passed in 2.57s
+```
+The red is on the axis: with the validation gone, a carried account whose `carryBase` is absent, symbolic or short is written (`'ok': True, 'action': 'created'`) where the unedited test requires the refusal `review-account-invalid`. The symbolic-base test stayed green: its `carryBase` is a full sha.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record.py:717` by Grep):
+```
+717:    chk("carriedReview" not in a or _full_sha(a.get("carryBase")), "carryBase")
+```
+
+**raw green:** same command.
+```
+....                                                                     [100%]
+4 passed in 2.57s
+```
+
+## E4b — `review_record_session`, the session writer's pinned base
+
+**axis:** the carry check reads the session's pinned review base (the driver's full sha), never `extras.baseRef`, which may be a symbolic ref (`review_record_session.py:925` axis comment, assignment at `:926`).
+
+**neutralization** (`review_record_session.py:926`, one Edit: the account's `baseRef`, which may be symbolic, is used):
+```python
+-        account["carryBase"] = cfg["baseRef"] if review_record._full_sha(cfg.get("baseRef")) else None
++        account["carryBase"] = account["baseRef"]
+```
+
+**raw red:** same command as E4a (both node ids).
+```
+...F                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_a_symbolic_extras_base_ref_still_writes_a_carried_record_that_reads_reviewed _
+/home/user/wt-2279-a/plugins/superheroes/lib/tests/test_c1l11d_carried_review.py:290: in test_a_symbolic_extras_base_ref_still_writes_a_carried_record_that_reads_reviewed
+    assert out["ok"] is True and out["status"] == "reviewed", out
+E   AssertionError: {'ok': False, 'reason': 'review-session-unsupported', 'detail': "the session's pinned review base is not a full commit sha, so the carry cannot be checked"}
+E   assert (False is True)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11d_carried_review.py::test_a_symbolic_extras_base_ref_still_writes_a_carried_record_that_reads_reviewed
+1 failed, 3 passed in 2.30s
+```
+The red is on the axis: with the symbolic `extras.baseRef` taken as the carry base, the session writer refuses (`review-session-unsupported`, "pinned review base is not a full commit sha") a carried record it must write.
+
+**restore:** the inverse Edit.
+
+**restore receipt** (the restored line, quoted from `review_record_session.py:926` by Grep):
+```
+926:        account["carryBase"] = cfg["baseRef"] if review_record._full_sha(cfg.get("baseRef")) else None
+```
+
+**raw green:** same command.
+```
+....                                                                     [100%]
+4 passed in 2.84s
+```

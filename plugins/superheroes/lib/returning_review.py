@@ -255,7 +255,9 @@ _CI_GREEN = "green"
 def _ci_pending_only(earlier, last_reviewed):
     """True when ``earlier`` did not finish for one reason only: CI was pending on its final commit when it was
     written. It is a ``not-reviewed`` record that is not abandoned, whose ``ci`` is pending on ``last_reviewed``,
-    and whose ``whatIsMissing`` is the one line the record writer words for that."""
+    and whose ``whatIsMissing`` is the one line the record writer words for that, with beside it only the lines the
+    writer words for a finding of the record left for the owner (those wait for the owner whatever CI says)."""
+    import review_findings_schema
     import review_record
     # axis: only the writer's not-reviewed status, never abandoned, is let through unfinished — see bite-proof record c1l11d_wo_c_fold
     if not review_record.unfinished(earlier.get("status")) or "abandoned" in earlier:
@@ -264,10 +266,16 @@ def _ci_pending_only(earlier, last_reviewed):
     if not (isinstance(ci, dict) and ci.get("state") == "pending" and ci.get("sha") == last_reviewed):
         return False
     missing = earlier.get("whatIsMissing")
-    if not (isinstance(missing, list) and len(missing) == 1 and isinstance(missing[0], str)):
+    if not (isinstance(missing, list) and all(isinstance(m, str) for m in missing)):
         return False
+    findings = earlier.get("findings")
+    # axis: a line beside the CI line is let through only when it is the writer's waits line for a finding of the record whose outcome is left-for-owner — see bite-proof record c1l11f_wo_a_returning
+    waits = {review_record.leftover_line(f) for f in (findings if isinstance(findings, list) else ())
+             if isinstance(f, dict) and f.get("outcome") == review_findings_schema.LEFT_FOR_OWNER}
     line = _CI_PENDING_PREFIX + last_reviewed[:7]
-    return missing[0] == line or missing[0].startswith(line + " ")
+    is_ci = [m == line or m.startswith(line + " ") for m in missing]
+    # axis: exactly one CI-pending line is required, beside owner-wait lines too — see bite-proof record c1l11f_wo_a_returning
+    return sum(is_ci) == 1 and all(ci_line or m in waits for m, ci_line in zip(missing, is_ci))
 
 
 def _ci_read(ci_state, sha):

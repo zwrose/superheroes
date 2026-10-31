@@ -452,9 +452,11 @@ def _valid_grouping(survivors, grouping):
     return groups
 
 
-def _tie_fix_group(fix_groups, group, index, tied, rest):
-    """Append a fix group when a test carrier (``tied``) was carved out and 2+ findings resulted."""
-    if not tied or len(tied) + len(rest) < 2:
+def _tie_fix_group(fix_groups, group, index, tied, rest, carried_test):
+    """Append a fix group when a carved-out member carries a break-it test (``carried_test``) and 2+ findings resulted;
+    ``tied`` is every carved-out member, a ``carriedTestLost`` one included."""
+    # axis: a fix group forms only when a test-carrying member was carved out, never for a carriedTestLost one alone — see bite-proof record c1l11f_wo_c_fix_groups
+    if not carried_test or len(tied) + len(rest) < 2:
         return
     group_id = group["group_id"]
     fix_groups.append({
@@ -488,6 +490,7 @@ def merge_and_rank(survivors, grouping=None):
             members = [by_id[mid] for mid in g["member_ids"]]
             merged_ids = list(g["member_ids"])
             tied = []
+            carried_test = False
             if len(members) > 1:
                 # axis: a finding that carries a break-it test (per-area or attached) carries it and its run
                 # records; merging it into a group would fold that away, so it leaves any multi-member group unmerged
@@ -497,12 +500,13 @@ def merge_and_rank(survivors, grouping=None):
                 for m in [m for m in members if break_it.carries_test(m) or m.get("carriedTestLost") is True]:
                     findings.append(dict(m))
                     tied.append(m["id"])
+                    carried_test = carried_test or break_it.carries_test(m)
                     members.remove(m)
                     merged_ids.remove(m["id"])
                 if len(members) <= 1:
                     findings.extend(dict(m) for m in members)
                     grouped_ids.update(g["member_ids"])
-                    _tie_fix_group(fix_groups, g, index, tied, [m["id"] for m in members])
+                    _tie_fix_group(fix_groups, g, index, tied, [m["id"] for m in members], carried_test)
                     continue
             merged = _merge_group(members)
             rep = max(members, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
@@ -514,7 +518,7 @@ def merge_and_rank(survivors, grouping=None):
                 "member_ids": merged_ids,
                 "kept_id": kept_id,
             })
-            _tie_fix_group(fix_groups, g, index, tied, [kept_id])
+            _tie_fix_group(fix_groups, g, index, tied, [kept_id], carried_test)
             grouped_ids.update(g["member_ids"])
         for s in valid:
             if s["id"] not in grouped_ids:
