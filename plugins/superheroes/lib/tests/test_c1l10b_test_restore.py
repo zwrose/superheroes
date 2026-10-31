@@ -613,7 +613,7 @@ def _restore_state(path=TEST_PATH, content=ROLE_TEST, step_head="a" * 40):
 
 
 def _facts(files=None, **entry):
-    body = {"sha": "b" * 40, "reachable": True, "inStep": False, "paths": [TEST_PATH],
+    body = {"sha": "b" * 40, "reachable": True, "predatesStep": False, "paths": [TEST_PATH],
             "files": {TEST_PATH: ROLE_TEST.encode("utf-8")} if files is None else files}
     body.update(entry)
     return lambda commits, paths: {RD.RESTORE_COMMIT: body}
@@ -629,8 +629,8 @@ def test_t5_the_shared_check_accepts_a_test_only_commit_with_the_reviewers_bytes
                  id="wrong-bytes"),
     pytest.param(_facts(files={TEST_PATH: None}), "%s:test-missing" % TEST_PATH, id="missing-path"),
     pytest.param(_facts(files={}), "%s:test-missing" % TEST_PATH, id="path-not-read"),
-    pytest.param(_facts(inStep=True), "commit-not-in-step", id="no-new-commit"),
-    pytest.param(_facts(inStep=None), "commit-not-in-step", id="in-step-unknown"),
+    pytest.param(_facts(predatesStep=True), "commit-not-in-step", id="no-new-commit"),
+    pytest.param(_facts(predatesStep=None), "commit-not-in-step", id="in-step-unknown"),
     pytest.param(_facts(reachable=False), "commit-unknown", id="unreachable"),
     pytest.param(lambda commits, paths: None, "unverifiable", id="git-unreadable"),
     pytest.param(lambda commits, paths: {}, "unverifiable", id="head-unknown"),

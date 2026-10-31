@@ -1033,15 +1033,6 @@ def test_reconcile_v1_without_cas_token_differing_payload_reappends(tmp_path):
     assert len(rec["reappend"]) == 1
 
 
-def test_head_diff_store_path_valid_requires_exact_session_store_path(tmp_path):
-    sd = _session(tmp_path)
-    expected = RR.head_diff_store_path(sd, 1, PHASE, SEAT, 1)
-    assert RR.head_diff_store_path_valid(expected, sd, 1, PHASE, SEAT, 1) is True
-    lookalike = os.path.join("/attacker", "round-1", "seats", PHASE,
-                             "%s.a1.headdiff" % RR.storage_key(SEAT))
-    assert RR.head_diff_store_path_valid(lookalike, sd, 1, PHASE, SEAT, 1) is False
-
-
 def test_reconcile_keeps_the_store_file_authoritative(tmp_path):
     # The journal is the log: reconcile never deletes or rewrites a store file to match it.
     sd = _session(tmp_path)

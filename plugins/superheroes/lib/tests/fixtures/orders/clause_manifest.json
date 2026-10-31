@@ -60,7 +60,7 @@
   ],
   "dispatch-audits": [
     "You are the [fix auditor](../glossary.md#fix-auditor) for one cleared-or-stalled finding target",
-    "When an independent runner-channel vendor is live, you are never the fixer's vendor",
+    "When an independent runner-channel vendor is live, you are never the build session's vendor",
     "Return exactly one audit result for this target",
     "Judge only this one target",
     "answer three questions about the fix in the result's field for them",
