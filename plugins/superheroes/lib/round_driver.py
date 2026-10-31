@@ -305,6 +305,7 @@ degraded = receipt_disclosures.degraded
 base_degraded = receipt_disclosures.base_degraded
 author_family = receipt_disclosures.author_family
 maker_author_family = receipt_disclosures.maker_author_family
+seat_judgment_family = receipt_disclosures.seat_judgment_family
 same_family_seats = receipt_disclosures.same_family_seats
 same_family_seats_for_receipt = receipt_disclosures.same_family_seats_for_receipt
 same_family_degraded = receipt_disclosures.same_family_degraded
@@ -338,7 +339,9 @@ adapter_provenance_shape = receipt_disclosures.adapter_provenance_shape
 order_vendor_provenance_gaps_shape = receipt_disclosures.order_vendor_provenance_gaps_shape
 _degraded = degraded
 _base_degraded = base_degraded
-_driver_author_family = author_family
+# The author family the driver judges the seat map against; the disclosure and certification readers
+# share the same basis (see receipt_disclosures.seat_judgment_family).
+_driver_author_family = seat_judgment_family
 _same_family_seats = same_family_seats
 _same_family_degraded = same_family_degraded
 _seat_map_violated = seat_map_violated
@@ -1386,6 +1389,9 @@ def new_state(config=None):
         # challenged-coverage / recurrence breaker reads, plus the accumulated coverage decisions.
         "_records": [],
         "_coverage": [],
+        # The build session applies the fixes of a state minted here; a continued state lacks it and
+        # is attributed by `_attribute_fix_maker` before its next command.
+        FIX_MAKER_MARK: True,
     }
     _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
@@ -2186,6 +2192,8 @@ def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope
         if val is not None:
             family[fname] = val
     _apply_disposition_family(entry, family)
+    # axis: a newer disposition supersedes a kept repeat's earlier outcome; repeatOf stays, and the kept path writes repeatKept again after this call — see bite-proof record c1l8_wo_b_record_repeats
+    entry.pop("repeatKept", None)
     entry[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
     if key in seen:
         ledger[seen[key]] = entry
@@ -2193,6 +2201,7 @@ def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope
         ledger.append(entry)
     if live is not None:
         _apply_disposition_family(live, family)
+        live.pop("repeatKept", None)
         live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
 
 
@@ -5162,7 +5171,7 @@ def _note_sent_under_decision(state, rows):
 
 
 def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index=0,
-                     keep_step_start=False):
+                     keep_step_start=False, session_dir=None):
     """The ONE writer of ``state["_fixBatch"]`` — slice the round's blocking batch by cap.
 
     It also records the head the step starts at (``_fixStepHead``) and clears the staged PR body
@@ -5176,8 +5185,9 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     setting P_APPLY_FIXES. Returns ``"queued"`` when a fix batch was queued, ``"excluded"`` when
     the batch was emptied by discharge exclusion (settling the round only when ``batch_index``
     is 0; on a continuation the caller enters post-fix), ``"empty"`` when no row was offered and
-    none is named by a ruling (the caller settles), or ``"faulted"`` when a disposition-
-    ledger read fault parked the session.
+    none is named by a ruling (the caller settles), ``"held"`` when a ruling emptied a step that
+    already holds commits or a PR-body edit (``keep_step_start``; the slice stays for its fold), or ``"faulted"``
+    when a disposition-ledger read fault parked the session.
     """
     cap = _fix_batch_cap(config)
     offered_nonempty = bool(rows)
@@ -5190,6 +5200,21 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if filtered:
         filtered, spent_keys = _drop_spent_out_of_scope_rows(state, filtered)
     filtered = _resolve_ruled_batch(state, filtered)
+    if filtered and keep_step_start and _step_holds_work(state, config, session_dir):
+        # A ruling that drops some of the slice cannot unwind the work the step already holds: a
+        # dropped finding may be the one whose fix is committed, and the report and the audit of that
+        # work resolve against this slice — so the dropped rows stay, ahead of the survivors.
+        present = {_fix_batch_row_key(row) for row in filtered}
+        kept = [row for row in state.get("_fixBatch") or []
+                if isinstance(row, dict) and _fix_batch_row_key(row)
+                and _fix_batch_row_key(row) not in present]
+        if kept:
+            _decision(state, "fix-batch-held",
+                      "a ruling dropped %d finding(s) from the fix batch after the step committed "
+                      "fixes or edited the PR body — they stay, so that work folds, verifies and is "
+                      "audited before the round settles: %s"
+                      % (len(kept), ", ".join(_fix_batch_row_key(row) for row in kept)))
+            filtered = kept + filtered
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:
@@ -5197,6 +5222,15 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     if not filtered:
         # Only rows the discharge filter dropped count as excluded by discharge; rows the
         # once-per-episode rule dropped do not.
+        if keep_step_start and _step_holds_work(state, config, session_dir):
+            # A ruling arriving mid-step cannot unwind work the step already holds, a commit or an
+            # edit of the staged PR body: the slice stays as it is, so the report still folds,
+            # verifies and audits it — an empty slice would converge on changes no one reviewed.
+            _decision(state, "fix-batch-held",
+                      "a ruling emptied the fix batch after the step committed fixes or edited the "
+                      "PR body — the slice stays, so that work folds, verifies and is audited "
+                      "before the round settles")
+            return "held"
         excluded_by_discharge = len(rows) - discharge_survivors
         if excluded_by_discharge:
             rec = state["rounds"].setdefault(str(state["round"]), {})
@@ -5223,6 +5257,28 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         state.pop("_prBodyAtStep", None)
     state["step"] = P_APPLY_FIXES
     return "queued"
+
+
+def _step_has_new_commits(state, config):
+    """True when HEAD of the configured repository has moved off the head the step started at."""
+    start = state.get("_fixStepHead")
+    head = _fix_step_head(config)
+    return _nonempty_str(start) and head is not None and head != start
+
+
+def _step_has_new_pr_body(state, session_dir):
+    """True when the staged PR body differs from the snapshot taken as the step was emitted."""
+    snapshot = state.get("_prBodyAtStep")
+    if not session_dir or not _nonempty_str(snapshot):
+        return False
+    staged = _staged_pr_body_sha256(session_dir)
+    return staged is not None and staged != snapshot
+
+
+def _step_holds_work(state, config, session_dir=None):
+    """True when the apply-fixes step already holds work a fold must see: a commit past its start
+    head, or an edit of the staged PR body."""
+    return _step_has_new_commits(state, config) or _step_has_new_pr_body(state, session_dir)
 
 
 def _fix_step_head(config):
@@ -5286,7 +5342,7 @@ def _reconcile_fix_queue_after_rulings(state, config, extra_rows=None, session_d
     batch_index = state.get("_fixBatchIndex") or 0
     status = _queue_fix_batch(
         state, config, offered, reset_accumulator=False, batch_index=batch_index,
-        keep_step_start=True)
+        keep_step_start=True, session_dir=session_dir)
     if status == "excluded" and batch_index >= 1 and not state.get("terminal"):
         state.pop("_fixQueue", None)
         state.pop("_fixBatchIndex", None)
@@ -5410,6 +5466,7 @@ FIX_WITHOUT_TEST = "fix-without-break-it-test"
 FIX_FINDING_UNKNOWN = "fix-finding-unknown"
 FIX_BINDING_MALFORMED = "fix-binding-malformed"
 UNFIXED_FINDING_UNKNOWN = "unfixed-finding-unknown"
+FINDING_ID_AMBIGUOUS = "finding-id-ambiguous"
 FIX_NO_BINDING = "no-binding"
 FIX_COMMIT_UNKNOWN = "commit-unknown"
 FIX_COMMIT_NOT_IN_STEP = "commit-not-in-step"
@@ -5419,19 +5476,30 @@ FIX_NO_FIX_CHANGE = "no-fix-change"
 FIX_UNVERIFIABLE = "unverifiable"
 
 
-def _slice_finding_resolver(slice_):
-    """``{value: finding key}`` for the slice: each row's identity key and its staged id name it."""
-    names = {}
-    for row in slice_ if isinstance(slice_, list) else []:
-        key = _finding_identity_key(row) if isinstance(row, dict) else None
-        if not key:
-            continue
-        names[key] = key
+def _slice_staged_ids(slice_):
+    """``{staged id: {finding keys}}`` for the slice. Staged ids restart in each verifier wave, so a
+    slice that mixes waves can hold two findings under one id."""
+    staged = {}
     for row in slice_ if isinstance(slice_, list) else []:
         key = _finding_identity_key(row) if isinstance(row, dict) else None
         rid = row.get("id") if key else None
         if isinstance(rid, str) and rid:
-            names.setdefault(rid, key)
+            staged.setdefault(rid, set()).add(key)
+    return staged
+
+
+def _slice_finding_resolver(slice_):
+    """``{value: finding key}`` for the slice: each row's identity key names it, and so does its staged
+    id when that id names exactly one finding of the slice. An id shared by two findings names
+    neither: the report must give the full finding key."""
+    names = {}
+    for row in slice_ if isinstance(slice_, list) else []:
+        key = _finding_identity_key(row) if isinstance(row, dict) else None
+        if key:
+            names[key] = key
+    for rid, keys in _slice_staged_ids(slice_).items():
+        if len(keys) == 1:
+            names.setdefault(rid, next(iter(keys)))
     return names
 
 
@@ -5505,9 +5573,10 @@ def _fix_commit_test_fault(facts, block):
     changed = [p for p in facts.get("paths") or [] if isinstance(p, str)]
     have = (facts.get("files") or {}).get(path)
     if have is not None and path not in changed:
-        # the repair exception: a source-only commit must follow a test that already stood at the start head
+        # the repair exception: a source-only commit must follow the block's bytes already standing at the
+        # start head; a test installed or changed by a separate commit of this step is not the same commit
         start = facts.get("startFiles")
-        if isinstance(start, dict) and start.get(path) is None:
+        if isinstance(start, dict) and start.get(path) != wanted:
             return FIX_TEST_MISSING
     if have is None:
         return FIX_TEST_MISSING
@@ -5539,10 +5608,16 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
     names = _slice_finding_resolver(slice_)
     bindings = _report_bindings(artifact)
     unfixed = [e for e in (artifact.get("unfixed") or []) if isinstance(e, dict)]
+    shared = {rid for rid, keys in _slice_staged_ids(slice_).items()
+              if len(keys) > 1 and rid not in names}
     for entry in unfixed:
+        if entry.get("finding") in shared:
+            return "%s:%s" % (FINDING_ID_AMBIGUOUS, entry.get("finding")), []
         if entry.get("finding") not in names:
             return "%s:%s" % (UNFIXED_FINDING_UNKNOWN, entry.get("finding")), []
     for entry in bindings:
+        if entry.get("finding") in shared:
+            return "%s:%s" % (FINDING_ID_AMBIGUOUS, entry.get("finding")), []
         if entry.get("finding") not in names:
             return "%s:%s" % (FIX_FINDING_UNKNOWN, entry.get("finding")), []
     left = {names[entry["finding"]] for entry in unfixed}
@@ -5683,11 +5758,16 @@ def _fold_apply_fixes(state, config, artifact, changed_subjects_seam=None, sessi
     fixes = list(artifact.get("fixes") or [])
     unfixed = [e for e in (artifact.get("unfixed") or []) if isinstance(e, dict)]
     commits = list(fix_commits or [])
+    fix_rec = {}
     if index >= 1 and isinstance(prior_fix, dict):
+        # An older session resumed here may hold keys this fold never writes (the retired fixer's
+        # `refusals`); they ride on unchanged beside the rebuilt ones.
+        fix_rec = {k: v for k, v in prior_fix.items() if k not in ("fixes", "commits", "unfixed")}
         fixes = list(prior_fix.get("fixes") or []) + fixes
         unfixed = list(prior_fix.get("unfixed") or []) + unfixed
         commits = list(prior_fix.get("commits") or []) + commits
-    fix_rec = {"fixes": fixes, "commits": commits}
+    fix_rec["fixes"] = fixes
+    fix_rec["commits"] = commits
     if unfixed:
         fix_rec["unfixed"] = unfixed
     _record_round(state, "fix", fix_rec)
@@ -7430,6 +7510,9 @@ RETIRED_STALL_FIELDS = ("_stallChoices", "_stallTargets")
 # classified as a retired owner gate.
 RETIRED_FIXER_PHASE = "dispatch-fixer"
 
+# The state key that says the build session is the fix maker (set at mint, or by `_attribute_fix_maker`).
+FIX_MAKER_MARK = "fixMakerIsBuildSession"
+
 
 def _migrate_fixer_step(session_dir, state):
     """Move a saved, unfinished state whose step, or pending action or phase, is the retired fixer
@@ -7455,6 +7538,56 @@ def _migrate_fixer_step(session_dir, state):
     state["_fixStepHead"] = head if _nonempty_str(head) else _fix_step_head(state.get("config"))
     state.pop("_escalatedRung", None)
     return True, attempt
+
+
+def _vendor_did_fix_work(state, config, vendor):
+    """True when the record shows `vendor` as a fixer that produced work: a round it was recorded as
+    the fixer of (`rounds[n]["fixerVendor"]`) holds fixes or commits, or a PR-body edit (`prBodyFix`
+    whose `after` differs from its `before`: a body-only fix has empty fixes and no commits), or the
+    step under way holds commits past its start head (work an earlier build left in place, whose fixer
+    the config names). A vendor the config merely names, before any fix, did no work."""
+    rounds = state.get("rounds")
+    for rec in (rounds.values() if isinstance(rounds, dict) else ()):
+        if not isinstance(rec, dict) or rec.get("fixerVendor") != vendor:
+            continue
+        fix = rec.get("fix")
+        if isinstance(fix, dict) and (fix.get("fixes") or fix.get("commits")):
+            return True
+        body = rec.get("prBodyFix")
+        if (isinstance(body, dict) and _nonempty_str(body.get("after"))
+                and body.get("after") != body.get("before")):
+            return True
+    return _step_has_new_commits(state, config)
+
+
+def _attribute_fix_maker(state):
+    """Make the build session the fix maker of a continued, unfinished state that does not yet say so
+    (True when it changed). Whatever phase it stands at, the build session applies the fixes from here
+    on, so `config.fixerVendor` becomes its vendor, or unknown (None) when its seat map names no
+    family: the audit then degrades, never reading a stale external fixer. An earlier external
+    fixer's vendor stays in the rounds that recorded it (`rounds[n]["fixerVendor"]`), not in the
+    config. Its commits stay in the step, so its family stays a maker: the audit of them is never
+    seated on that family. That holds only for a former vendor that did work (`_vendor_did_fix_work`): one the
+    config names but no round or step shows contributing is not a maker, so it stays eligible to audit."""
+    if not isinstance(state, dict) or state.get("terminal") or state.get(FIX_MAKER_MARK) is True:
+        return False
+    config = state.get("config")
+    if not isinstance(config, dict):
+        return False
+    vendor = _build_session_vendor(seat_map_receipts.effective_seat_map(state))
+    former = config.get("fixerVendor")
+    former_family = (model_registry.family_for("code-fixer", former)
+                     if _nonempty_str(former) and former != vendor
+                     and _vendor_did_fix_work(state, config, former) else None)
+    if former_family is not None:
+        held = state.get("formerFixerFamilies")
+        held = list(held) if isinstance(held, list) else []
+        if former_family not in held:
+            held.append(former_family)
+        state["formerFixerFamilies"] = held
+    config["fixerVendor"] = vendor
+    state[FIX_MAKER_MARK] = True
+    return True
 
 
 def _step_is_retired(state):
@@ -8579,6 +8712,24 @@ def _retain_unauthenticated_finder_findings(state, artifact):
     _set_findings(state, rows)
 
 
+def _retain_second_test_pending_findings(state):
+    """Carry the findings parked behind a second-test seat that failed vendor authentication onto the
+    receipt-visible findings: the first pass's survivors keep their verdicts, and the held findings (whose
+    one more test never got graded) are marked UNVERIFIED. The rejected callback's content is never read."""
+    carried = state.get("_secondTestCarry")
+    held = state.get("_secondTestHeld")
+    existing = state.get("findings")
+    rows = list(existing) if isinstance(existing, list) else []
+    rows.extend(dict(f) for f in (carried if isinstance(carried, list) else ()) if isinstance(f, dict))
+    for row in (held if isinstance(held, list) else ()):
+        finding = row.get("finding") if isinstance(row, dict) else None
+        if isinstance(finding, dict):
+            kept = dict(finding)
+            kept["unverified"] = True
+            rows.append(kept)
+    _set_findings(state, rows)
+
+
 def _retain_verified_findings_unmerged(state):
     """Carry the verified survivors staged for synthesis onto the receipt-visible findings before an
     unauthenticated-synthesis park, WITHOUT applying the unauthenticated grouping: the confirmed
@@ -8663,7 +8814,9 @@ def run_loop(seams, config=None):
                 reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
                 if _library_finder_unauthenticated(state, reported, action, selected=selected,
                                                    replaced=replaced):
-                    if action != P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
+                    if action == P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
+                        _retain_second_test_pending_findings(state)
+                    else:
                         _retain_unauthenticated_finder_findings(state, artifact)
                     else:  # what the round already had — the held findings and the first pass's survivors — is kept
                         _retain_second_test_findings(state)
@@ -10600,11 +10753,13 @@ def _migrate_saved_fixer_step(session_dir, cmd):
     if not ok or not isinstance(state, dict):
         return
     moved, attempt = _migrate_fixer_step(session_dir, state)
-    if not moved:
+    attributed = _attribute_fix_maker(state)
+    if not moved and not attributed:
         return
     save_state(session_dir, state)
-    _journal_append(session_dir, {"cmd": cmd, "phase": RETIRED_FIXER_PHASE, "round": state["round"],
-                                  "attempt": attempt, "outcome": "fix-step-migrated"})
+    if moved:
+        _journal_append(session_dir, {"cmd": cmd, "phase": RETIRED_FIXER_PHASE, "round": state["round"],
+                                      "attempt": attempt, "outcome": "fix-step-migrated"})
 
 
 def _hand_back_retired_gate(session_dir, cmd):
