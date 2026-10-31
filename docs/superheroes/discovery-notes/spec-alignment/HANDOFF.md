@@ -244,8 +244,8 @@ advisor seats that vetted their spec PRs. Both converged, independently, on the 
 
 **Private records (quote owner sessions; never commit):**
 `~/.claude/wave-logs/spec-alignment-discovery/sessions-study-SYNTHESIS.md` (the synthesis and
-open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' own records at
-`~/.claude/wave-logs/discovery-core-story/` and `~/.claude/wave-logs/discovery-account-terms-record/`.
+open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' own records under
+`~/.claude/wave-logs/` (one directory per discovery).
 
 ## Next steps (updated 2026-09-28)
 

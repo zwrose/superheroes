@@ -5,8 +5,8 @@ Adapted to the base guardian seam: every tool AND every git call routes through
 no project-interpreter resolution). Collectors are PATH-only through the seam; the tool
 argv operands are absolute (``--packageFile`` / ``--prefix`` / ``-r`` / ``git -C``). The
 tool-output fixtures are VERBATIM output captured at the command line on 2026-07-21 from
-the owner's real checkouts — /path/to/project (node) and /path/to/python-project
-(python: pip-audit 2.9.0). Where a fixture is modified, the test says so.
+the owner's real checkouts — /path/to/project and /path/to/second-project
+(pip-audit 2.9.0). Where a fixture is modified, the test says so.
 """
 import json
 import os

@@ -2309,14 +2309,14 @@ class DepsLens(object):
     # Measured 2026-07-21/22 at the command line, not estimated:
     #   a consuming project (1099 deps): npm-check-updates --jsonUpgraded 3.2s, npm audit 1.2s
     #   home-assistant/core (59 packages): osv-scanner 0.63–0.74s (queries remote OSV DB)
-    #   a second consuming project (Python): pip-audit 2.2s (pip-audit 2.9.0, unrated fallback)
+    #   a second consuming project: pip-audit 2.2s (pip-audit 2.9.0, unrated fallback)
     #   renovate liveness from git history: 0.02s
     cost = {
         "collectorSeconds": 6.5,
         "note": "measured on real repos 2026-07-21/22: npm-check-updates 3.2s + npm audit "
                 "1.2s (a consuming project, 1099 deps), osv-scanner 0.63–0.74s over a "
                 "59-package requirements.txt (home-assistant/core, queries remote OSV "
-                "database), pip-audit 2.2s (a second consuming project, Python, unrated "
+                "database), pip-audit 2.2s (a second consuming project, unrated "
                 "fallback), git liveness 0.02s. All "
                 "collectors are PATH-only through the guardian seam (no npx fetch, no "
                 "repo-local interpreter). Freshness collection is skipped entirely for "
