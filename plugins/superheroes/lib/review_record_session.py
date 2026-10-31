@@ -918,7 +918,8 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             # axis: a report the loop never folded that cites a line its round's diff did not touch is an outside finding, listed on the account's outside list and never as open work, so abandoning before the fold does not change how it is treated — see bite-proof record c3_wo_a_outside
             # axis: the test role's own break-it proposal is scope-exempt at compile only when its block parses, names the cited file and cites line 1 (break_it.intercept's rule), so only such a proposal is never classified outside here — see bite-proof record c3_wo_a_outside
             exempt = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.scope_exempt(f)
-            if fkey not in listed and not exempt and recovered is not None:
+            # axis: the scope check runs before a listed identity is handled, so a report that matches a settled ledger row but cites a line its round's diff did not touch is recovered as outside and never reopens that row — see bite-proof record c3_wo_a_outside
+            if not exempt and recovered is not None:
                 if rnd not in scopes:
                     scopes[rnd] = _round_scope(session_dir, rnd, pending_round, reviewed_diff)
                 line = _outside_the_round(f, scopes[rnd])

@@ -379,6 +379,24 @@ def test_t9_an_unfolded_report_on_an_untouched_line_is_outside_not_open_work(tmp
     assert listed["hits"] == [{"id": "O-1", "file": "z.py", "line": 1, "title": "Other"}]  # the state's list is not edited
 
 
+def test_t9_an_audit_candidate_matching_a_settled_ledger_row_on_an_untouched_line_is_outside_and_reopens_nothing(tmp_path):
+    # axis: the scope check runs before a listed identity is handled, so a report that matches a settled ledger row but cites a line its round's diff did not touch is recovered as outside and never reopens that row — see bite-proof record c3_wo_a_outside
+    candidate = dict(UNFOLDED)
+    key = rs.sc.finding_identity_key(rs._normalized(candidate))
+    adds_line_3 = "diff --git a/o.py b/o.py\n--- a/o.py\n+++ b/o.py\n@@ -2,0 +3,1 @@\n+added\n"  # touches only o.py
+    adds_line_8 = "diff --git a/u.py b/u.py\n--- a/u.py\n+++ b/u.py\n@@ -7,0 +8,1 @@\n+added\n"
+    for diff, outside_expected in ((adds_line_3, True), (adds_line_8, False)):
+        row = {"findingKey": key, "title": candidate["title"], "outcome": "fixed", "reason": "r", "decidedBy": "auditor"}
+        recovered = []
+        out = rs._unfolded(str(tmp_path), [], {}, [row], settled_rounds={key: 2}, settled_kinds={key: "fixed"},
+                           pending=[dict(candidate)], pending_round=2, reviewed_diff=diff, recovered=recovered)
+        assert out == []
+        if outside_expected:  # the earlier settlement stands and the report is recovered outside under its source
+            assert row["outcome"] == "fixed" and recovered == [("fix auditor", candidate["title"], "u.py", 8)]
+        else:  # control: a report the round's diff does touch still reopens the settled row
+            assert row["outcome"] is None and row["reason"] == rs.UNFOLDED_OPEN and recovered == []
+
+
 def _test_role_account(tmp_path, proposal):
     session = Session(tmp_path, terminal=None, reviewedDiff=DIFF).seat("test-role").save()
     put_envelope(session, "test-role", {"vendor": "codex", "model": "m", "payload": {"findings": [proposal]}})
