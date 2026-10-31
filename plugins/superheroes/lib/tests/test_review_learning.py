@@ -1274,6 +1274,7 @@ def test_claude_md_rule_writes_through_a_symlinked_claude_md(proj, canon_root):
     os.symlink("AGENTS.md", _claude_md(proj))
     got = _apply(proj, canon_root, _text_proposal("claude-md-rule", CLAUDE_RULE), APPROVAL)
     assert (got["ok"], got["outcome"]) == (True, "applied")
+    assert os.path.basename(got["set"]["path"]) == "CLAUDE.md"  # reported as given, not as the link's target
     assert os.path.islink(_claude_md(proj)) and os.readlink(_claude_md(proj)) == "AGENTS.md"
     assert open(shared, encoding="utf-8").read() == "# shared\n\n%s\n" % CLAUDE_RULE
 

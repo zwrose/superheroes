@@ -310,18 +310,20 @@ def _write_text_kind(cwd, proposal, root):
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             raise RuntimeError("the project's config lock is held by another writer")
-        # a symlinked CLAUDE.md or layer is written through to its target, so the link and what it shares survive
-        path = os.path.realpath(_text_target(cwd, kind, root))
+        given = _text_target(cwd, kind, root)
+        # a symlinked CLAUDE.md (a supported layout) is written through to its target, so the link survives;
+        # the layer is written where it stands, as every other layer write does
+        path = os.path.realpath(given) if kind == "claude-md-rule" else given
         with open(path, encoding="utf-8") as fh:
             before = fh.read()
         after = (_with_focus_hint if kind == "focus-hint" else _with_claude_md_rule)(before, line)
         if after is None:
-            return "noop", path
+            return "noop", given
         store_core.atomic_write(path, after)
         with open(path, encoding="utf-8") as fh:
             if line not in (l.rstrip() for l in fh.read().splitlines()):
                 raise RuntimeError("%s does not hold the added line after the write" % path)
-    return "written", path
+    return "written", given
 
 
 def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
