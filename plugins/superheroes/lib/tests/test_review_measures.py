@@ -112,15 +112,26 @@ def test_rounds_and_sessions_per_pr_read_each_sessions_latest_record():
     assert m["sessionsPerPr"] == {"median": 1.5, "p90": 2, "shareOverOne": 0.5}
 
 
-def test_reviewer_cost_dedupes_by_name_and_commit_and_skips_rows_that_did_not_run():
+def test_reviewer_cost_dedupes_by_session_name_and_commit_and_skips_rows_that_did_not_run_or_were_carried():
     rows_a = [_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)", ran="not-run", tokens=None)]
-    rows_b = [_row("security-reviewer (round 1)"), _row("security-reviewer (round 1)", commit="c2", tokens=50, minutes=0.5)]
+    rows_b = [dict(_row("security-reviewer (round 1)"), carried=True),
+              _row("security-reviewer (round 1)", commit="c2", tokens=50, minutes=0.5)]
     recs = [_rec(1, "a", rows=rows_a), _rec(1, "b", "2026-10-04T00:00:00Z", rows=rows_b)]
     row = RM.compute(_full(records=recs), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 150 and cost["minutes"]["total"] == 2.0
     assert row["measures"]["seats"]["security-reviewer"]["tokens"] == 150
     assert "premortem-reviewer" not in row["measures"]["seats"]
+
+
+def test_separate_sessions_on_the_same_commit_each_count_and_a_carried_row_is_not_counted_again():
+    recs = [_rec(1, "a", rows=[_row("security-reviewer (round 1)", tokens=100)]),
+            _rec(1, "b", "2026-10-04T00:00:00Z", rows=[_row("security-reviewer (round 1)", tokens=200),
+                                                        dict(_row("code-reviewer (round 1)", tokens=100), carried=True)])]
+    for order in (recs, recs[::-1]):
+        m = RM.compute(_full(records=order), FROM, UNTIL)["measures"]
+        assert m["reviewerCostPerPr"]["tokens"]["total"] == 300
+        assert m["seats"]["security-reviewer"]["tokens"] == 300 and "code-reviewer" not in m["seats"]
 
 
 def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
@@ -249,6 +260,28 @@ def test_leftover_outcomes_need_the_misses_log_and_a_false_pr_claim_is_no_escape
     assert _caps("leftover", [_rec(1)], escapes=claim) == {"not-escaped": 1}
     plain = [{k: v for k, v in claim[0].items() if k != "marker"}]
     assert _caps("leftover", [_rec(1)], escapes=plain) == {"escaped": 1}  # without the marker it is an escape and counts
+
+
+def test_a_leftover_outcome_is_escaped_not_escaped_or_unattributed_by_what_the_log_names():
+    def log(*items):
+        return [dict({"reviewedAt": "2026-10-03", "call": "seen-and-left"}, **i) for i in items]
+    two = [_rec(1), _rec(2)]
+    ci = [{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]
+    got = lambda esc: _caps("leftover", two, escapes=esc, ciRuns=ci)  # noqa: E731
+    assert got(log({"pr": 1, "key": "k1"})) == {"escaped": 1}
+    assert got(log({"pr": 2, "key": "k1"}, {"pr": "2", "key": "k2"})) == {"not-escaped": 1}
+    assert got(log({"pr": 2, "key": "k1"})) == {"not-escaped": 1}
+    assert got(log({})) == {"unattributed": 1}  # no pr named
+    assert got(log({"pr": 2, "key": "k1"}, {})) == {"unattributed": 1}  # one item names no pr
+    assert got(log({"pr": 1})) == {"unattributed": 1}  # this pr, no key
+    assert got(log({"pr": 1, "key": "k9"})) == {"unattributed": 1}  # this pr, another key
+
+
+def test_a_vet_reads_a_clean_record_written_before_the_window():
+    recs = [_rec(1, at="2026-09-30T10:00:00Z"), _rec(1, "b", "2026-10-02T10:00:00Z")]
+    vets = [{"pr": 1, "at": "2026-10-01T10:00:00Z", "sentBack": True, "body": ""}]
+    m = RM.compute(_full(records=recs, vetReceipts=vets), FROM, UNTIL)["measures"]
+    assert m["vetSendBacksOnCleanLoops"] == {"sentBack": 1, "cleanLoopsVetted": 1}
 
 
 def test_each_cap_choice_reads_the_follow_up_record_it_names():

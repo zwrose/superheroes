@@ -12,7 +12,9 @@ The input file is one JSON object the advisor assembles at the pass; a key it le
 read it unmeasured, with that reason, never zero:
   records       every review record written for the window's PRs, all sessions (`review_record.py read`)
   ciRuns        one item per CI run on a window PR: {"pr", "minutes", "suiteMinutes" (the suite job, or null)}
-  escapes       the misses log as `review_learning.py tally` reads it; an item may also name its "pr" and "key"
+  escapes       the misses log as `review_learning.py tally` reads it; an item may also name its "pr" and "key". A
+                leftover cap choice reads `escaped` only when a non-false-claim item names the same pr and key,
+                `not-escaped` only when every such item names a pr and none names this one, else `unattributed`
   vetReceipts   one item per vet receipt: {"pr", "at" (the receipt's time), "sentBack" (bool), "body" (its text)}
   capChoicesSince  the day the project adopted the release whose vet receipt records cap choices
   costly        {"lateFindsOnUnchangedCode" | "repeatFindingLocations": {"basis": "monthly"|"sample", "value": n, "source": "where it came from"}}
@@ -20,8 +22,9 @@ read it unmeasured, with that reason, never zero:
 Counting rules (written fresh: the post-0.43 assessment's counting scripts did not reach this build):
   - A PR is in the window when one of its review records is dated (`writtenAt`) inside it; only in-window records count.
   - A session's figures come from its latest record. Rounds per PR sum the sessions' `rounds.count`.
-  - Reviewer cost sums `reviewers[].cost` over every record of the PR, each row once per (`name`, `commit`), rows
-    that did not run left out; any null among them makes that PR's (or that seat's) figure unmeasured.
+  - Reviewer cost sums `reviewers[].cost` over every record of the PR, each row once per (record `sessionId`, `name`,
+    `commit`), rows that did not run and rows carried from an earlier review (a `carried` key) left out; any null
+    among them makes that PR's (or that seat's) figure unmeasured.
   - Finding outcomes by lens read each PR's latest record, one per finding key, merged members left out; an
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
@@ -104,12 +107,13 @@ def _clean(rec):
 
 
 def _rows(recs):
-    """Every reviewer row that ran, once per (name, commit), across the given records."""
+    """Every reviewer row that ran, once per (sessionId, name, commit), across the given records; a row the record
+    carried from an earlier review (it has a `carried` key) is left out, its cost counted where it was incurred."""
     out = {}
     for r in recs:
         for row in r["reviewers"]:
-            if row["ran"] != review_record.RAN_NOT_RUN:
-                out.setdefault((row["name"], row.get("commit")), row)
+            if row["ran"] != review_record.RAN_NOT_RUN and "carried" not in row:
+                out.setdefault((r["sessionId"], row["name"], row.get("commit")), row)
     return list(out.values())
 
 
@@ -129,9 +133,12 @@ def _cap_outcome(choice, key, pr, later, escapes):
     """What happened next. `later` is every valid record of the PR written after the vet, in or out of the window;
     `escapes` is the misses log, already known to be a list."""
     if choice == "leftover":
-        hit = any(isinstance(e, dict) and e.get("marker") != review_learning.FALSE_CLAIM_MARKER and _pr_ok(e.get("pr"))
-                  and str(e["pr"]) == pr and e.get("key") in (None, key) for e in escapes)
-        return "escaped" if hit else "not-escaped"
+        items = [e for e in escapes if isinstance(e, dict) and e.get("marker") != review_learning.FALSE_CLAIM_MARKER]
+        if any(_pr_ok(e.get("pr")) and str(e["pr"]) == pr and e.get("key") == key for e in items):
+            return "escaped"
+        if all(_pr_ok(e.get("pr")) and str(e["pr"]) != pr for e in items):
+            return "not-escaped"
+        return "unattributed"
     later = sorted(later, key=lambda r: r["writtenAt"])
     if choice == "extra-audit-round":
         later = [r for r in later if "extraAudit" in r["rounds"]]  # the follow-up R9 names: a record of the audit round
@@ -260,7 +267,7 @@ def compute(inp, start, end, written_at=None):
     else:
         clean = sent = 0
         for v in in_window:
-            read = [r for r in prs.get(str(v["pr"]), []) if r["writtenAt"] <= v["at"]]
+            read = [r for r in every.get(str(v["pr"]), []) if r["writtenAt"] <= v["at"]] if str(v["pr"]) in prs else []
             if read and _clean(_latest(read)):
                 clean, sent = clean + 1, sent + v["sentBack"]
         m["vetSendBacksOnCleanLoops"] = {"sentBack": sent, "cleanLoopsVetted": clean}
