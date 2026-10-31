@@ -1,5 +1,7 @@
 # Place call WO-C bite-proof: the failed-check marker, the cloud prompt's two lines and the named base on the remote
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/cloud_ready.py` (C1 to C5), `plugins/superheroes/lib/launch_place.py` (C6) and `plugins/superheroes/lib/launcher.py` (C7 to C11). Detectors are in `plugins/superheroes/lib/tests/test_cloud_ready.py`, `test_launch_place.py` and `test_launcher_cloud.py`. C9 to C11 were rewritten in C8a WO1 against the current check: `_base_on_remote` asks GitHub through `_gh_commit_lookup`, and `_cloud_base_refusal` maps the answer.
 
 **Status.** The implementer ran every proof (C1 to C11): each neutralization is a targeted Edit in the shipped file, the red is the single named test node run alone, the restore is the inverse Edit, and the green is the same node. Reds and greens below are the pytest output of each run (the harness's certificate-trust lines are filtered out of the capture; every pytest line is as printed); the absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -36,7 +38,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1229/test_
 >       assert got["ready"] is False and got["reason"] == "no-setup"
 E       assert (True is False)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:427: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:427: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_any_marker_present_means_not_ready
 1 failed in 8.55s
@@ -73,7 +75,7 @@ part = 'reviewer', condition = 'passPresent'
         got = _read(repo, store)
 >       _only_false(got, condition)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:439: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:439: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'ready': False, 'reason': 'unreachable', 'conditions': {'setup': True, 'passPresent': True, 'passLive': True, 'version': True, ...}, 'setting': False, ...}
@@ -90,7 +92,7 @@ E         {'passPresent': True} != {'passPresent': False}
 E         {'platform': False} != {'platform': True}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_a_named_part_forces_its_own_condition_false[reviewer-passPresent]
 1 failed in 6.55s
@@ -127,7 +129,7 @@ part = 'version', condition = 'version'
         got = _read(repo, store)
 >       _only_false(got, condition)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:439: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:439: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'ready': False, 'reason': 'unreachable', 'conditions': {'setup': True, 'passPresent': True, 'passLive': True, 'version': True, ...}, 'setting': False, ...}
@@ -144,7 +146,7 @@ E         {'platform': False} != {'platform': True}
 E         {'version': True} != {'version': False}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_a_named_part_forces_its_own_condition_false[version-version]
 1 failed in 7.98s
@@ -181,7 +183,7 @@ part = 'calibration', condition = 'calibration'
         got = _read(repo, store)
 >       _only_false(got, condition)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:439: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:439: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 result = {'ready': False, 'reason': 'unreachable', 'conditions': {'setup': True, 'passPresent': True, 'passLive': True, 'version': True, ...}, 'setting': False, ...}
@@ -198,7 +200,7 @@ E         {'calibration': True} != {'calibration': False}
 E         {'platform': False} != {'platform': True}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:84: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_a_named_part_forces_its_own_condition_false[calibration-calibration]
 1 failed in 6.22s
@@ -241,7 +243,7 @@ E         {'platform': True} != {'platform': False}
 E         {'passLive': True} != {'passLive': False}
 E         Use -v to get more diff)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:466: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:466: AssertionError
 ___ test_E1_a_damaged_marker_is_present_with_no_parts_and_no_setup[not json] ___
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1239/test_E1_a_damaged_marker_is_pr0')
@@ -265,7 +267,7 @@ E         {'platform': True} != {'platform': False}
 E         {'passLive': True} != {'passLive': False}
 E         Use -v to get more diff)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:483: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:483: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_E3_a_marker_of_unknown_parts_only_is_no_setup
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_E1_a_damaged_marker_is_present_with_no_parts_and_no_setup[not json]
@@ -306,7 +308,7 @@ E
 E         - Say "check again" and I'll run the check again.
 E         + Say "set up cloud builds" and I'll walk you through it.
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:296: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launch_place.py:296: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launch_place.py::test_fix_text_after_a_failed_check_asks_for_the_check_again
 1 failed in 1.69s
@@ -342,7 +344,7 @@ E       AssertionError: assert 0 == 1
 E        +  where 0 = <built-in method count of list object at 0x106185b00>(('Cloud environment: %s' % 'env_01AbCdEf'))
 E        +    where <built-in method count of list object at 0x106185b00> = ['/superheroes:workhorse', '', 'Issue: #656', '', 'Place: cloud session', 'Advisor plugin version: 0.42.0', ...].count
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:292: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:292: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_compose_cloud_prompt_names_the_environment_on_its_own_line
 1 failed in 8.01s
@@ -379,7 +381,7 @@ E       AssertionError: assert 0 == 1
 E        +  where 0 = <built-in method count of list object at 0x1060adb00>(('Base commit: %s' % '66dcfc6dad9ee7cb67bf27b2dc159db01f333dd0'))
 E        +    where <built-in method count of list object at 0x1060adb00> = ['/superheroes:workhorse', '', 'Issue: #656', '', 'Place: cloud session', 'Advisor plugin version: 0.42.0', ...].count
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:304: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_cloud.py:304: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_cloud.py::test_compose_cloud_prompt_names_the_base_commit_on_its_own_line
 1 failed in 7.26s

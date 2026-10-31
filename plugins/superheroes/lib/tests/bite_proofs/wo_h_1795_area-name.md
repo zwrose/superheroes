@@ -1,5 +1,7 @@
 # #1795 bite-proof — the area name kept when sample paths are stripped (WO-H: `lane_call.why_line_paths_stripped`)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Per-element bite-proof following `plugins/superheroes/rubric/bite-proof.md`. The element was neutralized with one targeted edit, its single test node ran alone and went red, the edit was undone by the inverse edit, the restored line was quoted back, and the same node ran green. The test file was not edited between the red and the green. Redaction: none needed.
 
 Declared guarded-element set: P1, as dispatched.
@@ -42,7 +44,7 @@ E         - touches-risk-area: Payments (refunds)
 E         ?                            ----------
 E         + touches-risk-area: Payments
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:463: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:463: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_lane_call.py::test_stripping_a_line_built_for_a_longer_area_name_keeps_that_whole_name
 1 failed in 0.15s

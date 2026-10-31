@@ -1,5 +1,7 @@
 # WO-E (#2099 fix leg, vet 622 finding 1) bite-proof — a post-park progress edit is not a resume
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 **Provenance:** work order WO-E, worktree `/home/user/wt-2099-e` (branch `wo-2099-e`, on top of `ddb34ef4`), claude implementer (sonnet), edits left uncommitted.
 
 **Method.** Each guarded element is neutralized on its own by a targeted `Edit` to the consumer in `plugins/superheroes/lib/wave_watch.py` (never the detector). The detector is run alone by exact node id (`-q`, no `-k`), the neutralization is undone by the inverse `Edit`, the same node ids are re-run green, and the restored lines are quoted back. One neutralization was live at a time. Redaction: pytest temp paths and timestamps are kept as printed; nothing needed redacting. Every capture is far under the 32 KiB per-element ceiling and the whole record is far under 128 KiB. Where a capture is shortened, the record says what was elided.
@@ -55,7 +57,7 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_cloud_terminal.py::test_p11
 3 failed in 0.41s
 ```
 
-- **Field-shape tests with E1 live** (the order-defect measurement; the same neutralization was still in the tree): `T::test_p9_the_recorded_park_then_a_seconds_later_parked_progress_edit_stays_terminal[weekly-eats-1996]`, `[superheroes-2071]`, `[superheroes-1948]` and `T::test_p9_a_recorded_park_shape_is_lane_terminal_through_the_arm`:
+- **Field-shape tests with E1 live** (the order-defect measurement; the same neutralization was still in the tree): `T::test_p9_the_recorded_park_then_a_seconds_later_parked_progress_edit_stays_terminal[consumer-1996]`, `[superheroes-2071]`, `[superheroes-1948]` and `T::test_p9_a_recorded_park_shape_is_lane_terminal_through_the_arm`:
 
 ```
 ....                                                                     [100%]
