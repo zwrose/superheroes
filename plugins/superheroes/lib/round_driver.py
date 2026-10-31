@@ -14320,6 +14320,10 @@ def _runner_shaped_result(phase, result_kind, envelope_payload):
     return {"ok": True, "resultKind": result_kind, result_kind: envelope_payload}
 
 
+# record-result refusal: a landed panel read list that is not the list the runner graded for the run
+EVIDENCE_READ_PARTS_MISMATCH_REFUSAL = "evidence-read-parts-mismatch"
+
+
 def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_cited_head,
                                 phase):
     """Bind runner telemetry to the driver's order hash.
@@ -14390,6 +14394,23 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
                 mismatch_extra["expectedPayloadSha256"] = round_records.payload_sha256(
                     result_content)
             return None, "evidence-result-mismatch", mismatch_extra, None
+    if (phase == P_PANEL and run_kind == engine_dispatch.RUN_KIND_REVIEW
+            and isinstance(envelope_payload, dict)):
+        runner_parts = record.get("readParts")
+        if not isinstance(runner_parts, list):
+            runner_parts = []
+        if "readParts" in envelope_payload:
+            # axis: the read list a panel seat keeps is the list the runner graded, not the landed copy; a different landed list refuses
+            if (round_records.payload_sha256(envelope_payload["readParts"])
+                    != round_records.payload_sha256(runner_parts)):
+                return None, EVIDENCE_READ_PARTS_MISMATCH_REFUSAL, {
+                    "landedReadPartsSha256": round_records.payload_sha256(
+                        envelope_payload["readParts"]),
+                    "runnerReadPartsSha256": round_records.payload_sha256(runner_parts)}, None
+        else:
+            envelope_payload = dict(envelope_payload)
+            envelope_payload["readParts"] = list(runner_parts)
+            payload_adopted = True
     cited_head_source = None
     view_head = None
     if run_kind == engine_dispatch.RUN_KIND_WRITE:
