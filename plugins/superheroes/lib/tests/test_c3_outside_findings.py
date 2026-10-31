@@ -356,6 +356,38 @@ def test_t9_a_later_round_report_of_the_same_hit_is_listed_open_when_the_driver_
     assert legacy["findings"] == []
 
 
+def test_t9_an_unfolded_report_on_an_untouched_line_is_outside_not_open_work(tmp_path):
+    # axis: a report the loop never folded that cites a line its round's diff did not touch is an outside finding, listed on the account's outside list and never as open work, so abandoning before the fold does not change how it is treated — see bite-proof record c3_wo_a_outside
+    account = rs.account_from_session(_abandoned(tmp_path / "out", reviewedDiff=DIFF), extras(), Fake().readers(),
+                                      abandoned="stopped")
+    assert account["findings"] == [] and account["refused"] == []
+    assert account["outsideThisPR"] == [{"source": {"kind": "reviewer", "name": "code-reviewer", "sweepId": None},
+                                         "hits": [{"id": "O-1", "file": "u.py", "line": 8, "title": "Unfolded defect"}]}]
+    # the same report on a line the diff touched stays open, and with no diff nothing is outside
+    adds_line_8 = "diff --git a/u.py b/u.py\n--- a/u.py\n+++ b/u.py\n@@ -7,0 +8,1 @@\n+added\n"
+    assert diff_scope.parse_touched_lines(adds_line_8) == {"u.py": {8}}
+    touched = rs.account_from_session(_abandoned(tmp_path / "in", reviewedDiff=adds_line_8), extras(), Fake().readers(),
+                                      abandoned="stopped")
+    assert [f["title"] for f in touched["findings"]] == ["Unfolded defect"] and "outsideThisPR" not in touched
+    # a hit already on the list keeps its place: the recovered one is numbered after it, under its own source
+    listed = {"source": {"kind": "reviewer", "name": "x", "sweepId": None},
+              "hits": [{"id": "O-1", "file": "z.py", "line": 1, "title": "Other"}]}
+    both = rs.account_from_session(_abandoned(tmp_path / "both", reviewedDiff=DIFF, outsideThisPR=[listed]), extras(),
+                                   Fake().readers(), abandoned="stopped")
+    assert [(e["source"]["name"], [h["id"] for h in e["hits"]]) for e in both["outsideThisPR"]] == [
+        ("x", ["O-1"]), ("code-reviewer", ["O-2"])]
+    assert listed["hits"] == [{"id": "O-1", "file": "z.py", "line": 1, "title": "Other"}]  # the state's list is not edited
+
+
+def test_t9_an_unfolded_break_it_proposal_stays_open_whatever_its_line(tmp_path):
+    # axis: the test role's own break-it proposal is scope-exempt at compile (its test file does not exist in the diff), so it is never classified outside here — see bite-proof record c3_wo_a_outside
+    proposal = dict(UNFOLDED, title="Break it", taxonomy="break-it-test")
+    session = Session(tmp_path, terminal=None, reviewedDiff=DIFF).seat("test-role").save()
+    put_envelope(session, "test-role", {"vendor": "codex", "model": "m", "payload": {"findings": [proposal]}})
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
+    assert [f["title"] for f in account["findings"]] == ["Break it"] and "outsideThisPR" not in account
+
+
 # ---- T10 -----------------------------------------------------------------------------------------------------
 
 

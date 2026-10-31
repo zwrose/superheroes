@@ -88,14 +88,41 @@ def test_d4_vet_receipt_sorts_the_outside_list():
     assert triggered, "no triggered-fields row names outsideThisPR"
     assert "## The outside list" in text
     assert "(#the-outside-list)" in text, "the Contents or the row does not link the section"
-    assert "follow-up" in text and "dismissed" in text
-    assert re.search(r"[Nn]othing is filed until the owner's word", text)
 
 
 def _outside_section(text):
     """The text of vet-receipt.md's `## The outside list` section, up to the next `## ` heading."""
     assert "## The outside list" in text
     return text.split("## The outside list", 1)[1].split("\n## ", 1)[0]
+
+
+def _numbered_instructions(section):
+    """The numbered instruction list of the section (`1. ...`, `2. ...`), each item with its continuation lines. The
+    list ends at the first line that is neither an item, an indented continuation nor blank, so the field template and
+    the sample block after it are never part of it."""
+    items, started = [], False
+    for line in section.splitlines():
+        if re.match(r"\d+\.\s", line):
+            items.append(line)
+            started = True
+        elif started and line.startswith((" ", "\t")):
+            items[-1] += "\n" + line
+        elif started and line.strip():
+            break
+    return items
+
+
+def test_d4_the_numbered_instructions_carry_the_two_choices_and_the_owners_word():
+    # read from the numbered list alone: the template and the sample block both say `dismissed`, so they cannot stand in
+    items = _numbered_instructions(_outside_section(_read(VET_RECEIPT)))
+    assert len(items) == 2, f"expected two numbered choices, found {len(items)}"
+    follow_up, dismissal = items
+    assert "follow-up" in follow_up and re.search(r"proposed follow-up|follow-up filing", follow_up), "no follow-up choice"
+    assert re.search(r"[Nn]othing\s+is\s+filed\s+until\s+the\s+owner's\s+word", follow_up), \
+        "the follow-up does not wait on the owner's word"
+    assert re.search(r"dismissal|dismissed", dismissal) and "reason" in dismissal, "no dismissal-with-reason choice"
+    # the choice words the field carries are the template's, kept apart from the instructions above
+    assert "follow-up | dismissed" in _fenced_blocks(_outside_section(_read(VET_RECEIPT)))[0]
 
 
 def _fenced_blocks(section):
