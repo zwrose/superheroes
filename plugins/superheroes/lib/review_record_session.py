@@ -28,6 +28,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import audits as audits_mod  # noqa: E402
+import break_it  # noqa: E402
 import circuit_breaker  # noqa: E402
 import decision_kinds  # noqa: E402
 import dispatch_outcome  # noqa: E402
@@ -54,7 +55,8 @@ CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
 HAND_SUBMIT_NOTE = "the session was driven by hand submit; reviewers' raw outputs were not stored"
 ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
-UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded appear only in the raw findings files"
+UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded are listed as open findings"
+UNFOLDED_OPEN = "recorded by a reviewer but never taken into the loop before it was closed"
 NO_SEAT_RESULT = "the session recorded no seat result or seat status"
 UNFILLED = "unfilled"
 _OWNER_SUPPLIED = "owner-supplied"
@@ -65,6 +67,8 @@ _PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P
 _UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 _FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
+# the finding parts a later row must not erase: the live row's value wins, else the ledger row's
+_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake")
 
 
 def _int(v):
@@ -353,9 +357,12 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         if key not in ran and any(k[0] == phase and k[2] == seat and k[1] > rnd for k in ran):
             continue  # a later round ran this seat: the earlier miss is recovered
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
-        out.append(_reviewer(state, rnd, seat, stem, key in ran, env,
-                             r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
-                             _text(r.get("citedHead")), bound.get(key), phase))
+        row = _reviewer(state, rnd, seat, stem, key in ran, env,
+                        r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
+                        _text(r.get("citedHead")), bound.get(key), phase)
+        if phase == sc.PANEL_PHASE and isinstance(body, dict) and "readParts" in body:
+            row["readParts"] = body["readParts"]  # what the reviewer reported reading; the writer validates it
+        out.append(row)
     out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names
             if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it
     return out, raw
@@ -456,6 +463,17 @@ def _id(row, key):
     return rid if isinstance(rid, str) and rid and not verification.is_staged_id(rid) else key
 
 
+def _finding_parts(row, older):
+    """{part: value} for each finding part: the row's own when it has the key, else the older (ledger) row's, else absent."""
+    out = {}
+    for k in _FINDING_PARTS:
+        for src in (row, older):
+            if isinstance(src, dict) and k in src:
+                out[k] = src[k]
+                break
+    return out
+
+
 def _findings(state):
     """The account's findings list."""
     return _findings_and_merges(state)[0]
@@ -499,11 +517,13 @@ def _findings_and_merges(state):
         if rep is not None and reason and sc.finding_identity_key(rep) != key:
             reason += MERGED_INTO_FORMAT.format(_id(rep, sc.finding_identity_key(rep)))
         dim = row.get("dimension")
+        # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
+        held = _finding_parts(row, by_key.get(key))
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
-                    "body": row.get("body", row.get("detail"))})
+                    "body": row.get("body", row.get("detail")), **held})
     return out, merged
 
 
@@ -534,6 +554,148 @@ def _refused(rounds):
             if isinstance(d, dict) and _text(d.get("title")) and _text(d.get("reason")):
                 out.append({"file": d.get("file"), "line": d.get("line"), "title": d["title"],
                             "reason": d["reason"], "round": int(n)})
+    return out
+
+
+def _rerun_checks(rounds):
+    """Every re-run check the rounds recorded, in round order; the containing round names each one."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        checks = rounds[n].get("rerunChecks") if isinstance(rounds[n], dict) else None
+        # a malformed entry passes through unchanged: the writer's validation is the refusing layer
+        out += [dict(e, round=int(n)) if isinstance(e, dict) else e for e in checks] if isinstance(checks, list) else []
+    return out
+
+
+def _synthesis_rounds(rows):
+    """The sorted distinct rounds in which the synthesis step recorded a result (`recorded`, or a hand submit's
+    `accepted`); a seat recorded missing is no result."""
+    # axis: a record-missing synthesis row is no result and adds no round — see bite-proof record c1l1_wo_b_session_seam
+    # axis: a hand submit journals "accepted" and counts as "recorded" does — see bite-proof record c1l1_wo_b_session_seam
+    return sorted({r["round"] for r in rows if r.get("outcome") in ("recorded", "accepted")
+                   and r.get("phase") == round_phases.P_SYNTHESIS
+                   and r.get("cmd") != "record-missing" and _int(r.get("round"))})
+
+
+def _line_key(value):
+    """A finding's line as a comparable key: the coerced int when it coerces, else its repr."""
+    ok, line = sc.coerce_line(value)
+    return line if ok else repr(value)
+
+
+def _file_key(value):
+    """A finding's file as a comparable, hashable key: a string as itself, any other JSON value as a tagged repr."""
+    return value if isinstance(value, str) else ("non-string", repr(value))
+
+
+def _drop_key(rnd, title, file, line):
+    """The key a compile drop and the finding it dropped share: round, title, file and line. A file that is not a
+    string was recorded without its line, so for it the line is left out of the key."""
+    # axis: a drop with no string file lost its line when recorded, so it is matched on round, title and file alone — see bite-proof record c1l1_wo_b_session_seam
+    return (rnd, title, _file_key(file), _line_key(line) if isinstance(file, str) else None)
+
+
+def _normalized(finding):
+    """A copy of a stored reviewer finding with its line normalized as `mechanical_compile` does: a numeric-string
+    line coerced to its int. A supplied findingKey is kept (an existing test pins that it matches a listed row)."""
+    out = dict(finding)
+    ok, line = sc.coerce_line(finding.get("line"))
+    if ok:
+        out["line"] = line
+    return out
+
+
+def _passed_break_it(rounds):
+    """``{(round, title, file)}`` of each break-it run whose test passed: the intercept dropped that proposal
+    before compile, so it is in neither the listed findings nor the compile drops."""
+    out = set()
+    for n in rounds:
+        runs = rounds[n].get("breakItRuns") if str(n).isdigit() and isinstance(rounds[n], dict) else None
+        for r in runs if isinstance(runs, list) else []:
+            if isinstance(r, dict) and r.get("outcome") == "passed" and isinstance(r.get("title"), str):
+                out.add((int(n), r["title"], _file_key(r.get("file"))))
+    return out
+
+
+def _audit_candidates(payload):
+    """The new-issue candidates a stored fix-audit result claims: only a `discharged-but-new-issue` ruling carries them."""
+    if not (isinstance(payload, dict) and payload.get("ruling") == "discharged-but-new-issue"):
+        return []
+    raised = payload.get("newIssues")
+    return [c for c in raised if isinstance(c, dict)] if isinstance(raised, list) else []
+
+
+def _raised_reports(session_dir, rows, pending, pending_round):
+    """``[(phase, round, seat, [finding])]``: each stored reviewer report, the stored fix-audit results' new-issue
+    candidates, and the candidates an audit fold left pending in the state (`_newIssues`, folded only by the scoped step)."""
+    out = []
+    for key, (att, _) in _slots(rows).items():
+        phase, rnd, seat, _ = key
+        if phase not in _RAW_PHASES and phase != round_phases.P_AUDITS:
+            continue
+        env = _envelope(_path(session_dir, key, att))
+        payload = env.get("payload") if isinstance(env, dict) else None
+        if phase == round_phases.P_AUDITS:
+            out.append((phase, rnd, seat, _audit_candidates(payload)))
+            continue
+        raised = payload.get("findings") if isinstance(payload, dict) else None
+        out.append((phase, rnd, seat, raised if isinstance(raised, list) else []))
+    if isinstance(pending, list) and pending:
+        out.append((round_phases.P_AUDITS, pending_round, "auditor", [c for c in pending if isinstance(c, dict)]))
+    return out
+
+
+def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_kinds=None, pending=None,
+              pending_round=None):
+    """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
+
+    A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
+    (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
+    stays; a drop whose file is not a string lost its line, so it is matched by round, title and file), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
+    own panel proposal is settled that way) add nothing. A listed finding already settled in a round before the
+    report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
+    settled_rounds = settled_rounds or {}
+    settled_kinds = settled_kinds or {}  # a finding key to the kind of its recorded settlement
+    listed = {f["findingKey"] for f in findings}
+    by_listed = {f["findingKey"]: f for f in findings}
+    dropped = {_drop_key(d["round"], d["title"], d["file"], d["line"]) for d in _refused(rounds)}
+    passed = _passed_break_it(rounds)
+    out = []
+    for phase, rnd, seat, raised in _raised_reports(session_dir, rows, pending, pending_round):
+        for f in raised:
+            if not (isinstance(f, dict) and isinstance(f.get("title"), str) and f["title"].strip()):
+                continue
+            fkey = sc.finding_identity_key(_normalized(f))
+            # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
+            # axis: a break-it proposal whose test passed was dropped before compile and is no defect — see bite-proof record c1l1_wo_b_session_seam
+            # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
+            settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
+                and (rnd, f["title"], _file_key(f.get("file"))) in passed
+            if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
+                continue
+            if fkey in listed:
+                held = by_listed.get(fkey)
+                # a report from a round after the one that settled the listed finding was never folded (a folded
+                # re-report would have reopened the ledger row): the defect came back, so the row reads open again
+                # the scoped finder is the one report phase that runs after a round's fix audit, so in the settling
+                # round itself only its report postdates the settlement; the one exception is a refutation, which the
+                # loop records after the scoped report is folded, so a same-round refuted row answers that report;
+                # so does a same-round owner skip (out-of-scope): only a fix audit's `fixed` is reopened by it;
+                # an audit's own new-issue candidate (stored or pending) is unprocessed whatever its identity, so
+                # it too reopens the `fixed` row its own audit fold recorded
+                if isinstance(held, dict) and held.get("outcome") is not None and _int(rnd) \
+                        and _int(settled_rounds.get(fkey)) \
+                        and (rnd > settled_rounds[fkey] or (rnd == settled_rounds[fkey]
+                                                            and phase in (round_phases.P_SCOPED, round_phases.P_AUDITS)
+                                                            and settled_kinds.get(fkey) == "fixed")):
+                    held.update({"outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
+                continue
+            listed.add(fkey)
+            fid = f.get("id")
+            out.append({"id": fid if isinstance(fid, str) and fid.strip() else fkey, "findingKey": fkey, "title": f["title"],
+                        "severity": f.get("severity"), "file": f.get("file"), "line": f.get("line"),
+                        "consequence": f.get("consequence"), "body": f.get("body", f.get("detail")), "reviewer": seat,
+                        "outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
     return out
 
 
@@ -584,6 +746,17 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings, merged = _findings_and_merges(state)
+    if abandoned is not None:  # the loop never took these in: each is listed open rather than only in a raw file
+        # axis: in an abandoned session a finding recorded in a stored seat result but never folded is listed open — see bite-proof record c1l1_wo_b_session_seam
+        ledger, _ = sc.read_disposition_ledger(state, required=False)
+        by_key = {sc.finding_identity_key(r): r for r in ledger or [] if isinstance(r, dict)}
+        settled_rounds = {k: sc.resolve_merged_into_entry(r, by_key).get("dispositionRound") for k, r in by_key.items()
+                          if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
+        settled_kinds = {k: sc.resolve_merged_into_entry(r, by_key).get("disposition") for k, r in by_key.items()
+                         if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
+        pending = state.get("_newIssues")
+        findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds, pending,
+                              state.get("round") if _int(state.get("round")) else None)
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
             reviewers, raw = _status_reviewers(state, meta.get("headSha"), rows), []
@@ -627,13 +800,17 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         cause = decision_kinds.map_terminal_cause(state["terminal"], last.get("kind")) or {}
         capped = decision_kinds.map_verdict_to_terminal_state(state["terminal"]) == "cap" or cause.get("reason") == "budget"
     ceiling = cause.get("reason") == "budget"  # a round-ceiling stop, not a stop at the configured round cap
+    rerun, synthesis = _rerun_checks(rounds), _synthesis_rounds(rows)
     return {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
                                  cfg.get("headSha")),
             "rounds": {"count": len(rounds), "cap": _ceiling(cfg) if ceiling else cfg["maxRounds"] if _int(cfg.get("maxRounds")) else None,
                        "capKind": review_record.CAP_KINDS[1] if ceiling else review_record.CAP_KINDS[0], "stoppedAtCap": capped,
-                       **({"wider": wider} if wider else {})},
+                       **({"wider": wider} if wider else {}),
+                       **({"extraAudit": state["extraAudit"]} if isinstance(state.get("extraAudit"), dict) else {})},
+            **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
+            **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
@@ -679,10 +856,10 @@ def _owner_rulings(entries, findings, merged):
     return out
 
 
-def _carried(account, extras, repo_root, readers):
-    """The latest earlier record's findings this session did not raise, as that record stored them.
+def _earlier(account, extras, repo_root, readers):
+    """The latest earlier record's findings, or [] when there is none.
 
-    Any refusal other than "no earlier record", and any malformed findings list, carries nothing: the
+    Any refusal other than "no earlier record", and any malformed findings list, reads as none: the
     writer makes its own refusal, so there is one place that refuses.
     """
     repo = extras.get("repo") or review_record._readers(readers)["repo_name"](repo_root)
@@ -690,6 +867,37 @@ def _carried(account, extras, repo_root, readers):
     earlier = prior.get("findings") if prior.get("ok") else None
     if not isinstance(earlier, list) or not all(isinstance(f, dict) for f in earlier):
         return []
+    return earlier
+
+
+def _fill(account, earlier):
+    """Give each account finding the parts the earlier record held for it and the session's row lacks.
+
+    A `grade`, `repeatOf` or `kindOfMistake` the row lacks is the earlier one; the earlier `breakItRuns` come first,
+    followed by each of the row's runs not already among them. The earlier runs come from the posted record, which the
+    writer scrubbed, so each of the row's runs is compared in its scrubbed form."""
+    held = {review_record._key(f): f for f in earlier}
+    for f in account["findings"]:
+        old = held.get(review_record._key(f))
+        if old is None:
+            continue
+        for part in ("grade", "repeatOf", "kindOfMistake"):
+            if part not in f and part in old:
+                f[part] = old[part]
+        # axis: the earlier record's break-it runs stay ahead of this session's new ones, none twice — see bite-proof record c1l1_wo_b_session_seam
+        # a present non-list value is left as supplied, so the writer refuses it as review-account-invalid
+        if isinstance(old.get("breakItRuns"), list) and isinstance(f.get("breakItRuns", []), list):
+            mine = f.get("breakItRuns", [])
+            runs = list(old["breakItRuns"])
+            for run in mine:
+                # axis: a current run is compared as the writer will post it (scrubbed), so a run the scrub changed is not appended on every rewrite — see bite-proof record c1l1_wo_b_session_seam
+                if (review_record._scrubbed(run) if isinstance(run, dict) else run) not in runs:
+                    runs.append(run)
+            f["breakItRuns"] = runs
+
+
+def _carried(account, earlier):
+    """The latest earlier record's findings this session did not raise, as that record stored them."""
     present = {review_record._key(f) for f in account["findings"]}
     out = []
     for f in earlier:
@@ -712,7 +920,9 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         except (OSError, ValueError, TypeError):
             raise Refusal(BAD_EXTRAS, "extras file")
         account = account_from_session(session_dir, extras, readers, tmp[0], abandoned)
-        account["findings"] += _carried(account, extras, repo_root, readers)
+        earlier = _earlier(account, extras, repo_root, readers)
+        _fill(account, earlier)
+        account["findings"] += _carried(account, earlier)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)

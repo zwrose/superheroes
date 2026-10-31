@@ -61,6 +61,7 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 - **Roles on the reviewer line.** The `Reviewers:` line now names the review's roles (the panel lenses, then verifier, synthesis, fix auditor, scoped finder, gap sweep) when it finds any.
 - **Cost on every reviewer row.** Each record row carries `cost`, `{tokens, minutes}`, computed by the writer from the engine's run record. A value it could not measure is null, never zero, and trimming a long record does not remove it. An account cannot set it.
 - **Other parts, only once a review fills them.** `rounds.extraAudit`, `rerunChecks`, `synthesisRounds`, `outsideThisPR`, `unreadShare`, a reviewer row's `readParts`, and a finding's `grade`, `repeatOf`, `breakItRuns` and `kindOfMistake` appear on a record only when the account carries them. A record without them reads as before. See [Parts that show only when present](skills/review-code/reference/review-record.md#parts-that-show-only-when-present).
+- **Abandoned sessions.** The record of an abandoned session now lists a finding that was recorded but never folded into the loop as open, with the reason saying so, instead of leaving it only in the raw findings files.
 
 ### Launcher: a reservation whose append reports failure is read back
 
