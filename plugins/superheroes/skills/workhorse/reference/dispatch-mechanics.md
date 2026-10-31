@@ -850,7 +850,8 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   in its run dir, and its fold removes only paths that are new since then, empty and read-only, never
   following a symlink or entering `.git`, a nested worktree or another device. The folded result
   reports it as `placeholderSweep` (`removed`, `left` with every other new path up to 100,
-  `leftCount`, `incomplete`, `error`); a snapshot that did not finish removes nothing. Name its
+  `leftCount`, `incomplete`, `error`); a snapshot that did not finish or could not read a directory,
+  or a worktree root that is no longer the one snapshotted (`root-changed`), removes nothing. Name its
   `removed` list in the build record. An abandoned run is not swept.
 
 ### The native implementer engine
