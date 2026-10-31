@@ -162,9 +162,40 @@ def _now_iso():
     return datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
+_KNOWN_STATES = ("working", "blocked", "done")
+# The claude whose `agents --json` listing contract `_liveness` was measured against.
+_CONTRACT_VERSION = (2, 1, 316)
+_VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
+
+
+def _liveness(entry):
+    """"alive", "dead-candidate" or "undetermined" for one listed relay entry."""
+    # axis: a listed relay is dead only when it is blocked with no process field on a job record, on a claude whose listing contract is known; a pid is never dead — see bite-proof record wo_2294_dead_relay.md
+    state = entry.get("state")
+    if "pid" in entry:
+        return "alive" if state in _KNOWN_STATES else "undetermined"
+    if "status" in entry:
+        return "undetermined"
+    if state in ("working", "done"):
+        return "alive"
+    if state == "blocked" and isinstance(entry.get("id"), str) and entry["id"]:
+        return "dead-candidate"
+    return "undetermined"
+
+
+def _claude_version(run, env, config_dir):
+    """The installed claude's (major, minor, patch), or None when it cannot be read."""
+    built = _sibling("engine_adapter").claude_version_argv()
+    if built["reason"]:
+        return None
+    code, out, _ = _call(run, built["argv"], dict(env, CLAUDE_CONFIG_DIR=config_dir), _LIST_TIMEOUT)
+    found = _VERSION_RE.search(out) if code == 0 else None
+    return tuple(int(part) for part in found.group().split(".")) if found else None
+
+
 def _listing(run, env, config_dir, name):
-    """(listed entries, None) for the relay's name, or (None, refusal extras). An entry the default
-    listing shows is alive whatever its `state`: a finished turn is `done`, not dead."""
+    """(listed entries, None) for the relay's name, or (None, refusal extras). An entry is listed
+    whatever its `state`; `_liveness` says which of them is alive."""
     built = _sibling("engine_adapter").claude_agents_list_argv()
     if built["reason"]:
         return None, {"reason": "relay-listing-failed", "detail": built.get("detail")}
@@ -188,33 +219,95 @@ def ensure(repo_root, config_dir, *, env=None, run=None):
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return refusal
-    env, started = _env(env), False
-    alive, failure = _listing(run, env, config_dir, name)
+    env, started, version = _env(env), False, []
+
+    def known():
+        # The claude version is read at most once per call, and only when a listing holds a candidate.
+        if not version:
+            version.append(_claude_version(run, env, config_dir))
+        return version[0] is not None and version[0] >= _CONTRACT_VERSION
+
+    def classify(entries):
+        rated = []
+        for e in entries:
+            kind = _liveness(e)
+            if kind == "dead-candidate":
+                kind = "dead" if known() else "undetermined"
+            rated.append((e, kind))
+        return ([e for e, k in rated if k == "dead"], [(e, k) for e, k in rated if k != "dead"])
+
+    def dead_item(e):
+        return {"sessionId": e.get("sessionId"), "id": e.get("id"), "state": e.get("state")}
+
+    listed, failure = _listing(run, env, config_dir, name)
     if failure:
         return _refuse(name=name, **failure)
-    if not alive:
+    dead, kept = classify(listed)
+    first_dead = {e.get("sessionId") for e in dead}
+
+    def refuse_start(**more):
+        out = _refuse("relay-start-failed", name=name, **more)
+        if dead:
+            out["deadEntries"] = [dead_item(e) for e in dead]
+        return out
+
+    if not kept:
         built = _sibling("engine_adapter").claude_relay_argv(name, RELAY_PROMPT)
         if built["reason"]:
-            return _refuse("relay-start-failed", name=name, detail=built.get("detail"))
+            return refuse_start(detail=built.get("detail"))
         # The account trusts a repository it has been run in; a fresh directory is refused.
         cwd = os.path.realpath(repo_root)
         code, out, err = _call(run, built["argv"], dict(env, CLAUDE_CONFIG_DIR=config_dir),
                                _START_TIMEOUT, cwd)
         if code != 0:
-            return _refuse("relay-start-failed", name=name, detail=_first_line(err, out))
-        alive, failure = _listing(run, env, config_dir, name)
-        if failure or not alive:
-            return _refuse("relay-start-failed", name=name)
+            return refuse_start(detail=_first_line(err, out))
+        listed, failure = _listing(run, env, config_dir, name)
+        if failure:
+            return refuse_start()
+        latest_dead, kept = classify(listed)
+        if not kept:
+            return refuse_start()
         started = True
-    if len(alive) > 1:
-        return _refuse("relay-ambiguous", name=name, sessionIds=[e.get("sessionId") for e in alive])
-    entry = alive[0]
-    state["relays"][name] = {"sessionId": entry.get("sessionId"),
-                             "startedAt": entry.get("startedAt"), "configDir": config_dir}
+    else:
+        latest_dead = dead
+    if len(kept) > 1:
+        return _refuse("relay-ambiguous", name=name, sessionIds=[e.get("sessionId") for e, _ in kept])
+    entry, kind = kept[0]
+    fresh = entry.get("sessionId")
+    # axis: the replacement must be a new session — a relay listed under a dead entry's session id is that old entry, not a fresh one — see bite-proof record wo_2294_dead_relay.md
+    if started and not (isinstance(fresh, str) and fresh and fresh not in first_dead):
+        return refuse_start()
+    # axis: only an entry classified dead in the latest listing, other than the kept one and (after a start) also dead in the first listing, is stopped — see bite-proof record wo_2294_dead_relay.md
+    targets = [e for e in latest_dead if e.get("sessionId") != fresh
+               and (not started or e.get("sessionId") in first_dead)]
+    stops = []
+    for target in targets:
+        item = dead_item(target)
+        stop = _sibling("engine_adapter").claude_stop_argv(target.get("id"))
+        if stop["reason"]:
+            item.update(stopped=False, detail=stop["reason"])
+        else:
+            code, out, err = _call(run, stop["argv"], dict(env, CLAUDE_CONFIG_DIR=config_dir), _LIST_TIMEOUT)
+            item["stopped"] = code == 0
+            if code != 0:
+                item["detail"] = _first_line(err, out)
+        stops.append(item)
+    record = {"sessionId": fresh, "startedAt": entry.get("startedAt"), "configDir": config_dir}
+    if kind == "undetermined":
+        record.update(liveness="undetermined", listedState=entry.get("state"))
+    state["relays"][name] = record
     if not _save(path, state):
         return _refuse("relay-state-unwritable", name=name)
-    return {"ok": True, "reason": None, "name": name, "sessionId": entry.get("sessionId"),
-            "started": started}
+    result = {"ok": True, "reason": None, "name": name, "sessionId": fresh, "started": started}
+    if started and dead:
+        result["replaced"] = True
+    if stops:
+        result["deadEntries"] = stops
+    if kind == "undetermined":
+        result["undetermined"] = {"sessionId": fresh, "state": entry.get("state")}
+        result["say"] = ("ensure could not tell whether relay %s is alive (listed state %s); "
+                         "it is kept as alive." % (name, entry.get("state")))
+    return result
 
 
 def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
@@ -602,6 +695,10 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
     out = {"ok": delivered, "delivered": delivered, "reason": None if delivered else verdict,
            "msgId": msg_id, "say": _say(verdict, msg_id, wait_text, detail)}
     out.update(detail or {})
+    # axis: a silent relay whose liveness ensure could not tell says so, after the usual sentence and before the unwritable-state suffix — see bite-proof record wo_2294_dead_relay.md
+    if verdict == "relay-silent" and relay.get("liveness") == "undetermined":
+        out["say"] += (" ensure could not tell whether the relay was alive (listed state %s), "
+                       "which may be why." % relay.get("listedState"))
     if not saved:
         out["decisionSaved"] = False
         out["say"] += " (The decision could not be saved: the relay's state file is unwritable.)"

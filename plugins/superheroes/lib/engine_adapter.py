@@ -751,6 +751,7 @@ def claude_builder_argv(token, session_id, prompt):
 # renders, and a cloud builder is not dispatched through it.
 REFUSAL_CLOUD_ENVIRONMENT_INVALID = "cloud-environment-invalid"
 REFUSAL_CLOUD_SESSION_NAME_INVALID = "cloud-session-name-invalid"
+REFUSAL_RELAY_STOP_ID_INVALID = "relay-stop-id-invalid"
 CLOUD_ENVIRONMENT_ID_RE = re.compile(r"env_[A-Za-z0-9]+")
 # Where Claude Code keeps the picked cloud environment in its settings: `remote.defaultEnvironmentId`.
 # The one home for the spelling; the launch argv writes it and the setup reader reads it.
@@ -834,6 +835,23 @@ def claude_relay_argv(session_name, prompt):
         }
     return _ok([CLAUDE_EXECUTABLE, "--bg", "-n", session_name, "--model", "haiku",
                 "--effort", "low", prompt])
+
+
+def claude_version_argv():
+    """Build the argv that prints the installed claude's version. Never raises."""
+    return _ok([CLAUDE_EXECUTABLE, "--version"])
+
+
+def claude_stop_argv(agent_id):
+    """Build the argv that stops one background agent by the short id `claude agents` lists. Never raises."""
+    if (not isinstance(agent_id, str) or agent_id.startswith("-")
+            or not _CLOUD_SESSION_NAME_RE.fullmatch(agent_id)):
+        return {
+            "argv": [],
+            "reason": REFUSAL_RELAY_STOP_ID_INVALID,
+            "detail": "1 to 64 characters from letters, digits, '.', '_' and '-', not opening with '-'",
+        }
+    return _ok([CLAUDE_EXECUTABLE, "stop", agent_id])
 
 
 def run_engine_cli(argv, run=None, **kwargs):

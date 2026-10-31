@@ -32,19 +32,29 @@ TEXT = "Use the narrow fix.\nSecond line ✓ \"quoted\" & <angle>\n"
 class FakeRun:
     """Scripted answers: `lists` is consumed one per `agents --json`; `start` is the exit code of
     `claude --bg`, with `start_out` and `start_err` as what it printed. Every call's argv, env and
-    cwd are recorded."""
+    cwd are recorded. `claude --version` prints `version_out` (exit `version_code`); `claude stop`
+    exits `stop` and prints `stop_err`."""
 
-    def __init__(self, lists=(), start=0, list_code=0, start_out="backgrounded", start_err=""):
+    def __init__(self, lists=(), start=0, list_code=0, start_out="backgrounded", start_err="",
+                 version_out="2.1.316 (Claude Code)", version_code=0, stop=0, stop_err=""):
         self.calls = []
         self.lists = list(lists)
         self.start = start
         self.list_code = list_code
         self.start_out = start_out
         self.start_err = start_err
+        self.version_out = version_out
+        self.version_code = version_code
+        self.stop = stop
+        self.stop_err = stop_err
 
     def __call__(self, argv, **kwargs):
         self.calls.append(SimpleNamespace(argv=list(argv), env=kwargs.get("env"),
                                           cwd=kwargs.get("cwd")))
+        if argv == ["claude", "--version"]:
+            return SimpleNamespace(returncode=self.version_code, stdout=self.version_out, stderr="")
+        if argv[:2] == ["claude", "stop"]:
+            return SimpleNamespace(returncode=self.stop, stdout="", stderr=self.stop_err)
         if argv[:3] == ["claude", "agents", "--json"]:
             out = self.lists.pop(0) if len(self.lists) > 1 else (self.lists[0] if self.lists else "[]")
             if isinstance(out, BaseException):
@@ -55,6 +65,12 @@ class FakeRun:
 
     def starts(self):
         return [c for c in self.calls if c.argv[:2] == ["claude", "--bg"]]
+
+    def stops(self):
+        return [c for c in self.calls if c.argv[:2] == ["claude", "stop"]]
+
+    def versions(self):
+        return [c for c in self.calls if c.argv == ["claude", "--version"]]
 
 
 class Clock:
@@ -897,6 +913,220 @@ def test_two_alive_entries_are_ambiguous(world):
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["reason"] == "relay-ambiguous" and out["sessionIds"] == ["s-1", "s-2"]
     assert run.starts() == []
+
+
+# ---- a relay a usage limit left dead (#2294) -------------------------------------------------
+
+def _dead(name, **extra):
+    """A job record a usage limit left behind: blocked, no process field."""
+    return _entry(name, state="blocked", sessionId="dead-1", id="d1", **extra)
+
+
+def _fresh(name, **extra):
+    """The relay a start brings up: a new session id, a live process, waiting for a message."""
+    return _entry(name, state="done", sessionId=RELAY_ID, id="f1", pid=4242, status="idle", **extra)
+
+
+def _plain(name):
+    return {"ok": True, "reason": None, "name": name, "sessionId": RELAY_ID, "started": False}
+
+
+def _agents_indexes(run):
+    return [i for i, c in enumerate(run.calls) if c.argv[:3] == ["claude", "agents", "--json"]]
+
+
+@pytest.mark.parametrize("version_out", ["2.1.316 (Claude Code)", "2.2.0 (Claude Code)", "10.0.1 (Claude Code)"])
+def test_a_dead_relay_is_replaced_and_the_dead_entry_stopped(world, version_out):
+    # axis: a blocked job record with no process field is dead — it is replaced by a fresh start and then stopped by its id, after the fresh relay is listed — see bite-proof record wo_2294_dead_relay.md (G1)
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_dead(name)]), json.dumps([_dead(name), _fresh(name)])],
+                  version_out=version_out)
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    (start,) = run.starts()
+    assert start.argv == engine_adapter.claude_relay_argv(name, cr.RELAY_PROMPT)["argv"]
+    (stop,) = run.stops()
+    assert stop.argv == ["claude", "stop", "d1"] and stop.env["CLAUDE_CONFIG_DIR"] == world.config
+    assert run.calls.index(stop) > _agents_indexes(run)[1]
+    assert out["ok"] is True and out["started"] is True and out["replaced"] is True
+    assert out["sessionId"] == RELAY_ID
+    assert out["deadEntries"] == [{"sessionId": "dead-1", "id": "d1", "state": "blocked", "stopped": True}]
+    record = json.load(open(_state_file(world)))["relays"][name]
+    assert record == {"sessionId": RELAY_ID, "startedAt": 1789474395431, "configDir": world.config}
+
+
+@pytest.mark.parametrize("extra", [{"pid": 4242, "status": "waiting"}, {"pid": 4242}])
+def test_a_blocked_entry_with_a_process_is_alive(world, extra):
+    # axis: a pid is never dead — a blocked entry with a pid (with or without a status) is a live relay, left alone — see bite-proof record wo_2294_dead_relay.md (G2)
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_entry(name, state="blocked", **extra)])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out == _plain(name)
+    assert run.starts() == [] and run.stops() == [] and run.versions() == []
+
+
+@pytest.mark.parametrize("state,extra", [
+    ("working", {}), ("done", {"pid": 50504, "status": "idle"}), ("working", {"pid": 50504, "status": "busy"}),
+])
+def test_working_and_done_relays_are_left_alone(world, state, extra):
+    # axis: a working or done relay is alive, with or without a process field — nothing is started, stopped or version-read
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_entry(name, state=state, **extra)])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out == _plain(name)
+    assert run.starts() == [] and run.stops() == [] and run.versions() == []
+
+
+@pytest.mark.parametrize("state,extra", [
+    ("failed", {}), ("stopped", {}), (None, {}), ("stopped", {"pid": 4242}), (None, {"pid": 4242}),
+    ("blocked", {"status": "waiting"}),
+])
+def test_an_unknown_or_missing_state_is_kept_and_said(world, state, extra):
+    # axis: a state the listing contract does not name is neither alive nor dead — the entry is kept, nothing is stopped, and the record and result say so
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_entry(name, state=state, **extra)])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is True and out["started"] is False and out["sessionId"] == RELAY_ID
+    assert out["undetermined"] == {"sessionId": RELAY_ID, "state": state}
+    assert "could not tell whether relay %s is alive" % name in out["say"]
+    assert run.starts() == [] and run.stops() == []
+    record = json.load(open(_state_file(world)))["relays"][name]
+    assert record["liveness"] == "undetermined" and record["listedState"] == state
+
+
+@pytest.mark.parametrize("kwargs", [
+    {"version_out": "2.1.315 (Claude Code)"}, {"version_out": "garbage"}, {"version_code": 1},
+])
+def test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead(world, kwargs):
+    # axis: the contract gate — a version older than the measured one, unparseable, or unreadable leaves a blocked job record undetermined — see bite-proof record wo_2294_dead_relay.md (G3)
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_dead(name)])], **kwargs)
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is True and out["started"] is False and out["sessionId"] == "dead-1"
+    assert out["undetermined"] == {"sessionId": "dead-1", "state": "blocked"}
+    assert "replaced" not in out and "deadEntries" not in out
+    assert run.starts() == [] and run.stops() == [] and len(run.versions()) == 1
+
+
+def test_a_blocked_entry_without_an_id_is_not_a_job_record_and_never_dead(world):
+    # axis: dead needs the job-record shape — a blocked no-process entry with no id is undetermined, without even reading the version
+    name = cr.relay_name(world.config)
+    entry = _dead(name)
+    del entry["id"]
+    run = FakeRun(lists=[json.dumps([entry])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["undetermined"] == {"sessionId": "dead-1", "state": "blocked"}
+    assert run.starts() == [] and run.stops() == [] and run.versions() == []
+
+
+def _start_failure_runs(name):
+    dead = json.dumps([_dead(name)])
+    return {
+        "start-exits-1": FakeRun(lists=[dead], start=1, start_err="boom"),
+        "second-listing-only-dead": FakeRun(lists=[dead, dead]),
+        "second-listing-empty": FakeRun(lists=[dead, "[]"]),
+        "second-listing-unreadable": FakeRun(lists=[dead, "garbage"]),
+    }
+
+
+@pytest.mark.parametrize("case", ["start-exits-1", "second-listing-only-dead", "second-listing-empty",
+                                  "second-listing-unreadable"])
+def test_a_fresh_start_that_fails_refuses_names_the_dead_and_stops_nothing(world, case):
+    # axis: no stop on a start-failure path — the dead entry is the only relay there is, so it is named, never stopped — see bite-proof record wo_2294_dead_relay.md (G6)
+    name = cr.relay_name(world.config)
+    run = _start_failure_runs(name)[case]
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is False and out["reason"] == "relay-start-failed" and out["name"] == name
+    assert out["deadEntries"] == [{"sessionId": "dead-1", "id": "d1", "state": "blocked"}]
+    assert run.stops() == []
+    if case == "start-exits-1":
+        assert out["detail"] == "boom"
+
+
+def test_a_relay_listed_under_the_dead_sessions_id_is_not_a_fresh_one(world):
+    # axis: freshness — the replacement must carry a session id the first listing's dead entries did not — see bite-proof record wo_2294_dead_relay.md (G4)
+    name = cr.relay_name(world.config)
+    back = _entry(name, state="done", sessionId="dead-1", id="d1", pid=4242, status="idle")
+    run = FakeRun(lists=[json.dumps([_dead(name)]), json.dumps([back])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is False and out["reason"] == "relay-start-failed"
+    assert out["deadEntries"] == [{"sessionId": "dead-1", "id": "d1", "state": "blocked"}]
+    assert len(run.starts()) == 1 and run.stops() == []
+
+
+def test_an_old_entry_turned_live_next_to_a_fresh_one_is_ambiguous_and_nothing_is_stopped(world):
+    # axis: two non-dead entries after the start are ambiguous, and an ambiguous refusal stops nothing
+    name = cr.relay_name(world.config)
+    back = _entry(name, state="done", sessionId="dead-1", id="d1", pid=4242, status="idle")
+    run = FakeRun(lists=[json.dumps([_dead(name)]), json.dumps([back, _fresh(name)])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is False and out["reason"] == "relay-ambiguous"
+    assert out["sessionIds"] == ["dead-1", RELAY_ID]
+    assert run.stops() == []
+
+
+def test_a_failed_stop_does_not_fail_ensure(world):
+    # axis: a stop that exits non-zero is reported on the dead entry (stopped false, the first line of what it printed) and ensure stays ok
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_dead(name)]), json.dumps([_dead(name), _fresh(name)])],
+                  stop=1, stop_err="no such session")
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is True and out["replaced"] is True and out["sessionId"] == RELAY_ID
+    assert out["deadEntries"][0]["stopped"] is False
+    assert out["deadEntries"][0]["detail"] == "no such session"
+
+
+def test_only_the_dead_entries_of_the_first_listing_are_stopped(world):
+    # axis: stop targets come from the latest listing but only those already dead in the first — a job record that turned up blocked after the start is not stopped — see bite-proof record wo_2294_dead_relay.md (G5)
+    name = cr.relay_name(world.config)
+    late = _entry(name, state="blocked", sessionId="dead-2", id="d2")
+    run = FakeRun(lists=[json.dumps([_dead(name)]), json.dumps([_dead(name), _fresh(name), late])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert [c.argv for c in run.stops()] == [["claude", "stop", "d1"]]
+    assert out["ok"] is True and out["replaced"] is True
+    assert [d["sessionId"] for d in out["deadEntries"]] == ["dead-1"]
+
+
+def test_a_dead_entry_no_longer_listed_is_replaced_without_a_stop(world):
+    # axis: an empty target set omits deadEntries while replaced still applies
+    name = cr.relay_name(world.config)
+    run = FakeRun(lists=[json.dumps([_dead(name)]), json.dumps([_fresh(name)])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is True and out["replaced"] is True and out["started"] is True
+    assert run.stops() == [] and "deadEntries" not in out
+
+
+def test_a_stop_the_builder_refuses_is_reported_and_does_not_fail_ensure(world):
+    # axis: a dead entry whose id the stop builder refuses is reported unstopped with the refusal's reason, and nothing is run for it
+    name = cr.relay_name(world.config)
+    bad = dict(_dead(name), id="-rf")
+    run = FakeRun(lists=[json.dumps([bad]), json.dumps([bad, _fresh(name)])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is True and run.stops() == []
+    assert out["deadEntries"] == [{"sessionId": "dead-1", "id": "-rf", "state": "blocked",
+                                   "stopped": False, "detail": engine_adapter.REFUSAL_RELAY_STOP_ID_INVALID}]
+
+
+def _silent_message(world, **relay_extra):
+    msg = _composed(world)
+    path = _state_file(world)
+    state = json.load(open(path))
+    state["relays"][msg["relay"]].update(relay_extra)
+    json.dump(state, open(path, "w"))
+    _write_record(world, [])
+    return msg
+
+
+def test_check_says_when_the_silent_relays_liveness_was_undetermined(world):
+    # axis: a silent relay whose record says ensure could not tell it was alive gets the one appended sentence; a relay recorded without it keeps today's sentence — see bite-proof record wo_2294_dead_relay.md (G7)
+    msg = _silent_message(world, liveness="undetermined", listedState="failed")
+    out, _ = _check(world, msg["msgId"], wait=4, interval=2)
+    today = "The relay did not send message %s within 4 seconds; it was not delivered." % msg["msgId"]
+    assert out["reason"] == "relay-silent"
+    assert out["say"] == today + (" ensure could not tell whether the relay was alive "
+                                  "(listed state failed), which may be why.")
+    plain = _silent_message(world)
+    out, _ = _check(world, plain["msgId"], wait=4, interval=2)
+    assert out["say"] == "The relay did not send message %s within 4 seconds; it was not delivered." % plain["msgId"]
 
 
 # ---- compose --------------------------------------------------------------------------------

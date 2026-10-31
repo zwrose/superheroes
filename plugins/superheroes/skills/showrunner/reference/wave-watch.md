@@ -542,7 +542,9 @@ order relayed to the lane's session is composed with `--fix-order`, and it re-op
 
 1. `python3 -B <plugin root>/lib/cloud_relay.py ensure --repo-root <root> --config-dir <configDir>`,
    before every relayed answer. It starts the relay if none is listed, which keeps it alive and
-   follows the builders to whichever account they run on, one relay per account. It returns `name`.
+   follows the builders to whichever account they run on, one relay per account. It returns `name`. A relay a usage limit left dead (listed blocked with no
+   process) is replaced: `ensure` starts a fresh one under the same name, stops the dead entry, and returns
+   `replaced` (with `deadEntries` for each dead entry it stopped), so no hand restart is needed.
 2. Write the answer to a file, then `compose --repo-root <root> --config-dir <configDir> --session
    <cloudSessionName> --text-file <file>`. It returns `msgId`, `relayMessage` and `forward`. The
    answer text never carries a shell-evaluated value you have not seen expanded, such as a time
