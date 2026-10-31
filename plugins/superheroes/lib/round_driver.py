@@ -4178,7 +4178,7 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         # axis: the second pass renumbers every row, so the renumbering is recorded as an attempt too — #2157
         _record_staged_id_bindings(state, carried + survivors + carried_refuted + refuted,
                                    restaged, "second-pass-restage")
-        split =len(carried) + len(survivors)
+        split = len(carried) + len(survivors)
         state["_verified"], state["_refuted"] = restaged[:split], restaged[split:]
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
@@ -10609,8 +10609,7 @@ RULING_TARGET_AMBIGUOUS_HINT = (
 
 
 def _record_staged_id_bindings(state, originals, staged, source):
-    """Append the staged-id -> finding-identity-key bindings one verifier attempt minted, so a later
-    ruling can tell that an id such as ``v0`` named a different finding in an earlier attempt."""
+    """Append one verifier attempt's staged-id -> finding-key bindings to the history."""
     if not isinstance(originals, list) or not isinstance(staged, list):
         return
     bindings = {}
@@ -10631,8 +10630,7 @@ def _record_staged_id_bindings(state, originals, staged, source):
 
 
 def _staged_view_rows(originals):
-    """The staged copies (carrying ``v0..vN``) of the dict rows in ``originals``; a non-dict original
-    is skipped — its id-only placeholder names no finding."""
+    """The staged copies of the dict rows in ``originals`` (a non-dict original is skipped)."""
     if not isinstance(originals, list):
         return []
     rows = []
@@ -10643,11 +10641,7 @@ def _staged_view_rows(originals):
 
 
 def _ruling_candidate_rows(state, ledger_entries=None, before_ledger_only=False):
-    """``[(key, row)]`` of every row a ruling id may name, in precedence order: findings, the fix rows,
-    the disposition ledger, then the verifier stores (``_verified``, ``_refuted``, the second-test
-    carries and holds, and the staged view of ``_toVerify``). A non-list store, a non-dict row, or a
-    row with no derivable key is skipped; never raises. ``before_ledger_only`` stops after the fix
-    rows — all a ruling may read when the ledger is unreadable."""
+    """``[(key, row)]`` a ruling id may name; ``before_ledger_only`` is the ledger-unreadable set."""
     candidates = []
 
     def take(rows, keyer):
@@ -10684,8 +10678,7 @@ def _ruling_candidate_rows(state, ledger_entries=None, before_ledger_only=False)
 
 
 def _ruling_id_matches(state, rid, candidates):
-    """``{key: row}`` of every distinct finding the id ``rid`` names across the candidate rows, the
-    recorded verifier-attempt bindings, and the rulings log."""
+    """``{key: row}`` of each distinct finding ``rid`` names (rows, attempt history, log)."""
     by_key = {}
 
     def row_for(key):
@@ -10739,8 +10732,7 @@ def _resolve_ruling_target(state, ruling_id):
 
 
 def _ruling_target_candidates(state, rid):
-    """The distinct findings the id ``rid`` names, as ``{findingKey, file, line, title}`` dicts sorted
-    by ``findingKey`` — what an ambiguous-target refusal lists."""
+    """The distinct findings ``rid`` names, as ``{findingKey, file, line, title}`` sorted by key."""
     if not isinstance(rid, str):
         return []
     rid = rid.strip()

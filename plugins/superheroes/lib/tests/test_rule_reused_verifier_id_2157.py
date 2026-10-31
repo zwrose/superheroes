@@ -125,6 +125,10 @@ def _attempt_history_session(tmp_path):
               first={_HELD["title"]: _MISSED, _PLAIN["title"]: _PLAUSIBLE},
               second={_HELD["title"]: _MISSED})
     r.drive(stop=RD.P_SYNTHESIS)
+    state = _state(r.dir)
+    # the stale second-pass staging (a later round restages it) would bind v0 to HELD; only the history may
+    state["_toVerify"] = []
+    RD.save_state(r.dir, state)
     return r
 
 
