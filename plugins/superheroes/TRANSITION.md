@@ -18,6 +18,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **A caller that reads a break-it run's `copy-failed`, `dependency-link-failed` or `dependency-link-unsafe` reason reads the new run reasons instead.** See [Review: break-it tests run in the session's working copy](#review-break-it-tests-run-in-the-sessions-working-copy).
+
 - **After switching.** **Nothing is owed at once: code review composes no grounding seat; remove a saved `grounding-seat` seat pin, which now reads as a pin for an unknown seat.** See [Review: the grounding seat is gone](#review-the-grounding-seat-is-gone).
 
 - **Before switching.** **A project whose review profile says `mode: review-only` or `mode: unverified`, or that has no verify command, sets one first, or code review refuses to start.** See [Review: runs only as the loop, with a verify command](#review-runs-only-as-the-loop-with-a-verify-command).
@@ -33,6 +35,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A custom panel reviewer that writes its own findings file writes the object `{"findings": [...], "readParts": [...]}`, and a reviewer on a schema-delivered engine emits `readParts` on every result.** See [Review: round-1 reviewers return what they read](#review-round-1-reviewers-return-what-they-read).
 
 - **After switching.** **Re-run configure once when the "rubric-version advanced" notice appears.** See [Review: the rubric version is 14](#review-the-rubric-version-is-14).
+
+### Review: break-it tests run in the session's working copy
+
+- **Where a test runs.** The build session runs each break-it test once, exactly as written, on the unfixed code, in its own working copy at the reviewed head, before the verifier grades. There is no throwaway copy and no linked dependency folder; the working copy's own installed `node_modules` is used as it is, and the run's temporary files go to the session folder. The working copy is left as it was: the written test file is removed and anything the run changed in git is restored.
+- **Refs left.** The run record gains `refsLeft`, always present and empty when none, naming each other ref the run's time window saw change, sorted. Only HEAD and the branch it points at are restored; any other ref is left as it is.
+- **The run reasons.** A break-it run is recorded not-run with `working-copy-not-at-head`, `working-copy-dirty`, `working-copy-restore-failed`, `scratch-unresolved` or `working-copy-unreadable`. A run that fails to restore the working copy withholds certification. The reasons `copy-failed`, `dependency-link-failed` and `dependency-link-unsafe` are gone from break-it runs.
 
 - **After switching.** **Nothing is owed: the advisor stops writing a share sentence at launch and applying a kind label at routing, and a project's stamped `dial` or `budgetN` is ignored. Existing `kind:machinery` and `kind:product` labels may be deleted by hand.** See [Advisor: the forward-share dial and the kind labels are retired](#advisor-the-forward-share-dial-and-the-kind-labels-are-retired).
 

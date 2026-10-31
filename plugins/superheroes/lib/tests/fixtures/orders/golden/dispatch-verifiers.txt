@@ -33,7 +33,8 @@ Verdict semantics:
   handled); reason must explain why.
 - An issue whose `taxonomy` is `break-it-test` cites a new test file that the change does not hold
   yet; that is expected, never a reason for REFUTED. Judge it by its `suggestion` block and its
-  `breakItRun` record, which is the run the orchestrator made in a throwaway copy of the change.
+  `breakItRun` record, which is the run the orchestrator made in the build session's own working
+  copy at the reviewed head.
   CONFIRMED when the recorded output shows the test's own assertion failing on the behaviour the
   issue names. A setup failure (a missing module or command, exit 127, or an import or collection
   error unrelated to the change) shows nothing about the issue, so it is judged like `not-run`,

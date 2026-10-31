@@ -169,7 +169,7 @@ For each touched area, write at least one **break-it test**: a new test file, in
 
 The test is committed exactly as you write it and is kept only when it comes through unchanged, so write it the way the project's own rules require a committed test to be. Read CLAUDE.md, the calibration and any check the project runs over its test files, and write every marker or directive comment they require in its full required form (for example, a marker the project requires to carry a reason carries one), never as a bare marker the project would then have to extend.
 
-You never write the file into the repository. You deliver it as a finding, and the review loop runs it in a throwaway copy of the change and records the run under your name. A failing run is your finding. A passing run means the change held, and the loop drops that finding. Writing break-it tests does not make you a maker of the change.
+You never write the file into the repository. You deliver it as a finding, and the review loop runs it in the build session's own working copy at the reviewed head and records the run under your name. A failing run is your finding. A passing run means the change held, and the loop drops that finding. Writing break-it tests does not make you a maker of the change.
 
 Shape the finding exactly as follows, because the loop parses it:
 

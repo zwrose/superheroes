@@ -155,7 +155,7 @@ def test_t3_run_one_failing_test_is_failed_with_output(repo):
     assert record["reason"] is None
     assert "boom-marker" in record["output"]
     assert set(record) == {"schema", "role", "path", "command", "head", "sha256", "content", "outcome",
-                           "reason", "exitCode", "output", "interpreter"}
+                           "reason", "exitCode", "output", "interpreter", "restored", "refsLeft"}
     assert record["content"] == block["content"]
     assert record["schema"] == break_it.SCHEMA and record["role"] == break_it.ROLE
 
@@ -306,30 +306,8 @@ def test_t9_run_one_kills_a_lingering_worker(repo, tmp_path, detached, clean_env
 
 
 @pytest.mark.proc_containment
-@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc to disable the reaper")
-def test_t9_cwd_net_kills_a_detached_worker_without_the_reaper(repo, tmp_path, monkeypatch, env_tags_readable):
-    # The reaper cannot scan (no /proc for it), the worker has its own session and no environment: only the working-directory net can catch it.
-    marker = 'PROC_ROOT = "/proc"'
-    assert marker in break_it._REAPER
-    monkeypatch.setattr(break_it, "_REAPER", break_it._REAPER.replace(marker, 'PROC_ROOT = "/nonexistent"'))
-    pidfile = tmp_path / "worker.pid"
-    content = ("import os, subprocess\n"
-               "p = subprocess.Popen([%r, '60'], start_new_session=True, env={})\n"
-               "open(os.environ['PIDFILE'], 'w').write(str(p.pid))\n") % shutil.which("sleep")
-    block = _block("tests/test_w.py", content,
-                   run="PIDFILE=%s %s tests/test_w.py" % (shlex.quote(str(pidfile)), PY))
-    assert break_it.run_one(str(repo), _head(repo), block)["outcome"] == "passed"
-    pid = int(pidfile.read_text())
-    try:
-        assert _gone(pid), "the detached worker outlived run_one"
-    finally:
-        if not _gone(pid):
-            os.kill(pid, 9)
-
-
-@pytest.mark.proc_containment
-def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, monkeypatch, env_tags_readable):
-    # bites on: the _kill_tagged(token) call in run_one; the reaper cannot scan, the worker has its own session and has left the copy's directory but kept its environment, so only the environment-tag net can catch it; the worker is a Python child because macOS hides a system program's environment from `ps -E`.
+def test_t9_tag_net_kills_a_detached_worker_that_left_the_working_directory(repo, tmp_path, monkeypatch, env_tags_readable):
+    # bites on: the _kill_tagged(token) call in run_one; the reaper cannot scan, the worker has its own session and has left the run's working directory but kept its environment, so only the environment-tag net can catch it; the worker is a Python child because macOS hides a system program's environment from `ps -E`.
     marker = 'PROC_ROOT = "/proc"'
     assert marker in break_it._REAPER
     monkeypatch.setattr(break_it, "_REAPER", break_it._REAPER.replace(marker, 'PROC_ROOT = "/nonexistent"'))
@@ -342,7 +320,7 @@ def test_t9_tag_net_kills_a_detached_worker_that_left_the_copy(repo, tmp_path, m
     assert break_it.run_one(str(repo), _head(repo), block)["outcome"] == "passed"
     pid = int(pidfile.read_text())
     try:
-        assert _gone(pid), "the detached worker that left the copy outlived run_one"
+        assert _gone(pid), "the detached worker that left the working directory outlived run_one"
     finally:
         if not _gone(pid):
             os.kill(pid, 9)
@@ -387,27 +365,24 @@ def test_t10_run_one_caps_the_output_tail(repo):
 
 
 # T11
-def test_t11_run_one_leaves_nothing_behind(repo, monkeypatch):
-    made = []
-    real = break_it.tempfile.mkdtemp
-
-    def spy(*args, **kwargs):
-        made.append(real(*args, **kwargs))
-        return made[-1]
-
-    monkeypatch.setattr(break_it.tempfile, "mkdtemp", spy)
+def test_t11_run_one_leaves_nothing_behind(repo):
     head = _head(repo)
-    break_it.run_one(str(repo), head, _block("tests/test_a.py", "assert True\n"))
-    break_it.run_one(str(repo), _head(repo), _block("tests/test_b.py", "assert False\n"))
-    break_it.run_one(str(repo), head, _block("README.md", "x\n"))
-    break_it.run_one(str(repo), "no-such-rev", _block("tests/test_c.py", "assert True\n"))
-    assert len(made) == 4
-    assert not any(os.path.exists(d) for d in made)
+    before = _git(repo, "status", "--porcelain", "--untracked-files=all")
+    records = [
+        break_it.run_one(str(repo), head, _block("tests/test_a.py", "assert True\n")),
+        break_it.run_one(str(repo), _head(repo), _block("tests/test_b.py", "assert False\n")),
+        break_it.run_one(str(repo), head, _block("README.md", "x\n")),
+        break_it.run_one(str(repo), "no-such-rev", _block("tests/test_c.py", "assert True\n"))]
+    assert [(r["outcome"], r["reason"]) for r in records] == [
+        ("passed", None), ("failed", None), ("not-run", "path-exists"), ("not-run", "working-copy-unreadable")]
     listing = _git(repo, "worktree", "list", "--porcelain")
     assert [ln for ln in listing.splitlines() if ln.startswith("worktree ")] == [
         "worktree %s" % os.path.realpath(str(repo))]
-    assert _git(repo, "status", "--porcelain") == ""
+    assert not (repo / "tests").exists()
+    assert _git(repo, "status", "--porcelain", "--untracked-files=all") == before == ""
     assert _head(repo) == head
+    folders = repo / ".git" / "superheroes"
+    assert not folders.exists() or [n for n in os.listdir(str(folders)) if n.startswith("break-it-tmp-")] == []
 
 
 # T12
@@ -558,13 +533,15 @@ def test_t13_git_routing_is_scrubbed_and_refused(repo, tmp_path, monkeypatch):
 
 
 # T14
-def test_t14_copy_has_independent_git_metadata(repo):
+def test_t14_git_metadata_the_test_writes_is_restored(repo):
     content = ("import subprocess\n"
                "subprocess.check_call(['git', 'config', '--local', 'break.it', 'x'])\n"
                "subprocess.check_call(['git', 'tag', 'break-it-tag'])\n")
     record = break_it.run_one(str(repo), _head(repo), _block("tests/test_m.py", content))
     assert record["outcome"] == "passed", record
-    assert _git(repo, "tag", "--list") == ""
+    assert record["restored"] == ["test-file", "config"]
+    assert record["refsLeft"] == ["refs/tags/break-it-tag"]
+    assert _git(repo, "tag", "--list") == "break-it-tag"
     done = subprocess.run(["git", "-C", str(repo), "config", "--local", "break.it"], capture_output=True)
     assert done.returncode != 0
 
@@ -626,23 +603,26 @@ def test_reaper_without_proc_still_propagates_the_child_exit_status(repo, monkey
     assert (failing["outcome"], failing["exitCode"]) == ("failed", 1)
 
 
+# The run's working directory is the caller's own tree, so an inherited import path into it is still scrubbed: the
+# script's own folder, not the root, is all the test finds on its path until it adds the working directory itself.
+_NOT_ON_PATH = ("import importlib.util, os, sys\nassert 'PYTHONPATH' not in os.environ\n"
+                "assert importlib.util.find_spec('callermod') is None\n"
+                "sys.path.append(os.getcwd())\nimport callermod\nassert callermod.VALUE == 'head', callermod.VALUE\n")
+
+
 def test_inherited_import_path_into_the_caller_tree_is_dropped(repo, monkeypatch):
-    _write(repo, "callermod.py", "VALUE = 'copy'\n")
+    _write(repo, "callermod.py", "VALUE = 'head'\n")
     head = _commit(repo, "add callermod")
-    _write(repo, "callermod.py", "VALUE = 'caller'\n")  # uncommitted: only the caller's tree has it
     monkeypatch.setenv("PYTHONPATH", str(repo))
-    content = "import os, sys\nsys.path.append(os.getcwd())\nimport callermod\nassert callermod.VALUE == 'copy', callermod.VALUE\n"
-    record = break_it.run_one(str(repo), head, _block("tests/test_ip.py", content))
+    record = break_it.run_one(str(repo), head, _block("tests/test_ip.py", _NOT_ON_PATH))
     assert record["outcome"] == "passed", record
 
 
 def test_import_path_with_dot_segment_spelling_is_dropped(repo, monkeypatch):
-    _write(repo, "callermod.py", "VALUE = 'copy'\n")
+    _write(repo, "callermod.py", "VALUE = 'head'\n")
     head = _commit(repo, "add callermod")
-    _write(repo, "callermod.py", "VALUE = 'caller'\n")
     monkeypatch.setenv("PYTHONPATH", os.path.join(str(repo.parent), ".", repo.name))
-    content = "import os, sys\nsys.path.append(os.getcwd())\nimport callermod\nassert callermod.VALUE == 'copy', callermod.VALUE\n"
-    record = break_it.run_one(str(repo), head, _block("tests/test_ipd.py", content))
+    record = break_it.run_one(str(repo), head, _block("tests/test_ipd.py", _NOT_ON_PATH))
     assert record["outcome"] == "passed", record
 
 
@@ -710,13 +690,15 @@ def test_git_setup_timeout_kills_the_helper_descendants(repo, tmp_path, monkeypa
 
     try:
         started = time.monotonic()
-        record = break_it.run_one(str(repo), head, _block("tests/test_g.py", "assert True\n"))
-        assert time.monotonic() - started < 30, "setup waited for the helper instead of killing it"
-        assert (record["outcome"], record["reason"]) == ("not-run", "copy-failed")
+        # the test rewrites a tracked file, so the restore's checkout of it runs the slow smudge helper
+        content = "open('a.dat', 'w').write('changed\\n')\n"
+        record = break_it.run_one(str(repo), head, _block("tests/test_g.py", content))
+        assert time.monotonic() - started < 30, "the restore waited for the helper instead of killing it"
+        assert (record["outcome"], record["reason"]) == ("not-run", "working-copy-restore-failed")
         deadline = time.monotonic() + 5
         while helpers() and time.monotonic() < deadline:
             time.sleep(0.1)
-        assert helpers() == [], "a git helper outlived the timed-out setup"
+        assert helpers() == [], "a git helper outlived the timed-out restore"
     finally:
         for pid in helpers():
             os.kill(pid, 9)
