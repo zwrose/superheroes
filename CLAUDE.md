@@ -48,6 +48,16 @@ Never cite another repository's issue by bare `#NNN` in an issue, PR or doc here
 renders as a live link to an unrelated issue in this repo. Write `owner/repo#NNN`, and leave out
 private project specifics.
 
+## Committed files name no consuming project
+
+No committed file — code, comments, tests, fixtures, bite-proof records, docs, definition docs,
+Canon — names a project that uses the plugin, or carries that project's paths, commands, database
+names or other data, or stack specifics; nor a path on the owner's own machine (anything under
+a person's home directory). Write neutral examples instead: "a consuming project", `/path/to/project`,
+`/path/to/home`, `app-test`. GitHub issues, PRs and comments may name a consuming project; the
+repository's files may not. Never enforce this with a CI step, workflow, test or committed list
+of names: the check would itself publish the names.
+
 ## Versioning (SemVer)
 
 The `superheroes` plugin owns its version in `plugins/superheroes/.claude-plugin/plugin.json`.
