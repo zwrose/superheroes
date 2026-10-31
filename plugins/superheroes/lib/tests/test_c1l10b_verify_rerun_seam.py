@@ -443,6 +443,24 @@ def test_4_a_footer_the_cloud_appends_to_the_patched_body_is_not_a_difference(tm
     assert "did not copy" not in PBS.record_line(sd)
 
 
+def test_4_a_retried_publish_recognizes_its_own_earlier_success_under_the_footer(tmp_path):
+    # axis: a retried publish recognizes its own earlier success even when cloud egress appended its footer to the live body
+    sd = TPB._staged_fixed(tmp_path)
+    gh = _FooterGh(TPB.BODY)
+    first = PBS.publish(sd, 7, runner=gh)
+    assert (first["ok"], first["outcome"], first["reason"]) == (True, "published", None)
+    assert gh.live.endswith(FOOTER) and gh.live != TPB.FIXED
+    retried = PBS.publish(sd, 7, runner=gh)
+    assert (retried["ok"], retried["outcome"], retried["reason"]) == (
+        True, PBS.OUTCOME_PUBLISHED, PBS.REASON_ALREADY_PUBLISHED)
+    assert retried["at"] == first["at"]
+    stored, err = RR.read_json(PBS.paths(sd)["published"])
+    assert err is None and (stored["ok"], stored["outcome"], stored["reason"]) == (
+        True, PBS.OUTCOME_PUBLISHED, PBS.REASON_ALREADY_PUBLISHED)
+    assert "copied its audited PR-body fix" in PBS.record_line(sd)
+    assert "did not copy" not in PBS.record_line(sd)
+
+
 def test_7_a_staged_body_that_already_ends_with_the_footer_publishes(tmp_path):
     fixed = TPB.FIXED + "\n" + FOOTER
     sd = TPB._staged_fixed(tmp_path, fixed=fixed)

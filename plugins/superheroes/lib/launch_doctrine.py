@@ -111,6 +111,12 @@ RULING_INVARIANTS = {
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
 # The cloud-launch sentence lives once, in rubric/launch-doctrine.md; the parser checks only what it must carry.
 CLOUD_LAUNCH_INVARIANTS = ("never a force-push", "never `main`")
+# The detective cloud sentence lives once, in rubric/launch-doctrine.md; the parser checks only what it must carry.
+DETECTIVE_CLOUD_INVARIANTS = (
+    "cloud_builder.py intake",
+    "disposable copies live only inside this cloud session",
+    "push no branch",
+)
 
 _RULINGS_BEGIN = "<!-- launch-doctrine:rulings:begin -->"
 _RULINGS_END = "<!-- launch-doctrine:rulings:end -->"
@@ -118,6 +124,8 @@ _PREFLIGHT_BEGIN = "<!-- launch-doctrine:preflight:begin -->"
 _PREFLIGHT_END = "<!-- launch-doctrine:preflight:end -->"
 _CLOUD_LAUNCH_BEGIN = "<!-- launch-doctrine:cloud-launch:begin -->"
 _CLOUD_LAUNCH_END = "<!-- launch-doctrine:cloud-launch:end -->"
+_DETECTIVE_CLOUD_BEGIN = "<!-- launch-doctrine:cloud-detective:begin -->"
+_DETECTIVE_CLOUD_END = "<!-- launch-doctrine:cloud-detective:end -->"
 _CHARTER_BEGIN = "<!-- launch-doctrine:preflight-charter:begin -->"
 _CHARTER_END = "<!-- launch-doctrine:preflight-charter:end -->"
 
@@ -159,6 +167,7 @@ def _refuse(reason: str) -> dict:
         "rulingsBlock": None,
         "digest": None,
         "cloudLaunchLine": None,
+        "detectiveCloudLine": None,
     }
 
 
@@ -168,6 +177,7 @@ def _ok(
     rulings_block: str,
     digest: str,
     cloud_launch_line: str,
+    detective_cloud_line: str,
 ) -> dict:
     return {
         "ok": True,
@@ -177,6 +187,7 @@ def _ok(
         "rulingsBlock": rulings_block,
         "digest": digest,
         "cloudLaunchLine": cloud_launch_line,
+        "detectiveCloudLine": detective_cloud_line,
     }
 
 
@@ -270,14 +281,24 @@ def _parse_preflight_block(text: str, body: str, body_start: int) -> tuple[list[
     return checks, None
 
 
-def _parse_cloud_launch_block(text: str, body: str, body_start: int) -> tuple[str | None, str | None]:
+def _parse_one_line_block(
+    text: str, body: str, body_start: int, invariants: tuple[str, ...], stem: str,
+) -> tuple[str | None, str | None]:
     lines = [raw_line for raw_line in body.split("\n") if raw_line.strip()]
     if len(lines) != 1:
         return None, f"doctrine-malformed-line:{_line_number(text, body_start)}"
-    for phrase in CLOUD_LAUNCH_INVARIANTS:
+    for phrase in invariants:
         if phrase not in lines[0]:
-            return None, f"doctrine-cloud-launch-invariant-missing:{phrase}"
+            return None, f"doctrine-{stem}-invariant-missing:{phrase}"
     return lines[0], None
+
+
+def _parse_cloud_launch_block(text: str, body: str, body_start: int) -> tuple[str | None, str | None]:
+    return _parse_one_line_block(text, body, body_start, CLOUD_LAUNCH_INVARIANTS, "cloud-launch")
+
+
+def _parse_detective_cloud_block(text: str, body: str, body_start: int) -> tuple[str | None, str | None]:
+    return _parse_one_line_block(text, body, body_start, DETECTIVE_CLOUD_INVARIANTS, "cloud-detective")
 
 
 def parse(text: object) -> dict:
@@ -327,8 +348,20 @@ def parse(text: object) -> dict:
     if reason is not None:
         return _refuse(reason)
 
+    detective_body, reason = _extract_block(
+        text, _DETECTIVE_CLOUD_BEGIN, _DETECTIVE_CLOUD_END, "cloud-detective")
+    if reason is not None:
+        return _refuse(reason)
+    detective_block_start = text.find(_DETECTIVE_CLOUD_BEGIN) + len(_DETECTIVE_CLOUD_BEGIN)
+    if detective_block_start < len(text) and text[detective_block_start] == "\n":
+        detective_block_start += 1
+
+    detective_cloud_line, reason = _parse_detective_cloud_block(text, detective_body, detective_block_start)
+    if reason is not None:
+        return _refuse(reason)
+
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return _ok(rulings, checks, rulings_block, digest, cloud_launch_line)
+    return _ok(rulings, checks, rulings_block, digest, cloud_launch_line, detective_cloud_line)
 
 
 def load(path: str | None = None) -> dict:
