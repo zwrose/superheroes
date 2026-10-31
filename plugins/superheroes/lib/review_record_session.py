@@ -293,7 +293,7 @@ def _status_reviewers(state, setup=None, rows=()):
         unfilled = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd)) \
             & set(round_phases.DIMENSIONS)
         for seat in sorted(seats):
-            if seat in unfilled:
+            if round_phases.seat_lens(seat) in unfilled:
                 continue  # listed below as an unfilled seat
             commit = _panel_head(state, rnd, setup)
             ran = seats[seat] == "run" and commit is not None  # any other value, or a panel with no recoverable head, is never credited
@@ -383,7 +383,7 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     out, raw = [], []
     for key, (att, r) in slots.items():
         phase, rnd, seat, _ = key
-        if phase == sc.PANEL_PHASE and seat in unfilled.get(rnd, ()):
+        if phase == sc.PANEL_PHASE and round_phases.seat_lens(seat) in unfilled.get(rnd, ()):
             continue  # listed below as an unfilled seat, whether or not a slot was journaled for it
         env = envs[key]
         body = env.get("payload") if isinstance(env, dict) else None

@@ -99,6 +99,7 @@ import seat_map  # noqa: E402
 import seat_map_receipts  # noqa: E402
 import session_contract  # noqa: E402
 import session_mode  # noqa: E402
+import slicing  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
 from finding_identity import finding_identity, finding_label, normalize_title  # noqa: E402
@@ -1387,9 +1388,50 @@ def new_state(config=None):
     _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
     _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
+    _plan_slices(state, cfg)
     if not state["terminal"]:
         _seed_returning_round(state, cfg)
     return state
+
+
+def _slice_security(dims, repo_root, parts):
+    """True when a slice seats the security lens: the panel holds it and the slice's files touch a risk area, or the risk areas
+    are not set (an unclear risk counts as touching). An exception reads as touching."""
+    if "security-reviewer" not in dims:
+        return False
+    try:
+        files = sorted({p["file"] for p in parts if isinstance(p, dict) and isinstance(p.get("file"), str)})
+        found = risk_areas.touched(repo_root, files)
+        return found.get("riskAreas") == "not-set" or bool(found.get("touched"))
+    except Exception:  # fail toward seating the lens
+        return True
+
+
+def _plan_slices(state, cfg):
+    """Cut the round-1 change into size slices once, at fresh state, and store the plan (without the slices' diff text) and the
+    count it was cut from. Writes nothing when there is no round-1 diff text."""
+    diff_text = cfg.get("diff")
+    if not isinstance(diff_text, str):
+        return
+    repo_root = cfg.get("repoRoot") or os.getcwd()
+    proven = state.get("provenCopies") or []
+    try:
+        count = countable_lines.count(diff_text, repo_root, proven=proven,
+                                      head=state.get("provenCopiesHead") or _resolve_head_commit(repo_root))
+    except Exception:  # an unreadable count slices on raw changed lines
+        count = None
+    plan = slicing.plan(diff_text, count, proven=proven)
+    state["sliceCount"] = count
+    if plan["sliced"] is not True:
+        state["slicePlan"] = {"sliced": False, "countable": plan["countable"], "bar": plan["bar"], "slices": []}
+        return
+    dims = round_phases.panel_dimensions(cfg)
+    state["slicePlan"] = {
+        "sliced": True, "countable": plan["countable"], "bar": plan["bar"],
+        "slices": [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
+                    "security": _slice_security(dims, repo_root, sl["parts"])}
+                   for sl in plan["slices"]],
+    }
 
 
 COPY_PROOF_HEAD_TIMEOUT = 60
@@ -3216,6 +3258,21 @@ def _panel_dimensions(config):
     return round_phases.panel_dimensions(config)
 
 
+def _panel_slices(state, roster):
+    """The panel payload's cut: each slice by id with the seats of ``roster`` that review it (empty when the roster is not sliced)."""
+    plan = state.get("slicePlan") if isinstance(state, dict) else None
+    slices = plan.get("slices") if isinstance(plan, dict) and plan.get("sliced") is True else None
+    out = []
+    for sl in slices if isinstance(slices, list) else []:
+        sid = sl.get("id") if isinstance(sl, dict) else None
+        if not isinstance(sid, str) or not sid:
+            continue
+        seats = [k for k in roster if round_phases.seat_lens(k) != k and k.partition(":")[2] == sid]
+        if seats:
+            out.append({"id": sid, "seats": seats})
+    return out
+
+
 # The held finding's fields the second-test seat reads: the finding as staged, its first test, that
 # test's runs with their output, and the note the verifier gave for holding it.
 _SECOND_TEST_ENTRY_FIELDS = ("id", "title", "file", "line", "severity", "body", "consequence",
@@ -3239,9 +3296,10 @@ def _advance(state, config):
     step = state["step"]
     rnd = state["round"]
     payload = {}
-    dims = _panel_dimensions(config)
     if step == P_PANEL:
-        payload = {"dimensions": list(dims), "tier": DEEP}  # round 1 / full panels are always reviewer-deep
+        roster = round_phases.panel_roster(state, config)
+        # round 1 / full panels are always reviewer-deep
+        payload = {"dimensions": list(roster), "tier": DEEP, "slices": _panel_slices(state, roster)}
     elif step == P_VERIFIERS:
         staged = verification.stage_ids(state.get("_toVerify") or [])
         payload = {"clusters": verification.cluster_findings(staged)}
@@ -3463,7 +3521,7 @@ def _seat_map_configured_vendor(seat_map, dim):
     """Configured vendor for `dim` from a #510 seat map, or None if absent/unknown."""
     if not isinstance(seat_map, dict) or not isinstance(seat_map.get("seats"), dict):
         return None
-    c = seat_map["seats"].get(dim)
+    c = seat_map["seats"].get(round_phases.seat_lens(dim))
     v = c.get("vendor") if isinstance(c, dict) else None
     return v if isinstance(v, str) and v in _PANEL_VENDORS else None
 
@@ -3581,8 +3639,9 @@ def _fold_panel(state, config, artifact, session_dir=None):
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
     # A submitted map never releases a seat the map already governing this round left unfilled.
+    roster = round_phases.panel_roster(state, config)
     unfilled = receipt_disclosures.unfilled_seats(
-        seat_map_receipts.round_governing_map(state, state["round"]))
+        seat_map_receipts.round_governing_map(state, state["round"]), roster)
     if seat_map:
         receipts = state.get("seatMapReceipts")
         if not isinstance(receipts, list):
@@ -3592,7 +3651,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # A seat the governing map leaves unfilled never ran, whatever payload was submitted for it:
     # drop it so the dimension folds `missing` and none of its findings are credited.
     unfilled = unfilled | receipt_disclosures.unfilled_seats(
-        seat_map_receipts.round_governing_map(state, state["round"]))
+        seat_map_receipts.round_governing_map(state, state["round"]), roster)
     if unfilled and isinstance(seats, dict):
         seats = {dim: seat for dim, seat in seats.items() if dim not in unfilled}
     raw = []
@@ -3602,7 +3661,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     missing_dims = []
     vacuous_dims = []
     engaged_artifact_dims = []
-    for dim in _panel_dimensions(config):
+    for dim in roster:
         seat = seats.get(dim) if isinstance(seats, dict) else None
         findings = _usable_findings(seat)
         status = "run"
@@ -3627,14 +3686,14 @@ def _fold_panel(state, config, artifact, session_dir=None):
         seat_status[dim] = status
         for f in findings:
             g = dict(f)
-            g.setdefault("dimension", dim)
+            g.setdefault("dimension", round_phases.seat_lens(dim))
             if status == "missing":
                 g["unverified"] = True
                 unverified.append({"dimension": dim, "title": g.get("title"),
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
             # axis: only the test role's own seat can trigger a run; the trust is the roster seat key, never the finding's own dimension or taxonomy
-            if dim == break_it.ROLE:
+            if round_phases.seat_lens(dim) == break_it.ROLE:
                 break_it_raw.append(g)
     if vacuous_dims:
         _record_round(state, "vacuousSeats", list(vacuous_dims))
@@ -3677,7 +3736,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
     _record_round(state, "seatStatus", seat_status)
-    _panel_dims = _panel_dimensions(config)
+    _panel_dims = roster
     _expected = len(_panel_dims)
     if _expected > 0:
         _ran = sum(1 for d in _panel_dims if seat_status.get(d) == "run")
@@ -3742,7 +3801,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # full panel, so its record is the `baseline`.
     kind = "baseline"
     dim_map = {}
-    for dim in _panel_dimensions(config):
+    for dim in roster:
         seat = seats.get(dim) if isinstance(seats, dict) else None
         s_findings = []
         # A missing seat defaults to LOW confidence, never high — an absent lens must never lend a
@@ -9873,7 +9932,7 @@ def _run_seam(seams, action, payload, state, config):
     io = seams.get("io") or {}
     if action == P_PANEL:
         seats = {}
-        for dim in _panel_dimensions(config):
+        for dim in round_phases.panel_roster(state, config):
             tier = payload.get("tier", DEEP)
             result = seams["reviewer"](dim, tier, state["round"], payload)
             # bounded re-dispatch on a receipt-missing/stale seat (REDISPATCH_BUDGET), then missing.
@@ -11667,7 +11726,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
     # clusters and every seat `missing` — four recorded occurrences. Refuse HERE, before the fold, so
     # the pending step survives and recovery is a plain re-keyed resubmit on the same attempt/hash.
     if phase == P_PANEL:
-        fault = panel_seat_key_fault(_panel_dimensions(state["config"]), artifact)
+        fault = panel_seat_key_fault(round_phases.panel_roster(state, state["config"]), artifact)
         if fault:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
@@ -12542,9 +12601,10 @@ def _shipped_rubric_path():
 
 def _role_brief_path(seat_key):
     """Absolute path of the seat's agent file when its panel order names one; else empty."""
-    if seat_key not in ROLE_BRIEF_SEATS:
+    lens = round_phases.seat_lens(seat_key)
+    if lens not in ROLE_BRIEF_SEATS:
         return ""
-    return os.path.join(_plugin_resource_root(), "agents", "%s.md" % seat_key)
+    return os.path.join(_plugin_resource_root(), "agents", "%s.md" % lens)
 
 
 _RISK_AREAS_MATCHED_SHOWN = 5
@@ -12587,7 +12647,7 @@ def _risk_areas_text(seat_key, repo_root, base, head, leave_out=()):
     touches, as read by `risk_areas.touched` over every changed path less the `leave_out` paths (the
     proven copies no seat is given). Empty for any other seat.
     Never raises; a change that cannot be read says so rather than claiming it touches none."""
-    if seat_key != "test-role":
+    if round_phases.seat_lens(seat_key) != "test-role":
         return ""
     try:
         paths, unreadable = _risk_areas_changed_paths(repo_root, base, head)
@@ -12621,7 +12681,7 @@ def _break_it_grammar_text(seat_key):
     its `run` line and the rules its content must meet, built only from the three `break_it` constants.
     Empty for any other seat."""
     # axis: only the test role's order carries the grammar; every other seat's order stays free of it
-    if seat_key != "test-role":
+    if round_phases.seat_lens(seat_key) != "test-role":
         return ""
     return "```\n%s\n```\n\n%s\n\n%s" % (break_it.BLOCK_TEMPLATE, break_it.RUN_RULES, break_it.CONTENT_RULES)
 
@@ -12974,7 +13034,7 @@ def _seat_transport_fault(row, seat_key):
 
 def _panel_dimension_label(seat_key):
     """Rubric dimension label for a panel seat — from SUBJECT_FALLBACK, not filename stem."""
-    return review_seats.dimension_label(seat_key)
+    return review_seats.dimension_label(round_phases.seat_lens(seat_key))
 
 
 def _label(value):
@@ -13077,6 +13137,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
     "BREAK_IT_GRAMMAR_BLOCK",
+    "SLICE_SCOPE_LINE",
     "MODE",
     "MODE_EVIDENCE",
     "REPO",
@@ -13531,6 +13592,55 @@ def _pr_body_line(phase, session_dir, rnd, state, meta, cfg, materialize_shared_
             % (paths["staged"], paths["original"]))
 
 
+def _panel_findings_stem(seat_key, occurrence):
+    """The file stem of a panel seat's findings file: the lens's agent stem for a whole-change seat, the seat's storage key for a
+    slice seat (two slices of one lens never share a file)."""
+    if round_phases.seat_lens(seat_key) != seat_key:
+        return round_records.storage_key(seat_key, occurrence)
+    return AGENT_SUFFIX.get(seat_key, seat_key)
+
+
+def _slice_scope_line(slice_id, parts):
+    """The one paragraph that tells a slice seat which parts of the change are its own."""
+    entries = []
+    for part in parts if isinstance(parts, list) else []:
+        file = part.get("file") if isinstance(part, dict) else None
+        if not isinstance(file, str) or not file:
+            continue
+        ranges = [r for r in part.get("lines") or [] if isinstance(r, (list, tuple)) and len(r) == 2]
+        entries.append("%s: %s" % (file, ", ".join("%s-%s" % (r[0], r[1]) for r in ranges)) if ranges else file)
+    return ("Your slice: %s. Review only these parts of the change, and return in your read list only what you "
+            "read: %s. A file listed with no range is a whole-file change (a deletion or a binary file)."
+            % (slice_id, "; ".join(entries)))
+
+
+def _slice_seat_scope(state, session_dir, rnd, seat_key, occurrence, reviewer_diff_path, native):
+    """``(diff path, scope line)`` for a panel seat. A whole-change seat keeps the reviewer diff and has no scope line. A slice
+    seat is told its parts; a native seat is also given a diff holding only its slice, re-derived from the round's inputs
+    (the plan is deterministic), and falls back to the reviewer diff when the re-derived plan does not hold that slice.
+    An engine seat keeps the reviewer diff and the engine's patch, and is narrowed by the scope line alone."""
+    if round_phases.seat_lens(seat_key) == seat_key:
+        return reviewer_diff_path, ""
+    slice_id = seat_key.partition(":")[2]
+    plan = state.get("slicePlan") if isinstance(state, dict) else None
+    stored = next((s for s in (plan.get("slices") if isinstance(plan, dict) else None) or []
+                   if isinstance(s, dict) and s.get("id") == slice_id), None)
+    if stored is None:
+        raise ValueError("order-render-refused:unknown-slice:%s" % seat_key)
+    scope_line = _slice_scope_line(slice_id, stored.get("parts"))
+    if not native:
+        return reviewer_diff_path, scope_line
+    derived = slicing.plan(state.get("reviewedDiff"), state.get("sliceCount"), proven=state.get("provenCopies") or [])
+    found = next((s for s in derived["slices"] if s["id"] == slice_id), None)
+    # axis: a slice seat reads its own diff only when the re-derived plan holds that slice with the stored parts; any mismatch gives the reviewer diff
+    if found is None or found["parts"] != stored.get("parts"):
+        return reviewer_diff_path, scope_line
+    path = os.path.join(round_records.round_dir(session_dir, rnd), "slices",
+                        round_records.storage_key(seat_key, occurrence) + ".diff")
+    _ensure_bytes_at_path(session_dir, path, found["diff"].encode("utf-8"))
+    return path, scope_line
+
+
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
                         session_dir, rnd, paths, channel, roster=None,
                         materialize_shared_inputs=True):
@@ -13561,12 +13671,14 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
         mode_resolved = session_mode.resolve(meta, cfg)
         prior_comments_path = _resolve_prior_comments_path(session_dir, state)
+        seat_diff_path, scope_line = _slice_seat_scope(
+            state, session_dir, rnd, seat_key, occurrence, diff_path, native=channel == CHANNEL_FILE)
         ph = {
             "MODE": mode_resolved["mode"],
             "MODE_EVIDENCE": session_mode.evidence_line(mode_resolved),
             "REPO": meta.get("repo") or cfg.get("repo") or "unknown",
             "TARGET": meta.get("branch") or cfg.get("branch") or "unknown",
-            "DIFF_PATH": diff_path,
+            "DIFF_PATH": seat_diff_path,
             "RUBRIC_PATH": rubric_path,
             "ROLE_BRIEF_PATH": _role_brief_path(seat_key),
             "RISK_AREAS_TEXT": _risk_areas_text(
@@ -13580,8 +13692,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "DIMENSION": dim_label,
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
-            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % AGENT_SUFFIX.get(
-                seat_key, seat_key)),
+            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % _panel_findings_stem(
+                seat_key, occurrence)),
+            "SLICE_SCOPE_LINE": scope_line,
         }
     elif phase == P_VERIFIERS:
         prefix = "verifier:"
@@ -13866,7 +13979,7 @@ def _seat_dispatch_row(state, seat_key, seat_map=None):
     if seat_map is None:
         seat_map = _effective_seat_map(state)
     seats = (seat_map or {}).get("seats")
-    entry = seats.get(seat_key) if isinstance(seats, dict) else None
+    entry = seats.get(round_phases.seat_lens(seat_key)) if isinstance(seats, dict) else None
     if not isinstance(entry, dict):
         return {"vendor": None, "model": None, "engine": None}
     return {"vendor": entry.get("vendor"), "model": entry.get("model"),
@@ -13964,7 +14077,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                         "session.")
                 raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
-    unfilled = receipt_disclosures.unfilled_seats(seat_map) if phase == P_PANEL else frozenset(noauditor_ids)
+    unfilled = (receipt_disclosures.unfilled_seats(seat_map, [k for k, _occ in round_records.roster_slots(roster)])
+                if phase == P_PANEL else frozenset(noauditor_ids))
     if phase in _NONPANEL_REVIEWER_PHASES:
         cfg = state.get("config") or {}
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")

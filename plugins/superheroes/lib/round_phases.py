@@ -44,6 +44,45 @@ def panel_dimensions(config):
     return round_panel_contract.panel_dimensions_from_config(config)
 
 
+def seat_lens(key):
+    """The lens of a panel seat key: the key itself, or the part before the first ':' of a slice seat key whose lens is a dimension."""
+    if isinstance(key, str) and ":" in key:
+        lens = key.split(":", 1)[0]
+        if lens in DIMENSIONS:
+            return lens
+    return key
+
+
+# The lenses a sliced round 1 seats once per slice; every other lens stays one seat over the whole change.
+SLICED_LENSES = ("code-reviewer", "test-role", "security-reviewer")
+
+
+def panel_roster(state, config):
+    """The panel's seat keys: the configured dimensions, except that a sliced round 1 seats the whole-change lenses once
+    and each slice's own code, test and (when the slice carries one) security seat."""
+    dims = list(panel_dimensions(config))
+    plan = state.get("slicePlan") if isinstance(state, dict) else None
+    rnd = state.get("round") if isinstance(state, dict) else None
+    # axis: only a round-1 plan that says it was sliced and lists slices changes the roster; anything else keeps the configured dimensions
+    if not (isinstance(plan, dict) and plan.get("sliced") is True) or (isinstance(rnd, int) and rnd > 1):
+        return dims
+    slices = plan.get("slices")
+    slices = [s for s in slices if isinstance(s, dict) and isinstance(s.get("id"), str) and s["id"]] \
+        if isinstance(slices, list) else []
+    if not slices:
+        return dims
+    roster = [d for d in dims if d not in SLICED_LENSES]
+    for sl in slices:
+        if "code-reviewer" in dims:
+            roster.append("code-reviewer:" + sl["id"])
+        if "test-role" in dims:
+            roster.append("test-role:" + sl["id"])
+        # axis: a slice seats the security lens only when its plan row says it touches a risk area (a row with no `security` key reads as not touching)
+        if "security-reviewer" in dims and sl.get("security") is True:
+            roster.append("security-reviewer:" + sl["id"])
+    return roster
+
+
 # Verify submit-shape guard — lives here so `round_adapters` never imports `round_driver`.
 _VERIFY_RESULTS = ("pass", "fail", "timeout", "skipped", "none", "unverified")
 

@@ -2072,8 +2072,8 @@ def _roles(r):
         stem = next((role for prefix, role in _STEM_ROLE.items() if seat.startswith(prefix)), None)
         if stem:
             roles.add(stem)
-        elif seat in _PANEL_LENS and _PANEL_LENS[seat] not in lenses:
-            lenses.append(_PANEL_LENS[seat])
+        elif round_phases.seat_lens(seat) in _PANEL_LENS and _PANEL_LENS[round_phases.seat_lens(seat)] not in lenses:
+            lenses.append(_PANEL_LENS[round_phases.seat_lens(seat)])
     if r.get("synthesisRounds"):
         roles.add("synthesis")
     return " · ".join(([", ".join(lenses)] if lenses else []) + [role for role in _ROLE_ORDER if role in roles])

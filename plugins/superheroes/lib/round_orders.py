@@ -506,6 +506,9 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph["RISK_AREAS_LINE"] = (
         "- Risk areas this change touches: %s" % risk_text if risk_text else ""
     )
+    # A whole-change seat has no slice: its scope line is empty unless the driver handed one.
+    if not isinstance(ph.get("SLICE_SCOPE_LINE"), str):
+        ph["SLICE_SCOPE_LINE"] = ""
     return _test_role_derived_placeholders(ph)
 
 

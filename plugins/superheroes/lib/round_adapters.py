@@ -164,7 +164,7 @@ def roster_for(phase, state, config):
     """(seat keys this phase owes, reason_or_None).
 
     Deterministic. Order is SEMANTIC on every multi-seat phase and is therefore preserved, not
-    sorted: the panel folds in `_panel_dimensions` order, the verifiers artifact concatenates in
+    sorted: the panel folds in `round_phases.panel_roster` order, the verifiers artifact concatenates in
     cluster order (`verification.cluster_findings` already sorts by (file, bucket)), and the audits
     artifact lists results in audit-target order. A reason is returned only when the roster cannot
     be derived at all — never an empty roster standing in for an underivable one.
@@ -174,7 +174,7 @@ def roster_for(phase, state, config):
     st = state if isinstance(state, dict) else {}
     cfg = config if isinstance(config, dict) else {}
     if phase == P_PANEL:
-        return list(round_phases.panel_dimensions(cfg)), None
+        return list(round_phases.panel_roster(st, cfg)), None
     if phase == P_VERIFIERS:
         staged = verification.stage_ids(st.get("_toVerify") or [])
         keys = []
