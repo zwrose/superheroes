@@ -147,8 +147,10 @@ def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     assert seats["security-reviewer"]["tokens"] == 100
     assert seats["premortem-reviewer"]["tokens"] == U and why["seats.premortem-reviewer.tokens"] == "cost-not-recorded"
     assert seats["code-reviewer"]["minutes"] == U
-    assert row["measures"]["reviewerCostPerPr"] == {"tokens": U, "minutes": U}
-    assert why["reviewerCostPerPr.tokens"] == "cost-not-recorded"
+    assert row["measures"]["reviewerCostPerPr"]["tokens"] == U and row["measures"]["reviewerCostPerPr"]["minutes"] == U
+    assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"] == {"tokens": {"count": 2, "why": RM.LEFT_OUT_WHY},
+                                                                  "minutes": {"count": 2, "why": RM.LEFT_OUT_WHY}}
+    assert why["reviewerCostPerPr.tokens"] == "no-measured-pr"
 
 
 def test_a_null_among_the_rows_makes_the_sum_unmeasured_never_a_partial_sum():
@@ -163,21 +165,28 @@ def test_a_null_among_the_rows_makes_the_sum_unmeasured_never_a_partial_sum():
 
 def test_a_record_written_before_per_row_cost_gives_its_pr_cost_from_the_record_level_cost():
     seen = {"observation": {"tokens": 3267465, "wallSeconds": 400}}  # a 0.46.x row: observed, but no `cost` key
-    rows = [dict(seen, name="security-reviewer (round 1)", ran="engine-record", commit="c1"),
-            dict(seen, name="premortem-reviewer (round 1)", ran="engine-record", commit="c1"),
-            {"name": "grounding-seat", "ran": "not-run", "commit": "c1"}]
+    observed = [dict(seen, name="security-reviewer (round 1)", ran="engine-record", commit="c1"),
+                dict(seen, name="premortem-reviewer (round 1)", ran="engine-record", commit="c1"),
+                {"name": "grounding-seat", "ran": "not-run", "commit": "c1"}]
     record_cost = {"unit": "reviewer-minutes", "minutes": 13.4, "tokens": 6534930, "source": "engine records",
                    "notCounted": ["grounding-seat"]}
 
-    def measures(**over):
+    def measures(rows, **over):
         return RM.compute(_full(records=[dict(_rec(1, rows=rows), cost=dict(record_cost, **over))]), FROM, UNTIL)["measures"]
-    m = measures()
+    # (1) observed rows: the observations are the figures and the session total is not read
+    for m in (measures(observed), measures(observed, tokens=999)):
+        assert m["reviewerCostPerPr"]["tokens"]["total"] == 6534930 and m["reviewerCostPerPr"]["minutes"]["total"] == 13.4
+        assert m["seats"]["security-reviewer"]["tokens"] == 3267465 and m["seats"]["premortem-reviewer"]["tokens"] == 3267465
+    # (2) trimmed rows (no observation): the record-level cost is the PR's figure, and a seat reads per-row only
+    trimmed = [{k: v for k, v in x.items() if k != "observation"} for x in observed]
+    m = measures(trimmed)
     assert m["reviewerCostPerPr"]["tokens"] != U and m["reviewerCostPerPr"]["minutes"] != U
     assert m["reviewerCostPerPr"]["tokens"]["total"] == 6534930 and m["reviewerCostPerPr"]["minutes"]["total"] == 13.4
     assert m["seats"]["security-reviewer"]["tokens"] == U and m["seats"]["premortem-reviewer"]["tokens"] == U  # per seat: per-row only
     for over in ({"notCounted": ["security-reviewer (round 1)"]}, {"notCounted": "grounding-seat"}, {"tokens": None}):
-        assert measures(**over)["reviewerCostPerPr"] == {"tokens": U, "minutes": U}
-    assert RM.compute(_full(records=[_rec(1, rows=rows)]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"] == U  # no cost at all
+        got = measures(trimmed, **over)["reviewerCostPerPr"]
+        assert got["tokens"] == U and got["minutes"] == U
+    assert RM.compute(_full(records=[_rec(1, rows=trimmed)]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"] == U  # no cost at all
     # a record with per-row cost keys never reads its record-level cost
     both = dict(_rec(1, rows=[_row("security-reviewer (round 1)")]), cost={"tokens": 999, "minutes": 9, "notCounted": []})
     assert RM.compute(_full(records=[both]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"]["total"] == 100
