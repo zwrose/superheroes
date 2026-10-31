@@ -8814,9 +8814,7 @@ def run_loop(seams, config=None):
                 reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
                 if _library_finder_unauthenticated(state, reported, action, selected=selected,
                                                    replaced=replaced):
-                    if action == P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
-                        _retain_second_test_pending_findings(state)
-                    else:
+                    if action != P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
                         _retain_unauthenticated_finder_findings(state, artifact)
                     else:  # what the round already had — the held findings and the first pass's survivors — is kept
                         _retain_second_test_findings(state)
