@@ -30,7 +30,8 @@ The owner half is the close line, then three fixed headings in this order, then 
 - **`## What we're accepting`.** The risks and trades merging commits the owner to: parked residual
   risks, costly disclosed degradations (§ Disclosed degradations sorts them), deferred DoD rows, and
   any direct question the builder has for the owner. The omission floor's three rows are keyed on
-  severity, not on the disposition label. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
+  severity, not on the disposition label. Every break-it test the review record shows as
+  `not run: transit-redacted` is named here as a missing proof. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
 - **`## How to see it`.** On a show-it PR, read the project's `## Show-it surface` declaration in
   `core.md` for the level and shape, then carry the concrete instance here. An absent declaration
   means level `none`, disclosed. The section carries the entry point (the URL or the command) and
