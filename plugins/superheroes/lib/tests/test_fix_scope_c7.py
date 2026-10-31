@@ -233,8 +233,7 @@ def test_t1_a_critical_out_of_scope_finding_is_offered_to_a_fixer_once(captured_
         return [{"id": t["id"], "ruling": "not-discharged", "reason": "still open"}
                 for t in (targets or [])]
 
-    seams = TRD._seams(reviewer=reviewer, verifier=verifier, fix_step=fix_step, auditor=auditor,
-                       io={"stall_menu": lambda payload: "hold"})
+    seams = TRD._seams(reviewer=reviewer, verifier=verifier, fix_step=fix_step, auditor=auditor)
     _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
     assert state["terminal"]
     assert offers == [(1, [key])]  # offered once; the next round's batch left it out
@@ -374,8 +373,7 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_
             out.append(result)
         return out
 
-    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor,
-                       io={"stall_menu": lambda payload: "hold"})
+    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor)
     _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
     return key, state, offers, seen_targets, history
 

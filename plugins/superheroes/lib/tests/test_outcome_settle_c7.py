@@ -139,8 +139,7 @@ def _capped_seams():
     return TRD._seams(
         reviewer=reviewer, verifier=plausible, fix_step=fix_step,
         auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
-                                      for t in (targets or [])],
-        io={"stall_menu": lambda payload: "hold"})
+                                      for t in (targets or [])])
 
 
 def test_t2_real_important_open_at_the_round_cap_is_left_for_owner(sources_calls):
@@ -178,8 +177,7 @@ def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
         return rulings
 
     result, state = TRD._run_loop_capturing_state(
-        TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor,
-                   io={"stall_menu": lambda payload: "hold"}),
+        TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor),
         TRD._cfg_cert(maxRounds=2))
     assert state["terminal"]
     assert counter["n"] >= 1

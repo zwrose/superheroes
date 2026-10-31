@@ -728,47 +728,6 @@ action that owns it, leaving the rest of the calibration untouched:
   }
   ```
 
-- **Pre-authorize owner-judgment review gates** → write a narrow `gate-policy/1` overlay under
-  `core.md`'s `reviewGatePolicy` key (a sibling of `enginePreferences`, not inside it). The
-  shipped default pre-authorizes nothing — every rule added here is a narrow pre-authorization of
-  a gate the driver would otherwise park on. A `skip` (or stall `accept-the-disclosed-risk`) rule
-  may carry a `followUp` `{item, revisitTrigger, classClosure}`; a new follow-up must include a
-  nonblank `item`. A present but malformed `followUp` (missing or blank `item`, missing
-  `revisitTrigger`, missing `classClosure`, wrong shape) is refused at overlay load and at
-  calibration write and never reaches resolution; only an absent `followUp` lets the rule
-  resolve and record the disposition, after which certification refuses it for the missing
-  follow-up. A `followUp` may ride only a judgment `skip` or a stall
-  `accept-the-disclosed-risk` rule; on any other disposition it is `layer-follow-up-not-allowed`.
-  Show the resolved policy layers and rule counts first, then merge only the requested overlay
-  document. Pass `null` (or empty stdin) to remove the overlay and return to shipped-defaults-only.
-
-<!-- decision-point: id=configure-tune-gate-policy mode=proceed kind=owner-gate default="retain shipped-defaults-only gate policy overlay" carrier=run-output -->
-
-  PROCEED: retain the shipped-defaults-only overlay unless the owner selects this tune action in
-  this turn, record in the run output that the shipped-defaults-only gate-policy overlay was
-  retained and that `/superheroes:configure` changes it, and continue. Follow-up:
-  `/superheroes:configure`.
-
-  ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf '%s\n' '{"schema":"gate-policy/1","default":"park","rules":[{"gate":"present-judgment","findingClass":"judgment:important","disposition":"skip"}]}' | \
-    python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
-  ```
-
-  To clear the overlay:
-
-  ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf 'null\n' | python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
-  ```
-
-  **Read the result, don't assume success.** `write-review-gate-policy` returns
-  `{action, reason?}`. Only `written` or `noop` means the overlay was saved — surface any other
-  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command exits 0
-  either way, so check `action`, not exit status.
-
-<!-- /decision-point: id=configure-tune-gate-policy -->
-
 ### Auto-checkpoint (the compaction mod)
 
 With the compaction mod, an interactive session (or a desktop-app Code session) checkpoints its notes and compacts itself once the context passes a threshold; a heads-up band above the prompt offers **Now** and **Snooze** shortly before. Three plugin settings:

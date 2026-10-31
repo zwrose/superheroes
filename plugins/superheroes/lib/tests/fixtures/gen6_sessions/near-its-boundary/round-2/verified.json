@@ -1,0 +1,1 @@
+{"findings":[{"classification":"mechanical","consequence":"a reviewer-found defect stays in the change","file":"newsurf.py","findingKey":"newsurf.py::scoped2@L1","id":"v0","line":1,"raisedRound":2,"raisedSeq":3,"severity":"Important","title":"scoped-2","verdict":"PLAUSIBLE"}]}

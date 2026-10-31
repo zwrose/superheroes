@@ -1,0 +1,10 @@
+{"appendId":"6fcf07fb256246a8be120ff250690b45#13","attempt":0,"cmd":"next","fault":"caller-error","manifestSha256":"07c1a34ccdf3d4b7bf12bee67f26c1130051be1c37c3a3ea2223e1abb7fa02da","outcome":"orders-emitted","phase":"dispatch-panel","round":1,"session":"1eded151b404b070f7d5fa0d2a26e4b2"}
+{"attempt":0,"cmd":"next","outcome":"emitted","phase":"dispatch-panel","round":1,"ts":1793250634.4053364}
+{"appendId":"860b387412b74c99838f8658ab7466bc#2","attempt":0,"cmd":"submit","fault":"caller-error","outcome":"accepted","phase":"dispatch-panel","round":1,"session":"1eded151b404b070f7d5fa0d2a26e4b2"}
+{"appendId":"14a770fce6614157aa88e46cd9c56958#6","attempt":0,"cmd":"next","fault":"caller-error","manifestSha256":"3074001f1c9c89fead1c8c27859f7d8b986204ff4496965b6da3ab8f90e1a531","outcome":"orders-emitted","phase":"dispatch-verifiers","round":1,"session":"1eded151b404b070f7d5fa0d2a26e4b2"}
+{"attempt":0,"cmd":"next","outcome":"emitted","phase":"dispatch-verifiers","round":1,"ts":1793250634.5539253}
+{"appendId":"c840c93f23df42c88ac6a717c2fba94f#2","attempt":0,"cmd":"submit","fault":"caller-error","outcome":"accepted","phase":"dispatch-verifiers","round":1,"session":"1eded151b404b070f7d5fa0d2a26e4b2"}
+{"appendId":"501fb5cf7f254627a6dccd2cc34027e9#6","attempt":0,"cmd":"next","fault":"caller-error","manifestSha256":"6b1eb970db2ee6f5f4a03912f268a0f126a5f64ddb68fe635d0d6a383673d98a","outcome":"orders-emitted","phase":"dispatch-synthesis","round":1,"session":"1eded151b404b070f7d5fa0d2a26e4b2"}
+{"attempt":0,"cmd":"next","outcome":"emitted","phase":"dispatch-synthesis","round":1,"ts":1793250634.7081594}
+{"appendId":"72b5610da4bd4ea5b32c59ff41f727d0#2","attempt":0,"cmd":"submit","fault":"caller-error","outcome":"accepted","phase":"dispatch-synthesis","round":1,"session":"1eded151b404b070f7d5fa0d2a26e4b2"}
+{"attempt":0,"cmd":"next","outcome":"emitted","phase":"present-judgment","round":1,"ts":1793250634.7535207}

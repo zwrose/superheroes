@@ -86,6 +86,7 @@ _EXPECTED_CMD_NAMES = (
     "cmd_attest",
     "cmd_checkpoint",
     "cmd_correct_fixer_refusals",  # rewrites the pending fixer landing + journal; no durable seat records
+    "cmd_extra_audit",  # session state + mirror + one journal row, copies the receipt to round-receipt.superseded-1.json; no durable seat records
     "cmd_next",
     "cmd_record_missing",
     "cmd_record_result",

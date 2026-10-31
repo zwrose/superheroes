@@ -9,7 +9,7 @@ and the plugin root `<plugin root>`.
 
 The oracle is the hook's own `decide` (`hooks/plugin_scripts_allow.py`): each call form found in the
 skill text is rendered with real paths and handed to `decide`. It must be approved, except the
-round driver's `run-verify` and `rule` verbs and any `round_driver.py` call carrying
+round driver's `run-verify`, `rule` and `extra-audit` verbs and any `round_driver.py` call carrying
 `--verify-command`, `--break-it-interpreter` or `--records-path`, which the hook leaves to the normal
 permission check on purpose and which this module asserts are NOT approved.
 
@@ -69,7 +69,10 @@ _FORBIDDEN_ROOT_DIR = re.compile(
 )
 _NAMES_NINE = re.compile(r"(?<![A-Za-z0-9_])(?:%s)\.py" % _NINE_ALT)
 _SESSION_DIR_VAR = re.compile(r"--session-dir[ =]\"?\$\{?SESSION_DIR\}?\"?")
-_UNAPPROVED_DRIVER_VERBS = ("run-verify", "rule")
+_UNAPPROVED_DRIVER_VERBS = ("run-verify", "rule", "extra-audit")
+# the unapproved verbs the population must show a form of; `extra-audit` is asserted not approved when
+# a form is found, but no form of it is required
+_REQUIRED_DRIVER_FORMS = ("run-verify", "rule")
 _UNAPPROVED_DRIVER_FLAGS = ("--verify-command", "--break-it-interpreter", "--records-path")
 
 Form = namedtuple("Form", "rel line nth text")
@@ -192,7 +195,7 @@ def _population_problems(forms):
     if len(forms) < POPULATION_FLOOR:
         problems.append("population %d is below the floor %d" % (len(forms), POPULATION_FLOOR))
     verbs = {_driver_verb(f.text) for f in forms}
-    for verb in _UNAPPROVED_DRIVER_VERBS:
+    for verb in _REQUIRED_DRIVER_FORMS:
         if verb not in verbs:
             problems.append("no round_driver.py %s form in the population" % verb)
     return problems

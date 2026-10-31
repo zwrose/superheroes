@@ -391,6 +391,17 @@ def test_run_verify_gets_no_decision_whatever_the_session_state_holds(tmp_path):
     assert _decide(_payload(nxt)) is False
 
 
+def test_extra_audit_gets_no_decision(tmp_path):
+    # axis: the driver's `extra-audit` verb reopens a finished session and reads the PR's comments, so
+    # like `rule` it is not on the verb list and is left to the normal permission check
+    d = str(tmp_path)
+    order = str(tmp_path / "order.md")
+    extra_audit = f"python3 -B {DRIVER} extra-audit --session-dir {d} --order-file {order} --by advisor --pr 1"
+    nxt = f"python3 -B {DRIVER} next --session-dir {d}"
+    assert _decide(_payload(extra_audit)) is False
+    assert _decide(_payload(nxt)) is True
+
+
 # --- the session's saved state must be the driver's own ------------------------
 
 _STATE = b'{"config":{"verifyCommand":"none"},"round":1}'

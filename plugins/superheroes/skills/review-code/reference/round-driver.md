@@ -8,6 +8,7 @@
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Round economy](#round-economy)
 - [Rounds, the cap and handback](#rounds-the-cap-and-handback)
+- [The extra audit round](#the-extra-audit-round)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
 - [Dispositions](#dispositions)
 - [Actions and payloads](#actions-and-payloads)
@@ -31,8 +32,7 @@ audits over the just-fixed findings plus a scoped finder over the fix's new surf
 runs again only on the confirmation re-arm triggers (Critical surfaced since the last qualifying panel, or
 cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). On
 the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
-calls `next`, dispatches the emitted order (or fulfills a gate action), and `submit`s the
-artifact.
+calls `next`, dispatches the emitted order, and `submit`s the artifact.
 
 Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
 keys of the previous round's fix batch>]}` for a delta round, or `{"on": "wider", "why": "<the
@@ -689,7 +689,8 @@ and its verify gate, and then the session hands the PR back.
 - **The cap round ends with something open.** The session hands back through the one handback
   terminal (`_hand_back` in `lib/round_driver.py`), verdict `handed-back`, last decision
   `round-cap`, with every open finding, Important and Critical alike, each with its outcome. There
-  is no park or held state, no automatic extra round, and no new session started to keep going.
+  is no park or held state, no automatic extra round (the advisor may order one audit round, § The
+  extra audit round), and no new session started to keep going.
 - **The same fix fails its audit in two rounds in a row.** The session makes one automatic recovery
   attempt: the fix is re-dispatched one rung up. No recovery attempt runs when the second failure is
   in the cap round. If the fix still fails after the recovery attempt, the session hands back with
@@ -701,12 +702,87 @@ and its verify gate, and then the session hands the PR back.
   back with `handed-back` / `owner-choice-open`, and the finding reaches the owner as a leftover at
   the vet, framed in owner terms.
 - **Nothing from the review reaches the owner mid-review.** The driver emits no owner-facing step,
-  accepts no owner artifact on `advance`, and no gate policy resolves one.
+  and accepts no owner artifact on `advance`. No setting or saved calibration stands in for the owner
+  at a step, because there is no such step.
 
-The three `handed-back` decision kinds are `round-cap`, `fix-keeps-failing` and
-`owner-choice-open`. The result file maps `converged` to `exit_clean` and every other verdict to
-`halt`. The review record reads rounds as `<count> of <cap>` and says the loop stopped at its cap for
-`round-cap` ([review-record.md](review-record.md)).
+The four `handed-back` decision kinds are `round-cap`, `fix-keeps-failing`, `owner-choice-open` and
+`extra-audit-open` (§ The extra audit round). The result file maps `converged` to `exit_clean` and
+every other verdict to `halt`. The review record reads rounds as `<count> of <cap>` and says the
+loop stopped at its cap for `round-cap` and `extra-audit-open` ([review-record.md](review-record.md)).
+
+## The extra audit round
+
+When a session hands the PR back at the cap with a fix the cap round applied and no audit checked,
+the advisor may order one [extra audit round](../../../rubric/glossary.md#extra-audit-round) at the
+vet. At most one is allowed per PR, across all its sessions. The build session that holds the
+handed-back session directory orders it:
+
+```bash
+python3 -B <plugin root>/lib/round_driver.py extra-audit --session-dir <session dir> --order-file <the order file> --by <who> --pr <N>
+```
+
+`--repo <owner/name>` is optional: append it to that line to name the PR's repository. The order
+file is the JSON object `{"why": "<non-blank reason>"}`, with no other key. The build session
+then carries on with the normal `next` / `advance` loop to the terminal and writes the review record
+as usual.
+
+**The refusals,** checked in this order. Each refuses with nothing changed but a journal row.
+
+1. The shared lock, upgrade and commit-recovery refusals.
+2. `extra-audit-state-unreadable`.
+3. `extra-audit-order-invalid`.
+4. `extra-audit-already-run`: this session already ran one. This comes before the at-cap check
+   because a session that ran its extra round ends on that round's own terminal, never on the cap's.
+5. `extra-audit-not-at-cap`: the session is not `handed-back` with last decision `round-cap` or
+   `fix-keeps-failing`.
+6. `extra-audit-nothing-to-audit`: no fix the cap round applied is unaudited. A `fix-keeps-failing`
+   handback always lands here, because its last fix was already audited.
+7. `extra-audit-head-unresolvable` and `extra-audit-head-moved`: the checkout's HEAD is not the
+   session's certified head.
+8. `extra-audit-receipt-faulted` (the finalized-receipt check): the finalized receipt fails its
+   on-disk check.
+9. `extra-audit-pr-history-unreadable` (the first PR-history read): the repository could not be
+   resolved from the session checkout, or the PR's comments could not be listed, or a review-record
+   comment on it does not parse, or an extra-audit reservation comment names no session. This fails
+   closed.
+10. `extra-audit-already-run-on-pr` (the first PR-history read): an earlier review record on the PR
+    shows an extra audit round, or another session already posted its reservation comment on the PR.
+11. `extra-audit-reservation-failed`: the reservation comment could not be posted. Once every check
+    above passes, and before the receipt copy and the state commit, the verb posts one comment on the
+    PR (first line `<!-- superheroes:extra-audit-reserved -->`, then the session id and the order's
+    why). A reservation from the same session does not count, so a re-run after a crash carries on.
+    A refusal after this point leaves the reservation comment on the PR.
+12. `extra-audit-pr-history-unreadable` (the re-read after the reservation is posted): the verb reads
+    the PR's comments again, and the re-read fails for any reason item 9 names. This fails closed.
+13. `extra-audit-already-run-on-pr` (the re-read): another session's reservation, or a review record
+    showing the extra round, has a lower comment id than this session's own reservation. The first
+    reservation posted wins; the loser keeps its reservation in place and refuses.
+14. `extra-audit-receipt-faulted` (the superseded-copy check): the receipt cannot be copied to its
+    superseded name, the copy does not match it, or an existing superseded copy does not match it.
+
+**The round.** The verb reopens the session as round 5, the cap plus one. That round dispatches
+**only `dispatch-audits`**, over the cap round's fixes. It runs no panel, scoped finder, gap sweep,
+verifiers, synthesis, fixer or verify run. A surface the round cannot derive hands back
+`extra-audit-open` instead of scheduling a panel.
+
+**The two ends.**
+
+- **Every fix discharged, nothing else blocking.** The session ends `converged` through the normal
+  convergence check, which still hands back a held owner choice as `owner-choice-open`.
+- **Otherwise** it ends `handed-back` with the decision kind `extra-audit-open`, which counts as a
+  stop at the cap. An auditor's new issue in that round is not searched or fixed; it is left open for
+  the vet.
+
+**The receipt.** The finalized `round-receipt.json` is copied, byte for byte, to
+`round-receipt.superseded-1.json` before the state is reopened. It is never moved or deleted. The
+extra round's terminal then writes a fresh `round-receipt.json`. A crash between the copy and the
+state commit leaves the original session as it was, and a re-run carries on.
+
+**The record.** `rounds.count` does not count the extra round. `rounds.extraAudit` is
+`{"why": …}`. `stoppedAtCap` is true for `extra-audit-open`. The record writer also refuses
+`review-record-extra-audit-repeated`: an account showing the extra round, when an earlier readable
+record from another session on the PR shows one too. That is a backstop; the verb's own check comes
+first. The fields are described in [review-record.md](review-record.md).
 
 ## Lens coverage beside counts
 
@@ -878,18 +954,27 @@ example the finding keys this driver mints), so resuming under a plugin other th
 minted the session can apply the wrong disposition. Recorded rows that carry no cited-head
 derivation are read as they were recorded, not refused.
 
-**A session of an earlier generation is not continued.** State the driver mints carries
-`sessionGeneration`, set to the integer `7`; the key is written only when state is minted and is
-never added to a loaded state. Generation 7 is current; any other value, `6` included, is earlier.
-A saved state is from an earlier generation when it is a
-JSON object whose `sessionGeneration` is absent or is anything other than the integer `7`, or whose
-`schemaVersion` is an integer the driver still supports (`2`, `3` or `4`) that is older than the
-current state version, `5`. Any other `schemaVersion` (`1`, a later one, a non-integer, `true`, or
-`null`) is not such a session: the state loader refuses it as unsupported and no restart marker
-is written. While such a session is unfinished (its `terminal` is empty), every driver command on
-it — `next`, `submit`, `record-result`, `record-missing`, `advance`, `attest`, `checkpoint` and
-`rule` — answers, before it recovers a commit, reads or writes the journal, mints a session id,
-emits an order, records or folds:
+**A session of generation 6 at state version 5 finishes; every other earlier session is not
+continued.** State the driver mints carries `sessionGeneration`, set to the integer `7`; the key is
+written only when state is minted and is never added to a loaded state. Generation 7 is current.
+
+An unfinished session of generation 6, at the current state version, `5`, is not refused. It
+finishes under the round cap it recorded at its start, its stored `maxRounds` (often 7). That cap is
+applied as the round boundary, with no ceiling above it and no owner gate. A session of generation 6
+that is waiting at a retired gate hands back: waiting at the judgment gate, it ends `handed-back` /
+`owner-choice-open`, and the gate's findings show as owner-choice leftovers; waiting at the stall
+menu, it ends `handed-back` / `fix-keeps-failing`. Its `sessionGeneration` stays `6` on disk.
+
+A saved state is from an earlier generation that is not continued when it is a JSON object whose
+`sessionGeneration` is absent, is not an integer, or is an integer other than `7` and other than
+`6` (`5` and older included), or whose `sessionGeneration` is `6` and whose `schemaVersion` is not
+`5`; or whose `schemaVersion` is an integer the driver still supports (`2`, `3` or `4`) that is older
+than the current state version, `5`. Any other `schemaVersion` (`1`, a later one, a non-integer,
+`true`, or `null`) is not such a session: the state loader refuses it as unsupported and no restart
+marker is written. While such a session is unfinished (its `terminal` is empty), every driver
+command on it — `next`, `submit`, `record-result`, `record-missing`, `advance`, `attest`,
+`checkpoint`, `rule` and `extra-audit` — answers, before it recovers a commit, reads or writes the
+journal, mints a session id, emits an order, records or folds:
 
 ```json
 {"ok": false, "reason": "session-from-earlier-version", "restart": "fresh-session",
@@ -989,7 +1074,7 @@ abandoned session.
   (required) and `executionEvidence` (optional), bound together by `envelopeSha256`; sessions at v2–v4
   continue to land `seat-result/1`. No stored state field is removed at the bump, so in-flight lanes
   complete on their recorded version.
-- `verdict` — the terminal verdicts the driver writes are `converged`, `handed-back`, `halted` (a verify failure), `cannot-certify` and the attested `uncertified-manual`. `held`, `stalled`, `capped-with-open-critical` and `capped-with-open-blocker` are never written; a reader meets them only in the state of a finished session of an earlier generation. A `handed-back` receipt names its decision kind (§ Rounds, the cap and handback). The result file maps `converged` to `exit_clean` and every other verdict to `halt`.
+- `verdict` — the terminal verdicts the driver writes are `converged`, `handed-back`, `halted` (the verify gate failed or did not run, a head that now needs a larger seat map than the session was composed with, or the library `run_loop` guard tripping; § Certification shapes), `cannot-certify` and the attested `uncertified-manual`. `held`, `stalled`, `capped-with-open-critical` and `capped-with-open-blocker` are never written; a reader meets them only in the state of a finished session of an earlier generation. A `handed-back` receipt names its decision kind (§ Rounds, the cap and handback). The result file maps `converged` to `exit_clean` and every other verdict to `halt`.
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted
@@ -1062,7 +1147,8 @@ on one: what a review rests on is the review record (`skills/review-code/referen
 - **Handback at the cap** — `handed-back` / `round-cap`: round 4 ended with something open. Every open finding, Important and Critical alike, is listed with its outcome; the PR goes back to its owner.
 - **Handback after a failed recovery** — `handed-back` / `fix-keeps-failing`: the fix still fails its audit after the recovery attempt.
 - **Handback on an owner's choice** — `handed-back` / `owner-choice-open`: a finding only the owner's choice can settle is still open when nothing else is left to fix. It reaches the owner as a leftover at the vet.
-- **Verify failure** — terminal `halted`, certification withheld.
+- **Extra audit unfinished** — `handed-back` / `extra-audit-open`: the extra audit round ended with a fix undischarged, an auditor's new issue, or a surface it could not derive (§ The extra audit round).
+- **Halted** — terminal `halted`, certification withheld, in three cases. The verify gate stops the session (`verify-fail`: the verify command failed; `verify-skip-but-configured`: it reported a skip although a verify command is configured; `verify-unresolved`: its result was neither pass nor skip). A head that now touches a risk area the session's smaller seat map was not composed for stops it (`lane-expanded-recompose`); the review restarts in a fresh session with a freshly composed map. The library `run_loop` stops a loop that has not reached a terminal after its step guard, and writes no decision kind. A finished session of an earlier generation can also read `halted` / `round-ceiling`; the driver no longer writes it.
 
 **Library `recordsPath` / `round-records.json` seam.** When config carries
 `recordsPath`, each in-memory ledger record is written through `review_memory.summarize_record` (a
