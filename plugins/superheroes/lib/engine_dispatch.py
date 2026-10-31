@@ -3277,12 +3277,16 @@ PLACEHOLDER_BASELINE_NAME = "placeholder-baseline.json"
 PLACEHOLDER_LEFT_CAP = 100
 
 
+def _raise(exc):
+    raise exc
+
+
 def _walk_kept(root, skip_rels, deadline, clock):
     """Yield (prefix, dirnames, filenames, dirfd, pruned) under ``root`` top-down, pruning `.git`,
     the ``skip_rels`` subtrees and other devices, never following symlinks. Raises TimeoutError
-    once ``deadline`` passes."""
+    once ``deadline`` passes, and the OSError of any directory it cannot read."""
     root_dev = None
-    walker = os.fwalk(root, topdown=True, follow_symlinks=False)
+    walker = os.fwalk(root, topdown=True, onerror=_raise, follow_symlinks=False)
     try:
         for dirpath, dirnames, filenames, dirfd in walker:
             if clock() > deadline:
@@ -3324,12 +3328,14 @@ def _placeholder_snapshot(cwd_real, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SEC
         skip = _nested_rels(cwd_real)
         if skip is None:
             return {"status": "incomplete", "reason": "worktree-enumeration-failed"}
+        root = os.lstat(cwd_real)
         paths, pruned = [], sorted(skip)
         for prefix, dirnames, filenames, _fd, cut in _walk_kept(
                 cwd_real, skip, clock() + budget_seconds, clock):
             paths.extend(prefix + name for name in dirnames + filenames)
             pruned.extend(cut)
-        return {"status": "ok", "paths": paths, "pruned": pruned}
+        return {"status": "ok", "root": [root.st_dev, root.st_ino], "paths": paths,
+                "pruned": pruned}
     except TimeoutError:
         return {"status": "incomplete", "reason": "budget-exhausted"}
     except Exception as exc:
@@ -3352,12 +3358,16 @@ def _is_placeholder(st):
 def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
                         clock=time.monotonic):
     """Remove the placeholders a claude write run left; report every other new path. Never raises."""
-    removed, new, dirs = [], [], []
+    removed, new, dirs, modes = [], [], [], {}
     out = {"removed": removed, "left": [], "leftCount": 0, "incomplete": False, "error": None}
     try:
         if not isinstance(baseline, dict) or baseline.get("status") != "ok":
             reason = baseline.get("reason") if isinstance(baseline, dict) else None
             out.update(incomplete=True, error="baseline-" + (reason or "missing"))
+            return out
+        root = os.lstat(cwd_real)
+        if stat.S_ISLNK(root.st_mode) or [root.st_dev, root.st_ino] != baseline.get("root"):
+            out.update(incomplete=True, error="root-changed")
             return out
         before = set(baseline.get("paths") or ())
         skip = _nested_rels(cwd_real)
@@ -3372,7 +3382,16 @@ def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BU
                     continue
                 try:
                     if _is_placeholder(os.stat(name, dir_fd=dirfd, follow_symlinks=False)):
-                        os.unlink(name, dir_fd=dirfd)
+                        try:
+                            os.unlink(name, dir_fd=dirfd)
+                        except PermissionError:
+                            # a non-root sweep inside a new read-only dir: give the owner write
+                            # on that dir alone, and put its mode back below if it stays
+                            if not prefix or prefix[:-1] in before:
+                                raise
+                            modes.setdefault(prefix[:-1], os.fstat(dirfd).st_mode)
+                            os.fchmod(dirfd, modes[prefix[:-1]] | stat.S_IWUSR)
+                            os.unlink(name, dir_fd=dirfd)
                         removed.append(prefix + name)
                         continue
                 except OSError:
@@ -3383,9 +3402,12 @@ def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BU
         for rel in sorted(dirs, key=lambda p: p.count("/"), reverse=True):
             path = os.path.join(cwd_real, *rel.split("/"))
             try:
-                if _is_placeholder(os.lstat(path)):
+                st = os.lstat(path)
+                # judged by the mode it had before the sweep lent it owner write
+                if stat.S_ISDIR(st.st_mode) and (modes.get(rel, st.st_mode) & 0o222) == 0:
                     os.rmdir(path)
                     removed.append(rel)
+                    modes.pop(rel, None)
                     continue
             except OSError:
                 pass
@@ -3394,6 +3416,11 @@ def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BU
         out["incomplete"] = True
     except Exception as exc:
         out.update(incomplete=True, error=type(exc).__name__)
+    for rel, mode in modes.items():
+        try:
+            os.chmod(os.path.join(cwd_real, *rel.split("/")), stat.S_IMODE(mode))
+        except OSError:
+            pass
     new.sort()
     out.update(left=new[:PLACEHOLDER_LEFT_CAP], leftCount=len(new))
     return out
@@ -3415,7 +3442,8 @@ def _fold_placeholder_sweep(run_dir_real, state):
                 baseline = json.load(fh)
         except (OSError, ValueError):
             baseline = None
-        return _sweep_placeholders(os.path.realpath(cwd), baseline)
+        # never realpath here: a root replaced by a symlink must fail the identity check
+        return _sweep_placeholders(cwd, baseline)
     except Exception as exc:
         return {"removed": [], "left": [], "leftCount": 0, "incomplete": True,
                 "error": type(exc).__name__}

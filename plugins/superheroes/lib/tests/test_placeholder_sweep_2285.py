@@ -3,6 +3,7 @@
 Invariant: after a claude write run folds, the worktree holds no path that is new since the
 before-run snapshot, empty and read-only; a path the snapshot holds is never removed, a new path
 with content (or a write bit) is left and reported, and without a complete snapshot nothing goes."""
+import json
 import os
 
 # The write-dispatch suite's helpers and its autouse tmp-base/journal-root/uv-absent fixture.
@@ -143,6 +144,76 @@ def test_sweep_spares_git_symlinks_and_unwalked_subtrees(tmp_path):
     assert out["removed"] == []
     assert os.path.isfile(in_vendor) and os.path.isfile(target)
     assert sorted(out["left"]) == ["linked", "linked-file"]
+
+
+# axis: a directory the snapshot cannot open makes it incomplete, never a silent gap.
+def test_snapshot_unreadable_subtree_is_incomplete(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    locked = os.path.join(wt, "locked")
+    os.makedirs(locked)
+    _placeholder_file(wt, "locked/.bashrc")
+    real_open = ED.os.open
+
+    def guarded_open(path, flags, mode=0o777, *, dir_fd=None):
+        if path == "locked":
+            raise PermissionError(13, "Permission denied", path)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+    monkeypatch.setattr(ED.os, "open", guarded_open)
+    baseline = _snapshot(wt)
+    monkeypatch.undo()
+    assert baseline == {"status": "incomplete", "reason": "PermissionError"}
+    out = _sweep(wt, baseline)
+    assert out["removed"] == [] and out["error"] == "baseline-PermissionError"
+    assert os.path.isfile(os.path.join(locked, ".bashrc"))
+
+
+# axis: a worktree root replaced by a symlink after the snapshot is never swept.
+def test_root_replaced_by_symlink_is_not_swept(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    other = tmp_path / "other"
+    other.mkdir()
+    victim = _placeholder_file(other, ".bashrc")
+    os.rename(wt, str(tmp_path / "moved"))
+    os.symlink(str(other), wt)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / ED.PLACEHOLDER_BASELINE_NAME).write_text(json.dumps(baseline), encoding="utf-8")
+    out = ED._fold_placeholder_sweep(str(run_dir), {"opened": {
+        "runKind": ED.RUN_KIND_WRITE, "engine": "claude", "cwd": wt}})
+    assert out["removed"] == [] and out["error"] == "root-changed"
+    assert os.path.isfile(victim)
+
+
+# axis: placeholders inside a new read-only dir go, for a non-root sweep too.
+def test_placeholders_inside_new_read_only_dir_are_removed(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    parent = os.path.join(wt, ".claude")
+    _placeholder_file(wt, ".claude/settings.json")
+    os.chmod(parent, 0o555)
+    out = _sweep(wt, baseline)
+    assert out["removed"] == [".claude/settings.json", ".claude"], out
+    assert not os.path.lexists(parent)
+
+
+# axis: a new read-only dir that stays keeps its own mode after the sweep.
+def test_new_read_only_dir_that_stays_keeps_its_mode(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    parent = os.path.join(wt, ".idea")
+    _placeholder_file(wt, ".idea/workspace.xml")
+    with open(os.path.join(parent, "notes.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x")
+    os.chmod(parent, 0o555)
+    try:
+        out = _sweep(wt, baseline)
+        mode = os.stat(parent).st_mode & 0o777
+    finally:
+        os.chmod(parent, 0o755)
+    assert out["removed"] == [".idea/workspace.xml"]
+    assert out["left"] == [".idea", ".idea/notes.txt"]
+    assert mode == 0o555
 
 
 # --- wiring through the production open and fold ---------------------------------------------
