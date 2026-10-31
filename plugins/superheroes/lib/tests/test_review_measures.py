@@ -206,7 +206,8 @@ def test_a_window_before_the_rework_reads_cap_choices_unmeasured(since):
 def test_cap_choices_are_counted_with_what_happened_next():
     body = "\n".join([_cap("extra-audit-round", "k a"), _cap("rethink", "k2"), _cap("leftover", "k3")])
     recs = [_rec(1, "a", findings=[_f("k a", None)]),
-            _rec(1, "b", "2026-10-05T00:00:00Z", findings=[_f("k a"), _f("k2")]), _rec(2)]
+            dict(_rec(1, "b", "2026-10-05T00:00:00Z", findings=[_f("k a"), _f("k2")], count=2),
+                 rounds={"count": 2, "extraAudit": {"why": "cap"}}), _rec(2)]
     vets = [{"pr": 1, "at": "2026-10-04T00:00:00Z", "sentBack": False, "body": body},
             {"pr": 2, "at": "2026-10-04T00:00:00Z", "sentBack": False, "body": _cap("rethink")}]
     esc = [{"reviewedAt": "2026-10-03", "call": "seen-and-left", "pr": 1, "key": "k3"}]

@@ -15,7 +15,7 @@ read it unmeasured, with that reason, never zero:
   escapes       the misses log as `review_learning.py tally` reads it; an item may also name its "pr" and "key"
   vetReceipts   one item per vet receipt: {"pr", "at" (the receipt's time), "sentBack" (bool), "body" (its text)}
   capChoicesSince  the day the project adopted the release whose vet receipt records cap choices
-  costly        {"lateFindsOnUnchangedCode" | "repeatFindingLocations": {"basis": "monthly"|"sample", "value": n}}
+  costly        {"lateFindsOnUnchangedCode" | "repeatFindingLocations": {"basis": "monthly"|"sample", "value": n, "source": "where it came from"}}
 
 Counting rules (written fresh: the post-0.43 assessment's counting scripts did not reach this build):
   - A PR is in the window when one of its review records is dated (`writtenAt`) inside it; only in-window records count.
@@ -58,6 +58,11 @@ ROW_KEYS = ("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "l
 CAP_CHOICES = ("extra-audit-round", "leftover", "rethink")
 COSTLY = ("lateFindsOnUnchangedCode", "repeatFindingLocations")
 COSTLY_BASES = ("monthly", "sample")
+MEASURE_KEYS = {"roundsPerPr": ("median", "p90"), "sessionsPerPr": ("median", "p90", "shareOverOne"),
+                "reviewerCostPerPr": ("tokens", "minutes"), "ci": ("runsPerPr", "minutesPerPr", "suiteMedianMinutes"),
+                "panels": ("sizes", "withoutGrounding", "sessions"), "vetSendBacksOnCleanLoops": ("sentBack", "cleanLoopsVetted"),
+                "escapes": ("missed", "seenAndLeft", "falsePrClaims"), "capChoices": CAP_CHOICES,
+                **dict.fromkeys(COSTLY, ("basis", "value", "source"))}
 _CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
 _OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
 _day = review_learning._day
@@ -74,8 +79,9 @@ def _pr_ok(pr):
 
 
 def _rec_ok(r):
-    """A review record whole enough to count: identity, date, rounds, and every reviewer row and finding sound."""
-    return (isinstance(r, dict) and _pr_ok(r.get("pr")) and isinstance(r.get("sessionId"), str) and r["sessionId"].strip()
+    """A review record whole enough to count: identity, date, rounds, and every reviewer row and finding sound, and not
+    marked incomplete by its producer (`ok` false, or `unreadFiles` naming files; the rule of `review_learning.tally`)."""
+    return (isinstance(r, dict) and r.get("ok") is not False and r.get("unreadFiles") in (None, []) and _pr_ok(r.get("pr")) and isinstance(r.get("sessionId"), str) and r["sessionId"].strip()
             and _day(r.get("writtenAt"), whole=False) is not None and isinstance(r.get("rounds"), dict)
             and _num(r["rounds"].get("count")) is not None and isinstance(r["rounds"]["count"], int)
             and isinstance(r.get("reviewers"), list) and isinstance(r.get("findings"), list)
@@ -120,16 +126,22 @@ def _sum(vals, k):
 
 
 def _cap_outcome(choice, key, pr, later, escapes):
+    """What happened next. `later` is every valid record of the PR written after the vet, in or out of the window;
+    `escapes` is the misses log, already known to be a list."""
     if choice == "leftover":
-        hit = any(isinstance(e, dict) and _pr_ok(e.get("pr")) and str(e["pr"]) == pr and e.get("key") in (None, key)
-                  for e in escapes if isinstance(escapes, list))
+        hit = any(isinstance(e, dict) and e.get("marker") != review_learning.FALSE_CLAIM_MARKER and _pr_ok(e.get("pr"))
+                  and str(e["pr"]) == pr and e.get("key") in (None, key) for e in escapes)
         return "escaped" if hit else "not-escaped"
+    later = sorted(later, key=lambda r: r["writtenAt"])
+    if choice == "extra-audit-round":
+        later = [r for r in later if "extraAudit" in r["rounds"]]  # the follow-up R9 names: a record of the audit round
+    elif later:
+        later = [r for r in later if r["sessionId"] == later[0]["sessionId"]]  # the session that wrote first, at its latest
     if not later:
         return "pending"
-    last = _latest(later)
     if choice == "rethink":
-        return "converged" if _clean(last) else "not-converged"
-    found = [f for f in last["findings"] if (f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")) == key]
+        return "converged" if _clean(later[-1]) else "not-converged"
+    found = [f for f in later[0]["findings"] if (f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")) == key]
     return "settled" if found and all(f.get("outcome") not in _OPEN for f in found) else "not-settled"
 
 
@@ -143,12 +155,13 @@ def compute(inp, start, end, written_at=None):
         return UNMEASURED
 
     recs, prs, sessions = inp.get("records"), collections.defaultdict(list), collections.defaultdict(dict)
-    whole = isinstance(recs, list)
+    every, whole = collections.defaultdict(list), isinstance(recs, list)  # every: valid records by PR, in the window or not
     for r in recs if whole else []:
         if not _rec_ok(r):
             left["malformed"] += 1
             whole = False
             continue
+        every[str(r["pr"])].append(r)
         if not start <= _day(r["writtenAt"], whole=False) <= end:
             left["outsideWindow"] += 1
             continue
@@ -193,7 +206,7 @@ def compute(inp, start, end, written_at=None):
                     costs[s][1].append(_cost(row, "minutes"))
         m["seats"] = {}
         for s in sorted(set(outcomes) | set(costs)):
-            shown = {"outcomes": dict(outcomes[s])}
+            shown = {"outcomes": {o: outcomes[s][o] for o in (*review_findings_schema.OUTCOMES, "open")}}
             for k, vals in zip(("tokens", "minutes"), costs[s] if s in costs else ([], [])):
                 total = _sum(vals, k)
                 shown[k] = total if total is not None else miss("seats.%s.%s" % (s, k), "cost-not-recorded")
@@ -237,7 +250,7 @@ def compute(inp, start, end, written_at=None):
     for v in vets if isinstance(vets, list) else []:
         if not (isinstance(v, dict) and _pr_ok(v.get("pr")) and isinstance(v.get("sentBack"), bool)
                 and isinstance(v.get("at"), str) and _day(v["at"], whole=False) is not None
-                and isinstance(v.get("body", ""), str)):
+                and isinstance(v.get("body"), str)):
             bad_vet = True
         elif start <= _day(v["at"], whole=False) <= end:
             in_window.append(v)
@@ -255,24 +268,28 @@ def compute(inp, start, end, written_at=None):
     since = _day(inp.get("capChoicesSince"))
     cap_reason = ("no-cap-choices-since" if since is None else "before-cap-choice-recording" if start < since
                   else vet_reason)
-    found = [(v, mt.group(1), mt.group(2)) for v in in_window for mt in _CAP_RE.finditer(v.get("body", ""))]
-    if not cap_reason and any(choice not in CAP_CHOICES for _, choice, _ in found):
+    found = [(v, mt.group(1), mt.group(2)) for v in in_window for mt in _CAP_RE.finditer(v["body"])]
+    torn = any("<!-- superheroes:cap-choice" in ln and not _CAP_RE.search(ln) for v in in_window for ln in v["body"].splitlines())
+    if not cap_reason and (torn or any(choice not in CAP_CHOICES for _, choice, _ in found)):
         cap_reason = "incomplete-evidence"
+    if not cap_reason and m["escapes"] == UNMEASURED:  # a leftover's outcome reads the misses log
+        cap_reason = why["escapes"]
     if cap_reason:
         m["capChoices"] = miss("capChoices", cap_reason)
     else:
         m["capChoices"] = {c: {"count": 0, "outcomes": {}} for c in CAP_CHOICES}
         for v, choice, key in found:
             pr = str(v["pr"])
-            got = _cap_outcome(choice, key, pr, [r for r in prs.get(pr, []) if r["writtenAt"] > v["at"]], esc)
+            got = _cap_outcome(choice, key, pr, [r for r in every.get(pr, []) if r["writtenAt"] > v["at"]], esc)
             m["capChoices"][choice]["count"] += 1
             m["capChoices"][choice]["outcomes"][got] = m["capChoices"][choice]["outcomes"].get(got, 0) + 1
 
     costly = inp.get("costly") if isinstance(inp.get("costly"), dict) else {}
     for name in COSTLY:
         c = costly.get(name)
-        if isinstance(c, dict) and c.get("basis") in COSTLY_BASES and _num(c.get("value")) is not None:
-            m[name] = {"basis": c["basis"], "value": c["value"]}
+        if (isinstance(c, dict) and c.get("basis") in COSTLY_BASES and _num(c.get("value")) is not None
+                and isinstance(c.get("source"), str) and c["source"].strip()):
+            m[name] = {"basis": c["basis"], "value": c["value"], "source": c["source"]}
         else:
             m[name] = miss(name, "not-run-this-pass")
 
@@ -291,11 +308,19 @@ def problems(row):
     if (not isinstance(row, dict) or tuple(row) != ROW_KEYS or row.get("schema") != SCHEMA
             or not isinstance(row["measures"], dict) or not isinstance(row["unmeasured"], list)):
         return ["the row's keys are not %s" % (ROW_KEYS,)]
-    out = [] if tuple(row["measures"]) == MEASURES else ["the measures are not %s" % (MEASURES,)]
+    m, w = row["measures"], row.get("window")
+    out = [] if tuple(m) == MEASURES else ["the measures are not %s" % (MEASURES,)]
+    a, b = (_day(w.get(k)) if isinstance(w, dict) else None for k in ("from", "until"))
+    if a is None or b is None or b < a:
+        out.append("the window is not two ISO dates in order")
+    out += ["%s does not hold exactly %s" % (k, keys) for k, keys in MEASURE_KEYS.items()
+            if isinstance(m.get(k), dict) and set(m[k]) != set(keys)]
+    if isinstance(m.get("seats"), dict) and not all(isinstance(s, dict) for s in m["seats"].values()):
+        out.append("a seat is not a dict")
     named = {u.get("measure") for u in row["unmeasured"] if isinstance(u, dict) and u.get("reason")}
-    out += ["%s reads unmeasured with no reason" % k for k, v in row["measures"].items()
-            if v == UNMEASURED and k not in named]
-    if not all(isinstance(v, dict) or v == UNMEASURED for v in row["measures"].values()):
+    out += ["%s reads unmeasured with no reason" % path for path, v in _flat(m)
+            if v == UNMEASURED and not any(path == n or path.startswith("%s." % n) for n in named)]
+    if not all(isinstance(v, dict) or v == UNMEASURED for v in m.values()):
         out.append("a measure is neither a value nor unmeasured")
     return out
 
