@@ -139,6 +139,14 @@ and the receipt says that scrubbing happened.
 exists yet.** You never edit an issue body. The confirmed cause reaches the body through the
 advisor, after the vet.
 
+**Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present, stamp the
+lane heartbeat with `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp` per
+CONVENTIONS §15: one `working` stamp when diagnosis starts, `blocked` when blocked on something
+only the owner or advisor can clear, `working` again when it clears, `handback` only after the
+receipt comment is posted, and `parked` only after an honest-exit comment is posted. When it is
+absent the session is not advisor-managed, so never invent an id. A stamp is a local store
+write, not a tracker write, so the rule above is unchanged.
+
 **Done when:** your writes to the tracker are the receipt comment and, where no incident issue
 existed, that issue, with no issue body edited.
 

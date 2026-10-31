@@ -1,4 +1,4 @@
-"""Re-dispatched fixer orders carry prior audit and gate rulings (#1272 WO-4)."""
+"""A re-set apply-fixes step carries prior audit and gate rulings (#1272 WO-4)."""
 import ast
 import json
 import os
@@ -6,22 +6,10 @@ import os
 import pytest
 
 import audits
-import round_phases as RP
 import round_records as RR
 import session_contract as SC
 
 import round_driver as RD
-
-
-def _minimal_paths(session_dir):
-    return {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
 
 
 def _guidance_disposition(fid, title, guidance, *, file="g.py", line=5):
@@ -74,17 +62,19 @@ def _specimen_state(tmp_path, rnd=3):
 
 
 def _fixer_render(tmp_path, state, rnd=None):
+    """The apply-fixes step's guidance prose (the no-guidance sentinel when it has no guidance file)
+    under the `GATE_GUIDANCE` key, and the batch file it names."""
     rnd = rnd if rnd is not None else state["round"]
     session_dir = str(tmp_path / "redispatch-session")
     os.makedirs(session_dir, exist_ok=True)
     _write_session_meta(session_dir, str(tmp_path))
-    paths = _minimal_paths(session_dir)
-    ph = RD._order_placeholders(
-        RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, rnd, paths, RD.CHANNEL_FILE,
-    )
-    fix_batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
-    with open(fix_batch_path, encoding="utf-8") as fh:
+    fields = RD._apply_fixes_payload_fields(session_dir, state, rnd, 0)
+    guidance = RD._GATE_GUIDANCE_NO_GUIDANCE
+    if fields["guidancePath"] is not None:
+        with open(fields["guidancePath"], encoding="utf-8") as fh:
+            guidance = fh.read()
+    ph = {"GATE_GUIDANCE": guidance}
+    with open(fields["fixBatchPath"], encoding="utf-8") as fh:
         fix_batch = json.loads(fh.read())
     return ph, fix_batch, session_dir
 
@@ -109,26 +99,6 @@ def test_redispatch_carries_prior_audit_and_gate_guidance_from_earlier_rounds(tm
     assert "guidance" not in row_k.get("gateRuling", {})
     row_k2 = next(r for r in fix_batch if r.get("findingKey") == _K2)
     assert row_k2["gateRuling"] == {"round": 1, "disposition": "fix-as-suggested"}
-
-
-def test_one_more_round_stall_path_carries_history_at_materializer(tmp_path):
-    """T2: _fold_stall one-more-round copies targets; materializer still decorates."""
-    state = _specimen_state(tmp_path)
-    state["_stallTargets"] = [dict(_ROW_K)]
-    RD._fold_stall(state, state["config"], {"choice": RD.ONE_MORE_ROUND_CHOICE})
-    assert state["step"] == RD.P_FIXER
-    session_dir = str(tmp_path / "stall-session")
-    os.makedirs(session_dir, exist_ok=True)
-    fix_batch_path = RD._ensure_fix_batch_file(session_dir, state["round"], state)
-    with open(fix_batch_path, encoding="utf-8") as fh:
-        fix_batch = json.loads(fh.read())
-    assert len(fix_batch) == 1
-    row = fix_batch[0]
-    assert row["priorAudit"]["ruling"] == "not-discharged"
-    assert row["priorAudit"]["round"] == 2
-    assert row["gateRuling"]["disposition"] == "fix-with-guidance"
-    assert row["gateRuling"]["round"] == 1
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in row
 
 
 def test_fix_batch_without_history_unchanged_and_no_guidance_block(tmp_path):
@@ -229,40 +199,6 @@ def test_history_row_key_follows_marker_not_row_id(tmp_path):
     assert row_k2["priorAudit"]["ruling"] == "discharged"
 
 
-def test_fold_judgment_stamps_finding_key_on_all_disposition_shapes():
-    """T7: _fold_judgment stamps findingKey on skip, fix-with-guidance, and fail-closed logs."""
-    skip_f = {"title": "defer this", "severity": "Important", "file": "s.py", "line": 1,
-              "tradeoff": True}
-    guidance_f = {"title": "narrow the API", "severity": "Minor", "file": "g.py", "line": 3,
-                  "tradeoff": True}
-    suggested_f = {"title": "just fix it", "severity": "Minor", "file": "j.py", "line": 7,
-                   "tradeoff": True}
-    fail_closed_f = {"title": "missing disposition", "severity": "Critical", "file": "f.py",
-                     "line": 5, "tradeoff": True}
-    state = RD.new_state({"leg": "code", "vendors": ["claude", "codex"], "diff": "d",
-                          "fixerVendor": "claude"})
-    RD._route_judgment_blockers(state, [dict(skip_f), dict(guidance_f), dict(suggested_f),
-                                         dict(fail_closed_f)])
-    ids = RD._judgment_row_ids(state["_judgmentFindings"])
-    assert len(ids) == 4
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": ids[0], "disposition": "skip", "reason": "defer the important one"},
-        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "narrow only"},
-        {"id": ids[2], "disposition": "fix-as-suggested", "reason": "ship the fix"},
-    ]})
-    log = state["rounds"][str(state["round"])]["judgmentDispositions"]
-    by_disp = {e["disposition"]: e for e in log if e.get("disposition") != "fix-as-suggested"}
-    for entry in log:
-        assert entry[SC.FINDING_KEY_FIELD] == entry["id"]
-    assert by_disp["skip"][SC.FINDING_KEY_FIELD] == ids[0]
-    assert by_disp["fix-with-guidance"][SC.FINDING_KEY_FIELD] == ids[1]
-    suggested = next(e for e in log
-                     if e.get("disposition") == "fix-as-suggested" and not e.get("failClosed"))
-    assert suggested[SC.FINDING_KEY_FIELD] == ids[2]
-    fail_closed = next(e for e in log if e.get("failClosed"))
-    assert fail_closed[SC.FINDING_KEY_FIELD] == ids[3]
-
-
 def test_apply_audit_results_copies_target_finding_key_marker():
     """T8: apply_audit_results copies findingKey from targets; absent marker → no key on row."""
     marked = {"id": "v0", SC.FINDING_KEY_FIELD: "f.py::bug@L1", "file": "f.py", "line": 1,
@@ -271,7 +207,9 @@ def test_apply_audit_results_copies_target_finding_key_marker():
               "title": "gap", "severity": "Minor"}
     unmarked = {"id": "v2", "file": "h.py", "line": 3, "title": "plain", "severity": "Minor"}
     targets = [marked, silent, unmarked]
-    results = [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}]
+    checks = {name: {"answer": "yes", "why": "checked"} for name in audits.CHECK_NAMES}
+    results = [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex",
+                "checks": checks}]
     kwargs = {"expected_auditors": {"v0": "codex"}, "collection_manifest": {"v0": "codex"}}
     out = audits.apply_audit_results(
         targets, results, carry_fields=(SC.FINDING_KEY_FIELD,), **kwargs,

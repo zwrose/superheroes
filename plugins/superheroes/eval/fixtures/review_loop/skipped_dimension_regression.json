@@ -19,5 +19,5 @@
   ],
   "expectedTerminal": "halted",
   "mustNotPass": true,
-  "maxRounds": 5
+  "maxRounds": 7
 }

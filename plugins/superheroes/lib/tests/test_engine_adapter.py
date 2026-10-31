@@ -20,6 +20,10 @@ def _load():
 
 EA = _load()
 
+# The three checks every audit result owes, each answered `yes`.
+_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in ("right", "brokeNothing", "testWouldFail")}
+
+
 def _seat(vendor, model, effort):
     return {"vendor": vendor, "model": model, "effort": effort}
 
@@ -2386,7 +2390,7 @@ def test_findings_member_parse_and_shape_diagnostic_agree(member, expect_hollow)
     ("findings", {"findings": [{"severity": "Minor", "title": "t", "body": "b"}]}),
     ("verdicts", {"verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "ok"}]}),
     ("grouping", {"grouping": [{"member_ids": ["f1"]}]}),
-    ("ruling", {"id": "f1", "ruling": "discharged", "reason": "fixed"}),
+    ("ruling", {"id": "f1", "ruling": "discharged", "reason": "fixed", "checks": _CHECKS}),
 ])
 def test_review_payload_shape_valid_registered_kind_returns_none(kind, payload):
     # axis: registry-based recognition — valid payloads for all four kinds diagnose as clean
@@ -2404,7 +2408,8 @@ def test_review_payload_shape_diagnostics_registry_covers_every_result_kind():
     ("verdicts", {"verdicts": [{}]}, EA.SHAPE_VERDICTS_HOLLOW_MEMBER),
     ("verdicts", {"verdicts": "oops"}, EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST),
     ("grouping", {"grouping": [{"member_ids": []}]}, EA.SHAPE_OBJECT_WITHOUT_FINDINGS),
-    ("ruling", {"id": "", "ruling": "discharged", "reason": "x"}, EA.SHAPE_OBJECT_WITHOUT_FINDINGS),
+    ("ruling", {"id": "", "ruling": "discharged", "reason": "x", "checks": _CHECKS},
+     EA.SHAPE_OBJECT_WITHOUT_FINDINGS),
 ])
 def test_review_payload_shape_invalid_registered_kind_diagnoses(kind, payload, expected_parsed):
     # axis: registry-based recognition — invalid payloads get a shape label, not silent None
@@ -2416,7 +2421,7 @@ def test_review_payload_shape_invalid_registered_kind_diagnoses(kind, payload, e
 def test_review_payload_shape_valid_top_level_ruling_returns_none():
     # axis: ruling payload no longer mislabelled object-without-findings (#1145 B3)
     assert EA.review_payload_shape(json.dumps({
-        "id": "f1", "ruling": "discharged", "reason": "fixed",
+        "id": "f1", "ruling": "discharged", "reason": "fixed", "checks": _CHECKS,
     })) is None
 
 
@@ -3535,7 +3540,7 @@ _WELL_FORMED_REVIEW_PAYLOADS = {
     "findings": {"findings": [], "investigated": []},
     "verdicts": {"verdicts": [], "investigated": []},
     "grouping": {"grouping": [{"member_ids": ["f1"]}]},
-    "ruling": {"id": "f1", "ruling": "discharged", "reason": "fixed"},
+    "ruling": {"id": "f1", "ruling": "discharged", "reason": "fixed", "checks": _CHECKS},
 }
 
 _DOUBLE_MATCH_REVIEW_PAYLOADS = {
@@ -3546,6 +3551,7 @@ _DOUBLE_MATCH_REVIEW_PAYLOADS = {
         "id": "f1",
         "ruling": "discharged",
         "reason": "fixed",
+        "checks": _CHECKS,
         "grouping": [{"member_ids": ["g1"]}],
     },
 }
@@ -3600,7 +3606,8 @@ def test_parse_result_review_grouping_null_is_clean():
 
 
 def test_parse_result_review_ruling_recognised():
-    stdout = json.dumps({"id": "f1", "ruling": "discharged", "reason": "resolved in diff"})
+    stdout = json.dumps({"id": "f1", "ruling": "discharged", "reason": "resolved in diff",
+                         "checks": _CHECKS})
     res = EA.parse_result("codex", "review", stdout)
     assert res == {
         "ok": True,
@@ -3609,13 +3616,14 @@ def test_parse_result_review_ruling_recognised():
             "id": "f1",
             "ruling": "discharged",
             "reason": "resolved in diff",
+            "checks": _CHECKS,
         },
         "investigated": [],
     }
 
 
 def test_parse_result_review_ruling_out_of_enum_not_recognised():
-    stdout = json.dumps({"id": "f1", "ruling": "maybe-discharged", "reason": "x"})
+    stdout = json.dumps({"id": "f1", "ruling": "maybe-discharged", "reason": "x", "checks": _CHECKS})
     assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
 
 
@@ -3635,6 +3643,7 @@ def test_parse_result_review_ruling_new_issue_without_usable_new_issues_unreadab
         "id": "f1",
         "ruling": "discharged-but-new-issue",
         "reason": "introduced regression",
+        "checks": _CHECKS,
         "newIssues": [],
     })
     assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
@@ -3677,6 +3686,7 @@ def test_spot_check_investigated_absolute_path_stays_rejected():
         "id": "f1",
         "ruling": "discharged",
         "reason": "ok",
+        "checks": _CHECKS,
         "investigated": ["plugins/superheroes/lib"],
     }),
 ])
@@ -3700,6 +3710,7 @@ def test_spot_check_empty_kind_only_directory_does_not_clear_floor(stdout):
         "id": "f1",
         "ruling": "discharged",
         "reason": "ok",
+        "checks": _CHECKS,
         "investigated": [os.path.join(_REPO_ROOT, _ENGINE_ADAPTER_REL)],
     }),
 ])
@@ -3726,6 +3737,7 @@ def test_engagement_read_ruling_engaged():
             "id": "f1",
             "ruling": "discharged",
             "reason": "fixed",
+            "checks": _CHECKS,
         },
     }) == "engaged"
 
@@ -3764,6 +3776,7 @@ _REVIEW_KIND_SECRET_PAYLOADS = {
         "id": "f1",
         "ruling": "discharged",
         "reason": "log shows Authorization: Bearer %s" % _REVIEW_SECRET,
+        "checks": _CHECKS,
     },
 }
 
@@ -3778,7 +3791,7 @@ _REVIEW_KIND_POPULATED_ENVELOPE_PAYLOADS = {
         "grouping": [{"member_ids": ["f1"]}],
     },
     "ruling": {
-        "id": "f1", "ruling": "discharged", "reason": "ok",
+        "id": "f1", "ruling": "discharged", "reason": "ok", "checks": _CHECKS,
     },
 }
 
@@ -3819,12 +3832,12 @@ def test_review_result_kind_empty_payload_outer_envelope_error_unreadable(kind):
 
 @pytest.mark.parametrize("bad_id", [None, "", "   ", 42, {}])
 def test_parse_result_review_ruling_invalid_id_unreadable(bad_id):
-    stdout = json.dumps({"id": bad_id, "ruling": "discharged", "reason": "ok"})
+    stdout = json.dumps({"id": bad_id, "ruling": "discharged", "reason": "ok", "checks": _CHECKS})
     assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
 
 
 def test_parse_result_review_ruling_valid_id_still_parses():
-    stdout = json.dumps({"id": "f1", "ruling": "discharged", "reason": "resolved"})
+    stdout = json.dumps({"id": "f1", "ruling": "discharged", "reason": "resolved", "checks": _CHECKS})
     res = EA.parse_result("codex", "review", stdout)
     assert res["ok"] is True
     assert res["resultKind"] == "ruling"

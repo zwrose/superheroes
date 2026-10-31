@@ -28,6 +28,7 @@ GREEN = ({"total_count": 1, "check_runs": [{"name": "validate", "status": "compl
 GOOD_RUN = {"source": "codex", "engineModel": CODEX, "viewHeadSha": HEAD,
             "observation": {"tokens": 100, "wallSeconds": 120}, "graded": True, "runKind": "review"}
 KEY = "a.py::t@L3"
+WRONG = {"verdict": "wrong", "reason": "the verifier showed the cited line does not exist"}  # the grade the driver's verifier fold writes
 STANDING = "2026-01-02-abcd1234-1"
 CANON_SOURCES = {"canonText": canon.entry_line(STANDING, "2026-01-02", "standing", "a ruling",
                                                'owner\'s words: "go"', "issue thread")}
@@ -237,7 +238,7 @@ def test_the_fixers_family_joins_the_makers_and_the_session_marks_no_reviewer_in
     session = s.save()
     account = rs.account_from_session(session, extras(makers=[{"family": "other", "source": "the extras"}]))
     # bites on: the fixer's family missing from the makers, or the session marking independence (the record writer decides it)
-    assert account["makers"] == [{"family": "other", "source": "the extras"}, {"family": fam, "source": "review loop fixer", "fromStep": 3}]
+    assert account["makers"] == [{"family": "other", "source": "the extras"}, {"family": fam, "source": "build session's fixes", "fromStep": 3}]
     marks = {v["name"]: v.get("notIndependent") for v in account["reviewers"]}
     assert marks == {"code-reviewer (round 1)": None, "security-reviewer (round 1)": None}
     listed = rs.account_from_session(session, extras(makers=[{"family": fam, "source": "the extras"}]))
@@ -267,16 +268,15 @@ def test_an_unfilled_seat_is_listed_as_planned_and_not_run_even_with_no_slot_jou
     assert rows["code-reviewer (round 1)"]["ran"] is True
 
 
-def test_an_unfilled_seat_the_driver_never_schedules_is_not_a_missing_reviewer(tmp_path):
+def test_an_unfilled_retired_seat_in_an_older_map_is_no_reviewer_row_and_does_not_park(tmp_path):
     seat_map = {"seats": {"code-reviewer": {"vendor": "codex", "model": CODEX},
                           "grounding-seat": dict(UNFILLED_SEAT)}}
     s = Session(tmp_path, seatMapReceipts=[{"round": "1", "map": seat_map}])
     s.seat("code-reviewer")
     account = rs.account_from_session(s.save(), extras(), Fake().readers())
-    # bites on: a composed grounding seat (not on the driven path) missing from the account, or parking a complete review as a missing reviewer; it must be named as not run, never park
-    assert {v["name"] for v in account["reviewers"]} == {"code-reviewer (round 1)", "grounding-seat"}
-    grounding = next(v for v in account["reviewers"] if v["name"] == "grounding-seat")
-    assert grounding["ran"] is False and grounding["vendor"] == "unfilled" and grounding["notRunReason"] == "no-loop-phase"
+    # bites on: a seat the map names but no panel round schedules turning into a reviewer row, or parking a complete review
+    assert {v["name"] for v in account["reviewers"]} == {"code-reviewer (round 1)"}
+    assert not any("notRunReason" in v for v in account["reviewers"])
     assert send(tmp_path, s.dir, Fake())["parked"] is False
 
 
@@ -346,7 +346,7 @@ def _fixer_then_reviewer_account(tmp_path, review_round, original_makers=None):
 
 def test_a_reviewer_before_the_fix_is_judged_against_the_makers_it_faced(tmp_path):
     account, fake = _fixer_then_reviewer_account(tmp_path, 1, original_makers=["xai"])
-    fixer = next(m for m in account["makers"] if m["source"] == "review loop fixer")
+    fixer = next(m for m in account["makers"] if m["source"] == "build session's fixes")
     assert fixer["fromStep"] == 3 and account["reviewers"][0]["step"] == 2
     rec = rr.build_record(account, fake.readers())
     # bites on: a reviewer credited to an earlier commit demoted because its family later made a fix
@@ -379,7 +379,7 @@ def test_a_fixer_family_first_named_after_the_first_fix_keeps_its_delayed_start(
                              viewHeadSha=EARLIER), None)}
     account = rs.account_from_session(s.save(), extras(runDirs=["/run/n1"]), Fake(runs=runs).readers())
     # bites on: the cumulative union standing in for the original makers, dropping the fixer's fromStep entry
-    assert {"family": "anthropic", "source": "review loop fixer", "fromStep": 3} in account["makers"]
+    assert {"family": "anthropic", "source": "build session's fixes", "fromStep": 3} in account["makers"]
     assert not any(m["family"] == "anthropic" and "fromStep" not in m for m in account["makers"])
     assert {m["family"] for m in account["makers"]} == {"openai", "anthropic"}
 
@@ -424,7 +424,7 @@ OOS = {"disposition": "out-of-scope", "outOfScopeReason": "belongs to the follow
 RULED = {"findingKey": KEY, "ruling": "out-of-scope", "provenance": {"ruledBy": "the owner", "ruledAt": "2030-01-02"}}
 CASES = [
     pytest.param([ledger_row()], [], KEY, "fixed", "fixed and audited in round 2", id="fresh-fixed"),
-    pytest.param([ledger_row(disposition="refuted", refutedReason="the cited line does not exist")], [], KEY,
+    pytest.param([ledger_row(disposition="refuted", refutedReason="the cited line does not exist", grade=WRONG)], [], KEY,
                  "shown-wrong", "the cited line does not exist", id="verifier-refuted"),
     pytest.param([ledger_row(disposition="refuted", refutedReason="author-justified: kept on purpose")], [], KEY,
                  "left-for-owner", "author-justified: kept on purpose", id="author-justified"),
@@ -603,8 +603,9 @@ def test_refusals(tmp_path, make, reason):
 @pytest.mark.parametrize("terminal,decision,max_rounds,cap,kind,stopped", [
     ("capped-with-open-blocker", None, 3, 3, "rounds", True),
     ("capped-with-open-critical", None, None, None, "rounds", True),
-    # a round-ceiling stop names the ceiling the driver applied (the default one here), not the configured cap
-    ("halted", "round-ceiling", 3, circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE, "ceiling", True),
+    # a round-ceiling stop names the ceiling the driver applied (the default one here), not the configured cap;
+    # 10 is the earlier version's default ceiling, which review_record_session._ceiling reads as a literal
+    ("halted", "round-ceiling", 3, 10, "ceiling", True),
     ("halted", "something-else", 3, 3, "rounds", False),
     ("converged", None, True, None, "rounds", False)])
 def test_rounds_report_the_count_the_cap_and_whether_the_cap_stopped_it(tmp_path, terminal, decision, max_rounds, cap,
@@ -622,7 +623,7 @@ def test_write_from_session_never_raises_and_removes_its_temp_file(tmp_path, mon
     s = Session(tmp_path).seat("code-reviewer")
     seen = []
 
-    def boom(path, repo_root, readers=None):
+    def boom(path, repo_root, readers=None, **kwargs):
         seen.append(path)
         assert os.path.exists(path) and not path.startswith(str(tmp_path))
         raise RuntimeError("boom")
@@ -635,7 +636,7 @@ def test_write_from_session_never_raises_and_removes_its_temp_file(tmp_path, mon
     # bites on: the temporary directory outliving a success or a refusal
     made, real = [], rs.tempfile.mkdtemp
     monkeypatch.setattr(rs.tempfile, "mkdtemp", lambda *a, **k: made.append(real(*a, **k)) or made[-1])
-    monkeypatch.setattr(rr, "write", lambda path, repo_root, readers=None: {"ok": True, "action": "created"})
+    monkeypatch.setattr(rr, "write", lambda path, repo_root, readers=None, **kwargs: {"ok": True, "action": "created"})
     assert send(tmp_path, s.save(), Fake())["ok"] is True
     assert send(tmp_path, Session(tmp_path / "r", terminal=None).save(), Fake())["ok"] is False
     assert len(made) == 2 and not any(os.path.exists(d) for d in made)

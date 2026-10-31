@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""#1966 — the fixer fold derives the post-fix diff from git and refuses a mismatched supplied one."""
+"""#1966 — the apply-fixes fold derives the post-fix diff from git and refuses a mismatched supplied one."""
 import os
 import subprocess
 import sys
@@ -76,7 +76,7 @@ _FINDINGS_A = [
 
 
 def _loop(supplied, scoped_findings=None, seam=None):
-    """A run_loop over a scripted fixer supplying `supplied` (None = nothing) and a git answer."""
+    """A run_loop over a scripted fix step supplying `supplied` (None = nothing) and a git answer."""
     fired = {"scoped": False}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -174,7 +174,7 @@ def _init_two_line_repo(tmp_path):
 
 
 class _Cli:
-    """A CLI-path session over a real two-commit repository, driven to the first fixer step."""
+    """A CLI-path session over a real two-commit repository, driven to the first apply-fixes step."""
 
     def __init__(self, tmp_path, monkeypatch, findings=None, **cfg_over):
         _pin_git_env(monkeypatch)
@@ -190,7 +190,7 @@ class _Cli:
         self.supply = lambda cli: {}
 
     def respond(self, phase, payload, rnd):
-        if phase == RD.P_FIXER and rnd == 1:
+        if phase == RD.P_APPLY_FIXES and rnd == 1:
             self.fix_calls += 1
             body = self.fixer_body if self.fix_calls == 1 else "%sslice %d\n" % (
                 self.fixer_body, self.fix_calls)
@@ -201,7 +201,7 @@ class _Cli:
         return _responder(round1_findings=self.findings)(phase, payload, rnd)
 
     def to_fixer(self):
-        return _drive_to_phase(self.d, self.cfg, self.respond, RD.P_FIXER)
+        return _drive_to_phase(self.d, self.cfg, self.respond, RD.P_APPLY_FIXES)
 
     def submit(self, n):
         return RD.cmd_submit(self.d, n["phase"], n["attempt"], n["expectedStateHash"],
@@ -225,6 +225,13 @@ class _Cli:
 def _assert_parked(state, token):
     assert state["terminal"] == "cannot-certify"
     assert state["certification"]["reason"].startswith(token)
+    assert state["headDiff"] is None
+
+
+def _assert_handed_back(state):
+    """The unknown-surface end: the PR is handed back, never a panel and never an empty surface."""
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
     assert state["headDiff"] is None
 
 
@@ -268,23 +275,30 @@ def test_t4_no_supplied_diff_derives_git_and_schedules_the_fix_audit(tmp_path, m
 
 # ---- T5 edges ----------------------------------------------------------------------------------
 
-def test_e3_non_absolute_path_is_unreadable_and_git_governs(tmp_path, monkeypatch):
+def test_e3_non_absolute_path_on_a_hand_submit_is_refused_before_the_fold(tmp_path, monkeypatch):
     cli = _Cli(tmp_path, monkeypatch)
 
     def supply(c):
         # driving to the fixer step moves the cwd into the session checkout, so the relative file is made where the
-        # driver reads from, holding text git's diff does not: only the absolute-path rule keeps it unread
+        # driver would read from, holding text git's diff does not: only the absolute-path rule keeps it unread
         os.makedirs("relative", exist_ok=True)
         with open("relative/fix.diff", "w", encoding="utf-8") as fh:
             fh.write("not git's diff\n")
         return {"headDiffPath": "relative/fix.diff"}
 
     cli.supply = supply
-    n, state = cli.fold_fixer()
-    assert state.get("terminal") is None
-    rec = state["rounds"][str(n["round"])]
-    assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("git", "supplied-unreadable")
-    assert state["headDiff"] == cli.git_full()
+    n = cli.to_fixer()
+    ok, before = RD.load_state(cli.d)
+    assert ok
+    out = cli.submit(n)
+    assert out["ok"] is False
+    assert "headDiffPath" in out["reason"]
+    ok, after = RD.load_state(cli.d)
+    assert ok
+    assert (after["pending"]["phase"], after["pending"]["attempt"]) == (n["phase"], n["attempt"])
+    assert after["pending"] == before["pending"]
+    assert after.get("terminal") is None
+    assert "headDiffCheck" not in (after["rounds"].get(str(n["round"])) or {})
 
 
 def test_e4_missing_file_path_is_unreadable_and_git_governs(tmp_path, monkeypatch):
@@ -314,8 +328,8 @@ def test_e6_empty_git_diff_with_nothing_supplied_takes_the_unknown_path(tmp_path
     cli = _Cli(tmp_path, monkeypatch)
     cli.fixer_body = "old\n"
     n, state = cli.fold_fixer()
-    _assert_parked(state, "panel-diff-underivable")
-    assert "empty diff" in state["certification"]["reason"]
+    _assert_handed_back(state)
+    assert "post-fix head diff unresolvable (source 'unknown')" in state["certification"]["reason"]
     rec = state["rounds"][str(n["round"])]
     assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("unknown", "unverifiable")
 
@@ -325,7 +339,7 @@ def test_e7_unresolved_head_with_nothing_supplied_takes_the_unknown_path(tmp_pat
     monkeypatch.setattr(RD, "_resolve_fix_fold_head_sha",
                         lambda session_dir, state: (None, "fix-fold head: repo root unresolvable"))
     n, state = cli.fold_fixer()
-    _assert_parked(state, "panel-diff-underivable")
+    _assert_handed_back(state)
     rec = state["rounds"][str(n["round"])]
     assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("unknown", "unverifiable")
     assert rec["fixFoldHeadRefused"] == "fix-fold head: repo root unresolvable"
@@ -387,7 +401,7 @@ def test_e9_second_fix_slice_with_a_mismatching_diff_parks_without_post_fix_entr
     assert ok and state.get("terminal") is None
     assert state["rounds"][str(n1["round"])]["headDiffCheck"] == "match"
     n2 = RD.cmd_next(cli.d)
-    assert n2["phase"] == RD.P_FIXER
+    assert n2["phase"] == RD.P_APPLY_FIXES
     out2 = cli.submit(n2)
     assert out2["ok"], out2
     ok, state = RD.load_state(cli.d)
@@ -443,25 +457,8 @@ def test_e10_no_repository_unreadable_path_is_unknown_and_never_an_empty_surface
     _r, state = _no_repo_loop({"fixes": [], "headDiffPath": missing, "changedSubjects": ["Code"]})
     rec = state["rounds"]["1"]
     assert (rec["headDiffSource"], rec["headDiffCheck"]) == ("unknown", "no-repository")
-    assert state["terminal"] == "cannot-certify"
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
     reason = state["certification"]["reason"]
-    assert reason.startswith("panel-diff-underivable")
-    assert "repoRoot missing" in reason
+    assert "post-fix head diff unresolvable (source 'unknown')" in reason
     assert "2" not in state["rounds"]
-
-
-_BAD_ENTRY = {"command": "cmd", "refusedBy": "denied", "next": "stopped"}
-
-
-@pytest.mark.parametrize("refusals", ["x", [_BAD_ENTRY]])
-def test_hand_submitted_fixer_refusals_are_refused_before_the_fold(tmp_path, monkeypatch, refusals):
-    cli = _Cli(tmp_path, monkeypatch)
-    cli.supply = lambda c: {"refusals": refusals}
-    n = cli.to_fixer()
-    out = cli.submit(n)
-    assert out["ok"] is False
-    assert out["reason"].startswith("`refusals` — ")
-    ok, state = RD.load_state(cli.d)
-    assert ok
-    assert state["pending"]["phase"] == RD.P_FIXER
-    assert "fix" not in state["rounds"].get(str(n["round"]), {})

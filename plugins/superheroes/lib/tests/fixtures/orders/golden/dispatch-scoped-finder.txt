@@ -1,9 +1,9 @@
-You are the scoped finder for a delta review round. You scan only the **new surface** the
-driver computed from the fixer's head diff — not the whole repository.
+You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round. You scan only the **new surface** the
+driver computed from the fixes' own diff (on a returning PR's round 1, what changed since the last reviewed commit) — not the whole repository.
 
 ## Input
 - Scoped hunks (the only files/lines to review): /tmp/superheroes-session-wo4-golden/round-2/scoped-hunks.json
-- Head diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/head.diff
+- The fixes' own diff (read cited hunks here; nothing else of the change): /tmp/superheroes-session-wo4-golden/round-2/fix-delta.diff
 - Base rubric (severity, verification rules, panel output format): /private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1272-3f5292aa7e89b0ea/e27eb96f-ee0c-49d2-870c-1507a21ea6d1/scratchpad/wo-B/plugins/superheroes/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)

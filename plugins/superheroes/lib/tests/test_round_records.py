@@ -2203,11 +2203,10 @@ def test_phase_name_constants_agree_across_modules():
         ("P_SCOPED", RP.P_SCOPED),
         ("P_GAPSWEEP", RP.P_GAPSWEEP),
         ("P_VERIFY", RP.P_VERIFY),
-        ("P_FIXER", RP.P_FIXER),
+        ("P_APPLY_FIXES", RP.P_APPLY_FIXES),
     )
     for attr, expected in shared:
         assert getattr(RD, attr) == expected == getattr(RA, attr)
-    for attr in ("P_JUDGMENT", "P_STALL", "P_TERMINAL"):
-        assert getattr(RD, attr) == getattr(RP, attr)
+    assert getattr(RD, "P_TERMINAL") == getattr(RP, "P_TERMINAL")
     assert RR._PANEL_PHASE_DIRNAME == RP.P_PANEL
 

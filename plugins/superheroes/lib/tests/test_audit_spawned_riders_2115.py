@@ -77,7 +77,8 @@ def _spawn_loop(x_ruling="discharged", reraise_parent=True):
         out = []
         for t in targets or []:
             result = {"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": TRD.audit_checks()}
             if rnd == 2:
                 result.update(ruling="discharged-but-new-issue", newIssues=[_child()])
             elif t["id"] == X_KEY:
@@ -85,8 +86,7 @@ def _spawn_loop(x_ruling="discharged", reraise_parent=True):
             out.append(result)
         return out
 
-    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor,
-                       io={"stall_menu": lambda payload: "hold"})
+    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor)
     # the scoped finder is seated on a non-panel cell, so the config names the cells proven live
     config = TRD._cfg_cert(maxRounds=20, seatMap=TRD._nonpanel_cell_proof(["claude", "codex"]))
     _result, state = TRD._run_loop_capturing_state(seams, config)
@@ -174,7 +174,7 @@ def _fold_round_three(state, results, manifest="targets", monkeypatch=None):
 
 
 def _ruling(key, ruling="discharged"):
-    return {"id": key, "ruling": ruling, "reason": "judged by the auditor"}
+    return {"id": key, "ruling": ruling, "reason": "judged by the auditor", "checks": TRD.audit_checks()}
 
 
 @pytest.fixture

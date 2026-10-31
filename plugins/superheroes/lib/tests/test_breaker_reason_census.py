@@ -29,17 +29,17 @@ _UNDER_HANDLING_ALLOWLIST = {
         ),
     },
     ("round_driver.py", "_settle_delta"): {
-        "handles": frozenset({"max-iterations", "audit-stall"}),
+        "handles": frozenset({"audit-stall"}),
         "reason": (
-            "Round ceiling is enforced on the round-advance boundary; check_audit_breaker never "
-            "emits round-ceiling, so it is unreachable here — unlisted reasons park fail-closed "
-            "via the final branch"
+            "The round cap is enforced on the round-advance boundary; check_audit_breaker emits "
+            "only audit-stall, so max-iterations and round-ceiling are unreachable here — unlisted "
+            "reasons park fail-closed via the final branch"
         ),
     },
 }
 
 # check_circuit_breaker reasons reachable at review_loop_plan.tally_round_decider; round-ceiling must
-# be named explicitly in the haltKind switch (only check_round_ceiling emits it elsewhere).
+# be named explicitly in the haltKind switch (no breaker call emits it any more; review_loop_plan still names it).
 _CIRCUIT_BREAKER_EMITTED = frozenset({
     "max-iterations", "no-net-progress", "challenged-principle-recurring", "recurring-finding",
 })
@@ -192,21 +192,17 @@ def test_allowlisted_consumer_handled_set_is_derived_from_source_not_the_allowli
     """Allowlisted consumers derive handled from source literals, not the allowlist entry.
 
     Guards _handled_reasons_for_consumer: restoring its allowlist early-return makes this red."""
-    multi_handle_entries = [
-        (key, entry)
-        for key, entry in _UNDER_HANDLING_ALLOWLIST.items()
-        if len(entry["handles"]) >= 2
-    ]
-    assert multi_handle_entries, (
-        "_UNDER_HANDLING_ALLOWLIST must contain at least one entry with >=2 handles"
-    )
-    key, entry = multi_handle_entries[0]
+    # No real consumer handles two reasons any more (the audit breaker's max-iterations criterion was
+    # removed), so the probe registers a synthetic two-reason consumer for the duration of the check.
+    key = ("synthetic_consumer.py", "_switches_on_two_reasons")
+    entry = {"handles": frozenset({"audit-stall", "max-iterations"}), "reason": "probe"}
     filename, function = key
     handles = set(entry["handles"])
     dropped = sorted(handles)[0]
     compared = handles - {dropped}
     mod = sys.modules[__name__]
-    with patch.object(mod, "_consumer_sites", return_value={key: compared}):
+    with patch.dict(_UNDER_HANDLING_ALLOWLIST, {key: entry}), \
+            patch.object(mod, "_consumer_sites", return_value={key: compared}):
         gaps = compute_consumer_gaps(cb.BREAKER_REASONS)
     assert gaps, "compute_consumer_gaps returned empty dict for %s:%s" % (filename, function)
     assert key in gaps, "consumer %s:%s missing from gaps: %r" % (filename, function, gaps)

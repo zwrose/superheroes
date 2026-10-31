@@ -33,7 +33,10 @@ how a builder branches, links, and hands one back — lives in the workhorse cha
    down, linked natively (`gh issue create --parent <feature>`, or `gh issue edit <feature>
    --add-sub-issue <layer>` for an existing issue). It is filed, and fully wired, when the layer is
    planned. A layer sub-issue files without a further owner word, whether the owner approved the stack's shape or the advisor ruled a size split — the one exception to the [filing rule](../skills/showrunner/reference/owner-decisions.md#the-tiers-and-the-filing-rule). Linking does not copy the parent's wiring, so set the layer's milestone, project, and
-   labels explicitly to match the parent's. Each layer issue carries its own Anchor, What, and DoD
+   labels explicitly to match the parent's. A layer of an epic's child is titled
+   `<Tag> Cn layer k — <its surface>`, following the epic's short tag
+   ([decomposition.md — The epic's short tag](../skills/showrunner/reference/decomposition.md#the-epics-short-tag)).
+   Each layer issue carries its own Anchor, What, and DoD
    (the [issue contract](../skills/showrunner/reference/issue-contract.md)). New scope that a vet or
    tripwire adds to the feature joins as a new layer sub-issue once the owner's word covers that scope — see [How a stack
    merges](#how-a-stack-merges).
@@ -330,10 +333,18 @@ change is mechanically non-semantic: whitespace, pure formatting, a comment, or 
 leaves the rule unchanged. A changed hunk takes the merge train's existing union-fix floor whenever
 it changes **behavior-bearing content**: product code; a test's assertions or fixtures' expected
 values; or any prose that states a rule a session or a gate follows. When it is **not clear** which
-side a hunk falls on, it takes the reviewer floor. A layer is not brought current, by merge or
-rebase, while its review loop is open: a merge mid-review moves the head the review session
-anchored, and the session breaks with `view-head-anchor-mismatch`. Bring it current once the loop
-ends. The tax it removes is per-layer re-review on bring-currents whose content did not change.
+side a hunk falls on, it takes the reviewer floor. A layer is not brought current, by merge or rebase, while its review loop is open: a merge
+mid-review moves the head the review session anchored, and the session breaks with
+`view-head-anchor-mismatch`. A review session reads the layer against the lower-layer commit it
+pinned when it started, for its whole run, and a lower-layer move never stops or restarts it. Once
+the loop ends and before the layer hands back, when the lower layer has moved, the build session
+brings the layer current by a local `--no-ff` merge, runs the calibrated verify on the merged head,
+and reviews the catch-up with a returning review session, which reads only what the catch-up changed
+in the layer's own lines. A catch-up that changed none of them is an empty returning round that
+carries the earlier review, and any finding still open is re-checked against the caught-up head. No
+finding comes from the lower layer's code. The handback check (`lib/vet_slot.py handback --pr <n>
+--repo <owner/name>`) refuses `stack-not-caught-up` until the layer's pushed head holds the lower
+layer's current head. The tax it removes is per-layer re-review on bring-currents whose content did not change.
 
 For a **local tracked** stack, `gh stack sync` and `gh stack rebase` are the native verbs and they
 do move local branches. That is why they belong to that route and not to a lane whose layer is under

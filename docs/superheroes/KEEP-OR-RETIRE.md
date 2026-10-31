@@ -592,9 +592,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired.
 - **Notes.** capability-gap — the stage ships without a wired caller yet; evidence is on the held
-  verification set (Cursor-family orchestrators observed on weekly-eats lanes).
+  verification set (Cursor-family orchestrators observed on weekly-eats lanes). Retired by the
+  owner-approved review-loop spec (FR-47; Canon 2026-10-27-5692f27d-1); what the seat checked
+  moves to the advisor's vet.
 
 #### D5 — Circuit breaker + escalation
 

@@ -7,10 +7,10 @@ mandated path is the easiest path. These pin BOTH layers over the shared core:
     hash mismatch rejected, exact-duplicate idempotent), v1-state refusal, per-call journalling.
   - Layer 1 (run_loop): the ported run-shape driven end-to-end with scripted seams.
 
-Ported invariants from the retired test_code_loop_plan.py (round-1 full-deep baseline; the #174
-confirmation economics incl. cap-parks-on-Critical; fail-toward-run-all on an unknown surface;
-exits only off a qualifying round — now also expressible as an audited-chain certification), plus
-the new #507 mechanics: audit-keyed stall + self-recovery + stall menu, delta rounds, degraded
+Ported invariants from the retired test_code_loop_plan.py (round-1 full-deep baseline; rounds 2 and
+later run no panel; a fix surface the driver cannot work out hands the PR back; exits only off a
+qualifying round — now also expressible as an audited-chain certification), plus
+the new #507 mechanics: audit-keyed stall + self-recovery + hand-back, delta rounds, degraded
 independence, receipt-missing seats carried unverified, the author-justification POST-filter, and
 the driver receipt + its validator.
 """
@@ -97,6 +97,21 @@ def _big_diff(n_files=25):
 
 # --- default scripted seams ---------------------------------------------------
 
+def audit_checks(**answers):
+    """The fix auditor's three answers (`right`, `brokeNothing`, `testWouldFail`) as an audit result
+    carries them in `checks`: every one `yes` unless a check is named with another answer."""
+    return {name: {"answer": answers.get(name, "yes"), "why": "checked: %s" % name}
+            for name in ("right", "brokeNothing", "testWouldFail")}
+
+
+def audit_test_match(target, answer="matches"):
+    """The `testMatch` an audit result owes for `target`: `{"testMatch": ...}` when the target's committed
+    break-it test was changed and explained, else nothing."""
+    if (target.get("breakIt") or {}).get("match") != "changed-explained":
+        return {}
+    return {"testMatch": {"answer": answer, "why": "compared the committed test with the test role's"}}
+
+
 def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=None,
            verify_runner=None, io=None, vendors=None, fixer_vendor="claude"):
     def default_reviewer(dim, tier, rnd, ctx):
@@ -114,8 +129,9 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
 
     def default_auditor(targets, rnd):
         # Echo the selected independent auditor vendor so the discharge passes the provenance gate.
-        return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                 "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+        return [dict({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": audit_checks()}, **audit_test_match(t))
                 for t in (targets or [])]
 
     def default_fix(batch, rnd, payload):
@@ -508,8 +524,9 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
         if phase == RD.P_AUDITS:
             # The orchestrator records its dispatch manifest out-of-band from the results — the vendor
             # it seated per target, read off the dispatch payload (never the result echo).
-            return {"results": [{"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
-                                 "auditorVendor": t.get("auditorVendor")}
+            return {"results": [dict({"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
+                                      "auditorVendor": t.get("auditorVendor"),
+                                      "checks": audit_checks()}, **audit_test_match(t))
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -518,7 +535,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
                 scoped_state["fired"] = True
                 return {"findings": list(scoped)}
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": head, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": verify}
@@ -661,7 +678,23 @@ def test_submit_verify_recognized_token_accepted(tmp_path, token, decision_kind)
     ok, state = RD.load_state(d)
     assert ok
     kinds = [dec.get("kind") for dec in state.get("decisions", [])]
-    if decision_kind is None:
+    if token == "fail":
+        # the first `fail` does not halt: the gate is pending again (UFR-3), the second result decides
+        assert not state.get("terminal"), state.get("terminal")
+        assert state["step"] == RD.P_VERIFY
+        assert "verify-rerun" in kinds, kinds
+        assert decision_kind not in kinds, kinds
+        again = RD.cmd_next(d)
+        assert (again["phase"], again["attempt"]) == (RD.P_VERIFY, n["attempt"] + 1), again
+        out = RD.cmd_submit(d, again["phase"], again["attempt"], again["expectedStateHash"],
+                            {"result": token})
+        assert out["ok"] is True, out
+        ok, state = RD.load_state(d)
+        assert ok
+        assert state.get("terminal") == "halted", state.get("terminal")
+        kinds = [dec.get("kind") for dec in state.get("decisions", [])]
+        assert decision_kind in kinds, kinds
+    elif decision_kind is None:
         assert not any(k and k.startswith("verify-") for k in kinds), kinds
     else:
         assert decision_kind in kinds, kinds
@@ -735,7 +768,7 @@ def _audit_artifact(n, **over):
     targets = n["payload"]["targets"]
     assert targets, "the audits payload carried no targets to key rulings against"
     result = {"id": targets[0]["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-              "auditorVendor": targets[0].get("auditorVendor")}
+              "auditorVendor": targets[0].get("auditorVendor"), "checks": audit_checks()}
     result.update(over)
     return ({"results": [result],
              "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}, targets)
@@ -805,8 +838,10 @@ def test_submit_audits_two_targets_one_colliding_id_not_refused():
     collapses two same-identity findings into one. The chokepoint behavior is pinned by the
     loop-level test above."""
     targets = [{"id": "f.py::unchecked return value"}, {"id": "f.py::unchecked return value"}]
-    one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"},
-                       {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"}]
+    one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r",
+                        "checks": audit_checks()},
+                       {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r",
+                        "checks": audit_checks()}]
     assert RD.audit_results_fault({"results": one_ruling_each}, targets) is None
 
 
@@ -904,7 +939,7 @@ def test_verify_result_fault_pure():
 
 
 def test_audit_results_fault_pure():
-    good = [{"id": "a1", "ruling": "not-discharged"}]
+    good = [{"id": "a1", "ruling": "not-discharged", "checks": audit_checks()}]
     assert RD.audit_results_fault({"results": good}, [{"id": "a1"}]) is None
     assert RD.audit_results_fault({}, [{"id": "a1"}]) is None
     # a non-dict ROOT can carry no rulings at all — refused, naming the envelope (never a `results`
@@ -915,7 +950,8 @@ def test_audit_results_fault_pure():
     # `ambiguous` handling governs (test_submit_audits_repeated_id_accepted_the_fold_governs)
     assert RD.audit_results_fault({"results": good + good}, [{"id": "a1"}, {"id": "a1"}]) is None
     # an empty target set judges no id — the seat-key guard's empty-key rule, audit-side
-    assert RD.audit_results_fault({"results": [{"id": "zz", "ruling": "not-discharged"}]}, []) is None
+    assert RD.audit_results_fault(
+        {"results": [{"id": "zz", "ruling": "not-discharged", "checks": audit_checks()}]}, []) is None
     assert "not an audit target" in RD.audit_results_fault({"results": good}, [{"id": "other"}])
     # a ruling with no binding id is refused even with NO targets to key against — the id branch
     # stands on its own, so its bite-proof reddens on the refusal axis rather than on a message
@@ -923,7 +959,8 @@ def test_audit_results_fault_pure():
         {"results": [{"id": None, "ruling": "not-discharged"}]}, [])
     assert "results[0] is str" in RD.audit_results_fault({"results": ["discharged"]}, [])
     # the entry index is named so a multi-result artifact says WHICH ruling is wrong
-    two = [{"id": "a1", "ruling": "not-discharged"}, {"id": "a2", "ruling": "nope"}]
+    two = [{"id": "a1", "ruling": "not-discharged", "checks": audit_checks()},
+           {"id": "a2", "ruling": "nope"}]
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
@@ -1174,7 +1211,7 @@ def test_new_issues_usability_agrees_with_the_running_fold():
         out = AU.apply_audit_results(
             [target],
             [{"id": "v0", "ruling": "discharged-but-new-issue", "reason": "fixed but leaked",
-              "newIssues": candidates}])
+              "newIssues": candidates, "checks": audit_checks()}])
         folded = out["audits"][0]["ruling"]
         if usable:
             assert folded == "discharged-but-new-issue", (candidates, out)
@@ -1214,9 +1251,9 @@ def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
     assert payload["certification"]["shape"] == "full-panel-confirmed"
 
 
-def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
-    """A malformed/quoted-path head diff → unknown surface → a FULL reviewer-deep panel (the
-    existing unknown→run-everything rule), not a scoped audit. Git's answer is the malformed text
+def test_unknown_delta_surface_hands_the_pr_back_and_runs_no_panel(tmp_path, monkeypatch):
+    """A malformed/quoted-path head diff → unknown surface → the PR is handed back
+    (`fix-surface-unknown`), not a scoped audit and not a panel. Git's answer is the malformed text
     too, so the supplied diff cross-checks as a match and the split meets the malformed diff."""
     from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
 
@@ -1251,7 +1288,7 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": bad_head, "changedSubjects": []}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1260,10 +1297,11 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
         return {}
 
     payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
-    assert seen["panel_r2"] is True
-    assert payload["verdict"] == "converged"
+    assert seen["panel_r2"] is False
+    assert payload["verdict"] == "handed-back"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
+    assert receipt["decisions"][-1]["kind"] == "fix-surface-unknown", receipt["decisions"]
     first = receipt["rounds"][0]
     assert first["headDiffSource"] == "git", first
     assert first["headDiffCheck"] == "match", first
@@ -1284,10 +1322,18 @@ _R2B_HEAD_MF = ("diff --git a/f.py b/f.py\nindex 2..3 100644\n--- a/f.py\n+++ b/
                 "diff --git a/g.py b/g.py\nindex 0..1 100644\n--- a/g.py\n+++ b/g.py\n"
                 "@@ -0,0 +1,3 @@\n+alpha\n+beta\n+gamma\n")
 
+# The head-file lines the fix changed between _R2B_REVIEWED and _R2B_HEAD_MF: f.py line 2 (`+more` became
+# `+fixed`) and the new hunk at 50-51, and the three lines of the new file g.py.
+_R2B_FIX_LINES = {"f.py": [(2, 2), (50, 51)], "g.py": [(1, 3)]}
+
+
+def _line_ranges(hunks):
+    return {file: [(h["start"], h["end"]) for h in entries] for file, entries in hunks.items()}
+
 
 def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
-    """The dispatch-scoped-finder payload carries EXACTLY the split's computed `newSurface` hunks
-    (file → hunk ranges + text) — a multi-file surface must arrive intact, not empty (#507 WO-R2b:
+    """The dispatch-scoped-finder payload carries the fixes' own surface (file → the head lines the fixes
+    changed + the delta text) — a multi-file surface must arrive intact, not empty (#507 WO-R2b:
     the field-found defect was an empty `hunks: {}` payload despite a real computed surface)."""
     d = str(tmp_path)
     captured = {"payload": None}
@@ -1306,14 +1352,15 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
             return {"grouping": None}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             captured["payload"] = payload
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": _R2B_HEAD_MF, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1323,45 +1370,13 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
     hunks = captured["payload"]["hunks"]
-    # exactly the split's computed new surface — a non-empty, multi-file map.
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert expected and set(expected) == {"f.py", "g.py"}, expected
-    assert hunks == expected
-    assert sum(len(v) for v in hunks.values()) == 2
-
-
-def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
-    """A genuinely empty computed new surface (split `unknown: False`, no new hunks — the fix only
-    touched the audited lines) SKIPS the scoped-finder dispatch with a receipt-visible
-    `scopedFinder: skipped-empty-surface` note, never a vacuous scan over nothing (#507 WO-R2b)."""
-    d = str(tmp_path)
-    seen = {"scoped": False}
-
-    base = _responder(round1_findings=[
-        {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}])
-
-    def respond(phase, payload, rnd):
-        if phase == RD.P_SCOPED:
-            seen["scoped"] = True
-        return base(phase, payload, rnd)
-
-    payload = _drive_cli(d, _cfg(), respond)
-    assert payload["verdict"] == "converged"
-    assert seen["scoped"] is False, "the scoped finder was dispatched over an empty surface"
-    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
-        receipt = json.load(fh)
-    ok, reason = RD.validate_receipt(receipt)
-    assert ok, reason
-    # the skip is journaled receipt-visibly: as a decision AND on the delta round record.
-    kinds = [dc["kind"] for dc in receipt["decisions"]]
-    assert "scoped-finder-skipped" in kinds, kinds
-    delta_round = [r for r in receipt["rounds"] if r.get("scopedFinder")]
-    assert delta_round and delta_round[0]["scopedFinder"] == "skipped-empty-surface", receipt["rounds"]
+    # the fixes' own surface — a non-empty, multi-file map, the fixed line of the audited hunk included.
+    assert set(hunks) == {"f.py", "g.py"}, hunks
+    assert _line_ranges(hunks) == _R2B_FIX_LINES
 
 
 # =============================================================================
-# dispatch-fixer head diff: inline OR absolute headDiffPath; unreadable → full panel (#507)
+# apply-fixes head diff: inline OR absolute headDiffPath; unreadable → full panel (#507)
 # =============================================================================
 
 def _multifile_delta_respond(captured, fixer_artifact):
@@ -1383,14 +1398,15 @@ def _multifile_delta_respond(captured, fixer_artifact):
             return {"grouping": None}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             captured["payload"] = payload
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return dict(fixer_artifact)
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1399,7 +1415,7 @@ def _multifile_delta_respond(captured, fixer_artifact):
 
 
 def test_fixer_head_diff_path_form_end_to_end(tmp_path):
-    """A `dispatch-fixer` artifact may carry the post-fix head diff as an ABSOLUTE `headDiffPath` the
+    """An `apply-fixes` report may carry the post-fix head diff as an ABSOLUTE `headDiffPath` the
     driver reads itself (a real git diff cannot inline into a JSON submit artifact). The delta split
     reads the file's content, so the scoped finder's payload carries that file's new surface (#507)."""
     d = str(tmp_path)
@@ -1411,9 +1427,7 @@ def test_fixer_head_diff_path_form_end_to_end(tmp_path):
     payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    assert _line_ranges(captured["payload"]["hunks"]) == _R2B_FIX_LINES
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "path" for r in receipt["rounds"]), receipt["rounds"]
@@ -1446,7 +1460,7 @@ def test_fixer_unreadable_head_diff_path_with_repository_derives_git(tmp_path):
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiffPath": missing, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -1455,7 +1469,7 @@ def test_fixer_unreadable_head_diff_path_with_repository_derives_git(tmp_path):
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                                 "auditorVendor": t.get("auditorVendor")}
+                                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -1487,9 +1501,7 @@ def test_fixer_inline_head_diff_wins_over_path(tmp_path):
     assert payload["verdict"] == "converged"
     # inline won → the scoped finder fired over the inline diff's two-file surface.
     assert captured["payload"] is not None
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    assert _line_ranges(captured["payload"]["hunks"]) == _R2B_FIX_LINES
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "inline" for r in receipt["rounds"]), receipt["rounds"]
@@ -1503,7 +1515,8 @@ def test_run_loop_code_leg_end_to_end(tmp_path):
     receipt = RD.run_loop(_seams(reviewer=lambda dim, tier, rnd, ctx:
                                  ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE,
                                                  "file": "f.py", "line": 1}]}
-                                  if rnd == 1 and dim == "code-reviewer" else [])),
+                                  if rnd == 1 and dim == "code-reviewer" else []),
+                                 vendors=["claude", "codex"]),
                           _cfg_cert())
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] is not None
@@ -1518,8 +1531,8 @@ def test_run_loop_returns_the_driver_receipt():
         assert key not in result
 
 
-def test_run_loop_invalid_round_ceiling_returns_a_parked_receipt():
-    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5))
+def test_run_loop_invalid_max_rounds_returns_a_parked_receipt():
+    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=-1))
     assert result["verdict"] == "cannot-certify"
     assert result["certification"]["shape"] is None
     assert "class" not in result
@@ -1610,7 +1623,7 @@ def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
                 for c in (clusters or []) for i in (c.get("ids") or [])]
 
     result, state = _run_loop_capturing_state(
-        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier),
+        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier, vendors=["claude", "codex"]),
         _cfg_cert(),
     )
     assert result["verdict"] != "cannot-certify"
@@ -1656,7 +1669,7 @@ def test_run_loop_certification_success_carries_writer_fields():
     assert "terminalState" not in refusal
 
 # =============================================================================
-# audit-keyed stall → self-recovery once → stall menu
+# audit-keyed stall → self-recovery once → hand back
 # =============================================================================
 
 def _persistent_not_discharged_seams(io=None):
@@ -1675,258 +1688,33 @@ def _persistent_not_discharged_seams(io=None):
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verifier=plaus_verifier,
-        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
+        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken",
+                                       "checks": audit_checks(right="no")}
                                       for t in (targets or [])],
-        fix_step=fix_step, io=io)
+        fix_step=fix_step, io=io, vendors=["claude", "codex"])
 
 
-def test_not_discharged_twice_self_recovers_once_then_stall_menu(tmp_path):
-    menu_shown = []
-
-    def stall_menu(payload):
-        menu_shown.append(payload)
-        return "hold"
-
-    seams = _persistent_not_discharged_seams(io={"stall_menu": stall_menu})
-    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
+def test_not_discharged_twice_self_recovers_once_then_is_handed_back(tmp_path):
+    receipt = RD.run_loop(_persistent_not_discharged_seams(), _cfg_cert(maxRounds=20))
     recoveries = [r for r in receipt["rounds"] if r.get("selfRecovery")]
     assert len(recoveries) == 1
-    # the stall menu was presented without accept-the-risk (PLAUSIBLE stalled target).
-    assert len(menu_shown) == 1
-    assert menu_shown[0]["choices"] == ["one-more-round", "hold"]
-    assert menu_shown[0]["acceptRiskEligible"] is False
-    assert receipt["verdict"] == "held"
-
-
-def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
-    """Build state with a stalled audit target (empty findings list) for accept-risk tests."""
-    state = RD.new_state(_cfg_cert())
-    state["findings"] = []
-    f = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1,
-         "verdict": verdict, "evidence": evidence}
-    state["fixBatch"] = [f]
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    tgt = state["_auditTargets"][0]
-    ident = identity or tgt["identity"]
-    state["_auditOutcome"] = {"notDischarged": [tgt["id"]]}
-    state["selfRecovered"] = True
-    return state, ident, tgt
+    assert receipt["verdict"] == "handed-back"
+    assert receipt["decisions"][-1]["kind"] == "fix-keeps-failing"
 
 
 _STALL_BREAKER = {"reason": "audit-stall", "detail": "stalled", "stalledIdentities": ["v0"]}
 
 
-def test_accept_the_risk_gated_on_confirmed(tmp_path):
-    """accept-the-disclosed-risk is offerable ONLY for a CONFIRMED-with-receipt stalled target."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is True
-    assert "accept-the-disclosed-risk" in state["_stallChoices"]
-    # without evidence on the stalled target → NOT eligible.
-    state2, ident2, _ = _stall_target_state(verdict="CONFIRMED", evidence=None)
-    RD._handle_stall(state2, state2["config"], {"reason": "audit-stall",
-                                                "detail": "x", "stalledIdentities": [ident2]})
-    assert state2["_acceptRiskEligible"] is False
-    assert "accept-the-disclosed-risk" not in state2["_stallChoices"]
-
-
-def test_accept_risk_eligible_empty_findings_confirmed_stalled_target():
-    """accept-risk reads stalled audit targets, not the findings list — empty findings still eligible."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is True
-
-
-def test_accept_risk_not_eligible_without_evidence_on_stalled_target():
-    state, ident, tgt = _stall_target_state(evidence=None)
-    assert tgt.get("evidence") is None
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is False
-
-
-def test_empty_stall_targets_omit_one_more_round_from_menu():
-    """one-more-round is not offered when the stall-target snapshot is empty."""
+def test_a_stall_after_the_recovery_attempt_is_handed_back_not_put_to_the_owner():
+    """A stall with selfRecovered already true hands the PR back (fix-keeps-failing) — no menu."""
     state = RD.new_state(_cfg())
     state["selfRecovered"] = True
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert state["_stallTargets"] == []
-    assert "one-more-round" not in state["_stallChoices"]
-
-
-def test_second_stall_menu_omits_one_more_round_after_latch():
-    """one-more-round is offerable once per session — a second stall menu drops it."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_oneMoreRoundUsed"] = True
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert "one-more-round" not in state["_stallChoices"]
-    assert state["_stallChoices"] == ["hold"]
-
-
-@pytest.mark.parametrize("choice", ["ship-smaller", "spend-more"])
-def test_retired_stall_choice_refused_at_submit(tmp_path, choice):
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": choice})
-    assert out["ok"] is False
-    assert out["reason"] == "stall-choice-retired:%s" % choice
-    ok, reloaded = RD.load_state(d)
-    assert ok and reloaded["step"] == RD.P_STALL
-
-
-def test_one_more_round_accepted_through_cmd_submit(tmp_path):
-    """Stepwise owner gate: one-more-round survives cmd_submit and re-enters dispatch-fixer."""
-    d = str(tmp_path)
-    state, ident, tgt = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert "one-more-round" in state["_stallChoices"]
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
-    assert out["ok"] is True, out
-    ok, reloaded = RD.load_state(d)
-    assert ok
-    assert reloaded["step"] == RD.P_FIXER
-    assert reloaded["_oneMoreRoundUsed"] is True
-    assert reloaded["_fixBatch"] == reloaded["_stallTargets"]
-
-
-def test_stale_accept_risk_flag_without_stall_targets_fails_closed():
-    """A cached _acceptRiskEligible from an older rule must not certify without a qualifying snapshot."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = []
-    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
-    RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
-    assert state["terminal"] == "stalled"
+    assert state["terminal"] == "handed-back"
     assert state["step"] == RD.P_TERMINAL
-    assert state["certification"]["shape"] is None
-
-
-def test_stale_accept_risk_menu_refused_at_submit_chokepoint(tmp_path):
-    """Stale persisted menu with accept-the-disclosed-risk must not consume the owner gate."""
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = []
-    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
-    state["step"] = RD.P_STALL
-    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL, "attempt": 1}
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"],
-        {"choice": "accept-the-disclosed-risk"})
-    assert out["ok"] is False
-    assert out["reason"] == RD.STALL_ACCEPT_RISK_NOT_ELIGIBLE
-    ok, reloaded = RD.load_state(d)
-    assert ok and reloaded["step"] == RD.P_STALL
-    assert reloaded.get("terminal") is None
-
-
-def test_stale_accept_risk_flag_is_not_advertised_in_the_stall_menu():
-    """The MENU reads the persisted snapshot, not the cached flag (#1037 rider).
-
-    The chokepoint already refused this state (the two tests above); what shipped dishonest was the
-    display — a menu offering `accept-the-disclosed-risk` and `acceptRiskEligible: true` for a
-    choice the fold would then refuse. Same source for both, so they cannot disagree."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True          # cached under a broader (prior) rule
-    state["_stallTargets"] = []                  # …with nothing in the snapshot to justify it
-    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
-    state["step"] = RD.P_STALL
-    action = RD._advance(state, state["config"])
-    assert action["phase"] == RD.P_STALL, action
-    assert action["payload"]["acceptRiskEligible"] is False
-    assert "accept-the-disclosed-risk" not in action["payload"]["choices"]
-    assert "hold" in action["payload"]["choices"]
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_INELIGIBLE
-
-
-def test_qualifying_snapshot_still_advertises_accept_risk_in_the_stall_menu():
-    """A/B for the test above: a real CONFIRMED-with-evidence snapshot still offers the choice."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    assert state["_stallTargets"], "the fixture must leave a qualifying snapshot"
-    action = RD._advance(state, state["config"])
-    assert action["phase"] == RD.P_STALL, action
-    assert action["payload"]["acceptRiskEligible"] is True
-    assert "accept-the-disclosed-risk" in action["payload"]["choices"]
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_ELIGIBLE
-
-
-def test_stall_policy_class_ignores_the_cached_flag_without_a_snapshot():
-    """Gate policy resolves on the snapshot too — the classifier and the fold agree by construction."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = True
-    state["_stallTargets"] = [{"verdict": "PLAUSIBLE", "evidence": "ran"}]   # not CONFIRMED
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_INELIGIBLE
-    state["_stallTargets"] = [{"verdict": "CONFIRMED", "evidence": "ran"}]   # A/B
-    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_ELIGIBLE
-
-
-def test_accept_risk_submit_authorized_when_eligible(tmp_path):
-    """accept-the-disclosed-risk with a qualifying snapshot is still accepted at submit."""
-    d = str(tmp_path)
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"],
-        {"choice": "accept-the-disclosed-risk"})
-    assert out["ok"] is True, out
-
-
-def test_stall_choice_not_offered_refused_at_submit(tmp_path):
-    """A choice absent from the presented menu is refused before fold — pending survives."""
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_oneMoreRoundUsed"] = True
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert "one-more-round" not in state["_stallChoices"]
-    RD.save_state(d, state)
-    n = RD.cmd_next(d)
-    assert n["ok"]
-    out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
-    assert out["ok"] is False
-    assert out["reason"] == "stall-choice-not-offered:one-more-round"
-    ok, reloaded = RD.load_state(d)
-    assert ok and reloaded["step"] == RD.P_STALL
-
-
-def test_unknown_stall_choice_fails_closed_to_stalled_terminal():
-    """An unknown stall choice still parks as `stalled` — fail-closed, not converged."""
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = False
-    state["_stallChoices"] = ["one-more-round", "hold"]
-    RD._fold_stall(state, state["config"], {"choice": "ship-whenever"})
-    assert state["terminal"] == "stalled"
-    assert state["step"] == RD.P_TERMINAL
-    assert state["certification"]["shape"] is None
+    assert state["decisions"][-1] == {"round": state["round"], "kind": "fix-keeps-failing",
+                                      "detail": "stalled"}
+    assert state["certification"] == {"shape": None, "reason": "stalled"}
 
 
 def _stall_then_clean_auditor_seams(io=None, clean_after=2):
@@ -1940,7 +1728,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         return [{"id": t["id"], "ruling": ruling,
                  "reason": "broken" if ruling == "not-discharged" else "fixed",
                  "evidence": "tests pass" if ruling == "discharged" else None,
-                 "auditorVendor": t.get("auditorVendor")}
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
                 for t in (targets or [])]
 
     def fix_step(batch, rnd, payload):
@@ -1958,7 +1746,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         verifier=plaus_verifier,
         auditor=auditor,
         fix_step=fix_step,
-        io=io or {})
+        io=io or {}, vendors=["claude", "codex"])
     seams["_audit_calls"] = audit_calls
     seams["_fix_calls"] = counter
     return seams
@@ -1980,242 +1768,13 @@ def test_audit_stall_clears_on_clean_round_then_certifies_converged():
     assert len(recoveries) == 1
 
 
-def test_one_more_round_reenters_fixer_then_certifies_converged():
-    """#960: one-more-round re-enters dispatch-fixer, re-audits, discharges, and certifies."""
-    fix_after_menu = {"n": 0}
-    stall_menus = []
-
-    def stall_menu(payload):
-        stall_menus.append(dict(payload))
-        return "one-more-round"
-
-    base = _stall_then_clean_auditor_seams(io={"stall_menu": stall_menu}, clean_after=3)
-    orig_fix = base["fix_step"]
-
-    def fix_step(batch, rnd, payload):
-        if stall_menus:
-            fix_after_menu["n"] += 1
-        return orig_fix(batch, rnd, payload)
-
-    base["fix_step"] = fix_step
-    receipt = RD.run_loop(base, _cfg_cert(maxRounds=20))
-    assert receipt["verdict"] == "converged"
-    assert receipt.get("certificationShape") is not None
-    assert len(stall_menus) == 1
-    assert "one-more-round" in stall_menus[0]["choices"]
-    assert fix_after_menu["n"] >= 1
-    assert base["_audit_calls"]["n"] >= 4
-
-
-def test_second_stall_menu_omits_one_more_round_after_one_more_round_spent():
-    """#960: after one-more-round is spent, a second stall menu offers exactly two choices."""
-    stall_menus = []
-
-    def stall_menu(payload):
-        stall_menus.append(dict(payload))
-        return "one-more-round" if len(stall_menus) == 1 else "hold"
-
-    counter = {"n": 0}
-
-    def fix_step(batch, rnd, payload):
-        counter["n"] += 1
-        return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
-
-    seams = _seams(
-        reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
-             if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
-                                      for t in (targets or [])],
-        fix_step=fix_step,
-        io={"stall_menu": stall_menu}, vendors=["claude", "codex"])
-    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
-    assert len(stall_menus) == 2
-    assert "one-more-round" in stall_menus[0]["choices"]
-    assert "one-more-round" not in stall_menus[1]["choices"]
-    assert stall_menus[1]["choices"] == ["accept-the-disclosed-risk", "hold"]
-    assert len(stall_menus[1]["choices"]) == 2
-    assert receipt["verdict"] == "held"
-
-
-def test_one_more_round_empty_stall_targets_parks_cannot_certify():
-    state = RD.new_state(_cfg())
-    state["selfRecovered"] = True
-    state["_acceptRiskEligible"] = False
-    state["_stallChoices"] = ["one-more-round", "hold"]
-    state["_stallTargets"] = []
-    RD._fold_stall(state, state["config"], {"choice": "one-more-round"})
-    assert state["terminal"] == "cannot-certify"
-    assert state["step"] == RD.P_TERMINAL
-
-
-def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
-    """#608 review: unknown fixer → escalate returns None — must not set a truthy _escalatedRung."""
-    state = RD.new_state({"leg": "code", "vendors": ["claude"]})
-    assert state["config"]["fixerVendor"] is None
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_TERMINAL
-    assert state.get("_escalatedRung") is None
-    # #620 R3a: the null-rung self-recovery decision detail must be honest — never "escalated to None".
-    sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
-    assert len(sr) == 1
-    assert "escalated to None" not in sr[0]["detail"]
-    assert "no escalation rung available" in sr[0]["detail"]
-
-
-def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
-    """#608 review contrast: known claude fixer at default sonnet-5.5/high has a next ladder rung."""
-    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
-    RD._handle_stall(state, state["config"], _STALL_BREAKER)
-    assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_TERMINAL
-    escalated = state.get("_escalatedRung")
-    assert escalated is not None
-    assert escalated["rung"] is not None
-    assert escalated["vendor"] == "claude"
-    # #620 R3a contrast: on the real-rung path the detail names the actual escalation target.
-    sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
-    assert len(sr) == 1
-    assert ("fixer escalated to %r" % (escalated["rung"],)) in sr[0]["detail"]
-
-
-def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
-    """#507 v9: exercise the eligible owner-acceptance stall path to its terminal — an eligible
-    CONFIRMED-with-receipt stall, the owner submits `accept-the-disclosed-risk`, and the run
-    converges (terminal, certification note records the accepted disclosed risk). Guards against a
-    mutation that makes an eligible acceptance hold/park instead of converge."""
-    state, ident, _ = _stall_target_state()
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
-                                              "stalledIdentities": [ident]})
-    assert state["_acceptRiskEligible"] is True
-    RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
-    assert state["terminal"] == "converged"
-    assert state["step"] == RD.P_TERMINAL
-    note = (state.get("certification") or {}).get("note") or ""
-    assert "accepted the disclosed" in note, note
-
-
-def _dual_stall_target_state(confirmed, plausible):
-    """Two stalled audit targets for mixed accept-risk disposition tests."""
-    state = RD.new_state(_cfg_cert())
-    state["findings"] = []
-    compiled, _ = RD.mechanical_compile([dict(confirmed), dict(plausible)], None)
-    for row, src in zip(compiled, (confirmed, plausible)):
-        row["verdict"] = src["verdict"]
-        row["evidence"] = src.get("evidence")
-    RD._stage_findings(state, compiled)
-    state["fixBatch"] = compiled
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    targets = state["_auditTargets"]
-    state["_auditOutcome"] = {"notDischarged": [t["id"] for t in targets]}
-    state["selfRecovered"] = True
-    RD._handle_stall(state, state["config"], {
-        "reason": "audit-stall", "detail": "x",
-        "stalledIdentities": [t["identity"] for t in targets]})
-    return state, targets
-
-
-def _ledger_by_key(state):
-    SC = _load("session_contract")
-    return {SC.finding_identity_key(e): e
-            for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
-
-
-def test_accept_risk_dispositions_only_qualifying_targets_in_mixed_batch(tmp_path):
-    """accept-the-disclosed-risk must not clear PLAUSIBLE siblings — only per-target qualifiers."""
-    confirmed = {"title": "confirmed-bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "a.py", "line": 1,
-                 "verdict": "CONFIRMED", "evidence": "tests pass"}
-    plausible = {"title": "plausible-bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "b.py", "line": 2,
-                  "verdict": "PLAUSIBLE", "evidence": "maybe"}
-    state, targets = _dual_stall_target_state(confirmed, plausible)
-    assert state["_acceptRiskEligible"] is True
-    follow_up = {"item": "defer plausible sibling", "revisitTrigger": "next milestone",
-                 "classClosure": "tracked separately"}
-    RD._fold_stall(state, state["config"], {
-        "choice": RD.ACCEPT_RISK_CHOICE,
-        "followUp": follow_up,
-    })
-    ledger = _ledger_by_key(state)
-    confirmed_key = RD._finding_key_of(targets[0])
-    plausible_key = RD._finding_key_of(targets[1])
-    assert ledger[confirmed_key]["disposition"] == "left-for-owner"
-    assert ledger[confirmed_key]["followUp"] == follow_up
-    assert ledger[plausible_key].get("disposition") == "left-for-owner"
-    assert ledger[confirmed_key].get("outOfScopeReason")
-    assert "outOfScopeReason" not in ledger[plausible_key]
-    assert "followUp" not in ledger[plausible_key]
-
-
-def test_accept_risk_never_dispositions_critical_targets(tmp_path):
-    """Critical stalled targets stay open — out-of-scope on Critical is forbidden at certification."""
-    critical = {"title": "crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "c.py", "line": 1,
-                "verdict": "CONFIRMED", "evidence": "proven"}
-    important = {"title": "imp", "severity": "Important", "consequence": _CONSEQUENCE, "file": "d.py", "line": 2,
-                 "verdict": "CONFIRMED", "evidence": "proven"}
-    state, targets = _dual_stall_target_state(critical, important)
-    follow_up = {"item": "accept important only", "revisitTrigger": "next milestone",
-                 "classClosure": "none"}
-    RD._fold_stall(state, state["config"], {
-        "choice": RD.ACCEPT_RISK_CHOICE,
-        "followUp": follow_up,
-    })
-    ledger = _ledger_by_key(state)
-    critical_key = RD._finding_key_of(targets[0])
-    important_key = RD._finding_key_of(targets[1])
-    assert ledger[critical_key].get("disposition") == "left-for-owner"
-    assert ledger[important_key]["disposition"] == "left-for-owner"
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["shape"] is None
-
-
-def test_accepted_risk_leaving_a_critical_open_parks_and_never_converges(tmp_path):
-    state, ident, _ = _stall_target_state()
-    state["fixBatch"][0]["severity"] = "Critical"
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    tgt = state["_auditTargets"][0]
-    state["_auditOutcome"] = {"notDischarged": [tgt["id"]]}
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
-                                              "stalledIdentities": [tgt["identity"]]})
-    assert state["_acceptRiskEligible"] is True
-    RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
-    assert state["terminal"] == "cannot-certify"
-    assert state["step"] == RD.P_TERMINAL
-    assert state["certification"]["shape"] is None
-    assert "bug" in state["certification"]["reason"]
-    entry = _ledger_by_key(state).get(RD._finding_key_of(tgt)) or {}
-    assert entry.get("disposition") is None
-
-
-def test_accepted_risk_with_an_ineligible_critical_sibling_parks(tmp_path):
-    """An ineligible Critical (PLAUSIBLE, or no evidence) still blocks convergence."""
-    important = {"title": "imp", "severity": "Important", "consequence": _CONSEQUENCE, "file": "d.py", "line": 2,
-                 "verdict": "CONFIRMED", "evidence": "proven"}
-    plausible_crit = {"title": "plausible-crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "c.py",
-                      "line": 1, "verdict": "PLAUSIBLE", "evidence": "maybe"}
-    noevidence_crit = {"title": "noevidence-crit", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "e.py",
-                       "line": 3, "verdict": "CONFIRMED", "evidence": None}
-    for crit in (plausible_crit, noevidence_crit):
-        state, targets = _dual_stall_target_state(important, crit)
-        assert state["_acceptRiskEligible"] is True
-        RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
-        assert state["terminal"] == "cannot-certify"
-        assert state["step"] == RD.P_TERMINAL
-        assert crit["title"] in state["certification"]["reason"]
-        ledger = _ledger_by_key(state)
-        assert ledger[RD._finding_key_of(targets[0])]["disposition"] == "left-for-owner"
-        assert ledger[RD._finding_key_of(targets[1])].get("disposition") == "left-for-owner"
-
-
 # =============================================================================
-# confirmation economics: cap-parks-on-Critical, budget 2, re-arm
+# a delta round ends on its audit and scoped finder, never on a further panel
 # =============================================================================
 
-def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=None):
+def _delta_state_ready(findings=None, not_discharged=None):
     state = RD.new_state(_cfg(maxRounds=20))
-    state["confirmations"] = confirmations
-    state["surfacedSinceLastPanel"] = list(surfaced)
-    state["round"] = confirmations + 3
+    state["round"] = 3
     state["findings"] = list(findings or [])
     state["fullPanelRan"] = False
     nd = not_discharged or []
@@ -2227,34 +1786,30 @@ def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=No
     return state
 
 
-def test_capped_with_open_critical_parks(tmp_path):
-    """A Critical still owed at the 2-panel confirmation cap parks (certification withheld)."""
-    state = _delta_state_ready(confirmations=RD.MAX_CONFIRMATIONS, surfaced=["Critical"])
-    RD._settle_delta(state, state["config"])
-    assert state["terminal"] == "capped-with-open-critical"
-    assert state["certification"]["shape"] is None
-
-
-def test_non_critical_at_cap_certifies(tmp_path):
-    """A non-Critical at the cap resolves by scoped verify → certifies (audited-chain)."""
-    state = _delta_state_ready(confirmations=RD.MAX_CONFIRMATIONS, surfaced=["Important"])
+def test_a_delta_settle_with_every_audit_discharged_certifies_audited_chain(tmp_path):
+    """Re-pinned from the confirmation-cap tests: a delta round whose audits discharged and whose scoped
+    finder raised nothing certifies `audited-chain`, with no panel step and no confirmation follow-up."""
+    state = _delta_state_ready()
     RD._settle_delta(state, state["config"])
     assert state["terminal"] == "converged"
     assert state["certification"]["shape"] == "audited-chain"
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_critical_rearms_one_more_confirmation_under_budget(tmp_path):
-    """A Critical surfaced with confirmations under the cap re-arms one more FULL panel."""
-    state = _delta_state_ready(confirmations=0, surfaced=["Critical"])
+def test_a_critical_the_audit_did_not_discharge_never_schedules_a_panel(tmp_path):
+    """Re-pinned from the Critical re-arm test: an audit that discharged nothing for a Critical target
+    no longer owes a confirmation panel; the settle never steps to the panel."""
+    state = _delta_state_ready(not_discharged=["x"])
+    state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "x", "severity": "Critical"}]
     RD._settle_delta(state, state["config"])
-    assert state["terminal"] is None  # not certified — a confirmation is owed
-    assert state["step"] == RD.P_PANEL
-    assert any(dd["kind"] == "confirmation-rearm" for dd in state["decisions"])
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_confirmation_budget_two_respected_end_to_end(tmp_path):
-    """A Critical surfaced by a delta scoped-finder re-arms a full panel; a subsequent clean panel
-    certifies as full-panel-confirmed (one re-arm, budget not exceeded)."""
+def test_a_scoped_critical_is_fixed_and_audited_in_the_next_round_not_confirmed_by_a_panel(tmp_path):
+    """Re-pinned from the confirmation-budget test: a Critical the scoped finder raises in round 2 is
+    fixed and audited in a later round, and the review ends `audited-chain` with no panel after round 1."""
     scoped_state = {"fired": False}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -2266,16 +1821,29 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
         return []
 
     counter = {"n": 0}
+    fixed, audited = {}, {}
 
     def fix_step(batch, rnd, payload):
         counter["n"] += 1
+        fixed[rnd] = [b.get("title") for b in batch]
         return {"fixes": [], "headDiff": _headf_ns(counter["n"]), "changedSubjects": ["Code"]}
 
-    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step),
+    def auditor(targets, rnd):
+        audited[rnd] = [t.get("title") for t in (targets or [])]
+        return [dict({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": audit_checks()}, **audit_test_match(t))
+                for t in (targets or [])]
+
+    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor),
                           _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
-    assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
-    assert any(x["kind"] == "confirmation" for x in receipt["rounds"])
+    assert counter["n"] == 2
+    assert "bug" in fixed[1] and "hole" in fixed[2]
+    assert "hole" in audited[3]
+    assert receipt["certificationShape"] == "audited-chain-degraded"
+    assert not any(x["kind"] in ("confirmation", "full-panel-unknown-surface")
+                   for x in receipt["rounds"])
 
 
 # =============================================================================
@@ -2314,7 +1882,8 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
     def auditor(targets, rnd):
         seen.extend(dict(t) for t in (targets or []))
         return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                 "evidence": "tests pass", "auditorVendor": "claude"} for t in (targets or [])]
+                 "evidence": "tests pass", "auditorVendor": "claude", "checks": audit_checks()}
+                for t in (targets or [])]
 
     refusal, state = _run_loop_capturing_state(
         _seams(reviewer=lambda dim, tier, rnd, ctx:
@@ -2323,7 +1892,9 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
                 if rnd == 1 and dim == "code-reviewer" else []), auditor=auditor),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
     loop_receipt = RD.build_receipt(state)
-    assert refusal["verdict"] == "held" and refusal["certificationShape"] is None
+    # The scoped finder, like the auditor, cannot be seated outside the fixer's family: the fixes' own
+    # diff has no reviewer, so the review is not certified (re-pinned: it used to hand back before it).
+    assert refusal["verdict"] == "cannot-certify" and refusal["certificationShape"] is None
     assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
                         for t in seen)
     assert state["independenceDegraded"] is True
@@ -2340,13 +1911,15 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude"))
+        auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude",
+                                    seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
     assert captured["targets"], "the auditor must have received the fix's audit targets"
     t = captured["targets"][0]
@@ -2364,7 +1937,8 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
            "baseGuard": RD.BASE_GUARD_CHECKED}
@@ -2373,7 +1947,8 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    assert result["verdict"] == "held" and result["certificationShape"] is None
+    # re-pinned: the scoped finder over the fixes' own diff cannot be seated either, so the review parks
+    assert result["verdict"] == "cannot-certify" and result["certificationShape"] is None
     t = captured["targets"][0]
     assert t["independence"] == "unseatable" and "auditorVendor" not in t
 
@@ -2385,14 +1960,19 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
-    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "codex",
-           "baseGuard": RD.BASE_GUARD_CHECKED}
+    # the build session (claude) and the codex fixer are both makers, so the scoped finder, which sits
+    # outside every maker's family, is seated on a third vendor and reports that one
+    cfg = {"leg": "code", "vendors": ["claude", "codex", "cursor"], "diff": DIFF, "fixerVendor": "codex",
+           "baseGuard": RD.BASE_GUARD_CHECKED,
+           "seatMap": _nonpanel_cell_proof(["claude", "codex", "cursor"])}
     receipt = RD.run_loop(_seams(
             reviewer=lambda dim, tier, rnd, ctx:
                 ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
-                 if rnd == 1 and dim == "code-reviewer" else []),
+                 if rnd == 1 and dim == "code-reviewer"
+                 else {"findings": [], "vendor": "cursor"} if dim == "scoped-finder" else []),
             auditor=auditor, fixer_vendor="codex"), cfg)
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
@@ -2410,14 +1990,14 @@ def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
     # the fixer vendor tries to self-clear — echoing "claude" proves nothing (no manifest either)
     out = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "trust me",
-                    "auditorVendor": "claude"}])
+                    "auditorVendor": "claude", "checks": audit_checks()}])
     assert out["discharged"] == []
     assert out["notDischarged"] == ["v0"]
     assert out["unauthenticated"] == ["v0"]
     # the orchestrator's manifest authenticates the codex dispatch → discharged, trusted vendor recorded
     ok = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "fix verified",
-                    "auditorVendor": "codex"}],
+                    "auditorVendor": "codex", "checks": audit_checks()}],
         collection_manifest={"v0": "codex"})
     assert ok["discharged"] == ["v0"]
     assert ok["unauthenticated"] == []
@@ -2437,14 +2017,15 @@ def test_audit_round_outcomes_carry_class_keys_for_alias_stall(tmp_path):
     tgt = state["_auditTargets"][0]
     assert tgt["classKey"] == "Security::CWE-401::orig"
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+         "checks": audit_checks(right="no")}]})
     round1 = state["auditRounds"][-1]
     assert round1["outcomes"][0]["classKey"] == "Security::CWE-401::orig"
     # a SECOND round: the finding is retitled (a different identity) but keeps its classKey.
     retitled = {"round": state["round"] + 1, "outcomes": [
         {"identity": "f.py::memory not freed", "ruling": "not-discharged",
          "classKey": "Security::CWE-401::orig", "dimension": "Security", "taxonomy": "CWE-401"}]}
-    brk = CB.check_audit_breaker([round1, retitled], 20)
+    brk = CB.check_audit_breaker([round1, retitled])
     assert brk["halt"] and brk["reason"] == "audit-stall", brk
 
 
@@ -2461,13 +2042,14 @@ def test_audit_outcome_carries_title_so_distinct_classkeys_dont_false_stall(tmp_
         state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
         tgt = state["_auditTargets"][0]
         RD._fold_audits(state, state["config"], {"results": [
-            {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+            {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+             "checks": audit_checks(right="no")}]})
         return state["auditRounds"][-1]
 
     r1 = fold("secret a", "Security::CWE-401::secret a")
     assert r1["outcomes"][0]["title"] == "secret a"
     r2 = {"round": 2, "outcomes": fold("secret b", "Security::CWE-401::secret b")["outcomes"]}
-    brk = CB.check_audit_breaker([r1, r2], 20)
+    brk = CB.check_audit_breaker([r1, r2])
     assert not brk["halt"], brk  # two distinct classKeys → NOT a stall
 
 
@@ -2511,7 +2093,8 @@ def test_verify_skip_with_no_command_still_advances(tmp_path):
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        verify_runner=lambda cmd, rnd: "none"), _cfg_cert(verifyCommand="none"))
+        verify_runner=lambda cmd, rnd: "none"),
+        _cfg_cert(verifyCommand="none", seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
 
 
@@ -2528,7 +2111,7 @@ def test_new_blocker_does_not_drop_unresolved_target_at_different_line():
         {"identity": "f.py::same bug", "ruling": "not-discharged"}]}]
     state["findings"] = [{"title": "same bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}]
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert sorted(b.get("line") for b in state["_fixBatch"]) == [1, 2]
 
 
@@ -2784,11 +2367,11 @@ def test_receipt_carries_audit_provenance_per_round(tmp_path):
     that ran fix audits records `auditProvenance: collection-manifest`, and validate_receipt accepts
     the field (build_receipt must project it, not leave it recorded in state only)."""
     d = str(tmp_path)
-    _drive_cli(d, _cfg(), _responder(
+    _drive_cli(d, _cfg(seatMap=_nonpanel_cell_proof(["claude", "codex"])), _responder(
         round1_findings=[{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]))
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
-    provs = [r.get("auditProvenance") for r in receipt["rounds"]]
+    provs =[r.get("auditProvenance") for r in receipt["rounds"]]
     assert "collection-manifest" in provs, provs
     ok, reason = RD.validate_receipt(receipt)
     assert ok, reason
@@ -2911,42 +2494,6 @@ def test_duplicate_terminating_submit_fault_carries_foldLanded(tmp_path):
     assert dup.get("foldLanded") is True
 
 
-def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
-    """#507 R2 residual-5: cross-cutting rework accumulates across MULTIPLE post-panel delta fixes.
-    Three delta fixes of one subject each cumulate to 3 distinct subjects → cross-cutting, even
-    though no single fix is broad (the latest-only read under-fired)."""
-    import review_round_policy as RRP
-    state = RD.new_state(_cfg())
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    assert state["_changedSubjectsSincePanel"] == []
-    for subj in (["Security"], ["Code"], ["Test"]):
-        state["round"] = 2
-        RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                       lambda r, h, a, _s=subj: _s)
-    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
-    assert RRP.is_cross_cutting(state["_changedSubjectsSincePanel"]) is True
-
-
-def test_panel_resets_accumulator_and_baseline_fix_excluded():
-    """A full panel resets the cross-cutting accumulator (a broad fix BEFORE it does not count as the
-    panel's rework), and a round-1 BASELINE fix never accumulates (it is not confirmation rework)."""
-    # a broad ROUND-1 baseline fix is excluded
-    state = RD.new_state(_cfg())
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    state["round"] = 1
-    RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                   lambda r, h, a: ["Code", "Security", "Test"])
-    assert state["_changedSubjectsSincePanel"] == []
-    # a broad delta fix accumulates, then a later panel resets it
-    state["round"] = 2
-    RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                   lambda r, h, a: ["Code", "Security", "Test"])
-    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
-    state["round"] = 3
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    assert state["_changedSubjectsSincePanel"] == []
-
-
 def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
     """#507 R2 residual-6: _fold_audits passes the DRIVER-recorded auditor map, so a clearing result
     echoing the FIXER vendor (a self-audit) is rejected not-discharged — the claimant echo never
@@ -2959,43 +2506,22 @@ def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
     assert tgt["auditorVendor"] == "codex"
     RD._fold_audits(state, state["config"], {"results": [
         {"id": tgt["id"], "ruling": "discharged", "reason": "self-clear",
-         "auditorVendor": "claude"}]})  # echoes the FIXER, not the recorded codex
+         "auditorVendor": "claude", "checks": audit_checks()}]})  # echoes the FIXER, not the recorded codex
     assert state["_auditOutcome"]["unauthenticated"] == [tgt["id"]]
     assert state["_auditOutcome"]["discharged"] == []
 
 
-def test_judgment_dispositions_distinct_for_same_title_different_lines():
-    """#507 R2 v5: two same-title tradeoff blockers at DIFFERENT lines get DISTINCT disposition ids,
-    so a skip for the one never collides onto the other (the line-less id collapsed them)."""
+def test_owner_choice_holds_are_distinct_for_same_title_different_lines():
+    """#507 R2 v5: two same-title tradeoff blockers at DIFFERENT lines are held under DISTINCT keys,
+    so a ruling on the one never settles the other (the line-less id collapsed them)."""
     a = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
          "tradeoff": True}
     b = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 20,
          "tradeoff": True}
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(a), dict(b)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    assert len(set(ids)) == 2, ids
-    id_a, id_b = ids
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": id_a, "disposition": "fix-as-suggested"},
-        {"id": id_b, "disposition": "skip", "reason": "defer the line-20 choice"}]})
-    assert state["step"] == RD.P_FIXER
-    assert [f["line"] for f in state["_fixBatch"]] == [10]
-    assert [s["line"] for s in state["_skippedBlockers"]] == [20]
-
-
-def test_fixer_vendor_flag_rejects_unknown_and_wires_fresh(tmp_path):
-    """#507 R2 v4: --fixer-vendor sets the ACTUAL fixer so the auditor is seated as a DIFFERENT
-    vendor. An unknown vendor or a non-fresh state fails loud (nonzero), never a silent default."""
-    d = str(tmp_path)
-    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "nope"]) == 1
-    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "codex",
-                    "--vendors", "codex,cursor"] + _guard_argv(d)) == 0
-    ok, state = RD.load_state(d)
-    assert ok and state["config"]["fixerVendor"] == "codex"
-    # non-fresh: a later --fixer-vendor cannot take effect → rejected loud
-    assert RD.main(["next", "--session-dir", d, "--fixer-vendor", "cursor"]) == 1
+    assert RD._hold_owner_choice(state, [dict(a), dict(b)]) == []
+    assert len(set(state["ownerChoiceHeld"])) == 2, state["ownerChoiceHeld"]
+    assert state["ownerChoiceHeld"] == [RD._finding_key_of(a), RD._finding_key_of(b)]
 
 
 def test_receipt_missing_seat_surfaces_unverified(tmp_path):
@@ -3192,7 +2718,7 @@ def test_settle_delta_list_dimension_via_mechanical_compile(tmp_path):
     raw = [{"title": "hole", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
             "dimension": ["security", "perf"]}]
     compiled, _ = RD.mechanical_compile(raw, DIFF)
-    state = _delta_state_ready(confirmations=0, surfaced=[], findings=compiled)
+    state = _delta_state_ready(findings=compiled)
     RD._settle_delta(state, state["config"])
     record = (state.get("_records") or [])[-1]
     dim_map = record.get("dimensions") or {}
@@ -3310,6 +2836,8 @@ _ALL_CHANNELS = {
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "verifierProvenance": [{"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}],
     "synthesisUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude"}],
+    "secondTestUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude",
+                              "held": ["f.py::bug@L1"]}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",
@@ -3898,14 +3426,14 @@ def test_fold_fixer_derives_subjects_from_git_not_self_report():
     ]
     head = _file_diff("a.py", 3) + _file_diff("b.py", 3) + _file_diff("c.py", 3)
     artifact = {"fixes": [], "headDiff": head, "changedSubjects": ["Code"]}
-    RD._fold_fixer(state, state["config"], artifact)
+    RD._fold_apply_fixes(state, state["config"], artifact)
     assert state["_changedSubjects"] == ["Code", "Security", "Test"]
 
 
 def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
     """run_loop routes the derivation through the injected `changed_subjects` seam (the eval-harness
-    pattern). A seam that returns a cross-cutting set re-arms a confirmation even though the fixer's
-    self-report and the synthetic diff are narrow — proving the self-report is never consulted."""
+    pattern). The seam is consulted although the fixer's self-report is narrow, and a cross-cutting
+    set no longer re-arms a confirmation panel — none runs after round 1."""
     calls = []
 
     def changed_subjects(reviewed, head, accumulated):
@@ -3920,9 +3448,10 @@ def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
 
     seams = _seams(reviewer=reviewer)
     seams["changed_subjects"] = changed_subjects
-    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
+    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert calls  # the seam was invoked (the self-report was never consulted)
-    assert any(r.get("kind") == "confirmation" for r in receipt["rounds"])
+    assert not any(r.get("kind") == "confirmation" for r in receipt["rounds"])
+    assert receipt["verdict"] == "converged"
 
 
 # =============================================================================
@@ -4141,9 +3670,14 @@ def test_base_guard_wrong_base_diff_refuses_no_state(tmp_path, capsys):
 
 def test_base_guard_healthy_next_stat_bound_receipt(tmp_path, capsys):
     d = str(tmp_path)
-    ga = _guard_argv(d) + ["--vendors", "codex,cursor", "--fixer-vendor", "codex"]
+    # the build session's own family (openai) is the fixer, so the audits are seated on another vendor
+    seat_map = dict(_nonpanel_cell_proof(["codex", "cursor"]), hostFamily="openai")
+    seat_map_path = os.path.join(d, "seat-map.json")
+    with open(seat_map_path, "w", encoding="utf-8") as fh:
+        json.dump(seat_map, fh)
+    ga = _guard_argv(d) + ["--vendors", "codex,cursor", "--seat-map", seat_map_path]
     rc, out = _cli_next_json(d, ga, capsys)
-    assert rc == 0 and out["ok"]
+    assert rc == 0 and out["ok"], out
     pin = json.load(open(os.path.join(d, "meta.json"), encoding="utf-8"))["baseRef"]
     for _ in range(80):
         n = RD.cmd_next(d)
@@ -4335,7 +3869,7 @@ def test_seat_map_excused_only_violation_unchanged_cert_shape():
     RD._terminal_converged(state_clean, cfg, full_panel=True)
     shape_clean = state_clean["certification"]["shape"]
     SM = _load("seat_map")
-    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0)
     seat_map_excused = SM.to_receipt(m, "anthropic")
     state_excused = RD.new_state(cfg)
     state_excused["seatMap"] = seat_map_excused
@@ -4363,7 +3897,7 @@ def test_seat_map_pin_excusal_degraded_shape_and_disclosure():
     pin_lines = [d for d in receipt["degraded"] if d.startswith("seat-map pin excusal:")]
     assert len(pin_lines) == 1
     assert "security-reviewer" in pin_lines[0]
-    assert SM.classify_violations(seats, model_registry.family_for("code-fixer", "claude"))["excusedByPin"]
+    assert SM.classify_violations(seats, model_registry.family_for("implementer", "claude"))["excusedByPin"]
 
 
 def test_seat_map_unproven_liveness_shape_driver():
@@ -4682,9 +4216,9 @@ def test_auditor_vendor_family_keyed_single_vendor_same_family_unseatable():
 # new expectation AND the cross-family branches the old test did not cover. One thing did go with
 # it: that test was the only one reaching `_auditor_vendor`'s SECOND (same-vendor) loop on its
 # `independent` return, and post-#651 no vendor can satisfy that branch — every vendor's
-# `code-fixer` and `verifier` roles now resolve to the same family — so it is unreachable, not
+# `implementer` and `verifier` roles now resolve to the same family — so it is unreachable, not
 # merely untested. #652 rider 4a deleted that loop; the invariant is pinned by
-# test_auditor_and_code_fixer_families_match_per_vendor in test_model_registry.py.
+# test_auditor_and_implementer_families_match_per_vendor in test_model_registry.py.
 
 
 # axis: _auditor_vendor independence follows the auditor role family, not verifier
@@ -4728,13 +4262,15 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude"))
+        auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude",
+                                    seatMap=_nonpanel_cell_proof(["codex", "cursor"])))
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
     assert t["fixerVendor"] == "claude"
@@ -4743,12 +4279,12 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
 
 
 # =============================================================================
-# the judgment gate is an INTERVENTION, not a terminal (#507 R2a)
+# an owner-choice blocker is held out of the fix batch and handed back open (C1-L4)
 # =============================================================================
 
 _TRADEOFF = {"title": "widen the API", "severity": "Important", "consequence": _CONSEQUENCE,
              "file": "f.py", "line": 1, "tradeoff": True}
-# The judgment disposition key is the per-LOCATION id (line-less finding_identity + line) so two
+# The held-finding key is the per-LOCATION id (line-less finding_identity + line) so two
 # same-title tradeoff blockers at different lines never collide (#507 R2 v5).
 _TRADEOFF_ID = "f.py::widen the api@L1"
 _RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Important", "consequence": _CONSEQUENCE,
@@ -4756,78 +4292,60 @@ _RESUME_IDENTITY_TRADEOFF = {"title": "resume identity fields", "severity": "Imp
 _RESUME_IDENTITY_TRADEOFF_ID = "pkg/resume_identity.py::resume identity fields@L42"
 
 
-def test_judgment_payload_rows_carry_single_classification_literal():
-    """Every present-judgment row must use the one classification literal the gate-policy enum assumes."""
+def test_tradeoff_blocker_is_held_out_of_the_fix_batch_not_put_to_the_owner():
+    """A tradeoff/product-choice blocker is held out of the fixer's batch and journaled — no phase
+    puts it to the owner, and the step does not move."""
     state = RD.new_state(_cfg())
-    finding_b = {"title": "narrow the API", "severity": "Minor", "consequence": _CONSEQUENCE,
-                 "file": "g.py", "line": 2, "tradeoff": True}
-    state["_judgmentFindings"] = [dict(_TRADEOFF), finding_b]
-    state["step"] = RD.P_JUDGMENT
-    step = RD._advance(state, state["config"])
-    classifications = {row["classification"] for row in step["payload"]["findings"]}
-    assert classifications == {"judgment"}
-
-
-def test_tradeoff_blocker_routes_to_judgment_not_stall():
-    """A tradeoff/product-choice blocker routes to the present-judgment gate — NEVER the terminal
-    stall menu (the R2a defect: the stall menu dead-ended it so it could never be fixed)."""
-    state = RD.new_state(_cfg())
-    took = RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    assert took is True
-    assert state["step"] == RD.P_JUDGMENT and state["step"] != RD.P_STALL
-    step = RD._advance(state, state["config"])
-    assert step["action"] == RD.P_JUDGMENT
-    fnd = step["payload"]["findings"]
-    assert len(fnd) == 1 and fnd[0]["id"] == _TRADEOFF_ID
-    assert fnd[0]["dispositions"] == list(RD.JUDGMENT_DISPOSITIONS)
+    step_before = state["step"]
+    assert RD._hold_owner_choice(state, [dict(_TRADEOFF)]) == []
+    assert state["step"] == step_before
+    assert state["ownerChoiceHeld"] == [_TRADEOFF_ID]
     kinds = [d["kind"] for d in state["decisions"]]
-    assert "judgment-gate" in kinds
+    assert kinds == ["owner-choice-held"]
 
 
-def test_fix_as_suggested_folds_to_fixer_batch():
+def test_mechanical_blocker_is_not_held_with_the_tradeoff():
+    """A mechanical (non-tradeoff) blocker in the SAME batch stays in the batch — never abandoned."""
+    mech = {"title": "null deref", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"],
-                      {"dispositions": [{"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"}]})
-    assert state["step"] == RD.P_FIXER
-    batch = state["_fixBatch"]
-    assert len(batch) == 1 and batch[0]["title"] == "widen the API"
-    assert batch[0]["judgmentDisposition"] == "fix-as-suggested"
+    rest = RD._hold_owner_choice(state, [dict(mech), dict(_TRADEOFF)])
+    assert [r["title"] for r in rest] == ["null deref"]
+    assert state["ownerChoiceHeld"] == [_TRADEOFF_ID]
 
 
-def test_fix_with_guidance_attaches_guidance():
+def test_a_purely_mechanical_batch_holds_nothing_and_journals_nothing():
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "keep it backward compatible"}]})
-    assert state["step"] == RD.P_FIXER
-    b = state["_fixBatch"][0]
-    assert b["judgmentDisposition"] == "fix-with-guidance"
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in b
+    mech = {"title": "null deref", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}
+    assert RD._hold_owner_choice(state, [dict(mech)]) == [mech]
+    assert "ownerChoiceHeld" not in state and state["decisions"] == []
 
 
-def test_skip_with_reason_records_ledger_and_rides_disclosure():
-    """A skip needs a citable reason: it lands in the decision ledger, rides the exit disclosure AND
-    the dedicated top-level `skippedBlockers` channel. With nothing left to fix, the run converges —
-    but CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
+def test_held_keys_are_deduped_append_only_and_journaled_once_per_call():
+    state = RD.new_state(_cfg())
+    other = dict(_TRADEOFF, title="drop the flag", line=2)
+    RD._hold_owner_choice(state, [dict(_TRADEOFF)])
+    RD._hold_owner_choice(state, [dict(_TRADEOFF), dict(other)])
+    assert state["ownerChoiceHeld"] == [_TRADEOFF_ID, "f.py::drop the flag@L2"]
+    assert [d["kind"] for d in state["decisions"]].count("owner-choice-held") == 2
+    RD._hold_owner_choice(state, [])  # a call that holds nothing leaves the list and journal alone
+    assert len(state["ownerChoiceHeld"]) == 2 and len(state["decisions"]) == 2
+
+
+def test_recorded_skipped_blocker_still_rides_the_certification_and_disclosure():
+    """A skipped blocker an earlier version recorded is still read at the converge: the run converges
+    CLEAN EXCEPT FOR SKIPPED, never a plain success (the reason leads with clean-except-skipped)."""
     state = RD.new_state(_cfg())
     state["seatMapReceipts"] = _seat_map_receipts(
         _assertable_seat_map(state["config"]["vendors"], state["config"].get("fixerVendor")))
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "shipping v1 narrow on purpose"}]})
+    state["_skippedBlockers"] = [{"id": _TRADEOFF_ID, "file": "f.py", "line": 1,
+                                  "title": "widen the API", "severity": "Important",
+                                  "reason": "shipping v1 narrow on purpose"}]
+    state["rounds"].setdefault("1", {})["skippedBlockers"] = list(state["_skippedBlockers"])
+    RD._terminal_converged(state, state["config"], full_panel=False)
     assert state["terminal"] == "converged"
-    kinds = [d["kind"] for d in state["decisions"]]
-    assert "judgment-skip" in kinds
-    # the certification is non-plain: shape unchanged (audited-chain) but the reason leads with
-    # the exit_skipped invariant marker.
     cert = state.get("certification") or {}
     assert cert.get("shape") == "audited-chain"
     assert (cert.get("reason") or "").startswith("clean-except-skipped: 1 blocker(s) skipped")
-    assert "owner-skipped" in (cert.get("note") or "")
     receipt = RD.build_receipt(state)
     # top-level dedicated channel — id/title/severity/reason
     assert receipt["skippedBlockers"] == [
@@ -4858,199 +4376,23 @@ def test_receipt_always_carries_skipped_blockers_channel():
     assert not ok3 and "skippedBlockers" in why3
 
 
-def test_partial_skip_end_to_end_marks_clean_except_skipped(tmp_path):
-    """A run that fixes one judgment finding and skips another converges CLEAN EXCEPT FOR SKIPPED:
-    the skipped one rides the top-level channel and the certification reason leads with the marker,
-    even though real fix-and-audit work ran."""
-    trade_a = {"title": "widen the API", "severity": "Important", "consequence": _CONSEQUENCE,
-               "file": "f.py", "line": 1, "tradeoff": True}
-    trade_b = {"title": "drop the flag", "severity": "Important", "consequence": _CONSEQUENCE,
-               "file": "f.py", "line": 2, "tradeoff": True}
-
-    def judgment_gate(payload):
-        out = []
-        for f in payload["findings"]:
-            if f["id"] == "f.py::widen the api@L1":
-                out.append({"id": f["id"], "disposition": "fix-as-suggested"})
-            else:
-                out.append({"id": f["id"], "disposition": "skip", "reason": "deferred to v2"})
-        return {"dispositions": out}
-
-    refusal, receipt = _run_loop_with_loop_receipt(_seams(
-        reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [dict(trade_a), dict(trade_b)]}
-             if rnd == 1 and dim == "code-reviewer" else []),
-        io={"judgment_gate": judgment_gate}), _cfg_cert())
-    assert refusal["verdict"] == "converged"
-    assert [s["title"] for s in receipt["skippedBlockers"]] == ["drop the flag"]
-    reason = (receipt["certification"] or {}).get("reason") or ""
-    assert reason.startswith("clean-except-skipped: 1 blocker(s) skipped")
-    ok, _ = RD.validate_receipt(receipt)
-    assert ok
-
-
-def test_skip_without_reason_fails_closed_to_fix():
-    """A skip with no citable reason is NOT honored — it fails closed to fix-as-suggested (a judgment
-    blocker is never silently skipped)."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "skip"}]})
-    assert state["step"] == RD.P_FIXER
-    assert state["_fixBatch"][0]["judgmentFailClosed"] is True
-    assert "judgment-fail-closed" in [d["kind"] for d in state["decisions"]]
-
-
-def test_missing_or_unknown_disposition_fails_closed_to_fix():
-    """A listed judgment finding with a MISSING disposition (or an UNKNOWN one) folds as
-    fix-as-suggested, flagged failClosed — never silently skipped."""
-    # missing: the artifact lists no disposition at all
-    s1 = RD.new_state(_cfg())
-    RD._route_judgment_blockers(s1, [dict(_TRADEOFF)])
-    RD._fold_judgment(s1, s1["config"], {"dispositions": []})
-    assert s1["step"] == RD.P_FIXER
-    b1 = s1["_fixBatch"][0]
-    assert b1["judgmentDisposition"] == "fix-as-suggested" and b1["judgmentFailClosed"] is True
-    # unknown: a disposition string the gate does not recognize
-    s2 = RD.new_state(_cfg())
-    RD._route_judgment_blockers(s2, [dict(_TRADEOFF)])
-    RD._fold_judgment(s2, s2["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "ship-it-anyway"}]})
-    assert s2["step"] == RD.P_FIXER
-    assert s2["_fixBatch"][0]["judgmentFailClosed"] is True
-
-
-def test_mechanical_blocker_carried_through_judgment_gate():
-    """A mechanical (non-tradeoff) blocker in the SAME batch is carried through the gate and rides
-    the fix batch even when the tradeoff finding is skipped — never abandoned at the gate."""
-    mech = {"title": "null deref", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2}
-    state = RD.new_state(_cfg())
-    took = RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
-    assert took is True and state["step"] == RD.P_JUDGMENT
-    # only the tradeoff finding is presented for judgment
-    step = RD._advance(state, state["config"])
-    assert [x["id"] for x in step["payload"]["findings"]] == [_TRADEOFF_ID]
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "deferred to v2"}]})
-    assert state["step"] == RD.P_FIXER
-    assert [b["title"] for b in state["_fixBatch"]] == ["null deref"]
-
-
-def test_judgment_row_ids_same_finding_same_id():
-    """Byte-identical tradeoff findings at the same location are one finding and share one disposition id."""
-    key = RD._judgment_row_ids([dict(_TRADEOFF)])[0]
-    findings = [dict(_TRADEOFF), dict(_TRADEOFF)]
-    assert RD._judgment_row_ids(findings) == [key, key]
-
-
-def test_judgment_colliding_identity_different_severity_dispositions_not_collapse():
-    """Fixtures are two tradeoff findings at one location whose long titles agree past the title
-    clamp (alpha/bravo suffixes) and separate by the content-hash disambiguator; severity is what
-    the assertion then reads per row — severity is not the distinguishing axis."""
-    loc_id_prefix = RD.session_contract.location_key({"title": "same choice " + "x" * 205 + " alpha",
-                                                      "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
-                                                      "tradeoff": True})
-    critical = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Critical", "consequence": _CONSEQUENCE,
-                "file": "f.py", "line": 10, "tradeoff": True}
-    important = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important", "consequence": _CONSEQUENCE,
-                 "file": "f.py", "line": 10, "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(critical), dict(important)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    assert len(ids) == 2 and ids[0] != ids[1]
-    assert all(i.startswith(loc_id_prefix) for i in ids)
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": ids[0], "disposition": "fix-as-suggested"},
-        {"id": ids[1], "disposition": "skip", "reason": "defer the important one"},
-    ]})
-    assert state["step"] == RD.P_FIXER
-    assert [f["severity"] for f in state["_fixBatch"]] == ["Critical"]
-    assert [s["severity"] for s in state["_skippedBlockers"]] == ["Important"]
-
-
-def test_judgment_identical_disposition_same_id_collapses():
-    """Two artifact entries with the same id and the same disposition collapse harmlessly."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
-    ]})
-    assert state["step"] == RD.P_FIXER
-    assert len(state["_fixBatch"]) == 1
-
-
-def test_judgment_conflicting_dispositions_same_id_parks():
-    """Colliding ids with conflicting dispositions park — never last-wins merge."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
-        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "conflict"},
-    ]})
-    assert state["terminal"] == "cannot-certify"
-    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
-
-
-def test_judgment_conflicting_guidance_same_id_parks():
-    """Two fix-with-guidance rows for one id with different guidance park via collision cause."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach A"},
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "approach B"},
-    ]})
-    assert state["terminal"] == "cannot-certify"
-    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
-
-
-def test_judgment_identical_guidance_same_id_collapses():
-    """Identical guidance for the same id folds normally — not a conflict."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "same text"},
-    ]})
-    assert state["step"] == RD.P_FIXER
-    assert len(state["_fixBatch"]) == 1
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "same text"
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
-
-
-def test_fix_with_guidance_blank_records_disposition_without_guidance_value():
-    """fix-with-guidance with blank guidance records disposition only — no fabricated guidance."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "   "}]})
-    assert state["step"] == RD.P_FIXER
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][0]
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged["disposition"] == "fix-with-guidance"
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in logged
-
-
-def test_judgment_dispositions_record_carries_guidance_text():
-    """G3 axis: disposition_log carries userGuidance for fix-with-guidance folds."""
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "keep it backward compatible"}]})
-    logged = state["rounds"]["1"]["judgmentDispositions"][0]
-    assert logged[RD.GATE_GUIDANCE_RECORD_KEY] == "keep it backward compatible"
+def _record_gate_decision(state, finding, disposition, guidance=None):
+    """Write the `judgmentDispositions` row an earlier version's judgment fold recorded for `finding`
+    (the readers of that recorded state are what these tests pin)."""
+    key = RD._finding_key_of(finding)
+    entry = {"id": key, RD.session_contract.FINDING_KEY_FIELD: key, "title": finding["title"],
+             "file": finding["file"], "line": finding["line"], "disposition": disposition}
+    if guidance is not None:
+        entry[RD.GATE_GUIDANCE_RECORD_KEY] = guidance
+    RD._stamp_ruling_seq(state, entry)
+    RD._record_round_append(state, "judgmentDispositions", entry)
+    return entry
 
 
 def test_receipt_projects_judgment_dispositions_when_recorded():
     """G4 axis: build_receipt carries judgmentDispositions when the round recorded one."""
     state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "narrow only"}]})
+    _record_gate_decision(state, _TRADEOFF, "fix-with-guidance", "narrow only")
     state["terminal"] = "converged"
     receipt = RD.build_receipt(state)
     rd = receipt["rounds"][0]
@@ -5058,13 +4400,10 @@ def test_receipt_projects_judgment_dispositions_when_recorded():
 
 
 def test_judgment_dispositions_guidance_reaches_the_export_the_receipt_and_the_fixer_order(tmp_path):
-    """E6: fold guidance reaches the export, the receipt and the rendered fixer order in one session."""
+    """E6: fold guidance reaches the export, the receipt and the apply-fixes guidance file in one session."""
     records = tmp_path / "round-records.json"
     state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
-    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "narrow only"}]})
+    _record_gate_decision(state, _TRADEOFF, "fix-with-guidance", "narrow only")
     state["_records"] = [_seed_record(1)]
     RD._persist_round_records(state, state["config"])
     on_disk = json.loads(records.read_text())
@@ -5079,32 +4418,21 @@ def test_judgment_dispositions_guidance_reaches_the_export_the_receipt_and_the_f
                            "judgmentDisposition": "fix-with-guidance"}]
     session_dir = str(tmp_path / "resume-render")
     os.makedirs(session_dir)
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    assert "narrow only" in ph["GATE_GUIDANCE"]
-    assert ph["GATE_GUIDANCE"] != RD._GATE_GUIDANCE_NO_GUIDANCE
+    fields = RD._apply_fixes_payload_fields(session_dir, state, 1, 0)
+    assert fields["guidancePath"] is not None
+    with open(fields["guidancePath"], encoding="utf-8") as fh:
+        guidance = fh.read()
+    assert "narrow only" in guidance
+    assert guidance.strip() != RD._GATE_GUIDANCE_NO_GUIDANCE
 
 
 def test_judgment_dispositions_identity_fields_reach_the_export_the_receipt_and_the_fixer_order(tmp_path):
-    """E6b: fold identity fields (id, file, line) reach the export, the receipt and the rendered fixer order in one session."""
+    """E6b: fold identity fields (id, file, line) reach the export, the receipt and the apply-fixes guidance file in one session."""
     records = tmp_path / "round-records.json"
     tradeoff = dict(_RESUME_IDENTITY_TRADEOFF)
     guidance_text = "keep the resume identity intact"
     state = RD.new_state(_cfg(dimensions=["test-role"], recordsPath=str(records)))
-    RD._route_judgment_blockers(state, [tradeoff])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _RESUME_IDENTITY_TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": guidance_text}]})
+    _record_gate_decision(state, tradeoff, "fix-with-guidance", guidance_text)
     state["_records"] = [_seed_record(1)]
     RD._persist_round_records(state, state["config"])
     on_disk = json.loads(records.read_text())
@@ -5130,19 +4458,10 @@ def test_judgment_dispositions_identity_fields_reach_the_export_the_receipt_and_
                            "judgmentDisposition": "fix-with-guidance"}]
     session_dir = str(tmp_path / "resume-identity-render")
     os.makedirs(session_dir)
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
+    fields = RD._apply_fixes_payload_fields(session_dir, state, 1, 0)
+    assert fields["guidancePath"] is not None
+    with open(fields["guidancePath"], encoding="utf-8") as fh:
+        block = fh.read()
     assert "### %s:%s — %s" % (tradeoff["file"], tradeoff["line"], tradeoff["title"]) in block
     assert _gate_guidance_record_id_line(block) == _RESUME_IDENTITY_TRADEOFF_ID
 
@@ -5154,173 +4473,17 @@ def _gate_guidance_record_id_line(block):
     return m.group(1) if m else None
 
 
-def test_guided_order_block_id_matches_judgment_dispositions_record(tmp_path):
-    """E3: durable record id is minted once at the fold and appears on the record-id line."""
-    mech = {"title": "widen the API", "severity": "Critical", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [mech, dict(_TRADEOFF)])
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": _TRADEOFF_ID, "disposition": "fix-with-guidance",
-         "guidance": "keep it backward compatible"}]})
-    record = state["rounds"]["1"]["judgmentDispositions"][0]
-    record_id = record["id"]
-    assert record["file"] == _TRADEOFF.get("file")
-    assert record["line"] == _TRADEOFF.get("line")
-    assert RD.GATE_GUIDANCE_RECORD_KEY not in state["_fixBatch"][1]
-    session_dir = str(tmp_path / "e3-id-match")
-    os.makedirs(session_dir)
-    state["reviewedDiff"] = "diff --git a/f b/f\n"
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
-    assert _gate_guidance_record_id_line(block) == record_id
-    assert "### %s:%s — %s" % (_TRADEOFF["file"], _TRADEOFF["line"], _TRADEOFF["title"]) in block
-
-
-def test_two_guided_findings_same_location_distinct_ids_match_record(tmp_path):
-    """E4: two guided tradeoffs at the same location — ambiguity note, both guidance texts kept."""
-    a = {"title": "same choice " + "x" * 205 + " alpha", "severity": "Important", "consequence": _CONSEQUENCE,
-         "file": "f.py", "line": 10, "tradeoff": True}
-    b = {"title": "same choice " + "x" * 205 + " bravo", "severity": "Important", "consequence": _CONSEQUENCE,
-         "file": "f.py", "line": 10, "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(a), dict(b)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    assert ids[0] != ids[1]
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
-        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
-    ]})
-    records = state["rounds"]["1"]["judgmentDispositions"]
-    record_by_guidance = {r[RD.GATE_GUIDANCE_RECORD_KEY]: r["id"] for r in records}
-    session_dir = str(tmp_path / "e4-same-loc")
-    os.makedirs(session_dir)
-    state["reviewedDiff"] = "diff --git a/f b/f\n"
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
-    for guidance, record_id in record_by_guidance.items():
-        assert record_id in block
-        assert "> %s" % guidance in block
-    identity_line = RD._gate_guidance_identity_line(
-        {"file": "f.py", "line": 10, "title": "same choice " + "x" * 205 + " alpha"})
-    assert block.count(identity_line) == 2
-    assert block.count("Note: 2 guided findings share this identity") == 2
-    assert block.count("BEGIN owner-gate guidance") == 2
-
-
-def test_two_guided_findings_same_title_distinguished_by_id(tmp_path):
-    """Edge 10: same title at different lines → distinct identity lines, no ambiguity note."""
-    a = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 10,
-         "tradeoff": True}
-    b = {"title": "same choice", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 20,
-         "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(a), dict(b)])
-    step = RD._advance(state, state["config"])
-    ids = [f["id"] for f in step["payload"]["findings"]]
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": ids[0], "disposition": "fix-with-guidance", "guidance": "guidance A"},
-        {"id": ids[1], "disposition": "fix-with-guidance", "guidance": "guidance B"},
-    ]})
-    session_dir = str(tmp_path / "two-guided")
-    os.makedirs(session_dir)
-    state["reviewedDiff"] = "diff --git a/f b/f\n"
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RD.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 1, paths, RD.CHANNEL_FILE,
-    )
-    block = ph["GATE_GUIDANCE"]
-    assert "### f.py:10 — same choice" in block
-    assert "### f.py:20 — same choice" in block
-    assert "Note:" not in block
-    assert ids[0] in block and ids[1] in block
-    assert "guidance A" in block and "guidance B" in block
-    assert ids[0] != ids[1]
-
-
-def test_stall_menu_payload_carries_no_judgment_findings():
-    """The stall menu is the audit-stall TERMINAL only — its payload never carries judgment
-    findings (they route to present-judgment)."""
-    state = RD.new_state(_cfg())
-    state["findings"] = [{"id": "v0", "verdict": "PLAUSIBLE"}]
-    state["selfRecovered"] = True
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
-                                              "stalledIdentities": ["v0"]})
-    assert state["step"] == RD.P_STALL
-    step = RD._advance(state, state["config"])
-    assert set(step["payload"].keys()) == {"choices", "acceptRiskEligible"}
-    assert "judgmentFindings" not in step["payload"]
-
-
-def test_migrate_old_stall_routed_judgment_state(tmp_path):
-    """#507 R2a migration: a state persisted under the OLD routing (a judgment blocker parked at the
-    present-stall-menu terminal) is re-pointed to present-judgment on load, and `next` re-emits the
-    judgment action from state under the new contract (schemaVersion stays 2)."""
-    d = str(tmp_path)
-    state = RD.new_state(_cfg())
-    state["step"] = RD.P_STALL
-    state["_judgmentFindings"] = [dict(_TRADEOFF)]
-    state["_stallChoices"] = ["one-more-round", "hold"]
-    state["_acceptRiskEligible"] = False
-    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL,
-                        "attempt": 0, "payload": {"choices": []}}
-    RD.save_state(d, state)
-    ok, loaded = RD.load_state(d)
-    assert ok and loaded["step"] == RD.P_JUDGMENT and loaded["pending"] is None
-    out = RD.cmd_next(d)
-    assert out["ok"] and out["action"] == RD.P_JUDGMENT
-    assert out["payload"]["findings"][0]["dispositions"] == list(RD.JUDGMENT_DISPOSITIONS)
-
-
-def test_tradeoff_finding_reaches_audited_chain_end_to_end(tmp_path):
-    """End-to-end: one tradeoff blocking finding routes to the judgment gate, the owner disposes it
-    fix-as-suggested, and the run fixes-and-audits it to an audited-chain certification — the very
-    path the R2a defect made unreachable."""
-    disposed = []
-
-    def judgment_gate(payload):
-        disposed.append(payload)
-        return {"dispositions": [{"id": f["id"], "disposition": "fix-as-suggested"}
-                                 for f in payload["findings"]]}
-
+def test_tradeoff_finding_alone_is_handed_back_open_end_to_end():
+    """End-to-end: one tradeoff blocking finding is held out of the fix batch, nothing is put to the
+    owner mid-review, and the run ends handed back with the finding open — never converged."""
     refusal, loop_receipt = _run_loop_with_loop_receipt(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
-            ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else []),
-        io={"judgment_gate": judgment_gate}), _cfg_cert())
-    assert len(disposed) == 1 and disposed[0]["findings"][0]["id"] == _TRADEOFF_ID
-    assert refusal["verdict"] == "converged"
-    assert refusal["certificationShape"] == "audited-chain-degraded"
-    assert "judgment-gate" in [d["kind"] for d in loop_receipt["decisions"]]
+            ({"findings": [dict(_TRADEOFF)]} if rnd == 1 and dim == "code-reviewer" else [])),
+        _cfg_cert())
+    assert refusal["verdict"] == "handed-back"
+    assert refusal["certificationShape"] is None
+    kinds = [d["kind"] for d in loop_receipt["decisions"]]
+    assert kinds[-2:] == ["owner-choice-held", "owner-choice-open"]
     ok, _ = RD.validate_receipt(loop_receipt)
     assert ok
 
@@ -5340,11 +4503,10 @@ def _verified_clean_seat_map(vendors):
     if not live:
         live = ["claude"]
     for author in ("xai", "anthropic", "openai"):
-        for narrative in ("anthropic", "openai"):
-            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
-            violations = SM.verify(m, author)
-            if violations == []:
-                return SM.to_receipt(m, author)
+        m = SM.build(SM.PANEL_ROSTER, live, author, 0)
+        violations = SM.verify(m, author)
+        if violations == []:
+            return SM.to_receipt(m, author)
     raise AssertionError("no verify-clean seat map for vendors %r" % vendors)
 
 
@@ -5366,14 +4528,13 @@ def _assertable_seat_map(vendors, fixer_vendor="claude"):
     live = sorted({v for v in (vendors or []) if isinstance(v, str) and v})
     if not live:
         live = ["claude"]
-    driver_author_family = model_registry.family_for("code-fixer", fixer_vendor)
+    driver_author_family = model_registry.family_for("implementer", fixer_vendor)
     for author in ("xai", "anthropic", "openai"):
-        for narrative in ("anthropic", "openai"):
-            m = SM.build(SM.PANEL_ROSTER, live, author, narrative, 0)
-            receipt = SM.to_receipt(m, author)
-            if SM.unexcused_violations(receipt, driver_author_family) == []:
-                receipt.update(_nonpanel_cell_proof(live))
-                return receipt
+        m = SM.build(SM.PANEL_ROSTER, live, author, 0)
+        receipt = SM.to_receipt(m, author)
+        if SM.unexcused_violations(receipt, driver_author_family) == []:
+            receipt.update(_nonpanel_cell_proof(live))
+            return receipt
     raise AssertionError(
         "no assertable seat map for vendors %r driver_author_family=%r"
         % (vendors, driver_author_family))
@@ -5757,7 +4918,7 @@ def test_seat_map_unjudgeable_terminal_converged_shape_drivers_consumer():
     seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
     unjudgeable_map = dict(seat_map)
     unjudgeable_map.pop("authorFamily", None)
-    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    driver_fam = model_registry.family_for("implementer", cfg.get("fixerVendor"))
     assert SM.derived_violations(unjudgeable_map, driver_fam) == []
     state = RD.new_state(cfg)
     _set_seat_map(state, unjudgeable_map)
@@ -5784,7 +4945,7 @@ def test_seat_map_unjudgeable_cert_shape_degraded_consumer():
     seat_map = _assertable_seat_map(["claude", "codex"], fixer_vendor=None)
     unjudgeable_map = dict(seat_map)
     unjudgeable_map.pop("authorFamily", None)
-    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    driver_fam = model_registry.family_for("implementer", cfg.get("fixerVendor"))
     assert SM.derived_violations(unjudgeable_map, driver_fam) == []
     state = RD.new_state(cfg)
     _set_seat_map(state, unjudgeable_map)
@@ -5943,7 +5104,7 @@ def test_emit_receipt_seat_map_derived_violations_replay_no_breach_lost():
     state["certification"] = {"shape": "full-panel-confirmed-degraded"}
     receipt = RD.build_receipt(state)
     emitted = receipt["seatMap"]
-    driver_fam = model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    driver_fam = model_registry.family_for("implementer", cfg.get("fixerVendor"))
     replayed = SM.derived_violations(emitted, driver_fam)
     emitted_violations = emitted.get("violations") or []
     emitted_keys = {(str(v.get("constraint", "")), str(v.get("seat") or ""))
@@ -6907,68 +6068,67 @@ def _rearm_forever_seams():
     return seams
 
 
-def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
-    """DoD headline: clean audits + fresh blocker every review round halts at the ceiling."""
-    # axis: the ROUND BOUNDARY — a round above the ceiling never begins (not: the ceiling round's findings)
-    ceiling = 4
+def test_clean_rearm_forever_halts_at_round_cap(tmp_path):
+    """DoD headline: clean audits + fresh blocker every review round hands back at the cap."""
+    # axis: the ROUND BOUNDARY — a round above the cap never begins (not: the cap round's findings)
+    cap = 4
     seams = _rearm_forever_seams()
-    result = RD.run_loop(seams,
-                         _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=ceiling))
-    assert result["verdict"] == "halted"
+    result = RD.run_loop(seams, _cfg_cert(maxRounds=cap))
+    assert result["verdict"] == "handed-back"
     leg_rnds = seams["_legRnds"]
-    # axis: the ceiling round runs to completion — fixer and verify both ran at the ceiling before park
-    assert ceiling in leg_rnds["fix"]
-    assert ceiling in leg_rnds["verify"]
+    # axis: the cap round runs to completion — fixer and verify both ran at the cap before the hand-back
+    assert cap in leg_rnds["fix"]
+    assert cap in leg_rnds["verify"]
 
 
-def test_clean_rearm_forever_halts_at_distinct_ceiling(tmp_path):
-    """Round reached and ceiling value are asserted independently — not conflated by substring."""
+def test_clean_rearm_forever_hands_back_at_a_cap_below_the_default(tmp_path):
+    """A library-path cap below the default binds: no round past it begins."""
     # axis: the ROUND BOUNDARY — rounds reached N and round N+1 not begun are separate facts
-    ceiling = 11
-    result = RD.run_loop(_rearm_forever_seams(),
-                         _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=7))
-    assert result["verdict"] == "halted"
+    seams = _rearm_forever_seams()
+    result = RD.run_loop(seams, _cfg_cert(maxRounds=3))
+    assert result["verdict"] == "handed-back"
+    assert max(seams["_legRnds"]["verify"]) == 3
 
 
-def test_delta_at_ceiling_records_ledger_then_parks_on_advance():
-    """A verified delta round at the ceiling appends its ledger record, then the advance parks."""
-    # axis: the ceiling round completes (delta ledger append) before the boundary refuses the next round
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=10))
-    state["round"] = 10
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = ["Critical"]
+def test_delta_at_cap_records_ledger_then_converges_with_no_round_past_the_cap():
+    """Re-pinned: a delta round at the cap whose audits discharged appends its ledger record and ends the
+    review on that round (no confirmation panel is owed, so no round past the cap is asked for)."""
+    # axis: the cap round completes (delta ledger append) and nothing asks for the round after it
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 4
     state["findings"] = []
     state["fullPanelRan"] = False
-    state["auditRounds"] = [{"round": 9, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["auditRounds"] = [{"round": 3, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
     RD._settle_delta(state, state["config"])
-    assert any(r.get("kind") == "delta" and r.get("round") == 10 for r in state["_records"])
-    assert state["terminal"] == "halted"
-    assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
-    assert state["round"] == 10
+    assert any(r.get("kind") == "delta" and r.get("round") == 4 for r in state["_records"])
+    assert state["terminal"] == "converged"
+    assert state["certification"]["shape"].startswith("audited-chain")
+    assert not any(d["kind"] == "round-cap" for d in state["decisions"])
+    assert state["round"] == 4
 
 
-def test_delta_at_ceiling_challenged_principle_parks_without_ceiling():
-    """Challenged-principle park at the ceiling round terminates; the ceiling boundary never runs."""
-    # axis: challenged-principle-recurring parks inside _settle_delta — round-ceiling is advance-only
+def test_delta_at_cap_challenged_principle_parks_without_the_cap():
+    """Challenged-principle park at the cap round terminates; the cap boundary never runs."""
+    # axis: challenged-principle-recurring parks inside _settle_delta — round-cap is advance-only
     finding = {"title": "recurs", "file": "a.js", "severity": "Critical", "consequence": _CONSEQUENCE, "dimension": "code-reviewer",
                "classKey": "Code::x::recurs"}
     prior = {
-        "schemaVersion": 2, "round": 9, "kind": "delta",
+        "schemaVersion": 2, "round": 3, "kind": "delta",
         "dimensions": {"code-reviewer": {"dimension": "code-reviewer", "status": "run",
                                          "confidence": "high", "tier": RD.DEEP, "findings": [finding]}},
         "findings": [finding], "coverageDecisions": [],
     }
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=10))
-    state["round"] = 10
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 4
     state["findings"] = [finding]
     state["_records"] = [prior]
     state["_coverage"] = [{"id": "RCD-1", "classKey": "Code::x::recurs"}]
-    state["auditRounds"] = [{"round": 9, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["auditRounds"] = [{"round": 3, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
     RD._settle_delta(state, state["config"])
     assert state["terminal"] == "cannot-certify"
-    assert not any(d["kind"] == "round-ceiling" for d in state["decisions"])
+    assert not any(d["kind"] == "round-cap" for d in state["decisions"])
 
 
 def _rearm_until_converge_seams(converge_at):
@@ -6999,87 +6159,85 @@ def _rearm_until_converge_seams(converge_at):
     return _seams(reviewer=reviewer, fix_step=fix_step, vendors=["claude", "codex"])
 
 
-def test_round_nine_below_ceiling_does_not_halt_on_ceiling(tmp_path):
-    """Below the ceiling the advance path converges normally — no round-ceiling decision."""
-    # axis: the ceiling does not fire below it — driven through the real advance path, not settle
-    ceiling = 10
-    receipt = RD.run_loop(_rearm_until_converge_seams(9),
-                          _cfg_cert(maxRoundsAbsolute=ceiling, maxRounds=7))
+def test_round_three_below_the_cap_does_not_hand_back(tmp_path):
+    """Below the cap the advance path converges normally — no round-cap decision."""
+    # axis: the cap does not fire below it — driven through the real advance path, not settle
+    receipt = RD.run_loop(_rearm_until_converge_seams(3), _cfg_cert(maxRounds=4))
     reached = max(r["round"] for r in receipt["rounds"])
-    assert reached == 9
+    assert reached == 3
     assert receipt["verdict"] == "converged"
     assert not any(r.get("stallChoice") for r in receipt["rounds"])
 
 
-def test_clean_below_ceiling_still_certifies_converged(tmp_path):
-    """No-regression: a clean run below the ceiling still certifies converged."""
-    receipt = RD.run_loop(_seams(), _cfg_cert(maxRoundsAbsolute=10))
+def test_clean_below_the_cap_still_certifies_converged(tmp_path):
+    """No-regression: a clean run below the cap still certifies converged."""
+    receipt = RD.run_loop(_seams(), _cfg_cert())
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] is not None
 
 
-def test_loaded_state_above_ceiling_halts_on_cmd_next(tmp_path):
-    """A persisted non-terminal state above the ceiling parks on cmd_next — no certification."""
-    # axis: persisted state at round ceiling+1 halts on cmd_next with round-ceiling, no certification
+def test_loaded_state_above_cap_hands_back_on_cmd_next(tmp_path):
+    """A persisted non-terminal state above the cap hands back on cmd_next — no certification."""
+    # axis: persisted state at round cap+1 hands back on cmd_next with round-cap, no certification
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 11
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
+    state["step"] = RD.P_VERIFY
     RD.save_state(d, state)
     n = RD.cmd_next(d)
     assert n["ok"]
     assert n["phase"] == RD.P_TERMINAL
     ok, reloaded = RD.load_state(d)
     assert ok
-    assert reloaded["terminal"] == "halted"
+    assert reloaded["terminal"] == "handed-back"
     assert reloaded["certification"]["shape"] is None
-    assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
-    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-ceiling")
-    # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
-    assert "Round ceiling 10 reached" in detail
-    assert "round 11 had already begun" in detail
+    assert any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
+    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-cap")
+    # axis: loaded-state hand-back detail names the cap and the round reached separately — not boundary "not begun" wording
+    assert "Round cap 4 reached" in detail
+    assert "round 5 had already begun" in detail
     assert "not begun" not in detail
 
 
-def test_loaded_state_above_ceiling_halts_on_cmd_submit(tmp_path):
-    """A persisted non-terminal state above the ceiling parks on cmd_submit — no certification."""
-    # axis: persisted state at round ceiling+1 halts on cmd_submit with round-ceiling, no certification
+def test_loaded_state_above_cap_hands_back_on_cmd_submit(tmp_path):
+    """A persisted non-terminal state above the cap hands back on cmd_submit — no certification."""
+    # axis: persisted state at round cap+1 hands back on cmd_submit with round-cap, no certification
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 11
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
-    state["pending"] = {"action": RD.P_PANEL, "round": 11, "phase": RD.P_PANEL, "attempt": 0,
+    state["step"] = RD.P_VERIFY
+    state["pending"] = {"action": RD.P_VERIFY, "round": 5, "phase": RD.P_VERIFY, "attempt": 0,
                         "payload": {}}
     RD.save_state(d, state)
     h = RD.state_hash(state)
-    out = RD.cmd_submit(d, RD.P_PANEL, 0, h, {"seats": {}})
+    out = RD.cmd_submit(d, RD.P_VERIFY, 0, h, {"result": "pass"})
     assert out["ok"] is True
     assert out["nextStep"] == RD.P_TERMINAL
     ok, reloaded = RD.load_state(d)
     assert ok
-    assert reloaded["terminal"] == "halted"
+    assert reloaded["terminal"] == "handed-back"
     assert reloaded["certification"]["shape"] is None
-    assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
-    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-ceiling")
-    # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
-    assert "Round ceiling 10 reached" in detail
-    assert "round 11 had already begun" in detail
+    assert any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
+    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-cap")
+    # axis: loaded-state hand-back detail names the cap and the round reached separately — not boundary "not begun" wording
+    assert "Round cap 4 reached" in detail
+    assert "round 5 had already begun" in detail
     assert "not begun" not in detail
 
 
-def test_loaded_state_at_ceiling_runs_on_cmd_next(tmp_path):
-    """A persisted state at round == ceiling is not parked on cmd_next entry."""
-    # axis: persisted state at round == ceiling runs — equality is allowed
+def test_loaded_state_at_cap_runs_on_cmd_next(tmp_path):
+    """A persisted state at round == cap is not handed back on cmd_next entry."""
+    # axis: persisted state at round == cap runs — equality is allowed
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 10
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 4
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
+    state["step"] = RD.P_VERIFY
     RD.save_state(d, state)
     n = RD.cmd_next(d)
     assert n["ok"]
@@ -7087,19 +6245,19 @@ def test_loaded_state_at_ceiling_runs_on_cmd_next(tmp_path):
     ok, reloaded = RD.load_state(d)
     assert ok
     assert reloaded.get("terminal") is None
-    assert not any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+    assert not any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
 
 
-def test_loaded_terminal_above_ceiling_re_emits_unchanged(tmp_path):
-    """A stored terminal above the ceiling re-emits unchanged — the loaded-state guard does not clobber."""
-    # axis: already-terminal persisted state above ceiling re-emits its stored terminal unchanged
+def test_loaded_terminal_above_cap_re_emits_unchanged(tmp_path):
+    """A stored terminal above the cap re-emits unchanged — the loaded-state guard does not clobber."""
+    # axis: already-terminal persisted state above the cap re-emits its stored terminal unchanged
     d = str(tmp_path)
-    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
-    state["round"] = 11
+    state = RD.new_state(_cfg(maxRounds=4))
+    state["round"] = 5
     state["terminal"] = "converged"
     state["certification"] = {"shape": "full-panel-confirmed-degraded", "reason": "stored"}
     state["step"] = RD.P_TERMINAL
-    state["pending"] = {"action": RD.P_TERMINAL, "round": 11, "phase": RD.P_TERMINAL, "attempt": 0,
+    state["pending"] = {"action": RD.P_TERMINAL, "round": 5, "phase": RD.P_TERMINAL, "attempt": 0,
                         "payload": {"verdict": "converged", "certification": state["certification"]}}
     state["decisions"] = [{"kind": "converged", "detail": "stored"}]
     RD.save_state(d, state)
@@ -7110,72 +6268,21 @@ def test_loaded_terminal_above_ceiling_re_emits_unchanged(tmp_path):
     assert ok
     assert reloaded["terminal"] == "converged"
     assert reloaded["certification"]["shape"] == "full-panel-confirmed-degraded"
-    assert not any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+    assert not any(dec["kind"] == "round-cap" for dec in reloaded["decisions"])
 
 
-def test_load_refusal_when_ceiling_below_max_rounds():
-    """A ceiling below maxRounds refuses at load with the named token."""
-    with pytest.raises(RD.RoundCeilingRefusal) as exc:
-        RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 5})
-    assert exc.value.reason == CB.CEILING_BELOW_CAP_REFUSAL
-
-
-def test_load_accepts_ceiling_at_or_above_max_rounds():
-    """A ceiling at or above maxRounds resolves and loads."""
-    cfg = RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 10})
-    assert cfg["maxRoundsAbsolute"] == 10
-    cfg2 = RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 7})
-    assert cfg2["maxRoundsAbsolute"] == 7
-
-
-def test_new_state_unnamed_ceiling_below_max_rounds_loads_flat_default():
-    """maxRounds=20 with no named ceiling loads; flat default ceiling binds below the cap."""
-    state = RD.new_state(_cfg(maxRounds=20))
-    assert state["config"]["maxRoundsAbsolute"] == CB.DEFAULT_MAX_ROUNDS_ABSOLUTE
-
-
-def test_max_rounds_absolute_cli_structured_refusal(tmp_path, capsys):
-    """CLI --max-rounds-absolute below maxRounds emits the structured refusal shape."""
-    d = str(tmp_path)
-    rc = RD.main(["next", "--session-dir", d, "--max-rounds", "7",
-                  "--max-rounds-absolute", "5"])
-    assert rc == 1
-    out = json.loads(capsys.readouterr().out.strip())
-    assert out == {"ok": False, "reason": CB.CEILING_BELOW_CAP_REFUSAL, "value": 5}
-
-
-def test_max_rounds_absolute_not_fresh_state_refuses(tmp_path, capsys):
-    """B1: --max-rounds-absolute on non-fresh state refuses with the named token."""
-    d = str(tmp_path)
-    rc, out = _cli_next_json(d, ["--max-rounds", "7"] + _guard_argv(d), capsys)
-    assert rc == 0 and out["ok"]
-    rc2, out2 = _cli_next_json(
-        d, ["--max-rounds-absolute", "20"] + _guard_argv(d, fresh=False), capsys)
-    assert rc2 == 1
-    assert out2 == {"ok": False, "reason": "max-rounds-absolute-not-fresh-state", "value": 20}
-
-
-def test_max_rounds_absolute_fresh_with_max_rounds_loads(tmp_path, capsys):
-    """B1: fresh session with --max-rounds 12 --max-rounds-absolute 12 loads."""
-    d = str(tmp_path)
-    rc, out = _cli_next_json(
-        d, ["--max-rounds", "12", "--max-rounds-absolute", "12"] + _guard_argv(d), capsys)
-    assert rc == 0
-    assert out["ok"] is True
-
-
-def test_run_loop_parks_on_ceiling_refusal():
-    """B2: run_loop with ceiling below maxRounds parks cannot-certify; never raises."""
-    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=7, maxRoundsAbsolute=5))
+def test_run_loop_parks_on_max_rounds_refusal():
+    """B2: run_loop with a non-positive maxRounds parks cannot-certify; never raises."""
+    result = RD.run_loop(_seams(), _cfg_cert(maxRounds=0))
     assert result["verdict"] == "cannot-certify"
     assert result["certificationShape"] is None
 
 
-def test_persisted_config_without_max_rounds_absolute_resolves_default_ceiling():
-    """Persisted config predating #1030 resolves the default ceiling — never ceiling-less."""
+def test_persisted_config_without_max_rounds_resolves_the_round_cap():
+    """A persisted config with no usable maxRounds resolves ROUND_CAP — never cap-less."""
     cfg = dict(RD.new_state(_cfg())["config"])
-    cfg.pop("maxRoundsAbsolute", None)
-    assert RD._round_ceiling(cfg) == CB.DEFAULT_MAX_ROUNDS_ABSOLUTE
+    cfg.pop("maxRounds", None)
+    assert RD._round_cap(cfg) == RD.round_phases.ROUND_CAP
 
 
 def _round_slice_is_round_key(node):
@@ -7226,12 +6333,13 @@ def _round_counter_mutation_sites():
 
 
 def test_round_counter_mutation_sites_census():
-    """state['round'] is written only by _advance_round on the advance path."""
-    # axis: only _advance_round may mutate state['round'] — dict literals in new_state are construction
+    """state['round'] is written only by _advance_round on the advance path and by
+    _begin_extra_audit_round for the one extra audit round."""
+    # axis: only the two writers, the advance path and the extra audit round, may mutate state['round'] — dict literals in new_state are construction
     sites = _round_counter_mutation_sites()
     assert len(sites) >= 1, "expected at least one state['round'] mutation site"
     writers = {func for func, _lineno in sites}
-    expected = {"_advance_round"}
+    expected = {"_advance_round", "_begin_extra_audit_round"}
     extra = writers - expected
     missing = expected - writers
     assert writers == expected, (
@@ -7240,7 +6348,7 @@ def test_round_counter_mutation_sites_census():
 
 
 def _delta_settle_state_for_breaker(monkeypatch, breaker_result):
-    state = RD.new_state(_cfg(maxRounds=10, maxRoundsAbsolute=10))
+    state = RD.new_state(_cfg(maxRounds=10))
     state["round"] = 3
     state["findings"] = []
     state["auditRounds"] = [{"round": 2, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
@@ -7256,10 +6364,10 @@ def _audit_breaker_emitted_reasons():
 
 
 _SETTLE_DELTA_CLAIMED = frozenset({
-    "max-iterations",
     "audit-stall",
 })
 _SETTLE_DELTA_UNREACHABLE = frozenset({
+    "max-iterations",
     "no-net-progress",
     "recurring-finding",
     "challenged-principle-recurring",
@@ -7273,18 +6381,8 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
     for reason in _SETTLE_DELTA_UNREACHABLE:
         assert reason not in audit_emitted, reason
 
-    # max-iterations — parks or certifies; never routes to the fixer.
-    state = _delta_settle_state_for_breaker(monkeypatch, {
-        "halt": True, "reason": "max-iterations", "detail": "cap",
-        "stalledIdentities": [],
-    })
-    RD._settle_delta(state, state["config"])
-    assert state["step"] != RD.P_FIXER
-    assert state["terminal"] in (
-        "converged", "capped-with-open-critical", "capped-with-open-blocker",
-    )
-
-    # audit-stall — discharged targets leave no open work; self-recovery settles via confirmation.
+    # max-iterations — the audit breaker no longer emits it: the round cap is the driver's boundary.
+    # audit-stall — discharged targets leave no open work; self-recovery settles on this round's audit.
     state = _delta_settle_state_for_breaker(monkeypatch, {
         "halt": True, "reason": "audit-stall", "detail": "stalled",
         "stalledIdentities": ["x"],
@@ -7292,8 +6390,10 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
     state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
                                "file": "f.py", "line": 1}]
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_PANEL
+    # re-pinned: it used to step to a confirmation panel; no later round runs a panel now
+    assert state["step"] == RD.P_TERMINAL
     assert any(d["kind"] == "self-recovery" for d in state["decisions"])
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
     # round-ceiling — unreachable at _settle_delta; enforced on the round-advance boundary only.
     assert CB.ROUND_CEILING_REASON not in audit_emitted
@@ -7310,7 +6410,7 @@ def test_settle_delta_unregistered_halt_reason_parks_fail_closed(monkeypatch):
     RD._settle_delta(state, state["config"])
     assert state["terminal"] == "cannot-certify"
     assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
-    assert state["step"] != RD.P_FIXER
+    assert state["step"] != RD.P_APPLY_FIXES
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
     assert "synthetic-unregistered-reason" in detail
 
@@ -7418,6 +6518,7 @@ def test_verify_fold_unresolved_head_post_audits_advances():
     state = _verify_fold_state()
     state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
     state["_newSurface"] = {"f.py": [1]}
+    state["_fixDeltaDiff"] = "diff --git a/f.py b/f.py\n"
     RD._fold_verify(state, state["config"], {"result": "pass"},
                     resolution=(None, "fix-fold head: repo root unresolvable"))
     assert not state.get("terminal")
@@ -7425,38 +6526,179 @@ def test_verify_fold_unresolved_head_post_audits_advances():
     assert "_verifyThen" not in state
 
 
-def test_verify_fold_unresolved_head_panel_parks_underivable():
-    state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
-    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
-    RD._fold_verify(state, state["config"], {"result": "pass"},
-                    resolution=(None, "fix-fold head: repo root unresolvable"))
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "head unresolved" in state["certification"]["reason"]
+def test_a_saved_delta_session_without_a_fix_delta_rebuilds_it_from_its_baseline():
+    state = _verify_fold_state()
+    state["_newSurface"] = {"f.py": [1]}
+    state["deltaBaseline"] = {"round": 1, "diff": _R2B_REVIEWED}
+    state["headDiff"] = _R2B_HEAD_MF
+    RD._after_audits(state, state["config"])
+    assert state["step"] == RD.P_SCOPED
+    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
+    assert state["_fixDeltaDiff"].startswith("diff --git a/f.py b/f.py")
 
 
-def test_verify_fold_at_ceiling_parks_round_ceiling():
+def test_a_saved_delta_session_whose_fix_delta_cannot_be_rebuilt_is_handed_back():
+    state = _verify_fold_state()
+    state["_newSurface"] = {"f.py": [1]}
+    RD._after_audits(state, state["config"])
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_SCOPED
+
+
+def _saved_delta_session(tmp_path, *, step, pending, surface, baseline=True, **over):
+    """A real session directory holding a delta round's state saved by an earlier build: round 2 at
+    ``step``, a scoped surface, no `_fixDeltaDiff`, and (by default) a baseline and head diff to rebuild from."""
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout = str(tmp_path / "checkout")
+    enter_checkout(checkout)
+    _seed_repo_root_if_missing(d, checkout)
+    first = RD.cmd_next(d, _cfg(maxRounds=4))
+    assert first["ok"] and first["action"] == RD.P_PANEL, first
+    ok, state = RD.load_state(d)
+    assert ok and isinstance(state, dict), state
+    state.update(round=2, step=step, _newSurface=surface, **over)
+    state["rounds"].setdefault("2", {})
+    state.pop("_fixDeltaDiff", None)
+    if baseline:
+        state["deltaBaseline"] = {"round": 2, "diff": _R2B_REVIEWED}
+        state["headDiff"] = _R2B_HEAD_MF
+    else:
+        state["deltaBaseline"] = None
+    state["pending"] = ({"action": step, "round": 2, "phase": step, "attempt": 1,
+                         "payload": {"hunks": surface, "tier": RD.DEEP}} if pending else None)
+    RD.save_state(d, state)
+    return d
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "scoped-pending"])
+def test_a_saved_scoped_session_without_a_fix_delta_is_rebuilt_before_any_order_renders(tmp_path, pending):
+    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=pending,
+                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
+    answer = RD.cmd_next(d)
+    assert answer["ok"] and answer["phase"] == RD.P_SCOPED and answer["round"] == 2, answer
+    ok, state = RD.load_state(d)
+    assert ok and isinstance(state["_fixDeltaDiff"], str)
+    assert state["_fixDeltaDiff"].startswith("diff --git a/f.py b/f.py")
+    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
+    assert RD._ensure_round_fix_delta(d, 2, state)  # the scoped order's fix-delta input renders
+    assert [row["outcome"] for row in RD.read_journal(d) if row.get("outcome") == "fix-delta-rebuilt"] \
+        == ["fix-delta-rebuilt"]
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "scoped-pending"])
+def test_a_saved_scoped_session_with_no_usable_baseline_is_handed_back(tmp_path, pending):
+    d = _saved_delta_session(tmp_path, step=RD.P_SCOPED, pending=pending, baseline=False,
+                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]})
+    answer = RD.cmd_next(d)
+    assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
+    ok, state = RD.load_state(d)
+    assert state["terminal"] == "handed-back" and state["step"] != RD.P_SCOPED
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+    assert [row for row in RD.read_journal(d) if row.get("outcome") == "fix-delta-hand-back"]
+
+
+def test_a_saved_audit_session_with_an_empty_old_surface_is_rebuilt_not_folded_empty():
+    state = _verify_fold_state()
+    state["_newSurface"] = {}
+    state["deltaBaseline"] = {"round": 1, "diff": _R2B_REVIEWED}
+    state["headDiff"] = _R2B_HEAD_MF
+    RD._after_audits(state, state["config"])
+    assert state["step"] == RD.P_SCOPED
+    assert _line_ranges(state["_newSurface"]) == _R2B_FIX_LINES
+    assert isinstance(state["_fixDeltaDiff"], str)
+    assert "scopedFinder" not in state["rounds"]["1"]
+
+
+def test_a_state_that_has_its_fix_delta_is_untouched_by_the_rebuild():
+    state = _verify_fold_state()
+    state.update(round=2, step=RD.P_SCOPED, pending=None, _fixDeltaDiff="diff --git a/f.py b/f.py\n",
+                 _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
+                 deltaBaseline={"round": 2, "diff": _R2B_REVIEWED}, headDiff=_R2B_HEAD_MF)
+    before = json.dumps(state, sort_keys=True)
+    assert RD._rebuild_saved_fix_delta(state) is True
+    assert RD._finish_saved_fix_delta(state) is None
+    assert json.dumps(state, sort_keys=True) == before
+
+
+# A PR hunk whose `+b` the fix deleted: the deletion anchors on the `+a` of its own hunk, not on the second hunk.
+_DELETION_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                      "@@ -10,0 +10,2 @@\n+a\n+b\n"
+                      "@@ -100,1 +102,1 @@\n-x\n+y\n")
+_DELETION_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+                  "@@ -10,0 +10,1 @@\n+a\n"
+                  "@@ -100,1 +101,1 @@\n-x\n+y\n")
+# A hunk at the end of the file: the fix deleted `+guard`, so the surviving file ends at line 9.
+_EOF_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                 "@@ -7,4 +7,4 @@\n c7\n c8\n c9\n-x\n+guard\n")
+_EOF_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+             "@@ -7,4 +7,3 @@\n c7\n c8\n c9\n-x\n")
+# A hunk with nothing left but removals once the fix deleted its additions; a second hunk has citable lines.
+_REMOVALS_ONLY_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                           "@@ -10,2 +10,2 @@\n-x\n-y\n+a\n+b\n"
+                           "@@ -100,1 +98,1 @@\n-p\n+q\n")
+_REMOVALS_ONLY_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+                       "@@ -10,2 +10,0 @@\n-x\n-y\n"
+                       "@@ -100,1 +98,1 @@\n-p\n+q\n")
+_DELETION_CASES = [(_DELETION_REVIEWED, _DELETION_HEAD), (_EOF_REVIEWED, _EOF_HEAD),
+                   (_REMOVALS_ONLY_REVIEWED, _REMOVALS_ONLY_HEAD)]
+
+
+def _deletion_surface(reviewed, head):
+    surface, _text = RD._fix_delta_surface(RD.new_state(_cfg()), reviewed, head)
+    return surface
+
+
+def test_a_fix_that_only_removes_a_pr_addition_keeps_a_head_anchor_for_the_deletion():
+    surface = _deletion_surface(_DELETION_REVIEWED, _DELETION_HEAD)
+    assert _line_ranges(surface) == {"f.py": [(10, 10)]}, surface
+    assert 10 in RD.diff_scope.parse_diff_lines(_DELETION_HEAD)["f.py"]
+
+
+def test_a_deletion_at_the_end_of_the_file_anchors_on_a_line_the_head_diff_registers():
+    surface = _deletion_surface(_EOF_REVIEWED, _EOF_HEAD)
+    registered = RD.diff_scope.parse_diff_lines(_EOF_HEAD)["f.py"]
+    assert registered == {7, 8, 9}
+    anchors = {n for h in surface["f.py"] for n in (h["start"], h["end"])}
+    assert anchors and anchors <= registered, surface
+
+
+def test_a_deletion_in_a_hunk_with_no_citable_line_is_marked_not_numbered():
+    surface = _deletion_surface(_REMOVALS_ONLY_REVIEWED, _REMOVALS_ONLY_HEAD)
+    assert [(h["start"], h["end"], h.get("removedOnly")) for h in surface["f.py"]] == [(0, 0, True)], surface
+    assert "-+a" in surface["f.py"][0]["text"] and "-+b" in surface["f.py"][0]["text"]
+
+
+def test_every_line_number_a_fix_delta_surface_carries_is_one_the_head_diff_registers():
+    for reviewed, head in _DELETION_CASES:
+        registered = RD.diff_scope.parse_diff_lines(head)
+        for file, entries in _deletion_surface(reviewed, head).items():
+            for h in entries:
+                assert h["start"] == h["end"] == 0 or {h["start"], h["end"]} <= registered[file], (file, h)
+
+
+def test_verify_fold_at_cap_hands_back_round_cap():
     for resolution in (("a" * 40, None), (None, "fix-fold head: repo root unresolvable")):
-        state = _verify_fold_state(maxRounds=2, maxRoundsAbsolute=2)
+        state = _verify_fold_state(maxRounds=2)
         state["round"] = 2
         state["rounds"] = {"2": {}}
-        state["_verifyThen"] = RD.VERIFY_THEN_CEILING
+        state["_verifyThen"] = RD.VERIFY_THEN_CAP
         RD._fold_verify(state, state["config"], {"result": "pass"}, resolution=resolution)
-        assert state["terminal"] == "halted"
+        assert state["terminal"] == "handed-back"
         assert state["step"] == RD.P_TERMINAL
-        assert any(dec["kind"] == "round-ceiling" for dec in state["decisions"])
+        assert any(dec["kind"] == "round-cap" for dec in state["decisions"])
 
 
-def test_verify_fold_legacy_position_unresolved_head_unknown_surface_parks_underivable():
-    """No continuation flag and no head: the delta round has no baseline, so it needs a full panel
-    over the head diff; with no head the derivation refuses and the session parks."""
+def test_verify_fold_legacy_position_unresolved_head_unknown_surface_hands_back():
+    """Re-pinned: no continuation flag and no head: the delta round has no baseline, so its fix surface
+    is unknown; the PR is handed back (`fix-surface-unknown`), never a panel over the head diff."""
     state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
     assert "_verifyThen" not in state
     RD._fold_verify(state, state["config"], {"result": "pass"},
                     resolution=(None, "fix-fold head: repo root unresolvable"))
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "head unresolved" in state["certification"]["reason"]
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_PANEL
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
 
 
 def test_verify_head_lookup_persists_the_session_head(tmp_path):
@@ -7522,19 +6764,19 @@ def test_fixer_fold_records_refusal_when_head_unresolvable(tmp_path, monkeypatch
     state["round"] = 1
     state["_fixBatch"] = [{"id": "F1", "file": "a.py", "line": 1, "severity": "Important"}]
     monkeypatch.setattr(RD.store_core, "run_git", lambda _repo_root, *_args, **_kwargs: None)
-    RD._fold_fixer(state, state["config"], {"fixes": [{"file": "a.py"}], "headDiff": "diff"},
+    RD._fold_apply_fixes(state, state["config"], {"fixes": [{"file": "a.py"}], "headDiff": "diff"},
                    session_dir=session_dir)
     assert "git rev-parse HEAD failed" in state["rounds"]["1"]["fixFoldHeadRefused"]
     assert "fixFoldHead" not in state["rounds"]["1"]
 
 
-def test_ceiling_always_runs_the_verify_gate():
-    state = RD.new_state(_cfg(maxRounds=2, maxRoundsAbsolute=2))
+def test_cap_round_always_runs_the_verify_gate():
+    state = RD.new_state(_cfg(maxRounds=2))
     state["round"] = 2
     state["rounds"] = {"2": {"verifyResult": "pass"}}
     RD._enter_post_fix(state, state["config"], session_dir=None)
     assert state["step"] == RD.P_VERIFY
-    assert state["_verifyThen"] == RD.VERIFY_THEN_CEILING
+    assert state["_verifyThen"] == RD.VERIFY_THEN_CAP
     assert not state.get("terminal")
     assert "ceilingGateReused" not in state["rounds"]["2"]
 
@@ -7747,7 +6989,8 @@ def test_a_result_submitted_for_a_target_with_no_auditor_is_ignored_and_the_targ
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tid = state["_auditTargets"][0]["id"]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude"}]})
+        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude",
+         "checks": audit_checks()}]})
     outcome = state["_auditOutcome"]
     assert outcome["unaudited"] == [tid] and outcome["discharged"] == []
     assert outcome["notDischarged"] == [tid]

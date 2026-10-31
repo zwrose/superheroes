@@ -31,7 +31,7 @@ reviewer **outside every maker's family** and (b) the owner's **per-change autho
 standing grants; every micro change is authorized on its own, and the authorizing owner is
 independent of the maker **but is not comparing the change against a build record they have read**:
 no build brief, no advisor vet — the reviewer receipt and the explicit authorization are what stand
-in; post both where `review-discipline.md` names their durable home (`### Micro — owner authorization`).
+in; post both where `review-discipline.md` names their durable home (`### Micro — owner authorization`). That reviewer keeps the same 4-round cap and only-what-changed rule as every lane.
 
 The change must **pass the quiet-failure question** unless the owner **explicitly waives it** —
 **owner-only, per change, never a standing grant; the risk must be stated explicitly** (the single

@@ -33,13 +33,13 @@ SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine":
 
 class FakeAdapters(object):
     ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
-                      RD.P_SCOPED, RD.P_VERIFY, RD.P_FIXER)
+                      RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def __init__(self):
         self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
                         RD.P_VERIFIERS: [],
                         RD.P_SYNTHESIS: ["synthesis"],
-                        RD.P_FIXER: ["dispatch-fixer"],
+                        RD.P_APPLY_FIXES: ["apply-fixes"],
                         RD.P_VERIFY: ["verify"]}
         self.roster_reasons = {}
         self.faults = {}
@@ -59,11 +59,13 @@ class FakeAdapters(object):
         return self.policies.get(phase, "seat-status")
 
     def is_orchestrator_fulfilled(self, phase):
-        return phase in (RD.P_VERIFY,)
+        return phase in (RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def orchestrator_payload_fault(self, phase, payload):
         if phase == RD.P_VERIFY:
             return RD.verify_result_fault(payload)
+        if phase == RD.P_APPLY_FIXES:
+            return RD.payload_contracts.payload_fault(phase, payload, "apply-fixes")
         return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,

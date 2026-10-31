@@ -112,7 +112,7 @@ def test_l3_a1_excludes_discharged_row():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state.get("_fixBatch") in (None, [])
-    assert state["step"] != RD.P_FIXER
+    assert state["step"] != RD.P_APPLY_FIXES
 
 
 def test_l3_a1_mixed_batch_keeps_the_open_row():
@@ -125,7 +125,7 @@ def test_l3_a1_mixed_batch_keeps_the_open_row():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(discharged), _fix_row(open_compiled)])
     assert [r["title"] for r in state["_fixBatch"]] == ["open"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert not any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
 
 
@@ -142,7 +142,7 @@ def test_l3_a1_mixed_batch_continuation_keeps_the_open_row():
         state, config, [_fix_row(discharged), _fix_row(open_compiled)],
         reset_accumulator=False, batch_index=1)
     assert [r["title"] for r in state["_fixBatch"]] == ["open"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert not any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
 
 
@@ -161,7 +161,7 @@ def test_l3_a1_same_round_reraise_stays_in_batch():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["_fixBatch"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 @pytest.mark.parametrize("reraise_round", [1, 2])
@@ -185,7 +185,7 @@ def test_l3_a1_caller_supplied_sequence_stamps_stripped_on_reraise(reraise_round
     status = RD._queue_fix_batch(state, config, [_fix_row(poisoned[0])])
     assert status == "queued"
     assert state.get("_fixBatch")
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 def test_l3_a1_backfill_strips_record_sequence_stamps():
@@ -207,13 +207,11 @@ def test_l3_a1_backfill_strips_record_sequence_stamps():
     assert entry.get("raisedSeq") != 888
 
 
-def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
-    """axis: delta empty-batch exclusion must re-arm when Critical is still owed."""
+def test_l3_a1_surfaced_critical_after_exclusion_never_rearms_a_panel():
+    """axis: delta empty-batch exclusion settles on the round's own audit, even when a Critical is held."""
     state = RD.new_state(_cfg())
     state["round"] = 2
     state["rounds"] = {"2": {"roundKind": "delta"}}
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = ["Critical"]
     discharged, discharged_key = _compile_one(
         {"file": "f.py", "line": 1, "title": "mechanical", "severity": "Important",
          "consequence": _CONSEQUENCE})
@@ -226,14 +224,13 @@ def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
     RD._stage_findings(state, [tradeoff])
     batch = [_fix_row(discharged), _fix_row(tradeoff)]
     config = _cfg()
-    assert RD._route_judgment_blockers(state, batch)
-    row_id = RD._judgment_row_ids(state["_judgmentFindings"])[0]
-    RD._fold_judgment(state, config, {"dispositions": [
-        {"id": row_id, "disposition": "skip", "reason": "owner accepts tradeoff"},
-    ]})
-    assert state["step"] == RD.P_PANEL
-    assert state.get("terminal") is None
-    assert state["rounds"]["2"]["confirmationFollowup"]["rearm"] is True
+    remainder = RD._hold_owner_choice(state, batch)  # the tradeoff is held out of the batch
+    assert [RD._fix_batch_row_key(r) for r in remainder] == [discharged_key]
+    assert state["ownerChoiceHeld"] == [tradeoff_key]
+    assert RD._queue_fix_batch(state, config, remainder) == "excluded"
+    assert state["step"] == RD.P_TERMINAL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
+    assert "confirmationFollowup" not in state["rounds"]["2"]
 
 
 def test_l3_a1_edge_ledger_absent_no_exclusion():
@@ -244,7 +241,7 @@ def test_l3_a1_edge_ledger_absent_no_exclusion():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["_fixBatch"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 def test_l3_a1_edge_malformed_ledger_parks_before_fixer():
@@ -270,7 +267,7 @@ def test_l3_a1_edge_no_identity_key_no_exclusion():
     config = _cfg()
     RD._queue_fix_batch(state, config, [row])
     assert state["_fixBatch"] == [row]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 def test_l3_a1_legacy_stamp_less_fixed_row_stays_in_batch():
@@ -286,7 +283,7 @@ def test_l3_a1_legacy_stamp_less_fixed_row_stays_in_batch():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["_fixBatch"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 def test_l3_a1_edge_disposition_seq_without_raised_seq_no_exclusion():
@@ -301,7 +298,7 @@ def test_l3_a1_edge_disposition_seq_without_raised_seq_no_exclusion():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["_fixBatch"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 def test_l3_a1_edge_disposition_seq_not_after_raise_no_exclusion():
@@ -315,7 +312,7 @@ def test_l3_a1_edge_disposition_seq_not_after_raise_no_exclusion():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["_fixBatch"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 def test_l3_a1_edge_non_fixed_disposition_no_exclusion():
@@ -329,7 +326,7 @@ def test_l3_a1_edge_non_fixed_disposition_no_exclusion():
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["_fixBatch"]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 def test_l3_a1_fix_batch_single_writer_census():
@@ -346,13 +343,12 @@ def test_l3_a2_empty_batch_converges_on_the_paths_own_resolver():
     state = RD.new_state(_cfg())
     state["round"] = 2
     state["rounds"] = {"2": {"roundKind": "delta"}}
-    state["surfacedSinceLastPanel"] = []
-    state["confirmations"] = 0
     compiled, _ = _stage_and_discharge(state, round_no=2)
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
-    assert state["step"] != RD.P_FIXER
-    assert state["rounds"]["2"].get("confirmationFollowup") is not None
+    assert state["step"] != RD.P_APPLY_FIXES
+    assert state["step"] == RD.P_TERMINAL
+    assert state["rounds"]["2"].get("confirmationFollowup") is None
     assert any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
 
 
@@ -375,7 +371,7 @@ def test_l3_a2_control_open_blocker_reaches_fixer():
     RD._stage_findings(state, [compiled])
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert state["_fixBatch"]
 
 
@@ -393,7 +389,7 @@ def test_l3_a2_excluded_continuation_enters_post_fix_verify_and_audits():
     state["_fixBatchIndex"] = 0
     state["decisions"] = []
     config = _cfg()
-    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    RD._fold_apply_fixes(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
     assert state["step"] == RD.P_AUDITS
     assert state["round"] == 2
     assert state["_verifyThen"] == RD.VERIFY_THEN_POST_AUDITS
@@ -429,11 +425,11 @@ def test_l3_a2_excluded_count_accumulates_across_slices():
     state["terminal"] = None
     RD._queue_fix_batch(state, config, [_fix_row(open_compiled)])
     assert state["_fixBatch"] == [_fix_row(open_compiled)]
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     state["_fixQueue"] = [_fix_row(discharged_b)]
     state["_fixBatchIndex"] = 0
     state["decisions"] = []
-    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    RD._fold_apply_fixes(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
     assert state["rounds"]["1"]["fixBatchExcludedByDischarge"] == 2
 
 
@@ -452,14 +448,14 @@ def test_l3_a2_continuation_ledger_fault_parks():
     state["dispositionLedger"] = "not-a-list"
     state["decisions"] = []
     config = _cfg()
-    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    RD._fold_apply_fixes(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
     assert state["step"] == RD.P_TERMINAL
     assert state["terminal"] == "cannot-certify"
     assert state["round"] != 2
     assert state.get("_verifyThen") != RD.VERIFY_THEN_POST_AUDITS
 
 
-def test_l3_a2_fold_fixer_queued_continuation_records_one_split():
+def test_l3_a2_fold_apply_fixes_queued_continuation_records_one_split():
     open_a, _ = _compile_one(
         {"file": "a.py", "line": 1, "title": "a", "severity": "Important",
          "consequence": _CONSEQUENCE})
@@ -475,10 +471,10 @@ def test_l3_a2_fold_fixer_queued_continuation_records_one_split():
     state["_fixBatchIndex"] = 0
     state["decisions"] = []
     config = _cfg(fixBatchCap=1)
-    RD._fold_fixer(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
+    RD._fold_apply_fixes(state, config, {"fixes": [], "headDiff": _HEAD_DIFF})
     splits = [d for d in state["decisions"] if d["kind"] == "fix-batch-split"]
     assert len(splits) == 1
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
 
 
 # --- A3: delta split reads per-round reviewed baseline ------------------------
@@ -502,11 +498,13 @@ def _fix_batch():
 
 
 def _assert_delta_baseline_refusal(state):
-    assert state["rounds"]["2"]["roundKind"] == "full-panel-unknown-surface"
-    assert state["step"] == RD.P_PANEL
-    unknown = [d for d in state["decisions"] if d["kind"] == "unknown-surface"]
+    # re-pinned: the unknown surface hands the PR back; it no longer schedules a full panel
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_PANEL
+    unknown = [d for d in state["decisions"] if d["kind"] == "fix-surface-unknown"]
     assert len(unknown) == 1
-    assert unknown[0]["detail"].startswith(RD.DELTA_BASELINE_ABSENT)
+    assert RD.DELTA_BASELINE_ABSENT in unknown[0]["detail"]
+    assert not any(d["kind"] == "unknown-surface" for d in state["decisions"])
 
 
 _THIRD_DIFF = _mk_diff([("h.py", "@@ -1 +1 @@\n-third\n+third-edited\n")])
@@ -616,7 +614,7 @@ def test_l3_a3_non_text_baseline_refuses(tmp_path, monkeypatch):
     _assert_delta_baseline_refusal(state)
 
 
-def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(tmp_path, monkeypatch):
+def test_l3_a3_post_fix_absent_baseline_hands_back(tmp_path, monkeypatch):
     def _split_must_not_run(*_args, **_kwargs):
         raise AssertionError("split_fix_surface must not run when baseline is absent")
 
@@ -629,8 +627,10 @@ def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(tmp_path, monkeyp
     state["fixBatch"] = _fix_batch()
     state["_postFixEntry"] = True
     RD._enter_delta_round(state, config, panel_head=_panel_head(config))
-    assert state["step"] == RD.P_VERIFY
-    assert state["_verifyThen"] == RD.VERIFY_THEN_PANEL
+    assert state["terminal"] == "handed-back"
+    assert state["step"] not in (RD.P_VERIFY, RD.P_PANEL)
+    assert "_verifyThen" not in state
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
 
 
 def test_l3_a3_advance_round_writes_the_baseline_before_the_head_overwrite(monkeypatch):
@@ -656,11 +656,10 @@ def test_l3_a3_advance_round_writes_the_baseline_before_the_head_overwrite(monke
     assert state["rounds"]["2"]["roundKind"] == "delta"
 
 
-def test_l3_a3_ceiling_refusal_writes_no_baseline():
-    state = RD.new_state(_cfg(maxRoundsAbsolute=1, maxRounds=1))
+def test_l3_a3_cap_refusal_writes_no_baseline():
+    state = RD.new_state(_cfg(maxRounds=1))
     state["round"] = 1
-    assert RD._advance_round(state, _cfg(maxRoundsAbsolute=1, maxRounds=1),
-                             reason="test-ceiling") is False
+    assert RD._advance_round(state, _cfg(maxRounds=1), reason="test-cap") is False
     assert "deltaBaseline" not in state
 
 
@@ -687,6 +686,8 @@ def test_l3_a3_second_fix_scoped_surface_excludes_first_fix_unchanged_hunk():
     RD._enter_delta_round(state, _cfg(diff=base))
     new_surface = state.get("_newSurface") or {}
     audit_targets = state.get("_auditTargets") or []
+    # re-pinned: the scoped finder's surface is the second fix's own delta, so a fix that changed only its
+    # finding's hunk still gives it that file, while the first fix's untouched file stays off it
     assert "a.py" not in new_surface
-    assert not new_surface
+    assert list(new_surface) == ["b.py"]
     assert any(t.get("file") == "b.py" for t in audit_targets if isinstance(t, dict))

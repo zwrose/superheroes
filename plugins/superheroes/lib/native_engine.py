@@ -42,7 +42,6 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import bite_proof_format  # noqa: E402  the record format an order that asks for one carries (#2082)
-import break_it  # noqa: E402  _link_dependencies, DEPENDENCY_DIRS — the one home of the dependency link and its guard
 import cloud_pass  # noqa: E402  _is_cloud
 import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import core_md  # noqa: E402  read_sandbox_access
@@ -68,6 +67,9 @@ NATIVE_BOUNDS = (
 NATIVE_EFFORT_NOTE = "the Agent tool takes no effort; the subagent runs at its default effort"
 ROUTE_REASON_NATIVE = "cloud-local-sockets"
 ROUTE_REASON_CALIBRATED = "calibrated"
+REASON_DEPENDENCY_LINK_FAILED = "dependency-link-failed"
+REASON_DEPENDENCY_LINK_UNSAFE = "dependency-link-unsafe"
+DEPENDENCY_DIRS = ("node_modules",)
 
 NATIVE_PREAMBLE = """\
 You are a native implementer subagent for one scoped work order, running in your own isolated \
@@ -430,14 +432,58 @@ def _enroll_refusal(reason):
     return {"ok": False, "reason": reason}
 
 
+def _scan_entries(directory):
+    """The paths of every entry of ``directory`` and of each ``@``-prefixed scope directory and the ``.bin``
+    directory beneath it."""
+    found = []
+    for name in sorted(os.listdir(directory)):
+        entry = os.path.join(directory, name)
+        found.append(entry)
+        # axis: a ``.bin`` entry that links back into the reviewed checkout's tracked tree is scanned like a package link, so it is never linked
+        if (name.startswith("@") or name == ".bin") and os.path.isdir(entry) and not os.path.islink(entry):
+            found.extend(os.path.join(entry, sub) for sub in sorted(os.listdir(entry)))
+    return found
+
+
+def _link_dependencies(repo_root, copy):
+    """Link the reviewed checkout's installed dependency directories into ``copy``. None on success or when
+    there is nothing to do, else the not-run reason."""
+    root_real = os.path.realpath(repo_root)
+    for name in DEPENDENCY_DIRS:
+        source = os.path.join(os.path.abspath(repo_root), name)
+        target = os.path.join(copy, name)
+        # axis: a dependency directory the head tracks is already in the copy and is never replaced by a link
+        if os.path.lexists(target) or not os.path.isdir(source):
+            continue
+        src_real = os.path.realpath(source)
+        # axis: a dependency folder that is itself a link into another part of the reviewed checkout is never linked, so a test cannot write a tracked file through it
+        if (src_real == root_real or src_real.startswith(root_real.rstrip(os.sep) + os.sep)) and src_real != os.path.join(root_real, name):
+            return REASON_DEPENDENCY_LINK_UNSAFE
+        try:
+            for entry in _scan_entries(source):
+                if not os.path.islink(entry):
+                    continue
+                real = os.path.realpath(entry)
+                inside_root = real == root_real or real.startswith(root_real.rstrip(os.sep) + os.sep)
+                inside_src = real == src_real or real.startswith(src_real.rstrip(os.sep) + os.sep)
+                # axis: a package that links back into the reviewed checkout's tracked tree is never linked, so a test cannot write a tracked file through it
+                if inside_root and not inside_src:
+                    return REASON_DEPENDENCY_LINK_UNSAFE
+            os.symlink(source, target, target_is_directory=True)
+        except OSError:
+            # axis: a scan or link that fails reads not-run, never a run without the dependencies
+            return REASON_DEPENDENCY_LINK_FAILED
+    return None
+
+
 def _enroll_dependencies(top, builder_top):
     """Link the builder's installed dependency folders into ``top`` through the one guarded helper,
-    ``break_it._link_dependencies``. Returns the ``dependencies`` object: ``linked`` names exactly the links that
+    ``_link_dependencies``. Returns the ``dependencies`` object: ``linked`` names exactly the links that
     exist, and ``note`` the helper's reason, or why nothing was linked."""
-    installed = {name: os.path.isdir(os.path.join(builder_top, name)) for name in break_it.DEPENDENCY_DIRS}
-    present = {name: os.path.lexists(os.path.join(top, name)) for name in break_it.DEPENDENCY_DIRS}
-    reason = break_it._link_dependencies(builder_top, top)
-    linked = [name for name in break_it.DEPENDENCY_DIRS
+    installed = {name: os.path.isdir(os.path.join(builder_top, name)) for name in DEPENDENCY_DIRS}
+    present = {name: os.path.lexists(os.path.join(top, name)) for name in DEPENDENCY_DIRS}
+    reason = _link_dependencies(builder_top, top)
+    linked = [name for name in DEPENDENCY_DIRS
               if os.path.islink(os.path.join(top, name)) and not present[name]]
     dependencies = {"linked": linked}
     if reason:
@@ -691,7 +737,7 @@ class _Close(object):
             if item_check.get("missing"):
                 return self._forfeit("items-undelivered", **extra)
         patch_path = os.path.join(self.run_dir, _PATCH_NAME)
-        for name in break_it.DEPENDENCY_DIRS:
+        for name in DEPENDENCY_DIRS:
             link = os.path.join(target, name)
             # axis: only enroll's own untracked link to the builder's folder is dropped; a path the base tracks, or a link resolving elsewhere, is collected as it stands
             if (os.path.islink(link)

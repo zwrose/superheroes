@@ -41,13 +41,17 @@ if _LIB_DIR not in sys.path:
 
 import build_lane  # noqa: E402
 import cloud_pass  # noqa: E402
+import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
+import returning_review  # noqa: E402
+import review_diff_bytes  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import round_phases  # noqa: E402
 import sanitized_view  # noqa: E402
 import seat_map as seat_map_module  # noqa: E402
 import session_contract  # noqa: E402
@@ -59,6 +63,10 @@ RAW_MARKER = "<!-- superheroes:review-raw-output -->"
 # A part comment holds one slice of a record's JSON text. It must never start with MARKER: a part is not a record.
 PART_MARKER = "<!-- superheroes:review-record-part -->"
 PARTS_SCHEMA = "review-record-parts/1"
+# One comment posted on a PR when an extra audit round is ordered, before the session reopens. It is not a
+# record (it never starts with MARKER); `extra_audit_history` reads it so a second session sees the allowance gone.
+EXTRA_AUDIT_RESERVED_MARKER = "<!-- superheroes:extra-audit-reserved -->"
+_RESERVED_SESSION_RE = re.compile(r"sessionId: (\S+)")
 CAP_KINDS = ("rounds", "ceiling")
 CARRIED_SETTLED = ("fixed", "applies", "unsettled")
 ACCOUNT_SCHEMA = "review-account/1"
@@ -73,13 +81,9 @@ RAN_ENGINE_RECORD = "engine-record"
 RAN_REPORTED_BY_SESSION = "reported-by-session"
 RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
-# The reasons a planned seat is named as not run without being a missing review, its one home: token -> (the only
-# seat name it may label, the words the record carries). The writer refuses the token on any other row, and the
-# session's account and a hand-written one both name the seat through it.
-NOT_RUN_REASONS = {"no-loop-phase": (seat_map_module.GROUNDING_SEAT,
-                                     "no loop phase runs it, so no reviewer checked the PR body's claims")}
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RULING = rfs.OUTCOMES[-1]
+_SHOWN_WRONG = rfs.OUTCOMES[1]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 # GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
 _FILES_CEILING = 3000
@@ -94,6 +98,16 @@ _CLOSES_RE = stack_check.CLOSES_RE
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
+
+
+# The words of the record's optional parts, their one home.
+GRADE_VERDICTS = ("confirmed", "plausible", "wrong")
+RUN_STATUSES = ("ran", "timed-out", "not-started")
+# What the driver decided about a verify re-run; the record reads it and never works it out again.
+RERUN_DECISIONS = ("went-on", "head-moved", "tree-changed", "failed")
+SOURCE_KINDS = ("reviewer", "sweep")
+# The optional account keys the record carries whole, when the account has them.
+_ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare", "provenCopies")
 
 
 class Refusal(Exception):
@@ -352,8 +366,96 @@ def _readers(overrides):
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
             "changed_paths": changed_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
-            "owner_ruling_comment": _owner_ruling_comment,
+            "owner_ruling_comment": _owner_ruling_comment, "returning_decide": returning_review.decide,
             **(overrides or {})}
+
+
+# --- a carried review: an empty returning round's record reads the earlier review's reviewers ---
+
+_FULL_SHA = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
+
+
+def _full_sha(value):
+    return isinstance(value, str) and _FULL_SHA.fullmatch(value) is not None
+
+
+def carry_refusal(prior, last_reviewed, repo_root, base, head, proven, decide=None, ci_state=None):
+    """None when a record may carry `prior`'s reviewers for an empty returning round, else a short plain reason naming
+    the first leg that fails. The one home of the carry rule: the session writer and the record writer both ask it.
+
+    The legs, in order: `prior`'s final commit is `last_reviewed`; every finding of `prior` has an outcome; the
+    returning-review decider (`decide`, default `returning_review.decide`), asked afresh from git, answers `changed`
+    with no changed file (it also checks ancestry, a covering reviewer, a finished and not abandoned `prior`);
+    and a reviewer row of `prior` ran and covers its final commit. A fault in `decide` is a refusal. `ci_state`
+    (`sha -> CI's state`), when given, is passed to `decide` as its CI reader, so a `prior` written with CI pending
+    can count as finished."""
+    final = prior.get("finalCommit") if isinstance(prior, dict) else None
+    # axis: the earlier record's final commit must be the commit the session says it last reviewed — see bite-proof record c1l11d_wo_a_carried_review
+    if not (_full_sha(last_reviewed) and isinstance(final, dict) and final.get("sha") == last_reviewed):
+        return "the earlier record's final commit is not the last reviewed commit"
+    findings = prior.get("findings")
+    # axis: an earlier finding with no outcome stops the carry, so an unsettled finding never reads reviewed — see bite-proof record c1l11d_wo_a_carried_review
+    if not (isinstance(findings, list) and all(isinstance(f, dict) and f.get("outcome") is not None for f in findings)):
+        return "an earlier finding is still open"
+    try:
+        # axis: the carry check hands the decider the writer's CI reader, as a keyword and only when it has one — see bite-proof record c1l11d_wo_c_fold
+        reader = {"ci_state": ci_state} if ci_state is not None else {}
+        answer = (decide or returning_review.decide)(repo_root, base, head, dict(prior, ok=True), proven=proven, **reader)
+    except Exception as exc:  # noqa: BLE001 — fail closed: a decision that cannot be made carries nothing
+        return f"the change since the last reviewed commit could not be read ({type(exc).__name__})"
+    if not isinstance(answer, dict):
+        return "the change since the last reviewed commit could not be read"
+    # axis: the writer re-derives from git that the change since the last reviewed commit is empty; the account's word is never taken — see bite-proof record c1l11d_wo_a_carried_review
+    if answer.get("read") != returning_review.READ_CHANGED or answer.get("changedFiles") != []:
+        why = answer.get("why")
+        first = why[0] if isinstance(why, list) and why and isinstance(why[0], str) else None
+        return ("the earlier review does not stand for this head" + (f" ({first})" if first else "")
+                if answer.get("read") != returning_review.READ_CHANGED
+                else "the change since the last reviewed commit holds changed files")
+    rows = prior.get("reviewers")
+    if not (isinstance(rows, list) and any(isinstance(v, dict) and v.get("coversFinalCommit") is True
+                                           and v.get("ran") != RAN_NOT_RUN for v in rows)):
+        return "no reviewer of the earlier record ran and covers its final commit"
+    return None
+
+
+def revalidated_copies(copies, repo_root, base, head):
+    """The entries of `copies` that git still proves for `head`: each one's file is in the `base...head` change, not
+    deleted, shown by a section bound to the head blob, and its bytes at `head` hash to the entry's checksum. Any
+    other entry, and every entry when the diff cannot be read, is dropped, so a stale or invented proof never
+    widens what counts as an empty change."""
+    if not copies or not (_full_sha(base) and _full_sha(head)) or not isinstance(repo_root, str):
+        return []
+    try:
+        proc = review_diff_bytes.run_git_diff_three_dot(repo_root, base, head, timeout=120)
+        if proc.returncode != 0:
+            return []
+        diff_text = proc.stdout.decode("utf-8")
+        proof = {"schema": countable_lines.PROOF_SCHEMA, "copies": [dict(c) for c in copies]}
+        proven, _ = countable_lines.proven_copies(diff_text, repo_root, proof, head=head)
+    except Exception:  # noqa: BLE001 — fail closed: a proof that cannot be rechecked proves nothing
+        return []
+    return proven
+
+
+def carry_source(prior, last_reviewed, session_id, history):
+    """The record a carry is judged against: `prior`, unless `prior` is this same session's own earlier carried record
+    (same `sessionId`, a reviewer row carried from `last_reviewed`). A rewrite of that session then reads the record
+    that one carried from: the latest of `history` (the readable records older than `prior`, oldest first) whose final
+    commit is `last_reviewed`. Only the writer's own reading of the posted records decides; no such record leaves
+    `prior`, which `carry_refusal` then refuses."""
+    rows = prior.get("reviewers") if isinstance(prior, dict) else None
+    # axis: only this session's own carried record, read from the posted records, is looked through; another session's record at a later head still refuses — see bite-proof record c1l11d_wo_a_carried_review
+    own = (isinstance(rows, list) and isinstance(session_id, str) and prior.get("sessionId") == session_id
+           and any(isinstance(v, dict) and isinstance(v.get("carried"), dict) and v["carried"].get("commit") == last_reviewed
+                   for v in rows))
+    if not own:
+        return prior
+    for rec in reversed(history):
+        final = rec.get("finalCommit") if isinstance(rec, dict) else None
+        if isinstance(final, dict) and final.get("sha") == last_reviewed:
+            return rec
+    return prior
 
 
 # --- the account ---
@@ -375,6 +477,201 @@ def _makers_for(makers, step):
     reviewer with no step, or a maker with no `fromStep`, counts in full."""
     return frozenset(m["family"] for m in makers
                      if m.get("fromStep") is None or step is None or step >= m["fromStep"])
+
+
+def _is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool)
+
+
+def _nb(v):
+    return isinstance(v, str) and bool(v.strip())
+
+
+def _nb_or_none(v):
+    return v is None or _nb(v)
+
+
+def _str_or_none(v):
+    return v is None or isinstance(v, str)
+
+
+def _bool_or_none(v):
+    return v is None or isinstance(v, bool)
+
+
+def _int_or_none(v):
+    return v is None or _is_int(v)
+
+
+def _items_fault(v, item_fault):
+    """Where a list's item is malformed, as a path suffix (`[2].grade`), "" when `v` is no list, else None."""
+    if not isinstance(v, list):
+        return ""
+    for j, x in enumerate(v):
+        fault = item_fault(x)
+        if fault is not None:
+            return f"[{j}]{fault}"
+    return None
+
+
+def _range_fault(p):
+    ok = isinstance(p, list) and len(p) == 2 and all(_is_int(x) for x in p) and 1 <= p[0] <= p[1]
+    return None if ok else ""
+
+
+def _part_fault(p):
+    """Where one `{"file", "lines"}` entry is malformed, as a path suffix, else None."""
+    if not isinstance(p, dict):
+        return ""
+    if not _nb(p.get("file")):
+        return ".file"
+    fault = _items_fault(p.get("lines"), _range_fault)
+    return None if fault is None else f".lines{fault}"
+
+
+def _run_fault(run):
+    """Where one command run is malformed, as a path suffix, else None: a status, an exit code (an int when it
+    ran, else null), the output and a reason."""
+    if not isinstance(run, dict):
+        return ""
+    if run.get("status") not in RUN_STATUSES:
+        return ".status"
+    if not (_is_int(run.get("exitCode")) if run["status"] == "ran" else run.get("exitCode") is None):
+        return ".exitCode"
+    if not isinstance(run.get("output"), str):
+        return ".output"
+    return None if _str_or_none(run.get("reason")) else ".reason"
+
+
+def _rerun_fault(c):
+    if not isinstance(c, dict):
+        return ""
+    if not (_is_int(c.get("round")) and c["round"] >= 1):
+        return ".round"
+    if not _nb(c.get("check")):
+        return ".check"
+    if not (isinstance(c.get("runs"), list) and len(c["runs"]) == 2):
+        return ".runs (needs exactly two)"
+    fault = _items_fault(c["runs"], _run_fault)
+    if fault is not None:
+        return f".runs{fault}"
+    if "decision" in c and c["decision"] not in RERUN_DECISIONS:
+        return ".decision"
+    heads = c.get("heads")
+    if heads is not None and not (isinstance(heads, list) and len(heads) == 2
+                                  and all(_nb_or_none(h) for h in heads)):
+        return ".heads"
+    return None
+
+
+def _break_it_fault(x):
+    if not isinstance(x, dict):
+        return ""
+    if not _nb(x.get("test")):
+        return ".test"
+    if not _nb_or_none(x.get("commit")):
+        return ".commit"
+    if not _nb_or_none(x.get("changedWhy")):
+        return ".changedWhy"
+    return _run_fault(x)
+
+
+def _hit_fault(h):
+    if not isinstance(h, dict):
+        return ""
+    for k in ("id", "file", "title"):
+        if not _nb(h.get(k)):
+            return f".{k}"
+    return None if _int_or_none(h.get("line")) else ".line"
+
+
+def _outside_fault(x):
+    if not isinstance(x, dict):
+        return ""
+    src = x.get("source")
+    if not isinstance(src, dict):
+        return ".source"
+    if src.get("kind") not in SOURCE_KINDS:
+        return ".source.kind"
+    if not _nb(src.get("name")):
+        return ".source.name"
+    if not (_nb(src.get("sweepId")) if src["kind"] == "sweep" else src.get("sweepId") is None):
+        return ".source.sweepId"
+    if not (isinstance(x.get("hits"), list) and x["hits"]):
+        return ".hits"
+    fault = _items_fault(x["hits"], _hit_fault)
+    return None if fault is None else f".hits{fault}"
+
+
+def _unread_fault(u):
+    if not isinstance(u, dict):
+        return ""
+    for k in ("unreadLines", "countableLines"):
+        if not (_is_int(u.get(k)) and u[k] >= 0):
+            return f".{k}"
+    if u["unreadLines"] > u["countableLines"]:
+        return ".unreadLines (more than countableLines)"
+    fault = _items_fault(u.get("parts"), _part_fault)
+    return None if fault is None else f".parts{fault}"
+
+
+def _proven_copies_fault(v):
+    """Where the proven-copies list is malformed, as a path suffix, else None: a non-empty list of entries with
+    exactly a file, a source and a 64-hex sha256, no file twice."""
+    # the copy-list contract has one home, countable_lines.copies_fault, which proof ingestion consumes too
+    return countable_lines.copies_fault(v)
+
+
+def _grade_fault(g):
+    if not isinstance(g, dict):
+        return ""
+    if g.get("verdict") not in GRADE_VERDICTS:
+        return ".verdict"
+    return None if _nb(g.get("reason")) else ".reason"
+
+
+def _repeat_fault(g):
+    if not isinstance(g, dict):
+        return ""
+    # axis: a repeat names the earlier finding by its stored key, never by an id alone — see bite-proof record c1l1_wo_a_record_seam
+    if not _nb(g.get("findingKey")):
+        return ".findingKey"
+    if not _nb_or_none(g.get("id")):
+        return ".id"
+    return None if _bool_or_none(g.get("fixHolds")) else ".fixHolds"
+
+
+def _place_fault(p):
+    if not isinstance(p, dict):
+        return ""
+    if not _nb(p.get("file")):
+        return ".file"
+    if not _int_or_none(p.get("line")):
+        return ".line"
+    return None if _bool_or_none(p.get("fixed")) else ".fixed"
+
+
+def _kind_fault(k):
+    if not isinstance(k, dict):
+        return ""
+    if not _nb(k.get("kind")):
+        return ".kind"
+    fault = _items_fault(k.get("places"), _place_fault)
+    return None if fault is None else f".places{fault}"
+
+
+def _fix_group_fault(g):
+    if not isinstance(g, dict):
+        return ""
+    if not _nb(g.get("id")):
+        return ".id"
+    members = g.get("members")
+    if not isinstance(members, list) or len(members) < 2 or not all(_nb(m) for m in members):
+        return ".members"
+    if not _nb_or_none(g.get("commit")):
+        return ".commit"
+    # axis: `repairedAlone` is present only as the value true — see bite-proof record c1l11f_wo_c_fix_groups
+    return ".repairedAlone" if "repairedAlone" in g and g["repairedAlone"] is not True else None
 
 
 def _validate(a):
@@ -408,11 +705,23 @@ def _validate(a):
         chk(_step_ok(r.get("step")), f"reviewers[{i}].step")
         chk(r.get("notIndependent") is None or isinstance(r["notIndependent"], bool), f"reviewers[{i}].notIndependent")
         chk(r.get("ownerWord") is None or isinstance(r["ownerWord"], dict), f"reviewers[{i}].ownerWord")
-        why = r.get("notRunReason")
-        # axis: the not-run token labels only its own seat, never run, never attempted — see bite-proof record wo_1_1976_not_run_seat
-        chk(why is None or (isinstance(why, str) and why in NOT_RUN_REASONS and r["name"] == NOT_RUN_REASONS[why][0]
-                            and r["planned"] is True and r["ran"] is False and not r.get("runDir")
-                            and r.get("commit") is None), f"reviewers[{i}].notRunReason")
+        if "readParts" in r:
+            fault = _items_fault(r["readParts"], _part_fault)
+            # axis: a read-parts list is files with line ranges, never another shape — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"reviewers[{i}].readParts{fault}")
+        # axis: the not-run reason is no part of the account, on any reviewer row — see bite-proof record c1l2_wo2_not_run_retired
+        chk(r.get("notRunReason") is None, f"reviewers[{i}].notRunReason")
+        chk("carriedFrom" not in r or _full_sha(r["carriedFrom"]), f"reviewers[{i}].carriedFrom")
+    carried_review = a.get("carriedReview")
+    if "carriedReview" in a:
+        chk(isinstance(carried_review, dict) and set(carried_review) == {"lastReviewed", "why"}
+            and _full_sha(carried_review["lastReviewed"]) and _nb(carried_review["why"]), "carriedReview")
+    # axis: a carried account names the session's pinned review base as a full sha for the carry check, never the residual-lookup baseRef — see bite-proof record c1l11d_wo_c_fold
+    chk("carriedReview" not in a or _full_sha(a.get("carryBase")), "carryBase")
+    from_shas = {r["carriedFrom"] for r in a["reviewers"] if "carriedFrom" in r}
+    # axis: a carried row and the account's carriedReview name each other and the same commit, never one without the other — see bite-proof record c1l11d_wo_a_carried_review
+    chk(bool(from_shas) == ("carriedReview" in a)
+        and (not from_shas or from_shas == {carried_review["lastReviewed"]}), "carriedReview (and reviewers[].carriedFrom)")
     makers = a.get("makers")
     chk(makers is None or isinstance(makers, list), "makers")
     for i, m in enumerate(makers or []):
@@ -428,6 +737,25 @@ def _validate(a):
         decided_by = session_contract.decided_by_of(f)
         chk(decided_by is None or isinstance(decided_by, dict), f"findings[{i}].decidedBy")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
+        if "grade" in f:
+            fault = _grade_fault(f["grade"])
+            # axis: a grade is a verdict from the vocabulary with a reason, never a bare mark — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"findings[{i}].grade{fault}")
+        if "repeatOf" in f:
+            fault = _repeat_fault(f["repeatOf"])
+            chk(fault is None, f"findings[{i}].repeatOf{fault}")
+        if "breakItRuns" in f:
+            fault = _items_fault(f["breakItRuns"], _break_it_fault)
+            # axis: a break-it run says what ran, and carries an exit code exactly when it ran — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"findings[{i}].breakItRuns{fault}")
+        if "kindOfMistake" in f:
+            fault = _kind_fault(f["kindOfMistake"])
+            # axis: a kind of mistake names its kind and each place it recurs, never an unnamed place — see bite-proof record c1l1_wo_a_record_seam
+            chk(fault is None, f"findings[{i}].kindOfMistake{fault}")
+        if "fixGroup" in f:
+            fault = _fix_group_fault(f["fixGroup"])
+            # axis: a fix group names its id and two or more members, never a lone or unnamed one — see bite-proof record c1l11c_wo1_fix_groups
+            chk(fault is None, f"findings[{i}].fixGroup{fault}")
     for k in ("rawFindingsFiles", "checked"):
         chk(all(ne(x) for x in lst(k)), k)
     for i, g in enumerate(lst("goAheads")):
@@ -473,6 +801,31 @@ def _validate(a):
         and isinstance(rounds.get("stoppedAtCap"), bool)
         and rounds.get("capKind", CAP_KINDS[0]) in CAP_KINDS
         and ("wider" not in rounds or _wider_ok(rounds["wider"])), "rounds")
+    if "extraAudit" in rounds:
+        extra = rounds["extraAudit"]
+        # axis: the extra audit round is said with a reason and nothing else — see bite-proof record c1l1_wo_a_record_seam
+        chk(isinstance(extra, dict) and set(extra) == {"why"} and _nb(extra["why"]), "rounds.extraAudit")
+    if "rerunChecks" in a:
+        fault = _items_fault(a["rerunChecks"], _rerun_fault)
+        # axis: a re-run check holds the first failure and the one re-run, two runs, each with a coherent status — see bite-proof record c1l1_wo_a_record_seam
+        chk(fault is None, f"rerunChecks{fault}")
+    if "synthesisRounds" in a:
+        sr = a["synthesisRounds"]
+        # axis: the synthesis rounds are distinct rounds in ascending order — see bite-proof record c1l1_wo_a_record_seam
+        chk(isinstance(sr, list) and all(_is_int(n) and n >= 1 for n in sr)
+            and all(x < y for x, y in zip(sr, sr[1:])), "synthesisRounds")
+    if "outsideThisPR" in a:
+        fault = _items_fault(a["outsideThisPR"], _outside_fault)
+        # axis: an outside entry names its source, a sweep id exactly for a sweep, and at least one hit — see bite-proof record c1l1_wo_a_record_seam
+        chk(fault is None, f"outsideThisPR{fault}")
+    if "unreadShare" in a:
+        fault = _unread_fault(a["unreadShare"])
+        # axis: the unread lines are part of the countable lines, and every range is a real span — see bite-proof record c1l1_wo_a_record_seam
+        chk(fault is None, f"unreadShare{fault}")
+    if "provenCopies" in a:
+        fault = _proven_copies_fault(a["provenCopies"])
+        # axis: a proven copy names its file, its source and a 64-hex checksum the vet can check, each file once — see bite-proof record c1l5b_wo_d_proven_copies
+        chk(fault is None, f"provenCopies{fault}")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -620,7 +973,25 @@ def _lane(a, rd, meta):
     return {"value": a["lane"], "source": SESSION, "reason": a["laneReason"]}
 
 
-BASIS_EVIDENCE_MAX = 10      # matched or unmatchable paths kept per list
+_CAPPED_LANES = ("micro", "light")  # the lanes this writer holds to the round cap; the full lane's driver holds its own
+
+
+def _refuse_lane_over_round_cap(lane, rounds):
+    """Refuse a light or micro account over the round cap (FR-52).
+
+    `rounds.count` already leaves out the one extra audit round, so the count is held to the cap as it stands.
+    The full lane is left to its driver; a lane value this module does not know is not capped (the below-floor rule
+    reads it not-reviewed)."""
+    count = rounds["count"]
+    # axis: a light or micro record never shows a counted round past the cap; the extra audit round is already left out of the count — see bite-proof record c1l11b_wo_e_lane_round_cap
+    # axis: the extra audit round is not allowed a second time on top of the count that already leaves it out — see bite-proof record c1l11b_wo_h_cap_count
+    if lane in _CAPPED_LANES and count > round_phases.ROUND_CAP:
+        raise Refusal("review-record-round-cap-exceeded",
+                      f"the {lane} lane's review ran {count} rounds; its cap is {round_phases.ROUND_CAP}"
+                      + ("; the extra audit round is not counted" if "extraAudit" in rounds else ""))
+
+
+BASIS_EVIDENCE_MAX = 10     # matched or unmatchable paths kept per list
 BASIS_AREAS_MAX = 20         # touched areas kept on the record
 BASIS_PATHS_MAX = 40         # matched paths kept across all touched areas together
 BASIS_WHY_MAX = 12           # reason lines kept; the touches ones are the cut ones
@@ -739,15 +1110,43 @@ def _own_word_ok(word):
     return isinstance(word, dict) and all(isinstance(word.get(k), str) and word[k].strip() for k in ("words", "where"))
 
 
-def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset()):
+def _carried_row(r, carry):
+    """(the earlier record's row for the account row `r`, None), or (None, why it is not carried). `carry` is
+    (carry_refusal's answer, the earlier record). Only the writer's own reading of the earlier record decides."""
+    why, prior = carry
+    if why is not None:
+        return None, why
+    for v in prior["reviewers"]:
+        # axis: a carried row takes a row of the earlier record with its name, vendor and model that ran and covers its final commit — see bite-proof record c1l11d_wo_a_carried_review
+        if isinstance(v, dict) and all(v.get(k) == r.get(k) for k in ("name", "vendor", "model")) \
+                and v.get("coversFinalCommit") is True and v.get("ran") in _RAN_STATES:
+            return v, None
+    return None, "no matching covering reviewer in the earlier record"
+
+
+def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset(),
+              carry=None):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
     out["family"] = _family(r["vendor"], r["model"])
+    if "readParts" in r:
+        out["readParts"] = r["readParts"]
     # The runner's record does not expose a findings run's content: the code holds no reviewer's findings.
     out["findingsCoverage"] = SESSION
     named = isinstance(r.get("commit"), str) and bool(r["commit"])
     target = r["commit"] if named else head
     credited = None
-    if r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
+    carried_reading = None
+    if "carriedFrom" in r:
+        held, why = _carried_row(r, carry or ("no earlier record to carry", None))
+        if held is not None:
+            out.update(ran=held["ran"], family=held.get("family"), carried={"commit": r["carriedFrom"]})
+            carried_reading = held.get("reading")
+            named, target = True, r["carriedFrom"]
+        else:
+            out.update(ran="not-run", runNote=why)
+            if r["ran"]:
+                dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
+    elif r.get("runDir") and os.path.realpath(r["runDir"]) in shared:
         out.update(ran="not-run", runNote="the run record is claimed by more than one reviewer")
         if r["ran"]:
             dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
@@ -787,6 +1186,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
 
     def demote(note):
         out.pop("observation", None)
+        out.pop("carried", None)
         out.update(ran="not-run", runNote=note)
         if r["ran"]:
             dis.append({"fact": f"{r['name']} ran", "session": True, "code": "not-run"})
@@ -800,13 +1200,20 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
             out["family"] = _family(credited["source"], credited["engineModel"])
     if lane_value != "full":
         # axis: outside the full lane a reviewer counts only when the engine's own record reads engaged — see bite-proof record wo_a_1796_reading-independence
-        if out["ran"] == "engine-record":
-            obs = out.get("observation")
-            if not isinstance(obs, dict) or obs.get("read") != "engaged":
-                demote("the engine's record of the run does not show that the reviewer read the change")
-        elif out["ran"] == "reported-by-session":
-            demote("no engine record of the run shows that the reviewer read the change")
-        out["reading"] = "engaged" if out["ran"] == "engine-record" else "not-shown"
+        if "carried" in out:
+            # axis: a carried row has no observation of its own; it counts outside the full lane exactly when the earlier record's matching row itself read engaged, else it stays demoted — see bite-proof record c1l11d_wo_a_carried_review
+            if carried_reading != "engaged":
+                demote("the earlier record's row does not show that the reviewer read the change")
+            else:
+                out["reading"] = "engaged"
+        else:
+            if out["ran"] == "engine-record":
+                obs = out.get("observation")
+                if not isinstance(obs, dict) or obs.get("read") != "engaged":
+                    demote("the engine's record of the run does not show that the reviewer read the change")
+            elif out["ran"] == "reported-by-session":
+                demote("no engine record of the run shows that the reviewer read the change")
+            out["reading"] = "engaged" if out["ran"] == "engine-record" else "not-shown"
     # axis: a reviewer from a maker's family counts only with the owner's word; independence is computed here, never taken from the account — see bite-proof record wo_a_1796_reading-independence
     if out["ran"] != "not-run" and maker_families is None:
         demote("no maker is named for the step this reviewer reviewed, so independence cannot be shown")
@@ -819,9 +1226,15 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
             else:
                 demote("the reviewer is from a maker's family and no owner's word for this change lets it run")
     out["commit"] = target if named else None
-    out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and target == head
+    out["coversFinalCommit"] = bool(head) and out["ran"] != "not-run" and (target == head or "carried" in out)
     if isinstance(r.get("ownerWord"), dict):
         out["ownerWord"] = r["ownerWord"]
+    # axis: a row's cost is read from the engine record that credited it, never from the account; unmeasured is null, never zero — see bite-proof record c1l1_wo_a_record_seam
+    obs = out.get("observation") if out["ran"] == RAN_ENGINE_RECORD else None
+    obs = obs if isinstance(obs, dict) else {}
+    wall = obs.get("wallSeconds")
+    out["cost"] = {"tokens": obs.get("tokens") if _is_int(obs.get("tokens")) else None,
+                   "minutes": round(wall / 60, 1) if isinstance(wall, (int, float)) and not isinstance(wall, bool) else None}
     return out
 
 
@@ -863,6 +1276,31 @@ def leftover_line(finding):
     return f"finding {_name(finding)} waits for the owner's decision"
 
 
+def _repeat_key(f):
+    """The stored key of the earlier finding `f` repeats, or None when it names none."""
+    mark = f.get("repeatOf") if isinstance(f, dict) else None
+    key = mark.get("findingKey") if isinstance(mark, dict) else None
+    return _key({"findingKey": key}) if isinstance(key, str) and key.strip() else None
+
+
+def repeat_held_elsewhere(f, findings):
+    """True when `f` is left for the owner and repeats another left-for-owner finding of the same record, which holds
+    the owner's one card. The one reader of that rule: the leftover line, the leftForOwner list and the sheet's card
+    all ask it. A repeat whose earlier finding is not in this record, or has another outcome, keeps its own card, so no
+    owner decision goes missing."""
+    left = {_key(g): g for g in findings if isinstance(g, dict) and g.get("outcome") == _LEFT_FOR_OWNER}
+    own, held = _key(f), _repeat_key(f)
+    if f.get("outcome") != _LEFT_FOR_OWNER or held is None or held == own or held not in left:
+        return False
+    seen = set()
+    while held is not None and held not in seen:  # a ring of repeats holds nothing: each keeps its card
+        if held == own:
+            return False
+        seen.add(held)
+        held = _repeat_key(left[held]) if held in left else None
+    return True
+
+
 REVIEWED = "reviewed"
 NOT_REVIEWED = "not-reviewed"
 AWAITS_OWNER = "awaits-owner"
@@ -874,6 +1312,11 @@ def cleared(status):
     return status == REVIEWED
 
 
+def unfinished(status):
+    """The status a record has when something it needs is missing, `awaits-owner` excluded; the readers outside this file ask this instead of spelling the status."""
+    return status == NOT_REVIEWED
+
+
 def _finding_lines(findings):
     lines = []
     for f in findings:
@@ -881,7 +1324,8 @@ def _finding_lines(findings):
             lines.append(f"finding {_name(f)} has no outcome")
         elif not f.get("reason"):
             lines.append(f"finding {_name(f)} has no reason")
-        elif f["outcome"] == _LEFT_FOR_OWNER:
+        # axis: a kept left-for-owner repeat adds no leftover line; the earlier finding holds the owner's card — see bite-proof record c1l8_wo_b_record_repeats
+        elif f["outcome"] == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, findings):
             lines.append(leftover_line(f))
     return lines
 
@@ -938,7 +1382,8 @@ def _owner_only(rec, missing_lines):
     """True when the record reads not-reviewed, is not parked, and every missing line is a leftover line: with its leftovers it reads awaits-owner exactly when the same record without them reads reviewed."""
     if rec["status"] != NOT_REVIEWED or rec["parked"]:
         return False
-    leftovers = {leftover_line(f) for f in rec["findings"] if f.get("outcome") == _LEFT_FOR_OWNER}
+    leftovers = {leftover_line(f) for f in rec["findings"]
+                 if f.get("outcome") == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, rec["findings"])}
     # axis: a record is awaits-owner only when every missing line is a leftover finding
     if not missing_lines or not all(m in leftovers for m in missing_lines):
         return False
@@ -1056,7 +1501,7 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
     return out, rows
 
 
-def build_record(account, readers, prior=None):
+def build_record(account, readers, prior=None, history=()):
     a, rd, dis = _validate(account), _readers(readers), []
     read_paths, seen = rd["changed_paths"], {}
 
@@ -1070,6 +1515,7 @@ def build_record(account, readers, prior=None):
     meta = rd["pr_meta"](a["pr"], a["repo"])
     fc = {"sha": meta["head"], "source": "GitHub PR"} if meta else {"sha": a["finalCommit"], "source": SESSION}
     ci, lane = _ci(rd, a["repo"], fc["sha"], a.get("repoRoot")), _lane(a, rd, meta)
+    _refuse_lane_over_round_cap(lane["value"], a["rounds"])
     for fact, session, code, from_code in (("lane", a["lane"], lane["value"], lane["source"] != SESSION),
                                            ("finalCommit", a["finalCommit"], fc["sha"], bool(meta)),
                                            ("ci", a["ci"], ci["state"], ci["source"] == "GitHub checks")):
@@ -1077,10 +1523,18 @@ def build_record(account, readers, prior=None):
             dis.append({"fact": fact, "session": session, "code": code})
     dirs = [os.path.realpath(r["runDir"]) for r in a["reviewers"] if r.get("runDir")]
     shared = frozenset(d for d in dirs if dirs.count(d) > 1)
+    # A carried row is decided by the writer's own reading of the latest earlier record and of git, once per record.
+    carried_from = a["carriedReview"]["lastReviewed"] if "carriedReview" in a else None
+    source = carry_source(prior, carried_from, a["sessionId"], history) if carried_from else prior
+    carry = (carry_refusal(source, carried_from, a.get("repoRoot"), a.get("carryBase"), fc["sha"],
+                           # axis: the carry check hears only the copies git still proves at the final commit; the account's word is never taken — see bite-proof record c1l11d_wo_a_carried_review
+                           revalidated_copies(a.get("provenCopies") or [], a.get("repoRoot"), a.get("carryBase"), fc["sha"]),
+                           rd["returning_decide"],
+                           lambda sha: _ci(rd, a["repo"], sha, a.get("repoRoot"))["state"]), source) if carried_from else None
     reviewers = [_reviewer(r, rd, dis, fc["sha"], shared, a["finalCommit"], lane["value"],
-                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()))
+                           _makers_for(a["makers"], r.get("step")) or (None if a["makers"] else frozenset()), carry)
                  for r in a["reviewers"]]
-    notes, missing, seats_not_run, held = [], [], [], {}
+    notes, missing, held = [], [], {}
     # Identity is stamped on the unredacted account, so a later write compares the stored key.
     findings = [dict(f, **{session_contract.FINDING_KEY_FIELD: _key(f)}) for f in a["findings"]]
     findings = _apply_owner_rulings(findings, a["findings"], a["ownerRulings"])
@@ -1115,12 +1569,8 @@ def build_record(account, readers, prior=None):
         return g.get("kind") != "standing-ruling" or finding_outcomes.on_record(
             {"kind": "canon", "ref": g["canonId"]}, sources())[0]
 
-    for v, row in zip(reviewers, a["reviewers"]):  # built in the account's order
+    for v in reviewers:
         if v["planned"] and v["ran"] == "not-run":
-            token = row.get("notRunReason")
-            if token:  # the writer checked it labels only its own seat, never run
-                seats_not_run.append({"name": v["name"], "reason": token, "why": NOT_RUN_REASONS[token][1]})
-                continue
             mine = [g for g in a["goAheads"] if g["reviewer"] == v["name"]]
             complete = [g for g in mine if _go_ahead_ok(g)]
             # axis: a standing-ruling go-ahead counts only while its Canon entry is on record — see bite-proof record c7l3_wo1_record_writer
@@ -1139,7 +1589,16 @@ def build_record(account, readers, prior=None):
     toks = [v["observation"].get("tokens") for v in reviewers if v["ran"] == "engine-record"
             and isinstance(v.get("observation"), dict)]
     toks = [t for t in toks if isinstance(t, int) and not isinstance(t, bool)]
-    ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run"]
+    ran_names = [v["name"] for v in reviewers if v["ran"] != "not-run" and "carried" not in v]
+    carried_names = [v["name"] for v in reviewers if "carried" in v]
+    if carried_names:
+        # the record says plainly that no reviewer ran in this round, and what it carries instead
+        kept = f"carried from the earlier review of {_short(carried_from)}: {', '.join(carried_names)}"
+        reviewers_line = (f"Reviewers that ran: {', '.join(ran_names)}; {kept}" if ran_names
+                          else f"Reviewers that ran: none in this round — {kept}")
+        carried_lines = [reviewers_line, a["carriedReview"]["why"]]
+    else:
+        carried_lines = ["Reviewers that ran: " + (", ".join(ran_names) or "none")]
     # An account that names no repository reads no changed files, so the list is unknown.
     paths = rd["changed_paths"](a["pr"], a["repo"]) if a.get("repoRoot") else None
     withheld = rd["withheld_paths"](a.get("repoRoot"), fc["sha"], paths) if isinstance(paths, list) else None
@@ -1151,17 +1610,20 @@ def build_record(account, readers, prior=None):
         "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
         "carriedRechecks": carried_rows,
         "refused": a["refused"], **({"commandRefusals": a["commandRefusals"]} if a["commandRefusals"] else {}),
+        # axis: a part shows in the record exactly when the account carries it — see bite-proof record c1l1_wo_a_record_seam
+        **{k: a[k] for k in _ROUND_PARTS if k in a},
         "unreadFiles": unread, "rawOutputs": [],
-        "leftForOwner": [_name(f) for f in findings if f.get("outcome") == _LEFT_FOR_OWNER],
-        "missingReviews": missing, **({"seatsNotRun": seats_not_run} if seats_not_run else {}),
+        # axis: a kept left-for-owner repeat is not listed again beside the earlier finding that holds it — see bite-proof record c1l8_wo_b_record_repeats
+        "leftForOwner": [_name(f) for f in findings
+                         if f.get("outcome") == _LEFT_FOR_OWNER and not repeat_held_elsewhere(f, findings)],
+        "missingReviews": missing,
         "rounds": dict({k: v for k, v in a["rounds"].items() if k != "wider" or v}, source=SESSION),
         "cost": {"unit": "reviewer-minutes",
                  "minutes": round(sum(w for w in walls if isinstance(w, (int, float))) / 60, 1),
                  "tokens": sum(toks) if toks else None, "source": "engine records",
                  "notCounted": [v["name"] for v in reviewers if v["ran"] != "engine-record"]},
         "sessionDisagreements": dis,
-        "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}",
-                    "Reviewers that ran: " + (", ".join(ran_names) or "none")] + a["checked"],
+        "checked": [f"CI on {(fc['sha'] or 'unknown')[:7]}: {ci['state']}", *carried_lines] + a["checked"],
         "previousRecord": None,
         "earlierRecordsNotChecked": [],
         "writtenAt": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -1392,6 +1854,16 @@ _ROUND_SUFFIX = re.compile(r"(.*) \(round (\d+)\)", re.S)
 LISTED = "(listed in the full record)"
 _RAN_STATES = ("engine-record", "reported-by-session")
 _ROUNDS_WORD = {"rounds": "round cap", "ceiling": "round ceiling"}
+# The reviewer header's roles, their one home: a panel seat's lens, a row's phase stem (`<stem> <seat> (round n)`)
+# and the order the non-lens roles are listed in.
+_PANEL_LENS = {"code-reviewer": "code", "test-role": "test", "security-reviewer": "security",
+               "premortem-reviewer": "premortem", "architecture-reviewer": "architecture"}
+_STEM_ROLE = {"verifiers ": "verifier", "audits ": "fix auditor", "scoped-finder ": "scoped finder",
+              "gap-sweep ": "gap sweep", "second-test ": "second test"}
+_ROLE_ORDER = ("verifier", "synthesis", "fix auditor", "scoped finder", "gap sweep", "second test")
+_OUTCOME_PHRASES = ("fixed", "shown wrong", "craft call", "left for the owner", "settled by a ruling")
+assert len(rfs.OUTCOMES) == len(_OUTCOME_PHRASES), "every outcome needs its words in _OUTCOME_PHRASES"
+_OUTCOME_WORDS = dict(zip(rfs.OUTCOMES, _OUTCOME_PHRASES))
 
 
 def _seat_round(name):
@@ -1404,14 +1876,31 @@ def _row_bullet(v, final_sha):
     """The bullet for one reviewer row that carries no round suffix."""
     label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
         v["ran"], "did not run")
-    if v["ran"] != "not-run" and v.get("commit") and v["commit"] != final_sha:
+    if v["ran"] != "not-run" and isinstance(v.get("carried"), dict):
+        # axis: a carried row says it was carried and from which commit, never that it ran — see bite-proof record c1l11d_wo_a_carried_review
+        label = f"carried from {_short(v['carried'].get('commit'))}"
+    elif v["ran"] != "not-run" and v.get("commit") and v["commit"] != final_sha:
         label += f" on {v['commit'][:7]}"
     word = v.get("ownerWord")
+    read = _read_words([v])
     return (f"- {v['name']}: {label}"
             + ("; not independent of the makers" if v.get("notIndependent") else "")
             + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
                and isinstance(word.get("where"), str) and word["where"] else "")
-            + f"; findings: {v['findingsCoverage']}")
+            + f"; findings: {v['findingsCoverage']}" + (f"; {read}" if read else ""))
+
+
+def _read_words(rows):
+    """What the rows that carry a read-parts list say was read: `read <n> files, <m> lines`, `read nothing` when
+    every such list is empty, None when no row carries one."""
+    lists = [v["readParts"] for v in rows if isinstance(v.get("readParts"), list)]
+    if not lists:
+        return None
+    parts = [p for part_list in lists for p in part_list]
+    if not parts:
+        return "read nothing"
+    return (f"read {len({p['file'] for p in parts})} files, "
+            f"{sum(end - start + 1 for p in parts for start, end in p['lines'])} lines")
 
 
 def _rounds_text(rounds):
@@ -1425,13 +1914,19 @@ def _seat_bullet(seat, rows, final_sha):
     for v, n in rows:
         state = v["ran"] if v["ran"] in _RAN_STATES else "not-run"
         commit = v["commit"][:7] if state != "not-run" and v.get("commit") and v["commit"] != final_sha else None
+        if state != "not-run" and isinstance(v.get("carried"), dict):
+            # axis: a carried row says it was carried and from which commit, never that it ran, whether or not its name carries a round suffix — see bite-proof record c1l11d_wo_a_carried_review
+            state, commit = "carried", _short(v["carried"].get("commit"))
         buckets.setdefault((state, commit), []).append(n)
     said = []
-    for state in (*_RAN_STATES, "not-run"):
+    for state in (*_RAN_STATES, "carried", "not-run"):
         for (s, commit), nums in buckets.items():
             if s != state:
                 continue
             where = _rounds_text(nums)
+            if s == "carried":
+                said.append(f"carried from {commit} in {where}")
+                continue
             text = {"engine-record": f"ran in {where} (engine record)",
                     "reported-by-session": f"ran in {where} ({SESSION})"}.get(s, f"did not run in {where}")
             said.append(text + (f" on {commit}" if commit else ""))
@@ -1445,7 +1940,8 @@ def _seat_bullet(seat, rows, final_sha):
     coverage = list(dict.fromkeys(v["findingsCoverage"] for v, _ in rows))
     said.append("findings: " + (coverage[0] if len(coverage) == 1
                                 else "; ".join(f"round {n}: {v['findingsCoverage']}" for v, n in rows)))
-    return f"- {seat}: " + "; ".join(said)
+    read = _read_words([v for v, _ in rows])
+    return f"- {seat}: " + "; ".join(said + ([read] if read else []))
 
 
 def _seat_groups(r):
@@ -1510,6 +2006,153 @@ def _rounds_line(rounds):
             + (" The loop stopped at its cap." if rounds.get("stoppedAtCap") else ""))
 
 
+def _extra_audit_line(rounds, compact):
+    extra = rounds.get("extraAudit") if isinstance(rounds, dict) else None
+    if not isinstance(extra, dict):
+        return None
+    cap = rounds.get("cap")
+    why = _clip(extra.get("why")) if compact else extra.get("why")
+    return (f"Extra audit round: ran, ordered at the vet and not counted in the {f'{cap} ' if cap is not None else ''}"
+            f"rounds: {why}.")
+
+
+def _run_result(run):
+    if run.get("status") == "ran":
+        return "passed" if run.get("exitCode") == 0 else f"failed (exit {run.get('exitCode')})"
+    return "timed out" if run.get("status") == "timed-out" else "did not start"
+
+
+def _decision(c):
+    """The driver's recorded decision on a verify re-run entry, or None when the entry has none (a record an
+    earlier version wrote) or a value that is not one of `RERUN_DECISIONS`. The record never works it out again."""
+    decision = c.get("decision") if isinstance(c, dict) else None
+    return decision if isinstance(decision, str) and decision in RERUN_DECISIONS else None
+
+
+def _head_word(head):
+    return head[:12] if isinstance(head, str) and head else "unknown"
+
+
+def _rerun_clause(c):
+    """What a re-run entry says beyond its two results, by the driver's decision: a re-run that did not go on
+    names why it was not on the same code; one that went on, failed, or has no decision says nothing here."""
+    decision = _decision(c)
+    if decision == "head-moved":
+        heads = c.get("heads")
+        heads = heads if isinstance(heads, list) and len(heads) == 2 else [None, None]
+        return f" — the second run was at a different head ({_head_word(heads[0])} then {_head_word(heads[1])})"
+    if decision == "tree-changed":
+        return " — the second run saw changed working-tree contents"
+    return ""
+
+
+def _rerun_line(checks, compact):
+    if not checks:
+        return None
+    # axis: a re-run is called unchanged code only when the driver's decision on it is that it went on — see bite-proof record c1l10b_wo3_verify_rerun_seam
+    unchanged = all(_decision(c) == "went-on" for c in checks)
+    lead = "Re-run after one failure on unchanged code: " if unchanged else "Re-run after one failure: "
+    if compact:
+        return f"{lead}{len(checks)} checks {LISTED}."
+    return lead + "; ".join(
+        f"round {c.get('round')} {_inline_code(str(c.get('check')))}: "
+        + " then ".join(_run_result(run) for run in c.get("runs") or [])
+        + _rerun_clause(c)
+        for c in checks)
+
+
+def _roles(r):
+    """The reviewer header's roles: the panel lenses, then the other roles in `_ROLE_ORDER`, for the rows that
+    ran and the rounds the synthesis step ran in; each role once, the groups joined by ` · `."""
+    lenses, roles = [], set()
+    for v in r["reviewers"]:
+        if v["ran"] == "not-run":
+            continue
+        seat = _seat_round(v["name"])[0]
+        stem = next((role for prefix, role in _STEM_ROLE.items() if seat.startswith(prefix)), None)
+        if stem:
+            roles.add(stem)
+        elif seat in _PANEL_LENS and _PANEL_LENS[seat] not in lenses:
+            lenses.append(_PANEL_LENS[seat])
+    if r.get("synthesisRounds"):
+        roles.add("synthesis")
+    return " · ".join(([", ".join(lenses)] if lenses else []) + [role for role in _ROLE_ORDER if role in roles])
+
+
+def _place_text(p):
+    return p["file"] if p.get("line") is None else f"{p['file']}:{p['line']}"
+
+
+def _finding_bullet(f):
+    """One finding's bullet in the findings block; the parts the finding carries follow its outcome. A run's
+    output text is never in the summary."""
+    bullet = (f"- {' '.join(str(x) for x in (f.get('id'), f.get('severity')) if x)} · "
+              + _OUTCOME_WORDS.get(f.get("outcome"), "open"))
+    grade, repeat = f.get("grade"), f.get("repeatOf")
+    runs, kind, group = f.get("breakItRuns"), f.get("kindOfMistake"), f.get("fixGroup")
+    if isinstance(grade, dict):
+        bullet += f" · {grade.get('verdict')}: {grade.get('reason')}"
+    if isinstance(repeat, dict):
+        bullet += f" · repeat of {repeat.get('id') or str(repeat.get('findingKey'))[:12]}"
+        bullet += {True: " · fix still holds", False: " · fix no longer holds"}.get(repeat.get("fixHolds"), "")
+    if runs:
+        bullet += f" · break-it: {len(runs)} run(s) ({', '.join(_run_result(run) for run in runs)})"
+    if isinstance(group, dict) and isinstance(group.get("members"), list):
+        if group.get("repairedAlone") is True:
+            bullet += f" · repaired alone after the group's shared fix (group {group.get('id')})"
+        else:
+            bullet += f" · one fix shared with {len(group['members']) - 1} other finding(s) (group {group.get('id')})"
+    if isinstance(kind, dict):
+        bullet += f" · kind of mistake: {kind.get('kind')}"
+        places = kind.get("places") or []
+        if places:
+            fixed = sum(1 for p in places if p.get("fixed") is True)
+            bullet += (f" · also in this PR: {', '.join(_place_text(p) for p in places)} "
+                       f"({'all fixed' if fixed == len(places) else f'{fixed} of {len(places)} fixed'})")
+    return bullet
+
+
+def _findings_lines(findings, compact):
+    entries = [f for f in findings if isinstance(f, dict)] if isinstance(findings, list) else []
+    if not entries:
+        return []
+    if compact:
+        return [f"Findings: {len(entries)} {LISTED}."]
+    return ["Findings:", *[_finding_bullet(f) for f in entries]]
+
+
+def _outside_lines(outside, compact):
+    total = sum(len(x["hits"]) for x in outside or [])
+    if not total:
+        return []
+    if compact:
+        return [f"Outside this PR ({total}) {LISTED}."]
+    lines = [f"Outside this PR ({total})"]
+    for x in outside:
+        src = x["source"]
+        words = f"from {src['name']}" if src["kind"] == "reviewer" else f"from sweep {src['sweepId']} by {src['name']}"
+        lines += [f"- {h['id']} {_place_text(h)} · {h['title']} ({words})" for h in x["hits"]]
+    return [*lines, "For the advisor to sort at the vet."]
+
+
+def _proven_copies_lines(copies, compact):
+    if not copies:
+        return []
+    count = _plural(len(copies), "file", "files")
+    lead = "Proven copies, given to no reviewer: " + count
+    if compact:
+        return [f"{lead} {LISTED}."]
+    return [lead + " — " + ", ".join(f"{c['file']} (copy of {c['source']})" for c in copies) + "."]
+
+
+def _unread_line(share):
+    if not isinstance(share, dict):
+        return None
+    unread, countable = share["unreadLines"], share["countableLines"]
+    return (f"Left unread by the slice reviewers: {unread} of {countable} countable lines"
+            + (f" ({100 * unread / countable:.1f}%)" if countable > 0 else "") + ".")
+
+
 def _not_checked_line(entries, compact):
     if compact:
         return (f"{_plural(len(entries), 'earlier record', 'earlier records')} could not be checked by code "
@@ -1567,9 +2210,11 @@ def _summary(r, level):
     checked = list(r["checked"][:2])
     missing = r["whatIsMissing"]
     if compact:
-        ran = sum(1 for v in r["reviewers"] if v["ran"] != "not-run")
-        checked = checked[:1] + ([f"Reviewers that ran: {_plural(ran, 'reviewer', 'reviewers')} {LISTED}"]
-                                 if len(checked) > 1 else [])
+        ran = sum(1 for v in r["reviewers"] if v["ran"] != "not-run" and "carried" not in v)
+        carried = sum(1 for v in r["reviewers"] if "carried" in v)
+        ran_text = f"{_plural(ran, 'reviewer', 'reviewers')} {LISTED}" if ran or not carried else "none in this round"
+        kept_text = f"; {_plural(carried, 'reviewer', 'reviewers')} carried from the earlier review {LISTED}" if carried else ""
+        checked = checked[:1] + ([f"Reviewers that ran: {ran_text}{kept_text}"] if len(checked) > 1 else [])
         left_text = f"{_plural(len(missing), 'item', 'items')} {LISTED}" if missing else "nothing"
     else:
         left_text = "; ".join(missing) or "nothing"
@@ -1586,9 +2231,20 @@ def _summary(r, level):
         groups = _seat_groups(r)
         who = [f"Reviewers: {_plural(len(r['reviewers']), 'row', 'rows')} across "
                f"{_plural(len(groups), 'seat', 'seats')} {LISTED}."]
+        roles_line = None
     else:
-        who = ["Reviewers:", *_reviewer_bullets(r)]
+        roles = _roles(r)
+        roles_line = f"Reviewers: {roles}" if roles else "Reviewers:"
+        who = [roles_line, *_reviewer_bullets(r)]
     rounds_line = _rounds_line(r.get("rounds"))
+    extra_audit_line = _extra_audit_line(r.get("rounds"), compact)
+    rerun_line = _rerun_line(r.get("rerunChecks"), compact)
+    findings_lines = _findings_lines(r.get("findings"), compact)
+    outside_lines = _outside_lines(r.get("outsideThisPR"), compact)
+    proven_lines = _proven_copies_lines(r.get("provenCopies"), compact)
+    unread_line = _unread_line(r.get("unreadShare"))
+    # the lines that carry reviewer or session text, left out of the claim check by the line objects built here
+    quoted_lines = [*findings_lines, *outside_lines, *proven_lines, *([roles_line] if roles_line else [])]
     refused = r.get("refused") or []
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     transit_line = _transit_line(r.get("transitDamage"), level)
@@ -1606,24 +2262,32 @@ def _summary(r, level):
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
+        *([extra_audit_line] if extra_audit_line else []),
+        *([rerun_line] if rerun_line else []),
         *([_refused_line(refused, compact)] if refused else []),
         *([refusals_line] if refusals_line else []),
         *([_not_checked_line(r["earlierRecordsNotChecked"], compact)] if r.get("earlierRecordsNotChecked") else []),
         *who,
-        *[f"Not run: {n['name']}, because {n['why']}." for n in r.get("seatsNotRun") or []],
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
         *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
-        *wider_lines]
+        *wider_lines,
+        *findings_lines,
+        *outside_lines,
+        *proven_lines,
+        *([unread_line] if unread_line else [])]
     # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
     # block is. Every other line is still checked.
     # The wider lines carry the driver's own reason text, and the withheld line carries literal path data,
     # like the floor line. The refusals line carries the agent's literal command and next-step text. The transit
     # line carries the recorded fields' literal paths (record keys), so it is left out too.
+    # The findings block, the outside list and the reviewer header carry reviewers' and the session's own text, so
+    # they are left out too, by the line objects built above.
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
+    # axis: the findings block and the outside list are left out of the claim check, by line object — see bite-proof record c1l1_wo_a_record_seam
     _assert_no_bug_free_claim(
         "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
-                  and l is not transit_line and l not in wider_lines))
+                  and l is not transit_line and l not in wider_lines and all(l is not q for q in quoted_lines)))
     return "\n".join(lines)
 
 
@@ -1937,7 +2601,42 @@ def _guarded(fn):
         return _refuse("review-record-internal-error", f"{type(e).__name__}: {e}")
 
 
-def write(account_path, repo_root, readers=None):
+def _wrong_ungraded(findings, prior, verifier_closed):
+    """The index of each account finding that reads shown-wrong with neither the driver's verifier grade nor a carry.
+
+    A finding passes when its key is in `verifier_closed` (the session writer's set) and it carries a `wrong` grade, or
+    when the latest earlier record lists the same key as shown-wrong. A kept repeat passes through the earlier finding's
+    closure: its `repeatOf` names a key the earlier record lists as shown-wrong, or another finding of this account that
+    passes as verifier-closed. A malformed earlier list carries nothing."""
+    earlier = prior.get("findings") if isinstance(prior, dict) else None
+    carried = {_key(i) for i in earlier if isinstance(i, dict) and i.get("outcome") == _SHOWN_WRONG} \
+        if isinstance(earlier, list) else set()
+
+    def verifier_closed_wrong(f):
+        grade = f.get("grade")
+        # axis: a shown-wrong finding is carried from the earlier record or verifier-closed with a wrong grade, never written bare — see bite-proof record c1l7_wo_a_verifier_grade
+        return _key(f) in verifier_closed and isinstance(grade, dict) and grade.get("verdict") == "wrong"
+    shown = [(i, f) for i, f in enumerate(findings) if isinstance(f, dict) and f.get("outcome") == _SHOWN_WRONG]
+    closed_here = {_key(f) for _, f in shown if verifier_closed_wrong(f)}
+    # axis: a chain of kept repeats passes link by link from a carried or verifier-closed root; a ring or a link to a missing finding never gains a root, so it stays refused — see bite-proof record c1l8_wo_b_record_repeats
+    passing = set(carried) | closed_here
+    grew = True
+    while grew:
+        grew = False
+        for _, f in shown:
+            via = _repeat_key(f)
+            if via is not None and via != _key(f) and via in passing and _key(f) not in passing:
+                passing.add(_key(f))
+                grew = True
+    out = []
+    for i, f in shown:
+        # axis: an outcome the earlier record already stored as shown-wrong is carried whatever this account's grade says — see bite-proof record c1l7_wo_a_verifier_grade
+        if _key(f) not in passing:
+            out.append(i)
+    return out
+
+
+def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
     def go():
         try:
             with open(account_path, encoding="utf-8") as fh:
@@ -1965,7 +2664,7 @@ def write(account_path, repo_root, readers=None):
         by_id = {c["id"]: c for c in comments}
         found = _marker_comments(comments)
         latest = found[-1] if found else None
-        prior, not_checked = None, []
+        prior, not_checked, history = None, [], []
         for c in found:
             parsed = _parse_body(c["body"], by_id)
             # a record whose findings list is malformed is as unreadable as one that does not parse
@@ -1982,14 +2681,23 @@ def write(account_path, repo_root, readers=None):
                 else:
                     why = "changed in transit"
                 not_checked.append({"id": c["id"], "url": c.get("url"), "why": why})
+            # axis: a second session's record that carries the extra audit round is refused when an earlier readable record of another session already carries it — see bite-proof record c1l4b_wo_a
+            if (parsed is not None and "extraAudit" in a["rounds"] and parsed.get("sessionId") != a["sessionId"]
+                    and isinstance(parsed.get("rounds"), dict) and "extraAudit" in parsed["rounds"]):
+                raise Refusal("review-record-extra-audit-repeated",
+                              f"an earlier record of another session already shows the extra audit round: {c.get('url')}")
             if c is latest:
                 # axis: an unreadable earlier record never blocks a new one; it is listed instead
                 prior = usable
+            elif usable is not None:
+                history.append(usable)
         missing = _unaccounted(prior, a["findings"])
         if missing:
             raise Refusal("review-record-unaccounted",
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
-        record = build_record(a, rd, prior=prior)
+        for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
+            raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
+        record = build_record(a, rd, prior=prior, history=history)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
@@ -2021,6 +2729,20 @@ def write(account_path, repo_root, readers=None):
     return _guarded(go)
 
 
+def read_history(pr, repo=None, readers=None):
+    """The readable records older than the latest one, oldest first, as [] when there are none or the comments cannot be
+    listed. The session writer asks it only to look through its own carried record (`carry_source`)."""
+    try:
+        rd = _readers(readers)
+        comments = _comments(rd, pr, repo)
+        found = _marker_comments(comments)
+        by_id = {c["id"]: c for c in comments}
+        parsed = [_parse_body(c["body"], by_id) for c in found[:-1]]
+        return [p for p in parsed if isinstance(p, dict)]
+    except Exception:  # noqa: BLE001 — fail closed: no history means no looking through
+        return []
+
+
 def read(pr, repo=None, readers=None):
     def go():
         rd = _readers(readers)
@@ -2037,6 +2759,88 @@ def read(pr, repo=None, readers=None):
     return _guarded(go)
 
 
+HISTORY_UNREADABLE = "review-record-history-unreadable"
+
+
+def reserve_extra_audit(pr, repo, session_id, why, readers=None):
+    """Post the one reservation comment that claims the PR's extra audit allowance for `session_id`.
+
+    Returns {"ok": True, "url"} or {"ok": False, "detail"}. Nothing raises."""
+    try:
+        rd = _readers(readers)
+        sid = session_id if isinstance(session_id, str) and session_id and not re.search(r"\s", session_id) else "unknown"
+        body = f"{EXTRA_AUDIT_RESERVED_MARKER}\nsessionId: {sid}\nwhy: {_scrub_text(str(why))}\n"
+        sent = rd["create_comment"](pr, repo, body)
+        if not (isinstance(sent, dict) and "id" in sent):
+            return {"ok": False, "detail": "the reservation comment could not be written"}
+        return {"ok": True, "url": sent.get("url"), "id": sent["id"]}
+    except Exception as e:  # nothing raises to the caller
+        return {"ok": False, "detail": f"{type(e).__name__}: {e}"}
+
+
+def _reserved_session(comment):
+    """The session id a reservation comment names, or None when it names none (an unreadable marker)."""
+    lines = str(comment.get("body", "")).split("\n")
+    m = _RESERVED_SESSION_RE.fullmatch(lines[1].strip()) if len(lines) > 1 else None
+    return m.group(1) if m else None
+
+
+def extra_audit_history(pr, repo=None, readers=None, session_id=None, own_id=None):
+    """Whether any review record or reservation already posted on the PR shows the extra audit round.
+
+    Every record comment is read: one that does not parse makes the whole answer unreadable, and so
+    does a comment list that failed, so history that cannot be read never reads as "not run". A
+    reservation comment (see `reserve_extra_audit`) from a session other than `session_id` counts as
+    the round shown; one from `session_id` itself does not, so a re-run after a crash proceeds, and a
+    reservation that names no session makes the answer unreadable. The caller's own reservation id is
+    the lowest of `own_id` and the ids of reservations naming `session_id`; once it exists, only a
+    competitor (another session's reservation, or a record showing the round) with a LOWER comment id
+    counts, so the first reservation posted wins and a later loser's reservation never blocks the
+    winner. Returns {"ok": True, "ran", "sessionId", "url", "ownId", "lowestCompetingId"} (the session
+    and comment of the lowest-id competitor, else None), or
+    {"ok": False, "reason": HISTORY_UNREADABLE, "detail"}. Nothing raises."""
+    try:
+        rd = _readers(readers)
+        if repo is None:
+            repo = rd["repo_name"](None)
+            if not (isinstance(repo, str) and _REPO_RE.fullmatch(repo)):
+                raise Refusal("review-record-gh-failed", "the repository could not be resolved")
+        comments = _comments(rd, pr, repo)
+        by_id = {c["id"]: c for c in comments}
+        candidates = []  # (comment id, session, url) of every record or reservation that shows the round
+        for c in _marker_comments(comments):
+            rec = _parse_body(c["body"], by_id)
+            if rec is None:
+                raise Refusal("review-record-unreadable", _unreadable_detail(c, by_id))
+            rounds = rec.get("rounds")
+            if isinstance(rounds, dict) and "extraAudit" in rounds:
+                candidates.append((c["id"], rec.get("sessionId"), c.get("url")))
+        # axis: another session's reservation comment shows the round before any record does; an unreadable one fails closed
+        reservations = []
+        for c in sorted((c for c in comments if str(c.get("body", "")).startswith(EXTRA_AUDIT_RESERVED_MARKER)),
+                        key=lambda c: c["id"]):
+            reserved = _reserved_session(c)
+            if reserved is None:
+                raise Refusal("review-record-unreadable", f"reservation comment {c.get('id')} names no session: {c.get('url')}")
+            reservations.append((c["id"], reserved, c.get("url")))
+        own_ids = [i for i, s, _ in reservations if s == session_id]
+        if own_id is not None:
+            own_ids.append(own_id)
+        own = min(own_ids) if own_ids else None
+        # axis: the first reservation posted wins — only a competitor with a lower comment id than the caller's own reservation counts
+        candidates += [(i, s, u) for i, s, u in reservations if s != session_id and i != own_id]
+        if own is not None:
+            candidates = [t for t in candidates if t[0] < own]
+        shown = min(candidates, key=lambda t: t[0]) if candidates else None
+        return {"ok": True, "ran": shown is not None,
+                "sessionId": shown[1] if shown else None, "url": shown[2] if shown else None,
+                "ownId": own, "lowestCompetingId": shown[0] if shown else None}
+    except Refusal as e:
+        return {"ok": False, "reason": HISTORY_UNREADABLE, "detail": f"{e.reason}: {e.detail}"}
+    except Exception as e:  # nothing raises to the caller
+        return {"ok": False, "reason": HISTORY_UNREADABLE, "detail": f"{type(e).__name__}: {e}"}
+
+
 def _shows_reading(run):
     obs = run.get("observation") if isinstance(run, dict) else None
     # the record writer credits a run only when it is a graded review: hold the reading to the same rule
@@ -2049,7 +2853,9 @@ def _move_up_blocker(seat_map, maker_families, lane_basis=None):
     """The first reason a seat map does not let a second no-reading review move up to the full lane, else None.
     The panel it must hold is the one the lane basis calls for; with no basis, the full risky panel."""
     roster = seat_map.get("roster") if isinstance(seat_map, dict) else None
-    if not isinstance(roster, list) or not roster:
+    # axis: a roster member this plugin no longer composes (a retired seat in an older map) is not read, so it never parks the lane — see bite-proof record c1l2_wo2_move_up_roster_filter
+    roster = [n for n in roster if n in seat_map_module.KNOWN_SEATS] if isinstance(roster, list) else None
+    if not roster:
         return "the seat map has no roster"
     # axis: a map composed for fewer seats than the lane basis calls for cannot show the whole panel independent, so it parks — see bite-proof record wo_a_1797_roster
     missing = [n for n in seat_map_module.roster_for(lane_basis) if n not in roster]

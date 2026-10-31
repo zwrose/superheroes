@@ -150,16 +150,15 @@ is written and reviews code with an auto-fix loop (`review-code`). A spec is rev
 runs — gap review, the source check both ways, and grounding (see the-architect, above).
 Panels are composed to be vendor-complementary — models that didn't write the code (or the
 brief, or the spec) are the ones reviewing it, and no reviewer from a maker's family runs without
-the owner's word for that change. The full-lane panel follows the lane call: a code reviewer, the
-test role (which writes break-it tests on the project's risk areas) and a grounding seat (which
-checks the PR body on a read-only review) on every change, plus security and premortem reviewers when a risk area is touched or risk is unclear.
+the owner's word for that change. The full-lane panel follows the lane call: a code reviewer and the
+test role (which writes break-it tests on the project's risk areas) on every change, plus security and premortem reviewers when a risk area is touched or risk is unclear.
 Every review, on every
 lane, writes one **review record** on the PR, which the advisor's vet reads; every finding states
 its consequence, and a leftover with a real consequence comes to the owner.
 
 | Command | Use it to… |
 | --- | --- |
-| `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. |
+| `/superheroes:review-code` | Review an open PR or local branch and auto-fix what it finds — commits locally, never pushes. Needs the project's verify command, and reviews only the project's own PRs. |
 
 ## Test-Pilot
 

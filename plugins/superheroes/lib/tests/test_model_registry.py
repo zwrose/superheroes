@@ -59,7 +59,6 @@ _EXPECTED_DEFAULT_CLAUDE_TIERS = {
     "verifier": "opus",
     "mechanical": "haiku",
     "synthesis": "opus",
-    "code-fixer": "sonnet",
     "doc-reviser": "opus",
     "implementer": "sonnet",
     "pilot": "sonnet",
@@ -95,7 +94,6 @@ def test_roles_covers_matrix_and_model_tier_roles_stable():
         "verifier",
         "mechanical",
         "synthesis",
-        "code-fixer",
         "doc-reviser",
         "implementer",
         "pilot",
@@ -168,18 +166,16 @@ def test_derivation_helpers():
     assert MR.codex_pin_roles() == (
         "reviewer",
         "reviewer-deep",
-        "code-fixer",
         "implementer",
         "pilot",
     )
     assert MR.codex_role_kind() == {
         "reviewer": "review",
         "reviewer-deep": "review-deep",
-        "code-fixer": "fix",
         "implementer": "build",
         "pilot": "pilot",
     }
-    assert MR.codex_write_pin_roles() == ("code-fixer", "implementer")
+    assert MR.codex_write_pin_roles() == ("implementer",)
 
 
 def test_codex_effort_for_kind():
@@ -568,7 +564,7 @@ def test_sonnet_dispatch_token_resolves_to_sonnet_5_5():
     assert r["dispatch_token"] == "sonnet"
 
 
-def test_auditor_and_code_fixer_families_match_per_vendor():
+def test_auditor_and_implementer_families_match_per_vendor():
     """This invariant is what makes round_driver._auditor_vendor's same-vendor fallback unreachable
     (#652 rider 4a). If a future registry change breaks the invariant, the fallback becomes reachable
     again and the deleted branch must be reconsidered — so this test failing is a design signal,
@@ -576,10 +572,10 @@ def test_auditor_and_code_fixer_families_match_per_vendor():
     vendors = MR.vendors()
     assert vendors, "model_registry.vendors() must be non-empty for this invariant"
     for vendor in vendors:
-        fixer_fam = MR.family_for("code-fixer", vendor)
+        fixer_fam = MR.family_for("implementer", vendor)
         auditor_fam = MR.family_for("auditor", vendor)
         assert fixer_fam is not None, (
-            f"code-fixer family_for({vendor!r}) returned None — invariant cannot be evaluated"
+            f"implementer family_for({vendor!r}) returned None — invariant cannot be evaluated"
         )
         assert auditor_fam is not None, (
             f"auditor family_for({vendor!r}) returned None — invariant cannot be evaluated"
@@ -605,7 +601,6 @@ def test_cursor_first_party_models_are_one_family():
     assert MR.model_family("cursor", "composer-2.5") == "xai"
     assert MR.model_family("cursor", "cursor-grok-4.6") == "xai"
     assert len({MR.model_family("cursor", m) for m in MR.cursor_models()}) == 1
-    assert MR.family_for("code-fixer", "cursor") == "xai"
     assert MR.family_for("verifier", "cursor") == "xai"
     assert MR.family_for("implementer", "cursor") == MR.family_for("reviewer-deep", "cursor")
 
@@ -949,7 +944,7 @@ def test_i3_pin_only_sol_appended_after_ladder_slice_at_cell_effort():
 # bite-axis: a gpt-6-sol pin stays resolvable on every codex pin role that has a cell, at that cell's effort, and stays refused on a role with no cell
 def test_gpt6_sol_pin_resolves_at_each_codex_pin_roles_cell_effort():
     assert MR.pin_only_models("codex") == ("gpt-5.6-sol", "gpt-6-sol")
-    for role in ("reviewer", "reviewer-deep", "code-fixer", "implementer"):
+    for role in ("reviewer", "reviewer-deep", "implementer"):
         assert MR.codex_pin_verdict(role, "gpt-6-sol") == (True, None), role
         r = MR.resolve_dispatch(role, "codex", "gpt-6-sol", None)
         assert r["ok"] is True, role
@@ -984,7 +979,7 @@ def test_i3_reviewer_deep_pin_sol_resolves_xhigh_others_resolve_high():
     assert MR.codex_pin_verdict("reviewer-deep", "gpt-5.6-sol") == (True, None)
     r = MR.resolve_dispatch("reviewer-deep", "codex", "gpt-5.6-sol", None)
     assert r["ok"] is True and r["effort"] == "xhigh"
-    for role in ("reviewer", "implementer", "code-fixer"):
+    for role in ("reviewer", "implementer"):
         r = MR.resolve_dispatch(role, "codex", "gpt-5.6-sol", None)
         assert r["ok"] is True and r["effort"] == "high"
 

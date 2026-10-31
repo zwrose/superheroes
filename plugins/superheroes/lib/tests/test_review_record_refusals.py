@@ -1,9 +1,9 @@
-"""#2011 WO-3: the review record carries the refusals a review round's fixer met.
+"""#2011 WO-3: the review record carries the refusals a review round's fix recorded.
 
-A refusal in a round's fixer payload is folded into `rounds[n]["fix"]["refusals"]`, collected by
-`account_from_session` as `commandRefusals` (tagged with its round), validated by the record writer,
-and rendered as one "Refusals met" summary line. A session whose fixers met none yields a record with
-no `commandRefusals` key and no such line.
+A refusal stored at `rounds[n]["fix"]["refusals"]` (the apply-fixes fold writes none; a session of
+an earlier version holds them) is collected by `account_from_session` as `commandRefusals` (tagged
+with its round), validated by the record writer, and rendered as one "Refusals met" summary line. A
+session whose fixes met none yields a record with no `commandRefusals` key and no such line.
 
 Bite-proof record: wo3_2011_record
 """
@@ -34,40 +34,12 @@ OTHER = {"command": "rm -rf build", "refusedBy": "permission", "next": "removed 
 def _fold(state, artifact, index=0):
     state["round"] = 1
     state["_fixBatchIndex"] = index
-    RD._fold_fixer(state, state["config"], artifact, changed_subjects_seam=lambda *args: [],
+    RD._fold_apply_fixes(state, state["config"], artifact, changed_subjects_seam=lambda *args: [],
                    panel_diff_seam=lambda config, head: ("", None))
 
 
 def _state():
     return RD.new_state(TRD._cfg())
-
-
-def test_a_fixer_payload_with_refusals_lands_in_the_rounds_fix_dict():
-    # axis: the fold stores the payload's refusals on the round's fix dict — see bite-proof record wo3_2011_record
-    state = _state()
-    _fold(state, {"fixes": [], "refusals": [REFUSAL]})
-    assert state["rounds"]["1"]["fix"]["refusals"] == [REFUSAL]
-
-
-def test_two_batches_in_one_round_hold_the_concatenation():
-    # axis: the merge branch keeps the earlier batch's refusals — see bite-proof record wo3_2011_record
-    state = _state()
-    _fold(state, {"fixes": [], "refusals": [REFUSAL]}, index=0)
-    _fold(state, {"fixes": [], "refusals": [OTHER]}, index=1)
-    assert state["rounds"]["1"]["fix"]["refusals"] == [REFUSAL, OTHER]
-    state = _state()
-    _fold(state, {"fixes": []}, index=0)
-    _fold(state, {"fixes": [], "refusals": [OTHER]}, index=1)
-    assert state["rounds"]["1"]["fix"]["refusals"] == [OTHER]
-
-
-@pytest.mark.parametrize("later", [dict(fixes=[]), dict(fixes=[], refusals=[])])
-def test_a_later_batch_reporting_none_keeps_the_earlier_batchs_refusals(later):
-    # axis: the merge keeps the earlier batch's refusals when a later batch reports none — see bite-proof record wo6_2011_sendback
-    state = _state()
-    _fold(state, dict(fixes=[], refusals=[REFUSAL]), index=0)
-    _fold(state, later, index=1)
-    assert state["rounds"]["1"]["fix"]["refusals"] == [REFUSAL]
 
 
 @pytest.mark.parametrize("artifact", [{"fixes": []}, {"fixes": [], "refusals": []}, {"fixes": [], "refusals": "x"}])

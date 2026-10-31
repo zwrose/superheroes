@@ -32,7 +32,7 @@ def test_fixer_round_record_carries_declared_vendor():
         state["config"],
         {"seats": {dim: {"findings": []} for dim in RD.DIMENSIONS}},
     )
-    RD._fold_fixer(state, state["config"], {"fixes": [], "headDiff": HEAD})
+    RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD})
     # re-pinned (#1272 layer 2d): the fixer fold now advances the round; the vendor is recorded on the fold's own round
     assert state["rounds"]["1"]["fixerVendor"] == state["config"]["fixerVendor"]
 

@@ -139,13 +139,12 @@ def _capped_seams():
     return TRD._seams(
         reviewer=reviewer, verifier=plausible, fix_step=fix_step,
         auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
-                                      for t in (targets or [])],
-        io={"stall_menu": lambda payload: "hold"})
+                                      for t in (targets or [])])
 
 
 def test_t2_real_important_open_at_the_round_cap_is_left_for_owner(sources_calls):
     result, state = TRD._run_loop_capturing_state(_capped_seams(), TRD._cfg_cert(maxRounds=1))
-    assert state["terminal"] == "capped-with-open-blocker"
+    assert state["terminal"] == "handed-back"
     row = _row(state, "Bug")
     assert row["disposition"] == "left-for-owner"
     assert "round cap" in row["settledReason"]
@@ -172,15 +171,18 @@ def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
         for t in targets or []:
             if t["id"] == "f.py::first bug@L1":
                 rulings.append({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                                "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")})
+                                "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                                "checks": TRD.audit_checks()})
             else:
-                rulings.append({"id": t["id"], "ruling": "not-discharged", "reason": "still broken"})
+                rulings.append({"id": t["id"], "ruling": "not-discharged", "reason": "still broken",
+                                "checks": TRD.audit_checks(right="no")})
         return rulings
 
+    # the fix changed a file, so the scoped finder runs; the proven non-panel cells let it seat on the
+    # vendor outside the fixer's family instead of parking the review
     result, state = TRD._run_loop_capturing_state(
-        TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor,
-                   io={"stall_menu": lambda payload: "hold"}),
-        TRD._cfg_cert(maxRounds=2))
+        TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor),
+        TRD._cfg_cert(maxRounds=2, seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
     assert state["terminal"]
     assert counter["n"] >= 1
     _assert_all_settled(state)
@@ -193,7 +195,7 @@ def test_a_fixer_that_fixes_one_of_two_leaves_the_other_open(sources_calls):
     assert second["disposition"] != "fixed", (second, state["rounds"])
     assert second["disposition"] == "left-for-owner", second
     assert "round cap" in second["settledReason"]
-    assert state["terminal"] == "capped-with-open-blocker"
+    assert state["terminal"] == "handed-back"
 
 
 # --- T3 / T10: rulings that cite a decision ---------------------------------------------------
@@ -636,8 +638,8 @@ def test_an_unreadable_ledger_settles_nothing_and_records_why(monkeypatch):
 
 def test_a_cap_stop_states_the_round_cap_whatever_the_verdict(sources_calls):
     state = _staged_state([_finding("Real", 1, "Important", "real")])
-    RD._park_round_ceiling(state, "ceiling")
-    assert state["terminal"] == "halted"
+    RD._hand_back(state, "round-cap", "cap", cap=True)
+    assert state["terminal"] == "handed-back"
     assert _row(state, "Real")["settledReason"] == "still open when the loop reached its round cap"
 
 

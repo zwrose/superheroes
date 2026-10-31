@@ -45,7 +45,7 @@ captured_state = {'state': {'schemaVersion': 5, 'sessionGeneration': 4, 'config'
                     for t in (targets or [])]
     
         seams = TRD._seams(reviewer=reviewer, verifier=verifier, fix_step=fix_step, auditor=auditor,
-                           io={"stall_menu": lambda payload: "hold"})
+                           io=<the retired owner-gate seam>)
         _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
         assert state["terminal"]
 >       assert offers == [(1, [key])]  # offered once; the next round's batch left it out
@@ -61,6 +61,8 @@ FAILED plugins/superheroes/lib/tests/test_fix_scope_c7.py::test_t1_a_critical_ou
 1 failed in 1.45s
 exit=1
 ```
+
+[The retired owner-gate seam's key is elided here; the seam was removed from the driver.]
 
 - **Restore:** inverse edit (`if False:` back to `if earlier:`).
 - **Restore receipt** (the restored lines, read back by `grep -n`):

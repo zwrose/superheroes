@@ -14,7 +14,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import audits  # noqa: E402
-import command_refusals  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import round_phases  # noqa: E402
 
@@ -22,19 +21,21 @@ P_PANEL = round_phases.P_PANEL
 P_VERIFIERS = round_phases.P_VERIFIERS
 P_SYNTHESIS = round_phases.P_SYNTHESIS
 P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
-P_FIXER = round_phases.P_FIXER
+P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 
-ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_AUDITS, P_SCOPED, P_VERIFY,
-                  P_FIXER)
+ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_SECOND_TEST, P_AUDITS,
+                  P_SCOPED, P_VERIFY, P_APPLY_FIXES)
 
 SEAT_SYNTHESIS = "synthesis"
 SEAT_GAPSWEEP = "gap-sweep"
+SEAT_SECOND_TEST = "second-test"
 SEAT_SCOPED = "scoped-finder"
 SEAT_VERIFY = "verify"
-SEAT_FIXER = "fixer"
+SEAT_APPLY_FIXES = "apply-fixes"
 
 # The one ruling whose claim is unusable without a new-issue payload. `audits` exposes the ENUM
 # (`AUDIT_RULINGS`, which this module validates against and never hand-copies) but no per-member
@@ -310,10 +311,6 @@ def _apply_predicate(pred, payload, seat_key, *, record_boundary=False):
                 if not isinstance(member, str) or not member:
                     return ("`%s`[%d].member_ids[%d] is %s, not a non-empty string"
                             % ("grouping", index, member_index, _type_name(member)))
-    elif name == "head-diff-store-path-driver-owned":
-        if record_boundary and "headDiffStorePath" in payload:
-            return ("`headDiffStorePath` is driver-owned — callers must supply `headDiffPath` only; "
-                    "the driver copies the diff into the store at record time")
     elif name == "verify-result":
         return round_phases.verify_result_fault(payload)
     elif name == "audit-id-matches-seat":
@@ -333,6 +330,10 @@ def _apply_predicate(pred, payload, seat_key, *, record_boundary=False):
             if "newIssue" in payload:
                 detail += "; the payload carries `newIssue` (singular) — the driver consumes a LIST"
             return detail
+    elif name == "audit-checks":
+        fault = audits.audit_checks_fault(payload)
+        if fault:
+            return "audit result refused: %s" % fault
     else:
         raise ValueError("unknown predicate %r" % name)
     return None
@@ -387,21 +388,21 @@ def _gap_sweep_payload_fault(payload, seat_key):
     return _payload_fault_from_contract(payload, P_GAPSWEEP, seat_key)
 
 
+def _second_test_payload_fault(payload, seat_key):
+    """The second-test candidate list: the held findings, each carrying its one more test."""
+    return _payload_fault_from_contract(payload, P_SECOND_TEST, seat_key)
+
+
 def _scoped_payload_fault(payload, seat_key):
     """The scoped-finder candidate list."""
     return _payload_fault_from_contract(payload, P_SCOPED, seat_key)
 
 
-def _fixer_payload_fault(payload, seat_key, record_boundary=False):
-    fault = _payload_fault_from_contract(payload, P_FIXER, seat_key,
-                                         record_boundary=record_boundary)
-    if fault:
-        return fault
-    if "refusals" in payload:
-        refusal_fault = command_refusals.refusals_fault(payload["refusals"])
-        if refusal_fault:
-            return "`refusals` — " + refusal_fault
-    return None
+def _apply_fixes_payload_fault(payload, seat_key):
+    """The build session's own report of the fixes it applied: `fixes` (its own notes, or a
+    `{finding, commit}` binding per fixed finding that carries a break-it test) and, optionally,
+    the findings it left unfixed with the reason."""
+    return _payload_fault_from_contract(payload, P_APPLY_FIXES, seat_key)
 
 
 def _verify_payload_fault(payload, seat_key):
@@ -430,8 +431,9 @@ _PAYLOAD_CHECKERS = {
     P_VERIFIERS: _verifiers_payload_fault,
     P_SYNTHESIS: _synthesis_payload_fault,
     P_GAPSWEEP: _gap_sweep_payload_fault,
+    P_SECOND_TEST: _second_test_payload_fault,
     P_SCOPED: _scoped_payload_fault,
-    P_FIXER: lambda payload, seat_key: _fixer_payload_fault(payload, seat_key),
+    P_APPLY_FIXES: _apply_fixes_payload_fault,
     P_VERIFY: _verify_payload_fault,
     P_AUDITS: _audits_payload_fault,
 }
@@ -442,7 +444,7 @@ _PAYLOAD_FIELD_BINDINGS = {
     P_PANEL: {
         "required": [],
         "optional": ["findings", "confidence", "tier", "receiptMissing", "receiptStale",
-                     VACUOUS_FIELD, "reason"],
+                     VACUOUS_FIELD, "reason", "readParts"],
         "conditional": {
             "findings": ("required unless the seat declared it did not run "
                          "(vacuous is True or reason is a not-run outcome token)"),
@@ -450,6 +452,7 @@ _PAYLOAD_FIELD_BINDINGS = {
         "enums": {},
         "types": {
             "findings": "list-of-objects",
+            "readParts": "list-of-objects",
             "confidence": "non-empty-string",
             "tier": "non-empty-string",
             "receiptMissing": "boolean",
@@ -459,6 +462,7 @@ _PAYLOAD_FIELD_BINDINGS = {
         },
         "elements": {
             "findings": {"required": [], "optional": [], "types": {}, "enums": {}},
+            "readParts": {"required": [], "optional": [], "types": {}, "enums": {}},
         },
         "predicates": [{
             "name": "findings-unless-not-run",
@@ -476,13 +480,14 @@ _PAYLOAD_FIELD_BINDINGS = {
         "elements": {
             "verdicts": {
                 "required": ["id", "verdict", "reason"],
-                "optional": ["severity", "evidence"],
+                "optional": ["severity", "evidence", "pathReached"],
                 "types": {
                     "id": "non-empty-string",
                     "verdict": "non-empty-string",
                     "reason": "non-empty-string",
                     "severity": "string",
                     "evidence": "string",
+                    "pathReached": "boolean",
                 },
                 "enums": {"verdict": list(round_phases.VERDICTS)},
             },
@@ -498,8 +503,10 @@ _PAYLOAD_FIELD_BINDINGS = {
         "elements": {
             "grouping": {
                 "required": ["member_ids"],
-                "optional": [],
-                "types": {"member_ids": "list"},
+                # `repeatOf`: null or the order's ref of the earlier finding the group repeats. The shape
+                # is checked with the order's `earlier` list at the submit chokepoint, not here.
+                "optional": ["repeatOf"],
+                "types": {"member_ids": "list", "repeatOf": "any"},
                 "enums": {},
             },
         },
@@ -510,6 +517,17 @@ _PAYLOAD_FIELD_BINDINGS = {
         }],
     },
     P_GAPSWEEP: {
+        "required": ["findings"],
+        "optional": ["reviewerVendor"],
+        "conditional": {},
+        "enums": {},
+        "types": {"findings": "list-of-objects", "reviewerVendor": "string"},
+        "elements": {
+            "findings": {"required": [], "optional": [], "types": {}, "enums": {}},
+        },
+        "predicates": [],
+    },
+    P_SECOND_TEST: {
         "required": ["findings"],
         "optional": ["reviewerVendor"],
         "conditional": {},
@@ -531,38 +549,33 @@ _PAYLOAD_FIELD_BINDINGS = {
         },
         "predicates": [],
     },
-    P_FIXER: {
+    P_APPLY_FIXES: {
         "required": ["fixes"],
-        "optional": ["escalated", "headDiff", "headDiffPath", "coverageDecisions", "refusals"],
+        "optional": ["unfixed", "coverageDecisions", "headDiff", "headDiffPath"],
         "conditional": {},
         "enums": {},
         "types": {
             "fixes": "list",
-            "escalated": "boolean",
+            "unfixed": "list-of-objects",
+            "coverageDecisions": "list-of-objects",
             "headDiff": "string",
             "headDiffPath": "absolute-path",
-            "coverageDecisions": "list-of-objects",
-            "refusals": "list-of-objects",
         },
         "elements": {
-            "coverageDecisions": {"required": [], "optional": [], "types": {}, "enums": {}},
-            "refusals": {
-                "required": list(command_refusals.ENTRY_REQUIRED),
-                "optional": list(command_refusals.ENTRY_OPTIONAL),
-                "types": {"command": "non-empty-string", "next": "non-empty-string",
-                          "refusedBy": "string", "hook": "any", "route": "any"},
-                "enums": {"refusedBy": list(command_refusals.REFUSED_BY)},
+            "unfixed": {
+                "required": ["finding", "why"],
+                "optional": [],
+                "types": {"finding": "non-empty-string", "why": "non-empty-string"},
+                "enums": {},
             },
+            "coverageDecisions": {"required": [], "optional": [], "types": {}, "enums": {}},
         },
-        "predicates": [{
-            "name": "head-diff-store-path-driver-owned",
-            "fields": ["headDiffStorePath"],
-            "rule": "headDiffStorePath is driver-owned at record boundary",
-        }],
+        "predicates": [],
     },
     P_VERIFY: {
         "required": ["result"],
-        "optional": ["command", "exit", "outputSha256", "via", "ci", "reason"],
+        "optional": ["command", "exit", "outputSha256", "via", "ci", "reason", "exitCode",
+                     "outputPath", "headSha", "headShaAfter", "treeSha", "treeShaAfter"],
         "conditional": {},
         "enums": {"result": list(round_phases._VERIFY_RESULTS)},
         "types": {
@@ -573,6 +586,12 @@ _PAYLOAD_FIELD_BINDINGS = {
             "via": "string",
             "ci": "object",
             "reason": "string",
+            "exitCode": "any",
+            "outputPath": "string",
+            "headSha": "string",
+            "headShaAfter": "string",
+            "treeSha": "string",
+            "treeShaAfter": "string",
         },
         "elements": {},
         "predicates": [{
@@ -582,9 +601,10 @@ _PAYLOAD_FIELD_BINDINGS = {
         }],
     },
     P_AUDITS: {
-        "required": ["id", "ruling", "reason"],
+        "required": ["id", "ruling", "reason", "checks"],
         "optional": ["newIssues", "evidence", "auditorVendor", "unnamedChange",
-                     "unnamedChangeAllowedBySeq", "unnamedChangeFixes", "unnamedChangeReverts"],
+                     "unnamedChangeAllowedBySeq", "unnamedChangeFixes", "unnamedChangeReverts",
+                     "testMatch"],
         "conditional": {
             "newIssues": "required when ruling is %s" % RULING_NEW_ISSUE,
         },
@@ -593,6 +613,7 @@ _PAYLOAD_FIELD_BINDINGS = {
             "id": "non-empty-string",
             "ruling": "non-empty-string",
             "reason": "any",
+            "checks": "any",
             "newIssues": "list-of-objects",
             "evidence": "string",
             "auditorVendor": "string",
@@ -600,6 +621,7 @@ _PAYLOAD_FIELD_BINDINGS = {
             "unnamedChangeAllowedBySeq": "integer",
             "unnamedChangeFixes": "list",
             "unnamedChangeReverts": "list",
+            "testMatch": "any",
         },
         "elements": {
             "newIssues": {"required": [], "optional": [], "types": {}, "enums": {}},
@@ -620,6 +642,11 @@ _PAYLOAD_FIELD_BINDINGS = {
                 "fields": ["newIssues", "ruling"],
                 "rule": ("newIssues must pass audits.has_usable_new_issues when ruling is "
                          "discharged-but-new-issue"),
+            },
+            {
+                "name": "audit-checks",
+                "fields": ["checks", "testMatch"],
+                "rule": "checks must pass audits.audit_checks_fault",
             },
         ],
     },
@@ -650,8 +677,6 @@ def payload_fault(phase, payload, seat_key, record_boundary=False):
     if not isinstance(payload, dict):
         return "payload is %s, not an object" % _type_name(payload)
     try:
-        if phase == P_FIXER:
-            return _fixer_payload_fault(payload, seat_key, record_boundary=record_boundary)
         return _PAYLOAD_CHECKERS[phase](payload, seat_key)
     except Exception as exc:  # noqa: BLE001 — a validator that raises must not crash the adapter
         return "payload-validator-error:%s:%s" % (_type_name(exc), exc)

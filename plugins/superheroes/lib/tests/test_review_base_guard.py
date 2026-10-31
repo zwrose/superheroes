@@ -355,6 +355,23 @@ def test_pr_mode_repo_mismatch(git_repo, tmp_path):
     assert "acme" in r["detail"]
 
 
+def test_pr_mode_repo_mismatch_detail_is_the_plain_refusal(git_repo, tmp_path):
+    root, sha = git_repo
+    subprocess.run(
+        ["git", "-C", root, "remote", "add", "origin", "git@github.com:acme/widget.git"],
+        check=True,
+        capture_output=True,
+    )
+    session = str(tmp_path / "sess")
+    _write_meta(session, root, sha, mode="pr")
+    _write_pr(session, "https://github.com/otherorg/widget/pull/7")
+    r = rbg.check_base(session, root)
+    assert r["reason"] == REASON.REASON_REPO_MISMATCH
+    assert "reviewing this PR is not supported" in r["detail"]
+    assert "read-only" not in r["detail"]
+    assert "review-only" not in r["detail"]
+
+
 def test_mode_unrecognized_empty(git_repo, tmp_path):
     root, sha = git_repo
     session = str(tmp_path / "sess")

@@ -32,8 +32,10 @@ import review_loop_runner as harness  # noqa: E402
 from capture_goldens import normalize  # noqa: E402
 
 # Per-golden, per-top-level-field allowlist. Every allowlisted field is a #507 SCHEDULE / ECONOMICS
-# migration where the TESTED PROPERTY is preserved (terminal, coverageDecisionIds, benchmarkValid all
-# match the golden and are NEVER allowlisted). Reasons must stay in sync with PARITY.md.
+# migration where the TESTED PROPERTY is preserved (coverageDecisionIds and benchmarkValid match the
+# golden and are NEVER allowlisted; terminal matches every golden except skipped_dimension_regression,
+# whose Critical is scripted only into confirmation panels that no later round runs). Reasons must
+# stay in sync with PARITY.md.
 #
 # The migration classes, shared across fixtures:
 #   seen        — the driver's scoped-finder delta scans + re-armed confirmation PANELS replace the
@@ -87,8 +89,9 @@ ALLOWLIST: dict[str, dict[str, str]] = {
         "fixResults": _FIXRES,
     },
     "skipped_dimension_regression.golden.json": {
-        "roundCount": "the recurring Critical re-arms confirmation panels to the two-panel cap over delta rounds — a different round count than the JS mandatory-confirmation schedule",
-        "seen": _SEEN,
+        "terminal": "no later round runs a confirmation panel, so the Critical this fixture scripts only into confirmation rounds never surfaces and the loop ends clean, where the JS shell halted",
+        "roundCount": "the recurring Critical is scripted only into confirmation-panel rounds, which no longer run, so the loop reaches its end in a different round count than the JS mandatory-confirmation schedule",
+        "seen": "driver scoped-finder delta scans replace the JS per-dimension intermediate/confirmation seat schedule; no later round runs a confirmation panel",
         "tokenTotal": _TOK,
         "telemetry": _TELEM,
         "fixContexts": _FIXCTX,

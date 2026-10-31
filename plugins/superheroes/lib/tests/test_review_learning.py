@@ -679,7 +679,8 @@ def test_merged_member_carried_into_a_later_review_still_names_its_representativ
               "reason": "fixed and audited" + rs.MERGED_INTO_FORMAT.format("kb")}
     rep = {"id": "B", "findingKey": "kb", "outcome": "fixed", "reviewer": "Code", "reason": "fixed"}
     monkeypatch.setattr(review_record, "read", lambda pr, repo, readers: {"ok": True, "findings": [member, rep]})
-    carried = rs._carried({"pr": 1, "findings": []}, {"repo": "r"}, "/unused", None)
+    account = {"pr": 1, "findings": []}
+    carried = rs._carried(account, rs._earlier(account, {"repo": "r"}, "/unused", None))
     carried_member = next(f for f in carried if f["id"] == "A")
     assert carried_member["reason"].endswith(rs.CARRIED)
     assert rs.merged_into(carried_member["reason"]) == "kb"

@@ -731,8 +731,8 @@ composer→grok audit lane is closed. Because a gateway CLI still spans
 families, **panel independence keys on a model's family, not on
 the dispatch CLI** (consumed by the seat map, `lib/seat_map.py`, #510; owners supply
 per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The seat map
-**bars the maker's model family from rotation onto every panel seat** — all five lens seats and the
-`grounding-seat` (#670, owner-ratified 2026-07-26), including seats that are neither
+**bars the maker's model family from rotation onto every panel seat** — all five lens seats
+(#670, owner-ratified 2026-07-26), including seats that are neither
 strong-tier nor critical (closing the `test-reviewer` hole after #651 unified cursor's
 first-party models under one `xai` family). A pin cannot seat the maker family on a panel
 seat: the seat is recorded unfilled, with a `pin-breaks-constraint` degradation naming it. Where an
@@ -753,9 +753,7 @@ receipts (`liveCellsSource: "probed"`), missing or malformed `liveCells`, and on
 synthesized receipts, missing recorded `liveVendors` — **fails closed to violation**,
 and only a well-formed, registry-resolvable receipt authorizes
 the degradation branch. An **absent** (`None`) `liveCellsSource` on a receipt is not
-malformed — receipt minting legitimately resolves it to `synthesized`. When neither
-narrative nor maker can seat the grounding seat independently, **maker exclusion outranks
-narrative independence**: the fallback prefers the narrative family over the maker's own.
+malformed — receipt minting legitimately resolves it to `synthesized`.
 The cursor CLI's only sanctioned use is the models Cursor bills as **first-party** — today
 `composer-2.5` and `cursor-grok-4.6`, and nothing else, ever. Claude, GPT, or any
 other third-party model is **never** routed through cursor. The registry
@@ -919,8 +917,7 @@ PR-body markers from the retired execution spine survive independently of it:
   this marker in the PR body is the *owner half*; everything **below** it is the *build
   record*. The marker sits immediately above the opening `<details>` that wraps the build
   record — a pure owner-side gain: an agent reading `gh pr view --json body` gets
-  identical raw markdown. It gives **#609** a clean staging boundary for live grounding
-  dispatch and gives the advisor's follow-ups backstop a **grep anchor**.
+  identical raw markdown. It gives the advisor's follow-ups backstop a **grep anchor**.
 - **Disclosed degradations** (`<!-- superheroes:degradations -->`) — immediately followed
   by `### Disclosed degradations` and a list of bullets (one per degradation: what was
   promised, what was delivered instead, and why), or the single word **None** when there
@@ -997,7 +994,7 @@ A **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing
 pass. An empty degradation list is only clean when the section body is the literal word
 **None**; marker absence and **None** are different states. Every copy-holder of this
 floor — `rubric/review-discipline.md` (Ship-phase honesty), `skills/workhorse/SKILL.md`
-§11, and `skills/review-code/SKILL.md` step 8 — restates it as an inline enumerated
+§11, and `skills/review-code/SKILL.md` step 7 — restates it as an inline enumerated
 triple in order after the omission-floor anchor, with the marker literals byte-identical
 across all three copy-holders; that enumerated shape is what makes per-row drift
 mechanically detectable rather than a judgment call, because a copy that merges the three
@@ -1007,33 +1004,24 @@ The hook is **severity, not disposition status**: keying on "parked" misses a ge
 **Important**-severity race dispositioned "Deferred — follow-up"; severity is already
 carried by every dispositions table, and keying on it keeps craft nits below the bar.
 
-No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step 8, the
+No new machinery, and no waiting: the home is `skills/review-code/SKILL.md` step 7, the
 existing *PR-body honesty check (PR mode only)* — already PR-gated, already reads the
 `superheroes:dod-table` marker, already emits an **Important** / `tradeoff` /
 author-resolved finding. The floor is the **same check emitting the same finding shape**.
-Step 8 catches the floor on a read-only review (`--review-only`) of an **existing** PR. A
-full-lane build's pre-handback `review-code` run now runs in PR mode on the draft PR the builder
-opens first and writes its review record against it (workhorse charter §10), but it runs the
-driver-owned auto-fix loop, which does not run step 8 today
+There is no read-only review: a full-lane build's pre-handback `review-code` run is in PR mode on
+the draft PR the builder opens first and writes its review record against it (workhorse charter
+§10), and it runs the driver-owned auto-fix loop, which does not run step 7
 (`skills/review-code/reference/auto-fix-loop.md`). So the **advisor's vet** is the ratified
 independent checker for the principle in every case (do not add a new body-aware pass here).
 
-The principle-level checker is the **advisor's vet**, not step 8 — step 8 runs in the same
+The principle-level checker is the **advisor's vet**, not step 7 — step 7 runs in the same
 session that wrote the body, so it is the author checking whether the author forgot: fine
 for presence-matching, weak for judgment. Adopted for the vet: scoped to the **principle
 only** (the vet does not re-run the floor's presence match); lands as a **mandatory receipt
-field with an explicit `None`**; **#609 does not retire it** — with the dispatched grounding
-seat shipped, the vet is the backstop for that seat being absent, vacuous, or
-misconfigured, so **the principle is not sequenced behind #609**. `agents/grounding-seat.md`
-is deliberately narrow (beyond pointer fixes elsewhere); that narrowness is what makes the
-seat reliable.
+field with an explicit `None`**.
 
-This self-claims / DoD-grounding check is formalized as the **grounding seat**
-(`plugins/superheroes/agents/grounding-seat.md`, `reviewer` tier — never `mechanical`,
-since a false "claims check out" is a silence nothing downstream re-checks); on the
-**review-code** leg it is **live-dispatched under #609** (the seat emits verdicts; the
-orchestrator mints findings from `REFUTED` rows), with the orchestrator-inline PR-body
-honesty check above retained as a second leg.
+The PR's self-claims — the DoD table, the degradations list, the receipts claimed — are
+checked by the advisor's vet.
 
 Markers and the omission floor are cited by `rubric/review-discipline.md`, the canonical
 statement of the band's review convention (no unreviewed PRs, §7.4).
@@ -1424,7 +1412,7 @@ canonical ruling record is `LEDGERS.md` §4.
 > shared rule in `lib/wave_watch.py`. `plugins/superheroes/lib/heartbeat.py`'s module constants are
 > **authoritative** for the heartbeat.
 
-**Producer:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7).
+**Producers:** the workhorse builder (`skills/workhorse/SKILL.md` — stamp duty in §7) and a launched detective (`skills/detective/SKILL.md` — stamp duty in § What you may write).
 **Consumers:** the showrunner's scheduled liveness sweep (`skills/showrunner/SKILL.md` duty 9);
 `lib/wave_watch.py` for `lane-terminal` and `lane-blocked`.
 

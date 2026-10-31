@@ -17,7 +17,6 @@ __all__ = (
     "JOURNAL_FAULT_FILE",
     "META_FILE",
     "PANEL_PHASE",
-    "FIXER_PHASE",
     "AUDITS_PHASE",
     "CHANNEL_FILE",
     "CHANNEL_STDOUT",
@@ -128,15 +127,11 @@ def evidence_binding(result_kind):
 
 
 def execution_only_admissible_for_phase(phase):
-    """True when execution-only (write-run) evidence binding is admissible for this phase."""
-    if not isinstance(phase, str) or not phase:
-        return False
-    if phase not in (PANEL_PHASE, FIXER_PHASE, AUDITS_PHASE):
-        return False
-    return phase == FIXER_PHASE
+    """True when execution-only (write-run) evidence binding is admissible for this phase. No
+    phase is: every dispatched seat is a review run, and the build session writes its own fixes."""
+    return False
 
 PANEL_PHASE = "dispatch-panel"
-FIXER_PHASE = "dispatch-fixer"
 AUDITS_PHASE = "dispatch-audits"
 
 RUN_KIND_REVIEW = "review"
@@ -156,7 +151,7 @@ RUN_KIND_BY_PHASE = {
     AUDITS_PHASE: RUN_KIND_REVIEW,
     "dispatch-scoped-finder": RUN_KIND_REVIEW,
     "dispatch-gap-sweep": RUN_KIND_REVIEW,
-    FIXER_PHASE: RUN_KIND_WRITE,
+    "dispatch-second-test": RUN_KIND_REVIEW,
 }
 
 EXECUTION_EVIDENCE_RUN_KIND_FIELD = "runKind"

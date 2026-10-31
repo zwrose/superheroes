@@ -43,12 +43,13 @@ def _blocking_finding(title, line):
 
 REASON = round_driver.ROUND_PHASE_NOT_PENDING_REFUSAL
 P_AUDITS = round_driver.P_AUDITS
-P_FIXER = round_driver.P_FIXER
 
 
 def _audit_payload(seat, ruling="not-discharged"):
     return {"id": seat, "ruling": ruling, "auditorVendor": "claude",
-            "reason": "re-read the fixed hunk; defect persists"}
+            "reason": "re-read the fixed hunk; defect persists",
+            "checks": {name: {"answer": "yes", "why": "checked"}
+                       for name in ("right", "brokeNothing", "testWouldFail")}}
 
 
 def _store_bytes_snapshot(session_dir):
@@ -92,20 +93,6 @@ def _drive_until_audits_round(session_dir, gitdir, findings, head_path, target_r
             return pend
         if pend["phase"] == P_AUDITS:
             out = _complete_audits_not_discharged(session_dir, gitdir)
-            assert out["ok"], out
-        elif pend["phase"] == round_driver.P_STALL:
-            art = {"choice": round_driver.ONE_MORE_ROUND_CHOICE}
-            path = os.path.join(session_dir, "stall-artifact.json")
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(art, fh)
-            out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir),
-                                          owner_artifact_path=path)
-            if not out.get("ok") and out.get("reason") == "fold-refused":
-                art = {"choice": round_driver.HOLD_CHOICE}
-                with open(path, "w", encoding="utf-8") as fh:
-                    json.dump(art, fh)
-                out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir),
-                                              owner_artifact_path=path)
             assert out["ok"], out
         else:
             phase, out = _drive_one_phase(session_dir, gitdir, findings, head_path)
@@ -312,80 +299,6 @@ def _last_journal_recorded(session_dir, cmd):
     return rows[-1]
 
 
-def _setup_fixer_sweep_repair_pending(tmp_path):
-    """Pending fixer phase with a stored record whose head-diff blob needs sweep repair."""
-    findings = [_blocking_finding("missing bounds guard", 2)]
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="fence-fixer-repair")
-    _drive_to_phase(session_dir, gitdir, findings, head_path, P_FIXER)
-    state = _state(session_dir)
-    pend = state["pending"]
-    assert pend["phase"] == P_FIXER
-    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
-    seat = roster[0]
-    slots = _slots_of(roster)
-    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
-    repair_head_path = str(tmp_path / "fixer-repair-head.diff")
-    with open(repair_head_path, "w", encoding="utf-8") as fh:
-        fh.write("diff --git a/f.py b/f.py\n+sweep-repair\n")
-    payload = _TDI._payload_for(session_dir, state, pend, seat, findings, repair_head_path)
-    _land(session_dir, state, pend, seat, payload, occurrence=0)
-    recorded = round_driver.cmd_record_result(session_dir, seat, occurrence=0)
-    assert recorded["ok"], recorded
-    spath = recorded["storePath"]
-    blob = recorded["headDiffStorePath"]
-    stored, _ = round_records.read_json(spath)
-    del stored["payload"]["headDiffStorePath"]
-    round_records.atomic_write_json(spath, stored)
-    os.remove(blob)
-    return session_dir, pend, seat
-
-
-def _last_sweep_repair_journal_recorded(session_dir):
-    rows = [e for e in round_driver.read_journal(session_dir)
-            if e.get("cmd") == "record-result" and e.get("outcome") == "recorded"
-            and e.get("headDiffRepaired") is True]
-    assert rows, "no sweep repair recorded journal row"
-    return rows[-1]
-
-
-def _setup_fixer_sweep_fresh_head_diff_pending(tmp_path):
-    """Pending fixer phase with a landed (not stored) fixer record for sweep head-diff bind."""
-    findings = [_blocking_finding("missing bounds guard", 2)]
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="fence-fixer-sweep-bind")
-    _drive_to_phase(session_dir, gitdir, findings, head_path, P_FIXER)
-    state = _state(session_dir)
-    pend = state["pending"]
-    assert pend["phase"] == P_FIXER
-    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
-    seat = roster[0]
-    slots = _slots_of(roster)
-    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
-    bind_head_path = str(tmp_path / "fixer-sweep-bind-head.diff")
-    with open(bind_head_path, "w", encoding="utf-8") as fh:
-        fh.write("diff --git a/f.py b/f.py\n+sweep-bind\n")
-    payload = _TDI._payload_for(session_dir, state, pend, seat, findings, bind_head_path)
-    _land(session_dir, state, pend, seat, payload, occurrence=0)
-    return session_dir, pend, seat
-
-
-def _assert_cas_token_on_head_diff_row(session_dir, row):
-    assert "casToken" in row
-    assert row.get("payloadSha256")
-    rnd = row["round"]
-    phase = row["phase"]
-    seat = row["seat"]
-    occurrence = row.get("occurrence", 0)
-    attempt = row["attempt"]
-    spath = round_records.store_path(
-        session_dir, rnd, phase, round_records.storage_key(seat, occurrence), attempt)
-    stored, err = round_records.read_json(spath)
-    assert err is None
-    assert row["casToken"] == round_records.envelope_cas_token(stored)
-    if stored.get("schema") == round_records.SEAT_RESULT_SCHEMA_V2:
-        assert row["casToken"] == stored["envelopeSha256"]
-        assert row["casToken"] != row["payloadSha256"]
-
-
 def test_journal_addressed_true_when_round_phase_echoed(tmp_path):
     """#1177-C bite-proof: journal addressed distinguishes fenced durable-record calls."""
     session_dir, _gitdir, _head_path, _findings, pend, tid, _slots = _setup_audits_pending(tmp_path)
@@ -413,10 +326,6 @@ def test_record_result_journal_stamps_transport(tmp_path):
 @pytest.mark.parametrize(
     "envelope,expected",
     [
-        (
-            {"phase": P_FIXER, "provenance": round_records.PROVENANCE_DISPATCH_OBSERVED},
-            "orchestrator",
-        ),
         (
             {
                 "phase": round_driver.P_PANEL,
@@ -456,7 +365,7 @@ def test_record_result_journal_stamps_transport(tmp_path):
             "native-subagent",
         ),
     ],
-    ids=["fixer-phase", "orchestrator-provenance", "hand-landed", "runner", "incomplete-evidence",
+    ids=["orchestrator-provenance", "hand-landed", "runner", "incomplete-evidence",
          "dispatch-no-evidence"],
 )
 def test_journal_transport_fields_derivations(envelope, expected):
@@ -502,47 +411,6 @@ def test_journal_addressed_record_missing_both_directions(tmp_path):
     bare_out = round_driver.cmd_record_missing(session_dir2, other2, pend2["attempt"], "forfeit")
     assert bare_out["ok"] is True, bare_out
     assert _last_journal_recorded(session_dir2, "record-missing")["addressed"] is False
-
-
-def test_journal_addressed_sweep_fixer_repair_branch(tmp_path):
-    """#1177-G: sweep fixer-repair journal recorded events carry addressed when fenced."""
-    session_dir, pend, _seat = _setup_fixer_sweep_repair_pending(tmp_path)
-    out = round_driver.cmd_record_result(
-        session_dir, sweep=True,
-        expect_round=pend["round"], expect_phase=pend["phase"])
-    assert out["ok"] is True, out
-    entry = _last_sweep_repair_journal_recorded(session_dir)
-    assert entry["addressed"] is True
-
-
-def test_repair_fixer_head_diff_journal_carries_envelope_cas_token(tmp_path):
-    """Stored fixer head-diff repair journals the stored envelope's CAS token."""
-    # axis: _repair_fixer_head_diff → _store_head_diff late subscript — headDiffRepaired row
-    session_dir, pend, seat = _setup_fixer_sweep_repair_pending(tmp_path)
-    out = round_driver.cmd_record_result(session_dir, sweep=True)
-    assert out["ok"] is True, out
-    row = _last_sweep_repair_journal_recorded(session_dir)
-    assert row.get("headDiffRepaired") is True
-    assert row.get("seat") == seat
-    assert row.get("round") == pend["round"]
-    assert row.get("phase") == P_FIXER
-    _assert_cas_token_on_head_diff_row(session_dir, row)
-
-
-def test_sweep_fresh_fixer_head_diff_bind_journal_carries_envelope_cas_token(tmp_path):
-    """Sweep ingest head-diff bind journals the stored envelope's CAS token."""
-    # axis: _sweep_record head-diff branch → _store_head_diff late subscript — fresh bind row
-    session_dir, pend, seat = _setup_fixer_sweep_fresh_head_diff_pending(tmp_path)
-    out = round_driver.cmd_record_result(session_dir, sweep=True)
-    assert out["ok"] is True, out
-    rows = [e for e in round_driver.read_journal(session_dir)
-            if e.get("cmd") == "record-result" and e.get("outcome") == "recorded"
-            and e.get("headDiffRepaired") is not True and e.get("seat") == seat]
-    assert rows, "no sweep fresh head-diff bind recorded journal row"
-    row = rows[-1]
-    assert row.get("round") == pend["round"]
-    assert row.get("phase") == P_FIXER
-    _assert_cas_token_on_head_diff_row(session_dir, row)
 
 
 def test_cli_record_result_matching_round_wrong_phase_refuses(tmp_path, capsys):
