@@ -105,7 +105,10 @@ def test_k3_a_session_whose_only_finding_is_a_dropped_attached_failing_test_conv
     (run,) = state["rounds"]["1"]["breakItRuns"]
     assert run["droppedAtCompile"] is True and run["findingKey"] is None
     assert (run["outcome"], run["kind"], run["file"]) == ("failed", break_it.KIND_ATTACHED, "elsewhere/x.py")
-    assert [d["reason"] for d in state["rounds"]["1"]["compileDrops"]] == ["outside the round diff scope"]
+    # the off-diff finding is routed to the "Outside this PR" list, not recorded as a compile drop
+    assert state["rounds"]["1"]["compileDrops"] == []
+    assert [(e["source"]["name"], [(h["file"], h["line"]) for h in e["hits"]])
+            for e in state["outsideThisPR"]] == [("test-role", [("elsewhere/x.py", 9)])]
 
 
 # ---- B1: a non-string file is never hashed -----------------------------------------------------------------------

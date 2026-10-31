@@ -799,14 +799,26 @@ def _raised_reports(session_dir, rows, pending, pending_round):
     return out
 
 
+def _outside_keys(outside):
+    """The `(title, file key, line key)` of every hit on the state's "Outside this PR" list, whatever the entry's kind."""
+    keys = set()
+    for entry in outside if isinstance(outside, list) else []:
+        hits = entry.get("hits") if isinstance(entry, dict) else None
+        for hit in hits if isinstance(hits, list) else []:
+            if isinstance(hit, dict):
+                keys.add((hit.get("title"), _file_key(hit.get("file")), _line_key(hit.get("line"))))
+    return keys
+
+
 def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_kinds=None, pending=None,
-              pending_round=None):
+              pending_round=None, outside=None):
     """One open finding row for each finding a reviewer recorded in a stored seat result that the loop never took in.
 
     A finding the account already lists, one an earlier seat stored the same, one the round's compile dropped
     (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
     stays; a drop whose file is not a string lost its line, so it is matched by round, title and file), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
-    own panel proposal is settled that way) add nothing. A listed finding already settled in a round before the
+    own panel proposal is settled that way) add nothing; nor does one that is a hit on the state's `outsideThisPR`
+    list (matched by title, file and line; it stays there, not here). A listed finding already settled in a round before the
     report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
     settled_rounds = settled_rounds or {}
     settled_kinds = settled_kinds or {}  # a finding key to the kind of its recorded settlement
@@ -814,6 +826,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
     by_listed = {f["findingKey"]: f for f in findings}
     dropped = {_drop_key(d["round"], d["title"], d["file"], d["line"]) for d in _refused(rounds)}
     passed = _passed_break_it(rounds)
+    outside_keys = _outside_keys(outside)
     out = []
     for phase, rnd, seat, raised in _raised_reports(session_dir, rows, pending, pending_round):
         for f in raised:
@@ -826,6 +839,9 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
                 and (rnd, f["title"], _file_key(f.get("file"))) in passed
             if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
+                continue
+            # axis: a finding on the state's "Outside this PR" list stays there and is not listed open a second time — see bite-proof record c3_wo_a_outside
+            if (f["title"], _file_key(f.get("file")), _line_key(f.get("line"))) in outside_keys:
                 continue
             if fkey in listed:
                 held = by_listed.get(fkey)
@@ -910,7 +926,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                          if isinstance(sc.resolve_merged_into_entry(r, by_key), dict)}
         pending = state.get("_newIssues")
         findings += _unfolded(session_dir, rows, rounds, findings, settled_rounds, settled_kinds, pending,
-                              state.get("round") if _int(state.get("round")) else None)
+                              state.get("round") if _int(state.get("round")) else None,
+                              state.get("outsideThisPR"))
     carry = None  # the lastReviewed commit of an empty returning round: its record may carry the earlier review's reviewers
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
