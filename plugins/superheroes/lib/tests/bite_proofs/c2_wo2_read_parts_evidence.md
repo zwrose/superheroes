@@ -153,3 +153,44 @@ failure, and the first lines of the first test's body above its `assert out["ok"
 ...                                                                      [100%]
 3 passed, 6 deselected in 4.91s
 ```
+
+## E4: the amended seam test (`test_round_commit_seams.py`)
+
+- Detector changed: `test_seam_a_record_ingest_replaces_landing_when_evidence_stamped`
+  (`plugins/superheroes/lib/tests/test_round_commit_seams.py`), now stating that a stamped landing differs from the landed
+  one only by `executionEvidence`, `payloadHashSource`, `headSha`, `citedHeadSource`, `envelopeSha256`, and a `payload`
+  that gains exactly one key `readParts` equal to the runner's list, with `payloadSha256` recomputed from the new payload.
+- Axis: the stamped landing differs from the landed one only by the runner's read list (the E2 adoption, seen at the record-ingest seam).
+- Neutralization: the E2 neutralization again, in `round_driver.py` `_assemble_dispatch_evidence`'s adoption `else:` branch:
+  the two lines `envelope_payload["readParts"] = list(runner_parts)` and `payload_adopted = True` replaced by `pass`.
+- Command (red, green): `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-wo -m pytest plugins/superheroes/lib/tests/test_round_commit_seams.py -q -n auto`
+- Raw red (the `UV_NATIVE_TLS` tool warning line and the pytest temp paths are as the tool printed them; the fixture-argument
+  values `tmp_path = ...`, `adapters = ...` are kept; the test body up to the failing line is elided, 38 lines, nothing else changed):
+
+```
+..............F...................................................       [100%]
+=================================== FAILURES ===================================
+_______ test_seam_a_record_ingest_replaces_landing_when_evidence_stamped _______
+      # axis: the stamped landing differs from the landed one only by the runner's read list
+>     assert after_obj["payload"] == {**_env["payload"], "readParts": runner_parts}
+E     AssertionError: assert {'findings': []} == {'findings': ...eadParts': []}
+E       
+E       Omitting 1 identical items, use -vv to show
+E       Right contains 1 more item:
+E       {'readParts': []}
+E       Use -v to get more diff
+
+/home/user/wt-2218-wo2/plugins/superheroes/lib/tests/test_round_commit_seams.py:721: AssertionError
+FAILED plugins/superheroes/lib/tests/test_round_commit_seams.py::test_seam_a_record_ingest_replaces_landing_when_evidence_stamped
+1 failed, 65 passed in 22.66s
+```
+
+- Restore: inverse edit; restored lines quoted back (`round_driver.py` lines 14412-14413):
+  `envelope_payload["readParts"] = list(runner_parts)` / `payload_adopted = True`.
+  `git diff --stat -- plugins/superheroes/lib/round_driver.py` after restore: empty (the file is identical to `HEAD`).
+- Raw green:
+
+```
+..................................................................       [100%]
+66 passed in 22.27s
+```
