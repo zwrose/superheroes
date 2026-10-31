@@ -13,7 +13,7 @@ is skipped for this step. They are kept now: the held findings marked unverified
 
 Edges: E1 any seat-supplied value is stripped, a stamped finding's included · E2 the unseatable path still marks
 its findings (`test_second_test_c1l7.py` group U) · E3 a missing, null or non-list staging keeps whatever is valid
-and never raises · E4 a held row whose finding is not a dict is skipped · E5 gap-sweep and scoped-finder results
+and never raises · E4 a held row whose finding is not a dict is skipped · E5 seams-check and scoped-finder results
 are still retained by the generic helper.
 """
 import os
@@ -201,7 +201,7 @@ def test_e3_the_helper_leaves_the_staging_and_the_held_finding_untouched():
     assert "unverified" not in held and len(state["_secondTestHeld"]) == 1
 
 
-# ---- E5: the generic retain is unchanged for gap-sweep and scoped-finder ----------------------------------------
+# ---- E5: the generic retain is unchanged for seams-check and scoped-finder ----------------------------------------
 
 def test_e5_the_generic_retain_still_keeps_an_unauthenticated_finders_candidates_unverified():
     state = _staged_state(findings=[dict(_PLAIN, verdict="CONFIRMED")])

@@ -133,7 +133,7 @@ def test_hand_submit_refused_after_record_sweep_pending_unchanged(tmp_path):
 
 def test_hand_submit_without_store_records_still_folds(tmp_path):
     """Clean hand-submit round with no durable records is unchanged."""
-    session_dir, _gitdir, _head_path = _bootstrap(tmp_path)
+    session_dir, _gitdir, _head_path = _bootstrap(tmp_path, sliced=False)
     state = _state(session_dir)
     pend = state["pending"]
     art = _panel_hand_artifact(session_dir)
@@ -420,7 +420,7 @@ def test_advance_reports_unreadable_dispatch_manifest(tmp_path):
 
 def test_wedge_closed(tmp_path):
     """Hand-submit panel, then record-result on the next phase is refused; hand submit still works."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, sliced=False)
     findings = [_blocking_finding("missing bounds guard", 2)]
     assert _hand_submit_panel(session_dir, findings)["ok"] is True
     assert _state(session_dir).get("_submitUsed") is True
@@ -565,7 +565,7 @@ def test_disclosure_present_on_failure_response(tmp_path):
 
 def test_legacy_hand_path_session_can_still_fold(tmp_path):
     """Legacy state: durable records plus _submitUsed — hand submit folds and journals orphans."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, sliced=False)
     pend, slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
     state = _state(session_dir)
     state["_submitUsed"] = True
@@ -585,7 +585,7 @@ def test_legacy_hand_path_session_can_still_fold(tmp_path):
 
 def test_orphan_journal_not_repeated_on_later_hand_submit_same_round(tmp_path):
     """Orphan disclosure journals once at the submit that found records — not every later hand fold."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, sliced=False)
     pend, slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
     state = _state(session_dir)
     state["_submitUsed"] = True
@@ -699,7 +699,7 @@ def _hand_submit_artifact(session_dir, pend, panel_findings, head_path):
     assert reason is None, (phase, reason)
     seat, _occurrence = _slots_of(roster)[0]
     artifact = _payload_for(session_dir, state, pend, seat, panel_findings, head_path)
-    if phase in (round_driver.P_GAPSWEEP, round_driver.P_SCOPED):
+    if phase in (round_driver.P_SEAMS, round_driver.P_SCOPED):
         # a hand submit names the vendor the single-seat reviewer was dispatched on
         artifact = dict(artifact, reviewerVendor=round_driver._nonpanel_selection(state, session_dir, phase)[0])
     return artifact

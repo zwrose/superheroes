@@ -650,7 +650,7 @@ def test_m_a_second_test_the_runner_cannot_run_is_still_appended_and_the_finding
 def test_m_a_missing_second_test_seat_result_is_the_adapters_refuse_fold():
     # edge 4
     assert RA.missing_policy(RP.P_SECOND_TEST) == RA.MISSING_REFUSE_FOLD
-    assert RA.missing_policy(RP.P_SECOND_TEST) == RA.missing_policy(RP.P_GAPSWEEP)
+    assert RA.missing_policy(RP.P_SECOND_TEST) == RA.missing_policy(RP.P_SEAMS)
     assert RA._SINGLE_SEAT[RP.P_SECOND_TEST] == RA.SEAT_SECOND_TEST == "second-test"
 
 
@@ -703,24 +703,24 @@ def test_s_the_verdict_contract_accepts_a_boolean_path_reached_and_refuses_any_o
         assert fault is not None, bad
 
 
-def test_s_the_second_test_contract_is_the_gap_sweeps():
+def test_s_the_second_test_contract_is_the_seams_checks():
     assert PC.payload_fault(RP.P_SECOND_TEST, {"findings": []}, RA.SEAT_SECOND_TEST) is None
     assert PC.payload_fault(RP.P_SECOND_TEST, {}, RA.SEAT_SECOND_TEST) is not None
     assert PC.payload_fault(RP.P_SECOND_TEST, {"findings": [], "reviewerVendor": "claude"},
                             RA.SEAT_SECOND_TEST) is None
-    assert RA.payload_contract(RP.P_SECOND_TEST) == RA.payload_contract(RP.P_GAPSWEEP)
+    assert RA.payload_contract(RP.P_SECOND_TEST) == RA.payload_contract(RP.P_SEAMS)
 
 
 # ---- C: the census --------------------------------------------------------------------------------------------
 
-def test_c_the_new_phase_is_named_at_every_site_that_names_gap_sweep():
+def test_c_the_new_phase_is_named_at_every_site_that_names_seams_check():
     phase = RP.P_SECOND_TEST
     assert phase == "dispatch-second-test"
     assert phase in RP.ALL_PHASES and phase in RO.ORDER_PHASES
     assert phase in PC.ADAPTER_PHASES and phase in RA.ADAPTER_PHASES
-    assert SC.RUN_KIND_BY_PHASE[phase] == SC.RUN_KIND_BY_PHASE[RP.P_GAPSWEEP]
+    assert SC.RUN_KIND_BY_PHASE[phase] == SC.RUN_KIND_BY_PHASE[RP.P_SEAMS]
     assert phase in RD._NONPANEL_REVIEWER_PHASES
-    assert RD._NONPANEL_PHASE_ROLE[phase] == RD._NONPANEL_PHASE_ROLE[RP.P_GAPSWEEP] == "reviewer-deep"
+    assert RD._NONPANEL_PHASE_ROLE[phase] == RD._NONPANEL_PHASE_ROLE[RP.P_SEAMS] == "reviewer-deep"
     assert RA._SINGLE_SEAT[phase] == "second-test"
     assert phase in PC._PAYLOAD_CHECKERS
     with open(os.path.join(_HERE, "fixtures", "orders", "clause_manifest.json"), encoding="utf-8") as fh:
@@ -747,7 +747,7 @@ def test_c_the_unseatable_degradation_is_a_carried_channel_the_verifier_fold_rec
 def test_c_the_reviewer_header_names_the_second_test_seat():
     assert review_record._STEM_ROLE["second-test "] == "second test"
     assert "second test" in review_record._ROLE_ORDER
-    assert review_record._ROLE_ORDER.index("second test") > review_record._ROLE_ORDER.index("gap sweep")
+    assert review_record._ROLE_ORDER.index("second test") > review_record._ROLE_ORDER.index("seams check")
 
 
 def test_c_the_second_test_seat_is_a_pre_fix_seat_but_not_a_raw_finder():

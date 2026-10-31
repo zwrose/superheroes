@@ -68,14 +68,14 @@ _OWNER_SUPPLIED = "owner-supplied"
 _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an earlier version wrote
 _HANDED_BACK = "handed-back"
 _HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
-_RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
+_RAW_PHASES = (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_SCOPED)
 # the source names the driver gives an outside hit raised outside the panel, read from their one home in
 # session_contract (the driver reads the same); a panel seat's hit is named by the seat itself
-_OUTSIDE_STAGE_SOURCES = {round_phases.P_GAPSWEEP: sc.OUTSIDE_GAP_SWEEP, round_phases.P_SCOPED: sc.OUTSIDE_SCOPED_FINDER,
+_OUTSIDE_STAGE_SOURCES = {round_phases.P_SEAMS: sc.OUTSIDE_SEAMS_CHECK, round_phases.P_SCOPED: sc.OUTSIDE_SCOPED_FINDER,
                           round_phases.P_AUDITS: sc.OUTSIDE_FIX_AUDITOR}
 # the second-test seat is a test reviewer run on the held findings: it reads before the round's fix, and
 # its results are tests for findings already raised, so it is listed as a reviewer but never as a raw report
-_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS,
+_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_VERIFIERS,
                    round_phases.P_SECOND_TEST)
 # synthesis only groups already-raised findings into root causes: it raises, confirms, audits and grades
 # nothing, so it is not a reviewer of the change and the account does not list it
@@ -201,14 +201,14 @@ REVIEWER_ROUND_SUFFIX = re.compile(r"\s*\(round \d+\)$")
 
 
 def _step(rnd, phase):
-    """Where in the loop a reviewer sat: two steps a round, a panel, gap-sweep or verifier read before the
+    """Where in the loop a reviewer sat: two steps a round, a panel, seams-check or verifier read before the
     round's fix (even), every other review phase after it (odd)."""
     return 2 * rnd + (0 if phase in _PRE_FIX_PHASES else 1)
 
 
 def _reviewer(state, rnd, seat, stem, ran, env=None, ev=None, commit=None, run_dir=None, phase=None):
     seat_map = seat_map_receipts.round_governing_map(state, rnd).get("seats")
-    entry = (seat_map.get(seat) if isinstance(seat_map, dict) else None) or {}
+    entry = (seat_map.get(round_phases.seat_lens(seat)) if isinstance(seat_map, dict) else None) or {}
     env, ev = env or {}, ev or {}
     return {"name": f"{stem}{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}", "planned": True, "ran": ran,
             "vendor": _text(env.get("vendor"), entry.get("vendor")) or "unknown",
@@ -298,7 +298,7 @@ def _status_reviewers(state, setup=None, rows=()):
         unfilled = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd)) \
             & set(round_phases.DIMENSIONS)
         for seat in sorted(seats):
-            if seat in unfilled:
+            if round_phases.seat_lens(seat) in unfilled:
                 continue  # listed below as an unfilled seat
             commit = _panel_head(state, rnd, setup)
             ran = seats[seat] == "run" and commit is not None  # any other value, or a panel with no recoverable head, is never credited
@@ -323,11 +323,11 @@ def _status_reviewers(state, setup=None, rows=()):
         if phase == round_phases.P_VERIFIERS and _nothing_to_verify(state, rnd):
             continue
         prov = [p.get("ran") for p in ((state["rounds"].get(str(rnd)) or {}).get("verifierProvenance") or ()) if isinstance(p, dict)
-                and p.get("outcome") == "verdicts-folded"] if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase; a verifier whose verdicts were ignored or empty never ran
+                and p.get("outcome") == "verdicts-folded"] if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, seams check or scoped finder journals no seat: one row a phase; a verifier whose verdicts were ignored or empty never ran
         head = _panel_head(state, rnd, setup, phase)
         out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head) and (bool(prov) or phase != round_phases.P_VERIFIERS),
                              {"vendor": _text(*prov, _panel_head(state, rnd, None, phase, "vendor")) or "unknown", "model": "unknown"}, commit=head, phase=phase))
-    # axis: a hand-submit session with no seat status in any round and no audit, scoped-finder, verifier, gap-sweep or second-test row holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
+    # axis: a hand-submit session with no seat status in any round and no audit, scoped-finder, verifier, seams-check or second-test row holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
     # axis: a returning session that ran no panel lists the phases it did run, and refuses only when none ran — see bite-proof record c1l11b_wo_h_panel_free_record
     if not any(status.values()) and not out:
         raise Refusal(UNSUPPORTED, NO_SEAT_RESULT)
@@ -388,7 +388,7 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     out, raw = [], []
     for key, (att, r) in slots.items():
         phase, rnd, seat, _ = key
-        if phase == sc.PANEL_PHASE and seat in unfilled.get(rnd, ()):
+        if phase == sc.PANEL_PHASE and round_phases.seat_lens(seat) in unfilled.get(rnd, ()):
             continue  # listed below as an unfilled seat, whether or not a slot was journaled for it
         env = envs[key]
         body = env.get("payload") if isinstance(env, dict) else None
@@ -897,7 +897,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
             # axis: a break-it proposal whose test passed was dropped before compile and is no defect; kept for a session that began under the earlier rules, since the current intercept drops nothing — see bite-proof record c1l1_wo_b_session_seam
             # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
-            settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
+            settled = phase == round_phases.P_PANEL and round_phases.seat_lens(seat) == break_it.ROLE and break_it.is_break_it(f) \
                 and (rnd, f["title"], _file_key(f.get("file"))) in passed
             if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
                 continue
@@ -910,7 +910,8 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 continue
             # axis: a report the loop never folded that cites a line its round's diff did not touch is an outside finding, listed on the account's outside list and never as open work, so abandoning before the fold does not change how it is treated — see bite-proof record c3_wo_a_outside
             # axis: the test role's own break-it proposal is scope-exempt at compile only when its block parses, names the cited file and cites line 1 (break_it.intercept's rule), so only such a proposal is never classified outside here — see bite-proof record c3_wo_a_outside
-            exempt = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.scope_exempt(f)
+            # axis: a sliced test seat (`test-role:s1`) is the test role for this exemption, by its lens — see bite-proof record c2_wo8_merge_scoped_fixes
+            exempt = phase == round_phases.P_PANEL and round_phases.seat_lens(seat) == break_it.ROLE and break_it.scope_exempt(f)
             # axis: the scope check runs before a listed identity is handled, so a report that matches a settled ledger row but cites a line its round's diff did not touch is recovered as outside and never reopens that row — see bite-proof record c3_wo_a_outside
             if not exempt and recovered is not None:
                 if rnd not in scopes:

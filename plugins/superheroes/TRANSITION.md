@@ -18,6 +18,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **A big change that cannot be split is reviewed in slices by size, with every unread part reviewed and one seams check, in place of the split by top-level folder and the gap sweep. A caller that reads the panel payload's `shards` or `big` keys, or the `dispatch-gap-sweep` phase, reads `slices` and `dispatch-seams-check` instead; a session saved at the gap-sweep step continues past it; a hand-landed panel `readParts` that differs from an engine run's is refused `evidence-read-parts-mismatch`.** See [Review: a big change is reviewed in slices](#review-a-big-change-is-reviewed-in-slices).
+
 - **After switching.** **A PR whose review left findings for the owner names each one, by record id and title, under What we're accepting before it is marked ready or vetted READY.** `vet_slot.py handback --pr` and a READY `vet_slot.py write` now refuse `leftover-not-accepted` or `review-record-unreadable`. See [Vet slot: findings left for the owner are named before ready](#vet-slot-findings-left-for-the-owner-are-named-before-ready).
 
 - **After switching.** **A light- or micro-lane review record over four rounds (five with the extra audit round) is refused `review-record-round-cap-exceeded`; a session that wrote one now parks instead.** See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
@@ -55,6 +57,15 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A caller that passes `dispatch-write --landing-dir`, reads a `sandbox-landing-dir-*` refusal, imports `observed_refusals` or `record_paths.is_landing_dir`, or reads `$FIXER_MODEL` drops it; a saved `code-fixer` or `fixer` tier override is dropped and a saved codex pin under either key takes no effect and is listed as invalid; both are safe to remove.** See [Review: the fixer-only machinery is removed](#review-the-fixer-only-machinery-is-removed).
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
+
+### Review: a big change is reviewed in slices
+
+- **Slices by size.** A change whose countable lines are over the bar (1,000) is reviewed in round 1 in slices cut by size, never by folder, each slice with its own code and test reviewers and a security reviewer where the slice touches a risk area or its risk is unclear. Splitting a big change into separate PRs stays the first answer. The rules are in [Big changes: slices, unread parts and the seams check](skills/review-code/reference/round-driver.md#big-changes-slices-unread-parts-and-the-seams-check).
+- **Every unread part is reviewed.** After the slices report, each part a slice reviewer did not list as read becomes a new slice with the same reviewers, in up to two further waves. What is still unread after the last wave is recorded in the review record's `unreadShare`, filled on every sliced change.
+- **One seams check.** One reviewer reads the whole change for problems between slices, once, in round 1, after the slices and before the verifier. It replaces the gap sweep, and the split by top-level folder (over 1,500 changed lines or 20 files) is gone.
+- **Payload and phase.** The panel payload's `shards` and `big` keys are gone; it carries `slices` (`{id, seats}`) and, on a sliced round 1, a roster of whole-change seats plus `<lens>:<slice id>` seats. The `dispatch-gap-sweep` phase is gone; the `dispatch-seams-check` phase replaces it.
+- **Saved sessions.** A session saved at the gap-sweep step continues past it when loaded.
+- **Read lists.** An engine reviewer's `readParts` in the record is the list the dispatch runner graded for that run. A landed list that differs is refused `evidence-read-parts-mismatch`, and a landing with no list takes the runner's.
 
 ### Review: a ruling refuses an id that names more than one finding
 

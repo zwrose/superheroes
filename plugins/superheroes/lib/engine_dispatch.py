@@ -7696,6 +7696,9 @@ def run_execution_record(run_dir):
                 _, result_content = _result_kind_and_content_from_parse(res)
                 if isinstance(result_content, dict):
                     record["resultContent"] = result_content
+            # the reviewer's read list as the runner admitted it; a consumer binds a landed list to this one
+            if isinstance(res, dict) and isinstance(res.get("readParts"), list):
+                record["readParts"] = res["readParts"]
         resolved = opened.get("resolvedInputs")
         if isinstance(resolved, dict) and "engineModel" in resolved:
             engine_model = resolved.get("engineModel")

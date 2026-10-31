@@ -1,13 +1,14 @@
 """#1851 (review C5 L4) K — a non-panel result counts only when the vendor that ran it is the vendor its
 order named AND that vendor passes the shared eligibility bar (`round_adapters._maker_barred`).
 
-Covers the verifier (per seat and on a hand claim), the gap sweep and the scoped finder on the advance
+Covers the verifier (per seat and on a hand claim), the seams check and the scoped finder on the advance
 path, the hand `submit` path and the library `run_loop` path.
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_1b_1851_nonpanel_provenance.md
 """
 import os
 import sys
+from unittest import mock
 
 import pytest
 
@@ -25,7 +26,7 @@ import test_round_driver as TRD  # noqa: E402
 import test_round_driver_integration as IT  # noqa: E402
 import test_verifier_vendor_provenance_1797 as P17  # noqa: E402
 
-FINDERS = [(RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP), (RD.P_SCOPED, RA.SEAT_SCOPED)]
+FINDERS = [(RD.P_SEAMS, RA.SEAT_SEAMS), (RD.P_SCOPED, RA.SEAT_SCOPED)]
 BAR_HOW = ["maker-family", "vendor-is-the-fixer"]
 
 
@@ -135,9 +136,9 @@ def test_t1_hand_finder_claim_other_than_recorded_is_refused(tmp_path, phase, se
 
 def test_t1_library_finder_reporting_another_vendor_is_unauthenticated():
     state = _state()
-    assert RD._nonpanel_selection(state, None, RD.P_GAPSWEEP)[0] == "codex"
-    assert RD._library_finder_unauthenticated(state, "cursor", RD.P_GAPSWEEP) is True
-    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP) is False
+    assert RD._nonpanel_selection(state, None, RD.P_SEAMS)[0] == "codex"
+    assert RD._library_finder_unauthenticated(state, "cursor", RD.P_SEAMS) is True
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_SEAMS) is False
 
 
 # --- T2: the executed vendor equals the order's but sits in a maker family / is the fixer --------------
@@ -191,25 +192,27 @@ def test_t2_hand_finder_ineligible_recorded_vendor_claim_is_refused(tmp_path, ph
 
 
 def _library_run(reported):
-    """run_loop over a big diff so a gap sweep runs; `reported` is what the gap-sweep callback returns."""
-    calls = {"gap": 0}
+    """run_loop over a sliced change so a seams check runs; `reported` is what the seams-check callback returns."""
+    calls = {"seams": 0}
 
     def reviewer(dim, tier, rnd, ctx):
-        if dim == "gap-sweep":
-            calls["gap"] += 1
+        if dim == "seams-check":
+            calls["seams"] += 1
             return reported
         return []
 
     seams = TRD._seams(vendors=["claude", "codex"])
     # the callback reports (or not) exactly what the test says
     seams["reviewer"] = reviewer
-    _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert(diff=TRD._big_diff(25)))
-    return state, calls["gap"]
+    # `run_loop` runs on test_round_driver's own load of the module (`TRD.RD`)
+    with mock.patch.object(TRD.RD, "_round_is_sliced", lambda state: True):
+        _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert(diff=TRD._big_diff(25)))
+    return state, calls["seams"]
 
 
 def _parked(state):
     return state.get("terminal") == "cannot-certify" and \
-        str(state["certification"]["reason"]).startswith("nonpanel-finder-unauthenticated:%s" % RD.P_GAPSWEEP)
+        str(state["certification"]["reason"]).startswith("nonpanel-finder-unauthenticated:%s" % RD.P_SEAMS)
 
 
 @pytest.mark.parametrize("reported", [
@@ -217,20 +220,20 @@ def _parked(state):
     pytest.param({"findings": [], "vendor": "cursor"}, id="other-vendor"),
     pytest.param([], id="nothing-reported-while-the-engine-was-replaced"),
 ])
-def test_t2_library_gap_sweep_that_does_not_authenticate_parks_the_loop(reported):
+def test_t2_library_seams_check_that_does_not_authenticate_parks_the_loop(reported):
     # axis: the library finder guard — a result not from the selected eligible vendor never folds (P9)
     state, calls = _library_run(reported)
     assert calls == 1 and _parked(state), (state.get("terminal"), state.get("certification"))
 
 
-def test_t2_library_gap_sweep_positive_control_selected_vendor_folds():
+def test_t2_library_seams_check_positive_control_selected_vendor_folds():
     state, calls = _library_run({"findings": [], "vendor": "codex"})
     assert calls >= 1 and not _parked(state) and state.get("terminal") != "cannot-certify"
 
 
 @pytest.mark.parametrize("vendor,parks", [("cursor", True), ("codex", False)])
 def test_t2_library_scoped_finder_that_does_not_authenticate_parks_the_loop(vendor, parks):
-    # axis: the run_loop guard covers the scoped finder too, not only the gap sweep (P9)
+    # axis: the run_loop guard covers the scoped finder too, not only the seams check (P9)
     calls = {"scoped": 0}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -258,18 +261,18 @@ def test_t2_library_scoped_finder_that_does_not_authenticate_parks_the_loop(vend
 
 def test_t2_library_unseatable_selection_parks():
     state = _state(makers=["openai", "xai"])
-    assert RD._nonpanel_selection(state, None, RD.P_GAPSWEEP) == (None, None)
-    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP) is True
-    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP) is True
+    assert RD._nonpanel_selection(state, None, RD.P_SEAMS) == (None, None)
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_SEAMS) is True
+    assert RD._library_finder_unauthenticated(state, None, RD.P_SEAMS) is True
 
 
 def test_t2_library_selection_that_is_the_engine_folds_without_a_report():
     state = _state(fixer="codex")
-    selected, _source = RD._nonpanel_selection(state, None, RD.P_GAPSWEEP)
+    selected, _source = RD._nonpanel_selection(state, None, RD.P_SEAMS)
     assert selected == "claude" and not RD._nonpanel_replaced(state, selected)
-    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP) is False
-    assert RD._library_finder_unauthenticated(state, "claude", RD.P_GAPSWEEP) is False
-    assert RD._library_finder_unauthenticated(state, "cursor", RD.P_GAPSWEEP) is True
+    assert RD._library_finder_unauthenticated(state, None, RD.P_SEAMS) is False
+    assert RD._library_finder_unauthenticated(state, "claude", RD.P_SEAMS) is False
+    assert RD._library_finder_unauthenticated(state, "cursor", RD.P_SEAMS) is True
 
 
 # --- T3: the hand-submit claim rules -------------------------------------------------------------------

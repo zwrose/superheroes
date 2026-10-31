@@ -730,7 +730,7 @@ def test_seats_ingested_by_advance_are_reviewers_classified_by_their_stored_resu
 def test_raw_output_phases_are_the_drivers_phase_constants():
     import round_phases
     # bites on: a hand-copied phase list drifting from the driver's phase names
-    assert rs._RAW_PHASES == (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
+    assert rs._RAW_PHASES == (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_SCOPED)
 
 
 def test_two_slots_with_the_same_file_name_do_not_collide(tmp_path):

@@ -101,6 +101,11 @@ split there. (b) Would finishing take the PR past what one review can hold (the 
 stand-in)? If so, split. (c) Continue only when the change cannot be divided — the pieces do not work
 apart — and the PR says why. Otherwise the tiebreak above holds: in doubt, more and smaller PRs.
 
+**A big change that cannot be split is reviewed in slices.** Splitting stays the first answer for a
+big change. When a PR is not practical to split, code review reads it in [slices](glossary.md#slice)
+by size, never by folder, each slice with its own reviewers, plus one
+[seams check](glossary.md#seams-check) for the problems that sit between slices.
+
 ### Preflight in the light and micro lanes
 
 **Micro skips preflight** because preflight proves tools before a session goes
