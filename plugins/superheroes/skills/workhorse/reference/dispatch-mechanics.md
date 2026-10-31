@@ -845,14 +845,17 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `lib/engine_dispatch.py`. The folded result reports it as `ccWritesSweep`
   (`removed`, `incomplete`, `error`). An abandoned run is not swept.
 - **Sandbox placeholders are swept at fold.** On Linux the sandbox can leave empty, read-only
-  placeholder files and directories (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, files
-  under `.claude/`) in the worktree. A claude write run records every worktree path when it opens,
-  in its run dir, and its fold removes only paths that are new since then, empty and read-only, never
-  following a symlink or entering `.git`, a nested worktree or another device. The folded result
-  reports it as `placeholderSweep` (`removed`, `left` with every other new path up to 100,
-  `leftCount`, `incomplete`, `error`); a snapshot that did not finish or could not read a directory,
-  or a worktree root that is no longer the one snapshotted (`root-changed`), removes nothing. Name its
-  `removed` list in the build record. An abandoned run is not swept.
+  placeholders of the paths it protects in the worktree. Those paths are one list,
+  `SANDBOX_PLACEHOLDERS` in `lib/engine_dispatch.py` (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`,
+  `.vscode`, the `.claude` settings files and others, at the worktree root). A claude write run
+  records, in its run dir when it opens, which of them exist and every worktree path; its fold
+  removes a listed path only when it was absent then and is now empty and read-only, never through a
+  symlink. The folded result reports it as `placeholderSweep`: `removed`; `unlisted`, every other new
+  empty read-only path, left in place so a longer sandbox list shows up; `left`, every other new path
+  up to 100, with `leftCount`; `incomplete` and `error`. A snapshot that did not finish or could not
+  read a directory, or a worktree root that is no longer the one snapshotted (`root-changed`),
+  removes nothing. Name its `removed` and `unlisted` lists in the build record. An abandoned run is
+  not swept.
 
 ### The native implementer engine
 

@@ -2436,12 +2436,14 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 
 - **Component.** Not a census row. `_placeholder_snapshot` / `_sweep_placeholders` /
   `_fold_placeholder_sweep` in `plugins/superheroes/lib/engine_dispatch.py`, the snapshot taken in
-  `_open_write_run` and the sweep called from `_fold_run`. Workaround-marked (#2285). Cost: two
-  bounded filesystem walks per claude write run, one at open and one at fold.
+  `_open_write_run` and the sweep called from `_fold_run`; the paths it may remove are the one list
+  `SANDBOX_PLACEHOLDERS`. Workaround-marked (#2285). Cost: a few stats per claude write run plus two
+  bounded walks, one at open and one at fold, that only build the report.
 - **Start date.** 2026-10-31.
 - **Condition.** Citation-based, 45 days: build records or vet receipts citing sandbox placeholder
   files left in a worktree after a folded claude write run (a regression signal), or a fold whose
-  `placeholderSweep.removed` is non-empty (the workaround still earning its keep). Re-measure on each
+  `placeholderSweep.removed` is non-empty (the workaround still earning its keep), or whose
+  `placeholderSweep.unlisted` is non-empty (the sandbox's list has grown). Re-measure on each
   Claude Code bump: when the marker's delete-when condition is observed, a proposal to the owner at a
   gardening pass to remove the sweep.
 - **Last demonstrated benefit.** unknown — vet 740 on PR #2281 recorded the placeholders a builder
@@ -2481,9 +2483,9 @@ file, returns exactly that set.
   atomic-write staging dirs Claude Code creates in the worktree outside the sandbox. **delete-when:**
   the Claude Code version the channel runs no longer creates `.claude/.cc-writes` under the shell's
   working directory (or lets the staging dir be relocated outside the worktree).
-- `plugins/superheroes/lib/engine_dispatch.py` — the fold removes the empty, read-only placeholder
-  files and dirs the Linux claude write sandbox can leave in the worktree, only where they are new
-  since the run's before-run snapshot (#2285). **delete-when:** the Claude Code version the channel
+- `plugins/superheroes/lib/engine_dispatch.py` — the fold removes the empty, read-only placeholders
+  of `SANDBOX_PLACEHOLDERS` the Linux claude write sandbox can leave in the worktree, only where the
+  run's before-run snapshot shows them absent (#2285). **delete-when:** the Claude Code version the channel
   runs no longer leaves sandbox placeholders in the worktree on Linux.
 - `plugins/superheroes/lib/hostinfo.py` — OS-specific boot-id reads to corroborate a recorded pid
   belongs to this boot. **delete-when:** the host exposes a stable per-boot identity without

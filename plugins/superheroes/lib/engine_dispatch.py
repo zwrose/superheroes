@@ -3335,11 +3335,40 @@ def _open_dir_nofollow(root_fd, rel):
     return fd
 
 
+# The paths Claude Code's Linux sandbox protects in the shell's working directory, where it can
+# leave an empty, read-only placeholder: the file and directory lists in Claude Code 2.1.314's
+# sandbox (read from its bundle in the #2285 cloud build, `.git` left out), the `.claude` settings
+# files the vet-740 receipt on PR #2281 saw, and `.claude` itself. Children come before their
+# parent, so a placeholder dir its children's removal empties goes too.
+SANDBOX_PLACEHOLDERS = (
+    ".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
+    ".ripgreprc", ".mcp.json", ".vscode", ".idea",
+    ".claude/settings.json", ".claude/settings.local.json", ".claude/commands", ".claude/agents",
+    ".claude",
+)
+
+
+def _exists_at(root_fd, rel):
+    """Whether ``rel`` exists under ``root_fd``, never looking through a symlink; doubt raises."""
+    parent, _sep, name = rel.rpartition("/")
+    try:
+        fd = _open_dir_nofollow(root_fd, parent)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+    try:
+        os.stat(name, dir_fd=fd, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(fd)
+
+
 def _placeholder_snapshot(cwd_real, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
                           clock=time.monotonic):
-    """Every path under the worktree before a claude write run, and the subtrees not walked.
-
-    Anything short of a complete walk is not ok, and the fold then removes nothing. Never raises."""
+    """Which ``SANDBOX_PLACEHOLDERS`` exist before a claude write run, and every path under the
+    worktree for the fold's report. Anything short of a complete read is not ok, and the fold
+    then removes nothing. Never raises."""
     root_fd = None
     try:
         skip = _nested_rels(cwd_real)
@@ -3347,13 +3376,14 @@ def _placeholder_snapshot(cwd_real, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SEC
             return {"status": "incomplete", "reason": "worktree-enumeration-failed"}
         root_fd = os.open(cwd_real, _DIR_NOFOLLOW)
         root = os.fstat(root_fd)
+        present = [rel for rel in SANDBOX_PLACEHOLDERS if _exists_at(root_fd, rel)]
         paths, pruned = [], sorted(skip)
         for prefix, dirnames, filenames, _fd, cut in _walk_kept(
                 ".", skip, clock() + budget_seconds, clock, dir_fd=root_fd):
             paths.extend(prefix + name for name in dirnames + filenames)
             pruned.extend(cut)
-        return {"status": "ok", "root": [root.st_dev, root.st_ino], "paths": paths,
-                "pruned": pruned}
+        return {"status": "ok", "root": [root.st_dev, root.st_ino], "present": present,
+                "paths": paths, "pruned": pruned}
     except TimeoutError:
         return {"status": "incomplete", "reason": "budget-exhausted"}
     except Exception as exc:
@@ -3363,41 +3393,70 @@ def _placeholder_snapshot(cwd_real, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SEC
             os.close(root_fd)
 
 
-def _is_placeholder(st):
-    """Empty and read-only: a zero-length regular file or a directory, with no write bit set."""
-    return (st.st_mode & 0o222) == 0 and (
+def _is_placeholder(st, mode=None):
+    """Empty and read-only: a zero-length regular file or a directory, with no write bit set in
+    ``mode`` (default: its own)."""
+    return ((st.st_mode if mode is None else mode) & 0o222) == 0 and (
         stat.S_ISDIR(st.st_mode) or (stat.S_ISREG(st.st_mode) and st.st_size == 0))
 
 
-def _remove_lending(remove, name, dirfd, parent, before, modes):
-    """``remove(name, dir_fd=dirfd)``; a non-root sweep that is refused inside a new read-only dir
-    lends that dir alone owner write, recording its mode in ``modes`` to put back if it stays."""
+def _empty_dir(name, dirfd):
+    fd = os.open(name, _DIR_NOFOLLOW, dir_fd=dirfd)
+    try:
+        with os.scandir(fd) as entries:
+            return next(entries, None) is None
+    finally:
+        os.close(fd)
+
+
+def _remove_lending(remove, name, dirfd, parent, present, modes):
+    """``remove(name, dir_fd=dirfd)``; a non-root sweep refused inside a new placeholder dir lends
+    that dir alone owner write, recording its mode in ``modes`` to put back if it stays."""
     try:
         remove(name, dir_fd=dirfd)
     except PermissionError:
-        if not parent or parent in before:
+        if parent not in SANDBOX_PLACEHOLDERS or parent in present:
             raise
         modes.setdefault(parent, os.fstat(dirfd).st_mode)
         os.fchmod(dirfd, modes[parent] | stat.S_IWUSR)
         remove(name, dir_fd=dirfd)
 
 
-# WORKAROUND: on Linux the claude write sandbox can leave empty, read-only placeholder files and
-# dirs (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, files under `.claude/`) in the
-# worktree after a run (#2285).
+def _remove_placeholder(root_fd, rel, present, modes):
+    """Remove ``rel`` when it is an empty, read-only file or dir; True when it went."""
+    parent, _sep, name = rel.rpartition("/")
+    fd = _open_dir_nofollow(root_fd, parent)
+    try:
+        st = os.stat(name, dir_fd=fd, follow_symlinks=False)
+        # judged by the mode it had before the sweep lent it owner write; rmdir refuses a non-empty dir
+        if not _is_placeholder(st, modes.get(rel)):
+            return False
+        remove = os.rmdir if stat.S_ISDIR(st.st_mode) else os.unlink
+        _remove_lending(remove, name, fd, parent, present, modes)
+        modes.pop(rel, None)
+        return True
+    finally:
+        os.close(fd)
+
+
+# WORKAROUND: on Linux the claude write sandbox can leave empty, read-only placeholders of the
+# paths it protects (`SANDBOX_PLACEHOLDERS`) in the worktree after a run (#2285).
 # delete-when: the Claude Code version the channel runs no longer leaves sandbox placeholders in the
 # worktree on Linux.
-# axis: removes only paths absent from the before-run snapshot that are empty and read-only; a path
-# the snapshot holds, or a subtree it did not walk, is never touched, and no snapshot removes nothing.
-# Every operation is relative to a root fd checked against the snapshot, never through a symlink.
+# axis: removes only a `SANDBOX_PLACEHOLDERS` path that the before-run snapshot shows absent and that
+# is now empty and read-only, relative to a root fd checked against the snapshot and never through a
+# symlink; no complete snapshot removes nothing. Every other new path is only reported.
 def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
                         clock=time.monotonic):
-    """Remove the placeholders a claude write run left; report every other new path. Never raises."""
-    removed, new, dirs, modes = [], [], [], {}
-    out = {"removed": removed, "left": [], "leftCount": 0, "incomplete": False, "error": None}
+    """Remove the sandbox placeholders a claude write run left; report every other new path, and
+    the unlisted ones shaped like a placeholder. Never raises."""
+    removed, new, unlisted, modes = [], [], [], {}
+    out = {"removed": removed, "left": [], "leftCount": 0, "unlisted": unlisted,
+           "incomplete": False, "error": None}
     root_fd = None
     try:
-        if not isinstance(baseline, dict) or baseline.get("status") != "ok":
+        if (not isinstance(baseline, dict) or baseline.get("status") != "ok"
+                or not isinstance(baseline.get("present"), list)):
             reason = baseline.get("reason") if isinstance(baseline, dict) else None
             out.update(incomplete=True, error="baseline-" + (reason or "missing"))
             return out
@@ -3409,44 +3468,31 @@ def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BU
         if root is None or [root.st_dev, root.st_ino] != baseline.get("root"):
             out.update(incomplete=True, error="root-changed")
             return out
-        before = set(baseline.get("paths") or ())
-        skip = _nested_rels(cwd_real)
-        if skip is None:
-            out.update(incomplete=True, error="worktree-enumeration-failed")
-            return out
-        skip |= set(baseline.get("pruned") or ())
-        for prefix, dirnames, filenames, dirfd, _cut in _walk_kept(
-                ".", skip, clock() + budget_seconds, clock, dir_fd=root_fd):
-            for name in filenames:
-                if prefix + name in before or prefix + name in skip:
-                    continue
-                try:
-                    if _is_placeholder(os.stat(name, dir_fd=dirfd, follow_symlinks=False)):
-                        _remove_lending(os.unlink, name, dirfd, prefix[:-1], before, modes)
-                        removed.append(prefix + name)
-                        continue
-                except OSError:
-                    pass
-                new.append(prefix + name)
-            dirs.extend(prefix + name for name in dirnames if prefix + name not in before)
-        # deepest first, so a placeholder dir the removals above emptied goes too
-        for rel in sorted(dirs, key=lambda p: p.count("/"), reverse=True):
-            parent, _sep, name = rel.rpartition("/")
+        present = set(baseline["present"])
+        for rel in SANDBOX_PLACEHOLDERS:
+            if rel in present:
+                continue
             try:
-                pfd = _open_dir_nofollow(root_fd, parent)
-                try:
-                    st = os.stat(name, dir_fd=pfd, follow_symlinks=False)
-                    # judged by the mode it had before the sweep lent it owner write
-                    if stat.S_ISDIR(st.st_mode) and (modes.get(rel, st.st_mode) & 0o222) == 0:
-                        _remove_lending(os.rmdir, name, pfd, parent, before, modes)
-                        removed.append(rel)
-                        modes.pop(rel, None)
-                        continue
-                finally:
-                    os.close(pfd)
+                if _remove_placeholder(root_fd, rel, present, modes):
+                    removed.append(rel)
             except OSError:
                 pass
-            new.append(rel)
+        # the report: every other new path; nothing below removes anything
+        before = set(baseline.get("paths") or ())
+        skip = (_nested_rels(cwd_real) or set()) | set(baseline.get("pruned") or ())
+        for prefix, dirnames, filenames, dirfd, _cut in _walk_kept(
+                ".", skip, clock() + budget_seconds, clock, dir_fd=root_fd):
+            for name in dirnames + filenames:
+                if prefix + name in before:
+                    continue
+                new.append(prefix + name)
+                try:
+                    st = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
+                    if (prefix + name not in SANDBOX_PLACEHOLDERS and _is_placeholder(st)
+                            and (not stat.S_ISDIR(st.st_mode) or _empty_dir(name, dirfd))):
+                        unlisted.append(prefix + name)
+                except OSError:
+                    pass
     except TimeoutError:
         out["incomplete"] = True
     except Exception as exc:
@@ -3464,7 +3510,9 @@ def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BU
                     pass
             os.close(root_fd)
     new.sort()
-    out.update(left=new[:PLACEHOLDER_LEFT_CAP], leftCount=len(new))
+    unlisted.sort()
+    out.update(left=new[:PLACEHOLDER_LEFT_CAP], leftCount=len(new),
+               unlisted=unlisted[:PLACEHOLDER_LEFT_CAP])
     return out
 
 

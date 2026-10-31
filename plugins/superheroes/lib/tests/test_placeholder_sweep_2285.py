@@ -1,8 +1,9 @@
 """#2285: the claude write channel leaves no sandbox placeholder in the worktree.
 
-Invariant: after a claude write run folds, the worktree holds no path that is new since the
-before-run snapshot, empty and read-only; a path the snapshot holds is never removed, a new path
-with content (or a write bit) is left and reported, and without a complete snapshot nothing goes."""
+Invariant: after a claude write run folds, no `SANDBOX_PLACEHOLDERS` path that the before-run
+snapshot showed absent is left empty and read-only in the worktree; a path the snapshot showed
+present is never removed, every other new path (an unlisted placeholder-shaped one included) is
+left and reported, and without a complete snapshot nothing goes."""
 import json
 import os
 
@@ -45,82 +46,77 @@ def _snapshot(root):
     return ED._placeholder_snapshot(os.path.realpath(str(root)))
 
 
-# axis: new empty read-only files and dirs go, at any depth, and only those.
-def test_placeholders_created_during_run_are_removed(tmp_path):
+# axis: listed placeholders new since the snapshot go, files and dirs, `.claude` children before it.
+def test_listed_placeholders_created_during_run_are_removed(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
-    os.makedirs(os.path.join(wt, "pkg"))
     baseline = _snapshot(wt)
-    assert baseline["status"] == "ok"
+    assert baseline["status"] == "ok" and baseline["present"] == []
     _placeholder_file(wt, ".bashrc")
-    _placeholder_file(wt, "pkg/.mcp.json")
     _placeholder_dir(wt, ".vscode")
+    _placeholder_file(wt, ".claude/settings.json")
+    os.chmod(os.path.join(wt, ".claude"), 0o555)
     out = _sweep(wt, baseline)
-    assert sorted(out["removed"]) == [".bashrc", ".vscode", "pkg/.mcp.json"]
-    assert out["left"] == [] and out["leftCount"] == 0
+    assert out["removed"] == [".bashrc", ".vscode", ".claude/settings.json", ".claude"], out
+    assert out["left"] == [] and out["unlisted"] == []
     assert out["incomplete"] is False and out["error"] is None
-    for rel in (".bashrc", ".vscode", "pkg/.mcp.json"):
+    for rel in (".bashrc", ".vscode", ".claude"):
         assert not os.path.lexists(os.path.join(wt, rel))
 
 
-# axis: a new writable dir that held only placeholders is left (it is not read-only), and a new
-# read-only dir that still holds something is left.
-def test_new_dirs_that_are_not_placeholders_are_left(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    baseline = _snapshot(wt)
-    _placeholder_file(wt, ".claude/settings.json")
-    full_dir = os.path.join(wt, "out")
-    os.makedirs(full_dir)
-    with open(os.path.join(full_dir, "a.txt"), "w", encoding="utf-8") as fh:
-        fh.write("x")
-    os.chmod(full_dir, 0o555)
-    try:
-        out = _sweep(wt, baseline)
-    finally:
-        os.chmod(full_dir, 0o755)
-    assert out["removed"] == [".claude/settings.json"]
-    assert out["left"] == [".claude", "out", "out/a.txt"]
-    assert os.path.isdir(os.path.join(wt, ".claude"))
-    assert os.path.isfile(os.path.join(full_dir, "a.txt"))
-
-
-# axis: a path the snapshot holds is never removed, empty and read-only or not.
-def test_pre_existing_empty_file_survives(tmp_path):
+# axis: a listed path the snapshot saw is never removed, empty and read-only or not.
+def test_pre_existing_placeholder_survives(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     kept = _placeholder_file(wt, ".gitconfig")
     kept_dir = _placeholder_dir(wt, ".idea")
     baseline = _snapshot(wt)
+    assert baseline["present"] == [".gitconfig", ".idea"]
     out = _sweep(wt, baseline)
     assert out["removed"] == [] and out["left"] == []
     assert os.path.isfile(kept) and os.path.isdir(kept_dir)
 
 
-# axis: a new file with content, or a new empty file with a write bit, is left and reported.
+# axis: a new empty read-only path off the list, or a listed name below the root, is left and named.
+def test_unlisted_placeholder_is_left_and_reported(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    deep = _placeholder_file(wt, "pkg/.mcp.json")
+    other = _placeholder_file(wt, ".newrc")
+    empty_dir = _placeholder_dir(wt, ".newdir")
+    out = _sweep(wt, baseline)
+    assert out["removed"] == []
+    assert out["unlisted"] == [".newdir", ".newrc", "pkg/.mcp.json"]
+    assert out["left"] == [".newdir", ".newrc", "pkg", "pkg/.mcp.json"]
+    assert os.path.isfile(deep) and os.path.isfile(other) and os.path.isdir(empty_dir)
+
+
+# axis: a new file with content, or a new empty file with a write bit, survives, listed or not.
 def test_new_non_empty_file_survives(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     baseline = _snapshot(wt)
-    full = os.path.join(wt, "report.txt")
+    full = os.path.join(wt, ".mcp.json")
     with open(full, "w", encoding="utf-8") as fh:
-        fh.write("x")
+        fh.write("{}")
     os.chmod(full, 0o444)
-    open(os.path.join(wt, "empty-writable.txt"), "w").close()
+    open(os.path.join(wt, ".bashrc"), "w").close()
     out = _sweep(wt, baseline)
     assert out["removed"] == []
-    assert out["left"] == ["empty-writable.txt", "report.txt"] and out["leftCount"] == 2
-    assert os.path.isfile(full)
+    assert out["left"] == [".bashrc", ".mcp.json"] and out["unlisted"] == []
+    assert os.path.isfile(full) and os.path.isfile(os.path.join(wt, ".bashrc"))
 
 
 # axis: no complete snapshot means nothing is removed.
 def test_no_snapshot_removes_nothing(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     placeholder = _placeholder_file(wt, ".bashrc")
-    for baseline in (None, {"status": "incomplete", "reason": "budget-exhausted"}):
+    for baseline in (None, {"status": "incomplete", "reason": "budget-exhausted"},
+                     {"status": "ok", "paths": []}):
         out = _sweep(wt, baseline)
         assert out["removed"] == [] and out["incomplete"] is True
         assert out["error"].startswith("baseline-")
     assert os.path.isfile(placeholder)
 
 
-# axis: a snapshot that runs out of budget is not ok, so the fold removes nothing.
+# axis: a snapshot that runs out of budget is not ok.
 def test_snapshot_budget_exhausted_is_incomplete(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     ticks = iter(range(0, 1000, 100))
@@ -128,31 +124,10 @@ def test_snapshot_budget_exhausted_is_incomplete(tmp_path):
     assert out == {"status": "incomplete", "reason": "budget-exhausted"}
 
 
-# axis: `.git`, symlinks and a subtree the snapshot did not walk are never swept.
-def test_sweep_spares_git_symlinks_and_unwalked_subtrees(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    os.makedirs(os.path.join(wt, "vendor"))
-    external = tmp_path / "external"
-    external.mkdir()
-    baseline = _snapshot(wt)
-    baseline["paths"] = [p for p in baseline["paths"] if not p.startswith("vendor")]
-    baseline["pruned"].append("vendor")
-    in_vendor = _placeholder_file(wt, "vendor/.bashrc")
-    target = _placeholder_file(external, ".bashrc")
-    os.symlink(str(external), os.path.join(wt, "linked"))
-    os.symlink(target, os.path.join(wt, "linked-file"))
-    out = _sweep(wt, baseline)
-    assert out["removed"] == []
-    assert os.path.isfile(in_vendor) and os.path.isfile(target)
-    assert sorted(out["left"]) == ["linked", "linked-file"]
-
-
 # axis: a directory the snapshot cannot open makes it incomplete, never a silent gap.
 def test_snapshot_unreadable_subtree_is_incomplete(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
-    locked = os.path.join(wt, "locked")
-    os.makedirs(locked)
-    _placeholder_file(wt, "locked/.bashrc")
+    os.makedirs(os.path.join(wt, "locked"))
     real_open = ED.os.open
 
     def guarded_open(path, flags, mode=0o777, *, dir_fd=None):
@@ -163,9 +138,20 @@ def test_snapshot_unreadable_subtree_is_incomplete(tmp_path, monkeypatch):
     baseline = _snapshot(wt)
     monkeypatch.undo()
     assert baseline == {"status": "incomplete", "reason": "PermissionError"}
+
+
+# axis: a listed parent that is a symlink is never followed, at snapshot or at sweep.
+def test_symlinked_claude_dir_is_not_followed(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    external = tmp_path / "external"
+    victim = _placeholder_file(external, "settings.json")
+    os.symlink(str(external), os.path.join(wt, ".claude"))
     out = _sweep(wt, baseline)
-    assert out["removed"] == [] and out["error"] == "baseline-PermissionError"
-    assert os.path.isfile(os.path.join(locked, ".bashrc"))
+    assert out["removed"] == [] and os.path.isfile(victim)
+    again = _snapshot(wt)
+    assert again["present"] == [".claude"]
+    assert _sweep(wt, again)["removed"] == [] and os.path.isfile(victim)
 
 
 # axis: a worktree root replaced by a symlink after the snapshot is never swept.
@@ -185,24 +171,12 @@ def test_root_replaced_by_symlink_is_not_swept(tmp_path):
     assert os.path.isfile(victim)
 
 
-# axis: placeholders inside a new read-only dir go, for a non-root sweep too.
-def test_placeholders_inside_new_read_only_dir_are_removed(tmp_path):
+# axis: a new read-only listed dir that stays keeps its own mode after the sweep.
+def test_new_read_only_dir_that_stays_keeps_its_mode(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     baseline = _snapshot(wt)
     parent = os.path.join(wt, ".claude")
     _placeholder_file(wt, ".claude/settings.json")
-    os.chmod(parent, 0o555)
-    out = _sweep(wt, baseline)
-    assert out["removed"] == [".claude/settings.json", ".claude"], out
-    assert not os.path.lexists(parent)
-
-
-# axis: a new read-only dir that stays keeps its own mode after the sweep.
-def test_new_read_only_dir_that_stays_keeps_its_mode(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    baseline = _snapshot(wt)
-    parent = os.path.join(wt, ".idea")
-    _placeholder_file(wt, ".idea/workspace.xml")
     with open(os.path.join(parent, "notes.txt"), "w", encoding="utf-8") as fh:
         fh.write("x")
     os.chmod(parent, 0o555)
@@ -211,52 +185,9 @@ def test_new_read_only_dir_that_stays_keeps_its_mode(tmp_path):
         mode = os.stat(parent).st_mode & 0o777
     finally:
         os.chmod(parent, 0o755)
-    assert out["removed"] == [".idea/workspace.xml"]
-    assert out["left"] == [".idea", ".idea/notes.txt"]
+    assert out["removed"] == [".claude/settings.json"]
+    assert out["left"] == [".claude", ".claude/notes.txt"] and out["unlisted"] == []
     assert mode == 0o555
-
-
-# axis: nested new read-only empty dirs all go, for a non-root sweep too.
-def test_nested_read_only_placeholder_dirs_are_removed(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    baseline = _snapshot(wt)
-    outer = os.path.join(wt, "outer")
-    inner = _placeholder_dir(wt, "outer/inner")
-    os.chmod(outer, 0o555)
-    out = _sweep(wt, baseline)
-    assert out["removed"] == ["outer/inner", "outer"], out
-    assert not os.path.lexists(outer) and not os.path.lexists(inner)
-
-
-# axis: a subtree pruned at open stays untouched at fold even when it is now a placeholder file.
-def test_pruned_root_replaced_by_a_file_is_not_swept(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    baseline = _snapshot(wt)
-    baseline["pruned"].append("nested")
-    kept = _placeholder_file(wt, "nested")
-    out = _sweep(wt, baseline)
-    assert out["removed"] == [] and os.path.isfile(kept)
-
-
-# axis: an ancestor swapped for a symlink after the walk is never followed by the removals.
-def test_ancestor_swapped_for_symlink_after_walk_is_not_followed(tmp_path, monkeypatch):
-    wt, _main = _linked_worktree(tmp_path)
-    baseline = _snapshot(wt)
-    _placeholder_dir(wt, "a/b")
-    external = tmp_path / "external"
-    victim = _placeholder_dir(external, "b")
-    real_walk = ED._walk_kept
-
-    def walk_then_swap(*args, **kwargs):
-        yield from real_walk(*args, **kwargs)
-        os.chmod(os.path.join(wt, "a", "b"), 0o755)
-        os.rmdir(os.path.join(wt, "a", "b"))
-        os.rmdir(os.path.join(wt, "a"))
-        os.symlink(str(external), os.path.join(wt, "a"))
-    monkeypatch.setattr(ED, "_walk_kept", walk_then_swap)
-    out = _sweep(wt, baseline)
-    assert os.path.isdir(victim), out
-    assert out["removed"] == []
 
 
 # --- wiring through the production open and fold ---------------------------------------------
@@ -289,7 +220,7 @@ def test_claude_write_fold_removes_run_placeholders(tmp_path, monkeypatch):
     res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, seat=_implementer_claude_seat())
     assert res["ok"] is True, res
     for sweep in (res["placeholderSweep"], _folded_result(run_dir)["placeholderSweep"]):
-        assert sorted(sweep["removed"]) == [".bashrc", ".vscode"]
+        assert sweep["removed"] == [".bashrc", ".vscode"]
         assert sweep["left"] == ["deliverable.txt"]
         assert sweep["incomplete"] is False and sweep["error"] is None
     assert os.path.isfile(kept)
