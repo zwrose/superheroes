@@ -40,6 +40,7 @@ home) and receipt validation (`panel_tally._valid_final_receipt`, consumed bit-c
 modified) are reused, not re-implemented.
 """
 import argparse
+import collections
 import copy
 import difflib
 import errno
@@ -1595,6 +1596,37 @@ def _returning_diffs(state, cfg):
     return countable_lines.reviewer_diff(baseline, left_out), countable_lines.reviewer_diff(head_diff, left_out)
 
 
+def _changed_sections_only(baseline, head_diff):
+    """``(baseline', head')``: both diffs with every per-file section whose exact text the other diff also holds
+    cut out of both (matched as a multiset: a section held twice here and once there is cut once from each), the
+    preamble and every other byte kept in order. A section only one diff holds (a file added or removed since the
+    last review) stays. For a parser that reads the diffs, so a file unchanged since the last review (a binary or
+    a rename no hunk parser reads) is no reason to leave the surface unworked-out. A non-``str`` diff, or one
+    whose sections do not add back up to its text, is returned as it came."""
+    if not isinstance(baseline, str) or not isinstance(head_diff, str):
+        return baseline, head_diff
+    split = []
+    for text in (baseline, head_diff):
+        texts = [section["text"] for section in countable_lines.parse_sections(text)]
+        joined = "".join(texts)
+        if not text.endswith(joined):
+            return baseline, head_diff
+        split.append((text[:len(text) - len(joined)], texts))
+    (base_pre, base_texts), (head_pre, head_texts) = split
+    common = collections.Counter(base_texts) & collections.Counter(head_texts)
+
+    def kept(texts):
+        left, out = collections.Counter(common), []
+        for text in texts:
+            if left[text] > 0:
+                left[text] -= 1
+                continue
+            out.append(text)
+        return "".join(out)
+
+    return base_pre + kept(base_texts), head_pre + kept(head_texts)
+
+
 def _returning_surface(state, cfg):
     """``(surface, text)`` of what changed since the last reviewed commit, or ``(None, why)``: the fix-delta
     surface between ``base...lastReviewed`` and the round-1 diff, no proven copy in either diff."""
@@ -1604,7 +1636,8 @@ def _returning_surface(state, cfg):
     changed = (cfg.get("returning") or {}).get("changedFiles")
     only = set(changed) if isinstance(changed, list) and all(isinstance(f, str) for f in changed) else None
     try:
-        delta = _fix_delta_surface(state, baseline, head_diff, only=only)
+        # axis: a file whose section is the same in both diffs never reaches a parser, so an unchanged binary or rename cannot force the full panel — see bite-proof record c1_followups_2288
+        delta = _fix_delta_surface(state, *_changed_sections_only(baseline, head_diff), only=only)
     except Exception as exc:  # noqa: BLE001 — a surface nobody could work out is a full panel, never a hand-back
         return None, "the change since the last reviewed commit failed on %s: %s" % (type(exc).__name__, exc)
     if delta is None:
@@ -1640,7 +1673,8 @@ def _seed_carried(state, cfg, returning):
         baseline, head_diff = _returning_diffs(state, cfg)
     usable = [f for f in rows.values() if isinstance(f.get("file"), str) and f["file"] and _coerce_line(f.get("line"))[0]]
     if baseline is not None and usable:
-        split = delta_surface.split_fix_surface(baseline, head_diff, usable)
+        # axis: the carried findings' hunk split reads only the sections that changed; the audit's own delta below stays on the unfiltered pair — see bite-proof record c1_followups_2288
+        split = delta_surface.split_fix_surface(*_changed_sections_only(baseline, head_diff), usable)
         hunks = {} if split.get("unknown") else split.get("auditTargets") or {}
     for key, finding in rows.items():
         # a carried finding is audited only where the change since the last reviewed commit touches its line
@@ -1656,6 +1690,7 @@ def _seed_carried(state, cfg, returning):
     # the audit reads the round-1 diff as the head the change since the last reviewed commit ended on
     state["headDiff"] = state.get("reviewedDiff")
     state["fixBatch"] = list(audited.values())
+    # axis: the audit's fixer delta diffs the unfiltered baseline against the head, so a file unchanged between the two never shows as an addition — see bite-proof record c1_followups_2288
     state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
     state["fixBatch"] = []
     return True
@@ -1702,6 +1737,7 @@ def _with_carried(state, compiled):
             rest.append(c)
             continue
         # axis: a fresh report that matches a carried finding is merged into it and its evidence survives, under the carried key — see bite-proof record c1l11b_wo_h_carried_merge
+        held_key = _finding_identity_key(rows[id(h)])
         merged = _merge_same_finding(rows[id(h)], c)
         fresh_key = _finding_identity_key(c)
         for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
@@ -1719,7 +1755,28 @@ def _with_carried(state, compiled):
             for run in state.get("rounds", {}).get(str(state.get("round")), {}).get("breakItRuns") or []:
                 if isinstance(run, dict) and run.get("findingKey") == fresh_key:
                     run["findingKey"] = new_key
+        # axis: a parent link bound to either key the merge replaced moves to the key the merged row keeps; two different parents leave no link — see bite-proof record c1_followups_2288
+        _move_audit_spawned(state, (fresh_key, held_key), new_key)
     return rest + [rows[id(h)] for h in held]
+
+
+def _move_audit_spawned(state, old_keys, new_key):
+    """Move the spawn-map entries of ``old_keys`` onto ``new_key``, the key a merged row keeps. Entries that name
+    different parents (with one another, or with the entry already at ``new_key``) leave no link at all: an
+    uncertain link is not kept (`_bind_audit_spawned`). A state with no spawn map dict is left as it is."""
+    spawned = state.get(AUDIT_SPAWNED_KEY) if isinstance(state, dict) else None
+    if not isinstance(spawned, dict) or not new_key:
+        return
+    moving = [k for k in dict.fromkeys(old_keys) if k and k != new_key and k in spawned]
+    if not moving:
+        return
+    parents = [spawned.pop(k) for k in moving]
+    if new_key in spawned:
+        parents.append(spawned[new_key])
+    if all(p == parents[0] for p in parents):
+        spawned[new_key] = parents[0]
+    else:
+        spawned.pop(new_key, None)
 
 
 def _seed_returning_round(state, cfg):
@@ -4539,7 +4596,15 @@ def _stamp_fix_groups(state, fix_groups, kept):
             if row is not None:
                 row[verification.FIX_GROUP_FIELD] = {"id": group_id, "members": list(keys)}
         stamped.append({"id": group_id, "members": list(keys)})
-    _record_round(state, "fixGroups", stamped)
+    # axis: a round's `fixGroups` lists every group that governed its fixes, so a second synthesis wave of the round appends to the first wave's groups and never replaces them — see bite-proof record c1_followups_2288
+    current = state["rounds"].setdefault(str(state["round"]), {}).get("fixGroups")
+    recorded = list(current) if isinstance(current, list) else []
+    have = {g.get("id") for g in recorded if isinstance(g, dict)}
+    for group in stamped:
+        if group["id"] not in have:
+            have.add(group["id"])
+            recorded.append(group)
+    _record_round(state, "fixGroups", recorded)
 
 
 def _fold_synthesis(state, config, artifact, session_dir=None, exact_only=None):
@@ -8344,8 +8409,10 @@ def _after_audits(state, config):
         # a returning round 1 that reads in full: the carried findings were audited first, and the panel round 1 always ran
         # follows. What the audits raised is compiled as a scoped finder's candidates are and waits with the carried findings
         # sent back, to join the panel's candidates at the verifier.
-        raised, drops = mechanical_compile([ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)],
-                                           state.get("reviewedDiff"))
+        new_issues = [ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)]
+        raised, drops = mechanical_compile(new_issues, state.get("reviewedDiff"))
+        # axis: a child an audit raised on the full returning path is linked to its parent here, as `_fold_scoped` links it, so a later audit of the parent carries it — see bite-proof record c1_followups_2288
+        _bind_audit_spawned(state, new_issues, raised)
         _record_compile_drops(state, drops)
         state["_carriedToVerify"] = (state.get("_carriedToVerify") or []) + raised
         state["step"] = P_PANEL
