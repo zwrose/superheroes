@@ -407,7 +407,10 @@ def test_an_attached_test_keeps_ordinary_scope_checking_and_has_no_path_rule(fx,
     # both ran (the path of the block is not the file), only the in-diff one reaches staging
     assert sorted(c["path"] for c in spy.calls) == [ATTACHED_TEST, ATTACHED_TEST]
     assert [f["title"] for f in fx.state["_toVerify"]] == [ATTACHED_TITLE]
-    assert [d["reason"] for d in fx.round_record["compileDrops"]] == ["outside the round diff scope"]
+    # the off-diff finding is routed to the "Outside this PR" list, not recorded as a compile drop
+    assert fx.round_record["compileDrops"] == []
+    assert [(e["source"]["name"], [(h["file"], h["line"]) for h in e["hits"]])
+            for e in fx.state["outsideThisPR"]] == [("test-role", [("elsewhere/x.py", 9)])]
     dropped = [r for r in fx.round_record["breakItRuns"] if r["title"] == off_diff["title"]]
     assert dropped[0]["droppedAtCompile"] is True and dropped[0]["findingKey"] is None
 

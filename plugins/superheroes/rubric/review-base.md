@@ -32,13 +32,21 @@ Minor and Nit findings never change the verdict regardless of strictness.
 | **Important**    | Likely bug in normal use, OR a security/correctness issue warranting a fix before merge                      | A value that can be absent is dereferenced on a reachable path              |
 | **Minor**        | Real issue, small impact                                                                                     | A magic number; an inconsistent error message                              |
 | **Nit**          | Style/naming/cleanup; take-it-or-leave-it                                                                     | "This name could be clearer"                                                |
-| **Pre-existing** | Issue only in lines the diff did not change (unchanged files, or context lines) — SKIPPED, not reported      | A pattern in code the change didn't touch                                   |
+| **Pre-existing** | Issue only in lines the change did not touch — not a finding on the change; raised, if at all, as an [outside finding](glossary.md#outside-finding) under the cap in rule 2 | A pattern in code the change didn't touch                                   |
 
 ## Verification rules (binding — violations are dropped at compile time)
 
 1. **`file:line` citation required.** No citation → drop.
-2. **Diff-scope rule** (diff modes only): flag only code on `+`/`-` lines. Context
-   lines and unchanged code are pre-existing → SKIP. (Audit/sweep mode reviews the
+2. **Diff-scope rule** (diff modes only): flag only code on lines the change touched.
+   The touched lines are the added lines, and the line on each side of a deletion.
+   Context lines and unchanged files are untouched. An issue there is not a finding on
+   the change and never enters the review's findings. A reviewer that notices a real
+   defect there while reading may raise it as an [outside finding](glossary.md#outside-finding),
+   cited at its real `file:line` with its consequence stated. A reviewer raises
+   at most 3 outside findings, from its own reading. The review lists every one raised on
+   the record's "Outside this PR" list. An outside finding never goes to the fix, never
+   blocks the merge, and never becomes an owner card. The cap limits raising only:
+   nothing raised is dropped. (Audit/sweep mode reviews the
    whole repo; this rule does not apply there.) The one exception is a break-it test
    (taxonomy `break-it-test`), which only the test role writes: it cites its new test file at
    line 1, a file the diff does not hold yet, and its grounds are the changed code it targets.
@@ -195,10 +203,11 @@ enter the finding stream. It does **not** restate thresholds (per CONVENTIONS §
 single-source spirit); it **points at** the rule that already owns each class. Drop a
 candidate finding that is only:
 
-- **Pre-existing** — an issue in lines the diff did not change. Governed by the
+- **Pre-existing** — an issue in lines the change did not touch. Governed by the
   **Diff-scope rule** (verification rule #2, above) and the **Pre-existing** severity
-  tier (in the Severity-tiers table, above): these are SKIPPED, not reported. (Audit/sweep
-  mode is the sole exception, per that rule.)
+  tier (in the Severity-tiers table, above): it is not a finding on the change. A real
+  one may be raised as an outside finding under that rule's cap, never as a finding.
+  (Audit/sweep mode is the sole exception, per that rule.)
 - **Linter / tooling territory** — anything an automated formatter, linter, or
   type-checker already surfaces. Governed by **CoV step 4** ("Not tooling-caught", below);
   human-judgment style/naming/cleanup a tool does *not* catch remains reportable as a Nit.
@@ -301,7 +310,9 @@ on each candidate finding before emitting it, dropping (or downgrading) failures
 order:
 
 1. **Citation in scope** — `file:line` is present; in diff modes it lands on a
-   `+`/`-` line (context/unchanged lines are pre-existing → drop) (a break-it test cites its
+   touched line, as rule 2 defines it (an added line, or the line on each side of a
+   deletion; a finding on any other context or unchanged line is not a finding on the
+   change; it is an outside finding under rule 2's cap or it is dropped) (a break-it test cites its
    new file; see rule 2).
 2. **Reachable / not already guarded** — read the caller; if the only caller
    already guards the case, drop or downgrade.
