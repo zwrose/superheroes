@@ -1,9 +1,11 @@
-You are the gap-sweep finder for a big-diff review round. You receive the **full** diff and
-scan it for issues the sharded panel may have missed at shard boundaries or in cross-cutting
-concerns.
+You are the seams-check finder for a sliced review round. The change was too big for one
+reader, so it was cut into slices and each slice was reviewed on its own. You receive the
+**full** diff and look for the problems that sit **across** slices, where no single slice's
+reviewer could see both sides.
 
 ## Input
 - Full diff (read in bounded chunks): {{DIFF_PATH}}
+- Slice list (where the cuts fell: each slice's id and the files it holds): {{SLICES_PATH}}
 - Base rubric (severity, verification rules, panel output format): {{RUBRIC_PATH}}
 - Core calibration (threat model, canonical patterns): {{CORE_PATH}}
 - Review-crew layer (scope exclusions, focus hints, conventions): {{LAYER_PATH}}
@@ -13,7 +15,11 @@ concerns.
 ## Your assignment
 Read the full diff at {{DIFF_PATH}} in bounded chunks (<=800 lines): use Read offset/limit when
 available, or an equivalent bounded shell range. Never one whole-file read. Continue with later
-offsets until the diff is covered. Apply the diff-scope rule: only flag code in `+` or `-` lines.
+offsets until the diff is covered. Then read the slice list, and look for problems that sit
+across slices: a caller in one slice and its callee in another, a contract changed on one side
+and not the other, a rename half-applied, an invariant one slice breaks and another relies on.
+Do not re-review each slice on its own; a problem wholly inside one slice was that slice's
+reviewer's to find. Apply the diff-scope rule: only flag code in `+` or `-` lines.
 
 ## Diff-scope rule — CRITICAL
 You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing issues. Only flag

@@ -4,7 +4,7 @@ Schema: the strict result schema a codex review runs under asks for `readParts` 
 every other branch. Parser: a findings object's list `readParts` rides on the parse result. Runner: grading, the
 running projection, the final result and the replay of a native result each carry it when the source has one. Record:
 a panel reviewer that ran and reported no well-formed list shows `readParts: []`; a seat that did not run shows none.
-Order: both channels of the round-1 panel order name `readParts`, the gap-sweep order does not.
+Order: both channels of the round-1 panel order name `readParts`, the seams-check order does not.
 """
 import copy
 import json
@@ -22,7 +22,7 @@ import round_phases as rp
 import test_engine_dispatch as ted
 from test_engine_dispatch import _pin_temp_base_to_tmp_path  # noqa: F401  autouse: keeps views and journals under tmp_path
 from test_review_record_session import CODEX, Fake, Session, extras, put_envelope, put_extras
-from test_round_orders import _base_context, _gapsweep_placeholders, _panel_placeholders
+from test_round_orders import _base_context, _panel_placeholders, _seams_placeholders
 
 PARTS = [{"file": "src/a.py", "lines": [[3, 9], [20, 24]]}, {"file": "src/b.py", "lines": [[1, 4]]}]
 RESULT_BRANCH_KEY = "readParts"
@@ -329,8 +329,8 @@ def test_the_round_one_panel_order_names_the_read_list_on_both_channels(channel,
 
 
 @pytest.mark.parametrize("channel", ["file", "stdout"])
-def test_a_gap_sweep_order_does_not_name_the_read_list(channel):
-    # axis: the gap sweep owes no read list, its order never asks for one
-    ctx = _base_context(host_seat=(channel == "file"), placeholders=_gapsweep_placeholders(channel=channel))
-    text, reason = ro.render_order(rp.P_GAPSWEEP, "gap-sweep", copy.deepcopy(ctx))
+def test_a_seams_check_order_does_not_name_the_read_list(channel):
+    # axis: the seams check owes no read list, its order never asks for one
+    ctx = _base_context(host_seat=(channel == "file"), placeholders=_seams_placeholders(channel=channel))
+    text, reason = ro.render_order(rp.P_SEAMS, "seams-check", copy.deepcopy(ctx))
     assert reason is None and "readParts" not in text

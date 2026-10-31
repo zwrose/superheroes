@@ -471,7 +471,7 @@ def test_t5_durable_fix_batch_files(tmp_path):
     over = cap + 2
     session_dir, gitdir, head_path = _bootstrap(
         tmp_path, verifyCommand="pytest -q", diff=_multi_file_diff(over), fixerVendor="cursor",
-        seatMap=dict(_TDI.SEAT_MAP, hostFamily="anthropic"))
+        seatMap=dict(_TDI.SEAT_MAP, hostFamily="anthropic"), sliced=False)
     with open(head_path, "w", encoding="utf-8") as fh:
         fh.write(_multi_head(over))
     findings = _n_findings(over)

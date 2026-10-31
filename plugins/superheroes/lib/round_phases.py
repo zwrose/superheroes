@@ -12,7 +12,7 @@ P_VERIFIERS = "dispatch-verifiers"
 P_SYNTHESIS = "dispatch-synthesis"
 P_AUDITS = "dispatch-audits"
 P_SCOPED = round_panel_contract.P_SCOPED_FINDER_PHASE
-P_GAPSWEEP = "dispatch-gap-sweep"
+P_SEAMS = "dispatch-seams-check"
 P_SECOND_TEST = "dispatch-second-test"
 P_VERIFY = "run-verify"
 P_APPLY_FIXES = "apply-fixes"
@@ -26,7 +26,7 @@ FIX_BATCH_CAP_DEFAULT = 4
 ROUND_CAP = 4
 
 ALL_PHASES = (
-    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_APPLY_FIXES,
+    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_SEAMS, P_VERIFY, P_APPLY_FIXES,
     P_TERMINAL, P_SECOND_TEST,
 )
 
@@ -42,6 +42,80 @@ VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
 def panel_dimensions(config):
     """Configured panel dimensions, or the default DIMENSIONS list."""
     return round_panel_contract.panel_dimensions_from_config(config)
+
+
+def seat_lens(key):
+    """The lens of a panel seat key: the key itself, or the part before the first ':' of a slice seat key whose lens is a dimension."""
+    if isinstance(key, str) and ":" in key:
+        lens = key.split(":", 1)[0]
+        if lens in DIMENSIONS:
+            return lens
+    return key
+
+
+# The lenses a sliced round 1 seats once per slice; every other lens stays one seat over the whole change.
+SLICED_LENSES = ("code-reviewer", "test-role", "security-reviewer")
+
+
+def panel_roster(state, config):
+    """The panel's seat keys: the configured dimensions, except that a sliced round 1 seats the whole-change lenses once
+    and each slice's own code, test and (when the slice carries one) security seat."""
+    dims = list(panel_dimensions(config))
+    plan = state.get("slicePlan") if isinstance(state, dict) else None
+    rnd = state.get("round") if isinstance(state, dict) else None
+    # axis: only a round-1 plan that says it was sliced and lists slices changes the roster; anything else keeps the configured dimensions
+    if not (isinstance(plan, dict) and plan.get("sliced") is True) or (isinstance(rnd, int) and rnd > 1):
+        return dims
+    # axis: while a later unread wave is open the panel seats only that wave's seats, never the first wave's again
+    wave = state.get("_sliceWave")
+    wave_roster = state.get("_sliceWaveRoster")
+    if (isinstance(wave, int) and not isinstance(wave, bool) and wave > 1 and isinstance(wave_roster, list)
+            and wave_roster and all(isinstance(k, str) and k for k in wave_roster)):
+        return list(wave_roster)
+    slices = plan.get("slices")
+    # axis: a slice cut for a later unread wave carries a `wave` mark and is seated only by that wave's roster, never by the first wave's
+    slices = [s for s in slices if isinstance(s, dict) and isinstance(s.get("id"), str) and s["id"]
+              and "wave" not in s] if isinstance(slices, list) else []
+    if not slices:
+        return dims
+    roster = [d for d in dims if d not in SLICED_LENSES]
+    for sl in slices:
+        if "code-reviewer" in dims:
+            roster.append("code-reviewer:" + sl["id"])
+        if "test-role" in dims:
+            roster.append("test-role:" + sl["id"])
+        # axis: a slice seats the security lens only when its plan row says it touches a risk area (a row with no `security` key reads as not touching)
+        if "security-reviewer" in dims and sl.get("security") is True:
+            roster.append("security-reviewer:" + sl["id"])
+    return roster
+
+
+# The lens whose later-wave seat reads the whole change rather than a slice.
+WAVE_WHOLE_LENS = "premortem-reviewer"
+
+
+def is_slice_seat(key):
+    """True for a seat key `<lens>:<slice id>` of a slice seat; the premortem's whole-change wave seat is not one."""
+    return seat_lens(key) != key and seat_lens(key) != WAVE_WHOLE_LENS
+
+
+def wave_roster(dims, new_slices, with_whole):
+    """The seats of one later unread wave: each new slice's own code, test and (when its `security` is true) security seat, then,
+    when ``with_whole``, the one whole-change premortem seat of that wave (`premortem-reviewer:<wave id>`, the wave id being the
+    first part of the slices' ids before `u`)."""
+    roster = []
+    wave_id = ""
+    for sl in new_slices:
+        wave_id = wave_id or sl["id"].partition("u")[0]
+        if "code-reviewer" in dims:
+            roster.append("code-reviewer:" + sl["id"])
+        if "test-role" in dims:
+            roster.append("test-role:" + sl["id"])
+        if "security-reviewer" in dims and sl.get("security") is True:
+            roster.append("security-reviewer:" + sl["id"])
+    if with_whole and wave_id and WAVE_WHOLE_LENS in dims:
+        roster.append("%s:%s" % (WAVE_WHOLE_LENS, wave_id))
+    return roster
 
 
 # Verify submit-shape guard — lives here so `round_adapters` never imports `round_driver`.

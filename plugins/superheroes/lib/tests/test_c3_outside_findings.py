@@ -197,13 +197,13 @@ def test_t6_folding_the_same_outside_drops_twice_leaves_one_hit_each(world):
     assert RD._record_outside(state, [dict(d) for d in drops]) == []
     assert _hits(state) == [("code-reviewer", [("O-1", "a.py", 1, "one"), ("O-2", "a.py", 2, "two")])]
     # a second source with the same file, line and title is its own hit
-    RD._record_outside(state, [_drop("one", line=1, source="gap sweep")])
-    assert [(n, [h[0] for h in hits]) for n, hits in _hits(state)] == [("code-reviewer", ["O-1", "O-2"]), ("gap sweep", ["O-3"])]
-    # and a re-fold of the same gap-sweep artifact through the driver adds nothing
+    RD._record_outside(state, [_drop("one", line=1, source="seams check")])
+    assert [(n, [h[0] for h in hits]) for n, hits in _hits(state)] == [("code-reviewer", ["O-1", "O-2"]), ("seams check", ["O-3"])]
+    # and a re-fold of the same seams-check artifact through the driver adds nothing
     artifact = {"findings": [_finding("Swept", file="src/other.py", line=9)]}
-    RD._fold_gapsweep(state, state["config"], artifact)
-    RD._fold_gapsweep(state, state["config"], artifact)
-    assert [h for n, hits in _hits(state) if n == "gap sweep" for h in hits if h[3] == "Swept"] == [
+    RD._fold_seams(state, state["config"], artifact)
+    RD._fold_seams(state, state["config"], artifact)
+    assert [h for n, hits in _hits(state) if n == "seams check" for h in hits if h[3] == "Swept"] == [
         ("O-4", "src/other.py", 9, "Swept")]
 
 
@@ -222,7 +222,7 @@ def test_t7_a_break_it_intercepted_copy_is_attributed_to_the_test_role(world):
     assert [(n, [(h[1], h[2]) for h in hits]) for n, hits in _hits(state)] == [(break_it.ROLE, [("src/other.py", 1)])]
 
 
-def test_t7_the_gap_sweep_scoped_finder_and_fix_auditor_carry_their_stage_names(world):
+def test_t7_the_seams_check_scoped_finder_and_fix_auditor_carry_their_stage_names(world):
     outside = lambda title: _finding(title, file="src/other.py", line=1)  # noqa: E731
     # unit level: a named source, a per-finding map, a default
     a, b, c = outside("a"), outside("b"), outside("c")
@@ -231,7 +231,7 @@ def test_t7_the_gap_sweep_scoped_finder_and_fix_auditor_carry_their_stage_names(
     _compiled, drops = RD.mechanical_compile([outside("d")], DIFF)
     assert [d["source"] for d in drops] == ["reviewer"]
     state = world.state
-    RD._fold_gapsweep(state, state["config"], {"findings": [outside("From the gap sweep")]})
+    RD._fold_seams(state, state["config"], {"findings": [outside("From the seams check")]})
     state["_newIssues"] = [outside("From an audit during the scoped step")]
     RD._fold_scoped(state, state["config"], {"findings": [outside("From the scoped finder")]})
     state["_newIssues"] = [outside("Pending at the terminal")]
@@ -240,7 +240,7 @@ def test_t7_the_gap_sweep_scoped_finder_and_fix_auditor_carry_their_stage_names(
     state["_newIssues"] = [outside("From an audit before round one")]
     RD._after_audits(state, state["config"])
     assert [(n, [h[3] for h in hits]) for n, hits in _hits(state)] == [
-        ("gap sweep", ["From the gap sweep"]),
+        ("seams check", ["From the seams check"]),
         ("scoped finder", ["From the scoped finder"]),  # the scoped fold compiles the scoped finder's own findings first
         ("fix auditor", ["From an audit during the scoped step", "Pending at the terminal",
                          "From an audit before round one"])]
@@ -398,10 +398,23 @@ def test_t9_an_audit_candidate_matching_a_settled_ledger_row_on_an_untouched_lin
             assert row["outcome"] is None and row["reason"] == rs.UNFOLDED_OPEN and recovered == []
 
 
-def _test_role_account(tmp_path, proposal):
-    session = Session(tmp_path, terminal=None, reviewedDiff=DIFF).seat("test-role").save()
-    put_envelope(session, "test-role", {"vendor": "codex", "model": "m", "payload": {"findings": [proposal]}})
+def _test_role_account(tmp_path, proposal, seat="test-role"):
+    session = Session(tmp_path, terminal=None, reviewedDiff=DIFF).seat(seat).save()
+    put_envelope(session, seat, {"vendor": "codex", "model": "m", "payload": {"findings": [proposal]}})
     return rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
+
+
+@pytest.mark.parametrize("seat", ["test-role:s1", "test-role:w2u1"])
+def test_t9_a_sliced_test_seats_unfolded_break_it_proposal_stays_open_like_the_whole_change_seats(tmp_path, seat):
+    # axis: a sliced test seat (`test-role:<id>`) is the test role for the break-it scope exemption, by its lens, so its valid proposal stays open and is never recovered outside — see bite-proof record c2_wo8_merge_scoped_fixes
+    valid = BL._break_it_finding(file=BL.TEST_PATH, line=1)
+    account = _test_role_account(tmp_path / "valid", valid, seat)
+    assert [f["title"] for f in account["findings"]] == [valid["title"]] and "outsideThisPR" not in account
+    # control: the seat's lens only buys the exemption, so a proposal the intercept would not exempt is still outside
+    off_line = _test_role_account(tmp_path / "off", dict(valid, line=8), seat)
+    assert off_line["findings"] == []
+    assert [(e["source"]["name"], [h["title"] for h in e["hits"]]) for e in off_line["outsideThisPR"]] == [
+        (seat, [valid["title"]])]
 
 
 def test_t9_an_unfolded_break_it_proposal_stays_open_only_when_the_intercept_would_exempt_it(tmp_path):
@@ -430,24 +443,24 @@ def test_t9_a_hit_held_by_one_source_does_not_hide_the_same_place_reported_by_an
         return [{"source": {"kind": "reviewer", "name": name, "sweepId": None}, "hits": [dict(hit)]}]
 
     # held under another source: the code-reviewer's report is recovered under its own entry, after the existing hit
-    other = rs.account_from_session(_abandoned(tmp_path / "other", reviewedDiff=DIFF, outsideThisPR=held_by("gap sweep")),
+    other = rs.account_from_session(_abandoned(tmp_path / "other", reviewedDiff=DIFF, outsideThisPR=held_by("seams check")),
                                     extras(), Fake().readers(), abandoned="stopped")
     assert other["findings"] == []
     assert [(e["source"]["name"], [h["id"] for h in e["hits"]]) for e in other["outsideThisPR"]] == [
-        ("gap sweep", ["O-1"]), ("code-reviewer", ["O-2"])]
+        ("seams check", ["O-1"]), ("code-reviewer", ["O-2"])]
     # held under its own source: nothing is added
     own = rs.account_from_session(_abandoned(tmp_path / "own", reviewedDiff=DIFF, outsideThisPR=held_by("code-reviewer")),
                                   extras(), Fake().readers(), abandoned="stopped")
     assert [(e["source"]["name"], [h["id"] for h in e["hits"]]) for e in own["outsideThisPR"]] == [
         ("code-reviewer", ["O-1"])]
-    # a stage's report is named by the stage: a gap-sweep report is not hidden by the panel seat's hit, and is by its own
-    for held, expected in (("code-reviewer", [("code-reviewer", ["O-1"]), ("gap sweep", ["O-2"])]),
-                           ("gap sweep", [("gap sweep", ["O-1"])])):
-        s = Session(tmp_path / ("stage-" + held), terminal=None, reviewedDiff=DIFF, outsideThisPR=held_by(held))
-        s.seat("code-reviewer", phase="dispatch-gap-sweep")
+    # a stage's report is named by the stage: a seams-check report is not hidden by the panel seat's hit, and is by its own
+    for held, expected in (("code-reviewer", [("code-reviewer", ["O-1"]), ("seams check", ["O-2"])]),
+                           ("seams check", [("seams check", ["O-1"])])):
+        s = Session(tmp_path / ("stage-" + held.replace(" ", "-")), terminal=None, reviewedDiff=DIFF, outsideThisPR=held_by(held))
+        s.seat("code-reviewer", phase="dispatch-seams-check")
         session = s.save()
         put_envelope(session, "code-reviewer", {"vendor": "codex", "model": "m", "payload": {"findings": [UNFOLDED]}},
-                     phase="dispatch-gap-sweep")
+                     phase="dispatch-seams-check")
         account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
         assert account["findings"] == []
         assert [(e["source"]["name"], [h["id"] for h in e["hits"]]) for e in account["outsideThisPR"]] == expected

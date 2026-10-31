@@ -132,7 +132,7 @@ def responder(findings=(), apply_fixes=None, verify="pass"):
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
-        if phase in (RD.P_GAPSWEEP, RD.P_SCOPED):
+        if phase in (RD.P_SEAMS, RD.P_SCOPED):
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",

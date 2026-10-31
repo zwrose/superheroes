@@ -404,6 +404,13 @@ def test_tally_a_pr_dated_before_adoption_is_out_by_its_record():
     assert got["unattributedCatches"] == 0 and got["leftOut"]["beforeWindow"] == 1
 
 
+def test_tally_counts_a_slice_seat_as_its_lens_seat():
+    rec = _record(1, "a", D, [_row("code-reviewer:s1 (round 1)"), _row("test-role:s2 (round 1)")], [_finding("k", "Code")])
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert got["seats"]["code-reviewer"] == {"reviews": 1, "caught": 1}
+    assert got["seats"]["test-role"]["reviews"] == 1
+
+
 # axis: the guarding test for the duplicate-PR rule — a PR supplied twice (a retried record) is incomplete evidence, never a second catch
 @pytest.mark.parametrize("second_pr", [1, "1"])
 def test_tally_a_pr_supplied_twice_reads_incomplete_evidence(second_pr):

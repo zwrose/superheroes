@@ -26,8 +26,8 @@ __all__ = (
     "RECORD_RESULT_KINDS",
     "REVIEW_LIST_RESULT_KINDS",
     "OUTSIDE_FIX_AUDITOR",
-    "OUTSIDE_GAP_SWEEP",
     "OUTSIDE_SCOPED_FINDER",
+    "OUTSIDE_SEAMS_CHECK",
     "FINDING_KEY_FIELD",
     "TRANSIENT_FINDING_FIELDS",
     "DISPOSITIONS",
@@ -154,7 +154,7 @@ RUN_KIND_BY_PHASE = {
     "dispatch-synthesis": RUN_KIND_REVIEW,
     AUDITS_PHASE: RUN_KIND_REVIEW,
     "dispatch-scoped-finder": RUN_KIND_REVIEW,
-    "dispatch-gap-sweep": RUN_KIND_REVIEW,
+    "dispatch-seams-check": RUN_KIND_REVIEW,
     "dispatch-second-test": RUN_KIND_REVIEW,
 }
 
@@ -182,8 +182,8 @@ REVIEW_LIST_RESULT_KINDS = ("findings", "verdicts")
 # the source names of an outside hit raised outside the panel: the driver persists them as the finding's
 # source name and the record writer matches them back, so both read this one home
 OUTSIDE_FIX_AUDITOR = "fix auditor"
-OUTSIDE_GAP_SWEEP = "gap sweep"
 OUTSIDE_SCOPED_FINDER = "scoped finder"
+OUTSIDE_SEAMS_CHECK = "seams check"
 
 STATE_FILE = "loop-state.json"
 MIRROR_FILE = "loop-state.mirror.json"

@@ -35,6 +35,7 @@ import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
 import review_record_session  # noqa: E402
 import review_seats  # noqa: E402
+import round_phases  # noqa: E402
 import session_contract  # noqa: E402
 import store_core  # noqa: E402
 
@@ -442,6 +443,7 @@ def _seats(name):
     # a merged finding label joins its dimensions with " + " (panel_tally._merge_dims, verification._union_dimensions)
     for part in re.split(r"[,+]", name) if isinstance(name, str) else []:
         part = review_record_session.REVIEWER_ROUND_SUFFIX.sub("", part.strip()).strip().lower()
+        part = round_phases.seat_lens(part)  # a slice seat `code-reviewer:s1` is its lens's seat
         tokens = part.split()
         if len(tokens) > 1 and tokens[-1] in _KNOWN:
             part = tokens[-1]

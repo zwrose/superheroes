@@ -208,7 +208,7 @@ def test_i4_the_pool_is_snapshotted_before_staging_strips_a_reraised_rows_dispos
     assert "disposition" not in _row(state, raw), "premise: staging strips the re-raised row's disposition"
     pool = RD._earlier_pool(state)
     assert [(e["outcome"], e["family"]["disposition"], e["round"]) for e in pool] == [("craft", "craft", 1)]
-    RD._stage_findings(state, _compile([raw]))  # a second staging of the round (a gap sweep) keeps it
+    RD._stage_findings(state, _compile([raw]))  # a second staging of the round keeps it
     assert RD._earlier_pool(state) == pool
 
 

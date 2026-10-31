@@ -99,7 +99,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > repo-local agent-config surface removed (`AGENTS.md`, `.cursor/`, `CLAUDE.md`, and the other basenames
 > the runner strips at every directory level). That config is **not discoverable** from the seat's cwd —
 > which is the point of the view. The project's own conventions still reach the seat by path: every
-> reviewer order the driver renders (panel, verifiers, synthesis, gap-sweep, audits, scoped finder)
+> reviewer order the driver renders (panel, verifiers, synthesis, seams-check, audits, scoped finder)
 > names the core calibration, the review-crew layer and the project's `CLAUDE.md` by absolute paths
 > into the live checkout, resolved once when the order renders, and the view's notice tells the seat
 > that a file its order names by an absolute path is readable there. A project with no `CLAUDE.md`

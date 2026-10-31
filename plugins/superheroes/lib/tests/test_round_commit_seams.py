@@ -43,7 +43,7 @@ SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine":
 
 
 class FakeAdapters(object):
-  ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
+  ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_SEAMS, RD.P_AUDITS,
                     RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
   def __init__(self):
@@ -704,6 +704,8 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   assert "executionEvidence" in stored
   record, ev_err = ED.run_execution_record(run_dir)
   assert ev_err is None
+  assert isinstance(record, dict)
+  runner_parts = record.get("readParts") if isinstance(record.get("readParts"), list) else []
   after_obj, after_err = RR.read_json(path)
   assert after_err is None
   # citedHeadSource: durable cited-head derivation layer 1c binds onto a stored envelope;
@@ -715,8 +717,12 @@ def test_seam_a_record_ingest_replaces_landing_when_evidence_stamped(tmp_path, a
   assert after_obj["envelopeSha256"] == RR.envelope_sha256(
       after_obj["payload"], after_obj["executionEvidence"])
   assert after_obj["payloadHashSource"] == "seat-declared"
+  # axis: the stamped landing differs from the landed one only by the runner's read list
+  assert after_obj["payload"] == {**_env["payload"], "readParts": runner_parts}
+  assert set(after_obj["payload"]) - set(_env["payload"]) == {"readParts"}
+  assert after_obj["payloadSha256"] == RR.payload_sha256(after_obj["payload"])
   for key, value in _env.items():
-    if key != "envelopeSha256":
+    if key not in ("envelopeSha256", "payload", "payloadSha256"):
       assert after_obj[key] == value
 
 
