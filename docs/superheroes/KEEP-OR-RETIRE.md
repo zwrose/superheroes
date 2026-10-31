@@ -2437,13 +2437,13 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 - **Component.** Not a census row. `_placeholder_snapshot` / `_sweep_placeholders` /
   `_fold_placeholder_sweep` in `plugins/superheroes/lib/engine_dispatch.py`, the snapshot taken in
   `_open_write_run` and the sweep called from `_fold_run`; the paths it may remove are the one list
-  `SANDBOX_PLACEHOLDERS`. Workaround-marked (#2285). Cost: a few stats per claude write run plus two
-  bounded walks, one at open and one at fold, that only build the report.
+  `SANDBOX_PLACEHOLDERS`. Workaround-marked (#2285). Cost: a few stats per claude write run, at
+  open and at fold.
 - **Start date.** 2026-10-31.
 - **Condition.** Citation-based, 45 days: build records or vet receipts citing sandbox placeholder
   files left in a worktree after a folded claude write run (a regression signal), or a fold whose
-  `placeholderSweep.removed` is non-empty (the workaround still earning its keep), or whose
-  `placeholderSweep.unlisted` is non-empty (the sandbox's list has grown). Re-measure on each
+  `placeholderSweep.removed` is non-empty (the workaround still earning its keep). A sandbox
+  placeholder seen left that is not on the list is added to it. Re-measure on each
   Claude Code bump: when the marker's delete-when condition is observed, a proposal to the owner at a
   gardening pass to remove the sweep.
 - **Last demonstrated benefit.** unknown — vet 740 on PR #2281 recorded the placeholders a builder

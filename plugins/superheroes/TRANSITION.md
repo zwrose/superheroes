@@ -52,7 +52,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 ### Claude write channel: sandbox placeholders are removed at fold
 
-- **What changes.** On Linux a claude write run no longer leaves the sandbox's empty, read-only placeholders (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, the `.claude` settings files and the rest of `SANDBOX_PLACEHOLDERS`) at the root of the build worktree. The run records which of those paths exist when it opens, and its fold removes one only when it is new, empty and read-only. Every other new path is left and listed, and a new empty read-only path off the list is named under `unlisted`. The folded result gains `placeholderSweep`. See [Supervised write dispatch](skills/workhorse/reference/dispatch-mechanics.md).
+- **What changes.** On Linux a claude write run no longer leaves the sandbox's empty, read-only placeholders (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, the `.claude` settings files and the rest of `SANDBOX_PLACEHOLDERS`) at the root of the build worktree. The run records which of those paths exist when it opens, and its fold removes one only when it is new, empty and read-only; it removes nothing else. The folded result gains `placeholderSweep`. See [Supervised write dispatch](skills/workhorse/reference/dispatch-mechanics.md).
 - **Nothing is owed.** A run opened by an older plugin has no snapshot, so its fold removes nothing and reports `incomplete` with `baseline-missing`. A run that is abandoned rather than folded is not swept.
 
 ### Review: a finding that repeats an earlier one keeps its outcome

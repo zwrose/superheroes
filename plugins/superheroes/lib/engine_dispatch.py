@@ -3274,51 +3274,18 @@ def _fold_cc_writes_sweep(state):
 
 
 PLACEHOLDER_BASELINE_NAME = "placeholder-baseline.json"
-PLACEHOLDER_LEFT_CAP = 100
 
-
-def _raise(exc):
-    raise exc
-
-
-def _walk_kept(root, skip_rels, deadline, clock, dir_fd=None):
-    """Yield (prefix, dirnames, filenames, dirfd, pruned) under ``root`` top-down, pruning `.git`,
-    the ``skip_rels`` subtrees and other devices, never following symlinks. Raises TimeoutError
-    once ``deadline`` passes, and the OSError of any directory it cannot read."""
-    root_dev = None
-    walker = os.fwalk(root, topdown=True, onerror=_raise, follow_symlinks=False, dir_fd=dir_fd)
-    try:
-        for dirpath, dirnames, filenames, dirfd in walker:
-            if clock() > deadline:
-                raise TimeoutError
-            if root_dev is None:
-                root_dev = os.fstat(dirfd).st_dev
-            rel = os.path.relpath(dirpath, root)
-            prefix = "" if rel == "." else rel.replace(os.sep, "/") + "/"
-            kept, pruned = [], []
-            for name in dirnames:
-                try:
-                    dev = os.stat(name, dir_fd=dirfd, follow_symlinks=False).st_dev
-                except OSError:
-                    dev = None
-                if name == ".git" or prefix + name in skip_rels or dev != root_dev:
-                    pruned.append(prefix + name)
-                else:
-                    kept.append(name)
-            dirnames[:] = kept
-            yield prefix, kept, filenames, dirfd, pruned
-    finally:
-        walker.close()
-
-
-def _nested_rels(cwd_real):
-    """Registered worktrees nested under ``cwd_real``, relative and '/'-joined, or None."""
-    nested = _registered_nested_worktree_roots(cwd_real)
-    if nested is None:
-        return None
-    return {os.path.relpath(p, cwd_real).replace(os.sep, "/") for p in nested}
-
-
+# The paths Claude Code's Linux sandbox protects in the shell's working directory, where it can
+# leave an empty, read-only placeholder: the file and directory lists in Claude Code 2.1.314's
+# sandbox (read from its bundle in the #2285 cloud build, `.git` left out), the `.claude` settings
+# files the vet-740 receipt on PR #2281 saw, and `.claude` itself. Children come before their
+# parent, so a placeholder dir its children's removal empties goes too.
+SANDBOX_PLACEHOLDERS = (
+    ".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
+    ".ripgreprc", ".mcp.json", ".vscode", ".idea",
+    ".claude/settings.json", ".claude/settings.local.json", ".claude/commands", ".claude/agents",
+    ".claude",
+)
 _DIR_NOFOLLOW = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
 
@@ -3333,19 +3300,6 @@ def _open_dir_nofollow(root_fd, rel):
             os.close(fd)
         fd = nxt
     return fd
-
-
-# The paths Claude Code's Linux sandbox protects in the shell's working directory, where it can
-# leave an empty, read-only placeholder: the file and directory lists in Claude Code 2.1.314's
-# sandbox (read from its bundle in the #2285 cloud build, `.git` left out), the `.claude` settings
-# files the vet-740 receipt on PR #2281 saw, and `.claude` itself. Children come before their
-# parent, so a placeholder dir its children's removal empties goes too.
-SANDBOX_PLACEHOLDERS = (
-    ".gitconfig", ".gitmodules", ".bashrc", ".bash_profile", ".zshrc", ".zprofile", ".profile",
-    ".ripgreprc", ".mcp.json", ".vscode", ".idea",
-    ".claude/settings.json", ".claude/settings.local.json", ".claude/commands", ".claude/agents",
-    ".claude",
-)
 
 
 def _exists_at(root_fd, rel):
@@ -3364,28 +3318,16 @@ def _exists_at(root_fd, rel):
         os.close(fd)
 
 
-def _placeholder_snapshot(cwd_real, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
-                          clock=time.monotonic):
-    """Which ``SANDBOX_PLACEHOLDERS`` exist before a claude write run, and every path under the
-    worktree for the fold's report. Anything short of a complete read is not ok, and the fold
-    then removes nothing. Never raises."""
+def _placeholder_snapshot(cwd_real):
+    """Which ``SANDBOX_PLACEHOLDERS`` exist before a claude write run, and the worktree root's
+    identity. Anything short of a complete read is not ok, and the fold then removes nothing.
+    Never raises."""
     root_fd = None
     try:
-        skip = _nested_rels(cwd_real)
-        if skip is None:
-            return {"status": "incomplete", "reason": "worktree-enumeration-failed"}
         root_fd = os.open(cwd_real, _DIR_NOFOLLOW)
         root = os.fstat(root_fd)
         present = [rel for rel in SANDBOX_PLACEHOLDERS if _exists_at(root_fd, rel)]
-        paths, pruned = [], sorted(skip)
-        for prefix, dirnames, filenames, _fd, cut in _walk_kept(
-                ".", skip, clock() + budget_seconds, clock, dir_fd=root_fd):
-            paths.extend(prefix + name for name in dirnames + filenames)
-            pruned.extend(cut)
-        return {"status": "ok", "root": [root.st_dev, root.st_ino], "present": present,
-                "paths": paths, "pruned": pruned}
-    except TimeoutError:
-        return {"status": "incomplete", "reason": "budget-exhausted"}
+        return {"status": "ok", "root": [root.st_dev, root.st_ino], "present": present}
     except Exception as exc:
         return {"status": "incomplete", "reason": type(exc).__name__}
     finally:
@@ -3398,15 +3340,6 @@ def _is_placeholder(st, mode=None):
     ``mode`` (default: its own)."""
     return ((st.st_mode if mode is None else mode) & 0o222) == 0 and (
         stat.S_ISDIR(st.st_mode) or (stat.S_ISREG(st.st_mode) and st.st_size == 0))
-
-
-def _empty_dir(name, dirfd):
-    fd = os.open(name, _DIR_NOFOLLOW, dir_fd=dirfd)
-    try:
-        with os.scandir(fd) as entries:
-            return next(entries, None) is None
-    finally:
-        os.close(fd)
 
 
 def _remove_lending(remove, name, dirfd, parent, present, modes):
@@ -3445,14 +3378,11 @@ def _remove_placeholder(root_fd, rel, present, modes):
 # worktree on Linux.
 # axis: removes only a `SANDBOX_PLACEHOLDERS` path that the before-run snapshot shows absent and that
 # is now empty and read-only, relative to a root fd checked against the snapshot and never through a
-# symlink; no complete snapshot removes nothing. Every other new path is only reported.
-def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BUDGET_SECONDS,
-                        clock=time.monotonic):
-    """Remove the sandbox placeholders a claude write run left; report every other new path, and
-    the unlisted ones shaped like a placeholder. Never raises."""
-    removed, new, unlisted, modes = [], [], [], {}
-    out = {"removed": removed, "left": [], "leftCount": 0, "unlisted": unlisted,
-           "incomplete": False, "error": None}
+# symlink; no complete snapshot removes nothing.
+def _sweep_placeholders(cwd_real, baseline):
+    """Remove the sandbox placeholders a claude write run left. Never raises."""
+    removed, modes = [], {}
+    out = {"removed": removed, "incomplete": False, "error": None}
     root_fd = None
     try:
         if (not isinstance(baseline, dict) or baseline.get("status") != "ok"
@@ -3477,24 +3407,6 @@ def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BU
                     removed.append(rel)
             except OSError:
                 pass
-        # the report: every other new path; nothing below removes anything
-        before = set(baseline.get("paths") or ())
-        skip = (_nested_rels(cwd_real) or set()) | set(baseline.get("pruned") or ())
-        for prefix, dirnames, filenames, dirfd, _cut in _walk_kept(
-                ".", skip, clock() + budget_seconds, clock, dir_fd=root_fd):
-            for name in dirnames + filenames:
-                if prefix + name in before:
-                    continue
-                new.append(prefix + name)
-                try:
-                    st = os.stat(name, dir_fd=dirfd, follow_symlinks=False)
-                    if (prefix + name not in SANDBOX_PLACEHOLDERS and _is_placeholder(st)
-                            and (not stat.S_ISDIR(st.st_mode) or _empty_dir(name, dirfd))):
-                        unlisted.append(prefix + name)
-                except OSError:
-                    pass
-    except TimeoutError:
-        out["incomplete"] = True
     except Exception as exc:
         out.update(incomplete=True, error=type(exc).__name__)
     finally:
@@ -3509,10 +3421,6 @@ def _sweep_placeholders(cwd_real, baseline, *, budget_seconds=CC_WRITES_SWEEP_BU
                 except OSError:
                     pass
             os.close(root_fd)
-    new.sort()
-    unlisted.sort()
-    out.update(left=new[:PLACEHOLDER_LEFT_CAP], leftCount=len(new),
-               unlisted=unlisted[:PLACEHOLDER_LEFT_CAP])
     return out
 
 
@@ -3535,8 +3443,7 @@ def _fold_placeholder_sweep(run_dir_real, state):
         # never realpath here: a root replaced by a symlink must fail the identity check
         return _sweep_placeholders(cwd, baseline)
     except Exception as exc:
-        return {"removed": [], "left": [], "leftCount": 0, "incomplete": True,
-                "error": type(exc).__name__}
+        return {"removed": [], "incomplete": True, "error": type(exc).__name__}
 
 
 def _fold_size_tripwire(state):
