@@ -570,6 +570,17 @@ def _kind_fault(k):
     return None if fault is None else f".places{fault}"
 
 
+def _fix_group_fault(g):
+    if not isinstance(g, dict):
+        return ""
+    if not _nb(g.get("id")):
+        return ".id"
+    members = g.get("members")
+    if not isinstance(members, list) or len(members) < 2 or not all(_nb(m) for m in members):
+        return ".members"
+    return None if _nb_or_none(g.get("commit")) else ".commit"
+
+
 def _validate(a):
     def chk(ok, key):
         if not ok:
@@ -637,6 +648,10 @@ def _validate(a):
             fault = _kind_fault(f["kindOfMistake"])
             # axis: a kind of mistake names its kind and each place it recurs, never an unnamed place — see bite-proof record c1l1_wo_a_record_seam
             chk(fault is None, f"findings[{i}].kindOfMistake{fault}")
+        if "fixGroup" in f:
+            fault = _fix_group_fault(f["fixGroup"])
+            # axis: a fix group names its id and two or more members, never a lone or unnamed one — see bite-proof record c1l11c_wo1_fix_groups
+            chk(fault is None, f"findings[{i}].fixGroup{fault}")
     for k in ("rawFindingsFiles", "checked"):
         chk(all(ne(x) for x in lst(k)), k)
     for i, g in enumerate(lst("goAheads")):
@@ -1906,7 +1921,7 @@ def _finding_bullet(f):
     bullet = (f"- {' '.join(str(x) for x in (f.get('id'), f.get('severity')) if x)} · "
               + _OUTCOME_WORDS.get(f.get("outcome"), "open"))
     grade, repeat = f.get("grade"), f.get("repeatOf")
-    runs, kind = f.get("breakItRuns"), f.get("kindOfMistake")
+    runs, kind, group = f.get("breakItRuns"), f.get("kindOfMistake"), f.get("fixGroup")
     if isinstance(grade, dict):
         bullet += f" · {grade.get('verdict')}: {grade.get('reason')}"
     if isinstance(repeat, dict):
@@ -1914,6 +1929,8 @@ def _finding_bullet(f):
         bullet += {True: " · fix still holds", False: " · fix no longer holds"}.get(repeat.get("fixHolds"), "")
     if runs:
         bullet += f" · break-it: {len(runs)} run(s) ({', '.join(_run_result(run) for run in runs)})"
+    if isinstance(group, dict) and isinstance(group.get("members"), list):
+        bullet += f" · one fix shared with {len(group['members']) - 1} other finding(s) (group {group.get('id')})"
     if isinstance(kind, dict):
         bullet += f" · kind of mistake: {kind.get('kind')}"
         places = kind.get("places") or []

@@ -34,6 +34,7 @@ DECISION_KINDS = (
     "fix-batch-held",
     "fix-batch-ruled",
     "fix-batch-split",
+    "fix-group-unkeyed",
     "fix-keeps-failing",
     "fix-surface-unknown",
     LANE_EXPANDED_RECOMPOSE,

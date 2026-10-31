@@ -206,8 +206,13 @@ the missing ids as singleton groups. A `repeatOf` ref that names no earlier find
 submit the same way. A submit with no `grouping` key is **refused** at submit. **`grouping: null`**
 or an **empty-list** grouping carries no coverage obligation:
 `verification.merge_and_rank(survivors, grouping)` falls open to unmerged survivors;
-**synthesis drops nothing** and synthesis failure never aborts the review. Merged groups combine
-bodies and take the highest severity; the merged `verdict` is **CONFIRMED only when a member at
+**synthesis drops nothing** and synthesis failure never aborts the review. In a group, a finding that carries a
+break-it test is never merged into another finding: it keeps its test and its runs, while the
+group's other members merge as above. The group's resulting findings, when they number two or more
+and include a test-carrying one, form a fix group with one fix; `merge_and_rank` returns them as
+`fixGroups` (`{group_id, member_ids}`) beside `merges`, which lists real merges only, and the driver
+mints the group's id. A group with no test-carrying member is unchanged: its merge is its one fix.
+Merged groups combine bodies and take the highest severity; the merged `verdict` is **CONFIRMED only when a member at
 the merged (highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so
 model-supplied member order can't flip GATE-eligibility, and carrying that member's receipt (the
 first such member in input order). A lower-severity confirmation **never promotes** the merged
@@ -220,7 +225,7 @@ honors a verdict severity at its **canonical** tier, so a mis-cased tier is neit
 silently demoted.
 
 Use `synthesized.findings` as `compiled.findings`. Carry `verified.drops`, `verified.downgrades`,
-and `synthesized.merges` into the round record as appropriate.
+`synthesized.merges`, and `synthesized.fixGroups` into the round record as appropriate.
 
 **Author-justification post-filter (PR mode, after merge_and_rank).** May take off the fix path
 only non-CONFIRMED findings with a substantive prior justification (quoted in the record),

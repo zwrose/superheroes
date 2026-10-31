@@ -4467,6 +4467,67 @@ def _apply_repeat_marks(state, plan):
         _record_round_append(state, "repeatMarks", row)
 
 
+def _fix_group_id(row):
+    """The id of the fix group a finding row is stamped into, or None."""
+    group = row.get(verification.FIX_GROUP_FIELD) if isinstance(row, dict) else None
+    group_id = group.get("id") if isinstance(group, dict) else None
+    return group_id if _nonempty_str(group_id) else None
+
+
+def _close_batch_over_fix_groups(state, blocking, batch):
+    """``batch`` plus every live finding in a fix group a batch row belongs to, whatever its severity
+    (a group can mix an Important and a Minor member). A blocker the owner-choice hold took out of
+    the batch stays out. The queue's own filters then judge each added row as any other."""
+    group_ids = {_fix_group_id(f) for f in batch} - {None}
+    if not group_ids:
+        return batch
+    present = {_finding_identity_key(f) for f in batch}
+    held = {_finding_identity_key(f) for f in blocking} - present
+    held.update(k for k in state.get("ownerChoiceHeld") or [] if isinstance(k, str))
+    closed = list(batch)
+    pulled = []
+    for row in state.get("findings") or []:
+        key = _finding_identity_key(row) if isinstance(row, dict) else None
+        # axis: the batch is closed over fix groups, so a non-blocking member rides with its group — see bite-proof record c1l11c_wo1_fix_groups
+        if key and key not in present and key not in held and _fix_group_id(row) in group_ids:
+            pulled.append(row)
+            present.add(key)
+    # axis: a pulled sibling goes through the same owner-ruling-aware hold as a blocker, so a tradeoff sibling is never admitted unheld — see bite-proof record c1l11c_wo1_fix_groups
+    return closed + (_hold_owner_choice(state, pulled) if pulled else [])
+
+
+def _stamp_fix_groups(state, fix_groups, kept):
+    """Stamp ``fixGroup`` ``{"id", "members"}`` on the live rows of each fix group this round, and
+    record the stamped groups. A group's members are the ``kept`` findings its ``member_ids`` name (a
+    member the author-justification filter dropped has left); it is stamped only while 2+ members
+    remain and one carries a break-it test. The id is the driver's own — the members' keys hashed —
+    since a native synthesis result carries no group id. An earlier round's stamp on a row that is in
+    no group now is removed. A member with no key leaves its group unstamped (per-member fixes)."""
+    for row in state.get("findings") or []:
+        if isinstance(row, dict):
+            row.pop(verification.FIX_GROUP_FIELD, None)
+    by_id = {f["id"]: f for f in kept if isinstance(f, dict) and isinstance(f.get("id"), str)}
+    stamped = []
+    for group in fix_groups if isinstance(fix_groups, list) else []:
+        members = [by_id[i] for i in group.get("member_ids") or [] if i in by_id]
+        if len(members) < 2 or not any(break_it.carries_test(m) for m in members):
+            continue
+        keys = [_finding_identity_key(m) for m in members]
+        if not all(keys):
+            _decision(state, "fix-group-unkeyed",
+                      "fix group %s left to per-member fixes — a member has no finding key"
+                      % group.get("group_id"))
+            continue
+        # axis: the fix group's id is the driver's own hash of the member keys, never the grouping's — see bite-proof record c1l11c_wo1_fix_groups
+        group_id = "fg-" + hashlib.sha256("\n".join(sorted(keys)).encode("utf-8")).hexdigest()[:12]
+        for key in keys:
+            row = _live_finding_by_key(state, key)
+            if row is not None:
+                row[verification.FIX_GROUP_FIELD] = {"id": group_id, "members": list(keys)}
+        stamped.append({"id": group_id, "members": list(keys)})
+    _record_round(state, "fixGroups", stamped)
+
+
 def _fold_synthesis(state, config, artifact, session_dir=None, exact_only=None):
     """Merge same-root-cause survivors (verification.merge_and_rank, coverage-guaranteed), then the
     author-justification POST-filter, then decide gap-sweep / fix / terminal. Repeats of an earlier finding
@@ -4522,6 +4583,7 @@ def _fold_synthesis(state, config, artifact, session_dir=None, exact_only=None):
     _record_round(state, "authorJustifiedDrops", aj_drops)
     _record_round(state, "merges", merged["merges"])
     _set_findings(state, kept)
+    _stamp_fix_groups(state, merged.get("fixGroups"), kept)
     _sync_merged_consequences(state, kept)
     _apply_repeat_marks(state, plan)
     # big diff → a gap-sweep over verified findings + the whole diff, before the fix leg. (Not on
@@ -5038,7 +5100,7 @@ def _after_findings_settled(state, config):
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
     if blocking:
-        batch = _hold_owner_choice(state, blocking)
+        batch = _close_batch_over_fix_groups(state, blocking, _hold_owner_choice(state, blocking))
         # A round whose only blockers are held for the owner has nothing to fix: it settles, and the
         # convergence chokepoint hands the held findings back open.
         if _queue_fix_batch(state, config, [dict(f) for f in batch]) == "empty":
@@ -5388,6 +5450,12 @@ def _resolve_ruled_batch(state, rows):
                   "%d finding(s) named by an owner ruling join this fix batch: %s"
                   % (len(added), ", ".join(_fix_batch_row_key(row) for row in added)))
     batch += added
+    _attach_row_rulings(state, batch, effective, ledger_by_key)
+    return batch
+
+
+def _attach_row_rulings(state, batch, effective, ledger_by_key):
+    """Attach to each row of ``batch`` the ruling it inherits through a merge (``ruledBy``)."""
     for row in batch:
         row.pop("ruledBy", None)
         row.pop("ruledBySeq", None)
@@ -5396,7 +5464,6 @@ def _resolve_ruled_batch(state, rows):
         if decision is not None and decision is not effective.get(key):
             row["ruledBy"] = decision["findingKey"]  # a ruling given to a merged-in finding
             row["ruledBySeq"] = decision.get("seq")
-    return batch
 
 
 def _note_sent_under_decision(state, rows):
@@ -5459,6 +5526,24 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
                       "audited before the round settles: %s"
                       % (len(kept), ", ".join(_fix_batch_row_key(row) for row in kept)))
             filtered = kept + filtered
+    # axis: every composed batch is closed over its fix groups here, whichever path built it, a sibling never offered riding through the same exclusions — see bite-proof record c1l11c_wo1_fix_groups
+    offered_keys = {_finding_identity_key(r) for r in rows if isinstance(r, dict)}
+    kept_keys = {_finding_identity_key(r) for r in filtered if isinstance(r, dict)}
+    siblings = [dict(r) for r in _close_batch_over_fix_groups(state, [], filtered)
+                if isinstance(r, dict) and _finding_identity_key(r) not in kept_keys
+                and _finding_identity_key(r) not in offered_keys]
+    if siblings:
+        siblings, sibling_fault = _filter_excluded_discharged_fixes(state, siblings)
+        if sibling_fault is not None:
+            _park_cannot_certify(state, sibling_fault.detail)
+            return "faulted"
+        if siblings:
+            siblings, _spent = _drop_spent_out_of_scope_rows(state, siblings)
+        filtered += siblings
+        # axis: a pulled sibling gets the same inherited-ruling attachment as every resolved row — see bite-proof record c1l11c_wo1_fix_groups
+        _sibling_ledger, _sibling_fault = _disposition_ledger_by_key(state)
+        if _sibling_fault is None:
+            _attach_row_rulings(state, filtered, _live_ruling_by_key(state), _sibling_ledger)
     if not filtered and not offered_nonempty:
         return "empty"
     if reset_accumulator:
@@ -5492,9 +5577,16 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
                       "fix batch emptied by %s — remaining queue exhausted, the round proceeds "
                       "to post-fix" % why)
         return "excluded"
-    _note_sent_under_decision(state, filtered[:cap])
-    state["_fixBatch"] = filtered[:cap]
-    state["_fixQueue"] = filtered[cap:]
+    head, tail = filtered[:cap], filtered[cap:]
+    head_groups = {_fix_group_id(r) for r in head} - {None}
+    # axis: a fix group's members share one slice, so a member past the cap is pulled in beside its group — see bite-proof record c1l11c_wo1_fix_groups
+    pulled = [r for r in tail if _fix_group_id(r) in head_groups]
+    if pulled:
+        head = head + pulled
+        tail = [r for r in tail if not any(r is p for p in pulled)]
+    _note_sent_under_decision(state, head)
+    state["_fixBatch"] = head
+    state["_fixQueue"] = tail
     state["_fixBatchIndex"] = batch_index
     if not keep_step_start:
         state["_fixStepHead"] = _fix_step_head(config)
@@ -5715,6 +5807,8 @@ FIX_TEST_MISSING = "test-missing"
 FIX_TEST_BYTES_DIFFER = "test-bytes-differ"
 FIX_NO_FIX_CHANGE = "no-fix-change"
 FIX_UNVERIFIABLE = "unverifiable"
+FIX_GROUP_SPLIT = "fix-group-split"
+FIX_GROUP_NO_SHARED_COMMIT = "fix-group-no-shared-commit"
 
 
 def _slice_staged_ids(slice_):
@@ -5799,12 +5893,12 @@ def _git_fix_commit_facts(config, step_head, commits, test_paths):
     return facts
 
 
-def _fix_commit_test_fault(facts, block):
+def _fix_commit_test_fault(facts, block, exempt_paths=()):
     """The reason a commit does not carry the fix with its test (None when it does). The commit must
     be reachable from HEAD and not from the step's start head, hold the block's bytes at the block's
     path (the bytes are read from the commit itself; a commit that leaves the test path unchanged is
     a repair of a test already there at the start head), and change at least one path besides the
-    test."""
+    test and ``exempt_paths`` (the other tests of a fix group, which are no fix change)."""
     if not isinstance(facts, dict) or facts.get("reachable") is not True:
         return FIX_COMMIT_UNKNOWN
     if facts.get("inStep") is not False:
@@ -5825,8 +5919,31 @@ def _fix_commit_test_fault(facts, block):
     if have != wanted:
         return FIX_TEST_BYTES_DIFFER
     # axis: the commit changes something besides the test, so a test committed alone is no fix — see bite-proof record c1l9a_wo3_apply_fixes
-    if not any(p != path for p in changed):
+    if not any(p != path and p not in exempt_paths for p in changed):
         return FIX_NO_FIX_CHANGE
+    return None
+
+
+def _shared_fix_commit(members, bound, facts, plain_keys=()):
+    """The resolved sha of the one commit bound to every ``(key, block)`` member of a fix group that
+    carries each member's test and a change beside all the group's tests, else None. ``plain_keys``
+    are the group's fixed members with no test: each one that is bound must be bound to that commit
+    too."""
+    def sha_of(commit):
+        resolved = (facts.get(commit) or {}).get("sha")
+        return resolved if _nonempty_str(resolved) else commit
+
+    paths = sorted({block["path"] for _key, block in members})
+    for commit in bound.get(members[0][0], []):
+        # axis: the group's commit is one commit bound to every member, never each member's own — see bite-proof record c1l11c_wo1_fix_groups
+        if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key, _block in members):
+            continue
+        if not all(sha_of(commit) in {sha_of(c) for c in bound[key]} for key in plain_keys if bound.get(key)):
+            continue
+        # axis: the commit changes something besides every member's test, so the tests alone are no fix — see bite-proof record c1l11c_wo1_fix_groups
+        if all(_fix_commit_test_fault(facts.get(commit), block, exempt_paths=paths) is None
+               for _key, block in members):
+            return sha_of(commit)
     return None
 
 
@@ -5862,6 +5979,15 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
         if entry.get("finding") not in names:
             return "%s:%s" % (FIX_FINDING_UNKNOWN, entry.get("finding")), []
     left = {names[entry["finding"]] for entry in unfixed}
+    group_keys = {}
+    for row in slice_:
+        key = _finding_identity_key(row) if isinstance(row, dict) else None
+        if key and _fix_group_id(row):
+            group_keys.setdefault(_fix_group_id(row), []).append(key)
+    for group_id, keys in group_keys.items():
+        # axis: a fix group is fixed whole or left whole — a partly unfixed group is refused — see bite-proof record c1l11c_wo1_fix_groups
+        if len(keys) > 1 and 0 < len([k for k in keys if k in left]) < len(keys):
+            return "%s:%s" % (FIX_GROUP_SPLIT, group_id), []
     bound = {}
     for entry in bindings:
         bound.setdefault(names[entry["finding"]], []).append(entry.get("commit"))
@@ -5871,7 +5997,12 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
         key = _finding_identity_key(row) if isinstance(row, dict) else None
         if block is not None and key and key not in left:
             owed.append((key, block))
+    # axis: a plain group member's bound commit is resolved with the carriers' — an unresolved HEAD never stands in for the shared sha — see bite-proof record c1l11c_wo1_fix_groups
+    plain_named = [c for keys in group_keys.values() if len(keys) > 1 for k in keys
+                   if k not in left and k not in {ok for ok, _b in owed}
+                   for c in bound.get(k, []) if isinstance(c, str) and c]
     named = [c for key, _block in owed for c in bound.get(key, []) if isinstance(c, str) and c]
+    named = named + plain_named
     facts = None
     if named:
         test_paths = sorted({block["path"] for _key, block in owed})
@@ -5882,6 +6013,8 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
             facts = _git_fix_commit_facts(config, state["_fixStepHead"], sorted(set(named)),
                                           test_paths)
     commits = []
+    shared = {}
+    # a group's members share one commit; a finding of no group takes the single-finding path below
     for key, block in owed:
         candidates = [c for c in bound.get(key, []) if isinstance(c, str) and c]
         # axis: a finding that carries a break-it test and is not left unfixed owes a binding — see bite-proof record c1l9a_wo3_apply_fixes
@@ -5889,6 +6022,20 @@ def _apply_fixes_commit_fault(state, config, artifact, commit_seam=None):
             return "%s:%s:%s" % (FIX_WITHOUT_TEST, key, FIX_NO_BINDING), []
         if not isinstance(facts, dict):
             return "%s:%s:%s" % (FIX_WITHOUT_TEST, key, FIX_UNVERIFIABLE), []
+        group_id = next((g for g, keys in group_keys.items() if key in keys and len(keys) > 1), None)
+        if group_id is not None:
+            members = [(k, b) for k, b in owed if k in group_keys[group_id]]
+            unbound = next((k for k, _b in members if not bound.get(k)), None)
+            if unbound is not None:
+                return "%s:%s:%s" % (FIX_WITHOUT_TEST, unbound, FIX_NO_BINDING), []
+            if group_id not in shared:
+                owed_keys = {k for k, _b in owed}
+                plain_keys = [k for k in group_keys[group_id] if k not in owed_keys and k not in left]
+                shared[group_id] = _shared_fix_commit(members, bound, facts, plain_keys)
+            if shared[group_id] is None:
+                return "%s:%s" % (FIX_GROUP_NO_SHARED_COMMIT, group_id), []
+            commits.append({"finding": key, "commit": shared[group_id]})
+            continue
         faults = [_fix_commit_test_fault(facts.get(c), block) for c in candidates]
         if all(fault is not None for fault in faults):
             return "%s:%s:%s" % (FIX_WITHOUT_TEST, key, faults[0]), []
@@ -7478,6 +7625,14 @@ def _break_it_target_facts(state, config, finding, head):
             "changedWhy": why, "match": match}
 
 
+def _audit_fix_group(finding, key):
+    """``{"id", "members": [the other members' keys]}`` for a finding stamped into a fix group, else None."""
+    group = finding.get(verification.FIX_GROUP_FIELD)
+    if _fix_group_id(finding) is None or not isinstance(group.get("members"), list):
+        return None
+    return {"id": group["id"], "members": [m for m in group["members"] if m != key]}
+
+
 def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
@@ -7519,6 +7674,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             if sib_ruling is not None:
                 sibling["ownerRuling"] = sib_ruling
                 sibling["ownerRulingSeq"] = sib_seq
+            if _audit_fix_group(bf, sibling["id"]) is not None:
+                sibling[verification.FIX_GROUP_FIELD] = _audit_fix_group(bf, sibling["id"])
             batch_findings.append(sibling)
     # The round's other findings ride every target: a change the fix makes that the auditor can
     # attribute to one of them is that finding's fix, not an unnamed change. Findings the owner
@@ -7578,6 +7735,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         if attempt_delta is not None:
             row["fixerDelta"] = list(attempt_delta)
         row["batchFindings"] = [b for b in batch_findings if b["id"] != tid]
+        if _audit_fix_group(f, tid) is not None:
+            row[verification.FIX_GROUP_FIELD] = _audit_fix_group(f, tid)
         row["roundFindings"] = [r for r in round_findings if r["id"] != tid]
         row["reportedUnnamedChanges"] = list(reported_changes)
         # The finding's effective ruling rides the target, so an auditor weighing a change the finding
@@ -7597,6 +7756,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             row["ownerRuling"] = owner_ruling
         if break_it.carries_test(f):
             # axis: a re-queued target that carries a break-it test must still hand the next fixer its exact test block, body and run records
+            # axis: the test role's original test rides a re-queued target, so its next audit still compares against it — see bite-proof record c1l11c_wo1_fix_groups
             # axis: the test reviewer's version and the finding's correction ride the target into the next fix batch — see bite-proof record c1l10b_wo2_test_restore
             for carried in ("suggestion", "body", break_it.RUN_FIELD, break_it.RUNS_FIELD,
                             REVIEWER_TEST_FIELD, TEST_CORRECTION_FIELD):
