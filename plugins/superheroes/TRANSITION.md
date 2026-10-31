@@ -54,6 +54,14 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
 
+- **After switching.** **At each gardening pass the advisor appends the window's review-loop measures row and shows it in the gardening record.** See [Gardening pass: the review-loop measures row](#gardening-pass-the-review-loop-measures-row).
+
+### Gardening pass: the review-loop measures row
+
+- **What an advisor now does at a pass.** At duty 3, before the walk, run `lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`. It appends one fixed-shape row of review-loop measures for the window to `state/review-loop-measures.jsonl` in the project store, or replaces the row already there for the same window. The input file carries the window's review records, CI runs, misses log, vet receipts, the day cap choices began to be recorded, and any monthly or sampled measures. Its docstring names each key. See [The gardening pass](skills/showrunner/reference/owner-decisions.md#the-gardening-pass).
+- **In the gardening record.** Paste what `review_measures.py render --cwd <root>` prints: the window's row as a table and a chart across windows. The seating check's row file is the row's `seatingRow`.
+- **Nothing reads it between passes.** A measure whose input is missing reads unmeasured with its reason, never zero, and no check fails on any value. A window before cap choices were recorded reads that measure unmeasured.
+
 ### Review: a ruling refuses an id that names more than one finding
 
 - **Ambiguous ids.** `round_driver.py rule` refuses `ruling-target-ambiguous` when the ruling's id names more than one finding across the session's verifier attempts (a staged id like `v0` is reused every round and by the second-test pass). The refusal lists the candidate findings and their `findingKey`, and nothing is written. A ruling that names the finding by its `findingKey` binds; a unique id binds as before. Nothing is owed by a consuming project.

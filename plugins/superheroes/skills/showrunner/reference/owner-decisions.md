@@ -599,6 +599,12 @@ advisor run together to keep calibration honest.
      credited to every seat whose lens the finding names (a fixed finding in the security lens
      counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
      in that seat's lens.
+   - **Append the review-loop measures row** for the window at every pass, before the walk:
+     `python3 -B <plugin root>/lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`.
+     Its docstring names the input file's keys and the counting rules. A second run for the same window
+     replaces that window's row. A measure whose input is missing or damaged reads unmeasured with its
+     reason, never zero. The late-finds and repeat-location measures run monthly or on a sample, and
+     the row says which. The row gates nothing and is read by hand.
 4. **Record the decisions-asked count** for the window. List the window's declines with their
    triggers, one per line.
 5. **Report the [workaround markers](../../../rubric/glossary.md#workaround-marker)**, whose inventory
@@ -678,8 +684,8 @@ ninth duty.
   look expensive for what they find. It is met when that judgment says they do. A met check
   **reopens their seating** in the calibration. Beside the judgment, the record lists the numbers
   it read: each seat's finding outcomes by outcome, its tokens, and its minutes. They come from
-  `python3 -B <plugin root>/lib/review_learning.py seating --row <file>`. The advisor builds the row
-  file from the window's review-loop measures for those two seats. A number the measures do not
+  `python3 -B <plugin root>/lib/review_learning.py seating --row <file>`. The row file is the
+  `seatingRow` of the window's review-loop measures row (duty 3). A number the measures do not
   give is left out of the row, so the helper shows it as unmeasured. **An unmeasured number is
   recorded as unmeasured, never as zero.**
 - **Each pass records, for each check, whether it was met, not met or unmeasured, and when it was
@@ -716,6 +722,8 @@ ninth duty.
 - **the two revisit checks**: for each, met, not met or unmeasured, and when met, that it went to the owner; the
   window's false PR claim count, zero included; and the seating check's numbers as read, with an
   unmeasured number shown as unmeasured;
+- **the review-loop measures**: the window's row as a table and the chart across windows, both as
+  `review_measures.py render --cwd <root>` prints them, with each unmeasured measure and its reason;
 - the workaround-marker state;
 - the guardian staleness read and any pending triage;
 - the reviewer-pass line, or lines, from duty 8 with any `Renew now` mark, for a project with a cloud setup;
