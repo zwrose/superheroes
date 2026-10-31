@@ -11,6 +11,10 @@ gates: {review: passed}
 producedBy: "the-architect@0.42.0"
 created: "2026-10-09"
 updated: "2026-10-16"
+delivered: "2026-10-16"
+deliveryReceipt: "https://github.com/zwrose/superheroes/pull/1882#issuecomment-6209781421"
+livesIn: ["plugins/superheroes/skills/review-code/reference/review-record.md", "plugins/superheroes/rubric/review-discipline.md", "plugins/superheroes/skills/showrunner/reference/vet-receipt.md", "plugins/superheroes/skills/showrunner/reference/owner-decisions.md", "plugins/superheroes/theme/review-template.md", "plugins/superheroes/agents/test-role.md"]
+supersededInPart: [{"date": "2026-10-31", "sections": ["FR-16", "FR-23", "FR-24", "FR-38", "UFR-2", "Constraints"], "ruling": "The owner's approval (2026-10-27, spec PR #2199) of the review-loop spec a-review-loop-that-converges-in-few-rounds-and-sta-3f628c. It replaces FR-16 (specialists picked by risk area), FR-23 and FR-24 (the test role runs its own break-it tests; a failing run is a finding), UFR-2 (the cap brings open findings out as leftovers), and, under Constraints, only the line keeping the round caps, the stuck-loop stop and the fixer that works only on its finding: these landed with the core loop C1 (#2204) on main at 15da5a2 on 2026-10-31. Of FR-38 it replaces only the second acceptance (an out-of-scope finding with a real consequence reaches the owner), which lands with C3 (#2219), building on 2026-10-31; until C3 merges, the shipped behavior is still FR-38's."}]
 ---
 # Risk-calibrated review that learns
 

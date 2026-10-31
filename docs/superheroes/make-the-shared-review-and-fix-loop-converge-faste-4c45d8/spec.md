@@ -11,6 +11,10 @@ approved: "2026-06-30"
 producedBy: "the-architect@0.3.0"
 created: "2026-06-30"
 updated: "2026-06-30"
+delivered: "2026-07-02"
+deliveryReceipt: "https://github.com/zwrose/superheroes/pull/129"
+livesIn: ["plugins/superheroes/skills/review-code/reference/auto-fix-loop.md", "plugins/superheroes/skills/review-code/reference/round-driver.md", "plugins/superheroes/skills/review-code/reference/synthesis-pass.md"]
+supersededInPart: [{"date": "2026-10-31", "sections": ["FR-3"], "ruling": "The owner's approval (2026-10-27, spec PR #2199) of the review-loop spec a-review-loop-that-converges-in-few-rounds-and-sta-3f628c. It replaces FR-3 (a first-time finding gets one local fix) with its FR-23, which lands with C4 (copies of a bug, #2220), not yet built on 2026-10-31; until C4 merges, the shipped behavior is still FR-3's."}]
 ---
 # Make the shared review-and-fix loop converge faster and cost less
 
