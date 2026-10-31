@@ -137,8 +137,8 @@ def _bootstrap_args(session_dir, guard_dir, scratch):
     with open(seat_map, "w", encoding="utf-8") as fh:
         json.dump(_SEAT_MAP, fh)
     return (["next", "--session-dir", session_dir] + _guard_argv(guard_dir, fresh=True)
-            + ["--verify-command", "none", "--vendors", "claude,codex", "--fixer-vendor", "claude",
-               "--prior-comments", prior, "--max-rounds", "7", "--seat-map", seat_map])
+            + ["--verify-command", "none", "--vendors", "claude,codex",
+               "--prior-comments", prior, "--max-rounds", "4", "--seat-map", seat_map])
 
 
 def _main(capsys, argv):
@@ -463,9 +463,9 @@ def test_e3_an_unfinished_state_without_the_key_is_refused(tmp_path, capsys):
 
 # E4 — axis: only the driver's current integer generation is current; any other value, including
 # the ones that compare equal to a number, is refused.
-@pytest.mark.parametrize("generation", [1, 2, "3", None, True, 5, 7, float(RD.SESSION_GENERATION)],
-                         ids=["one", "two", "string-three", "null", "true", "five-previous", "seven",
-                              "float-current"])
+@pytest.mark.parametrize("generation", [1, 2, "3", None, True, 5, 8, float(RD.SESSION_GENERATION)],
+                         ids=["one", "two", "string-three", "null", "true", "five-previous",
+                              "eight-next", "float-current"])
 def test_e4_a_generation_that_is_not_the_current_integer_is_refused(generation, tmp_path, capsys):
     session_dir = _light_folder(tmp_path, generation=generation)
     rc, out = _main(capsys, ["next", "--session-dir", session_dir])

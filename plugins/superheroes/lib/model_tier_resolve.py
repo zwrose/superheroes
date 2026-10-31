@@ -23,7 +23,6 @@ _FALLBACK = {
     "verifier": "opus",
     "mechanical": "haiku",
     "synthesis": "opus",
-    "code-fixer": "sonnet",
     "doc-reviser": "opus",
     "implementer": "sonnet",
     "pilot": "sonnet",

@@ -29,14 +29,6 @@ def test_p1_line_compile_rule_prose(rel):
     assert "a string line is refused at compile" not in text
 
 
-def test_p2_fixer_template_verify_budget_placeholder():
-    # axis: fixer template carries scoped verify budget, not full verify command
-    text = _read("rubric/orders/dispatch-fixer.md")
-    assert "{{VERIFY_BUDGET}}" in text
-    assert "{{VERIFY_COMMAND}}" not in text
-    assert "never the project's full verify command" in text
-
-
 def test_p3_round_driver_round_economy_reference():
     # axis: round-driver reference documents round economy and concurrent gate
     text = _read("skills/review-code/reference/round-driver.md")
@@ -53,8 +45,8 @@ def test_p3_round_driver_round_economy_reference():
     assert "one full verify run" in text[verify_row_start:verify_row_end].lower()
 
 
-def test_p4_auto_fix_loop_fixer_verify_budget_copy():
-    # axis: auto-fix-loop illustrative fixer copy matches scoped budget contract
+def test_p4_auto_fix_loop_apply_fixes_scoped_verify_copy():
+    # axis: auto-fix-loop's apply-fixes procedure matches the scoped verify contract
     text = _read("skills/review-code/reference/auto-fix-loop.md")
-    assert "Verify budget:" in text
-    assert "never the project's full verify command" in text
+    assert "Run the scoped checks for what you changed" in text
+    assert "Never run the project's full verify command" in text

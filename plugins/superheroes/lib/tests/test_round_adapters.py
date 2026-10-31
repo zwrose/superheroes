@@ -28,6 +28,9 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from session_checkout import enter_checkout  # noqa: E402
 
+# The three checks every audit result owes (`audits.audit_checks_fault`), each answered `yes`.
+_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in audits.CHECK_NAMES}
+
 # --- diffs (same shapes test_round_driver.py drives with) ---------------------
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
@@ -96,13 +99,14 @@ def _responder(round1_findings=None, head=HEAD, grouping=None, verify="pass"):
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": _CHECKS}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": head}
         if phase == RD.P_VERIFY:
             return {"result": verify}
@@ -359,12 +363,12 @@ def test_gap_sweep_assembles_its_candidate_findings(tmp_path):
     assert artifact == {"findings": []}
 
 
-def test_fixer_passes_its_payload_through(tmp_path):
+def test_apply_fixes_passes_its_payload_through(tmp_path):
     def build(n, state):
         hand = {"fixes": [], "headDiff": HEAD}
-        return hand, [_result_env(RA.SEAT_FIXER, {"fixes": [], "headDiff": HEAD})], {}
+        return hand, [_result_env(RA.SEAT_APPLY_FIXES, {"fixes": [], "headDiff": HEAD})], {}
 
-    artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_FIXER, build)
+    artifact, hand = _assert_fold_equivalent(tmp_path, RD.P_APPLY_FIXES, build)
     assert artifact == hand
 
 
@@ -372,13 +376,18 @@ def test_verify_assembles_the_result_token(tmp_path):
     def build(n, state):
         # `command` is consumed now: the fold records it as the round's `verifyVia`
         hand = {"result": "pass", "command": "pytest -q"}
-        payload = {"result": "pass", "command": "pytest -q", "exit": 0, "outputSha256": "ab" * 32}
+        payload = {"result": "pass", "command": "pytest -q", "exit": 0, "outputSha256": "ab" * 32,
+                   "exitCode": 0, "outputPath": "/tmp/out.log", "headSha": "a" * 40,
+                   "headShaAfter": "b" * 40}
         return hand, [_result_env(RA.SEAT_VERIFY, payload)], {}
 
     artifact, _hand = _assert_fold_equivalent(tmp_path, RD.P_VERIFY, build)
     assert artifact["result"] == "pass"
     # The extras the fold tolerates ride along; only `result` is consumed.
     assert artifact["command"] == "pytest -q" and artifact["exit"] == 0
+    # The verb's own fields ride too, so the fold sees the heads and the output the run left.
+    assert artifact["exitCode"] == 0 and artifact["outputPath"] == "/tmp/out.log"
+    assert artifact["headSha"] == "a" * 40 and artifact["headShaAfter"] == "b" * 40
 
 
 def test_audits_assembles_results_and_a_trusted_collection_manifest(tmp_path):
@@ -386,7 +395,7 @@ def test_audits_assembles_results_and_a_trusted_collection_manifest(tmp_path):
         targets = n["payload"]["targets"]
         assert targets
         results = [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                    "auditorVendor": t.get("auditorVendor")} for t in targets]
+                    "auditorVendor": t.get("auditorVendor"), "checks": _CHECKS} for t in targets]
         hand = {"results": results,
                 "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}
         envelopes = [_result_env(t["id"], dict(r), vendor=t.get("auditorVendor"))
@@ -450,7 +459,7 @@ def test_roster_audits_keeps_two_targets_that_share_one_id(tmp_path):
     state = {"_auditTargets": [{"id": shared, "line": 1}, {"id": shared, "line": 90}]}
     keys, reason = RA.roster_for(RD.P_AUDITS, state, {})
     assert reason is None and keys == [shared, shared]
-    payload = {"id": shared, "ruling": audits.AUDIT_RULINGS[0], "reason": "r"}
+    payload = {"id": shared, "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS}
     envelopes = [_result_env(shared, dict(payload), occurrence=0),
                  _result_env(shared, dict(payload), occurrence=1)]
     artifact, reason = RA.assemble(RD.P_AUDITS, envelopes, state, {})
@@ -463,7 +472,7 @@ def test_roster_audits_keeps_two_targets_that_share_one_id(tmp_path):
     (RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP),
     (RD.P_SCOPED, RA.SEAT_SCOPED),
     (RD.P_VERIFY, RA.SEAT_VERIFY),
-    (RD.P_FIXER, RA.SEAT_FIXER),
+    (RD.P_APPLY_FIXES, RA.SEAT_APPLY_FIXES),
 ])
 def test_roster_single_seat_phases(phase, seat):
     assert RA.roster_for(phase, {}, {}) == ([seat], None)
@@ -482,7 +491,7 @@ def test_missing_policy_per_phase():
     assert RA.missing_policy(RD.P_PANEL) == RA.MISSING_SEAT_STATUS
     assert RA.missing_policy(RD.P_VERIFIERS) == RA.MISSING_FOLD_FAIL_CLOSED
     assert RA.missing_policy(RD.P_AUDITS) == RA.MISSING_FOLD_FAIL_CLOSED
-    for phase in (RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_VERIFY, RD.P_FIXER):
+    for phase in (RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES):
         assert RA.missing_policy(phase) == RA.MISSING_REFUSE_FOLD
 
 
@@ -566,9 +575,10 @@ def test_fold_fail_closed_policy_a_silent_auditor_leaves_its_target_not_discharg
 @pytest.mark.parametrize("phase,seat,payload", [
     (RD.P_SYNTHESIS, RA.SEAT_SYNTHESIS, {"grouping": None}),
     (RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP, {"findings": []}),
+    (RD.P_SECOND_TEST, RA.SEAT_SECOND_TEST, {"findings": []}),
     (RD.P_SCOPED, RA.SEAT_SCOPED, {"findings": []}),
     (RD.P_VERIFY, RA.SEAT_VERIFY, {"result": "pass"}),
-    (RD.P_FIXER, RA.SEAT_FIXER, {"fixes": []}),
+    (RD.P_APPLY_FIXES, RA.SEAT_APPLY_FIXES, {"fixes": []}),
 ])
 def test_refuse_fold_policy_every_single_seat_phase_refuses_a_missing_seat(phase, seat, payload):
     """`refuse-fold`: an empty success artifact at a single-seat phase could let the run certify.
@@ -646,7 +656,7 @@ def test_edge_occurrence_beyond_the_roster():
     shared = "f.py::t"
     state = {"_auditTargets": [{"id": shared}]}
     envelopes = [_result_env(shared, {"id": shared, "ruling": audits.AUDIT_RULINGS[0],
-                                      "reason": "r"}, occurrence=1)]
+                                      "reason": "r", "checks": _CHECKS}, occurrence=1)]
     artifact, reason = RA.assemble(RD.P_AUDITS, envelopes, state, {})
     assert artifact is None and reason == "seat-occurrence-not-in-roster:%s#1" % shared
 
@@ -779,13 +789,16 @@ def test_synthesis_payload_none_grouping_is_a_real_answer():
 @pytest.mark.parametrize("payload,fragment", [
     ({}, "`fixes` is missing"),
     ({"fixes": {}}, "`fixes` is dict, not a list"),
-    ({"fixes": [], "escalated": "yes"}, "`escalated` is str, not a boolean"),
     ({"fixes": [], "headDiff": 3}, "`headDiff` is int, not a string"),
     ({"fixes": [], "headDiffPath": "relative/head.diff"}, "is not an absolute path"),
     ({"fixes": [], "coverageDecisions": ["x"]}, "`coverageDecisions`[0] is str"),
+    ({"fixes": [], "unfixed": {}}, "`unfixed` is dict, not a list"),
+    ({"fixes": [], "unfixed": ["x"]}, "`unfixed`[0] is str, not an object"),
+    ({"fixes": [], "unfixed": [{"finding": "k"}]}, "`unfixed[0].why` is NoneType, not a non-empty string"),
+    ({"fixes": [], "unfixed": [{"why": "w"}]}, "`unfixed[0].finding` is NoneType, not a non-empty string"),
 ])
-def test_fixer_payload_faults(payload, fragment):
-    fault = RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER)
+def test_apply_fixes_payload_faults(payload, fragment):
+    fault = RA.payload_fault(RD.P_APPLY_FIXES, payload, RA.SEAT_APPLY_FIXES)
     assert fault is not None and fragment in fault, fault
 
 
@@ -808,16 +821,17 @@ def test_new_issue_ruling_is_a_real_member_of_the_audits_enum():
 
 
 @pytest.mark.parametrize("payload,fragment", [
-    ({"ruling": audits.AUDIT_RULINGS[0], "reason": "r"}, "`id` is NoneType"),
-    ({"id": "other", "ruling": audits.AUDIT_RULINGS[0], "reason": "r"},
+    ({"ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS}, "`id` is NoneType"),
+    ({"id": "other", "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS},
      "`id` is 'other' but this seat is"),
-    ({"id": "f.py::t", "ruling": "fixed", "reason": "r"}, "`ruling` is 'fixed'"),
-    ({"id": "f.py::t", "ruling": None, "reason": "r"}, "`ruling` is None"),
-    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r"},
+    ({"id": "f.py::t", "ruling": "fixed", "reason": "r", "checks": _CHECKS}, "`ruling` is 'fixed'"),
+    ({"id": "f.py::t", "ruling": None, "reason": "r", "checks": _CHECKS}, "`ruling` is None"),
+    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r", "checks": _CHECKS},
      "`newIssues` carries no usable issue object"),
-    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r",
+    ({"id": "f.py::t", "ruling": RA.RULING_NEW_ISSUE, "reason": "r", "checks": _CHECKS,
       "newIssue": "found another"}, "`newIssue` (singular)"),
-    ({"id": "f.py::t", "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "evidence": 3},
+    ({"id": "f.py::t", "ruling": audits.AUDIT_RULINGS[0], "reason": "r", "checks": _CHECKS,
+      "evidence": 3},
      "`evidence` is int, not a string"),
 ])
 def test_audit_payload_faults(payload, fragment):
@@ -829,7 +843,7 @@ def test_audit_payload_faults(payload, fragment):
 def test_audit_payload_requires_a_reason_on_every_ruling(ruling):
     """A ruling with no grounds is the unproven claim the audit fold exists to reject. Record time
     is where it is still a cheap re-dispatch away from being right."""
-    payload = {"id": "f.py::t", "ruling": ruling}
+    payload = {"id": "f.py::t", "ruling": ruling, "checks": _CHECKS}
     if ruling == RA.RULING_NEW_ISSUE:
         payload["newIssues"] = [{"title": "n", "file": "f.py", "line": 1, "severity": "Minor"}]
     for reasonless in (dict(payload), dict(payload, reason=""), dict(payload, reason="   "),
@@ -846,7 +860,8 @@ def test_audit_payload_reason_predicate_is_the_folds_own():
     """Same predicate as the fold, never a second copy of the rule."""
     for reason in ("r", " r ", "", "   ", None, 3, []):
         fault = RA.payload_fault(
-            RD.P_AUDITS, {"id": "i", "ruling": audits.AUDIT_RULINGS[1], "reason": reason}, "i")
+            RD.P_AUDITS, {"id": "i", "ruling": audits.AUDIT_RULINGS[1], "reason": reason,
+                          "checks": _CHECKS}, "i")
         assert (fault is None) == audits.has_usable_reason(reason), (reason, fault)
 
 
@@ -888,7 +903,8 @@ def test_collection_manifest_comes_only_from_the_dispatch_manifest(tmp_path):
                       respond=_responder(round1_findings=_A_FINDING, head=HEAD_NEW_SURFACE))
     targets = n["payload"]["targets"]
     envelopes = [_result_env(t["id"], {"id": t["id"], "ruling": audits.AUDIT_RULINGS[0],
-                                       "reason": "r", "auditorVendor": t.get("auditorVendor")},
+                                       "reason": "r", "auditorVendor": t.get("auditorVendor"),
+                                       "checks": _CHECKS},
                              vendor=t.get("auditorVendor")) for t in targets]
     artifact, reason = RA.assemble(RD.P_AUDITS, envelopes, state, state["config"],
                                    dispatch_manifest=None)
@@ -925,97 +941,6 @@ def test_seat_map_comes_from_state_and_is_omitted_when_empty(tmp_path):
 
 
 # =============================================================================
-# durability — the fixer head diff
-# =============================================================================
-
-def test_fixer_payload_refuses_caller_head_diff_store_path(tmp_path):
-    """`headDiffStorePath` is driver-owned — a caller cannot inject a trusted store path."""
-    store = tmp_path / "evil.diff"
-    store.write_text(HEAD, encoding="utf-8")
-    payload = {"fixes": [], "headDiffStorePath": str(store)}
-    fault = RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER, record_boundary=True)
-    assert fault is not None
-    assert "headDiffStorePath" in fault and "driver-owned" in fault
-    # A/B: headDiffPath alone is still accepted
-    caller = tmp_path / "caller-head.diff"
-    caller.write_text(HEAD, encoding="utf-8")
-    assert RA.payload_fault(RD.P_FIXER, {"fixes": [], "headDiffPath": str(caller)},
-                            RA.SEAT_FIXER) is None
-
-
-def test_fixer_head_diff_path_points_at_the_immutable_store_copy(tmp_path):
-    """`_resolve_head_diff` opens the path at FOLD time, so a caller-controlled path can change
-    between record and fold. The store copy is the one that cannot."""
-    d = str(tmp_path / "session")
-    os.makedirs(d)
-    pend = RD.new_state(_cfg())
-    pend["round"] = 1
-    attempt = 0
-    seat = RA.SEAT_FIXER
-    skey = RR.storage_key(seat)
-    store_copy = RR.store_path(d, 1, RD.P_FIXER, skey, attempt)
-    os.makedirs(os.path.dirname(store_copy), exist_ok=True)
-    headdiff = os.path.join(os.path.dirname(store_copy), "%s.a%d.headdiff" % (skey, attempt))
-    with open(headdiff, "w", encoding="utf-8") as fh:
-        fh.write(HEAD)
-    payload = {"fixes": [], "headDiffStorePath": headdiff}
-    env = _result_env(seat, payload)
-    env.update({"round": 1, "phase": RD.P_FIXER, "attempt": attempt})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], pend, _cfg(), session_dir=d)
-    assert reason is None
-    assert artifact["headDiffPath"] == headdiff
-    assert "headDiffStorePath" not in artifact
-    assert artifact["provenance"]["headDiffPathSource"] == "store"
-
-
-def test_fixer_rejects_an_untrusted_head_diff_store_path(tmp_path):
-    d = str(tmp_path / "session")
-    os.makedirs(d)
-    caller = tmp_path / "caller-head.diff"
-    caller.write_text(HEAD, encoding="utf-8")
-    skey = RR.storage_key(RA.SEAT_FIXER)
-    lookalike = os.path.join("/attacker", "round-1", "seats", RD.P_FIXER,
-                             "%s.a0.headdiff" % skey)
-    payload = {"fixes": [], "headDiffPath": str(caller), "headDiffStorePath": lookalike}
-    assert RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER, record_boundary=True) is not None
-    env = _result_env(RA.SEAT_FIXER, payload)
-    env.update({"round": 1, "phase": RD.P_FIXER, "attempt": 0})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], {}, {}, session_dir=d)
-    assert artifact is None and reason == "head-diff-store-path-untrusted"
-
-
-def test_fixer_head_diff_path_without_a_store_copy_is_disclosed(tmp_path):
-    caller = tmp_path / "caller-head.diff"
-    caller.write_text(HEAD, encoding="utf-8")
-    payload = {"fixes": [], "headDiffPath": str(caller)}
-    artifact, reason = RA.assemble(RD.P_FIXER, [_result_env(RA.SEAT_FIXER, payload)], {}, {})
-    assert reason is None
-    assert artifact["headDiffPath"] == str(caller)
-    assert artifact["provenance"]["headDiffPathSource"] == "caller-path-no-store-copy"
-
-
-def test_fixer_store_path_head_diff_folds_through_the_real_driver(tmp_path):
-    """End to end: the driver-written store path the adapter emits is the one the fold reads."""
-    d, n, state = _at(tmp_path, RD.P_FIXER)
-    skey = RR.storage_key(RA.SEAT_FIXER)
-    store_copy = RR.store_path(d, n["round"], RD.P_FIXER, skey, n["attempt"])
-    headdiff = os.path.join(os.path.dirname(store_copy), "%s.a%d.headdiff" % (skey, n["attempt"]))
-    os.makedirs(os.path.dirname(headdiff), exist_ok=True)
-    with open(headdiff, "w", encoding="utf-8") as fh:
-        fh.write(HEAD)
-    payload = {"fixes": [], "headDiffStorePath": headdiff}
-    env = _result_env(RA.SEAT_FIXER, payload)
-    env.update({"round": n["round"], "phase": RD.P_FIXER, "attempt": n["attempt"]})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], state, state["config"], session_dir=d)
-    assert reason is None
-    assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)["ok"]
-    ok, after = RD.load_state(d)
-    assert after["headDiff"] == HEAD
-    assert after["rounds"]["1"]["headDiffSource"] == "path"
-    assert after["rounds"]["1"]["adapterProvenance"]["byPhase"][RD.P_FIXER]["headDiffPathSource"] == "store"
-
-
-# =============================================================================
 # payload_contract — conformance with checkers
 # =============================================================================
 
@@ -1026,9 +951,10 @@ _SEAT_KEYS = {
     RD.P_VERIFIERS: "verifier:f.py:0",
     RD.P_SYNTHESIS: RA.SEAT_SYNTHESIS,
     RD.P_GAPSWEEP: RA.SEAT_GAPSWEEP,
+    RD.P_SECOND_TEST: RA.SEAT_SECOND_TEST,
     RD.P_SCOPED: RA.SEAT_SCOPED,
     RD.P_VERIFY: RA.SEAT_VERIFY,
-    RD.P_FIXER: RA.SEAT_FIXER,
+    RD.P_APPLY_FIXES: RA.SEAT_APPLY_FIXES,
     RD.P_AUDITS: "f.py::t",
 }
 
@@ -1053,6 +979,8 @@ def _minimal_payload_for_contract(phase, contract, seat_key):
             payload[field] = audits.AUDIT_RULINGS[0]
         elif field == "reason":
             payload[field] = "grounds"
+        elif field == "checks":
+            payload[field] = _CHECKS
         else:
             payload[field] = "x"
     if phase == RD.P_PANEL and "findings" not in payload:
@@ -1167,7 +1095,7 @@ def test_declared_element_enum_verdict_is_enforced():
 
 
 def test_declared_top_level_type_fixes_is_list():
-    fault = RA.payload_fault(RD.P_FIXER, {"fixes": "not-a-list"}, RA.SEAT_FIXER)
+    fault = RA.payload_fault(RD.P_APPLY_FIXES, {"fixes": "not-a-list"}, RA.SEAT_APPLY_FIXES)
     assert fault is not None and "`fixes` is str, not a list" in fault
 
 
@@ -1198,12 +1126,26 @@ def test_payload_contract_optional_keys_match_checker(phase):
     assert RA.payload_fault(phase, base, seat_key) is None
     for field in contract.get("optional") or []:
         payload = dict(base)
+        if field == "exitCode":
+            # declared `any`: the verb writes null for a run with no exit code, so no value is a wrong
+            # type — the field is accepted as an integer and as null
+            for value in (0, 1, None):
+                payload[field] = value
+                assert RA.payload_fault(phase, payload, seat_key) is None, value
+            continue
+        if field == "testMatch":
+            # declared `any`: the contract holds no target, so `audit-checks` judges `checks` alone; the
+            # shape of a `testMatch` is judged against its target (test_c1l10_audit_checks)
+            for value in (None, 1, {"answer": "matches", "why": "w"}):
+                payload[field] = value
+                assert RA.payload_fault(phase, payload, seat_key) is None, value
+            continue
         if field == "findings":
             payload[field] = "not-a-list"
         elif field in ("confidence", "tier", "reason", "command", "headDiff", "headDiffPath",
                        "evidence", "auditorVendor"):
             payload[field] = 1
-        elif field in ("receiptMissing", "receiptStale", RA.VACUOUS_FIELD, "escalated"):
+        elif field in ("receiptMissing", "receiptStale", RA.VACUOUS_FIELD):
             payload[field] = "not-a-bool"
         elif field == "newIssues":
             payload[field] = "not-a-list"

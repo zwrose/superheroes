@@ -136,11 +136,34 @@ and the receipt says that scrubbing happened.
 ## What you may write
 
 **Your only writes are the diagnosis comment (the receipt) and the incident issue itself, when none
-exists yet.** You never edit an issue body. The confirmed cause reaches the body through the
-advisor, after the vet.
+exists yet.** In a cloud session your tracker writes also include the intake, progress, terminal and
+builder-note comments that `${CLAUDE_PLUGIN_ROOT}/skills/detective/reference/cloud.md` names, on the
+incident issue. You never edit an issue body, and you never change the surface under diagnosis. The
+confirmed cause reaches the body through the advisor, after the vet.
 
-**Done when:** your writes to the tracker are the receipt comment and, where no incident issue
-existed, that issue, with no issue body edited.
+**Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present, stamp the
+lane heartbeat with `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/heartbeat.py" stamp` per
+CONVENTIONS §15: one `working` stamp when diagnosis starts, `blocked` when blocked on something
+only the owner or advisor can clear, `working` again when it clears, `handback` only after the
+receipt comment is posted, and `parked` only after an honest-exit comment is posted. When it is
+absent the session is not advisor-managed, so never invent an id. A stamp is a local store
+write, not a tracker write, so the rule above is unchanged.
+
+**Done when:** your writes to the tracker are the receipt comment, where no incident issue existed
+that issue, and, in a cloud session, only the intake, progress, terminal and builder-note comments
+the cloud reference names, with no issue body edited.
+
+## In a cloud session
+
+**A cloud start runs the cloud intake first and stops on its refusal.** Disposable copies live only
+inside the cloud session, and no branch is pushed for the surface under diagnosis. Besides the
+receipt, you post the lane notes on the incident issue that the advisor's watch reads: an intake
+note, one progress comment kept current, and a terminal note after the receipt.
+
+**Read `${CLAUDE_PLUGIN_ROOT}/skills/detective/reference/cloud.md` when the launch prompt says `Place: cloud session`.**
+
+**Done when:** the cloud intake ran before any diagnosis, or its refusal was posted and the lane
+ended, and the lane's notes went up as the cloud reference says.
 
 ## Handoff — advisor vet before any fix
 

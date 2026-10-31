@@ -438,6 +438,95 @@ def test_reserve_ignores_a_caller_supplied_surface_overlap(tmp_path, monkeypatch
     assert "surfaceOverlap" not in records[0]
 
 
+def _fail_reserved_append(monkeypatch, *, land, read_state=None):
+    """Make the `reserved` append report failure; `land` writes the line first. When
+    `read_state` is given, the first read after the failing append reports that state."""
+    real_append, real_read = ll.append, ll.read
+    seen = {"failed": False, "faked": False}
+
+    def fake_append(repo_root, record, env=None):
+        if record.get("event") != "reserved":
+            return real_append(repo_root, record, env=env)
+        if land:
+            real_append(repo_root, record, env=env)
+        seen["failed"] = True
+        return False
+
+    def fake_read(repo_root, env=None, **kw):
+        if read_state and seen["failed"] and not seen["faked"]:
+            seen["faked"] = True
+            return {"state": read_state, "records": []}
+        return real_read(repo_root, env=env, **kw)
+
+    monkeypatch.setattr(ll, "append", fake_append)
+    monkeypatch.setattr(ll, "read", fake_read)
+
+
+def test_reserve_append_failure_that_landed_reads_back_landed(tmp_path, monkeypatch):
+    # axis: an append that reports failure but landed reads back landed — still a failure, never a spawn go-ahead
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    _fail_reserved_append(monkeypatch, land=True)
+    result = ll.reserve(repo, _reserved("l1", "b1", ["alpha"], repo), env=env)
+    assert result == {
+        "ok": False, "reason": "ledger-append-failed", "path": None,
+        "appendReadBack": "landed",
+    }
+    records = ll.read(repo, env=env)["records"]
+    assert [r["launchId"] for r in records if r.get("event") == "reserved"] == ["l1"]
+
+
+def test_reserve_append_failure_that_wrote_nothing_reads_back_not_landed(tmp_path, monkeypatch):
+    # axis: an append that reports failure and wrote nothing reads back not-landed
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    _fail_reserved_append(monkeypatch, land=False)
+    result = ll.reserve(repo, _reserved("l1", "b1", ["alpha"], repo), env=env)
+    assert result == {
+        "ok": False, "reason": "ledger-append-failed", "path": None,
+        "appendReadBack": "not-landed",
+    }
+    assert [r for r in ll.read(repo, env=env)["records"] if r.get("launchId") == "l1"] == []
+
+
+def test_reserve_append_failure_with_an_undecidable_read_back_is_uncertain(tmp_path, monkeypatch):
+    # axis: a torn, corrupt or unreadable read-back is uncertain, never not-landed
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    for number, state in enumerate(("tornTail", "interiorCorrupt", "unreadable")):
+        _fail_reserved_append(monkeypatch, land=True, read_state=state)
+        result = ll.reserve(
+            repo, _reserved("l%d" % number, "b%d" % number, ["s%d" % number], repo, issue=700 + number),
+            env=env,
+        )
+        assert result == {
+            "ok": False, "reason": "ledger-append-failed", "path": None,
+            "appendReadBack": "uncertain",
+        }, state
+
+
+def test_reserve_append_failure_with_a_differing_record_is_uncertain(tmp_path, monkeypatch):
+    # axis: a record under this id that is not what was written is uncertain
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    real_append = ll.append
+
+    def fake_append(repo_root, record, env=None):
+        if record.get("event") == "reserved":
+            real_append(repo_root, dict(record, model="someone-else"), env=env)
+            return False
+        return real_append(repo_root, record, env=env)
+
+    monkeypatch.setattr(ll, "append", fake_append)
+    result = ll.reserve(repo, _reserved("l1", "b1", ["alpha"], repo), env=env)
+    assert result["ok"] is False
+    assert result["appendReadBack"] == "uncertain"
+
+
 def test_fold_refuses_a_malformed_surface_overlap(tmp_path):
     # axis: grammar census — the shape half of surfaceOverlap validation
     base = _reserved("l1", "b1", ["alpha"], str(tmp_path), issue=1001)

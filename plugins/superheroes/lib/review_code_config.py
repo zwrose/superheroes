@@ -15,18 +15,40 @@ import model_tier_overrides  # noqa: E402
 import core_md               # noqa: E402  (sibling)
 
 
+VERIFY_REFUSAL_REASON = "verify-command-required"
+VERIFY_REFUSAL_MESSAGE = (
+    "Code review is not available until a verify command is set. Code review needs a command "
+    "that verifies this project's code; set one with /superheroes:configure."
+)
+
+
+verify_command_configured = core_md.verify_command_configured  # the one shared no-command test
+
+
+_RETIRED_VERIFY_MODES = ("review-only", "unverified")
+
+
+def _is_retired_mode(value):
+    """True when a legacy `mode:` value names a retired verify mode. Backticks and case are
+    tolerated, and any inline annotation after the mode token (`review-only # disabled`) is
+    ignored, so an annotated opt-out still refuses."""
+    tokens = value.split("#", 1)[0].replace("`", " ").split()
+    return bool(tokens) and tokens[0].lower() in _RETIRED_VERIFY_MODES
+
+
 def resolve_verify_command(profile_path):
     """The profile's `## Verify` `command:` value (first wins), or 'none' when absent/unreadable."""
-    _mode, cmd = resolve_verify_from_profile(profile_path)
-    return cmd
+    return resolve_verify_from_profile(profile_path)
 
 
 def resolve_verify_from_profile(profile_path):
-    """Return (verify_mode, verify_command). verify_mode is None, 'unverified', or 'review-only'."""
+    """Return the profile's `## Verify` `command:` value (first wins), or 'none' when the profile
+    is absent, unreadable, or sets no command."""
     if not profile_path or not os.path.exists(profile_path):
-        return None, "none"
+        return "none"
     try:
         in_verify = False
+        command = None
         with open(profile_path, encoding="utf-8") as fh:
             for raw in fh:
                 line = raw.strip()
@@ -37,31 +59,27 @@ def resolve_verify_from_profile(profile_path):
                     break
                 if not in_verify:
                     continue
-                if line.startswith("mode: unverified"):
-                    return "unverified", "none"
-                if line.startswith("mode: review-only"):
-                    return "review-only", "none"
-                if line.startswith("command:"):
-                    cmd = line.split(":", 1)[1].strip() or "none"
-                    return None, cmd
+                if line.startswith("mode:") and _is_retired_mode(line.split(":", 1)[1]):
+                    # A retired opt-out mode wins over a retained command, in either order.
+                    return "none"
+                if command is None and line.startswith("command:"):
+                    command = line.split(":", 1)[1].strip() or "none"
+        return command or "none"
     except OSError:
-        return None, "none"
-    return None, "none"
+        return "none"
 
 
 # The cfg.tiers key -> model_tier role map. The single home for the review-code tier vocabulary
-# on the Python side. The review-code fixer resolves the `code-fixer` role (review-code only
-# fixes code).
+# on the Python side. Fix-applying runs in the build session, so there is no fixer tier.
 _TIER_ROLE = {
     "reviewer": "reviewer",
     "reviewerDeep": "reviewer-deep",
     "synthesis": "synthesis",
-    "fixer": "code-fixer",
 }
 
 
 def resolve_tiers(overrides):
-    """The four leaf tiers (FR-7), honoring per-role profile overrides; None => inherit session.
+    """The three leaf tiers (FR-7), honoring per-role profile overrides; None => inherit session.
     Resolved through the _TIER_ROLE vocabulary map (the SSOT for the cfg-key -> model_tier-role
     mapping)."""
     return {key: model_tier.resolve_model(role, overrides)
@@ -80,7 +98,6 @@ def _break_it_interpreter_value(record):
 
 def resolve(cwd, root=None):
     verify = None
-    verify_mode = None
     profile = None
     overrides = {}
     refusal = None
@@ -110,7 +127,7 @@ def resolve(cwd, root=None):
         if profile and not os.path.isfile(profile):
             profile = None
         if verify is None:
-            verify_mode, verify = resolve_verify_from_profile(profile)
+            verify = resolve_verify_from_profile(profile)
     except Exception as exc:
         _cr = sys.modules.get("calibration_resolve")
         if _cr is None:
@@ -121,7 +138,6 @@ def resolve(cwd, root=None):
         if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
             raise
         profile = None
-        verify_mode = None
     try:
         # Deliberate fail-open: model tiers here are a cost knob for review-code rounds,
         # not a governance gate — an unreadable profile yields band defaults (cost concern,
@@ -129,7 +145,8 @@ def resolve(cwd, root=None):
         overrides = model_tier_overrides.load_overrides(profile)
     except Exception:
         overrides = {}
-    if verify is None:
+    configured = verify_command_configured(verify)
+    if not configured:
         verify = "none"
     try:
         tiers = resolve_tiers(overrides)
@@ -137,7 +154,10 @@ def resolve(cwd, root=None):
         tiers = resolve_tiers({})
     return {
         "verifyCommand": verify,
-        "verifyMode": verify_mode,
+        "verifyRefusal": None if configured else {
+            "reason": VERIFY_REFUSAL_REASON,
+            "message": VERIFY_REFUSAL_MESSAGE,
+        },
         "tiers": tiers,
         "calibrationRefusal": refusal,
         "breakItInterpreter": break_it_interpreter,

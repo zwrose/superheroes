@@ -214,34 +214,6 @@ project configuration.
 The line in a [gardening record](#gardening-record) that lists the items still waiting on the
 owner's word.
 
-## The forward-share dial
-
-### Dial
-
-A project's ceiling on the share of launched lanes that carry machinery work over a [gardening
-window](#gardening-window). Each project configures its number, and the plugin ships a default.
-
-### Machinery lane
-
-A launched lane whose issue carries the machinery [kind label](#kind-label): work on the plugin's
-own mechanisms.
-
-### Product-forward lane
-
-A launched lane whose issue carries the product [kind label](#kind-label): work that moves the
-product toward its users, under the classification convention PHILOSOPHY's forward-share bet
-states.
-
-### N
-
-The [dial](#dial) expressed for one wave: the dial times the wave's lane count, rounded down, with
-a floor of one when a non-zero dial would round to zero. A project may pin N directly.
-
-### Kind label
-
-`kind:machinery` or `kind:product` on an issue: the advisor's judgment at routing, the owner's at
-an epic's ratification, and never set or checked by a tool.
-
 ## Cloud builds
 
 ### Cloud build
@@ -274,12 +246,8 @@ overrides the project's cloud builds setting for that build.
 
 ### Fold-in rules
 
-The rules for draining the backlog without launch slots: a backlog item rides an epic or a routed
+The rules for draining the backlog through live work: a backlog item rides an epic or a routed
 issue as ratified scope instead of taking a lane of its own.
-
-### Folded-in items
-
-Backlog items absorbed into an epic or a routed issue under the [fold-in rules](#fold-in-rules).
 
 ## Workaround markers
 
@@ -432,7 +400,7 @@ The plain account of one PR's review, written when the review ends on any lane. 
 
 ### Maker
 
-Any model that built or fixed the product's code under review. A fixer's family joins the makers for every later round. A reviewer that only writes break-it tests for a change is not a maker of it.
+Any model that built or fixed the product's code under review. The build session is a maker of every fix it applies. A reviewer that only writes break-it tests for a change is not a maker of it.
 
 ### Leftover
 
@@ -444,7 +412,30 @@ The review panel's test seat. For each changed test it asks whether the test wou
 
 ### Break-it test
 
-A test the [test role](#test-role) writes for a change that touches a risk area, to try to break the change on a named risky scenario. The review loop runs it in a throwaway copy of the change. A failing run becomes a finding, and the test stays with the change once that finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
+A test written only by the [test role](#test-role), to try to break a change on a named risky scenario: either attached to one of its findings or as a finding of its own for a risk area. The build session runs it once, in its own working copy, on the unfixed code. The run judges nothing: its result is saved with the finding and handed to the [verifier](#verifier), and a passing run does not drop the finding. The test stays with the change once its finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
+
+### Verifier
+
+The independent reviewer that grades each finding on its own as confirmed, plausible or wrong,
+with its reason, using the output of the finding's [break-it tests](#break-it-test) where there
+are any. It is the only one that closes a finding as wrong (`shown-wrong` in the
+[review record](#review-record)); the build session, the other reviewers and every filter may
+keep, merge or carry a finding, but never close it as wrong. When a passing break-it test never
+reached the path its finding describes, a fresh run of the [test role](#test-role) writes one
+more test, and then the verifier decides; no third test is written. The pass is in
+[the verification pass reference](../skills/review-code/reference/verification-pass.md).
+
+### Fix auditor
+
+The reviewer that, in every round after the first, checks each fix the build session applied: that it is right, that it broke nothing next to it, and that a test would fail if it were wrong. It also checks that the fix's committed [break-it test](#break-it-test) is the one the [test role](#test-role) wrote. It is from a different model family than every [maker](#maker). The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md).
+
+### Scoped finder
+
+The reviewer that, in every round after the first, looks for new problems only in the code the fixes touched, never in the rest of the change. It is given the fixes' own diff and nothing else of the change, and a copy proven identical to its source is left out of it. What it raises is graded by the [verifier](#verifier) like a first-round finding. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md).
+
+### Extra audit round
+
+The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
 
 ## Cloud builds
 

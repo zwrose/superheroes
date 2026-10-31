@@ -83,6 +83,10 @@ def _lib_run(monkeypatch, engine, synthesis, verifier_vendor, findings=None, **c
     reported = _A_FINDING if findings is None else findings
 
     def reviewer(dim, tier, rnd, ctx):
+        # the fix changed a file, so the scoped finder runs: it is seated on the engine's own vendor
+        # (the cell proof in `_cfg` leaves it seatable), and reports the vendor it ran on
+        if dim == "scoped-finder":
+            return {"findings": [], "vendor": engine}
         return [dict(f) for f in reported] if rnd == 1 and dim == "code-reviewer" else []
 
     def verifier(clusters, rnd):
@@ -211,7 +215,7 @@ def test_c1_cli_unseatable_synthesis_is_never_offered_and_the_round_continues(tm
     # axis: the empty-grouping fold at the chokepoint — the step never becomes dispatch-synthesis
     seen, state, receipt = _cli_run(tmp_path, **_VERIFIER_ONLY)
     assert RD.P_SYNTHESIS not in seen
-    assert RD.P_FIXER in seen, seen
+    assert RD.P_APPLY_FIXES in seen, seen
     assert state["rounds"]["1"]["synthesisUnseatable"]
     assert state["terminal"] != "cannot-certify", state.get("certification")
     assert any(UNSEATABLE_LINE in line for line in receipt["degraded"]), receipt["degraded"]
@@ -321,8 +325,8 @@ def test_b5_the_harness_counts_a_synthesis_leaf_only_for_a_round_that_ran_it(mon
     fixture = Path(_EVAL) / "fixtures" / "review_loop" / "confirmation_important_certifies.json"
     clean = HARNESS._eval_clean_seat_map
 
-    def without_codex_cells(fixer_vendor=HARNESS._EVAL_FIXER_VENDOR):
-        seat_map = dict(clean(fixer_vendor))
+    def without_codex_cells(build_session_vendor=HARNESS._EVAL_BUILD_SESSION_VENDOR):
+        seat_map = dict(clean(build_session_vendor))
         seat_map["nonPanelLiveCells"] = [c for c in seat_map["nonPanelLiveCells"] if c[0] != "codex"]
         return seat_map
 
@@ -331,9 +335,10 @@ def test_b5_the_harness_counts_a_synthesis_leaf_only_for_a_round_that_ran_it(mon
     monkeypatch.setattr(HARNESS, "_eval_clean_seat_map", without_codex_cells)
     leaves = HARNESS.run_fixture(fixture)["telemetry"]["tokenUsage"]["expectedLeaves"]
     assert not [leaf for leaf in leaves if leaf.startswith("synthesis:")], leaves
-    monkeypatch.setattr(HARNESS, "_eval_clean_seat_map",
-                        lambda fixer_vendor=HARNESS._EVAL_FIXER_VENDOR: dict(clean(fixer_vendor),
-                                                                             hostFamily="google"))
+    monkeypatch.setattr(
+        HARNESS, "_eval_clean_seat_map",
+        lambda build_session_vendor=HARNESS._EVAL_BUILD_SESSION_VENDOR: dict(
+            clean(build_session_vendor), hostFamily="google"))
     # a known non-maker host family seats it on `claude`: the callback runs and its leaf is counted
     ran = HARNESS.run_fixture(fixture)["telemetry"]["tokenUsage"]["expectedLeaves"]
     assert "synthesis:r1" in ran, ran

@@ -8,7 +8,7 @@
 - §4 — Optional heavier heroes — provisional defaults disclose
 - §4.4 — Show-it surface — provisional default
 - §4.5 — Engine preferences — per-role defaults
-- §4.6 — Project-configuration dependencies and kind labels
+- §4.6 — Project-configuration dependencies
 - §4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 - §4.8 — Sandbox access for the claude implementer — all off by default
 - §4.9 — Size count exclusions — none by default
@@ -78,20 +78,27 @@ the change touched. It is not the project's full gate. A build re-runs it after 
 round and on the final head, so a project whose verify command is its full gate pays that cost every
 time. Workhorse §8 says when the full gate runs.
 
-<!-- decision-point: id=configure-setup-verify-command mode=notify kind=ask-user-question default="mode: review-only when no verify command is detectable" carrier=review-crew-layer -->
+<!-- decision-point: id=configure-setup-verify-command mode=notify kind=ask-user-question default="no verify command recorded when none is detectable; the owner is told code review is not available until one is set" carrier=review-crew-layer -->
 
-When no verify command is detectable, take the provisional default **`mode: review-only`** (matching
-`review-init`'s default for the same field) — **never edit the owner's build config yourself** and
-never guess a command. NOTIFY: record `mode: review-only` in the core facts and disclose it in
-the set-up output and carry it into the hero's `## Setup disclosures` section per the §2 carrier
-note, and the run continues. The owner may set a real
-verify command via `/superheroes:configure`.
+When no verify command is detectable, record none — **never edit the owner's build config yourself**
+and never guess a command. Then, from the project root, ask the resolver what the owner should be
+told:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/review_code_config.py"
+```
+
+NOTIFY: show the owner the output's `verifyRefusal.message` verbatim in the set-up output and carry
+it into the hero's `## Setup disclosures` section per the §2 carrier note, and the run continues.
+The owner sets a command with `/superheroes:configure`. Without one, `/superheroes:review-code`
+refuses to start.
 
 <!-- /decision-point: id=configure-setup-verify-command -->
 
-Set-up does not write `breakItInterpreter`. When the verify command names no Python launcher (for
-example `pytest -q`, `make test` or `tox`), state in the set-up output that break-it Python tests
-will not run until that key is set. Name `scripts/pinned-python` when that file is present. Point to
+Set-up does not write `breakItInterpreter`. When a verify command is set and names no Python
+launcher (for example `pytest -q`, `make test` or `tox`), state in the set-up output that break-it
+Python tests will not run until that key is set. Name `scripts/pinned-python` when that file is present. Point to
 view-and-tune's "Name the Python launcher for break-it tests"
 (`skills/configure/reference/view-and-tune.md` § 2). Set-up detects and discloses this only; it
 never prompts for the value.
@@ -420,39 +427,27 @@ until the owner grants and tests it via `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-engine-preferences -->
 
-## 4.6 — Project-configuration dependencies and kind labels
+## 4.6 — Project-configuration dependencies
 
-At calibration, report the four declared dependencies and ensure the two kind labels exist. Neither
-step blocks set-up.
+At calibration, report the four declared dependencies. The step never blocks set-up.
 
-1. **Declared dependencies.** Run the dependency check and write each result into the set-up output.
-   Name the fallback for every dependency that is absent. A missing dependency never blocks
-   calibration.
+Run the dependency check and write each result into the set-up output. Name the fallback for every
+dependency that is absent. A missing dependency never blocks calibration.
 
-   ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/project_config.py" dependencies --cwd .
-   ```
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/project_config.py" dependencies --cwd .
+```
 
-   When the project has a dependency to declare, persist it with JSON on stdin:
+When the project has a dependency to declare, persist it with JSON on stdin:
 
-   ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   printf '%s' '"standing-proposals"' | \
-     python3 -B "$ROOT_DIR/lib/project_config.py" declare --dependency collector --cwd .
-   ```
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+printf '%s' '"standing-proposals"' | \
+  python3 -B "$ROOT_DIR/lib/project_config.py" declare --dependency collector --cwd .
+```
 
-   An undeclared dependency is not a failure — its fallback applies.
-
-2. **Kind labels.** When `kind:machinery` or `kind:product` is missing on the repository, create
-   only the missing labels through `kind_labels`. Report what was created. A label failure
-   degrades calibration with a disclosure and never refuses it.
-
-   ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   REPO=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
-   python3 -B "$ROOT_DIR/lib/kind_labels.py" --repo "$REPO" --apply
-   ```
+An undeclared dependency is not a failure — its fallback applies.
 
 ## 4.7 — Review-discipline CLAUDE.md — offer recorded, not written unasked
 

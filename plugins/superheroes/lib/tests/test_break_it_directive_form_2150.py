@@ -125,7 +125,7 @@ def test_the_content_rules_and_the_agent_paragraph_name_no_project_or_marker():
         for banned in ("gate-reads", "weekly"):
             assert banned not in text.lower(), (name, banned)
     paragraphs = section.split("\n\n")
-    assert paragraphs[paragraphs.index(paragraph) - 1].startswith("For each touched area, write at least one")
+    assert paragraphs[paragraphs.index(paragraph) - 1].startswith("A credential-like value in a break-it test")
 
 
 def test_a_test_in_the_projects_full_directive_form_comes_through_review_kept(ruled_world):

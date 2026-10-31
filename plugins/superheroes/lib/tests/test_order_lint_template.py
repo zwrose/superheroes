@@ -108,67 +108,9 @@ def test_unreadable_template_masks_nothing(consumer_repo, tmp_path, monkeypatch)
     assert {"token": OL.TOKEN_PLACEHOLDER_UNFILLED, "detail": "NAME"} in out["findings"]
 
 
-# --- the fixer-emission door (round_driver._emit_orders_manifest) ---
-
-RD = _load("round_driver")
-_DIFF = ("diff --git a/src/f.py b/src/f.py\nindex 1111111..2222222 100644\n--- a/src/f.py\n"
-         "+++ b/src/f.py\n@@ -1,2 +1,3 @@\n alpha\n+beta\n delta\n")
-_FIXER_SKEY = "fixer-508e7896192355de"
-
-
-def _emit_fixer_with(tmp_path, monkeypatch, order_text):
-    session_dir = str(tmp_path / "session")
-    os.makedirs(session_dir, exist_ok=True)
-    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: {})
-    monkeypatch.setattr(RD.engine_pref, "resolve_engine", lambda _role, _prefs: "claude")
-    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": _DIFF,
-                                    "fixerVendor": "claude", "verifyCommand": "none"})
-    assert out["ok"], out
-    ok, state = RD.load_state(session_dir)
-    assert ok, state
-    state["headDiff"] = _DIFF
-    state["fixBatch"] = []
-    monkeypatch.setattr(RD.round_orders, "render_order", lambda _p, _s, _c: (order_text, None))
-    return RD._emit_orders_manifest(
-        session_dir, state, state["round"], RD.P_FIXER, 0, ["fixer"],
-        journal_cmd="next", pending_payload={}, seat_map={})
-
-
-def _fixer_order(body, tail="Fix the batch in place."):
-    return "You are the fixer.\n\n" + body + "\n\n## Your fix batch\n\n" + tail + "\n"
-
-
-def test_fixer_door_passes_charter_shaped_order(tmp_path, monkeypatch):
-    # axis: the fixer-emission door masks the verbatim template exactly as the CLI does (E1)
-    anchor = _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(_shipped_body()))
-    assert "manifestSha256" in anchor
-
-
-def test_fixer_door_refuses_authored_placeholder(tmp_path, monkeypatch):
-    # axis: the fixer-emission door still refuses an authored placeholder beside the template (E3)
-    text = _fixer_order(_shipped_body(), tail="Fix " + "{{" + "TARGET_FILE" + "}}" + ".")
-    with pytest.raises(
-            ValueError,
-            match=r"^order-render-refused:%s:order-lint:order-placeholder-unfilled:TARGET_FILE$"
-            % _FIXER_SKEY):
-        _emit_fixer_with(tmp_path, monkeypatch, text)
-
-
-def test_fixer_door_refuses_placeholder_in_altered_template_copy(tmp_path, monkeypatch):
-    # axis: the fixer-emission door masks only a verbatim copy, exactly as the CLI does (E2)
-    altered = _shipped_body().replace(
-        "## Validating your work order", "## Validating your {{COUNT}} work order", 1)
-    # The door names the first finding: the unmasked copy's own example placeholder comes first.
-    with pytest.raises(
-            ValueError,
-            match=r"^order-render-refused:%s:order-lint:order-placeholder-unfilled:(NAME|COUNT)$"
-            % _FIXER_SKEY):
-        _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(altered))
-
-
 @pytest.mark.parametrize("eol", ["\r\n", "\r"], ids=["crlf", "cr"])
-def test_crlf_charter_shaped_order_passes_both_doors(consumer_repo, tmp_path, monkeypatch, eol):
-    # axis: one newline policy — a CRLF or CR order is graded the same through the CLI and the fixer door (E6)
+def test_crlf_charter_shaped_order_passes_the_cli(consumer_repo, tmp_path, eol):
+    # axis: one newline policy — a CRLF or CR order is graded the same through the CLI (E6)
     order = tmp_path / "order.md"
     order.write_bytes(_order(_shipped_body()).replace("\n", eol).encode("utf-8"))
     run = subprocess.run(
@@ -177,5 +119,3 @@ def test_crlf_charter_shaped_order_passes_both_doors(consumer_repo, tmp_path, mo
     )
     out = json.loads(run.stdout)
     assert (run.returncode, out["ok"], out["templateCopiesMasked"]) == (0, True, 1)
-    anchor = _emit_fixer_with(tmp_path, monkeypatch, _fixer_order(_shipped_body()).replace("\n", eol))
-    assert "manifestSha256" in anchor

@@ -51,7 +51,6 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import command_refusals  # noqa: E402
 import core_md  # noqa: E402
 import mode_registry  # noqa: E402
 import order_contract  # noqa: E402
@@ -66,8 +65,8 @@ ORDER_PHASES = (
     round_phases.P_VERIFIERS,
     round_phases.P_SYNTHESIS,
     round_phases.P_GAPSWEEP,
+    round_phases.P_SECOND_TEST,
     round_phases.P_AUDITS,
-    round_phases.P_FIXER,
     round_phases.P_SCOPED,
 )
 
@@ -77,7 +76,6 @@ _AUX_PLACEHOLDER_INPUTS = frozenset({
     "FOCUS_NOTES",
     "FINDINGS_OUTPUT_PATH",
     "GROUPING_OUTPUT_PATH",
-    "PR_CHECKOUT_PATH",
     "PRIOR_COMMENTS_PATH",
     "ROLE_BRIEF_PATH",
     "RISK_AREAS_TEXT",
@@ -116,26 +114,30 @@ REVIEW_SEAT_RULE = (
     "verify command."
 )
 
-FIXER_SEAT_RULE = (
-    "You run only the commands this order names, plus the file reads and searches that inspect "
-    "its inputs and the sources you fix, and the staging your commit needs. You run none of the "
-    "project's own files, scripts or tests beyond those, and the full verify command stays the "
-    "driver's."
-)
-
-
 def seat_rule_block(phase: str) -> str:
-    """The standing-rule block for ``phase``'s order: the fixer's rule or the review seats'."""
-    rule = FIXER_SEAT_RULE if phase == round_phases.P_FIXER else REVIEW_SEAT_RULE
-    return SEAT_RULE_HEADING + "\n\n" + rule
+    """The standing-rule block for ``phase``'s order: the review seats' rule."""
+    return SEAT_RULE_HEADING + "\n\n" + REVIEW_SEAT_RULE
 
 
 def order_template_path(phase: str, root: str | None = None) -> str:
-    """Absolute path to ``rubric/orders/<phase>.md``."""
+    """Absolute path to ``rubric/orders/<phase>.md`` (``phase`` is a template name: see ``_template_name``)."""
     if root is None:
         base = os.path.dirname(os.path.abspath(__file__))
         return os.path.normpath(os.path.join(base, "..", "rubric", "orders", phase + ".md"))
     return os.path.normpath(os.path.join(root, "rubric", "orders", phase + ".md"))
+
+
+SECOND_TEST_CORRECTION_TEMPLATE = "dispatch-second-test-correction"
+
+
+def _template_name(phase: str, context: dict) -> str:
+    """The template a phase's order is read from: the phase's own, except the second-test phase's
+    correction form (payload ``correction`` exactly ``true``), which has a template of its own."""
+    payload = context.get("payload")
+    if (phase == round_phases.P_SECOND_TEST and isinstance(payload, dict)
+            and payload.get("correction") is True):
+        return SECOND_TEST_CORRECTION_TEMPLATE
+    return phase
 
 
 def _refuse(reason: str) -> tuple[None, str]:
@@ -356,6 +358,13 @@ def _result_channel_neutral_delivery(stdout_example=None):
     )
 
 
+_READ_PARTS_REMINDER = (
+    "Return `readParts` — one entry per file you actually read, with the line ranges of it you "
+    "read (the file's lines at the reviewed head), as the base rubric defines it; `[]` when you "
+    "read nothing."
+)
+
+
 def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> str:
     """Format-only panel stdout delivery — shape illustration, not a literal emit target."""
     lines = [
@@ -372,7 +381,7 @@ def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> 
     if include_investigated_reminder:
         lines.append(
             "List in `investigated` every repo-relative path you actually read to ground "
-            "this review — always, whether or not you found anything."
+            "this review — always, whether or not you found anything. " + _READ_PARTS_REMINDER
         )
     return "\n".join(lines)
 
@@ -414,7 +423,7 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
             "- Payload landing path: %s" % landing,
         ])
     else:
-        if phase in (round_phases.P_PANEL, round_phases.P_FIXER):
+        if phase == round_phases.P_PANEL:
             lines.extend([_RESULT_CHANNEL_NEUTRAL_DELIVERY])
         else:
             stdout_example, reason = _stdout_payload_example(phase)
@@ -437,6 +446,24 @@ def _validate_common_context(context: object) -> str | None:
     return None
 
 
+def _test_role_derived_placeholders(ph: dict) -> dict[str, str]:
+    """``ph`` with the test role's brief line and break-it grammar block derived from the order inputs
+    ``ROLE_BRIEF_PATH`` and ``BREAK_IT_GRAMMAR_TEXT`` — one home for the panel's test-role order and the
+    second-test order."""
+    ph = dict(ph)
+    role_brief = ph.get("ROLE_BRIEF_PATH", "").strip()
+    ph["ROLE_BRIEF_LINE"] = (
+        "- Your role brief (read it first; it binds over the generic assignment above): %s"
+        % role_brief if role_brief else ""
+    )
+    grammar_text = ph.get("BREAK_IT_GRAMMAR_TEXT", "").strip()
+    ph["BREAK_IT_GRAMMAR_BLOCK"] = (
+        "- The break-it block (a break-it finding's suggestion is exactly this; the loop parses it):\n\n"
+        + grammar_text if grammar_text else ""
+    )
+    return ph
+
+
 def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
@@ -451,25 +478,8 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Deliver per the base rubric's panel output-format section. Write your payload "
             "artifact to %s — write an empty findings list rather than skipping the file when "
-            "you have nothing to flag." % landing
+            "you have nothing to flag. " % landing + _READ_PARTS_REMINDER
         )
-    pr_checkout = ph.get("PR_CHECKOUT_PATH", "").strip()
-    ph["PR_CHECKOUT_CONTEXT_LINE"] = (
-        "- PR branch checkout: %s" % pr_checkout if pr_checkout else ""
-    )
-    if pr_checkout:
-        ph["PR_CHECKOUT_INSTRUCTION_BLOCK"] = (
-            "## PR branch checkout (--review-only PR path only)\n"
-            "On the read-only PR path the PR branch is checked out at %s.\n"
-            "This is the ONLY source of truth for verifying code. Use Read, Grep, and Glob\n"
-            "against this directory, NOT the main repo working directory — it may be on a\n"
-            "different branch with stale or missing code. (On the auto-fix loop there is no\n"
-            "detached checkout: the PR branch IS the current working tree, so verify against\n"
-            "the working tree directly.)"
-            % pr_checkout
-        )
-    else:
-        ph["PR_CHECKOUT_INSTRUCTION_BLOCK"] = ""
     prior = ph.get("PRIOR_COMMENTS_PATH", "").strip()
     ph["PRIOR_COMMENTS_CONTEXT_LINE"] = (
         "- Prior comments + author justifications: %s" % prior if prior else ""
@@ -492,67 +502,11 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph["FOCUS_CONTEXT_LINE"] = (
         "- Focus: %s" % focus if focus else ""
     )
-    role_brief = ph.get("ROLE_BRIEF_PATH", "").strip()
-    ph["ROLE_BRIEF_LINE"] = (
-        "- Your role brief (read it first; it binds over the generic assignment above): %s"
-        % role_brief if role_brief else ""
-    )
     risk_text = ph.get("RISK_AREAS_TEXT", "").strip()
     ph["RISK_AREAS_LINE"] = (
         "- Risk areas this change touches: %s" % risk_text if risk_text else ""
     )
-    grammar_text = ph.get("BREAK_IT_GRAMMAR_TEXT", "").strip()
-    ph["BREAK_IT_GRAMMAR_BLOCK"] = (
-        "- The break-it block (a break-it finding's suggestion is exactly this; the loop parses it):\n\n"
-        + grammar_text if grammar_text else ""
-    )
-    return ph
-
-
-# The fixer reports no diff (#2109): the driver derives the post-fix diff from git against the
-# review's pinned base, which the fixer is not told, and parks `head-diff-mismatch` on any supplied
-# diff that differs, so leaving both keys out is the only report that can never stop the round.
-FIXER_NO_HEAD_DIFF_RULE = (
-    "Leave `headDiff` and `headDiffPath` out of your result, on every ending. The orchestrator "
-    "derives the post-fix diff from git itself (the whole branch against the review's pinned "
-    "base, not your commit alone) and only checks a supplied diff against it, so a supplied "
-    "diff that differs, your own commit's diff included, stops the round as head-diff-mismatch."
-)
-
-
-def _fixer_derived_placeholders(context: dict) -> dict[str, str]:
-    ph = dict(context.get("placeholders") or {})
-    ph["FILE_WRITE_RULE"] = command_refusals.FILE_WRITE_RULE
-    host_seat = context.get("host_seat") is True
-    if host_seat:
-        ph["FIXER_STEP_5_BLOCK"] = (
-            "5. Land last, every time: write your payload landing, per the Payload contract "
-            "section below, as the LAST thing you write, on every ending — after the step-4 "
-            "commit when you made one, and anyway (with no commit) when you stopped on "
-            "CHECK_FAILED, escalated, or had nothing to commit. Step 3's \"never commit broken "
-            "code\" still wins: the landing never licenses a commit. A committed fix with no "
-            "landing is read as an unlanded fix. " + FIXER_NO_HEAD_DIFF_RULE
-        )
-        ph["FIXER_ESCALATION_BLOCK"] = (
-            "Report it for owner escalation (see Payload contract) with the id and why."
-        )
-    else:
-        ph["FIXER_STEP_5_BLOCK"] = (
-            "5. Report back per the result contract the runner appends at dispatch — "
-            "not a graded shape in this order. The orchestrator derives the `fixes` "
-            "record from git; you are not asked to emit it. Land last, every time: your "
-            "result on the runner's declared result channel is the last thing you deliver, "
-            "on every ending — after the step-4 commit when you made one, and anyway when "
-            "you stopped without one. Step 3's \"never commit broken code\" still wins. "
-            + FIXER_NO_HEAD_DIFF_RULE
-        )
-        ph["FIXER_ESCALATION_BLOCK"] = (
-            "Report it for owner escalation via the runner's native write-result contract "
-            "the runner appends at dispatch: set `signal` to `needs_context`, name the "
-            "finding id and why in `report`, and write the graded JSON object to the "
-            "result file when the contract names one."
-        )
-    return ph
+    return _test_role_derived_placeholders(ph)
 
 
 def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
@@ -581,7 +535,7 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             "Write your grouping payload to %s.\n"
             "every survivor id appears exactly once across all groups." % landing
         )
-    elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+    elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Deliver per the base rubric's panel output-format section. Write your findings "
             "payload to %s — write an empty findings list rather than skipping the file when "
@@ -596,11 +550,11 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     if phase == round_phases.P_PANEL:
         ph = _panel_derived_placeholders(context)
-    elif phase == round_phases.P_FIXER:
-        ph = _fixer_derived_placeholders(context)
     elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
-                   round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+                   round_phases.P_GAPSWEEP, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
         ph = _channel_derived_placeholders(phase, context)
+        if phase == round_phases.P_SECOND_TEST:
+            ph = _test_role_derived_placeholders(ph)
     return ph
 
 
@@ -613,7 +567,7 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         if phase not in ORDER_PHASES:
             return _refuse("no-template:%s" % phase)
 
-        template, reason = _read_template(phase)
+        template, reason = _read_template(_template_name(phase, context))
         if reason:
             return _refuse(reason)
 
@@ -638,13 +592,10 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
                   _format_residual_block(context).rstrip(),
                   format_threat_model_block(context).rstrip(),
                   format_rulings_block(context).rstrip()]
-        if phase == round_phases.P_FIXER:
-            blocks.append("## Refused or denied commands\n\n" + command_refusals.ORDER_TEXT)
-        if phase != round_phases.P_FIXER or context.get("host_seat"):
-            contract_block, creason = _format_payload_contract(phase)
-            if creason:
-                return _refuse(creason)
-            blocks.append(contract_block.rstrip())
+        contract_block, creason = _format_payload_contract(phase)
+        if creason:
+            return _refuse(creason)
+        blocks.append(contract_block.rstrip())
         landing_block, lreason = _format_landing_block(context, phase)
         if lreason:
             return _refuse(lreason)

@@ -3,17 +3,31 @@ verified survivors (issues that passed per-issue verification) and the code chan
 review. Your job is **not** keep/drop — you group issues that share the same root cause.
 
 ## Input
-- Verified survivors: {{VERIFIED_FINDINGS_PATH}} — each has id, file, line, title,
-  severity, body/evidence, and a verification verdict.
+- Input file: {{VERIFIED_FINDINGS_PATH}} — a JSON object with three lists:
+  - `findings`: the verified survivors, each with id, file, line, title, severity,
+    body/evidence, and a verification verdict.
+  - `refuted`: the findings the verifier refuted this round, each with its staged id. They are
+    never merged or dropped by you; they may only carry a repeat mark.
+  - `earlier`: the earlier findings of this pull request, each `{ref, id, file, line, title,
+    outcome}` (`e1`, `e2`, …).
 - Diff (read cited hunks here): {{DIFF_PATH}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
 - Severity rubric (the only tiers; calibration): {{RUBRIC_PATH}}
 - Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
 
 ## Your task
-Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids}`
-echoing the staged ids verbatim — **no severities**; only `group_id` and `member_ids`.
+Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids,
+repeatOf}` echoing the staged ids verbatim — **no severities**; only `group_id`, `member_ids` and
+`repeatOf`.
 {{OUTPUT_CHANNEL_BLOCK}}
+
+Then mark repeats. For each group, set `repeatOf` to the `ref` of the one `earlier` finding the
+group's issues repeat — the same problem, not merely the same file — or to `null`. Never invent a
+ref: it is `null` or a `ref` listed in `earlier`. A `refuted` finding that repeats an earlier one
+goes in a group of its own (its id alone) or beside survivors that share its root cause; a refuted
+id appears in at most one group, and a refuted finding that repeats nothing is left out of every
+group. A repeat changes no severity and drops nothing; the driver decides what an earlier finding's
+outcome means for the repeat.
 
 Grouping **never lowers a severity**: the merged issue carries the **highest** severity among
 its members; the driver enforces this mechanically on a normalized, fail-closed vocabulary, so a

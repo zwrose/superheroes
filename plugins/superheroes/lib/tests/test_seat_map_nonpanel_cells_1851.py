@@ -311,19 +311,17 @@ def test_host_family_is_the_registry_family_of_the_host_model(capsys, host_args,
 
 def test_host_family_does_not_move_the_family_fields_or_degradations(capsys):
     known = _host_family_receipt(capsys, ["--host-model", "gpt-5.6-sol"])
-    assert known["narrativeFamily"] == "openai"
     assert known["authorFamily"] == "xai"
     assert not [d for d in known["degradations"] if d["constraint"] == "host-model-unknown"]
 
     unknown = _host_family_receipt(capsys, ["--host-model", ""])
-    assert unknown["narrativeFamily"] == "anthropic"
     assert len([d for d in unknown["degradations"] if d["constraint"] == "host-model-unknown"]) == 1
 
 
-def test_author_and_narrative_flag_path_records_a_null_host_family(capsys):
+def test_author_flag_path_records_a_null_host_family(capsys):
     receipt = _compose(
         capsys, base=["x", "compose", "--live-vendors", "claude,codex,cursor",
-                      "--author-family", "openai", "--narrative-family", "anthropic",
+                      "--author-family", "openai",
                       "--pr-number", "1851"])
 
     assert receipt["hostFamily"] is None
@@ -450,7 +448,7 @@ def test_cli_compose_liveness_prints_the_nonpanel_cells(probe_env, tmp_path, mon
 
 
 def test_to_receipt_carries_the_three_keys_only_when_the_map_has_them():
-    sm = SM.build(SM.PANEL_ROSTER, ["claude"], "openai", "anthropic", 1)
+    sm = SM.build(SM.PANEL_ROSTER, ["claude"], "openai", 1)
     assert not {"hostFamily", "nonPanelLiveCells", "nonPanelLiveCellsSource"} & set(SM.to_receipt(sm))
 
     sm.update(hostFamily="openai", nonPanelLiveCells=[CODEX_VERIFIER_TRIPLE], nonPanelLiveCellsSource="probed")

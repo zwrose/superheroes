@@ -91,6 +91,19 @@ def finding(fid="code-001", **over):
             "consequence": "c", "outcome": "fixed", "reason": "fixed in 1a2b3c4", "reviewer": "code-reviewer", **over}
 
 
+WRONG = {"verdict": "wrong", "reason": "the verifier showed the cited line does not exist"}
+
+
+def wrong(fid="code-001", **over):
+    """A finding the driver's verifier closed as wrong: the shown-wrong outcome with the verifier's wrong grade."""
+    return finding(fid, outcome="shown-wrong", grade=WRONG, **over)
+
+
+def closed(*findings):
+    """The set the session writer passes `rr.write`: the record keys of the findings the verifier fold closed."""
+    return {rr._key(f) for f in findings}
+
+
 def account(**over):
     base = {"schema": "review-account/1", "pr": 7, "sessionId": "s1", "lane": "full", "laneReason": "big",
             "finalCommit": HEAD, "ci": "green", "reviewers": [reviewer()], "findings": [], "rawFindingsFiles": [],
@@ -336,9 +349,10 @@ def test_read_back_survives_the_session_dir(tmp_path):
     raw = session / "code.json"
     raw.write_text(json.dumps([{"id": f"n{i}", "title": "nit", "severity": "Nit"} for i in range(7)]))
     findings = [finding(f"n{i}", severity="Nit") for i in range(7)]
-    findings += [finding("c1", outcome="craft", reason="style call"), finding("w1", outcome="shown-wrong", reason="x")]
+    findings += [finding("c1", outcome="craft", reason="style call"), wrong("w1", reason="x")]
     fake = Fake()
-    out = rr.write(put(session, account(findings=findings, rawFindingsFiles=[str(raw)])), str(tmp_path), fake.readers())
+    out = rr.write(put(session, account(findings=findings, rawFindingsFiles=[str(raw)])), str(tmp_path), fake.readers(),
+                   verifier_closed=closed(findings[-1]))
     assert out["ok"]
     shutil.rmtree(session)
     rec = rr.read(7, readers=fake.readers())
@@ -662,8 +676,8 @@ def test_w2_the_one_check_across_sessions(tmp_path):
     out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome=None, reason="")])), str(tmp_path), fake.readers())
     assert out["ok"] and out["action"] == "created" and len(fake.comments) == 2
     assert rr.read(7, readers=fake.readers())["status"] == "not-reviewed"
-    out = rr.write(put(tmp_path, account(findings=[finding("a-1", outcome="shown-wrong", reason="not a bug here")])),
-                   str(tmp_path), fake.readers())
+    shown = wrong("a-1", reason="not a bug here")
+    out = rr.write(put(tmp_path, account(findings=[shown])), str(tmp_path), fake.readers(), verifier_closed=closed(shown))
     assert out["ok"] and out["action"] == "created" and len(fake.comments) == 3
 
 
@@ -799,8 +813,8 @@ def test_the_stored_finding_key_is_opaque_and_survives_redaction(tmp_path, title
     assert stored["findingKey"] == rr._key(titled) and stored["findingKey"].startswith("rr1:")
     assert "s3cret" not in stored["findingKey"] and "ghp_" not in stored["findingKey"]
     assert "password" not in stored["findingKey"]
-    out = rr.write(put(tmp_path, account(findings=[dict(titled, outcome="shown-wrong", reason="r")])),
-                   str(tmp_path), fake.readers())
+    shown = dict(titled, outcome="shown-wrong", reason="r", grade=WRONG)
+    out = rr.write(put(tmp_path, account(findings=[shown])), str(tmp_path), fake.readers(), verifier_closed=closed(shown))
     assert out["ok"] and out["action"] == "created"
 
 
@@ -864,8 +878,8 @@ def test_w9_the_stored_key_is_compared_not_one_recomputed_from_redacted_text(tmp
     stored = rr.read(7, readers=fake.readers())["findings"][0]
     assert "s3cret" not in stored["title"] and stored["findingKey"] == rr._key(titled)
     assert rr._key({k: v for k, v in stored.items() if k != "findingKey"}) != stored["findingKey"]
-    out = rr.write(put(tmp_path, account(findings=[dict(titled, outcome="shown-wrong", reason="r")])),
-                   str(tmp_path), fake.readers())
+    shown = dict(titled, outcome="shown-wrong", reason="r", grade=WRONG)
+    out = rr.write(put(tmp_path, account(findings=[shown])), str(tmp_path), fake.readers(), verifier_closed=closed(shown))
     assert out["ok"] and out["action"] == "created"
 
 
@@ -2408,7 +2422,7 @@ def test_an_incomplete_owners_word_does_not_admit_a_same_family_reviewer(word):
 
 PANEL = list(seat_map_module.PANEL_ROSTER)
 SEAT_MAP = seat_map_module.to_receipt(
-    seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
+    seat_map_module.build(PANEL, ["codex", "cursor", "gemini"], "anthropic", 0), "anthropic")
 ENGAGED_RUN = {"runKind": "review", "graded": True, "observation": {"read": "engaged"}}
 NO_READING = dict(ENGAGED_RUN, observation={"read": "unknown"})
 
@@ -2490,7 +2504,7 @@ def _without(name):
     _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": ""}})),
     _seats(seats=dict(SEAT_MAP["seats"], **{PANEL[1]: {"source": "live", "family": 3}})),
     {"roster": ["code-reviewer"], "seats": {"code-reviewer": {"source": "live", "family": "openai"}}},
-    _without("test-role"), _without("grounding-seat"),
+    _without("test-role"),
 ])
 def test_reading_next_parks_on_a_map_that_cannot_show_independence(seat_map):
     out = rr.reading_next([NO_READING, NO_READING], seat_map, ["anthropic"])
@@ -2552,21 +2566,21 @@ def test_reading_next_cli_reads_real_engine_journals(tmp_path, capsys):
 
 NO_FLOOR_BASIS = {"floor": None}
 RISKY_BASIS = {"floor": "full"}
-THREE_SEAT_MAP = seat_map_module.to_receipt(
+TWO_SEAT_MAP = seat_map_module.to_receipt(
     seat_map_module.build(list(seat_map_module.roster_for(NO_FLOOR_BASIS)),
-                          ["codex", "cursor", "gemini"], "anthropic", "openai", 0), "anthropic")
+                          ["codex", "cursor", "gemini"], "anthropic", 0), "anthropic")
 
 
-def test_move_up_holds_a_no_floor_basis_to_the_three_seat_roster():
+def test_move_up_holds_a_no_floor_basis_to_the_two_seat_roster():
     # axis: the move-up check requires the roster the lane basis calls for, not the full panel — see bite-proof record wo_a_1797_roster
-    assert len(THREE_SEAT_MAP["roster"]) == 3
-    assert rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), NO_FLOOR_BASIS) is None
-    out = rr.reading_next([NO_READING, NO_READING], THREE_SEAT_MAP, ["anthropic"], NO_FLOOR_BASIS)
+    assert len(TWO_SEAT_MAP["roster"]) == 2
+    assert rr._move_up_blocker(TWO_SEAT_MAP, frozenset(["anthropic"]), NO_FLOOR_BASIS) is None
+    out = rr.reading_next([NO_READING, NO_READING], TWO_SEAT_MAP, ["anthropic"], NO_FLOOR_BASIS)
     assert out["next"] == "move-up"
 
 
 def test_move_up_blocks_a_three_seat_roster_under_a_risky_basis_and_names_the_missing_seats():
-    blocker = rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), RISKY_BASIS)
+    blocker = rr._move_up_blocker(TWO_SEAT_MAP, frozenset(["anthropic"]), RISKY_BASIS)
     assert blocker.startswith("the seat map's roster omits a panel seat")
     assert "security-reviewer" in blocker and "premortem-reviewer" in blocker
     assert "code-reviewer" not in blocker and "test-role" not in blocker
@@ -2574,14 +2588,14 @@ def test_move_up_blocks_a_three_seat_roster_under_a_risky_basis_and_names_the_mi
 
 def test_move_up_with_no_lane_basis_requires_the_full_risky_roster():
     for basis in (None, "full", {}, {"lane": "full"}):
-        blocker = rr._move_up_blocker(THREE_SEAT_MAP, frozenset(["anthropic"]), basis)
+        blocker = rr._move_up_blocker(TWO_SEAT_MAP, frozenset(["anthropic"]), basis)
         assert blocker and "omits a panel seat" in blocker, basis
-    out = rr.reading_next([NO_READING, NO_READING], THREE_SEAT_MAP, ["anthropic"])
+    out = rr.reading_next([NO_READING, NO_READING], TWO_SEAT_MAP, ["anthropic"])
     assert out["next"] == "park" and "omits a panel seat" in out["reason"]
 
 
 def test_reading_next_reads_the_lane_basis_the_seat_map_carries_unless_one_is_given():
-    carried = dict(THREE_SEAT_MAP, laneBasis=NO_FLOOR_BASIS)
+    carried = dict(TWO_SEAT_MAP, laneBasis=NO_FLOOR_BASIS)
     assert rr.reading_next([NO_READING, NO_READING], carried, ["anthropic"])["next"] == "move-up"
     given = rr.reading_next([NO_READING, NO_READING], carried, ["anthropic"], RISKY_BASIS)
     assert given["next"] == "park" and "security-reviewer" in given["reason"]
@@ -3095,7 +3109,7 @@ def test_the_declaration_reader_reads_a_missing_declaration_as_absent(tmp_path):
     assert rr._ci_workflow(write_core(tmp_path)) == ("absent", None)
     other = tmp_path / "other"
     other.mkdir()
-    assert rr._ci_workflow(write_core(other, {"projectConfiguration": {"budgetN": 3}})) == ("absent", None)
+    assert rr._ci_workflow(write_core(other, {"projectConfiguration": {"stackingTool": "gh-stack"}})) == ("absent", None)
 
 
 def test_the_declaration_reader_reads_a_non_mapping_configuration_as_unreadable(tmp_path):

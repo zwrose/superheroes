@@ -29,20 +29,19 @@ LENS_SEATS = (
 # one home: every pin normalizer reads it, so a pin under the old key is read as the new seat's pin
 # (an explicit pin under the new key wins). Nothing on disk is rewritten.
 LEGACY_SEAT_ALIASES = {"test-reviewer": "test-role"}
-GROUNDING_SEAT = "grounding-seat"
 # Every seat a roster may name, the architecture reviewer included.
-KNOWN_SEATS = LENS_SEATS + (GROUNDING_SEAT,)
+KNOWN_SEATS = LENS_SEATS
 # The risky full-lane roster: the default for any caller that names no roster, and the roster a
 # change with a touched or unclear risk gets. The architecture reviewer is not on it.
 PANEL_ROSTER = tuple(s for s in KNOWN_SEATS if s != "architecture-reviewer")
 # Seats on every full-lane panel; the specialists are added when the lane call has a floor.
-BASE_ROSTER = ("code-reviewer", "test-role", GROUNDING_SEAT)
+BASE_ROSTER = ("code-reviewer", "test-role")
 STRONG_TIER_SEATS = frozenset({"security-reviewer", "architecture-reviewer"})
 STRONG_TIER_REQUIRED = "reviewer-deep"
 CRITICAL_SEATS = frozenset({"security-reviewer", "premortem-reviewer", "code-reviewer"})
 MIN_CRITICAL_FAMILIES = 2
 # The maker's model family is barred from EVERY panel seat (#670, owner-ratified 2026-07-26) — the
-# five lens seats AND the grounding seat, not merely the strong-tier/critical subset. The test
+# five lens seats, not merely the strong-tier/critical subset. The test
 # role's seat was the hole: it is neither strong-tier nor critical, so post-#651 (cursor's first-party models are
 # ONE `xai` family) a composer-made diff could have cursor-grok reviewing its own tests with no
 # violation recorded. STRONG_TIER_SEATS / CRITICAL_SEATS keep their OTHER jobs (the reviewer-deep bar
@@ -65,8 +64,6 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 # `source` of a seat no reviewer outside the makers' families could fill — recorded, never run.
 UNFILLED_SOURCE = "unfilled"
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
-
-DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 # The registry roles whose per-vendor matrix cells the non-panel phases dispatch (the verifier, the
 # gap-sweep / scoped reviewers and the synthesis grouper): compose probes and records these beside
 # the panel's own cells.
@@ -74,8 +71,8 @@ NONPANEL_CELL_ROLES = ("verifier", "reviewer-deep", "synthesis")
 
 
 def roster_for(lane_basis) -> tuple[str, ...]:
-    """The full-lane panel the lane call asks for. The generalist, the test seat and the grounding
-    seat are always on it; the security and premortem seats join whenever the floor is not None.
+    """The full-lane panel the lane call asks for. The generalist and the test seat are always on
+    it; the security and premortem seats join whenever the floor is not None.
     Fail-closed: a basis that is not a dict, or has no `floor` key, gets the risky roster."""
     if isinstance(lane_basis, dict) and "floor" in lane_basis and lane_basis["floor"] is None:
         return tuple(s for s in PANEL_ROSTER if s in BASE_ROSTER)
@@ -101,14 +98,20 @@ _BACKFILL_DOWNGRADE_TO = "reviewer"
 # Tiers _backfill's claude-only fallback rotation tries (#1269).
 _BACKFILL_CLAUDE_ROTATION = (STRONG_TIER_REQUIRED, _BACKFILL_DOWNGRADE_TO)
 
-_PANEL_PIN_TIERS = frozenset(model_registry.codex_pin_roles()) & frozenset(
-    DEFAULT_TIER_BY_SEAT.values()
+# `reviewer` stays a pin tier: the backfill downgrade still seats panel seats at it, and a saved map's pins may key it.
+_PANEL_PIN_TIERS = frozenset(model_registry.codex_pin_roles()) & (
+    frozenset(DEFAULT_TIER_BY_SEAT.values()) | {_BACKFILL_DOWNGRADE_TO}
 )
 
 
 def panel_pin_tiers() -> frozenset[str]:
     """Return panel tier names that participate in codex role-pin seating."""
     return _PANEL_PIN_TIERS
+
+
+def _tiers_in_play(tiers) -> set[str]:
+    # compose can backfill any seat at the downgrade tier, so its cells are in play whatever the roster's own tiers
+    return set(tiers) | {_BACKFILL_DOWNGRADE_TO}
 
 
 def _read_codex_role_pins(seat_map: dict) -> tuple[dict[str, str] | None, bool]:
@@ -228,7 +231,7 @@ def _synthesize_live_cells(
     tiers_map = dict(DEFAULT_TIER_BY_SEAT)
     if tier_by_seat:
         tiers_map.update(tier_by_seat)
-    tiers_in_play = {tiers_map.get(s, "reviewer") for s in roster}
+    tiers_in_play = _tiers_in_play(tiers_map.get(s, "reviewer") for s in roster)
     cells: set[tuple[str, str, str | None]] = set()
     for vendor in live_vendors:
         if not isinstance(vendor, str) or not vendor:
@@ -525,6 +528,9 @@ def reachable_configs(
         for cv in configured_vendors:
             _add_cell(cv, tier)
 
+    any_seat_rotated = False
+    honorably_pinned: set[str] = set()
+
     for seat in roster:
         tier = _tier_for(seat)
         pin = pins.get(seat)
@@ -546,15 +552,29 @@ def reachable_configs(
                 )
                 if honorable:
                     reachable[v].add((model, effort))
+                    honorably_pinned.add(v)
                 else:
+                    any_seat_rotated = True
                     _rotate_all(tier)
             else:
+                any_seat_rotated = True
                 _rotate_all(tier)
         else:
+            any_seat_rotated = True
             _rotate_all(tier)
 
+    seat_tiers = {_tier_for(seat) for seat in roster}
+    in_play_tiers = _tiers_in_play(seat_tiers)
+    # The backfill tier's cells follow the roster's pins, as the cells of a seat at that tier would: any rotating
+    # seat rotates it across every vendor; otherwise only the vendors the roster was honorably pinned to get its cell.
+    for tier in in_play_tiers - seat_tiers:
+        if any_seat_rotated:
+            _rotate_all(tier)
+        else:
+            for v in honorably_pinned:
+                _add_cell(v, tier)
+
     if codex_role_pins and "codex" in configured_vendors:
-        in_play_tiers = {_tier_for(seat) for seat in roster}
         for tier in _PANEL_PIN_TIERS:
             if tier in codex_role_pins and tier in in_play_tiers:
                 _add_cell("codex", tier)
@@ -581,7 +601,6 @@ def build(
     roster: tuple[str, ...] | list[str] | None,
     live_vendors: list[str] | None,
     author_family: str | None,
-    narrative_family: str | None,
     seed: int,
     tier_by_seat: dict[str, str] | None = None,
     pins: dict[str, dict] | None = None,
@@ -750,32 +769,6 @@ def build(
                     "seat": seat,
                     "reason": f"seat {seat} has no strong-tier-eligible live vendor",
                 })
-        elif seat == GROUNDING_SEAT:
-            excl: set[str] = set()
-            if author_family:
-                excl.add(author_family)
-            if narrative_family:
-                excl.add(narrative_family)
-            if not author_family or not narrative_family:
-                degradations.append({
-                    "constraint": "grounding-provenance",
-                    "reason": "author or narrative family unknown — grounding independence not guaranteed",
-                })
-            # makers are barred first, so the fallback below relaxes narrative independence over the non-makers
-            pool = [cfg for cfg in base if cfg["family"] not in makers]
-            if base and not pool:
-                maker_emptied_seats.add(seat)
-            eligible = [cfg for cfg in pool if cfg["family"] not in excl]
-            if not eligible:
-                degradations.append({
-                    "constraint": "grounding-independence",
-                    "reason": "no grounding vendor independent of author/narrative families",
-                })
-                # #670 finding 1: hand the FULL pool to the maker filter below rather than
-                # pre-selecting "not the narrative family" — that old ordering picked the AUTHOR's
-                # own family whenever author and narrative were the only live families. Maker
-                # exclusion outranks narrative independence.
-                eligible = pool
         else:
             eligible = list(base)
 
@@ -839,15 +832,6 @@ def build(
                     ),
                 })
                 continue
-            if pin_seat == GROUNDING_SEAT:
-                excl = {f for f in (author_family, narrative_family) if f}
-                if fam and fam in excl:
-                    degradations.append(
-                        {
-                            "constraint": "pin-breaks-constraint",
-                            "reason": f"pinned grounding seat family {fam} is not independent of author/narrative",
-                        }
-                    )
             if pin_seat in STRONG_TIER_SEATS and tier != "reviewer-deep":
                 degradations.append(
                     {
@@ -1053,7 +1037,6 @@ def build(
         "liveVendors": list(live),
         "liveCells": sorted([list(c) for c in live_cells_normalized]),
         "authorFamily": author_family,
-        "narrativeFamily": narrative_family,
         "livenessPinScoped": bool(liveness_pin_scoped),
         "makerFamilies": sorted(makers),
         "roster": list(roster),
@@ -1233,6 +1216,9 @@ def classify_violations(
             unexcused.append(stamped)
             continue
 
+        raw_makers = seat_map.get("makerFamilies")
+        maker_set = {f for f in (raw_makers if isinstance(raw_makers, list) else []) if isinstance(f, str) and f}
+        maker_set.add(author_family)
         achievable: set[str] | None = set()
         for cs in collapsed:
             cfg = seats.get(cs)
@@ -1248,7 +1234,7 @@ def classify_violations(
                 if fams is None:
                     achievable = None
                     break
-                achievable |= fams - {author_family}
+                achievable |= fams - maker_set
 
         if achievable is None:
             stamped = dict(v)
@@ -1384,7 +1370,6 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "liveVendors": seat_map.get("liveVendors", []),
         "liveCells": receipt_live_cells,
         "liveCellsSource": receipt_cells_source,
-        "narrativeFamily": seat_map.get("narrativeFamily"),
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
@@ -1414,7 +1399,6 @@ def build_parser():
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("compose", help="compute the panel seat map for a run")
     cc.add_argument(c, "--author-family", contract="free-text", default=None)
-    cc.add_argument(c, "--narrative-family", contract="free-text", default=None)
     cc.add_argument(c, "--pr-number", contract="free-text", default=None)
     cc.add_argument(c, "--head-sha", contract="free-text", default=None)
     cc.add_argument(
@@ -1629,27 +1613,29 @@ def main(argv):
                     })
 
         author_family = args.author_family
-        narrative_family = args.narrative_family
         receipt_host_family = None
+        # The build session applies the review's fixes on this host, so its family is a maker: the
+        # one family kept off every seat besides the author's, on every implementation engine.
+        host_maker_family = None
         host_model, _ = host_model_lib.resolve(
             args.host_model or "", args.session_transcript or "", args.session_transcript_from or "")
         if args.implementation_engine is not None:
-            if args.author_family is not None or args.narrative_family is not None:
+            if args.author_family is not None:
                 print("family-flags-conflict", file=sys.stderr)
                 return 1
             host_fam = model_registry.host_family(host_model)
             receipt_host_family = host_fam
             impl_engine = args.implementation_engine
-            claude_host_fam = model_registry.family_for("code-fixer", "claude")
-            author_family = model_registry.family_for("code-fixer", impl_engine)
+            claude_host_fam = model_registry.family_for("implementer", "claude")
+            author_family = model_registry.family_for("implementer", impl_engine)
             if author_family is None:
                 print("author-family-unresolved:%s" % impl_engine, file=sys.stderr)
                 return 1
-            narrative_family = host_fam or claude_host_fam
+            host_maker_family = host_fam or claude_host_fam
             if host_fam is None:
                 reason = (
                     "host model unknown — neither the start event nor the session transcript "
-                    "named a model; the narrative family fell back to the claude "
+                    "named a model; the host family fell back to the claude "
                     "host's family (%s); the author family is the %s implementation "
                     "engine's (%s)"
                     % (claude_host_fam, impl_engine, author_family)
@@ -1658,33 +1644,21 @@ def main(argv):
                     "constraint": "host-model-unknown",
                     "reason": reason,
                 })
-            elif (
-                impl_engine == "claude"
-                and host_fam is not None
-                and host_fam != author_family
-            ):
+            elif host_fam != author_family:
                 family_degradations.append({
                     "constraint": "maker-family-split",
                     "reason": (
-                        "author family is %s (claude implementation engine) but "
-                        "review-code's native fixer on this host writes as %s; "
-                        "the host family is excluded from the panel as a second "
+                        "author family is %s (%s implementation engine) but the build "
+                        "session applies the review's fixes on this host as %s; "
+                        "the host family is kept off every seat as a second "
                         "maker family"
-                        % (author_family, host_fam)
+                        % (author_family, impl_engine, host_fam)
                     ),
                 })
 
         extra_maker_families: frozenset[str] | None = None
-        if args.implementation_engine is not None:
-            impl_engine = args.implementation_engine
-            host_fam_for_extra = model_registry.host_family(host_model)
-            if (
-                impl_engine == "claude"
-                and host_fam_for_extra is not None
-                and author_family is not None
-                and host_fam_for_extra != author_family
-            ):
-                extra_maker_families = frozenset({host_fam_for_extra})
+        if host_maker_family is not None and host_maker_family != author_family:
+            extra_maker_families = frozenset({host_maker_family})
 
         flag_makers = frozenset(f for f in (args.maker_family or []) if f)
         if flag_makers:
@@ -1743,7 +1717,6 @@ def main(argv):
             roster,
             live,
             author_family,
-            narrative_family,
             seed,
             **build_kwargs,
         )

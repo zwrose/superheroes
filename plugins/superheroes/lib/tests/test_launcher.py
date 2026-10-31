@@ -509,6 +509,13 @@ def test_premise_stamps_standing_exclusions(tmp_path):
     assert result["premise"]["standingExclusions"] == L.STANDING_EXCLUSIONS
 
 
+def test_premise_stamps_the_stand_down_even_over_a_caller_value(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    assert L.validate_premise(_valid_premise(repo), repo)["premise"]["standDown"] == 1
+    result = L.validate_premise(dict(_valid_premise(repo), standDown=0), repo)
+    assert result["ok"] is True and result["premise"]["standDown"] == 1
+
+
 # --- compose -----------------------------------------------------------------
 
 
@@ -5151,6 +5158,160 @@ def test_launch_reserve_refusal_leaves_no_orphan_worktree(tmp_path, monkeypatch)
     assert not os.path.exists(worktree_path)
 
 
+def _fail_reserved_append(monkeypatch, *, land, unreadable_read_back=False, settle_fails=False):
+    """Make the `reserved` append report failure; `land` writes the line first. A transient
+    unreadable read-back fails the first read after it; `settle_fails` fails the terminal write.
+    Returns a function that puts the real append, read and terminalize back."""
+    real_append, real_read, real_terminalize = ll.append, ll.read, ll.terminalize
+    seen = {"failed": False, "faked": False}
+
+    def fake_append(repo_root, record, env=None):
+        if record.get("event") != "reserved":
+            return real_append(repo_root, record, env=env)
+        if land:
+            real_append(repo_root, record, env=env)
+        seen["failed"] = True
+        return False
+
+    def fake_read(*args, **kwargs):
+        if unreadable_read_back and seen["failed"] and not seen["faked"]:
+            seen["faked"] = True
+            return {"state": "unreadable", "records": []}
+        return real_read(*args, **kwargs)
+
+    monkeypatch.setattr(ll, "append", fake_append)
+    monkeypatch.setattr(ll, "read", fake_read)
+    if settle_fails:
+        monkeypatch.setattr(
+            ll, "terminalize",
+            lambda *a, **k: {"ok": False, "reason": "ledger-unreadable:unreadable"},
+        )
+
+    def restore():
+        monkeypatch.setattr(ll, "append", real_append)
+        monkeypatch.setattr(ll, "read", real_read)
+        monkeypatch.setattr(ll, "terminalize", real_terminalize)
+
+    return restore
+
+
+def _launch_656(repo, tmp_path, **kwargs):
+    kwargs.setdefault("settle_seconds", 0.3)
+    return L.launch_build(
+        repo, 656, _valid_premise(repo), _all_checks(), str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"), **kwargs,
+    )
+
+
+def test_launch_append_failure_that_landed_is_settled_never_spawned_and_relaunches(
+    tmp_path, monkeypatch,
+):
+    # axis: a reservation whose append reported failure stays a failure even when it landed:
+    # no builder is spawned, the landed record is settled terminal, relaunch not refused
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    restore = _fail_reserved_append(monkeypatch, land=True)
+    first = _launch_656(repo, tmp_path)
+    assert first["ok"] is False
+    assert first["reason"] == "ledger-append-failed"
+    assert first["appendReadBack"] == "terminal"
+    records = ll.read(repo)["records"]
+    assert "started" not in [r["event"] for r in records if r["launchId"] == first["launchId"]]
+    assert _folded_launch(repo, first)["terminal"] is True
+    restore()
+    second = _launch_656(repo, tmp_path)
+    assert second["ok"] is True, second
+    assert not str(second.get("reason") or "").startswith("surface-overlap:")
+    _reap(second)
+
+
+def test_launch_append_failure_that_did_not_land_removes_the_worktree_and_relaunches(
+    tmp_path, monkeypatch,
+):
+    # axis: nothing landed — the worktree is removed, no live record remains, relaunch not refused
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    restore = _fail_reserved_append(monkeypatch, land=False)
+    result = _launch_656(repo, tmp_path)
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-append-failed"
+    assert result["appendReadBack"] == "not-landed"
+    assert not os.path.exists(L.build_worktree_path(repo, 656, result["launchId"]))
+    assert "keptWorktree" not in result
+    assert "orphanedWorktree" not in result
+    assert ll.live_launches(ll.read(repo)["records"]) == []
+    restore()
+    second = _launch_656(repo, tmp_path)
+    assert second["ok"] is True, second
+    _reap(second)
+
+
+def test_launch_append_failure_with_an_unreadable_read_back_is_settled_terminal(
+    tmp_path, monkeypatch,
+):
+    # axis: an undecidable read-back is settled by one terminal write, then the worktree goes
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    restore = _fail_reserved_append(monkeypatch, land=True, unreadable_read_back=True)
+    result = _launch_656(repo, tmp_path)
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-append-failed"
+    assert result["appendReadBack"] == "terminal"
+    assert "keptWorktree" not in result
+    assert not os.path.exists(L.build_worktree_path(repo, 656, result["launchId"]))
+    assert _folded_launch(repo, result)["terminal"] is True
+    restore()
+    second = _launch_656(repo, tmp_path)
+    assert second["ok"] is True, second
+    _reap(second)
+
+
+def test_launch_keeps_the_worktree_while_a_live_reservation_may_name_it(tmp_path, monkeypatch):
+    # axis: the worktree survives exactly when the settle cannot read or write the ledger
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    _fail_reserved_append(monkeypatch, land=True, unreadable_read_back=True, settle_fails=True)
+    result = _launch_656(repo, tmp_path)
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-append-failed"
+    assert result["appendReadBack"] == "uncertain"
+    worktree_path = L.build_worktree_path(repo, 656, result["launchId"])
+    assert result["keptWorktree"] == worktree_path
+    assert os.path.isdir(worktree_path)
+    assert "orphanedWorktree" not in result
+    assert "launcher.py repair-lane" in result["remedy"]
+    assert "--repo-root %s" % repo in result["remedy"]
+    assert "--launch-id %s" % result["launchId"] in result["remedy"]
+    assert "--evidence" in result["remedy"]
+    assert "--no-builder" in result["remedy"]
+    assert result["launchId"] in ll.live_launches(ll.read(repo)["records"])
+
+
+def test_launch_accounting_reservation_that_landed_ends_terminal_and_relaunches(
+    tmp_path, monkeypatch,
+):
+    # axis: a pre-spawn refusal's accounting reservation that landed despite a failed append is ended
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    real_path_for = L.build_worktree_path
+    monkeypatch.setattr(L, "build_worktree_path", lambda *a, **k: str(occupied))
+    restore = _fail_reserved_append(monkeypatch, land=True)
+    result = _launch_656(repo, tmp_path)
+    assert result["ok"] is False
+    assert result["reason"] == "launch-worktree-collision"
+    refused = [r for r in ll.read(repo)["records"] if r.get("event") == "refused"]
+    assert [r["reason"] for r in refused] == ["launch-worktree-collision"]
+    assert _folded_launch(repo, result)["terminal"] is True
+    restore()
+    monkeypatch.setattr(L, "build_worktree_path", real_path_for)
+    second = _launch_656(repo, tmp_path)
+    assert second["ok"] is True, second
+    assert not str(second.get("reason") or "").startswith("surface-overlap:")
+    _reap(second)
+
+
 def test_launch_refuses_a_worktree_path_collision_and_never_reuses_it(tmp_path, monkeypatch):
     # axis: collision refuses loudly; the occupied checkout is neither reused nor spawned into
     repo = _init_repo(tmp_path / "repo")
@@ -6972,9 +7133,9 @@ def test_stack_gate_passes_when_github_heads_are_uppercase(tmp_path, monkeypatch
 # --- dependency premise field and gate (I3) ----------------------------------
 
 
-import grounding_stage as gs  # noqa: E402
+import pr_body_regions as regions  # noqa: E402
 
-_VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+_VET_MARKER = regions.REGION_MARKERS["advisor-vet"]
 
 
 def _dependency_premise(repo, dependency, **overrides):
@@ -8415,16 +8576,29 @@ def test_iphone_f11_failure_after_creation_carries_the_phone(tmp_path, monkeypat
     _assert_iphone_argv_shapes(runner.calls)
 
 
-def test_iphone_f12_append_failure_reports_uncertain_and_never_deletes(tmp_path, monkeypatch):
-  # axis: a phone made before a failed append is reported uncertain and never removed
-    real_append = ll.append
+def test_iphone_f12_append_failure_that_did_not_land_deletes_its_own_phone(tmp_path, monkeypatch):
+  # axis: a phone made before a failed append that wrote nothing is no record's phone, so it is removed
+    _fail_reserved_append(monkeypatch, land=False)
+    runner = _FakeIphoneRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    udid = runner.udids[0]
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-append-failed"
+    assert result["appendReadBack"] == "not-landed"
+    assert result["iphone"] == {"id": udid, "recorded": False, "deleted": True}
+    assert captured == []
+    assert ["xcrun", "simctl", "delete", udid] in runner.calls
+    _assert_iphone_argv_shapes([argv for argv in runner.calls if "delete" not in argv])
 
-    def failing_reserved_append(repo_root, record, env=None):
-        if record.get("event") == "reserved":
-            return False
-        return real_append(repo_root, record, env=env)
 
-    monkeypatch.setattr(ll, "append", failing_reserved_append)
+def test_iphone_f12_append_failure_the_settle_cannot_read_reports_uncertain_and_never_deletes(
+    tmp_path, monkeypatch,
+):
+  # axis: a phone a live record may name is reported uncertain and never removed
+    _fail_reserved_append(monkeypatch, land=True, unreadable_read_back=True, settle_fails=True)
     runner = _FakeIphoneRun()
     captured = []
     _repo, result = _iphone_launch(
@@ -8432,10 +8606,26 @@ def test_iphone_f12_append_failure_reports_uncertain_and_never_deletes(tmp_path,
     )
     assert result["ok"] is False
     assert result["reason"] == "ledger-append-failed"
+    assert result["appendReadBack"] == "uncertain"
     assert result["iphone"] == {"id": runner.udids[0], "recorded": "uncertain"}
     assert captured == []
     assert not any("delete" in argv for argv in runner.calls)
     _assert_iphone_argv_shapes(runner.calls)
+
+
+def test_iphone_f12_append_failure_settled_terminal_names_the_phone_and_never_deletes(
+    tmp_path, monkeypatch,
+):
+  # axis: a phone the landed, now-terminal record names is reported recorded and left to the reap
+    _fail_reserved_append(monkeypatch, land=True, unreadable_read_back=True)
+    runner = _FakeIphoneRun()
+    captured = []
+    _repo, result = _iphone_launch(
+        tmp_path, monkeypatch, runner, captured, premise_extra={"iphoneCheck": True},
+    )
+    assert result["appendReadBack"] == "terminal"
+    assert result["iphone"] == {"id": runner.udids[0], "recorded": True}
+    assert not any("delete" in argv for argv in runner.calls)
 
 
 def test_iphone_f12b_admission_refusal_deletes_only_its_own_phone(tmp_path, monkeypatch):
@@ -9161,29 +9351,23 @@ def test_iphone_models_refusal_after_creation_deletes_every_phone(tmp_path, monk
     assert captured == []
 
 
-def test_iphone_models_append_failure_reports_every_phone_uncertain_and_deletes_none(
+def test_iphone_models_append_failure_that_did_not_land_deletes_every_phone(
     tmp_path, monkeypatch,
 ):
-  # axis: a phone that a failed append may have recorded is reported, never removed — each one
-    real_append = ll.append
-
-    def failing_reserved_append(repo_root, record, env=None):
-        if record.get("event") == "reserved":
-            return False
-        return real_append(repo_root, record, env=env)
-
-    monkeypatch.setattr(ll, "append", failing_reserved_append)
+  # axis: phones made before a failed append that wrote nothing are no record's phones — each one goes
+    _fail_reserved_append(monkeypatch, land=False)
     runner = _FakeModelsRun(creates=("ok", "ok"))
     captured = []
     (_repo, result), _root = _models_launch(tmp_path, monkeypatch, runner, captured)
     first, second = runner.udids
     assert result["reason"] == "ledger-append-failed"
-    assert result["iphone"] == {"id": first, "recorded": "uncertain"}
+    assert result["appendReadBack"] == "not-landed"
+    assert result["iphone"] == {"id": first, "recorded": False, "deleted": True}
     assert result["iphones"] == [
-        {"id": first, "recorded": "uncertain"},
-        {"id": second, "recorded": "uncertain"},
+        {"id": first, "recorded": False, "deleted": True},
+        {"id": second, "recorded": False, "deleted": True},
     ]
-    assert runner.deleted == []
+    assert runner.deleted == [first, second]
 
 
 def test_iphone_models_absent_refusal_after_creation_carries_no_phone_list(tmp_path, monkeypatch):

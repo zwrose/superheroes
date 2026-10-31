@@ -2,7 +2,7 @@
 
 A finding has exactly one effective decision: the latest of a ``rule`` ruling and an owner-gate
 decision by one sequence, read through ``_live_ruling_by_key``. It binds the finding under any
-wording a later round gives it at the same file and line, and the fixer order renders only it.
+wording a later round gives it at the same file and line, and the `apply-fixes` guidance file carries only it.
 """
 import ast
 import copy
@@ -47,7 +47,7 @@ def _mem_state(round_no=2):
 
 def _add_rule(state, key, ruling, *, guidance=None, file=FILE, line=LINE, rnd=None, **extra):
     """Append a ``rulingsLog`` row the way the ``rule`` verb writes one (sequence from the counter)."""
-    row = {"seq": RD._next_ruling_seq(state), "round": rnd or state["round"], "phase": RD.P_FIXER,
+    row = {"seq": RD._next_ruling_seq(state), "round": rnd or state["round"], "phase": RD.P_APPLY_FIXES,
            "attempt": 0, "id": key, "findingKey": key, "ruling": ruling, "reason": "because",
            "by": "owner"}
     if file is not None:
@@ -100,7 +100,7 @@ def test_t1_reword_carries_guidance_to_next_fix(tmp_path):
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-1)
     """
-    session_dir, _, _, row_a, _row_b = RC._pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _row_b = RC._pending_apply_fixes_two_findings(tmp_path)
     key_a = RD._fix_batch_row_key(row_a)
     path = RC._write_ruling_file(tmp_path / "r.json", [
         {"id": key_a, "ruling": "guidance", "reason": "keep it small", "guidance": "G1"}])
@@ -153,20 +153,19 @@ def test_t2_replaced_guidance_never_returns():
     assert "G1" not in RD._gate_guidance_block(entries)
 
 
-def test_t3_precedence_latest_decision_renders_alone(tmp_path):
+def test_t3_precedence_latest_decision_renders_alone():
     """axis: gate guidance and rule guidance on one key render one text — the later by one sequence.
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-3)
     """
-    # gate guidance "A", then a rule guidance "B" -> only "B"
-    session_dir = L2E._parked_judgment_session(tmp_path, name="gate-then-rule")
-    out = L2E._pending_submit(session_dir, {"dispositions": [
-        {"id": L2E._TRADEOFF_ID, "disposition": "fix-with-guidance", "guidance": "A"}]})
-    assert out["ok"] is True, out
-    state = L2E._load_state(session_dir)
     key = L2E._TRADEOFF_ID
-    gate_rows = state["rounds"][str(state["round"])]["judgmentDispositions"]
-    assert gate_rows[0]["rulingSeq"] == state["rulingSeqCounter"]
+    row = _finding("widen the API", line=1, file="f.py")
+    # gate guidance "A" (an earlier version recorded it), then a rule guidance "B" -> only "B"
+    state = _mem_state(1)
+    gate = _add_gate(state, 1, key, "fix-with-guidance", guidance="A", title="widen the API",
+                     file="f.py", line=1, seq=RD._next_ruling_seq(state))
+    assert gate["rulingSeq"] == state["rulingSeqCounter"]
+    _batch(state, row)
     assert key in {RD._fix_batch_row_key(r) for r in state["_fixBatch"]}
     _add_rule(state, key, "guidance", guidance="B", file="f.py", line=1)
     entries = _entries(state)
@@ -175,53 +174,47 @@ def test_t3_precedence_latest_decision_renders_alone(tmp_path):
     block = RD._gate_guidance_block(entries)
     assert "B" in block and "> A" not in block
     # a rule guidance, then a later sequenced gate guidance "A" -> only "A"
-    session_dir = L2E._parked_judgment_session(tmp_path, name="rule-then-gate")
-    state = L2E._load_state(session_dir)
+    state = _mem_state(1)
     _add_rule(state, key, "guidance", guidance="B", file="f.py", line=1)
-    RD.save_state(session_dir, state)
-    out = L2E._pending_submit(session_dir, {"dispositions": [
-        {"id": key, "disposition": "fix-with-guidance", "guidance": "A"}]})
-    assert out["ok"] is True, out
-    state = L2E._load_state(session_dir)
-    gate_rows = state["rounds"][str(state["round"])]["judgmentDispositions"]
-    assert gate_rows[0]["rulingSeq"] == 2
+    gate = _add_gate(state, 1, key, "fix-with-guidance", guidance="A", title="widen the API",
+                     file="f.py", line=1, seq=RD._next_ruling_seq(state))
+    assert gate["rulingSeq"] == 2
+    _batch(state, row)
     entries = _entries(state)
     assert [(e["id"], e["guidance"], bool(e.get("rulingChannel"))) for e in entries] == [
         (key, "A", False)]
     assert "> B" not in RD._gate_guidance_block(entries)
 
 
-def test_t4_gate_skip_binds_its_finding_but_never_a_reword(tmp_path):
-    """axis: an owner-gate skip is a decision on its own finding (restaged, it stays skipped and is
-    not put to the owner again) — and it never carries: a later, different finding at the skipped
-    location is judged fresh and reaches the fix batch.
+def test_t4_gate_skip_binds_its_finding_but_never_a_reword():
+    """axis: an owner-gate skip recorded by an earlier version is a decision on its own finding
+    (restaged, it stays skipped and is not held for the owner again) — and it never carries: a later,
+    different finding at the skipped location is judged fresh and reaches the fix batch.
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1a_c7_effective_decision.md (BP-4, BP-5)
     """
-    session_dir = L2E._parked_judgment_session(tmp_path)
-    out = L2E._pending_submit(session_dir, {"dispositions": [
-        {"id": L2E._TRADEOFF_ID, "disposition": "skip", "reason": "product choice",
-         "followUp": dict(L2E._WELL_FORMED)}]})
-    assert out["ok"] is True, out
-    state = L2E._load_state(session_dir)
-    skip_row = state["rounds"][str(state["round"])]["judgmentDispositions"][0]
+    state = _mem_state(1)
+    original = _finding("widen the API", line=1, file="f.py", tradeoff=True)
+    RD._stage_findings(state, [original])
+    RD._record_disposition(state, L2E._TRADEOFF_ID, "out-of-scope", 1,
+                           outOfScopeReason="product choice", followUp=dict(L2E._WELL_FORMED))
+    skip_row = _add_gate(state, 1, L2E._TRADEOFF_ID, "skip", title="widen the API", file="f.py",
+                         line=1, reason="product choice", seq=RD._next_ruling_seq(state))
+    skip_row["followUp"] = dict(L2E._WELL_FORMED)
     assert (skip_row["file"], skip_row["line"]) == ("f.py", 1)
     assert skip_row["rulingSeq"] == state["rulingSeqCounter"]
-    assert skip_row["followUp"] == L2E._WELL_FORMED
     base = copy.deepcopy(state)
     # the skipped finding itself, restaged a round later: the whole decision, follow-up included
     state["round"] += 1
-    original = _finding("widen the API", line=1, file="f.py", tradeoff=True)
     RD._stage_findings(state, [original])
     restaged = L2E._ledger_by_key(state)[L2E._TRADEOFF_ID]
     assert restaged["disposition"] == "out-of-scope"
     assert restaged["followUp"] == L2E._WELL_FORMED
     assert RD._filter_excluded_discharged_fixes(state, [original]) == ([], None)
-    # normal routing honors it: never put to the owner again
+    # normal routing honors it: never held for the owner again
     state["findings"] = [dict(original, verdict="CONFIRMED")]
     RD._after_findings_settled(state, state["config"])
-    assert state["step"] != RD.P_JUDGMENT
-    assert not state.get("_judgmentFindings")
+    assert not state.get("ownerChoiceHeld")
     assert any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
     # the review record's rulings list stays rule-sourced only
     assert RD._standing_rulings_for_orders(state) == ([], None)
@@ -236,7 +229,7 @@ def test_t4_gate_skip_binds_its_finding_but_never_a_reword(tmp_path):
     assert key_new not in RD._live_out_of_scope_ruling_keys(state)
     state["findings"] = [dict(different, verdict="CONFIRMED")]
     RD._after_findings_settled(state, state["config"])
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     assert key_new in {RD._fix_batch_row_key(r) for r in state["_fixBatch"]}
 
 
@@ -428,28 +421,6 @@ def test_fix_as_suggested_supersedes_an_earlier_skip_and_guidance():
     assert _entries(state) == []
 
 
-@pytest.mark.parametrize("disposition", [{"disposition": "fix-as-suggested"}, {}])
-def test_fix_at_the_gate_after_a_skip_reaches_the_fixer(disposition):
-    """axis: through the judgment fold, a fix choice (explicit or fail-closed) on a finding an earlier
-    round skipped clears the restaged out-of-scope disposition and queues the fix."""
-    state = _mem_state(2)
-    finding = _finding("subject", tradeoff=True)
-    key = RD._finding_identity_key(finding)
-    _add_gate(state, 1, key, "skip", seq=RD._next_ruling_seq(state))
-    RD._stage_findings(state, [finding])
-    assert L2E._ledger_by_key(state)[key]["disposition"] == "out-of-scope"
-    state["findings"] = [dict(finding)]
-    state["_judgmentFindings"] = [dict(finding)]
-    state["_judgmentMechanical"] = []
-    RD._fold_judgment(state, state["config"], {"dispositions": [dict(disposition, id=key)]})
-    logged = state["rounds"]["2"]["judgmentDispositions"][-1]
-    assert logged["rulingSeq"] == state["rulingSeqCounter"]
-    assert RD._live_ruling_by_key(state)[key]["ruling"] == "fix"
-    assert state["step"] == RD.P_FIXER
-    assert key in {RD._fix_batch_row_key(r) for r in state["_fixBatch"]}
-    assert L2E._ledger_by_key(state)[key].get("disposition") != "out-of-scope"
-
-
 @pytest.mark.parametrize("later", ["original", "second independent issue"])
 def test_a_same_round_carry_is_undone_when_a_later_staging_makes_it_ambiguous(later):
     """axis: a carry is provisional until the round's last staging — a gap sweep that raises the
@@ -580,44 +551,6 @@ def test_a_rule_out_of_scope_ruling_never_carries_to_a_reword():
     assert RD._filter_excluded_discharged_fixes(state, [reworded]) == ([reworded], None)
 
 
-def test_a_fix_choice_clears_the_superseded_skip_across_the_lineage_group():
-    """axis: a fix choice on a reworded finding supersedes the group's earlier decision on every
-    member — the original's out-of-scope disposition is cleared too."""
-    state = _mem_state(1)
-    original = _finding("original")
-    key_o = RD._finding_identity_key(original)
-    RD._stage_findings(state, [original])
-    RD._record_disposition(state, key_o, "out-of-scope", 1, outOfScopeReason="old skip")
-    reworded = _finding("reworded", tradeoff=True, severity="Critical")
-    key_r = RD._finding_identity_key(reworded)
-    state["findingLineage"] = {key_r: key_o}
-    state["round"] = 2
-    state["findings"] = [dict(reworded)]
-    state["_judgmentFindings"] = [dict(reworded)]
-    state["_judgmentMechanical"] = []
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": key_r, "disposition": "fix-as-suggested"}]})
-    assert L2E._ledger_by_key(state)[key_o].get("disposition") != "out-of-scope"
-
-
-def test_a_malformed_ruling_sequence_counter_parks_the_judgment_fold():
-    """axis: a gate decision is never recorded unsequenced — with a malformed counter the fold parks
-    cannot-certify instead of letting an older sequenced skip outrank the owner's fix choice."""
-    state = _mem_state(2)
-    finding = _finding("subject", tradeoff=True)
-    key = RD._finding_identity_key(finding)
-    _add_gate(state, 1, key, "skip", seq=RD._next_ruling_seq(state))
-    state["rulingSeqCounter"] = "corrupt"
-    state["findings"] = [dict(finding)]
-    state["_judgmentFindings"] = [dict(finding)]
-    state["_judgmentMechanical"] = []
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": key, "disposition": "fix-as-suggested"}]})
-    assert state["terminal"] == "cannot-certify"
-    assert "rulings-log-malformed" in state["certification"]["reason"]
-    assert "judgmentDispositions" not in state["rounds"].get("2", {})
-
-
 @pytest.mark.parametrize("skipped", ["reworded", "original"])
 def test_a_skip_never_reaches_another_finding_through_a_guidance_lineage(skipped):
     """axis: guidance carries across a lineage, but a later skip on one member binds that member only
@@ -641,36 +574,10 @@ def test_a_skip_never_reaches_another_finding_through_a_guidance_lineage(skipped
     assert RD._filter_excluded_discharged_fixes(state, [other]) == ([other], None)
 
 
-def test_a_fix_choice_reopens_a_skipped_lineage_member_into_the_fix_batch():
-    """axis: when a fix choice on one lineage member supersedes another member's own skip, that
-    member — blocking this round — joins the fix batch instead of being left unfixed."""
-    state = _mem_state(1)
-    key_a = _key("original")
-    _add_rule(state, key_a, "guidance", guidance="G1", rnd=1)
-    state["round"] = 2
-    reworded = _finding("reworded", tradeoff=True)
-    key_b = RD._finding_identity_key(reworded)
-    RD._stage_findings(state, [reworded])
-    assert state["findingLineage"] == {key_b: key_a}
-    _add_gate(state, 2, key_a, "skip", title="original", seq=RD._next_ruling_seq(state))
-    state["round"] = 3
-    original = _finding("original", tradeoff=True)
-    RD._stage_findings(state, [original, _finding("reworded", line=LINE)])
-    state["findings"] = [dict(original, disposition="out-of-scope"), dict(reworded)]
-    state["_judgmentFindings"] = [dict(reworded)]
-    state["_judgmentMechanical"] = []
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": key_b, "disposition": "fix-as-suggested"}]})
-    assert state["step"] == RD.P_FIXER
-    queued = {RD._fix_batch_row_key(r) for r in state["_fixBatch"] + state["_fixQueue"]}
-    assert queued == {key_a, key_b}
-    assert L2E._ledger_by_key(state)[key_a].get("disposition") != "out-of-scope"
-
-
 def test_a_rule_guidance_reopens_a_skipped_lineage_member(tmp_path):
     """axis: a rule guidance on one lineage member that supersedes another member's own skip clears
     that member's skip and restores it to the fixer queue."""
-    session_dir, _, _, row_a, row_b = RC._pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, row_b = RC._pending_apply_fixes_two_findings(tmp_path)
     key_a = RD._fix_batch_row_key(row_a)
     key_b = RD._fix_batch_row_key(row_b)
     state = RC._state(session_dir)

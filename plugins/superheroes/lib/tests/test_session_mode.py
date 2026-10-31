@@ -236,33 +236,3 @@ def test_check_base_mode_derivation_accepts_valid(git_repo, tmp_path, mode):
     result = rbg.check_base(session, root)
     assert result.get("reason") != rbg.REASON_MODE_UNRECOGNIZED
 
-
-@pytest.mark.parametrize(
-    "meta_payload",
-    [
-        {},
-        {"mode": None},
-        {"mode": "bogus"},
-        {"mode": 5},
-    ],
-)
-def test_read_meta_mode_derivation_refuses_invalid(tmp_path, meta_payload):
-    """T4: _read_meta still refuses invalid session modes with unchanged reason."""
-    import grounding_stage as gs
-
-    session = str(tmp_path / "sess-invalid")
-    _write_session_meta(session, meta_payload)
-    result = gs._read_meta(session)
-    assert result["ok"] is False
-    assert result["reason"] == "meta-mode-unknown"
-
-
-@pytest.mark.parametrize("mode", ["pr", "branch"])
-def test_read_meta_mode_derivation_accepts_valid(tmp_path, mode):
-    """T4: _read_meta still proceeds for pr and branch."""
-    import grounding_stage as gs
-
-    session = str(tmp_path / ("sess-" + mode))
-    _write_session_meta(session, {"mode": mode})
-    result = gs._read_meta(session)
-    assert result == {"ok": True, "mode": mode}

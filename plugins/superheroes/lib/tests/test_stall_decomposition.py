@@ -94,21 +94,6 @@ def _subtree_has_state_key_assignment(node, key, value=None):
     return False
 
 
-def _functions_with_call(source, tree, module_name, attr_name):
-    """Return top-level function names containing ``module_name.attr_name(...)``."""
-    hits = []
-    for node in _top_level_functions(tree):
-        for child in ast.walk(node):
-            if not isinstance(child, ast.Call):
-                continue
-            func = child.func
-            if (isinstance(func, ast.Attribute) and func.attr == attr_name
-                    and isinstance(func.value, ast.Name) and func.value.id == module_name):
-                hits.append(node.name)
-                break
-    return hits
-
-
 def _functions_with_state_key_assignment(tree, key, value=None):
     """Return top-level function names assigning to ``state[key]``."""
     hits = []
@@ -142,16 +127,6 @@ def test_guard_owner_is_not_handle_stall():
     assert "_handle_stall" not in owners
 
 
-def test_escalation_owner_matches_guard_owner():
-    # axis: model_registry.escalate has exactly one owner, same as the guard owner
-    tree = _round_driver_tree()
-    escalate_fns = _functions_with_call(_round_driver_source(), tree, "model_registry", "escalate")
-    guard_fns = _functions_with_state_key_assignment(tree, "selfRecovered", True)
-    assert escalate_fns == ["_commit_stall_self_recovery"]
-    assert escalate_fns == guard_fns
-    assert "_handle_stall" not in escalate_fns
-
-
 def test_handle_stall_has_no_terminal_routing():
     # axis: _handle_stall does not park, converge, or assign _fixBatch directly
     tree = _round_driver_tree()
@@ -181,7 +156,7 @@ def test_routing_owner_is_total():
     assert route is not None
     assert _subtree_has_bare_name_call(route, "_queue_fix_batch")
     assert _subtree_has_bare_name_call(route, "_park_cannot_certify")
-    assert _subtree_has_bare_name_call(route, "_park_capped_open")
+    assert _subtree_has_bare_name_call(route, "_hand_back")  # the uncomposable-blocker park, now a hand-back
     assert _subtree_has_bare_name_call(route, "_settle_delta_converged")
 
 

@@ -87,7 +87,7 @@ def _audit_roster(session_dir):
 
 def _audit_payload(seat, ruling="discharged"):
     return {"id": seat, "ruling": ruling, "auditorVendor": "claude",
-            "reason": "re-read the fixed hunk; the defect is gone"}
+            "reason": "re-read the fixed hunk; the defect is gone", "checks": _TRD.audit_checks()}
 
 
 def _store_path(session_dir, seat, pend=None):
@@ -257,7 +257,7 @@ def test_hand_submit_missing_manifest_key_names_expected_and_found(tmp_path):
     tid = targets[0]["id"]
     art = {
         "results": [{"id": tid, "ruling": "discharged", "reason": "r", "evidence": "e",
-                     "auditorVendor": targets[0].get("auditorVendor")}],
+                     "auditorVendor": targets[0].get("auditorVendor"), "checks": _TRD.audit_checks()}],
         "collectionManifest": {},
     }
     out = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"], art)
@@ -275,7 +275,7 @@ def test_hand_submit_missing_manifest_key_names_expected_and_found(tmp_path):
 
     art_empty = {
         "results": [{"id": tid, "ruling": "discharged", "reason": "r", "evidence": "e",
-                     "auditorVendor": targets[0].get("auditorVendor")}],
+                     "auditorVendor": targets[0].get("auditorVendor"), "checks": _TRD.audit_checks()}],
         "collectionManifest": {tid: ""},
     }
     session_dir2, n2 = _TRD._at(tmp_path / "empty-manifest", RD.P_AUDITS)
@@ -438,6 +438,7 @@ def _write_native_ruling_result(run_dir, repo_root, seat):
         ruling="discharged",
         reason="re-read the hunk; the defect is gone",
         auditorVendor="codex",
+        checks=_TRD.audit_checks(),
         investigated=[rel],
     )
     native_path = engine_dispatch._native_result_path(run_dir, 1)
@@ -473,6 +474,7 @@ def _audit_execution_run_dir(tmp_path, order_path, seat, echo_nonce="nonce-audit
         "ruling": "discharged",
         "reason": "re-read the hunk; the defect is gone",
         "auditorVendor": "codex",
+        "checks": _TRD.audit_checks(),
     })
     stdout = _TDI._codex_event_stream(ruling_text, action_items=1)
     ok, detail = engine_dispatch._open_review_run(
@@ -506,7 +508,8 @@ def test_evidence_digest_subject_follows_runner_semantics():
         ("verdicts", RD.P_VERIFIERS, {"verdicts": [{"id": "v1", "verdict": "pass"}]}),
         ("grouping", RD.P_SYNTHESIS, {"grouping": [{"member_ids": ["a"]}]}),
         ("ruling", RD.P_AUDITS,
-         {"id": "a1", "ruling": "discharged", "reason": "ok", "evidence": "e"}),
+         {"id": "a1", "ruling": "discharged", "reason": "ok", "evidence": "e",
+          "checks": _TRD.audit_checks()}),
     ]
     for kind in engine_adapter.REVIEW_RESULT_KINDS:
         match = next(((ph, p) for k, ph, p in _KIND_PHASE_PAYLOAD if k == kind), None)
@@ -610,7 +613,8 @@ def test_audit_provenance_basis_follows_the_fold_path(tmp_path):
     state3["auditRounds"] = []
     runner_round = state3["round"]
     RD._fold(state3, state3.get("config") or {}, RD.P_AUDITS, {
-        "results": [{"id": seat, "ruling": "discharged", "reason": "r", "auditorVendor": "claude"}],
+        "results": [{"id": seat, "ruling": "discharged", "reason": "r", "auditorVendor": "claude",
+                     "checks": _TRD.audit_checks()}],
         "collectionManifest": {seat: "claude"},
         "provenance": {"provenanceSource": {seat: "runner-record"}},
     })

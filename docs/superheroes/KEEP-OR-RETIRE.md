@@ -592,9 +592,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** retired.
 - **Notes.** capability-gap — the stage ships without a wired caller yet; evidence is on the held
-  verification set (Cursor-family orchestrators observed on weekly-eats lanes).
+  verification set (Cursor-family orchestrators observed on weekly-eats lanes). Retired by the
+  owner-approved review-loop spec (FR-47; Canon 2026-10-27-5692f27d-1); what the seat checked
+  moves to the advisor's vet.
 
 #### D5 — Circuit breaker + escalation
 
@@ -1909,14 +1911,15 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 - **Condition.** Usage-based, 60 days: calibrations on repositories that lacked a label, read from
   the configure receipts. On firing, a proposal to the owner at a gardening pass. Once every
   calibrated repository carries both labels, a zero count is expected and reads as done, not as
-  retire.
+  retire. **Retired — condition moot.**
 - **Last demonstrated benefit.** Both labels created on this repository through the helper's own
   argv, with an existing label's colour and description never reconciled away (the
   configuration-items child's build record).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
-  routing vocabulary is present before the first issue is routed.
+- **Decision.** retired — issue #2245 (owner ruling 2026-10-29: the kind labels are retired, so
+  configure creates none and `kind_labels.py` is removed).
+- **Notes.** capability-gap — a person could create two labels by hand; the helper existed so the
+  routing vocabulary was present before the first issue was routed.
 
 #### S7 — Bite-proof pointer census
 

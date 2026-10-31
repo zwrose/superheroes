@@ -595,27 +595,18 @@ def test_load_engine_prefs_surfaces_effort_submap_and_resolve_effort_honors_it(t
     assert EP.resolve_effort("codex", "build", got["effort"]) == "high"      # no override -> default
 
 
-def test_load_engine_prefs_remaps_legacy_fixer_pin_to_code_fixer(tmp_path):
+def test_load_engine_prefs_retired_fixer_pin_keys_are_invalid_unknown_roles(tmp_path):
+    # C1-L9c: neither `fixer` nor `code-fixer` is a pin role, and neither is remapped.
     repo = str(tmp_path)
-    pin = MR.pin_only_models("codex")[0]
-    _write_core_with_prefs(repo, {"codexModels": {"fixer": pin}})
+    pin = MR.codex_peer_for_claude_tier("opus")
+    _write_core_with_prefs(repo, {"codexModels": {"fixer": pin, "code-fixer": pin,
+                                                  "implementer": pin}})
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-    assert got["codexModels"] == {"code-fixer": pin}
-    assert "fixer" not in got.get("invalidCodexModels", {})
-    assert "code-fixer" not in got.get("invalidCodexModels", {})
-
-
-def test_load_engine_prefs_canonical_code_fixer_wins_over_legacy_fixer(tmp_path):
-    pin_a = MR.codex_peer_for_claude_tier("opus")
-    pin_b = MR.pin_only_models("codex")[0]
-    for i, codex_models in enumerate((
-        {"fixer": pin_a, "code-fixer": pin_b},
-        {"code-fixer": pin_b, "fixer": pin_a},
-    )):
-        repo = str(tmp_path / str(i))
-        _write_core_with_prefs(repo, {"codexModels": codex_models})
-        got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
-        assert got["codexModels"] == {"code-fixer": pin_b}
+    assert got["codexModels"] == {"implementer": pin}
+    assert got["invalidCodexModels"] == {
+        "fixer": "unknown role 'fixer' rejected",
+        "code-fixer": "unknown role 'code-fixer' rejected",
+    }
 
 
 def test_dispatch_calibration_rows_fable_tier_on_codex_shows_unsupported_marker():
@@ -1039,7 +1030,6 @@ def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_pat
                                   "codexModels": {"reviewer": pin,
                                                   "reviewer-deep": pin,
                                                   "implementer": pin,
-                                                  "code-fixer": pin,
                                                   # pilot has no codex matrix seat, so even a
                                                   # registered default-cell model is refused.
                                                   "pilot": default_model,
@@ -1048,15 +1038,14 @@ def test_load_engine_prefs_surfaces_only_valid_per_role_codex_model_pins(tmp_pat
     got = EP.load_engine_prefs(repo, root=os.path.join(repo, "store"))
     assert got["codexModels"] == {"reviewer": pin,
                                   "reviewer-deep": pin,
-                                  "implementer": pin,
-                                  "code-fixer": pin}
+                                  "implementer": pin}
     assert got["invalidCodexModels"]["bogus-role"] == "unknown role 'bogus-role' rejected"
     assert got["invalidCodexModels"]["pilot"].startswith("pin-not-on-allowlist:")
     invalid_repo = str(tmp_path / "invalid")
-    _write_core_with_prefs(invalid_repo, {"codexModels": {"code-fixer": "gpt-5.6-solar"}})
+    _write_core_with_prefs(invalid_repo, {"codexModels": {"implementer": "gpt-5.6-solar"}})
     invalid_got = EP.load_engine_prefs(invalid_repo, root=os.path.join(invalid_repo, "store"))
     assert invalid_got.get("codexModels", {}) == {}
-    assert invalid_got["invalidCodexModels"]["code-fixer"] == (
+    assert invalid_got["invalidCodexModels"]["implementer"] == (
         "unknown model 'gpt-5.6-solar' rejected"
     )
 
@@ -1069,45 +1058,30 @@ def test_codex_model_strength_covers_every_valid_model():
 
 def test_codex_write_probe_model_covers_the_implementation_dispatch_ceiling():
     # #409/#1435 WO-2: the write-auth probe dispatches the strongest model the codex implementation
-    # (build/fix) role will actually run — its pins, else the registry's opus peer floor for any
-    # UNPINNED write role.
+    # role will actually run — its pin, else the registry's opus peer floor when it is unpinned.
     floor = EP.CODEX_MODEL_BY_TIER["opus"]
     sol_peer = MR.codex_peer_for_claude_tier("opus")
     pin_only_sol = MR.pin_only_models("codex")[0]
-    # no pins at all -> the opus peer floor (both write roles unpinned)
+    assert EP.CODEX_WRITE_PIN_ROLES == ("implementer",)
+    # no pins at all -> the opus peer floor (the write role is unpinned)
     assert EP.codex_write_probe_model(None) == floor
     assert EP.codex_write_probe_model({}) == floor
     assert EP.codex_write_probe_model({"codexModels": {}}) == floor
     assert EP.codex_write_probe_model({"codexModels": "nope"}) == floor
-    # BOTH write roles pinned to unregistered gpt-5.5 -> treated as unpinned -> the floor
-    assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-5.5", "code-fixer": "gpt-5.5"}}) == floor
-    # PARTIAL pin: one write role unpinned derives the peer floor, so the probe clamps up to the
-    # floor rather than under-testing at gpt-5.5 (the premortem fail-direction regression, closed).
+    # the write role pinned to unregistered gpt-5.5 -> treated as unpinned -> the floor, so the
+    # probe clamps up rather than under-testing at gpt-5.5
     assert EP.codex_write_probe_model({"codexModels": {"implementer": "gpt-5.5"}}) == floor
     # a reviewer pin is irrelevant to the WRITE probe — it does not lower or raise the write ceiling
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": "gpt-5.5", "code-fixer": "gpt-5.5",
-                         "reviewer": sol_peer}}) == floor
-    # both write roles pinned ENTIRELY to the pin-only model -> that model (not falsely failed by a
-    # hard floor probe)
+        {"codexModels": {"implementer": "gpt-5.5", "reviewer": sol_peer}}) == floor
+    assert EP.codex_write_probe_model({"codexModels": {"reviewer": sol_peer}}) == floor
+    # the write role pinned to the pin-only model -> that model (not falsely failed by a hard floor
+    # probe), even though it is weaker than the floor
+    assert EP.CODEX_MODEL_STRENGTH.index(sol_peer) > EP.CODEX_MODEL_STRENGTH.index(pin_only_sol)
     assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": pin_only_sol, "code-fixer": pin_only_sol}}) == pin_only_sol
-    # code-fixer is unpinned and clamps to the opus peer floor, which is stronger than the
-    # implementer's pin-only model -> the probe dispatches the floor, not the pin. Proves the probe
-    # covers BOTH write roles, not just implementer (drops-a-write-role mutant dies here).
-    pin_only = MR.pin_only_models("codex")[0]
-    assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": pin_only}}) == MR.codex_peer_for_claude_tier("opus")
-    # BOTH write roles pinned to different real models -> the STRONGER of the two pins wins (max of
-    # two pins), not either pin alone or the floor — both orders (implementer=A/fixer=B and swap).
-    stronger = sol_peer
-    weaker = pin_only_sol
-    assert EP.CODEX_MODEL_STRENGTH.index(stronger) > EP.CODEX_MODEL_STRENGTH.index(weaker)
-    assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": stronger, "code-fixer": weaker}}) == stronger
-    assert EP.codex_write_probe_model(
-        {"codexModels": {"implementer": weaker, "code-fixer": stronger}}) == stronger
+        {"codexModels": {"implementer": pin_only_sol}}) == pin_only_sol
+    # the write role pinned to the floor model -> that model
+    assert EP.codex_write_probe_model({"codexModels": {"implementer": sol_peer}}) == sol_peer
 
 
 def test_load_engine_prefs_rejects_unregistered_model_before_dispatch(tmp_path):
@@ -1541,17 +1515,14 @@ def test_builder_tier_reason_display_none():
     assert EP.builder_tier_reason_display(None) is None
 
 
-def test_normalize_codex_pin_map_legacy_alias_and_canonical_wins():
-    pin = MR.pin_only_models("codex")[0]
-    result = EP.normalize_codex_pin_map({"fixer": pin})
-    assert result["pins"] == {"code-fixer": pin}
-    assert result["invalid"] == {}
-    both = EP.normalize_codex_pin_map({
-        "fixer": "gpt-nope",
-        "code-fixer": pin,
-    })
-    assert both["pins"] == {"code-fixer": pin}
-    assert "fixer" not in both["pins"]
+def test_normalize_codex_pin_map_retired_fixer_keys_are_unknown_roles():
+    pin = MR.codex_peer_for_claude_tier("opus")
+    result = EP.normalize_codex_pin_map({"fixer": pin, "code-fixer": pin})
+    assert result["pins"] == {}
+    assert result["invalid"] == {
+        "fixer": "unknown role 'fixer' rejected",
+        "code-fixer": "unknown role 'code-fixer' rejected",
+    }
 
 
 # axis: registered gpt-6-astra is accepted as a reviewer-deep pin against the real registry.

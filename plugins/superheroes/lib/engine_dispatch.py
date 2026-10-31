@@ -58,7 +58,6 @@ import heartbeat  # noqa: E402  HEARTBEAT_ROOT_ENV — the ledger root the launc
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import model_registry  # noqa: E402  role read_write classification (#1269 WO-FIX1)
 import payload_contracts  # noqa: E402  verdict optional keys — single contract home (#1270 2c)
-import record_paths  # noqa: E402  landing-slot layout, one home (#1995)
 import resolved_inputs_vocab  # noqa: E402  resolvedInputs <field>Source marker home (#1296)
 import round_orders  # noqa: E402  REVIEW_SEAT_RULE — the one home of the review seat rule (#2071)
 import review_findings_schema  # noqa: E402  findings example renderer (#1145 WO-C)
@@ -79,7 +78,7 @@ CREDENTIAL_TEXT_RULE = (
 # must ignore the CLI's SessionStart/skill-selection bootstrap that otherwise hijacks codex into
 # skill-selection. Every engine review dispatch is fed this preamble, so it carries the review seat
 # rule (#2071) from its one home: seats whose prompt round_orders does not render (the light-lane
-# reviewer, the grounding seat, the brief check, the spec checks) get it here. It also carries the
+# reviewer, the brief check, the spec checks) get it here. It also carries the
 # credential-text rule (#2121).
 ANTIHIJACK_PREAMBLE = (
     "You are a dispatched ONE-SHOT code reviewer. This is a headless, non-interactive dispatch. "
@@ -1752,7 +1751,7 @@ def _git_routing_scrubbed_environ():
         os.environ.update(saved)
 
 
-def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None, landing_dir=None):
+def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None):
     """Resolve the claude write channel's sandbox inputs ONCE, at run open (#1554).
 
     ``run_dir`` is the dispatch run directory: it and the supervisor journal root are denied for
@@ -1760,11 +1759,7 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None, landing_di
 
     Returns (sandbox_dict, None) or (None, refusal_token). The dict is journaled in the
     run-opened record and reused verbatim on every continuation and spawn — never re-derived
-    from the ambient environment.
-
-    ``landing_dir`` grants the child's file tools one extra directory, a review landing slot
-    (#1995); it is journaled as ``landingDir`` and refused unless it is a landing-layout directory
-    that overlaps no deny entry."""
+    from the ambient environment."""
     try:
         proc = _git_scrubbed(
             cwd_real, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir",
@@ -1883,11 +1878,6 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None, landing_di
                 return None, engine_adapter.REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE
             if denied not in deny_write:
                 deny_write.append(denied)
-    landing_real = None
-    if landing_dir is not None:
-        landing_real, landing_refusal = _landing_dir_grant(landing_dir, deny_write)
-        if landing_refusal is not None:
-            return None, landing_refusal
     sandbox = {
         "writeRoots": write_roots,
         "denyWrite": deny_write,
@@ -1905,29 +1895,7 @@ def _resolve_claude_write_sandbox(cwd_real, *, timeout, run_dir=None, landing_di
     if tmp_base is not None:
         # frozen with the socket grant: every spawn pins it as the child's CLAUDE_CODE_TMPDIR
         sandbox["claudeTmpBase"] = tmp_base
-    if landing_real is not None:
-        sandbox["landingDir"] = landing_real
     return sandbox, None
-
-
-def _landing_dir_grant(landing_dir, deny_write):
-    """(realpath, None) for a landing directory the write sandbox may grant, else (None, refusal)."""
-    if not isinstance(landing_dir, str) or not os.path.isabs(landing_dir) \
-            or engine_adapter.sandbox_path_has_glob(landing_dir):
-        return None, engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_INVALID
-    real = os.path.realpath(landing_dir)
-    if not real.strip("/") or engine_adapter.sandbox_path_has_glob(real) \
-            or not os.path.isdir(real) or not record_paths.is_landing_dir(real):
-        return None, engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_INVALID
-    # deny wins, but a grant that contains or sits in a denied path is refused rather than trusted
-    # to the runtime's precedence; the git hooks/config entries are joined, not resolved, so both
-    # spellings are compared
-    for denied in deny_write:
-        for entry in {denied, os.path.realpath(denied)}:
-            if real == entry or real.startswith(entry.rstrip("/") + "/") \
-                    or entry.startswith(real.rstrip("/") + "/"):
-                return None, engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_DENIED
-    return real, None
 
 
 def _git_scrubbed_bytes(cwd, *args, timeout=None):
@@ -4496,6 +4464,13 @@ def _review_result_payload(result, kind):
     return engine_adapter.review_payload_carried(result, kind)
 
 
+def _carry_read_parts(source, dest):
+    """Copy a reviewer's read list from one review result to the next when the source carries one."""
+    if isinstance(source.get("readParts"), list):
+        dest["readParts"] = source["readParts"]
+    return dest
+
+
 def _parse_review_has_payload(res):
     """True when a review parse result carries a non-empty payload for its resultKind."""
     if not res.get("ok"):
@@ -4628,6 +4603,7 @@ def _build_running_graded(run_dir_real, state):
                 entry["reason"] = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
             if grade.get("investigated") is not None:
                 entry["investigated"] = grade["investigated"]
+            _carry_read_parts(grade, entry)
             graded.append(entry)
     except Exception:
         return []
@@ -4844,7 +4820,15 @@ def _verify_native_schema(opened, run_kind, expected_result_kind=None):
         return None, "native-schema-unreadable"
     # axis: the schema on disk must equal the declared one for this run kind, or the attempt refuses native-schema-unreadable.
     if on_disk != declared:
-        return None, "native-schema-unreadable"
+        # A review run saved before `readParts` existed replays against its own recorded shape.
+        try:
+            prechange = engine_result_channel.prechange_review_schema(
+                engine, run_kind, expected_result_kind)
+        except Exception:
+            prechange = None
+        if prechange is None or on_disk != prechange:
+            return None, "native-schema-unreadable"
+        return prechange, None
     return declared, None
 
 
@@ -5038,6 +5022,7 @@ def _finish_review_grade_from_parse(
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": stamped}
         if accepted:
             result["investigated"] = accepted
+        _carry_read_parts(res, result)
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
@@ -5053,6 +5038,7 @@ def _finish_review_grade_from_parse(
             "ok": True, "resultKind": kind, kind: [], "investigated": accepted,
             "engagement": engagement_stamped,
         }
+        _carry_read_parts(res, result)
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
@@ -5623,6 +5609,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         )
                         if grade.get("investigated") is not None:
                             result["investigated"] = grade["investigated"]
+                        _carry_read_parts(grade, result)
                         _attach_review_rejection_fields(
                             result,
                             rejected_records=grade.get("investigatedRejectedRecords") or [],
@@ -5935,7 +5922,7 @@ def dispatch_review(*args, seat=None, prompt_path=None,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, order_id=None, diff_base=None,
                     mode=None, claude_mode=None, expected_result_kind=None,
-                    pr_body_path=None, session_dir=None,
+                    pr_body_path=None, session_dir=None, leave_out_file=None,
                     **kwargs):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
@@ -6040,7 +6027,8 @@ def dispatch_review(*args, seat=None, prompt_path=None,
             diff_base=diff_base, mode=mode, resolved_mode=resolved_mode,
             claude_mode=claude_mode, resolved_claude_mode=resolved_claude_mode,
             expected_result_kind=expected_result_kind,
-            pr_body_path=pr_body_path, session_dir=session_dir, cloud_history=cloud_history)
+            pr_body_path=pr_body_path, session_dir=session_dir, cloud_history=cloud_history,
+            leave_out_file=leave_out_file)
         stamped = dict(result)
         stamped["mode"] = resolved_mode["mode"] or (mode or sanitized_view.MODE_REVIEW)
         stamped["claudeMode"] = resolved_claude_mode["claudeMode"]
@@ -6073,7 +6061,8 @@ def _dispatch_review_impl(seat, *, prompt_path,
                           max_wait_source=resolved_inputs_vocab.DEFAULT, order_id=None, diff_base=None,
                           mode=None, claude_mode=None, resolved_mode=None,
                           resolved_claude_mode=None, expected_result_kind=None,
-                          pr_body_path=None, session_dir=None, cloud_history=None):
+                          pr_body_path=None, session_dir=None, cloud_history=None,
+                          leave_out_file=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch. In a cloud
     session `cloud_history`, when given, receives the history-completion answer under "cloudHistory"."""
@@ -6285,6 +6274,19 @@ def _dispatch_review_impl(seat, *, prompt_path,
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             resolved_claude_mode["claudeMode"] = claude_mode
+            leave_out = None
+            if leave_out_file is not None:
+                # Loaded and shape-checked on every launch; only a --diff-base view has a patch to use it.
+                try:
+                    leave_out = sanitized_view.load_leave_out_file(leave_out_file)
+                except sanitized_view.SanitizedViewError as exc:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": exc.detail,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir or "", engine=engine,
+                    )
             if cloud_pass._is_cloud(os.environ):
                 # A cloud clone is shallow and has no origin/main; make both right before the view
                 # is built. Never blocks: if it is not ok, build_view still refuses as it does today.
@@ -6313,6 +6315,7 @@ def _dispatch_review_impl(seat, *, prompt_path,
                     diff_base=diff_base,
                     pr_body_path=pr_body_path,
                     session_dir=session_dir,
+                    **({} if leave_out is None else {"leave_out": leave_out}),
                 )
             except sanitized_view.SanitizedViewError as exc:
                 return _finish_preflight_terminal(
@@ -6644,7 +6647,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
                    run_dir=_PARAM_UNSET, max_wait=_PARAM_UNSET, claude_mode=None,
                    expected_items=None, expected_items_file=None,
                    requires_process_listing=False, size_base=None, size_line=None,
-                   size_base_ref=None, landing_dir=None, items_base_sha=None, **kwargs):
+                   size_base_ref=None, items_base_sha=None, **kwargs):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -6719,7 +6722,7 @@ def dispatch_write(*args, seat=None, prompt_path=None, cwd,
             expected_items=expected_items, expected_items_file=expected_items_file,
             requires_process_listing=requires_process_listing,
             size_base=size_base, size_line=size_line, size_base_ref=size_base_ref,
-            landing_dir=landing_dir, items_base_sha=items_base_sha,
+            items_base_sha=items_base_sha,
         )
     except resolved_inputs_vocab.UndeclaredSourceMarker as exc:
         return _entry_refusal_for_undeclared_source_marker(
@@ -6746,7 +6749,7 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
                          claude_mode=None, expected_items=None,
                          expected_items_file=None, requires_process_listing=False,
                          size_base=None, size_line=None, size_base_ref=None,
-                         landing_dir=None, items_base_sha=None):
+                         items_base_sha=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     engine = seat["vendor"]
     role = seat["role"]
@@ -6863,22 +6866,9 @@ def _dispatch_write_impl(seat, *, prompt_path, cwd,
         if engine == "claude":
             if opened is not None:
                 claude_write_sandbox = opened.get("claudeWriteSandbox")
-                # the journaled sandbox governs; a continuation may not name a different grant
-                if landing_dir is not None:
-                    journaled = (claude_write_sandbox or {}).get("landingDir") \
-                        if isinstance(claude_write_sandbox, dict) else None
-                    if journaled is None or os.path.realpath(landing_dir) != journaled:
-                        return _write_preflight_terminal(
-                            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                             "detail": "engine-config:%s"
-                                       % engine_adapter.REFUSAL_SANDBOX_LANDING_DIR_MISMATCH,
-                             "attempts": 0, "forfeited": False, "terminal": True},
-                            run_dir=run_dir_real, argv=[],
-                        )
             elif not requires_process_listing:
                 claude_write_sandbox, sandbox_refusal = _resolve_claude_write_sandbox(
                     cwd_real, timeout=preflight_timeout, run_dir=run_dir_real,
-                    landing_dir=landing_dir,
                 )
                 if sandbox_refusal is not None:
                     return _write_preflight_terminal(
@@ -7312,6 +7302,7 @@ def _parse_review_attempt(run_dir_real, state, attempt):
                 res[kind] = payload
             if admitted.get("investigated") is not None:
                 res["investigated"] = admitted["investigated"]
+            _carry_read_parts(admitted, res)
             return res
         return None
     except Exception:
@@ -7769,6 +7760,12 @@ def build_parser():
                     help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
                          "to stage the merge-base->head review patch against; a revision "
                          "expression, branch name or tag is refused")
+    cc.add_argument(d, "--leave-out-file", contract="free-text", default=None,
+                    metavar="<path>",
+                    help="JSON file {\"schema\": \"leave-out/1\", \"files\": [<repo-relative "
+                         "path>, ...]} naming changed files to leave out of the review patch "
+                         "(proven copies); a malformed file refuses "
+                         "sanitized-view-leave-out-invalid; ignored on a continuation")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
     cc.add_argument(d, "--claude-mode", contract=_CLAUDE_MODES_CHOICES_CONTRACT, default=None,
@@ -7811,9 +7808,6 @@ def build_parser():
     cc.add_argument(w, "--requires-process-listing", contract="boolean-flag",
                     help="declare the order needs process listing (ps); a claude write "
                          "refuses sandbox-process-listing-unavailable before any run opens")
-    cc.add_argument(w, "--landing-dir", contract="free-text", default=None,
-                    help="a claude write also grants its file tools this one review landing "
-                         "directory (<session>/round-<N>/landing/<phase>)")
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
@@ -7859,7 +7853,8 @@ def main(argv):
                                   diff_base=args.diff_base, mode=args.mode,
                                   claude_mode=args.claude_mode,
                                   expected_result_kind=args.expected_result_kind,
-                                  pr_body_path=args.pr_body_path, session_dir=args.session_dir)
+                                  pr_body_path=args.pr_body_path, session_dir=args.session_dir,
+                                  leave_out_file=args.leave_out_file)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-write":
             res = dispatch_write(seat=args.seat,
@@ -7874,8 +7869,7 @@ def main(argv):
                                  items_base_sha=args.items_base_sha,
                                  requires_process_listing=args.requires_process_listing,
                                  size_base=args.size_base, size_line=args.size_line,
-                                 size_base_ref=args.size_base_ref,
-                                 landing_dir=args.landing_dir)
+                                 size_base_ref=args.size_base_ref)
             classification = dispatch_outcome.classify_dispatch_result(res)
         elif args.cmd == "dispatch-poll":
             res, classification = _dispatch_poll_impl(args.run_dir)

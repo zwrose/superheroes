@@ -184,6 +184,20 @@ lane's `started` record, and returns once the session exists. It does not wait f
     identity from the result and reach the session
     by it.
 
+**Detective lanes.** A premise launches a detective lane with `"charter": "detective"` and a
+`"budget"`, one line in time or usage terms. The prompt then starts with the detective command and
+carries `Budget: <budget>` on the line after the issue pointer. Without a budget the launch refuses
+`premise-detective-budget-missing` and composes nothing. The other refusals are `premise-charter-invalid`,
+`premise-budget-invalid` and `premise-budget-without-detective`. The `reserved` record names the lane's
+`charter`; older records carry none and read as workhorse. Declare-batch, preflight, `record-outcome`,
+`amend` and the watch's ledger reads take a detective lane like any other lane. A detective lane's
+place is called exactly as a builder's (`skills/showrunner/reference/dispatch-preflight.md` § The place
+call). In the cloud its prompt carries the doctrine's detective cloud rule in place of the builder's
+standing push permission, and the detective runs the cloud intake first
+(`skills/detective/reference/cloud.md`). A `claude -p` session
+started by hand with the detective command, the issue pointer and the budget is the fallback only for a
+host or plugin version without this launcher support; disclose it on the issue as outside the ledger, never as the norm.
+
 **Cloud lanes.** A [cloud lane](../../../rubric/glossary.md#cloud-lane) has no worktree: its
 `reserved` record carries `place: "cloud"` and no `worktree`. Its `started` record names the session:
 the name the host lists it under (`cloudSessionName`), its id (`cloudSessionId`) and its URL
@@ -383,26 +397,61 @@ such a step to the owner first.
   `skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane: the relay
   carries the archive request, and the builder archives its own session with the tool it has.
   Confirm the archive from the session list. Never assume it.
-- **Anything else** (reading a session's state or permission mode, listing sessions, messaging or
-  stopping a background session) goes to a one-off helper: a named background session started on
-  that account for this one job.
+- **Reading or archiving a builders'-account session** goes to a one-off cloud helper session on
+  that account. Start it as the launcher starts a cloud lane:
 
-**Starting the helper.** Start it from the repository root, which that account already trusts (a
-session started in a folder it does not trust stops at the trust prompt and never runs). Pin that
-account's config dir, and run it on the small model:
+      CLAUDE_CONFIG_DIR=<the builders' config dir> claude --cloud "<prompt>" --settings '{"remote":{"defaultEnvironmentId":"<a cloud environment of that account>"}}' --model haiku --permission-mode auto --disallowedTools <each tool in engine_adapter.CLOUD_DISALLOWED_TOOLS> -n <name>
+
+  That is the flag set `engine_adapter.claude_cloud_builder_argv` builds (`--cloud`, `--settings`,
+  `--model`, `--permission-mode auto`, `--disallowedTools` with the tools
+  `engine_adapter.CLOUD_DISALLOWED_TOOLS` names (the question tool), then `-n` last); the
+  last two keep the unattended helper from stopping on a permission or question prompt. The command needs a pseudo-terminal, for example
+  `script -q /dev/null …` on macOS. A cloud session's tools include `get_session`, `list_sessions`
+  and `archive_session`; a background helper has none of them. The prompt names the session ids,
+  asks for `get_session` on each, and asks the helper to post the raw results as one JSON array on
+  the lane's issue in a fenced block, since a cloud session cannot message back. The prompt comes
+  from `cloud_recover.py helper-read --repo O/N --issue N --session-id S …`, and the helper posts
+  only the five fields `cloud_recover.HELPER_READ_FIELDS` names (the fields the takeover check reads) per session (never usage or cost data:
+  the issue is public). The advisor reads
+  that comment through REST, saves the array to a file, and passes it with `--cloud-sessions-file`.
+  The posted copy is the helper's transcription of its tool output. A row that clears a lane
+  (archived or failed) counts only when a second helper read of that session, posted as its own
+  comment, shows the same status, status bucket and archived values for it; on any
+  disagreement, or with no second read, keep the unread refusal.
+  A `list_sessions` page the helper posts is a transcription too, and a dropped row cannot be
+  detected, so it never proves a session gone: a lane missing from a helper-posted page stays
+  unproven and the advisor reads it with `get_session` (the two-read agreement rule then applies to
+  the row that clears it). Only a complete page the advisor's own session read itself proves a
+  session gone, and only when its rows carry `environment_id` and meet the checks in § Adoption
+  mechanics; when they do not, read each lane with `get_session`. When a live lane never answers the fix order or the ask-to-push, the same
+  helper archives it; an archive is reversible with `unarchive_session`. At the reset time of a
+  limited account, the advisor has the cloud helper archive the superseded sessions on that account
+  (the ones whose lanes were recorded `died` and adopted). This is the advisor's own
+  step: never hand a session read or this archive to the owner.
+- **Anything else** (reading a background session's permission mode, messaging or stopping a
+  background session) goes to a one-off background helper: a named background session started on
+  that account for this one job. Reading a session's state and listing sessions are not in this
+  list: they belong to the cloud helper above, so each read has one helper kind and one result
+  channel.
+
+**Starting the background helper.** Start it from the repository root, which that account already
+trusts (a session started in a folder it does not trust stops at the trust prompt and never runs).
+Pin that account's config dir, and run it on the small model:
 
     CLAUDE_CONFIG_DIR=<the builders' config dir> claude --bg -n <name> --model haiku --effort low "<prompt>"
 
 Name it for its job, and put the account in the name, as the relay's name does.
 
-**The helper's prompt** names exactly the sessions it may act on and a never-touch list: the relay,
-every live builder, and every session the job does not name. It says which action to take on each
-(read, message, stop or archive), and that it never deletes a session. It asks for one result line
-per named session, sent back to the advisor session by `SendMessage`. When it cannot do a step, it
-lists its own tools instead.
+**The background helper's prompt** names exactly the sessions it may act on and a never-touch list:
+the relay, every live builder, and every session the job does not name. It says which action to
+take on each (read the permission mode, message or stop), and that it never deletes a session. It
+asks for one result line per named session, sent back to the advisor session by `SendMessage`. When
+it cannot do a step, it lists its own tools instead.
 
-When the helper reports that it cannot do a step, hand that step to the owner, naming the tools it
-listed. Deleting a session needs the owner's word every time.
+When the background helper reports that it cannot do a step, hand that step to the owner, naming
+the tools it listed. This covers only the background helper's steps; a session read or an archive
+goes to the cloud helper and never to the owner. Deleting a session needs the owner's word every
+time.
 
 **What each kind of session can do.** A background helper has no tool that archives a session:
 its CLI can stop, attach and delete sessions, but not archive one. A cloud session's own tools
@@ -423,22 +472,40 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
 - **Recover a cloud lane** in exactly these steps, each naming a verb or record that exists. The
   verbs are `python3 -B <plugin root>/lib/cloud_recover.py <verb> --repo-root <root> …`.
   1. Read the session's state in the host's session listing, and the lane's activity age from the
-     wave watch.
+     wave watch. When the builders' account is at its usage limit (the wave watch reports
+     `account-limited`, or the relay check reports it), the session state is read as `unread` and
+     `assess` reads the limit itself. The relay writes the limit only when it next runs, so send a
+     status ping through the relay first.
   2. Run `assess`. Its answer is `working`, `unresolved`, `parked`, `awaiting-handover`,
-     `ask-to-push` or `stopped`. `working`, `unresolved`, `parked` and `awaiting-handover` never
-     recover. `parked` means the lane's issue holds a builder stop or park comment newer than its last
+     `ask-to-push` or `stopped`. `assess` returns `stopped` with evidence `account-limited` for a
+     lane that started before the limit was recorded, while the limit holds. `working`,
+     `unresolved`, `parked` and `awaiting-handover` never recover. `parked` means the lane's issue holds a builder stop or park comment newer than its last
      pushed work, and the answer names that comment (`parkComment`). An alive session that
-     never hands over is resolved by the owner archiving it, which then reads `archived`.
+     never hands over is resolved by the cloud helper archiving it (§ Acting on the builders'
+     account), which then reads `archived`.
      On `parked`, act on the named comment as `wave-watch.md` says for a stop or a park (repair a
      stop; answer or route a park); never ask to push and never launch a successor.
   3. On `ask-to-push`, send `ask`'s text to the lane's session: on the same account with
      `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
      Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at
      all after a definite failure.
-  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, run `successor`, then
-     launch that premise with `launcher.py launch`. The routing step places it: cloud when cloud is
-     ready, the owner's machine otherwise. Until that launch starts, `assess` keeps answering `stopped`, so an
-     interrupted recovery is rerun, never lost.
+  4. On `stopped`, record the lane's outcome `died` with `record-outcome`, post
+     `cloud_builder.py superseded-notice --launch-id <the stopped lane>`'s `comment` on the issue,
+     then run `successor` and launch that premise with `launcher.py launch`. The notice comes before
+     `successor`: a stamped original that wakes after the reset sees the notice (it names its launch
+     id) and stands down, which covers a never-pushed lane too, and the notice stops it even when the
+     successor runs on the owner's machine. `successor` reads the limit again just before it records
+     the supersession and refuses `stop-evidence-expired` if the limit no longer holds. The routing
+     step places the launch: cloud when cloud is ready, the owner's machine otherwise. Until that
+     launch starts, `assess` keeps answering `stopped`, so an interrupted recovery is rerun, never lost:
+     a takeover interrupted after the notice is resumed from the limit while it holds. After the
+     reset the old builder has stood down (its stand-down comment names the notice), but that comment
+     is not stop evidence: have the cloud helper archive that session (§ Acting on the builders'
+     account), after which `assess` reads `archived` (positive stop evidence) and the launcher's
+     session read shows it archived.
+     `successor` passes over a pushed branch whose head another of the issue's pushed branches
+     already contains (it names it in `passedOver`); a branch holding work found nowhere else still
+     refuses `pushed-branch-ambiguous`.
   5. Tell the owner with `message`'s text.
 
   The state is `cloud-recover.json`, beside the launch ledger. Recovery never leaves two builders on
@@ -464,19 +531,45 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   listing (shown by a complete listing, as below), its status bucket reads failed,
   or `cloud_recover.py assess` recorded it `stopped` on a handover. A lane whose builder refused at
   intake built nothing and is outside this rule. An alive session that never answers the fix order
-  is resolved by the owner archiving it, which then reads `archived`. The launcher enforces this:
-  record the listing at launch time into a file and pass it with
-  `launch --cloud-sessions-file <file>`. The usual record is one `list_sessions` page read with no
-  cursor and a limit that holds every session (`has_more: false`); it is the only record that can
-  show a session is gone, and only when its rows run newest-created first and it holds a row of that lane's own cloud environment (`environment_id`) created at least 600 seconds after that lane started (the allowance covers clock skew between the two machines). A `get_session` result (or an array of them) works only for sessions it
-  returns: it covers an archived or failed session it shows, but never a session that is gone. On
-  another account a helper on that account reads it, as § Acting on the builders' account says.
-  `adopt-original-session-live` means an earlier cloud lane's session is still listed live;
-  `originalSessions` names each one, and the fix order goes to it. `adopt-original-session-unread`
-  means the listing could not be used, or a read it needs failed, or it is not a complete page, so
-  a missing session cannot count as gone; `failedRead` names the read. A lane whose builder refused
-  at intake, or that `assess` recorded `stopped` on a handover, needs no listing (a plain handback
-  is not a handover and still needs the listing).
+  is resolved by the cloud helper archiving it (§ Acting on the builders' account), which then
+  reads `archived`. The launcher enforces this: record the session read into a file and pass it
+  with `launch --cloud-sessions-file <file>`. The session read comes from the cloud helper
+  (§ Acting on the builders' account): one `get_session` result per lane, or an array of them. A
+  `get_session` result works only for sessions it returns: it covers an archived or failed session
+  it shows, but never a session that is gone. A `list_sessions` page can show a session gone only
+  when it is one page read with no cursor and a limit that holds every session (`has_more: false`),
+  its rows run newest-created first, and it holds a row of that lane's own cloud environment
+  (`environment_id`) created at least 600 seconds after that lane started (the allowance covers
+  clock skew between the two machines). When the rows carry no `environment_id`, the page proves
+  nothing: read each lane with `get_session`.
+  The check counts a lane only when it could still write the adopted branch: a lane bound to the
+  adopted branch by its premise (it names the same branch, or the same pull request number), and
+  any other lane unless it handed back before the branch's first pull request opened with no fix
+  order since (no `vet not-ready` after the handback, and no fix order to its session).
+  A handed-back lane had opened its own pull request before its handback, so a pull request on the
+  adopted branch opened before then would itself be the branch's first; the lane's pull request was
+  on another branch, and with no fix order since it writes only that branch. A lane bound to the
+  adopted branch needs the session read like any other, whether or not its branch still exists
+  (deleting a branch does not stop its builder). While the builders' account is at its usage limit,
+  a lane that started before the limit needs no session read until the reset time
+  `cloud_relay.py limit` names, and a listing that shows it live still refuses; after the reset the
+  session read is needed again, as for any lane. The relief also needs a supersession notice on the
+  issue that names the lane's launch id (post `cloud_builder.py superseded-notice --launch-id <lane>`'s
+  comment first), so the original builder stands down when it wakes. A lane launched before the stand-down check
+  existed (its reserved premise lacks the launcher's `standDown` stamp) still needs the session
+  read, limit or not. An adoption's cloud launch runs from a checkout at
+  its adopted head (`adoptsHead`), so no pointer branch at the premise's `baseCommit` is needed; a
+  launch that is not an adoption keeps the base rule. Every read the launcher makes for this fails
+  closed:
+  one that fails or is ambiguous keeps the lane in the check.
+  `adopt-original-session-live` means a lane that could still write the branch has a session still
+  listed live; `originalSessions` names each one, and the fix order goes to it.
+  `adopt-original-session-unread` means the session read could not be used, or a read it needs
+  failed, or it is not a complete page, so a missing session cannot count as gone; `failedRead`
+  names the read and `launchIds` the lanes still unproven. A lane whose builder refused at
+  intake, or that `assess` recorded `stopped` on a handover, needs no session read (a plain
+  handback is not a handover and still needs one, unless it is excused as above). No step of this
+  check goes to the owner: every refusal's `remedy` names a step the advisor runs itself.
 - **Adopt a layer that is behind its base.** Bring the adopted branch current with its base
   first: merge the base in and push, so the premise keeps its base (the usual route, standing
   craft). If that is not possible for an unstacked or bottom-layer adoption, set the premise's

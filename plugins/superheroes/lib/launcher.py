@@ -22,6 +22,7 @@ import struct
 import subprocess
 import sys
 import time
+import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -125,7 +126,12 @@ _WORKTREE_COLLISION_REMEDY = (
     "`git worktree prune` when the directory is already gone), then relaunch."
 )
 
-_WORKHORSE_CMD = "/superheroes:workhorse"
+# One command per launchable charter, built from the ledger's charter set (ll.LAUNCH_CHARTERS).
+_CHARTER_COMMANDS = {charter: "/superheroes:%s" % charter for charter in ll.LAUNCH_CHARTERS}
+_WORKHORSE_CMD = _CHARTER_COMMANDS["workhorse"]
+_DETECTIVE_CMD = _CHARTER_COMMANDS["detective"]
+# The prompt line that names a detective dispatch's budget, right after the issue line.
+_BUDGET_LABEL = "Budget:"
 
 # A cloud launch runs the platform command once and reads the session's identity from what it
 # prints. The command needs a pseudo-terminal, so its output arrives wrapped in terminal control
@@ -1153,6 +1159,43 @@ def adopts_premise_reason(premise):
     return None
 
 
+def charter_premise_reason(premise):
+    """The refusal token for a premise's `charter` and `budget`, or None when they are sound.
+    `charter` names the charter the launch starts (absent means workhorse). A detective lane
+    carries its `budget`, one unpadded line; a workhorse lane carries none. Never raises."""
+    if not isinstance(premise, dict):
+        return None
+    # axis: charter is a string naming a launchable charter — anything else would pick no command, or the wrong one
+    if "charter" in premise and (
+        not isinstance(premise["charter"], str) or premise["charter"] not in ll.LAUNCH_CHARTERS
+    ):
+        return "premise-charter-invalid"
+    charter = premise.get("charter", "workhorse")
+    has_budget = "budget" in premise
+    # axis: a detective prompt is never composed without a budget — the diagnosis would run unbounded
+    if charter == "detective" and not has_budget:
+        return "premise-detective-budget-missing"
+    # axis: a budget on a workhorse lane would be dropped from the prompt, so it is refused rather than ignored
+    if has_budget and charter == "workhorse":
+        return "premise-budget-without-detective"
+    budget = premise["budget"] if has_budget else None
+    # axis: a budget is one unpadded non-blank line free of control characters — a break would let it open a second prompt line, and a NUL cannot cross the process boundary
+    if has_budget and (
+        not isinstance(budget, str)
+        or not budget.strip()
+        or budget != budget.strip()
+        or any(ord(ch) < 32 or ord(ch) == 127 for ch in budget)
+    ):
+        return "premise-budget-invalid"
+    # axis: a budget the process argument boundary cannot encode (a lone surrogate) is refused here, before any worktree or reservation
+    if has_budget:
+        try:
+            os.fsencode(budget)
+        except (UnicodeEncodeError, ValueError):
+            return "premise-budget-invalid"
+    return None
+
+
 def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=None):
     """Validate premise stamp per contract C7. Never raises.
 
@@ -1298,6 +1341,10 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
         if not cloud_ready.valid_reported(premise["reportedCloud"]):
             return _fail("premise-reported-cloud-invalid")
 
+    charter_reason = charter_premise_reason(premise)
+    if charter_reason is not None:
+        return _fail(charter_reason)
+
     # axis: adoptsBranch names the pushed branch a successor launch adopts — a string in the branch-name shape, else the builder would be told to check out a name git reads as an option or a path — and adoptsHead, its pushed head, travels with it as a full lowercase sha, else the builder could not tell a moved branch from the one handed over — see bite-proof record adopt_branch
     adopts_reason = adopts_premise_reason(premise)
     if adopts_reason is not None:
@@ -1306,6 +1353,11 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     stamped = dict(premise)
     stamped["baseCommit"] = resolved
     stamped["standingExclusions"] = dict(STANDING_EXCLUSIONS)
+    # axis: only a workhorse launch carries the stand-down stamp, since only the builder's cloud reference checks for a newer launch when it wakes; a detective launch carries none, so a detective lane always needs the session read — see bite-proof record i2272_launcher
+    if premise.get("charter", "workhorse") == "workhorse":
+        stamped["standDown"] = 1
+    else:
+        stamped.pop("standDown", None)
     return {
         "ok": True,
         "reason": None,
@@ -1351,6 +1403,14 @@ def compose_launch(
     adopts_reason = adopts_premise_reason(premise)
     if adopts_reason is not None:
         return _fail(adopts_reason)
+    charter_reason = charter_premise_reason(premise)
+    if charter_reason is not None:
+        return _fail(charter_reason)
+    charter = premise.get("charter", "workhorse") if isinstance(premise, dict) else "workhorse"
+    cmd = _CHARTER_COMMANDS[charter]
+    issue_line = "Issue: #%s" % issue
+    if charter == "detective":
+        issue_line += "\n%s %s" % (_BUDGET_LABEL, premise["budget"])
     if isinstance(premise, dict) and "adoptsBranch" in premise:
         adopts = adopts_line(premise["adoptsBranch"], premise["adoptsHead"])
     version = None
@@ -1375,25 +1435,30 @@ def compose_launch(
             base_line += "\n" + adopts
         place_line = launch_lines.format_line(launch_lines.PLACE, "cloud session")
         version_line = launch_lines.format_line(launch_lines.VERSION, version)
-        # axis: every cloud prompt carries the doctrine's standing push permission, between the base lines and the rulings
-        cloud_launch_line = doctrine.get("cloudLaunchLine")
-        if not isinstance(cloud_launch_line, str) or not cloud_launch_line.strip():
-            return _fail("compose-cloud-launch-line-absent")
-        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s" % (
-            _WORKHORSE_CMD, issue, place_line, version_line, environment_line, base_line,
-            cloud_launch_line, rulings_block,
+        # axis: a cloud prompt carries the launch sentence its charter owns — a detective's carries the doctrine's detective cloud rule, never the builder's push permission
+        if charter == "detective":
+            launch_sentence = doctrine.get("detectiveCloudLine")
+            if not isinstance(launch_sentence, str) or not launch_sentence.strip():
+                return _fail("compose-detective-cloud-line-absent")
+        else:
+            launch_sentence = doctrine.get("cloudLaunchLine")
+            if not isinstance(launch_sentence, str) or not launch_sentence.strip():
+                return _fail("compose-cloud-launch-line-absent")
+        prompt = "%s\n\n%s\n\n%s\n%s\n%s\n%s\n\n%s\n\n%s" % (
+            cmd, issue_line, place_line, version_line, environment_line, base_line,
+            launch_sentence, rulings_block,
         )
     elif adopts is not None:
         local_base = premise.get("baseCommit")
         if not isinstance(local_base, str) or not local_base.strip():
             return _fail("premise-missing-field:baseCommit")
         # A local adopt launch never reaches cloud intake, so its base keeps the non-empty check.
-        prompt = "%s\n\nIssue: #%s\n\n%s\n%s\n\n%s" % (
-            _WORKHORSE_CMD, issue, adopts, launch_lines.format_line(launch_lines.BASE, local_base),
+        prompt = "%s\n\n%s\n\n%s\n%s\n\n%s" % (
+            cmd, issue_line, adopts, launch_lines.format_line(launch_lines.BASE, local_base),
             rulings_block,
         )
     else:
-        prompt = "%s\n\nIssue: #%s\n\n%s" % (_WORKHORSE_CMD, issue, rulings_block)
+        prompt = "%s\n\n%s\n\n%s" % (cmd, issue_line, rulings_block)
     if own_line not in prompt:
         return _fail("compose-ruling-zero-absent")
 
@@ -1441,6 +1506,7 @@ def compose_launch(
         "effort": effort_result["effort"],
         "effortSource": effort_result["source"],
         "doctrine": doctrine,
+        "charter": charter,
     }
     if cloud:
         composed["place"] = PLACE_CLOUD
@@ -1870,6 +1936,20 @@ def _terminalize(
         env=env,
     )
     return {"ok": bool(result.get("ok")), "reason": result.get("reason")}
+
+
+def _settle_uncertain_reservation(repo_root, launch_id, reason, stage, env):
+    """End a reservation whose append reported failure and whose read-back could not say.
+
+    One terminal write: `terminal` when the landed record is now ended, `absent` when the
+    line never landed, `uncertain` when the settle could not read or write the ledger.
+    """
+    term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
+    if term["ok"]:
+        return "terminal"
+    if term["reason"] == "terminal-unknown-launch":
+        return "absent"
+    return "uncertain"
 
 
 def _accounted_fail(reserve_result, reason, launch_id, **extra):
@@ -2558,6 +2638,76 @@ def _base_on_remote(repo_root, base, env):
 _base_on_remote_fn = _base_on_remote
 
 
+def _gh_branch_pulls(owner, repo, branch, env, timeout):
+    """Ask GitHub's pulls endpoint for every pull request (any state) headed at ``branch`` with
+    ``gh``; the completed process, or None when ``gh`` could not run or timed out. Tests replace it."""
+    try:
+        return subprocess.run(
+            [
+                "gh", "api",
+                "repos/%s/%s/pulls?state=all&head=%s:%s&per_page=100"
+                % (owner, repo, owner, urllib.parse.quote(branch, safe="")),
+            ],
+            capture_output=True,
+            text=True,
+            env=ll.scrub_env(env),
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _adopted_branch_first_pr(repo_root, branch, env):
+    """Epoch seconds when the first pull request headed at ``branch`` of this repository opened,
+    asked of GitHub afresh, or None when that could not be established: an origin that is not on
+    github.com, no ``gh``, a failed call, no pull request, a full page (more may exist), or any row
+    that is not this repository's own pull request for exactly that branch with a UTC ``created_at``."""
+    url = _git_scrubbed(
+        repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if url is None or url.returncode != 0:
+        return None
+    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
+    if matched is None:
+        return None
+    owner, repo = matched.group("owner"), matched.group("repo")
+    asked = _gh_branch_pulls(owner, repo, branch, env, _WORKTREE_GIT_TIMEOUT)
+    if asked is None or asked.returncode != 0:
+        return None
+    try:
+        rows = json.loads(asked.stdout)
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(rows, list) or not rows or len(rows) >= 100:
+        return None
+    stamps = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        head = row.get("head")
+        if not isinstance(head, dict):
+            return None
+        head_repo = head.get("repo")
+        full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
+        if (
+            head.get("ref") != branch or not isinstance(full_name, str)
+            or full_name.lower() != ("%s/%s" % (owner, repo)).lower()
+        ):
+            return None
+        stamp = _listing_created_ts(row)
+        if stamp is None:
+            return None
+        stamps.append(stamp)
+    return min(stamps)
+
+
+# The round-trip to GitHub; tests replace it.
+_adopted_branch_first_pr_fn = _adopted_branch_first_pr
+
+# The clock the original-session check reads an account's usage limit against; tests replace it.
+_now_fn = time.time
+
+
 def _cloud_base_refusal(repo_root, stamped, env):
     """The refusal reason when the base commit the launch names is not on the remote, else None.
 
@@ -2700,11 +2850,36 @@ def _cloud_start_refusal(repo_root, stamped, env):
 
     The base-on-remote refusals come first, with their tokens and their local fallback
     unchanged; then the checkout check, whose refusals carry the checkout's facts in ``extra``.
+    An adoption (``adoptsBranch`` with an ``adoptsHead`` that is a full sha) launches from a
+    checkout at its adopted head or at its ``baseCommit`` (the base is an ancestor of that head);
+    any other launch needs a checkout at its ``baseCommit``. ``extra`` keeps ``baseCommit`` and
+    says which it was checked against; an adoption refused at both carries the adopted head's
+    reason and detail.
     """
     reason = _cloud_base_refusal(repo_root, stamped, env)
     if reason is not None:
         return reason, {}
-    return _cloud_checkout_refusal(repo_root, stamped["baseCommit"], env)
+    head = stamped.get("adoptsHead")
+    base = stamped["baseCommit"]
+    # axis: an adoption passes from a checkout at its adopted head or at its base, each checked whole, and refuses with the adopted head's reason only when both refuse; every other launch is checked against its base alone — see bite-proof record i2272_launcher
+    adopting = "adoptsBranch" in stamped and isinstance(head, str) and bool(_HEX40.match(head))
+    if not adopting:
+        refusal = _cloud_checkout_refusal(repo_root, base, env)
+        if refusal is None:
+            return None
+        refusal_reason, detail = refusal
+        detail["baseCommit"] = base
+        detail["checkedAgainst"] = "baseCommit"
+        return refusal_reason, detail
+    refusal = _cloud_checkout_refusal(repo_root, head, env)
+    if refusal is None:
+        return None
+    if head != base and _cloud_checkout_refusal(repo_root, base, env) is None:
+        return None
+    refusal_reason, detail = refusal
+    detail["baseCommit"] = base
+    detail["checkedAgainst"] = "adoptsHead and baseCommit"
+    return refusal_reason, detail
 
 
 _ADOPT_HEAD_NOT_ON_BASE = "premise-adopts-head-not-on-base"
@@ -2796,17 +2971,34 @@ def _adopted_head_refusal(repo_root, stamped, env):
 _ADOPT_ORIGINAL_SESSION_LIVE = "adopt-original-session-live"
 _ADOPT_ORIGINAL_SESSION_UNREAD = "adopt-original-session-unread"
 _ADOPT_ORIGINAL_REMEDY_LIVE = (
-    "The adopted branch's original cloud builder is still live. Send the fix order to that "
-    "session (through the relay when it runs on another account) instead of launching a new "
-    "lane. Launch a new fix leg only once that session is archived or gone from the listing, "
-    "its status bucket reads failed, or cloud_recover assess has recorded it stopped on a "
-    "handover."
+    "The risk is a second builder on the adopted branch: an earlier cloud lane that could still "
+    "write it is listed live (originalSessions). Send the fix order to that session instead of "
+    "launching a new lane: SendMessage on this account, the relay on another. If it does not "
+    "answer, get its handover (cloud_recover.py ask, then assess) or have a cloud helper session "
+    "on the builders' account archive it (orchestration.md § Acting on the builders' account), "
+    "then launch again with a fresh session read. When the issue's newest lane is a local lane "
+    "on this account, resume that same session instead of adopting."
 )
 _ADOPT_ORIGINAL_REMEDY_UNREAD = (
-    "Record the builders' account's cloud session listing at launch time (one list_sessions "
-    "page read with no cursor and has_more false; a get_session result covers only a session it "
-    "returns, never one that is gone) and pass it with --cloud-sessions-file; a listing that "
-    "cannot be read, or that does not cover every earlier session, refuses."
+    "The risk is a second builder on the adopted branch, and nothing read so far shows the lanes "
+    "in launchIds are not live. Clear it with evidence you read yourself: have a cloud helper "
+    "session on the builders' account run get_session for each named lane's cloudSessionId and "
+    "post the results on the issue (orchestration.md § Acting on the builders' account), save "
+    "them to a file and launch again with --cloud-sessions-file; or get the lane's handover "
+    "(cloud_recover.py ask, then assess). A lane that handed back before the adopted branch's "
+    "first pull request opened needs no read, unless a fix order went to its session. While the "
+    "builders' account is at its usage limit, `cloud_relay.py limit --config-dir <the builders' "
+    "config dir>` shows it, and a lane that started before the limit needs no session read until "
+    "the reset time it names (the relay records the limit only when it next runs, so send a status "
+    "ping through the relay first), once a supersession notice naming that lane is on the issue: "
+    "post `cloud_builder.py superseded-notice --launch-id <lane>`'s comment there first; after the "
+    "reset, the session read is needed again. When the issue's newest "
+    "lane is a local lane on this account, resume that same session instead of adopting."
+)
+_ADOPT_ORIGINAL_REMEDY_STATE = (
+    "The launch ledger or cloud-recover.json named by failedRead could not be read, so which "
+    "earlier lanes could still write the adopted branch is unknown. Restore that file from its "
+    "last good copy and launch again."
 )
 _LISTING_STRING_FIELDS = ("title", "session_status", "status_bucket", "environment_id")
 # The owner machine clock that stamped startedTs and the host clock that stamped created_at can disagree.
@@ -2906,23 +3098,145 @@ def _page_created_by_environment(pages):
     return newest
 
 
-def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
-    """None, or ``(reason, detail)``: an adoption must not launch beside a live original builder.
+def _is_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+_NEEDS_FIRST_PR = object()
+_NEEDS_COMMENTS = object()
+
+
+def _issue_comments(repo_root, issue, env):
+    """The issue's comments (every page) as a list, or None when they could not be read whole.
+
+    The repository is the origin's GitHub owner and name; an origin not on github.com, a
+    non-numeric issue or a failed read gives None.
+    """
+    url = _git_scrubbed(
+        repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if url is None or url.returncode != 0:
+        return None
+    matched = _GITHUB_REMOTE_RE.match(url.stdout.strip())
+    if matched is None:
+        return None
+    try:
+        number = int(issue)
+    except (TypeError, ValueError):
+        return None
+    import cloud_recover
+
+    return cloud_recover._issue_comments(
+        "%s/%s" % (matched.group("owner"), matched.group("repo")), number, 1, ll.scrub_env(env), None,
+    )
+
+
+# The paginated comments read; tests replace it.
+_issue_comments_fn = _issue_comments
+
+
+def _supersession_notice_names(comments, launch_id):
+    """True when one of *comments* opens with the supersession header and names *launch_id* as a whole token."""
+    if not isinstance(comments, list):
+        return False
+    import cloud_builder
+
+    return any(
+        isinstance(c, dict) and isinstance(c.get("body"), str)
+        and cloud_builder._opens_with(c["body"], cloud_builder.SUPERSEDED_HEADER)
+        and cloud_builder._names_launch(c["body"], launch_id)
+        for c in comments
+    )
+
+
+def _limit_expired_refusal(reads, repo_root=None, env=None):
+    """``(reason, detail)`` when the usage limit a passed original-session check relied on has reset or been withdrawn, else None.
+
+    ``reads["resetsAt"]`` is the earliest reset time among the limited lanes the pass relied on, and
+    ``reads["relied"]`` lists their ``(configDir, startedTs)`` pairs; both comparisons are local (the
+    clock and a local record read), so they can run right before a spawn with no remote read.
+    """
+    resets_at = reads.get("resetsAt")
+    now = _now_fn()
+    expired = {
+        "failedRead": "limit-expired", "remedy": _ADOPT_ORIGINAL_REMEDY_UNREAD,
+    }
+    is_time = isinstance(resets_at, (int, float)) and not isinstance(resets_at, bool)
+    # axis: a limit authorization lasts until its reset time, so a spawn after the reset, past the remote lookups that followed the check, is refused unread — see bite-proof record i2272_launcher
+    if is_time and now >= resets_at:
+        return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
+    relied = reads.get("relied") or []
+    if relied:
+        import cloud_recover
+        import cloud_relay
+
+        for cfg, started_ts in relied:
+            reading = cloud_relay.account_limit(repo_root, cfg, env=env, now=now)
+            # axis: a limit authorization also needs the limit to still hold when the spawn is next, so a reply that withdrew it during the remote lookups refuses the spawn unread; the relied lanes were stamped when relied on, so the shared rule is applied to the stamp it needs — see bite-proof record i2272_launcher
+            if not cloud_recover.limit_relief(reading, {"standDown": 1}, started_ts):
+                return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
+        # axis: the account reads above take time, so the clock is read again after them and a reset crossed during a read refuses the spawn unread — see bite-proof record i2272_launcher
+        if is_time and _now_fn() >= resets_at:
+            return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(expired)
+    return None
+
+
+def _original_session_refusal(repo_root, issue, stamped, sessions_file, env, reads=None):
+    """The refusal ``_original_session_pass`` reaches, or None; every local read happens after the slow remote read.
+
+    ``reads`` is the caller's dict for what the pass learned: after a pass that returns None it holds
+    ``resetsAt``, the earliest reset time of the limited lanes the pass relied on, when there were any.
+
+    A pass reads the ledger, the recover state and the relay history (all local); when a lane needs
+    the remote read (the adopted branch's first pull request time) the pass stops and names it.
+    That read is made once, and the whole narrowing is evaluated again on a fresh local snapshot,
+    so a vet amendment, a handover stop or a fix order recorded during it is still seen. The pass
+    that returns a result is always one that made no remote read of its own.
+    """
+    reads = {} if reads is None else reads
+    while True:
+        result = _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
+        if result is _NEEDS_FIRST_PR:
+            reads["first"] = _adopted_branch_first_pr_fn(repo_root, stamped["adoptsBranch"], env)
+        elif result is _NEEDS_COMMENTS:
+            reads["comments"] = _issue_comments_fn(repo_root, issue, env)
+        else:
+            return result
+
+
+def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads):
+    """None, or ``(reason, detail)``: an adoption must not launch beside a live builder that could still write the adopted branch.
 
     A premise that carries ``adoptsBranch`` is checked against the cloud lanes the ledger holds for
     the issue that started a session. A lane is exempt when its latest outcome is ``refusal`` (it
-    built nothing) or ``cloud_recover assess`` recorded it stopped on a handover. For the others the
-    recorded host listing (``sessions_file``) must show the lane's session archived, failed or
-    gone: a row that is none of those is live, and a listing that cannot be read, or that does not
-    cover a session it does not show, refuses ``adopt-original-session-unread``.
+    built nothing) or ``cloud_recover assess`` recorded it stopped on a handover. Of the rest, a lane
+    is dropped only on evidence this machine reads itself, and every read that fails or is
+    ambiguous keeps it: a lane not bound to the adopted branch by its premise is dropped when it
+    handed back before the branch's first pull request opened and neither a ``vet not-ready`` nor a
+    fix-order relay record addressed to it reopened it (any fix-order relay record to its session
+    does), since a pull request on the branch before the handback would itself be the first, so the
+    lane's pull request was on another branch and nothing sends it back to this one. A lane bound
+    to the adopted branch is kept whether or not the branch is still on ``origin``: deleting a
+    branch does not stop its builder.
+    A lane left is limited when its account reads at its usage limit (``cloud_relay.account_limit``)
+    with the limit recorded after the lane started; a limited lane needs no listing while the
+    limit holds, but a supplied listing that shows its session live still refuses
+    ``adopt-original-session-live``. For the other lanes left, the recorded host listing
+    (``sessions_file``) must show the lane's session archived, failed or gone: a row that is none
+    of those is live, and a listing that cannot be read, or that does not cover a session it does
+    not show, refuses ``adopt-original-session-unread``.
     """
+    reads.pop("resetsAt", None)
+    reads.pop("relied", None)
     if "adoptsBranch" not in stamped:
         return None
 
     def unread(failed, **more):
-        return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(
-            more, failedRead=failed, remedy=_ADOPT_ORIGINAL_REMEDY_UNREAD,
+        remedy = (
+            _ADOPT_ORIGINAL_REMEDY_STATE if failed in ("ledger", "recover-state")
+            else _ADOPT_ORIGINAL_REMEDY_UNREAD
         )
+        return _ADOPT_ORIGINAL_SESSION_UNREAD, dict(more, failedRead=failed, remedy=remedy)
 
     got = ll.read(repo_root, env=env)
     folded = ll.fold(got["records"]) if got["state"] in ("ok", "missing") else None
@@ -2947,24 +3261,149 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
         }
     if not candidates:
         return None
+    branch = stamped["adoptsBranch"]
+    limited = set()
+    relays = None  # the relay history is local and read afresh by every pass
+    premises = {
+        r.get("launchId"): r.get("premise") for r in got["records"] if r.get("event") == "reserved"
+    }
+    if isinstance(branch, str) and branch:
+        adopted_pr = stamped.get("adopts")
+        kept = {}
+
+        def handback_ts(info):
+            reoutcome = next(
+                (a for a in reversed(info.get("amendments") or []) if a["kind"] == ll.AMENDMENT_REOUTCOME),
+                None,
+            )
+            if reoutcome is not None:
+                return reoutcome.get("ts")
+            at_index = info.get("terminalIndex")
+            record = (
+                got["records"][at_index]
+                if isinstance(at_index, int) and not isinstance(at_index, bool)
+                and 0 <= at_index < len(got["records"]) else None
+            )
+            return record.get("ts") if isinstance(record, dict) else None
+
+        def vet_reopened(info, handback):
+            return any(
+                a["kind"] == "vet" and a["value"] == "not-ready"
+                and not (cloud_recover._is_number(a.get("ts")) and a["ts"] <= handback)
+                for a in info.get("amendments") or []
+            )
+
+        def relay_reopened(info):
+            nonlocal relays
+            if relays is None:
+                import cloud_relay
+
+                relays = cloud_relay.fix_orders(repo_root, env=env, include_unchecked=True)
+            # axis: a fix-order relay read that fails keeps every handed-back lane, since a fix order sent since cannot be ruled out — see bite-proof record i2254_original_session
+            if relays.get("ok") is not True:
+                return True
+            for relay in relays.get("records") or []:
+                # axis: a fix-order relay record whose target is not a non-empty string is ambiguous and may have been sent to this lane, so it is matched against every handed-back lane
+                # axis: any fix order addressed to the lane's session keeps the lane whatever its compose or decision time, since delivery can follow a later handback — see bite-proof record i2254_original_session
+                if isinstance(relay, dict) and (
+                    not isinstance(relay.get("session"), str)
+                    or not relay.get("session")
+                    or relay.get("session") == info["cloudSessionName"]
+                ):
+                    return True
+            return False
+
+        for launch_id, info in candidates.items():
+            premise = premises.get(launch_id)
+            if isinstance(premise, dict) and (
+                premise.get("adoptsBranch") == branch
+                or (
+                    _is_int(premise.get("adopts")) and _is_int(adopted_pr)
+                    and premise["adopts"] == adopted_pr
+                )
+            ):
+                # axis: a lane bound to the adopted branch by its premise is kept whether or not its branch is still on origin, since deleting a branch does not stop its builder; it needs a session read or a limit reading like any other lane — see bite-proof record i2272_launcher
+                kept[launch_id] = info
+                continue
+            if cloud_recover._latest_outcome(info) != "handback":
+                kept[launch_id] = info
+                continue
+            handback = handback_ts(info)
+            if not cloud_recover._is_number(handback):
+                kept[launch_id] = info
+                continue
+            # axis: a vet not-ready after the handback is a fix order sent since, so the lane may write the branch again and stays; a vet stamp that is not a finite number stays too — see bite-proof record i2254_original_session
+            if vet_reopened(info, handback):
+                kept[launch_id] = info
+                continue
+            # axis: the first-pull-request time is read before the ledger, the recover state and the relay history that decide the lane, since the lookup is a slow remote read and a vet not-ready, a handover stop or a fix order recorded during it must still be seen — see bite-proof record i2254_original_session
+            if "first" not in reads:
+                return _NEEDS_FIRST_PR
+            first = reads["first"]
+            if relay_reopened(info):
+                kept[launch_id] = info
+                continue
+            # axis: a handed-back lane had opened its own pull request before the handback, and a pull request on the adopted branch opened before then would itself be the branch's earliest, so the lane's pull request was on another branch and with no fix order since it writes only that branch; a first-pull-request time that is unread, or not past the handback plus the clock-skew allowance, keeps the lane — see bite-proof record i2254_original_session
+            if cloud_recover._is_number(first) and handback + _ADOPT_ABSENCE_SKEW_SECONDS <= first:
+                continue
+            kept[launch_id] = info
+        candidates = kept
+    if not candidates:
+        return None
+    # one account_limit read per distinct configDir in this pass; the pass that stopped for the comments read hands its readings to the next
+    readings = reads.pop("readings", {})
+    relief = {}  # lanes whose account reading would relieve them, pending the supersession notice
+    for launch_id, info in candidates.items():
+        cfg = info.get("configDir")
+        if not isinstance(cfg, str) or not cfg:
+            continue
+        if cfg not in readings:
+            import cloud_relay
+
+            readings[cfg] = cloud_relay.account_limit(repo_root, cfg, env=env, now=_now_fn())
+        reading = readings[cfg]
+        started_ts = info.get("startedTs")
+        lane_premise = premises.get(launch_id)
+        # axis: a lane is limited only by the one rule recovery shares (cloud_recover.limit_relief): its account reads limited, the limit recorded after the lane started, and its reserved premise carrying the launcher's standDown stamp; a limit that has passed, one recorded before the lane started, a lane with no started time, an account with no reading and an unstamped lane leave the lane needing a listing — see bite-proof record i2272_launcher
+        if cloud_recover.limit_relief(reading, lane_premise, started_ts):
+            relief[launch_id] = reading
+    if relief:
+        # axis: the issue's comments are read in the remote-read stage, before the local snapshot the decision rests on — see bite-proof record i2272_launcher
+        if "comments" not in reads:
+            reads["readings"] = readings
+            return _NEEDS_COMMENTS
+        comments = reads["comments"]
+        for launch_id, reading in relief.items():
+            # axis: limit relief needs a supersession notice on the issue that names the lane's launch id as a whole token, so the original builder stands down on waking; no notice, a notice naming another launch, or a comments read that failed gives no relief — see bite-proof record i2272_launcher
+            if not _supersession_notice_names(comments, launch_id):
+                continue
+            limited.add(launch_id)
+            reads.setdefault("relied", []).append(
+                (candidates[launch_id]["configDir"], candidates[launch_id].get("startedTs"))
+            )
+            if cloud_recover._is_number(reading.get("resetsAt")):
+                resets = reads.get("resetsAt")
+                reads["resetsAt"] = reading["resetsAt"] if resets is None else min(resets, reading["resetsAt"])
+    # a limited lane is refused only on affirmative live evidence; it never makes a listing missing or incomplete refuse
+    lane_ids = sorted(launch_id for launch_id in candidates if launch_id not in limited)
     # axis: an adoption over a lane that started a session with no listing given refuses unread — see bite-proof record i2119_original_session
     if sessions_file is None:
-        return unread("listing-not-given")
+        return unread("listing-not-given", launchIds=lane_ids) if lane_ids else None
     try:
         with open(sessions_file, encoding="utf-8") as fh:
             text = fh.read()
     except OSError:
-        return unread("listing-file")
+        return unread("listing-file", launchIds=lane_ids) if lane_ids else None
     except UnicodeDecodeError:
-        return unread("listing-json")
+        return unread("listing-json", launchIds=lane_ids) if lane_ids else None
     try:
         parsed = _listing_value(text)
     except ValueError:
-        return unread("listing-json")
+        return unread("listing-json", launchIds=lane_ids) if lane_ids else None
     listing = _listing_rows(parsed)
     # axis: a listing that is not a recorded host shape refuses unread — see bite-proof record i2119_original_session
     if listing is None:
-        return unread("listing-shape")
+        return unread("listing-shape", launchIds=lane_ids) if lane_ids else None
     rows, pages, result_count = listing
     complete = result_count == 1 and len(pages) == 1 and pages[0].get("has_more") is False
     # axis: a has_more-false page proves absence only when its rows are ordered and parseable, so a cursor-read last page cannot pass — see bite-proof record i2119_original_session
@@ -2983,6 +3422,8 @@ def _original_session_refusal(repo_root, issue, stamped, sessions_file, env):
                 created_by_env.get(lane_env)
                 if created_by_env is not None and isinstance(lane_env, str) else None
             )
+            if launch_id in limited:
+                continue
             # axis: absence needs a row of the lane's own cloud environment created at or after the lane started plus the clock-skew allowance, and a lane with no started time or no environment proves nothing, and a lane whose session id was never confirmed is matched by title only, so absence never proves it gone — see bite-proof record i2119_original_session
             if (
                 newest is None or not isinstance(started_ts, (int, float))
@@ -3303,6 +3744,7 @@ def _reserved_record(
         # what a reader needs to tell an unpinned lane from one pinned to the same value.
         "effort": compose_result["effort"] or "",
         "effortSource": compose_result["effortSource"],
+        "charter": compose_result["charter"],
     }
     if cloud:
         reserved["place"] = PLACE_CLOUD
@@ -3615,14 +4057,27 @@ def launch_build(
     reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
         extra = {}
+        read_back = None
+        if reserve_result.get("reason") == "ledger-append-failed":
+            # The append reported failure: the read-back says whether the line landed. An
+            # undecided or missing read-back (fail closed) is settled by one terminal write.
+            read_back = reserve_result.get("appendReadBack")
+            if read_back != "not-landed":
+                read_back = _settle_uncertain_reservation(
+                    repo_root, launch_id, "ledger-append-failed", "reserve", env,
+                )
+            extra["appendReadBack"] = read_back
         if made_iphone_id:
-            if reserve_result.get("reason") == "ledger-append-failed":
-                # The append may or may not have landed, so the record may name these phones:
-                # they are reported, never removed.
+            if read_back == "uncertain":
+                # The settle could not read or write the ledger, so a record may name these
+                # phones: they are reported, never removed.
                 phone_outcomes = [{"id": udid, "recorded": "uncertain"} for udid in made_iphone_ids]
+            elif read_back == "terminal":
+                # The landed record is now terminal and names these phones: the reap owns them.
+                phone_outcomes = [{"id": udid, "recorded": True} for udid in made_iphone_ids]
             else:
-                # Every other refusal returns before the append: no record names these phones,
-                # so they are this launch's own and nothing else can reap them.
+                # No record names these phones (the refusal returned before the append, or the
+                # line did not land): they are this launch's own and nothing else can reap them.
                 phone_outcomes = [
                     {"id": udid, "recorded": False, "deleted": _delete_own_iphone(udid, run)}
                     for udid in made_iphone_ids
@@ -3631,12 +4086,25 @@ def launch_build(
             if models_named:
                 extra["iphones"] = phone_outcomes
         if not cloud:
-            proc = _git_scrubbed(
-                repo_root, "worktree", "remove", worktree_path,
-                env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-            )
-            if proc is None or proc.returncode != 0:
-                extra["orphanedWorktree"] = worktree_path
+            if read_back == "uncertain":
+                # A live reservation may name this worktree: keep it until the lane is readable.
+                extra["keptWorktree"] = worktree_path
+                extra["remedy"] = (
+                    "First make the ledger read cleanly again: `repair-lane` refuses an unreadable "
+                    "ledger. Then, after confirming no builder runs for this launch, end the lane "
+                    "with `launcher.py repair-lane --repo-root %s --launch-id %s "
+                    "--evidence \"<what failed and what was checked>\" "
+                    "--no-builder \"<what was checked to show no builder exists>\"`. "
+                    "Only once the lane reads terminal (or absent) can the worktree at %s be removed."
+                    % (repo_root, launch_id, worktree_path)
+                )
+            else:
+                proc = _git_scrubbed(
+                    repo_root, "worktree", "remove", worktree_path,
+                    env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+                )
+                if proc is None or proc.returncode != 0:
+                    extra["orphanedWorktree"] = worktree_path
         return _fail(reserve_result["reason"], launchId=launch_id, **extra)
 
     # The lanes this launch's surfaces overlapped are a recorded, disclosed warning rather
@@ -3719,8 +4187,20 @@ def launch_build(
             "effortSource": compose_result["effortSource"],
             "warnings": warnings,
         }
+        # axis: the original-session check ran before the remote reads, the reservation and local setup, so a usage limit it read can have expired; it is read again right before the cloud command, and a refusal terminalizes the unstarted lane — see bite-proof record i2272_launcher
+        limit_reads = {}
+        recheck = _original_session_refusal(
+            repo_root, issue, stamped, cloud_sessions_file, env, limit_reads,
+        )
+        if recheck is not None:
+            recheck_reason, recheck_detail = recheck
+            term = _terminalize(
+                repo_root, launch_id, False, recheck_reason, stage="original-session", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, recheck_reason), **recheck_detail)
         # axis: reservation may have waited on the ledger lock, so the base is re-checked
         # right before the command; a base the remote lost terminalizes the unstarted lane.
+        # The checkout is the last read before the command, after the slow original-session lookup, so a checkout that moved during that lookup is seen — see bite-proof record i2272_launcher
         drift = _cloud_start_refusal(repo_root, stamped, env)
         if drift is not None:
             drift_reason, drift_extra = drift
@@ -3728,6 +4208,14 @@ def launch_build(
                 repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
             )
             return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
+        # axis: the limit the check relied on is compared with the clock right before the cloud command, with no remote read, since the remote lookups above can outlive it — see bite-proof record i2272_launcher
+        expired = _limit_expired_refusal(limit_reads, repo_root, env)
+        if expired is not None:
+            expired_reason, expired_detail = expired
+            term = _terminalize(
+                repo_root, launch_id, False, expired_reason, stage="original-session", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, expired_reason), **expired_detail)
         cloud_result = _run_cloud_spawn(
             repo_root,
             launch_id,
@@ -3781,6 +4269,21 @@ def launch_build(
             )
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
             return _post_reserve_fail(reason)
+
+        # axis: the original-session check ran before the reservation and local setup, so a usage limit it read can have expired; it is read again right before every spawn attempt, and a refusal terminalizes the lane — see bite-proof record i2272_launcher
+        limit_reads = {}
+        recheck = _original_session_refusal(
+            repo_root, issue, stamped, cloud_sessions_file, env, limit_reads,
+        )
+        if recheck is None:
+            # axis: the limit the check relied on is compared with the clock right before the spawn, with no remote read, since the check's own remote lookup can outlive it — see bite-proof record i2272_launcher
+            recheck = _limit_expired_refusal(limit_reads, repo_root, env)
+        if recheck is not None:
+            recheck_reason, recheck_detail = recheck
+            term = _terminalize(
+                repo_root, launch_id, False, recheck_reason, stage="original-session", env=env,
+            )
+            return _post_reserve_fail(_terminalization_reason(term, recheck_reason), **recheck_detail)
 
         spawn_result = _spawn_attempt(
             repo_root,
@@ -3984,6 +4487,10 @@ def _try_reserve_for_refusal(
         "effort": effort_token,
         "effortSource": effort_source,
     }
+    # An invalid charter value is left off, so the accounting record still folds.
+    refused_charter = premise.get("charter", "workhorse")
+    if isinstance(refused_charter, str) and refused_charter in ll.LAUNCH_CHARTERS:
+        reserved["charter"] = refused_charter
     if slot is not None:
         reserved["slot"] = slot
     if generation is not None:
@@ -4003,6 +4510,17 @@ def _try_reserve_for_refusal(
         if isinstance(account_id, str) and account_id:
             reserved["accountId"] = account_id
     result = ll.reserve(repo_root, reserved, env=env)
+    if result.get("reason") == "ledger-append-failed" and result.get("appendReadBack") == "landed":
+        # The line is in the ledger and this path never spawns: the caller ends it with the
+        # refusal's own reason and stage, so the diagnostic is not replaced by the append failure.
+        return {"reserved": True, "warnings": []}
+    if result.get("reason") == "ledger-append-failed" and result.get("appendReadBack") != "not-landed":
+        # Undecided or missing read-back (fail closed): one terminal write settles the record,
+        # so the caller has nothing left to end.
+        settled = _settle_uncertain_reservation(
+            repo_root, launch_id, "ledger-append-failed", "reserve", env,
+        )
+        return {"reserved": False, "warnings": [], "appendReadBack": settled}
     # This accounting reservation can itself land on a live lane's surfaces, so it carries
     # the same disclosure a normal reservation does (#1054). Dropping it here is how the
     # pre-spawn refusal paths used to return a result that hid an overlap the ledger had

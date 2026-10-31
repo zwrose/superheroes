@@ -110,7 +110,7 @@ def test_audit_target_keys_opaque_id_row_by_content_and_stamps_marker():
 
 
 def test_readers_do_not_mutate_rows_missing_finding_key():
-    """T4: _judgment_row_ids and _audit_targets never write findingKey onto caller rows."""
+    """T4: _finding_key_of and _audit_targets never write findingKey onto caller rows."""
     row = {"file": "a.py", "line": 1, "title": "bug", "severity": "Important"}
     mint_state = RD.new_state(_cfg())
     RD._set_findings(mint_state, [dict(row)])
@@ -118,9 +118,9 @@ def test_readers_do_not_mutate_rows_missing_finding_key():
 
     judgment_row = copy.deepcopy(row)
     before_judgment = copy.deepcopy(judgment_row)
-    ids = RD._judgment_row_ids([judgment_row])
+    key = RD._finding_key_of(judgment_row)
     assert judgment_row == before_judgment
-    assert ids == [expected_key]
+    assert key == expected_key
 
     audit_row = copy.deepcopy(row)
     audit_state = RD.new_state(_cfg())
@@ -143,7 +143,6 @@ def test_finding_key_of_prefers_finding_key_over_id():
         "title": "t",
     }
     assert RD._finding_key_of(row) == minted
-    assert RD._judgment_row_ids([row]) == [minted]
     state = RD.new_state(_cfg())
     state["fixBatch"] = [row]
     targets = RD._audit_targets(state, state["config"], {})
@@ -225,7 +224,6 @@ def test_staged_id_is_never_a_finding_identity():
     """T11: staged v<N> ids are positional — keyed by minted content, not the staged id."""
     row = {"id": "v0", "file": "a.py", "line": 1, "title": "t", "severity": "Important"}
     assert RD._finding_key_of(row) == SC.location_key(row)
-    assert RD._judgment_row_ids([row]) == [SC.location_key(row)]
 
     rowA = row
     rowB = {"id": "v0", "file": "b.py", "line": 9, "title": "u", "severity": "Important"}
@@ -421,7 +419,7 @@ def test_persisted_targets_without_marker_dedupe_by_content():
     state["auditRounds"] = [{"round": 2, "outcomes": []}]
     state["findings"] = []
     RD._settle_delta(state, state["config"])
-    assert state.get("step") == RD.P_FIXER
+    assert state.get("step") == RD.P_APPLY_FIXES
     fix_batch = state.get("_fixBatch") or []
     assert len(fix_batch) == 1
 
