@@ -63,6 +63,7 @@ P_PANEL = round_phases.P_PANEL
 P_VERIFIERS = round_phases.P_VERIFIERS
 P_SYNTHESIS = round_phases.P_SYNTHESIS
 P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
@@ -72,6 +73,7 @@ P_FIXER = round_phases.P_FIXER
 ADAPTER_PHASES = payload_contracts.ADAPTER_PHASES
 SEAT_SYNTHESIS = payload_contracts.SEAT_SYNTHESIS
 SEAT_GAPSWEEP = payload_contracts.SEAT_GAPSWEEP
+SEAT_SECOND_TEST = payload_contracts.SEAT_SECOND_TEST
 SEAT_SCOPED = payload_contracts.SEAT_SCOPED
 SEAT_VERIFY = payload_contracts.SEAT_VERIFY
 SEAT_FIXER = payload_contracts.SEAT_FIXER
@@ -87,6 +89,7 @@ _type_name = payload_contracts._type_name
 _SINGLE_SEAT = {
     P_SYNTHESIS: SEAT_SYNTHESIS,
     P_GAPSWEEP: SEAT_GAPSWEEP,
+    P_SECOND_TEST: SEAT_SECOND_TEST,
     P_SCOPED: SEAT_SCOPED,
     P_VERIFY: SEAT_VERIFY,
     P_FIXER: SEAT_FIXER,
@@ -131,6 +134,7 @@ _MISSING_POLICY = {
     # Single-seat phases: an empty success artifact could let the run certify. Refuse.
     P_SYNTHESIS: MISSING_REFUSE_FOLD,
     P_GAPSWEEP: MISSING_REFUSE_FOLD,
+    P_SECOND_TEST: MISSING_REFUSE_FOLD,
     P_SCOPED: MISSING_REFUSE_FOLD,
     P_VERIFY: MISSING_REFUSE_FOLD,
     P_FIXER: MISSING_REFUSE_FOLD,
@@ -452,7 +456,7 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
         if fault is not None:
             return None, fault
         artifact = _assemble_synthesis(roster, indexed, disclosures)
-    elif phase in (P_GAPSWEEP, P_SCOPED):
+    elif phase in (P_GAPSWEEP, P_SECOND_TEST, P_SCOPED):
         fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,
                                      _maker_barred(state, config), disclosures)
         if fault is not None:

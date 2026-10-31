@@ -572,6 +572,7 @@ _FIXTURE_AUX_INPUTS = {
     RD.P_VERIFIERS: frozenset({"CHANNEL"}),
     RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
     RD.P_GAPSWEEP: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
+    RD.P_SECOND_TEST: frozenset({"CHANNEL", "ROLE_BRIEF_PATH", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_AUDITS: frozenset({"CHANNEL"}),
     RD.P_SCOPED: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
 }
@@ -618,6 +619,14 @@ _KNOWN_REALISTIC_VALUES = {
         "LAYER_PATH": "/proj/layer.md",
         "VERIFICATION_ROOT": "/proj",
         "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/gap-sweep-findings.json",
+    },
+    RD.P_SECOND_TEST: {
+        "HELD_FINDINGS_PATH": SESSION + "/round-1/second-test-held.json",
+        "DIFF_PATH": _DIFF,
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "VERIFICATION_ROOT": "/proj",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
+        "ROLE_BRIEF_PATH": "/plugin/agents/test-role.md",
     },
     RD.P_AUDITS: {
         "TARGET_SUMMARY_PATH": SESSION + "/round-1/audit-targets/x.json",

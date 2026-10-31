@@ -407,7 +407,18 @@ The review panel's test seat. For each changed test it asks whether the test wou
 
 ### Break-it test
 
-A test written only by the [test role](#test-role), to try to break a change on a named risky scenario: either attached to one of its findings or as a finding of its own for a risk area. The build session runs it once, in its own working copy, on the unfixed code. The run judges nothing: its result is saved with the finding and handed to the verifiers, and a passing run does not drop the finding. The test stays with the change once its finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
+A test written only by the [test role](#test-role), to try to break a change on a named risky scenario: either attached to one of its findings or as a finding of its own for a risk area. The build session runs it once, in its own working copy, on the unfixed code. The run judges nothing: its result is saved with the finding and handed to the [verifier](#verifier), and a passing run does not drop the finding. The test stays with the change once its finding is fixed. The shape is in [the test role's agent file](../agents/test-role.md).
+
+### Verifier
+
+The independent reviewer that grades each finding on its own as confirmed, plausible or wrong,
+with its reason, using the output of the finding's [break-it tests](#break-it-test) where there
+are any. It is the only one that closes a finding as wrong (`shown-wrong` in the
+[review record](#review-record)); the build session, the other reviewers and every filter may
+keep, merge or carry a finding, but never close it as wrong. When a passing break-it test never
+reached the path its finding describes, a fresh run of the [test role](#test-role) writes one
+more test, and then the verifier decides; no third test is written. The pass is in
+[the verification pass reference](../skills/review-code/reference/verification-pass.md).
 
 ### Extra audit round
 

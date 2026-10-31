@@ -25,6 +25,7 @@ Return one object per input issue:
 - evidence: for CONFIRMED only — name the triggering input, cite the line, and quote what
   proves the issue is real: the code you read, a read-only command you actually ran (with
   its output), or an execution output the orchestrator captured and supplied.
+- pathReached: optional boolean — see the break-it rules below.
 
 Verdict semantics:
 - CONFIRMED — you found the triggering input and can cite it.
@@ -44,6 +45,17 @@ Verdict semantics:
   from the code alone, and is never REFUTED on that ground; REFUTED only when the test cannot reach
   the changed code. When the record's outcome is `not-run`, judge the issue from the code alone, as
   for any other issue.
+- For an issue whose `breakItRun` passed, also return `pathReached`: `true` when the test ran the
+  code down the path the issue names, `false` when it never reached that path. A passing test
+  that reached the path is evidence the issue does not hold, but only when its assertions check the
+  behaviour the issue names (read the test's asserts: one that only asserts a non-null result, or
+  nothing about the disputed value, shows nothing). REFUTED when it does; when the assertions are
+  too weak to decide it, judge from the code and return CONFIRMED or PLAUSIBLE. One that missed it gets one
+  more test from a fresh run of the test reviewer, so judge nothing final on it: return
+  PLAUSIBLE with `pathReached: false` and your note in `reason`. An issue marked `secondTest: true` has had its
+  one more test; there is no other, so decide it on the evidence you have — REFUTED when it does
+  not hold, otherwise CONFIRMED or PLAUSIBLE, kept as a judgment call. For any other issue leave
+  `pathReached` out.
 
 ## Hard rules
 - Judge only the issues in this cluster. Do NOT add new issues, merge issues, or
@@ -96,9 +108,10 @@ Optional keys: verifierVendor
 verdicts type: list-of-objects
 verifierVendor type: string
 verdicts[] required keys: id, verdict, reason
-verdicts[] optional keys: severity, evidence
+verdicts[] optional keys: severity, evidence, pathReached
 verdicts[].evidence type: string
 verdicts[].id type: non-empty-string
+verdicts[].pathReached type: boolean
 verdicts[].reason type: non-empty-string
 verdicts[].severity type: string
 verdicts[].verdict type: non-empty-string

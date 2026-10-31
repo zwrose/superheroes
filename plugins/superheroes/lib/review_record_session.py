@@ -52,6 +52,7 @@ ABANDON_REASON_MISSING = "review-session-abandon-reason-missing"
 BAD_EXTRAS = "review-session-extras-invalid"
 CARRIED = " (carried from the earlier review record)"
 STILL_OPEN = "still open when the review loop ended"
+REFUTED_UNGRADED = "refuted without the verifier's wrong grade; still open"
 HAND_SUBMIT_NOTE = "the session was driven by hand submit; reviewers' raw outputs were not stored"
 ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
 UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded are listed as open findings"
@@ -63,7 +64,10 @@ _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an ea
 _HANDED_BACK = "handed-back"
 _HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
 _RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
-_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS)
+# the second-test seat is a test reviewer run on the held findings: it reads before the round's fix, and
+# its results are tests for findings already raised, so it is listed as a reviewer but never as a raw report
+_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS,
+                   round_phases.P_SECOND_TEST)
 # synthesis only groups already-raised findings into root causes: it raises, confirms, audits and grades
 # nothing, so it is not a reviewer of the change and the account does not list it
 _UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
@@ -263,10 +267,13 @@ _VERIFY_COUNTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED", "unverified", "ambiguous"
 
 def _nothing_to_verify(state, rnd):
     """Whether the round's verifier phase had no staged finding: `verifyPasses` is a non-empty list and every entry is a dict whose
-    verdict and unanswered counts are all present zeros. Anything else, a missing or malformed record included, had something to verify."""
+    verdict and unanswered counts are all present zeros and none held a finding for a second test (an absent or malformed `held`
+    reads as zero). Anything else, a missing or malformed record included, had something to verify."""
     passes = (state["rounds"].get(str(rnd)) or {}).get("verifyPasses")
     return isinstance(passes, list) and bool(passes) and all(
-        isinstance(p, dict) and all(_int(p.get(k)) and p[k] == 0 for k in _VERIFY_COUNTS) for p in passes)
+        # axis: a pass whose findings were all held ran a verifier, so it never reads as nothing to verify — see bite-proof record c1l7_wo_f_held_record
+        isinstance(p, dict) and all(_int(p.get(k)) and p[k] == 0 for k in _VERIFY_COUNTS)
+        and not (_int(p.get("held")) and p["held"] > 0) for p in passes)
 
 
 def _status_reviewers(state, setup=None, rows=()):
@@ -305,7 +312,7 @@ def _status_reviewers(state, setup=None, rows=()):
         later = {_audit_key(a) for r, rows in by_round.items() if r > rnd for a in rows if isinstance(a, dict) and not _audit_silent(a)}
         out += _audit_reviewers(state, rnd, audits, later)
     for rnd, phase in sorted({(r["round"], r["phase"]) for r in rows if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
-                              and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, *_RAW_PHASES[1:])}):
+                              and _int(r.get("round")) and r.get("phase") in (round_phases.P_VERIFIERS, round_phases.P_SECOND_TEST, *_RAW_PHASES[1:])}):
         # axis: a hand-accepted verifier phase with no staged finding is not a planned reviewer — see bite-proof record wo_6_1910_empty_verifier
         if phase == round_phases.P_VERIFIERS and _nothing_to_verify(state, rnd):
             continue
@@ -414,7 +421,13 @@ def _decide(own, by_key, rulings, exempt=None):
         return _FIXED, f"fixed and audited in round {rep.get('dispositionRound')}", rep
     if disp == "refuted":
         why = _text(rep.get("refutedReason"))
-        return (_LEFT_FOR_OWNER if (why or "").startswith("author-justified") else _SHOWN_WRONG), why, rep
+        grade = rep.get("grade")
+        # axis: a refuted row reads shown-wrong only on the verifier's own wrong grade, never on the disposition alone — see bite-proof record c1l7_wo_a_verifier_grade
+        if isinstance(grade, dict) and grade.get("verdict") == "wrong":
+            return _SHOWN_WRONG, why, rep
+        if (why or "").startswith("author-justified"):
+            return _LEFT_FOR_OWNER, why, rep
+        return None, REFUTED_UNGRADED, rep
     if disp in (_CRAFT, _LEFT_FOR_OWNER, _RULING):  # the end-of-loop settle names its outcome and reason
         return disp, _text(rep.get("settledReason")), rep
     why = _text(rep.get("outOfScopeReason"))
@@ -507,6 +520,9 @@ def _findings_and_merges(state):
         dim = row.get("dimension")
         # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
         held = _finding_parts(row, by_key.get(key))
+        if outcome == _SHOWN_WRONG:
+            # axis: a finding closed as wrong carries the closing representative's wrong grade, never a merged member's own — see bite-proof record c1l7_wo_a_verifier_grade
+            held["grade"] = rep["grade"]
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
@@ -923,12 +939,14 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
             raise Refusal(BAD_EXTRAS, "extras file")
         account = account_from_session(session_dir, extras, readers, tmp[0], abandoned)
         earlier = _earlier(account, extras, repo_root, readers)
+        # the findings the driver's verifier fold closed as wrong in this session (`_decide` reads shown-wrong on no other ground)
+        verifier_closed = {review_record._key(f) for f in account["findings"] if f.get("outcome") == _SHOWN_WRONG}
         _fill(account, earlier)
         account["findings"] += _carried(account, earlier)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)
-        return review_record.write(path, repo_root, readers)
+        return review_record.write(path, repo_root, readers, verifier_closed=verifier_closed)
     try:
         return review_record._guarded(go)
     finally:

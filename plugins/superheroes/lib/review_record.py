@@ -80,6 +80,7 @@ RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RULING = rfs.OUTCOMES[-1]
+_SHOWN_WRONG = rfs.OUTCOMES[1]
 _RED = frozenset({"failure", "timed_out", "cancelled", "action_required", "startup_failure", "stale"})
 # GitHub lists at most 3000 files for a pull request; a list this long may be cut short.
 _FILES_CEILING = 3000
@@ -1625,8 +1626,8 @@ _ROUNDS_WORD = {"rounds": "round cap", "ceiling": "round ceiling"}
 _PANEL_LENS = {"code-reviewer": "code", "test-role": "test", "security-reviewer": "security",
                "premortem-reviewer": "premortem", "architecture-reviewer": "architecture"}
 _STEM_ROLE = {"verifiers ": "verifier", "audits ": "fix auditor", "scoped-finder ": "scoped finder",
-              "gap-sweep ": "gap sweep"}
-_ROLE_ORDER = ("verifier", "synthesis", "fix auditor", "scoped finder", "gap sweep")
+              "gap-sweep ": "gap sweep", "second-test ": "second test"}
+_ROLE_ORDER = ("verifier", "synthesis", "fix auditor", "scoped finder", "gap sweep", "second test")
 _OUTCOME_PHRASES = ("fixed", "shown wrong", "craft call", "left for the owner", "settled by a ruling")
 assert len(rfs.OUTCOMES) == len(_OUTCOME_PHRASES), "every outcome needs its words in _OUTCOME_PHRASES"
 _OUTCOME_WORDS = dict(zip(rfs.OUTCOMES, _OUTCOME_PHRASES))
@@ -2323,7 +2324,28 @@ def _guarded(fn):
         return _refuse("review-record-internal-error", f"{type(e).__name__}: {e}")
 
 
-def write(account_path, repo_root, readers=None):
+def _wrong_ungraded(findings, prior, verifier_closed):
+    """The index of each account finding that reads shown-wrong with neither the driver's verifier grade nor a carry.
+
+    A finding passes when its key is in `verifier_closed` (the session writer's set) and it carries a `wrong` grade, or
+    when the latest earlier record lists the same key as shown-wrong. A malformed earlier list carries nothing."""
+    earlier = prior.get("findings") if isinstance(prior, dict) else None
+    carried = {_key(i) for i in earlier if isinstance(i, dict) and i.get("outcome") == _SHOWN_WRONG} \
+        if isinstance(earlier, list) else set()
+    out = []
+    for i, f in enumerate(findings):
+        if not (isinstance(f, dict) and f.get("outcome") == _SHOWN_WRONG):
+            continue
+        grade = f.get("grade")
+        # axis: a shown-wrong finding is carried from the earlier record or verifier-closed with a wrong grade, never written bare — see bite-proof record c1l7_wo_a_verifier_grade
+        closed = _key(f) in verifier_closed and isinstance(grade, dict) and grade.get("verdict") == "wrong"
+        # axis: an outcome the earlier record already stored as shown-wrong is carried whatever this account's grade says — see bite-proof record c1l7_wo_a_verifier_grade
+        if not (closed or _key(f) in carried):
+            out.append(i)
+    return out
+
+
+def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
     def go():
         try:
             with open(account_path, encoding="utf-8") as fh:
@@ -2380,6 +2402,8 @@ def write(account_path, repo_root, readers=None):
         if missing:
             raise Refusal("review-record-unaccounted",
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
+        for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
+            raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
         record = build_record(a, rd, prior=prior)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))

@@ -566,6 +566,7 @@ def test_fold_fail_closed_policy_a_silent_auditor_leaves_its_target_not_discharg
 @pytest.mark.parametrize("phase,seat,payload", [
     (RD.P_SYNTHESIS, RA.SEAT_SYNTHESIS, {"grouping": None}),
     (RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP, {"findings": []}),
+    (RD.P_SECOND_TEST, RA.SEAT_SECOND_TEST, {"findings": []}),
     (RD.P_SCOPED, RA.SEAT_SCOPED, {"findings": []}),
     (RD.P_VERIFY, RA.SEAT_VERIFY, {"result": "pass"}),
     (RD.P_FIXER, RA.SEAT_FIXER, {"fixes": []}),
@@ -1026,6 +1027,7 @@ _SEAT_KEYS = {
     RD.P_VERIFIERS: "verifier:f.py:0",
     RD.P_SYNTHESIS: RA.SEAT_SYNTHESIS,
     RD.P_GAPSWEEP: RA.SEAT_GAPSWEEP,
+    RD.P_SECOND_TEST: RA.SEAT_SECOND_TEST,
     RD.P_SCOPED: RA.SEAT_SCOPED,
     RD.P_VERIFY: RA.SEAT_VERIFY,
     RD.P_FIXER: RA.SEAT_FIXER,

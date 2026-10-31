@@ -132,6 +132,8 @@ _SELF_RECOVERY_FIXER_EFFORT = "high"
 # Fold-owned guidance record key inside judgmentDispositions entries (dispatch-fixer.md).
 GATE_GUIDANCE_RECORD_KEY = "userGuidance"
 QUOTED_DATA_LINT_ELISION = "(quoted data elided from the order lint)"
+# The verifier's grade on a finding; only `_fold_verifiers` writes it (`_seed_ledger_entry` strips a seat's).
+GRADE_FIELD = "grade"
 
 
 def _fixer_create_items(batch):
@@ -467,6 +469,7 @@ P_SYNTHESIS = round_phases.P_SYNTHESIS
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_VERIFY = round_phases.P_VERIFY
 P_FIXER = round_phases.P_FIXER
 P_TERMINAL = round_phases.P_TERMINAL
@@ -510,7 +513,8 @@ ORDER_EMISSION_DISCLOSURE_CHANNELS = (
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
-VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance", "synthesisUnseatable")
+VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance", "synthesisUnseatable",
+                                     "secondTestUnseatable")
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
@@ -1619,6 +1623,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
     any other is stripped. Touches neither ``_toVerify`` nor the live findings."""
     existing = ledger[seen[key]] if key in seen else None
     entry = _strip_disposition_family(dict(finding))
+    # axis: a grade a seat supplied is never seeded; only the verifier fold grades — see bite-proof record c1l7_wo_b_verifier_grade
+    entry.pop(GRADE_FIELD, None)
     entry.pop(session_contract.RAISED_SEQ_FIELD, None)
     entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
     entry[session_contract.RAISED_ROUND_FIELD] = round_no
@@ -1628,6 +1634,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         for field in session_contract.DISPOSITION_FAMILY_FIELDS:
             if field in existing:
                 entry[field] = existing[field]
+        if GRADE_FIELD in existing:  # a finding refuted earlier this round keeps the grade that closed it
+            entry[GRADE_FIELD] = existing[GRADE_FIELD]
     else:
         entry = _strip_disposition_family(entry)
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
@@ -1860,7 +1868,9 @@ def _stage_findings(state, compiled):
             continue
         key = _finding_identity_key(finding)
         if not key:
-            sanitized.append(finding)
+            # No ledger entry to seed, but a seat's grade must not reach `_toVerify` either.
+            sanitized.append({k: v for k, v in finding.items() if k != GRADE_FIELD}
+                             if GRADE_FIELD in finding else finding)
             continue
         carry.apply(state, finding, key)
         held_follow_up = _ledger_follow_up(ledger, seen, key)
@@ -2213,6 +2223,46 @@ def _record_disposition(state, key, disposition, round_no, *, clear_out_of_scope
     if live is not None:
         _apply_disposition_family(live, family)
         live[session_contract.DISPOSITION_SEQ_FIELD] = disp_seq
+
+
+def _record_grade(state, key, grade):
+    """Set the verifier's ``grade`` on the finding's ledger entry (created when the key has none) and
+    on its live finding when there is one. A non-dict grade or an empty key writes nothing."""
+    if not isinstance(grade, dict) or not isinstance(key, str) or not key:
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    live = _live_finding_by_key(state, key)
+    if key in seen and isinstance(ledger[seen[key]], dict):
+        entry = dict(ledger[seen[key]])
+    elif live is not None:
+        entry = dict(live)
+        entry[session_contract.RAISED_ROUND_FIELD] = state.get("round")
+    else:
+        entry = {session_contract.FINDING_KEY_FIELD: key}
+    entry[GRADE_FIELD] = dict(grade)
+    if key in seen:
+        ledger[seen[key]] = entry
+    else:
+        ledger.append(entry)
+    if live is not None:
+        live[GRADE_FIELD] = dict(grade)
+
+
+def _clear_grade(state, key):
+    """Drop a grade from the finding's ledger entry and its live finding. A finding the current
+    verification left ungraded must not keep a grade an earlier raise earned."""
+    if not isinstance(key, str) or not key:
+        return
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    if key in seen and isinstance(ledger[seen[key]], dict) and GRADE_FIELD in ledger[seen[key]]:
+        entry = dict(ledger[seen[key]])
+        entry.pop(GRADE_FIELD, None)
+        ledger[seen[key]] = entry
+    live = _live_finding_by_key(state, key)
+    if live is not None:
+        live.pop(GRADE_FIELD, None)
 
 
 def _clear_out_of_scope_disposition(state, key):
@@ -2842,6 +2892,20 @@ def _panel_dimensions(config):
     return round_phases.panel_dimensions(config)
 
 
+# The held finding's fields the second-test seat reads: the finding as staged, its first test, that
+# test's runs with their output, and the note the verifier gave for holding it.
+_SECOND_TEST_ENTRY_FIELDS = ("id", "title", "file", "line", "severity", "body", "consequence",
+                             "suggestion", break_it.RUNS_FIELD)
+
+
+def _second_test_entry(row):
+    """One order entry of the second-test payload from a `_secondTestHeld` row (`finding`, `note`)."""
+    finding = row.get("finding") if isinstance(row.get("finding"), dict) else {}
+    entry = {field: finding.get(field) for field in _SECOND_TEST_ENTRY_FIELDS}
+    entry["verifierNote"] = row.get("note")
+    return entry
+
+
 def _advance(state, config):
     """Given the state, return the next step to dispatch (or the terminal). Pure read — never
     mutates. `next` and run_loop both call this."""
@@ -2866,6 +2930,9 @@ def _advance(state, config):
     elif step == P_GAPSWEEP:
         payload = {"verifiedFindings": state.get("findings") or [],
                    "fullDiff": True}
+    elif step == P_SECOND_TEST:
+        payload = {"findings": [_second_test_entry(row) for row in state.get("_secondTestHeld") or []
+                                if isinstance(row, dict)]}
     elif step == P_AUDITS:
         payload = {"targets": state.get("_auditTargets") or []}
         if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
@@ -2971,6 +3038,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
         _fold_synthesis(state, config, artifact)
     elif phase == P_GAPSWEEP:
         _fold_gapsweep(state, config, artifact)
+    elif phase == P_SECOND_TEST:
+        _fold_second_test(state, config, artifact, session_dir=session_dir)
     elif phase == P_AUDITS:
         _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
@@ -3785,20 +3854,57 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 "outcome": "verdicts-folded"})
     staged = verification.stage_ids(state.get("_toVerify") or [])
     applied = verification.apply_verdicts(staged, verdicts)
-    state["_verified"] = applied["findings"]
-    _record_round(state, "verify", {"drops": applied["drops"], "downgrades": applied["downgrades"],
-                                    "unverified": applied["unverified"], "ambiguous": applied["ambiguous"],
-                                    "notExecuted": applied["notExecuted"]})
+    second_pass = state.get("_secondTestPass") is True
+    survivors = list(applied["findings"])
+    if second_pass:
+        # every finding in this pass has had its one more test, so nothing is held; one that is anyway is
+        # kept, graded, and never held a second time
+        again, fault = _keep_held_again(state, staged, applied["held"])
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        survivors += again
+    state["_verified"] = survivors
+    verify_record = {"drops": applied["drops"], "downgrades": applied["downgrades"],
+                     "unverified": applied["unverified"], "ambiguous": applied["ambiguous"],
+                     "notExecuted": applied["notExecuted"],
+                     # axis: the findings a passing test missed the path of are listed on the verify record, where the docs promise them — see bite-proof record c1l7_wo_f_held_record
+                     "held": applied["held"]}
+    prior_verify = state["rounds"].get(str(state["round"]), {}).get("verify") if second_pass else None
+    if isinstance(prior_verify, dict):
+        # axis: the first pass's drops, downgrades and the rest stay on the round's record beside the second's
+        for field, rows in verify_record.items():
+            if field == "held":
+                continue
+            held_rows = prior_verify.get(field)
+            verify_record[field] = (list(held_rows) if isinstance(held_rows, list) else []) + rows
+        # the second pass holds nothing, so the held list is the first pass's alone; an older record without one reads empty
+        first_held = prior_verify.get("held")
+        verify_record["held"] = list(first_held) if isinstance(first_held, list) else []
+    _record_round(state, "verify", verify_record)
     # axis: each verifier fold appends one verifyPasses entry; a second wave must not overwrite.
     _record_round_append(state, "verifyPasses", {
-        "CONFIRMED": sum(1 for f in applied["findings"] if f.get("verdict") == "CONFIRMED"),
-        "PLAUSIBLE": sum(1 for f in applied["findings"] if f.get("verdict") == "PLAUSIBLE"),
+        "CONFIRMED": sum(1 for f in survivors if f.get("verdict") == "CONFIRMED"),
+        "PLAUSIBLE": sum(1 for f in survivors if f.get("verdict") == "PLAUSIBLE"),
         "REFUTED": len(applied["drops"]),
         "drops": len(applied["drops"]),
         "downgrades": len(applied["downgrades"]),
         "unverified": len(applied["unverified"]),
         "ambiguous": len(applied["ambiguous"]),
+        "held": len(applied["held"]),
     })
+    for survivor in survivors:
+        grade = survivor.get(GRADE_FIELD)
+        # A survivor whose staged id resolves to no keyed finding keeps the grade on its copy only.
+        staged_finding, fault = _resolve_staged_finding(staged, survivor.get("id"))
+        if not fault and isinstance(staged_finding, dict):
+            key = _finding_identity_key(staged_finding)
+            if isinstance(grade, dict):
+                _record_grade(state, key, grade)
+            else:
+                # axis: a survivor this fold left ungraded drops the grade an earlier raise left on its ledger row, so a re-raised finding is never closed shown-wrong on a stale grade
+                _clear_grade(state, key)
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
         staged_finding, fault = _resolve_staged_finding(staged, d.get("id"))
@@ -3810,9 +3916,22 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
             key = _finding_identity_key(staged_finding)
             if key:
                 reason = d.get("reason") or "verifier refuted (no reason recorded)"
+                # axis: the refuted ledger row carries the wrong grade that closed it, written before the disposition — see bite-proof record c1l7_wo_b_verifier_grade
+                _record_grade(state, key, d.get(GRADE_FIELD))
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
     for n in applied["notExecuted"]:
         _decision(state, "verifier-not-executed", n.get("reason"))
+    if applied["held"] and not second_pass:
+        # axis: a finding whose passing test missed its path is neither graded nor closed on that test; it gets one more test — see bite-proof record c1l7_wo_c_second_test
+        state["_verified"] = []
+        _hold_for_second_test(state, session_dir, staged, applied["held"], survivors)
+        return
+    if second_pass:
+        carried = state.pop("_secondTestCarry", None)
+        state.pop("_secondTestHeld", None)
+        state.pop("_secondTestPass", None)
+        # axis: the first pass's survivors and this pass's are staged afresh, so their ids are unique — see bite-proof record c1l7_wo_c_second_test
+        state["_verified"] = verification.stage_ids((carried if isinstance(carried, list) else []) + survivors)
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
     # axis: a round with no verified survivors emits no synthesis order and folds to its next step — see bite-proof record wo_1_1910_synthesis_no_survivors
@@ -3834,6 +3953,134 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
         _fold_synthesis(state, config, {"grouping": None})
         return
     state["step"] = P_SYNTHESIS
+
+
+SECOND_TEST_FIELD = verification.SECOND_TEST_FIELD
+SECOND_TEST_HELD_AGAIN_REASON = "held again after its one more test; kept as a judgment call"
+
+
+def _record_second_test(state, **fields):
+    """Merge ``fields`` into the round's `secondTest` entry; a list already there is extended, never replaced."""
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    entry = rec.get("secondTest")
+    entry = dict(entry) if isinstance(entry, dict) else {}
+    for name, value in fields.items():
+        held = entry.get(name)
+        entry[name] = (list(held) + value) if isinstance(held, list) and isinstance(value, list) else value
+    _record_round(state, "secondTest", entry)
+
+
+def _stage_second_pass(state, copies):
+    """Stage the held findings (``copies``, each already marked `secondTest`) for the verifiers' second pass."""
+    for copy_ in copies:
+        copy_.pop("id", None)  # the staged id the first pass gave is not part of the finding
+    _stage_findings(state, copies)
+    state["_secondTestPass"] = True
+    state["step"] = P_VERIFIERS
+
+
+def _hold_for_second_test(state, session_dir, staged, held, survivors):
+    """Pass 1: keep the held findings (``held``, from `apply_verdicts`) and the pass-1 ``survivors`` aside and
+    send the held ones to the second-test seat; when no seat can be seated, skip the seat and go straight to
+    the verifiers' second pass with each held finding marked, and no new test."""
+    rows = []
+    for entry in held:
+        finding, fault = _resolve_staged_finding(staged, entry.get("id"))
+        if fault:
+            _park_cannot_certify(state, fault)
+            state["step"] = P_TERMINAL
+            return
+        rows.append({"finding": finding, "note": entry.get("note")})
+    state["_secondTestHeld"] = rows
+    state["_secondTestCarry"] = survivors
+    keys = [_finding_identity_key(row["finding"]) for row in rows]
+    _record_second_test(state, held=[{"findingKey": key, "note": row["note"]} for key, row in zip(keys, rows)])
+    _decision(state, "second-test-held",
+              "%d finding(s) held for one more test: the break-it test passed and the verifier judged it "
+              "did not reach the finding's path" % len(rows))
+    # axis: with no second-test seat to seat there is no order; the held findings are graded in the second pass with the test they have — see bite-proof record c1l7_wo_c_second_test
+    if _nonpanel_unseatable(state, session_dir, P_SECOND_TEST):
+        cfg = state.get("config") or {}
+        _record_round_append(state, "secondTestUnseatable", {
+            "makerFamilies": sorted(receipt_disclosures.accumulated_maker_families(state)),
+            "fixerVendor": cfg.get("fixerVendor"), "held": keys})
+        _decision(state, "second-test-unseatable",
+                  "no second-test seat outside the makers' families on a proven cell; the held findings "
+                  "were graded with the test they have")
+        _stage_second_pass(state, [dict(row["finding"], **{SECOND_TEST_FIELD: True}) for row in rows])
+        return
+    state["step"] = P_SECOND_TEST
+
+
+def _keep_held_again(state, staged, held):
+    """Pass 2: ``(survivors, fault)`` for any finding `apply_verdicts` held although it had its one more test:
+    each is kept PLAUSIBLE with a `plausible` grade, never held again, never dropped."""
+    kept = []
+    for entry in held:
+        finding, fault = _resolve_staged_finding(staged, entry.get("id"))
+        if fault:
+            return [], fault
+        survivor = dict(finding)
+        survivor["verdict"] = "PLAUSIBLE"
+        survivor[GRADE_FIELD] = {"verdict": "plausible", "reason": SECOND_TEST_HELD_AGAIN_REASON}
+        kept.append(survivor)
+        _decision(state, "second-test-held-again", "%s: %s" % (entry.get("id"), entry.get("note")))
+    return kept, None
+
+
+def _fold_second_test(state, config, artifact, session_dir=None):
+    """The second-test seat's result: for each held finding, the result finding with the same staged id whose
+    `suggestion` is a break-it block supplies the one more test, run as the panel's tests are; any other held
+    finding goes to the verifiers' second pass with the test it has. Nothing else of a result is taken."""
+    rows = state.get("_secondTestHeld")
+    rows = [row for row in rows if isinstance(row, dict) and isinstance(row.get("finding"), dict)] \
+        if isinstance(rows, list) else []
+    results = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
+    by_id, duplicated = {}, set()
+    for result in results:
+        rid = result.get("id") if isinstance(result, dict) else None
+        if not isinstance(rid, str):
+            continue
+        if rid in by_id:
+            duplicated.add(rid)
+        by_id[rid] = result
+    held_ids = {row["finding"].get("id") for row in rows}
+    unmatched = sorted(rid for rid in set(by_id) | duplicated if rid not in held_ids)
+    repo_root, head = _break_it_scope(session_dir, state, config)
+    copies, no_test, ran = [], [], []
+    for row in rows:
+        held = row["finding"]
+        key = _finding_identity_key(held)
+        result = by_id.get(held.get("id"))
+        block = break_it.carried_block(result)[0] if result is not None else None
+        copy_ = dict(held)
+        copy_[SECOND_TEST_FIELD] = True
+        if held.get("id") in duplicated:
+            no_test.append({"findingKey": key, "reason": "duplicate-id"})
+        elif result is None:
+            no_test.append({"findingKey": key, "reason": "no-result"})
+        elif block is None:
+            no_test.append({"findingKey": key, "reason": "no-block"})
+        else:
+            copy_["suggestion"] = result.get("suggestion")
+            if result.get(break_it.REDACTED_FIELD) is True:
+                copy_[break_it.REDACTED_FIELD] = True  # the transport altered the test's bytes: it is never run altered
+            else:
+                copy_.pop(break_it.REDACTED_FIELD, None)
+            stamped, runs, _exempt, _stamped = break_it.intercept(
+                [copy_], repo_root, head, interpreter=break_it.resolve_interpreter(config), scratch=session_dir)
+            copy_ = stamped[0]
+            first_runs = held.get(break_it.RUNS_FIELD)
+            first_runs = list(first_runs) if isinstance(first_runs, list) else []
+            copy_[break_it.RUNS_FIELD] = first_runs + [r for r in copy_.get(break_it.RUNS_FIELD, [])
+                                                       if r not in first_runs]
+            for run in runs:
+                # axis: the second test's run joins the round's history as the finding's latest, so the kept-check reads it — see bite-proof record c1l7_wo_c_second_test
+                _record_round_append(state, "breakItRuns", dict(run, findingKey=key))
+                ran.append({"findingKey": key, "outcome": run.get("outcome")})
+        copies.append(copy_)
+    _record_second_test(state, ran=ran, noTest=no_test, unmatched=unmatched)
+    _stage_second_pass(state, copies)
 
 
 def _sync_merged_consequences(state, kept):
@@ -7683,9 +7930,9 @@ def _run_seam(seams, action, payload, state, config):
                 artifact["synthesisVendor"] = vendor.strip()
             return artifact
         return {"grouping": result}
-    if action in (P_GAPSWEEP, P_SCOPED):
-        result = seams["reviewer"]("gap-sweep" if action == P_GAPSWEEP else "scoped-finder",
-                                   DEEP, state["round"], payload)
+    if action in (P_GAPSWEEP, P_SECOND_TEST, P_SCOPED):
+        seat = {P_GAPSWEEP: "gap-sweep", P_SECOND_TEST: "second-test", P_SCOPED: "scoped-finder"}[action]
+        result = seams["reviewer"](seat, DEEP, state["round"], payload)
         artifact = {"findings": _reviewer_findings(result)}
         # The callback may report who ran: `{"findings": [...], "vendor": v}`; a bare list reports none.
         vendor = result.get("vendor") if isinstance(result, dict) else None
@@ -7859,6 +8106,24 @@ def _retain_unauthenticated_finder_findings(state, artifact):
     _set_findings(state, rows)
 
 
+def _retain_second_test_pending_findings(state):
+    """Carry the findings parked behind a second-test seat that failed vendor authentication onto the
+    receipt-visible findings: the first pass's survivors keep their verdicts, and the held findings (whose
+    one more test never got graded) are marked UNVERIFIED. The rejected callback's content is never read."""
+    carried = state.get("_secondTestCarry")
+    held = state.get("_secondTestHeld")
+    existing = state.get("findings")
+    rows = list(existing) if isinstance(existing, list) else []
+    rows.extend(dict(f) for f in (carried if isinstance(carried, list) else ()) if isinstance(f, dict))
+    for row in (held if isinstance(held, list) else ()):
+        finding = row.get("finding") if isinstance(row, dict) else None
+        if isinstance(finding, dict):
+            kept = dict(finding)
+            kept["unverified"] = True
+            rows.append(kept)
+    _set_findings(state, rows)
+
+
 def _retain_verified_findings_unmerged(state):
     """Carry the verified survivors staged for synthesis onto the receipt-visible findings before an
     unauthenticated-synthesis park, WITHOUT applying the unauthenticated grouping: the confirmed
@@ -7901,7 +8166,7 @@ def run_loop(seams, config=None):
             selected, replaced = None, False
             if action == P_SYNTHESIS:
                 selected, _src = _nonpanel_selection(state, None, action)
-            if action in (P_GAPSWEEP, P_SCOPED):
+            if action in (P_GAPSWEEP, P_SECOND_TEST, P_SCOPED):
                 selected, _src = _nonpanel_selection(state, None, action)
                 replaced = selected is not None and _nonpanel_replaced(state, selected)
             # handle the gap-sweep re-entry (verifiers → synthesis carries the merge back).
@@ -7921,11 +8186,14 @@ def run_loop(seams, config=None):
                         state, "nonpanel-synthesis-unauthenticated:expected=%s:reported=%s" % (
                             selected, reported))
                     return _driver_receipt(state)
-            if action in (P_GAPSWEEP, P_SCOPED):
+            if action in (P_GAPSWEEP, P_SECOND_TEST, P_SCOPED):
                 reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
                 if _library_finder_unauthenticated(state, reported, action, selected=selected,
                                                    replaced=replaced):
-                    _retain_unauthenticated_finder_findings(state, artifact)
+                    if action == P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
+                        _retain_second_test_pending_findings(state)
+                    else:
+                        _retain_unauthenticated_finder_findings(state, artifact)
                     _park_cannot_certify(
                         state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
                             action, selected, reported))
@@ -9484,10 +9752,10 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         return {"ok": False, "reason": "nonpanel-reviewer-unseatable",
                 "detail": "no reviewer outside the makers' families can be seated for %s; no order "
                           "was emitted and a submitted artifact is not a review that ran" % phase}
-    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED) and not isinstance(artifact, dict):
+    if not _via_advance and phase in (P_GAPSWEEP, P_SECOND_TEST, P_SCOPED) and not isinstance(artifact, dict):
         return {"ok": False, "reason": "nonpanel-reviewer-unauthenticated",
                 "detail": "%s artifact must be a JSON object carrying `reviewerVendor`" % phase}
-    if not _via_advance and phase in (P_GAPSWEEP, P_SCOPED):
+    if not _via_advance and phase in (P_GAPSWEEP, P_SECOND_TEST, P_SCOPED):
         # A hand artifact for a finder phase is a review by the vendor it claims. When the selection
         # replaced the reviewer engine, the claim (`reviewerVendor`) is required and must equal the
         # vendor the dispatch recorded at emission — the verifier hand-submit rule, one helper.
@@ -10472,7 +10740,7 @@ def _reviewer_engine_vendor(repo_root):
         return "claude", VENDOR_SOURCE_DEFAULTED
 
 
-_NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
+_NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED, P_SECOND_TEST)
 
 # The cell role each non-panel phase dispatches on (`model_registry.matrix_config`): the verifier
 # row for verifiers, the reviewer-deep row for gap sweep and scoped, the synthesis row for grouping.
@@ -10481,6 +10749,7 @@ _NONPANEL_REVIEWER_PHASES = (P_VERIFIERS, P_GAPSWEEP, P_SCOPED)
 _NONPANEL_PHASE_ROLE = {
     P_VERIFIERS: receipt_disclosures.NONPANEL_ROLE_VERIFIER,
     P_GAPSWEEP: receipt_disclosures.NONPANEL_ROLE_FINDER,
+    P_SECOND_TEST: receipt_disclosures.NONPANEL_ROLE_FINDER,
     P_SCOPED: receipt_disclosures.NONPANEL_ROLE_FINDER,
     P_SYNTHESIS: receipt_disclosures.NONPANEL_ROLE_SYNTHESIS,
 }
@@ -10775,6 +11044,7 @@ ORDER_SIDECAR_CLUSTERS_DIR = "clusters"
 ORDER_SIDECAR_AUDIT_TARGETS_DIR = "audit-targets"
 ORDER_SIDECAR_SCOPED_HUNKS_FILE = "scoped-hunks.json"
 ORDER_SIDECAR_VERIFIED_FILE = "verified.json"
+ORDER_SIDECAR_HELD_FILE = "second-test-held.json"
 
 # Readable file inputs cited in emitted orders — existence guarded at emit (registry #723).
 ORDER_READABLE_FILE_INPUTS = frozenset({
@@ -10784,6 +11054,7 @@ ORDER_READABLE_FILE_INPUTS = frozenset({
     "TARGET_SUMMARY_PATH",
     "HUNKS_PATH",
     "VERIFIED_FINDINGS_PATH",
+    "HELD_FINDINGS_PATH",
     "FIX_BATCH_PATH",
     "PRIOR_COMMENTS_PATH",
     "PROFILE_PATH",
@@ -10846,6 +11117,10 @@ def _order_verified_sidecar_path(rdir):
     return os.path.join(rdir, ORDER_SIDECAR_VERIFIED_FILE)
 
 
+def _order_held_sidecar_path(rdir):
+    return os.path.join(rdir, ORDER_SIDECAR_HELD_FILE)
+
+
 def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
     """[(path, bytes)] sidecars named in orders, derived from the phase payload."""
     writes = []
@@ -10882,6 +11157,12 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
         if not isinstance(findings, list):
             findings = []
         path = _order_verified_sidecar_path(rdir)
+        writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
+    elif phase == P_SECOND_TEST:
+        findings = payload.get("findings")
+        if not isinstance(findings, list):
+            findings = []
+        path = _order_held_sidecar_path(rdir)
         writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
     return writes
 
@@ -11283,6 +11564,18 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "gap-sweep-findings.json"),
+            "CHANNEL": channel,
+            "CLAUDE_MD_PATH": claude_md_path,
+        }
+    elif phase == P_SECOND_TEST:
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
+        ph = {
+            "HELD_FINDINGS_PATH": _order_held_sidecar_path(rdir),
+            "DIFF_PATH": diff_path,
+            "RUBRIC_PATH": rubric_path,
+            "VERIFICATION_ROOT": repo_root,
+            "ROLE_BRIEF_PATH": _role_brief_path(break_it.ROLE),
+            "BREAK_IT_GRAMMAR_TEXT": _break_it_grammar_text(break_it.ROLE),
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
         }
