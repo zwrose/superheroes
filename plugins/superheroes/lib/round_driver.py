@@ -8587,6 +8587,24 @@ def _retain_unauthenticated_finder_findings(state, artifact):
     _set_findings(state, rows)
 
 
+def _retain_second_test_pending_findings(state):
+    """Carry the findings parked behind a second-test seat that failed vendor authentication onto the
+    receipt-visible findings: the first pass's survivors keep their verdicts, and the held findings (whose
+    one more test never got graded) are marked UNVERIFIED. The rejected callback's content is never read."""
+    carried = state.get("_secondTestCarry")
+    held = state.get("_secondTestHeld")
+    existing = state.get("findings")
+    rows = list(existing) if isinstance(existing, list) else []
+    rows.extend(dict(f) for f in (carried if isinstance(carried, list) else ()) if isinstance(f, dict))
+    for row in (held if isinstance(held, list) else ()):
+        finding = row.get("finding") if isinstance(row, dict) else None
+        if isinstance(finding, dict):
+            kept = dict(finding)
+            kept["unverified"] = True
+            rows.append(kept)
+    _set_findings(state, rows)
+
+
 def _retain_verified_findings_unmerged(state):
     """Carry the verified survivors staged for synthesis onto the receipt-visible findings before an
     unauthenticated-synthesis park, WITHOUT applying the unauthenticated grouping: the confirmed
@@ -8653,7 +8671,9 @@ def run_loop(seams, config=None):
                 reported = artifact.pop("reviewerVendor", None) if isinstance(artifact, dict) else None
                 if _library_finder_unauthenticated(state, reported, action, selected=selected,
                                                    replaced=replaced):
-                    if action != P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
+                    if action == P_SECOND_TEST:  # its items are findings already raised: they stay on the ledger, open
+                        _retain_second_test_pending_findings(state)
+                    else:
                         _retain_unauthenticated_finder_findings(state, artifact)
                     _park_cannot_certify(
                         state, "nonpanel-finder-unauthenticated:%s:expected=%s:reported=%s" % (
