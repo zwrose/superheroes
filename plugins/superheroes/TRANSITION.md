@@ -36,6 +36,14 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 
 - **After switching.** **A caller that passes `--max-rounds` above 4 or `next --max-rounds-absolute`, folds an owner gate with `advance --owner-artifact`, or reads the verdicts `held`, `stalled`, `capped-with-open-critical` or `capped-with-open-blocker` moves to the replacements listed; a review session started by the previous release now finishes, and an older one is refused and started again fresh. A saved `reviewGatePolicy` key in a project's core block is ignored and safe to remove.** See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
 
+- **After switching.** **A caller that passes `--narrative-family` to `seat_map.py compose`, or reads `narrativeFamily` from a seat map or its receipt, drops it; nothing replaces it.** See [Seat map: the narrative family is gone](#seat-map-the-narrative-family-is-gone).
+
+- **After switching.** **A project that implements with codex on a claude host and has no third model family live gets no reviewer until it adds one.** See [Seat map: the build session is a maker on every implementation engine](#seat-map-the-build-session-is-a-maker-on-every-implementation-engine).
+
+- **After switching.** **A custom panel reviewer that writes its own findings file writes the object `{"findings": [...], "readParts": [...]}`, and a reviewer on a schema-delivered engine emits `readParts` on every result.** See [Review: round-1 reviewers return what they read](#review-round-1-reviewers-return-what-they-read).
+
+- **After switching.** **Re-run configure once when the "rubric-version advanced" notice appears.** See [Review: the rubric version is 14](#review-the-rubric-version-is-14).
+
 - **After switching.** **Nothing is owed: the advisor stops writing a share sentence at launch and applying a kind label at routing, and a project's stamped `dial` or `budgetN` is ignored. Existing `kind:machinery` and `kind:product` labels may be deleted by hand.** See [Advisor: the forward-share dial and the kind labels are retired](#advisor-the-forward-share-dial-and-the-kind-labels-are-retired).
 
 - **After switching.** **Nothing is owed: an adoption's refusal for an earlier cloud lane now counts only lanes that could still write the adopted branch, and every refusal's `remedy` names a step the advisor runs itself.** See [Launcher: an adoption counts only the lanes that could still write the adopted branch](#launcher-an-adoption-counts-only-the-lanes-that-could-still-write-the-adopted-branch).
@@ -120,6 +128,30 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 - **What refuses the sheet.** A pinned file that no longer hashes to its pin (`breakdown pin <path> hashes to ... now`), a spec that no longer hashes to the newest vet record's `Vet done:` hash (`does not hash to ... the spec changed after its vet`), a pin outside the spec's folder (`breakdown pin <path> is outside the spec's folder`), and a newest vet record that is not a clean breakdown vet with its `Breakdown pins:` lines. Each names what to fix, and nothing is shown as accepted.
 - **Breakdown bodies have a fixed home.** In the spec's work-item folder, child and layer bodies go in `children/` (a single-issue spec's one body too), seam bodies in `seams/`, and the epic body at `epic.md`. The sheet refuses a pinned body outside that home (`breakdown pin <path> is a body outside the breakdown's home`) and any `.md` in the home that the vet does not pin (`<file> sits in the breakdown's body home but the newest vet record does not pin it`), single-issue specs included. An unpinned `.md` beside a pinned file in another subfolder still refuses too. `skills/showrunner/reference/spec-vet.md` and `decomposition.md` name the home in the same words.
 - **Wording.** A single-issue spec's sheet reads "1 body" and "pins 1 file".
+
+### Seat map: the narrative family is gone
+
+- **The flag.** `seat_map.py compose --narrative-family` is removed; passing it is now an argument error.
+- **The key.** The seat map and its receipt no longer carry `narrativeFamily`, and `seat_map.build()` no longer takes a `narrative_family` argument. Nothing replaces them.
+- **A stored seat map.** One that still carries the `narrativeFamily` key reads as before, and the key is ignored.
+
+### Seat map: the build session is a maker on every implementation engine
+
+- **What changed.** On `seat_map.py compose --implementation-engine <engine>`, the host model's family (the build session, which applies the review's fixes) is now always a maker and is kept off every review seat, whatever the implementation engine. Before, only a `claude` implementation engine did this.
+- **The record.** When the host family is known and differs from the author family, compose records `maker-family-split`. When the host model is unknown, the claude host family stands in as before.
+- **What it means.** Codex implementing on a claude host keeps anthropic off every seat. Where only claude and codex are live, every seat reads not run, so such a change gets no reviewer until a third model family is live.
+
+### Review: round-1 reviewers return what they read
+
+- **The list.** Each round-1 panel reviewer returns `readParts`, the files and line ranges at the reviewed head it read, beside its findings. A host panel reviewer writes the object `{"findings": [...], "readParts": [...]}` to its landing path instead of a bare array.
+- **The record.** The review record's reviewer row carries it (`read <n> files, <m> lines`). A panel reviewer that ran and returned no list, or a malformed one, reads `read nothing`.
+- **The result schema.** The strict review result schema now requires `readParts` on every branch: an array or null on a findings result, null on every other result kind. A reviewer on a schema-delivered engine emits `"readParts": null` outside a panel findings result.
+- **A run in flight.** A review run opened before the change still replays, with no list.
+
+### Review: the rubric version is 14
+
+- **The marker.** The review rubric's version marker is now 14, because its findings format gained the read list.
+- **The notice.** Each calibrated project sees one "rubric-version advanced" notice from the review's staleness check. Re-running configure re-stamps it.
 
 ### Advisor: the forward-share dial and the kind labels are retired
 

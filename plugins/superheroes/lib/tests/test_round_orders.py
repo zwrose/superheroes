@@ -696,7 +696,6 @@ def test_seat_transport_classifies_vendors_from_compose_output():
         live_vendors=["codex", "cursor", "claude"],
         # transport classification, not maker exclusion: with a maker named, a pin to its family leaves the seat unfilled (test_seat_map.py)
         author_family=None,
-        narrative_family="openai",
         seed=723,
         pins={
             "code-reviewer": {"vendor": "codex"},

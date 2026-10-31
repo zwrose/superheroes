@@ -126,6 +126,7 @@ def _native_verdicts_branch():
         "unnamedChangeAllowedBySeq": None,
         "unnamedChangeFixes": None,
         "unnamedChangeReverts": None,
+        "readParts": None,
         "investigated": ["plugins/superheroes/lib/engine_result_channel.py"],
     }
 
@@ -3360,6 +3361,7 @@ class _AstraCliFakeRunner:
                 "unnamedChangeAllowedBySeq": None,
                 "unnamedChangeFixes": None,
                 "unnamedChangeReverts": None,
+                "readParts": None,
                 "investigated": ["app/session_guard.py"],
             }
             with open(result_path, "w", encoding="utf-8") as fh:

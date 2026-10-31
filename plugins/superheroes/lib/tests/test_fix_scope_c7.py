@@ -565,7 +565,7 @@ def _native_ruling_branch(**over):
     contract, reason = PC.payload_contract(PC.P_AUDITS)
     assert reason is None
     branch = {"resultKind": "ruling", "findings": None, "verdicts": None, "grouping": None,
-              "investigated": ["f.py"], "id": "audit-seat",
+              "readParts": None, "investigated": ["f.py"], "id": "audit-seat",
               "ruling": contract["enums"]["ruling"][0], "reason": "grounds"}
     for opt in contract.get("optional") or ():
         branch[opt] = None

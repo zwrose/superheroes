@@ -470,22 +470,21 @@ def _leg_cli(failures, checked):
 def _leg_seat_map(failures, checked):
     vendors = list(model_registry.vendors())
     scenarios = [
-        (None, None, 0),
-        ("anthropic", "openai", 1),
-        ("anthropic", "anthropic", 2),
+        (None, 0),
+        ("anthropic", 1),
+        ("anthropic", 2),
     ]
     n = len(vendors)
     for r in range(1, n + 1):
         for combo in itertools.combinations(vendors, r):
             live = list(combo)
-            for author_family, narrative_family, seed in scenarios:
+            for author_family, seed in scenarios:
                 where = "seat-map live=%s seed=%s" % (live, seed)
                 try:
                     built = seat_map.build(
                         None,
                         live,
                         author_family,
-                        narrative_family,
                         seed,
                     )
                 except Exception as exc:

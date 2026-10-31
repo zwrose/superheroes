@@ -361,8 +361,10 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         row = _reviewer(state, rnd, seat, stem, key in ran, env,
                         r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                         _text(r.get("citedHead")), bound.get(key), phase)
-        if phase == sc.PANEL_PHASE and isinstance(body, dict) and "readParts" in body:
-            row["readParts"] = body["readParts"]  # what the reviewer reported reading; the writer validates it
+        if phase == sc.PANEL_PHASE and key in ran:
+            # axis: a panel reviewer that ran and reported no well-formed read list counts as having read nothing, never as unreported — see bite-proof record c1l5_wo_b_read_parts
+            reported = body.get("readParts") if isinstance(body, dict) else None
+            row["readParts"] = reported if review_record._items_fault(reported, review_record._part_fault) is None else []
         out.append(row)
     out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names
             if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it

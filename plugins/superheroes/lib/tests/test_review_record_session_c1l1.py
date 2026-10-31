@@ -162,7 +162,7 @@ def test_the_round_parts_the_state_holds_reach_the_account_as_they_are(tmp_path)
 
 
 def test_a_panel_reviewers_read_list_reaches_its_row_and_the_summary(tmp_path):
-    # axis: a panel row carries the readParts its stored result reported, an absent key leaves the row without one
+    # axis: a panel row carries the readParts its stored result reported, a ran panel reviewer with no list reads nothing ([])
     s = Session(tmp_path).seat("code-reviewer").seat("security-reviewer").seat("test-role")
     session = s.save()
     put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {
@@ -171,7 +171,7 @@ def test_a_panel_reviewers_read_list_reaches_its_row_and_the_summary(tmp_path):
     rows = {v["name"]: v for v in _account(session)["reviewers"]}
     assert rows["code-reviewer (round 1)"]["readParts"] == [{"file": "a.py", "lines": [[1, 10], [20, 24]]}]
     assert rows["security-reviewer (round 1)"]["readParts"] == []
-    assert "readParts" not in rows["test-role (round 1)"]
+    assert rows["test-role (round 1)"]["readParts"] == []
     fake = Fake()
     assert _write(tmp_path, session, fake)["ok"]
     assert "; read 1 files, 15 lines" in _body(fake) and "; read nothing" in _body(fake)

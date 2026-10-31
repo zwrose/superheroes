@@ -1,4 +1,4 @@
-<!-- rubric-version: 13 -->
+<!-- rubric-version: 14 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -101,7 +101,7 @@ your channel.
 **stdout channel** — external, sandboxed seats that cannot write a file. Your
 final stdout is a single JSON object and nothing after it:
 
-`{"findings": [], "investigated": ["src/orders.py"]}`
+`{"findings": [], "investigated": ["src/orders.py"], "readParts": [{"file": "src/orders.py", "lines": [[10, 42]]}]}`
 
 Wrap the finding array below as the `findings` value. List in `investigated`
 every repo-relative path you actually read to ground the review — always,
@@ -112,7 +112,18 @@ investigation record must forfeit as vacuous.
 
 **file channel** — in-process seats that can write. Emit the JSON array below
 at the path the dispatching skill names. Write `[]` when you have nothing to
-flag — do not skip the file.
+flag — do not skip the file. A panel reviewer writes instead the object
+`{"findings": [...], "readParts": [...]}` at that path, `findings` being the
+array below.
+
+**`readParts` — the read list (panel reviewers only).** One entry per file you
+read: `{"file": "<path relative to repo root>", "lines": [[start, end], ...]}`,
+the line ranges of that file you actually read, each `1 <= start <= end`. Line
+numbers are the file's at the reviewed head; a deletion inside a file that
+survives sits at the head line where it was removed. List only what you read —
+never the whole change by default. A reviewer that read nothing returns `[]`.
+Every other seat leaves `readParts` out (a stdout seat under the strict result
+schema emits `null`).
 
 The dispatching skill must name a channel the seat can actually use — that is
 the real prevention. If you are nevertheless told to use the file channel but

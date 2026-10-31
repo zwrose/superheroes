@@ -57,7 +57,7 @@ def test_every_roster_holds_the_test_role_and_not_the_old_key():
 def test_no_composed_panel_holds_both_seats(live_vendors):
     # bites on: a seat map that composes the old and new test seats side by side
     for seed in range(4):
-        built = seat_map.build(seat_map.PANEL_ROSTER, live_vendors, "xai", "anthropic", seed)
+        built = seat_map.build(seat_map.PANEL_ROSTER, live_vendors, "xai", seed)
         assert NEW in built["seats"]
         assert OLD not in built["seats"]
 
@@ -65,7 +65,7 @@ def test_no_composed_panel_holds_both_seats(live_vendors):
 def test_pin_under_both_keys_composes_one_seat():
     # bites on: the old-key pin seating a second (unknown) seat next to the test role
     pins = {OLD: {"vendor": "claude"}, NEW: {"vendor": "claude"}}
-    built = seat_map.build(seat_map.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins)
+    built = seat_map.build(seat_map.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins=pins)
     assert NEW in built["seats"] and OLD not in built["seats"]
     assert not [d for d in built["degradations"]
                 if d["constraint"] == "pin" and "unknown seat" in d["reason"]]
@@ -190,7 +190,7 @@ def test_old_pin_in_a_project_core_md_seats_the_test_role(tmp_path):
     assert "invalidSeatPins" not in loaded
     # the raw map the review setup feeds `seat_map compose --pins`, and the loaded one, both seat it
     for pins in ({OLD: pin}, loaded["seatPins"]):
-        built = seat_map.build(seat_map.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0,
+        built = seat_map.build(seat_map.PANEL_ROSTER, THREE_VENDORS, "xai", 0,
                                pins=pins)
         seat = built["seats"][NEW]
         assert (seat["vendor"], seat["model"], seat["source"]) == ("codex", model, "pinned")

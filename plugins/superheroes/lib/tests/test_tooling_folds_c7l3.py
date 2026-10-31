@@ -196,7 +196,7 @@ def test_m1_m2_nonpanel_candidates_skips_the_malformed_cell_and_uses_the_sibling
 @pytest.mark.parametrize("effort", _UNHASHABLE_EFFORTS, ids=["list", "dict"])
 def test_m1_m2_build_skips_the_malformed_cell_and_uses_the_sibling(effort):
     seat_map = SM.build(
-        SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 0,
+        SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0,
         live_cells=[["claude", "opus-5.5", "xhigh"], ["codex", "gpt-6.1-sol", effort], _GOOD],
         live_cells_source="probed",
     )
@@ -207,7 +207,7 @@ def test_m1_m2_build_skips_the_malformed_cell_and_uses_the_sibling(effort):
 @pytest.mark.parametrize("effort", _UNHASHABLE_EFFORTS, ids=["list", "dict"])
 def test_m1_m3_same_family_degradations_keeps_its_fail_closed_result(effort):
     seat_map = SM.build(
-        SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 0,
+        SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0,
         live_cells=[["claude", "opus-5.5", "xhigh"], _GOOD], live_cells_source="probed",
     )
     seat_map["liveCells"] = list(seat_map["liveCells"]) + [["codex", "gpt-6.1-sol", effort]]

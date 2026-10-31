@@ -442,7 +442,7 @@ _PAYLOAD_FIELD_BINDINGS = {
     P_PANEL: {
         "required": [],
         "optional": ["findings", "confidence", "tier", "receiptMissing", "receiptStale",
-                     VACUOUS_FIELD, "reason"],
+                     VACUOUS_FIELD, "reason", "readParts"],
         "conditional": {
             "findings": ("required unless the seat declared it did not run "
                          "(vacuous is True or reason is a not-run outcome token)"),
@@ -450,6 +450,7 @@ _PAYLOAD_FIELD_BINDINGS = {
         "enums": {},
         "types": {
             "findings": "list-of-objects",
+            "readParts": "list-of-objects",
             "confidence": "non-empty-string",
             "tier": "non-empty-string",
             "receiptMissing": "boolean",
@@ -459,6 +460,7 @@ _PAYLOAD_FIELD_BINDINGS = {
         },
         "elements": {
             "findings": {"required": [], "optional": [], "types": {}, "enums": {}},
+            "readParts": {"required": [], "optional": [], "types": {}, "enums": {}},
         },
         "predicates": [{
             "name": "findings-unless-not-run",

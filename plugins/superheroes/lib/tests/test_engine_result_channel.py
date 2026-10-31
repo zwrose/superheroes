@@ -96,6 +96,7 @@ def _valid_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "readParts": None,
             "investigated": investigated,
         }
     if kind == "verdicts":
@@ -126,6 +127,7 @@ def _valid_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "readParts": None,
             "investigated": investigated,
         }
     if kind == "grouping":
@@ -144,6 +146,7 @@ def _valid_review_branch(kind):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "readParts": None,
             "investigated": investigated,
         }
     contract, _ = PC.payload_contract(PC.P_AUDITS)
@@ -155,6 +158,7 @@ def _valid_review_branch(kind):
         "findings": None,
         "verdicts": None,
         "grouping": None,
+        "readParts": None,
         "investigated": investigated,
         **ruling,
     }

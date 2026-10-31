@@ -418,6 +418,20 @@ def declared_schema(engine, run_kind, expected_result_kind=None):
     return schema
 
 
+def prechange_review_schema(engine, run_kind, expected_result_kind=None):
+    """The review schema declared before `readParts` existed, or None when none applies.
+
+    A native review run opened before the read list was added saved this shape to disk; replay
+    admits it so a pending result from such a run still ingests (its missing read list is
+    unreported). New runs are always opened with `declared_schema`.
+    """
+    if run_kind != RUN_KIND_REVIEW or channel_for(engine) == CHANNEL_MARKER:
+        return None
+    schema = _review_root_schema(expected_result_kind, read_parts=False)
+    assert_strict_mode_valid(schema)
+    return schema
+
+
 def _validate_with_detail(schema, value):
     """Validate value against schema. Returns (ok, reason, failure_detail). Never raises."""
     if schema is None:
@@ -606,6 +620,22 @@ def _investigated_schema():
     return {"type": ["array", "null"], "items": {"type": "string"}}
 
 
+def _read_parts_schema():
+    """The panel reviewer's read list: files with the line ranges read; the shape is judged at the record."""
+    return {
+        "type": ["array", "null"],
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["file", "lines"],
+            "properties": {
+                "file": {"type": "string"},
+                "lines": {"type": "array", "items": {"type": "array", "items": {"type": "integer"}}},
+            },
+        },
+    }
+
+
 def _phase_contract(phase):
     contract, reason = payload_contracts.payload_contract(phase)
     if reason is not None:
@@ -653,13 +683,16 @@ def _branch_payload_schema(kind):
     raise ValueError("unknown review result kind %r" % (kind,))
 
 
-def _review_branch_schema(kind):
+def _review_branch_schema(kind, read_parts=True):
     payload_schema = _branch_payload_schema(kind)
     properties = {
         "resultKind": {"type": "string", "enum": [kind]},
         "investigated": _investigated_schema(),
     }
     required = ["resultKind", "investigated"]
+    if read_parts:
+        properties["readParts"] = _read_parts_schema() if kind == "findings" else _null_property()
+        required.append("readParts")
     for key in _PAYLOAD_CONTAINER_KEYS:
         if kind != "ruling" and key == kind:
             properties[key] = payload_schema
@@ -684,13 +717,13 @@ def _review_branch_schema(kind):
     }
 
 
-def _review_root_schema(expected_result_kind):
+def _review_root_schema(expected_result_kind, read_parts=True):
     kinds = REVIEW_RESULT_KINDS
     if expected_result_kind is not None:
         if expected_result_kind not in REVIEW_RESULT_KINDS:
             raise ValueError("unknown expected_result_kind %r" % (expected_result_kind,))
         kinds = (expected_result_kind,)
-    branches = [_review_branch_schema(kind) for kind in kinds]
+    branches = [_review_branch_schema(kind, read_parts) for kind in kinds]
     result_schema = branches[0] if len(branches) == 1 else {"anyOf": branches}
     return {
         "type": "object",
@@ -896,7 +929,7 @@ def _schema_branch_active_payload_keys(branch):
     props = branch.get("properties") or {}
     active = []
     for key, subschema in props.items():
-        if key in ("resultKind", "investigated"):
+        if key in ("resultKind", "investigated", "readParts"):
             continue
         if _schema_property_is_null_only(subschema):
             continue
@@ -1049,6 +1082,8 @@ def review_result_contract_from_schema(schema, delivery=None):
         "Every other payload property on the branch must be JSON null — only the named kind's "
         "payload may be populated.",
         "`investigated` lists the repository paths you actually read while forming this result.",
+        "`readParts` is the panel reviewer's read list on a `findings` branch (null on every other "
+        "branch, and on a findings branch from a seat that owes none).",
     ]
     for branch in branches:
         kind = _schema_branch_kind(branch)

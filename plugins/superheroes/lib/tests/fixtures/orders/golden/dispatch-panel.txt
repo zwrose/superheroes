@@ -60,12 +60,16 @@ justification); a CONFIRMED finding survives stamped
 `challenge: "author-justified"`. Outdated comments (where
 `position == null`) still count.
 
+## What you read
+Return your read list as the base rubric's panel output-format section defines it,
+covering only what you actually read.
+
 ## Delivery
 Deliver per the base rubric's panel output-format section. Set `tradeoff: true` only when an
 issue has multiple valid fix approaches (a judgment call); omit it otherwise (see the base
 rubric's "Triage rubric"). Set `dimension` to "Code" on every entry. Severity caps
 from the base rubric apply (at most 5 code-quality-only Nits reported per review round across all seats; real-consequence Nits are uncapped).
-Deliver per the base rubric's panel output-format section. Write your payload artifact to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-panel/code-reviewer.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
+Deliver per the base rubric's panel output-format section. Write your payload artifact to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-panel/code-reviewer.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag. Return `readParts` — one entry per file you actually read, with the line ranges of it you read (the file's lines at the reviewed head), as the base rubric defines it; `[]` when you read nothing.
 
 ## What you may run
 
@@ -98,9 +102,10 @@ Each finding below was ruled out of scope by the session's owner or advisor, wit
 Your result must carry a payload matching this shape:
 
 Required keys: (none)
-Optional keys: findings, confidence, tier, receiptMissing, receiptStale, vacuous, reason
+Optional keys: findings, confidence, tier, receiptMissing, receiptStale, vacuous, reason, readParts
 confidence type: non-empty-string
 findings type: list-of-objects
+readParts type: list-of-objects
 reason type: string
 receiptMissing type: boolean
 receiptStale type: boolean
