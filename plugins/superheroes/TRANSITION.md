@@ -50,6 +50,11 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
 
+### Claude write channel: sandbox placeholders are removed at fold
+
+- **What changes.** On Linux a claude write run no longer leaves the sandbox's empty, read-only placeholder files and directories (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`, `.vscode`, files under `.claude/`) in the build worktree. The run records the worktree's paths when it opens and its fold removes only paths that are new, empty and read-only; every other new path is left and listed. The folded result gains `placeholderSweep`. See [Supervised write dispatch](skills/workhorse/reference/dispatch-mechanics.md).
+- **Nothing is owed.** A run opened by an older plugin has no snapshot, so its fold removes nothing and reports `incomplete` with `baseline-missing`. A run that is abandoned rather than folded is not swept.
+
 ### Review: a finding that repeats an earlier one keeps its outcome
 
 - **Repeat marks.** Code review marks a finding that repeats one of the PR's earlier findings and keeps the earlier outcome, unless the verifier finds it no longer holds. The rule is in [Repeats](skills/review-code/reference/synthesis-pass.md#repeats).
