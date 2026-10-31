@@ -163,20 +163,20 @@ def _now_iso():
 
 
 _KNOWN_STATES = ("working", "blocked", "done")
-# The claude whose `agents --json` listing contract `_liveness` was measured against.
-_CONTRACT_VERSION = (2, 1, 316)
+# The `agents --json` listing contract _liveness reads was read on claude 2.1.302, 2.1.303, 2.1.310 and 2.1.316; the gate is the oldest.
+_CONTRACT_VERSION = (2, 1, 302)
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
 def _liveness(entry):
     """"alive", "dead-candidate" or "undetermined" for one listed relay entry."""
-    # axis: a listed relay is dead only when it is blocked with no process field on a job record, on a claude whose listing contract is known; a pid is never dead — see bite-proof record wo_2294_dead_relay.md
+    # axis: a listed relay is dead only when it is blocked with no process field on a job record, on a claude whose listing contract is known; a pid is never dead; a working entry with no process field reads undetermined, only done reads alive without one — see bite-proof record wo_2294_dead_relay.md
     state = entry.get("state")
     if "pid" in entry:
         return "alive" if state in _KNOWN_STATES else "undetermined"
     if "status" in entry:
         return "undetermined"
-    if state in ("working", "done"):
+    if state == "done":
         return "alive"
     if state == "blocked" and isinstance(entry.get("id"), str) and entry["id"]:
         return "dead-candidate"

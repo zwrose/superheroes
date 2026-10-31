@@ -86,29 +86,34 @@ FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_blocked_entry_w
 - **Guarded element:** `known()` in `ensure`, `return version[0] is not None and version[0] >= _CONTRACT_VERSION`
   (`cloud_relay.py:228`); axis: a candidate becomes dead only on a claude at or past the measured version.
 - **Neutralization:** that return → `        return True` (any version, or none, counts as known).
-- **Row:** `test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead` (older version,
+- **Gate (fix round, vet 749):** `_CONTRACT_VERSION = (2, 1, 302)`, the oldest claude whose `agents --json`
+  listing was read (2.1.302, 2.1.303, 2.1.310, 2.1.316); the older-version row is `2.1.301`, one patch below the
+  gate. Re-run in the fix round against the new gate.
+- **Row:** `test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead` (2.1.301,
   unparseable output, non-zero exit).
-- **Raw red (unfiltered run, fixture lines trimmed):**
+- **Raw red (unfiltered run, fixture lines trimmed; the three failures are identical in the asserted line):**
 
 ```
 FFF                                                                      [100%]
-kwargs = {'version_out': '2.1.315 (Claude Code)'}
+kwargs = {'version_out': '2.1.301 (Claude Code)'}
 >       assert out["ok"] is True and out["started"] is False and out["sessionId"] == "dead-1"
 E       assert (False is True)
 kwargs = {'version_out': 'garbage'}
 E       assert (False is True)
 kwargs = {'version_code': 1}
 E       assert (False is True)
-FAILED ...::test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead[kwargs0]
-FAILED ...::test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead[kwargs1]
-FAILED ...::test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead[kwargs2]
-3 failed, 141 deselected in 0.60s
+FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead[kwargs0]
+FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead[kwargs1]
+FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead[kwargs2]
+3 failed, 145 deselected in 0.56s
 ```
 
-- **Restore:** the inverse edit.
-- **Restore receipt (restored line quoted, `cloud_relay.py:228`):**
-  `        return version[0] is not None and version[0] >= _CONTRACT_VERSION`
-- **Raw green:** `3 passed, 141 deselected in 0.45s`
+- **Restore:** the inverse edit. The first restore edit was refused for matching three places, so the next
+  run still held the neutralization and was red again (`3 failed, 145 deselected in 2.43s`); the restore was
+  then redone with surrounding context and the green below is the run after it.
+- **Restore receipt (restored line quoted, `cloud_relay.py:228`, by grep after the restore):**
+  `228:        return version[0] is not None and version[0] >= _CONTRACT_VERSION`
+- **Raw green:** `3 passed, 145 deselected in 5.95s`
 
 ## G4 the freshness check
 
@@ -205,3 +210,56 @@ FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_check_says_when_t
 - **Restore receipt (restored line quoted, `cloud_relay.py:699`):**
   `    if verdict == "relay-silent" and relay.get("liveness") == "undetermined":`
 - **Raw green:** `1 passed, 143 deselected in 0.50s`
+
+## G8 `_liveness` rule 3: a `working` entry with no process field is could-not-tell (fix round, vet 749)
+
+- **Guarded element:** `_liveness`, `if state == "done":` / `return "alive"` (`cloud_relay.py:179`); axis: only
+  `done` reads alive without a process field; a `working` entry with no `pid` and no `status` falls through to
+  `undetermined` (never a stop target, never a start).
+- **Neutralization:** `    if state == "done":` → `    if state in ("working", "done"):` (the pre-fix rule 3).
+- **Row:** `test_an_unknown_or_missing_state_is_kept_and_said`, the `("working", {})` case (moved from
+  `test_working_and_done_relays_are_left_alone`). The other six cases stay green under this neutralization.
+- **Raw red (unfiltered run, fixture line trimmed):**
+
+```
+......F                                                                  [100%]
+state = 'working', extra = {}
+        assert out["ok"] is True and out["started"] is False and out["sessionId"] == RELAY_ID
+>       assert out["undetermined"] == {"sessionId": RELAY_ID, "state": state}
+E       KeyError: 'undetermined'
+FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_an_unknown_or_missing_state_is_kept_and_said[working-extra6]
+1 failed, 6 passed, 141 deselected in 0.60s
+```
+
+- **Restore:** the inverse edit.
+- **Restore receipt (restored lines quoted, by grep after the restore):**
+  `179:    if state == "done":` / `180-        return "alive"`
+- **Raw green:** `7 passed, 141 deselected in 0.60s`
+
+## G9 the not-started stop path: a dead entry beside a live relay is stopped (fix round, vet 749)
+
+- **Guarded element:** the `targets` comprehension in `ensure` (`cloud_relay.py:281`); axis: with no start, the
+  targets are the latest (only) listing's dead entries other than the kept relay, so a dead remnant beside a
+  live relay is stopped, nothing is started and nothing is reported `replaced`.
+- **Neutralization:** `    targets = [e for e in latest_dead if e.get("sessionId") != fresh` →
+  `    targets = [e for e in latest_dead if started and e.get("sessionId") != fresh` (no targets when nothing was started).
+- **Row:** `test_a_live_relay_beside_a_dead_entry_stops_the_dead_one_and_starts_nothing`.
+- **Raw red (unfiltered run, fixture line trimmed):**
+
+```
+F                                                                        [100%]
+        assert run.starts() == []
+>       (stop,) = run.stops()
+E       ValueError: not enough values to unpack (expected 1, got 0)
+FAILED plugins/superheroes/lib/tests/test_cloud_relay.py::test_a_live_relay_beside_a_dead_entry_stops_the_dead_one_and_starts_nothing
+1 failed, 147 deselected in 0.66s
+```
+
+- **Restore:** the inverse edit (`started and ` removed).
+- **Restore receipt (restored lines quoted, by grep after the restore):**
+  `281:    targets = [e for e in latest_dead if e.get("sessionId") != fresh` /
+  `282-               and (not started or e.get("sessionId") in first_dead)]`
+- **Raw green:** `1 passed, 147 deselected in 0.67s`
+
+G8 and G9 were added in the fix round (vet 749); G3 was re-proved against the lowered gate there.
+Every run in G3, G8 and G9 was unfiltered.

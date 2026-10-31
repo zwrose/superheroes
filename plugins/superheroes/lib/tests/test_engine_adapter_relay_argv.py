@@ -18,15 +18,18 @@ def test_agents_list_argv():
 
 
 def test_version_argv():
+    # axis: the version argv is exactly `claude --version` — the call the contract gate reads the installed claude with
     assert engine_adapter.claude_version_argv() == {"argv": ["claude", "--version"], "reason": None}
 
 
 def test_stop_argv_names_the_agent_by_its_id():
+    # axis: the stop argv targets the listed short id and nothing else
     assert engine_adapter.claude_stop_argv("d1") == {"argv": ["claude", "stop", "d1"], "reason": None}
 
 
 @pytest.mark.parametrize("agent_id", [None, 7, "", "-rf", "a b", "a/b", "x" * 65])
 def test_stop_argv_refuses_an_id_that_is_not_a_short_agent_id(agent_id):
+    # axis: a malformed id yields a refusal and no executable argv
     out = engine_adapter.claude_stop_argv(agent_id)
     assert out["argv"] == [] and out["reason"] == engine_adapter.REFUSAL_RELAY_STOP_ID_INVALID
     assert out["detail"]

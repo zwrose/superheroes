@@ -115,7 +115,7 @@ def _state_file(world):
 
 
 def _ensure_alive(world):
-    run = FakeRun(lists=[json.dumps([_entry(cr.relay_name(world.config))])])
+    run = FakeRun(lists=[json.dumps([_entry(cr.relay_name(world.config), pid=4242, status="busy")])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["ok"] is True
     return out
@@ -801,7 +801,8 @@ def test_check_refusals(world):
 def test_alive_relay_is_found_by_name_and_account_without_a_start(world):
     name = cr.relay_name(world.config)
     assert name.startswith("superheroes-relay-claude-two-")
-    run = FakeRun(lists=[json.dumps([_entry("superheroes-relay-claude-three"), _entry(name)])])
+    run = FakeRun(lists=[json.dumps([_entry("superheroes-relay-claude-three"),
+                                        _entry(name, pid=4242, status="busy")])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out == {"ok": True, "reason": None, "name": name, "sessionId": RELAY_ID, "started": False}
     assert run.starts() == []
@@ -811,7 +812,7 @@ def test_alive_relay_is_found_by_name_and_account_without_a_start(world):
 
 def test_none_alive_starts_the_relay_with_the_exact_argv(world):
     name = cr.relay_name(world.config)
-    run = FakeRun(lists=["[]", json.dumps([_entry(name, startedAt=5)])])
+    run = FakeRun(lists=["[]", json.dumps([_entry(name, startedAt=5, pid=4242, status="busy")])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["ok"] is True and out["started"] is True and out["sessionId"] == RELAY_ID
     (start,) = run.starts()
@@ -824,7 +825,7 @@ def test_none_alive_starts_the_relay_with_the_exact_argv(world):
 
 def test_another_accounts_relay_is_not_taken_as_alive(world):
     other = _entry("superheroes-relay-claude-three")
-    run = FakeRun(lists=[json.dumps([other]), json.dumps([other, _entry(cr.relay_name(world.config))])])
+    run = FakeRun(lists=[json.dumps([other]), json.dumps([other, _entry(cr.relay_name(world.config), pid=4242, status="busy")])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["started"] is True and len(run.starts()) == 1
 
@@ -848,7 +849,7 @@ def test_relay_starts_in_the_repository_root(world, tmp_path):
     link = tmp_path / "repo-link"
     link.symlink_to(world.repo)
     name = cr.relay_name(world.config)
-    run = FakeRun(lists=["[]", json.dumps([_entry(name)])])
+    run = FakeRun(lists=["[]", json.dumps([_entry(name, pid=4242, status="busy")])])
     out = cr.ensure(str(link), world.config, env=world.env, run=run)
     assert out["ok"] is True and out["started"] is True
     (start,) = run.starts()
@@ -909,7 +910,8 @@ def test_failed_start_and_no_entry_after_start_refuse(world):
 
 def test_two_alive_entries_are_ambiguous(world):
     name = cr.relay_name(world.config)
-    run = FakeRun(lists=[json.dumps([_entry(name, sessionId="s-1"), _entry(name, sessionId="s-2")])])
+    run = FakeRun(lists=[json.dumps([_entry(name, sessionId="s-1", pid=4242, status="busy"),
+                                     _entry(name, sessionId="s-2", pid=4243, status="busy")])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
     assert out["reason"] == "relay-ambiguous" and out["sessionIds"] == ["s-1", "s-2"]
     assert run.starts() == []
@@ -935,7 +937,8 @@ def _agents_indexes(run):
     return [i for i, c in enumerate(run.calls) if c.argv[:3] == ["claude", "agents", "--json"]]
 
 
-@pytest.mark.parametrize("version_out", ["2.1.316 (Claude Code)", "2.2.0 (Claude Code)", "10.0.1 (Claude Code)"])
+@pytest.mark.parametrize("version_out", ["2.1.302 (Claude Code)", "2.1.310 (Claude Code)", "2.1.316 (Claude Code)",
+                                         "2.2.0 (Claude Code)", "10.0.1 (Claude Code)"])
 def test_a_dead_relay_is_replaced_and_the_dead_entry_stopped(world, version_out):
     # axis: a blocked job record with no process field is dead — it is replaced by a fresh start and then stopped by its id, after the fresh relay is listed — see bite-proof record wo_2294_dead_relay.md (G1)
     name = cr.relay_name(world.config)
@@ -965,10 +968,10 @@ def test_a_blocked_entry_with_a_process_is_alive(world, extra):
 
 
 @pytest.mark.parametrize("state,extra", [
-    ("working", {}), ("done", {"pid": 50504, "status": "idle"}), ("working", {"pid": 50504, "status": "busy"}),
+    ("done", {}), ("done", {"pid": 50504, "status": "idle"}), ("working", {"pid": 50504, "status": "busy"}),
 ])
 def test_working_and_done_relays_are_left_alone(world, state, extra):
-    # axis: a working or done relay is alive, with or without a process field — nothing is started, stopped or version-read
+    # axis: a relay with a process field, or `done`, is alive — nothing is started, stopped or version-read
     name = cr.relay_name(world.config)
     run = FakeRun(lists=[json.dumps([_entry(name, state=state, **extra)])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
@@ -978,10 +981,10 @@ def test_working_and_done_relays_are_left_alone(world, state, extra):
 
 @pytest.mark.parametrize("state,extra", [
     ("failed", {}), ("stopped", {}), (None, {}), ("stopped", {"pid": 4242}), (None, {"pid": 4242}),
-    ("blocked", {"status": "waiting"}),
+    ("blocked", {"status": "waiting"}), ("working", {}),
 ])
 def test_an_unknown_or_missing_state_is_kept_and_said(world, state, extra):
-    # axis: a state the listing contract does not name is neither alive nor dead — the entry is kept, nothing is stopped, and the record and result say so
+    # axis: a state the listing contract does not name, or a `working` entry with no process field, is neither alive nor dead — the entry is kept, nothing is started or stopped, and the record and result say so — see bite-proof record wo_2294_dead_relay.md (G8)
     name = cr.relay_name(world.config)
     run = FakeRun(lists=[json.dumps([_entry(name, state=state, **extra)])])
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
@@ -994,10 +997,10 @@ def test_an_unknown_or_missing_state_is_kept_and_said(world, state, extra):
 
 
 @pytest.mark.parametrize("kwargs", [
-    {"version_out": "2.1.315 (Claude Code)"}, {"version_out": "garbage"}, {"version_code": 1},
+    {"version_out": "2.1.301 (Claude Code)"}, {"version_out": "garbage"}, {"version_code": 1},
 ])
 def test_a_claude_whose_listing_contract_is_not_known_never_makes_a_relay_dead(world, kwargs):
-    # axis: the contract gate — a version older than the measured one, unparseable, or unreadable leaves a blocked job record undetermined — see bite-proof record wo_2294_dead_relay.md (G3)
+    # axis: the contract gate — a version older than the oldest one whose listing was read (2.1.302), unparseable, or unreadable leaves a blocked job record undetermined — see bite-proof record wo_2294_dead_relay.md (G3)
     name = cr.relay_name(world.config)
     run = FakeRun(lists=[json.dumps([_dead(name)])], **kwargs)
     out = cr.ensure(world.repo, world.config, env=world.env, run=run)
@@ -1062,6 +1065,22 @@ def test_an_old_entry_turned_live_next_to_a_fresh_one_is_ambiguous_and_nothing_i
     assert out["ok"] is False and out["reason"] == "relay-ambiguous"
     assert out["sessionIds"] == ["dead-1", RELAY_ID]
     assert run.stops() == []
+
+
+def test_a_live_relay_beside_a_dead_entry_stops_the_dead_one_and_starts_nothing(world):
+    # axis: a dead remnant beside a live relay is stopped, nothing is started, nothing is reported replaced — see bite-proof record wo_2294_dead_relay.md (G9)
+    name = cr.relay_name(world.config)
+    live = _entry(name, sessionId=RELAY_ID, pid=4242, status="busy")
+    run = FakeRun(lists=[json.dumps([live, _dead(name)])])
+    out = cr.ensure(world.repo, world.config, env=world.env, run=run)
+    assert out["ok"] is True and out["started"] is False and "replaced" not in out
+    assert out["sessionId"] == RELAY_ID
+    assert run.starts() == []
+    (stop,) = run.stops()
+    assert stop.argv == ["claude", "stop", "d1"] and stop.env["CLAUDE_CONFIG_DIR"] == world.config
+    assert out["deadEntries"] == [{"sessionId": "dead-1", "id": "d1", "state": "blocked", "stopped": True}]
+    record = json.load(open(_state_file(world)))["relays"][name]
+    assert record == {"sessionId": RELAY_ID, "startedAt": 1789474395431, "configDir": world.config}
 
 
 def test_a_failed_stop_does_not_fail_ensure(world):
