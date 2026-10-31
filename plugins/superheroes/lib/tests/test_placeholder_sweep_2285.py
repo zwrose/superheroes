@@ -216,6 +216,49 @@ def test_new_read_only_dir_that_stays_keeps_its_mode(tmp_path):
     assert mode == 0o555
 
 
+# axis: nested new read-only empty dirs all go, for a non-root sweep too.
+def test_nested_read_only_placeholder_dirs_are_removed(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    outer = os.path.join(wt, "outer")
+    inner = _placeholder_dir(wt, "outer/inner")
+    os.chmod(outer, 0o555)
+    out = _sweep(wt, baseline)
+    assert out["removed"] == ["outer/inner", "outer"], out
+    assert not os.path.lexists(outer) and not os.path.lexists(inner)
+
+
+# axis: a subtree pruned at open stays untouched at fold even when it is now a placeholder file.
+def test_pruned_root_replaced_by_a_file_is_not_swept(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    baseline["pruned"].append("nested")
+    kept = _placeholder_file(wt, "nested")
+    out = _sweep(wt, baseline)
+    assert out["removed"] == [] and os.path.isfile(kept)
+
+
+# axis: an ancestor swapped for a symlink after the walk is never followed by the removals.
+def test_ancestor_swapped_for_symlink_after_walk_is_not_followed(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    _placeholder_dir(wt, "a/b")
+    external = tmp_path / "external"
+    victim = _placeholder_dir(external, "b")
+    real_walk = ED._walk_kept
+
+    def walk_then_swap(*args, **kwargs):
+        yield from real_walk(*args, **kwargs)
+        os.chmod(os.path.join(wt, "a", "b"), 0o755)
+        os.rmdir(os.path.join(wt, "a", "b"))
+        os.rmdir(os.path.join(wt, "a"))
+        os.symlink(str(external), os.path.join(wt, "a"))
+    monkeypatch.setattr(ED, "_walk_kept", walk_then_swap)
+    out = _sweep(wt, baseline)
+    assert os.path.isdir(victim), out
+    assert out["removed"] == []
+
+
 # --- wiring through the production open and fold ---------------------------------------------
 
 
