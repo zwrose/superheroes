@@ -123,7 +123,7 @@ tokens there — do not re-copy them into this reference.
 
 - **`LANE_ENDING_EVENTS`** — membership ends the `loop` invocation (after printing one JSON line).
 - **`ATTENTION_EVENTS`** — membership also ends the `loop`, but ends no lane: a builder is waiting
-  on you. Not suppressible.
+  on you, or the builders' account cannot run anything. Not suppressible, except `account-limited`, per lane.
 - **`BENIGN_EVENTS`** — membership never ends the loop. Each benign **non-timer** event is passed
   over: the loop re-arms, appends a `--log` line in the same `{"arm", "elapsedSeconds", "result"}`
   shape as a timer arm (the `result` carries that event), and accumulates **`passedOver`** /
@@ -412,6 +412,17 @@ by comment id: `{"launchId", "issue", "commentId", "url", "createdAt", "cloudSes
 until a confirmed delivery is followed by `note-answered`, the note fires again on every arm. A note posted while you were away fires when you are back. It reads
 the repository's issue comments once per tick, a `304` re-using the stored list.
 
+When **`account-limited`** fires, the builders' account is at its usage limit, so nothing on it can
+run. The payload names every live cloud lane on the account — `launchId` (the first), `launchIds`, and
+`accounts`, by account: `{"configDir", "limitType", "resetsAt", "resetsAtIso", "launchIds"}` — plus
+`alsoObserved`. Tell the owner which account, which limit and when it resets. Those lanes are stopped
+(the account cannot run anything), so recover them at once, as `rubric/launch-doctrine.md` § Recovery
+says; `cloud_recover.py assess` reads the same limit as stop evidence. While the limit holds the watch
+does not report those lanes `lane-stale`: the limit explains their quiet. Once acted on, suppress it
+per lane with `--ignore-event LAUNCHID:account-limited`. The relay writes the limit to its session record only when
+it next tries to run, so a status ping through the relay is what makes the reading appear; read an
+account by hand with `python3 -B <plugin root>/lib/cloud_relay.py limit --repo-root <root> --config-dir <dir>`.
+
 When **`lane-terminal`** fires for a cloud lane, the newest comment on a live started lane's issue,
 created at or after that lane's attempt began, opens with one of the terminal headers
 (`TERMINAL_HEADERS` in `lib/cloud_builder.py`: handback, stop, park), and no `note-answered` has
@@ -454,6 +465,15 @@ progress comment to a resumed phase more than five minutes after the park. Still
 --comment-id <the park comment's id>`, so recovery no longer reads it as a park
 (`cloud_recover.py assess` still reads the park). A builder that ends with a free-form comment instead is seen only by the `lane-stale`
 fallback.
+
+A lane whose `reserved` ledger record names `charter: detective` (an absent `charter` reads as
+workhorse) is read the same way, with a different action on each. On a **handback**, run
+the diagnosis vet (the showrunner charter's duty to vet diagnosis receipts before routing fixes) on the
+receipt the note links. On a **park**, read its text: a park that links a diagnosis receipt is the
+detective's honest not-demonstrated exit, so run the diagnosis vet and do not send a receipt that
+passes it back for another pass; a park with no receipt is a question that timed out (its text says no
+receipt was posted and what the detective awaits), so answer or route it as for a builder park. On a **stop**, the detective declined the work before
+spend, so route the incident and never repair a launch. No PR is vetted on a detective lane.
 
 Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
 on their `reserved` ledger record, and the batch `count` tallies them as `overlapsAccepted`. The
