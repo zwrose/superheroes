@@ -375,8 +375,11 @@ def test_a_member_with_no_key_leaves_its_group_to_per_member_fixes_and_records_t
 def test_a_stamp_from_an_earlier_round_is_removed_from_a_row_in_no_group_now():
     u = _unit()
     assert all("fixGroup" in r for r in u.rows)
+    u.state["round"] = 2
     RD._stamp_fix_groups(u.state, [], u.state["findings"])
-    assert not any("fixGroup" in r for r in u.rows) and u.state["rounds"]["1"]["fixGroups"] == []
+    assert not any("fixGroup" in r for r in u.rows)
+    assert u.state["rounds"]["1"]["fixGroups"] == [{"id": u.gid, "members": [u.ka, u.kb]}]
+    assert u.state["rounds"]["2"]["fixGroups"] == []
 
 
 # ---- item 3a: the batch is closed over fix groups ----------------------------------------------------------------
