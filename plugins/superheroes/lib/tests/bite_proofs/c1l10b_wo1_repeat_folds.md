@@ -134,3 +134,51 @@ FAILED plugins/superheroes/lib/tests/test_c1l10b_repeat_folds.py::test_6_an_unkn
 ..                                                                       [100%]
 2 passed in 1.52s
 ```
+
+## W1-E3 — the chain closure repeats until nothing changes
+
+**guarded element:** the fixed-point loop in `_wrong_ungraded` (`review_record.py`, lines 2413-2420: `while grew:` with `grew = True` after a key is added). Axis: a chain of kept repeats listed child-first (`[c, b, a]`) still passes link by link to the verifier-closed root; a single forward pass admits only links listed after their parent. Detectors: `test_2a_reverse_a_chain_listed_child_first_still_passes_link_by_link_to_the_root` and `test_2d_reverse_the_writer_takes_the_whole_chain_listed_child_first` in `plugins/superheroes/lib/tests/test_c1l10b_repeat_folds.py` (the parent-first `test_2a_` and `test_2d_` stay and cannot tell the two apart).
+
+**neutralization** (`review_record.py`, `_wrong_ungraded`): the loop runs one pass only.
+```diff
+                 passing.add(_key(f))
+-                grew = True
++                grew = False
+```
+
+**raw red:** `scripts/pinned-python -B -X pycache_prefix=/tmp/wo7-pyc -m pytest plugins/superheroes/lib/tests/test_c1l10b_repeat_folds.py -q -p no:cacheprovider -k reverse --tb=line` (the `--tb=line` flag was added to the order's command form to keep the capture short)
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+E   assert [0] == []
+      
+      Left contains one more item: 0
+      Use -v to get more diff
+/home/user/sh-2264/plugins/superheroes/lib/tests/test_c1l10b_repeat_folds.py:55: assert [0] == []
+E   AssertionError: {'ok': False, 'reason': 'review-account-invalid', 'detail': "findings[0] is shown-wrong without the verifier's grade"}
+    assert False
+/home/user/sh-2264/plugins/superheroes/lib/tests/test_c1l10b_repeat_folds.py:98: AssertionError: {'ok': False, 'reason': 'review-account-invalid', 'detail': "findings[0] is shown-wrong without the verifier's grade"}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l10b_repeat_folds.py::test_2a_reverse_a_chain_listed_child_first_still_passes_link_by_link_to_the_root
+FAILED plugins/superheroes/lib/tests/test_c1l10b_repeat_folds.py::test_2d_reverse_the_writer_takes_the_whole_chain_listed_child_first
+2 failed, 19 deselected in 3.95s
+```
+
+**restore:** the inverse edit — `grew = True` put back after `passing.add(_key(f))`.
+
+**restore receipt:** `grep -n "grew" plugins/superheroes/lib/review_record.py` printed
+```
+2413:    grew = True
+2414:    while grew:
+2415:        grew = False
+2420:                grew = True
+```
+and `git status --porcelain -- plugins/superheroes/lib/review_record.py` printed nothing (byte-identical to `109af679`).
+
+**raw green:** same command as the raw red.
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+..                                                                       [100%]
+2 passed, 19 deselected in 4.40s
+```

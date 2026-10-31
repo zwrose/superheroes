@@ -435,7 +435,7 @@ def _write_corrupt_profile(w):
     (_read_payload([_cloud_item(effective=True)], profileUnparseable=None), None),
     (_read_payload([_cloud_item(effective=False)], profileUnparseable="yes"), None),
     (_read_payload([_cloud_item(effective=False, malformed=True)]), None),
-    (_read_payload([{"slug": "dial", "effective": True, "malformed": False}]), None),
+    (_read_payload([{"slug": "stackingTool", "effective": True, "malformed": False}]), None),
     (_read_payload([_cloud_item(effective=1)]), None),
 ])
 def test_the_setting_is_a_bool_only_for_a_read_profile_with_a_well_formed_item(w, monkeypatch, answer, expected):
