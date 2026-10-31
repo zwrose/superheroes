@@ -299,7 +299,7 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 
 ### Claude write channel: leading NAME=value assignments run
 
-- **What now runs.** A command whose leading `NAME=value` assignments precede one of the allowed families (`python`, `python3`, `pytest`, `scripts/pinned-python`, `echo`, `npm`, `npx`, `node`, `pnpm`, `yarn`, `ps`), for example `MONGODB_URI=… SKIP_DB_SETUP=true npx --no-install vitest run …`, now runs in a sandboxed Claude implementer, still inside the sandbox. Before, it was refused with "This command requires approval" and the implementer handed back untested work. Each family gains two rules in `permissions.allow`, `Bash(*=* <family> *)` and `Bash(*=* <family>)`, in `CLAUDE_WRITE_BASH_FAMILIES` / `CLAUDE_WRITE_BASH_ALLOW` in `lib/engine_adapter.py`. Every project's claude write sandbox settings gain these rules; nothing else in the default settings changes.
+- **What now runs.** A command whose leading `NAME=value` assignments precede one of the allowed families (`python`, `python3`, `pytest`, `scripts/pinned-python`, `echo`, `npm`, `npx`, `node`, `pnpm`, `yarn`, `ps`), for example `DB_URL=… SKIP_SETUP=true npx --no-install vitest run …`, now runs in a sandboxed Claude implementer, still inside the sandbox. Before, it was refused with "This command requires approval" and the implementer handed back untested work. Each family gains two rules in `permissions.allow`, `Bash(*=* <family> *)` and `Bash(*=* <family>)`, in `CLAUDE_WRITE_BASH_FAMILIES` / `CLAUDE_WRITE_BASH_ALLOW` in `lib/engine_adapter.py`. Every project's claude write sandbox settings gain these rules; nothing else in the default settings changes.
 - **Still refused.** A leading assignment before any other command (`FOO=1 touch f`, `FOO=1 rm -rf x`) is still denied.
 - **A wider match.** Because the rule's leading `*` matches any characters, a command line that carries an `=` anywhere before an allowed family's name followed by a space or the line's end (for example `touch x=1 npx f`) also matches a rule. It still runs inside the sandbox, and only a command that managed policy excludes from the sandbox runs unprompted outside it.
 - **In-flight runs.** A claude write run opened by an older plugin refuses its continuation, because the spawn argv check (`_canonical_spawn_argv` / `_spawn_argv_coherence` in `lib/engine_dispatch.py`) rebuilds the settings from the current allow rules and the run's stored settings lack the new ones. Open a fresh dispatch.
@@ -2195,7 +2195,7 @@ shorter of its stamped TTL and that value.
 
 ### Registered consumers
 
-**weekly-eats write dispatches** omit effort today. After this release they must pass `--seat` as the
+**A registered consumer's write dispatches** omit effort today. After this release they must pass `--seat` as the
 four-key JSON object on every write dispatch, with vendor, model, effort, and role supplied inside
 the seat bundle.
 

@@ -11,10 +11,10 @@ Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_b_env_prefix_227
 
 Detector axes (bite-proof):
 - test_every_family_carries_both_assignment_rules — census: three rules per family, no extras, no duplicates
-- test_weekly_eats_shape_matches_a_new_rule — reach: the field shape matches a rule of the new settings
+- test_leading_assignments_shape_matches_a_new_rule — reach: the field shape matches a rule of the new settings
 - test_bare_family_with_assignment_matches_a_new_rule — reach: an assignment before a bare family matches
 - test_pinned_python_with_assignment_matches_a_new_rule — reach: the pinned-python shape matches
-- test_weekly_eats_shape_matches_no_old_rule — break-it: today's eleven prefix rules refuse the shape
+- test_leading_assignments_shape_matches_no_old_rule — break-it: today's eleven prefix rules refuse the shape
 - test_assignment_before_a_non_family_command_matches_no_rule — tightness: other commands stay refused
 - test_equals_before_a_family_word_is_a_known_match — residual: `touch x=1 npx f` matches, pinned
 """
@@ -41,8 +41,8 @@ _PRE_2275_RULES = (
     "Bash(yarn:*)", "Bash(ps:*)",
 )
 
-_WEEKLY_EATS = (
-    "MONGODB_URI=mongodb://localhost:27017/weekly-eats-test SKIP_DB_SETUP=true "
+_LEADING_ASSIGNMENTS = (
+    "DB_URL=postgres://localhost/app-test SKIP_SETUP=true "
     "npx --no-install vitest run --reporter=dot"
 )
 
@@ -82,9 +82,9 @@ def test_every_family_carries_both_assignment_rules():
     assert len(set(allow)) == len(allow)
 
 
-def test_weekly_eats_shape_matches_a_new_rule():
+def test_leading_assignments_shape_matches_a_new_rule():
     # axis: reach — the field shape (leading assignments before npx with arguments) matches a rule
-    assert _matching(_allow(), _WEEKLY_EATS)
+    assert _matching(_allow(), _LEADING_ASSIGNMENTS)
 
 
 def test_bare_family_with_assignment_matches_a_new_rule():
@@ -97,9 +97,9 @@ def test_pinned_python_with_assignment_matches_a_new_rule():
     assert _matching(_allow(), "PYTHONDONTWRITEBYTECODE=1 scripts/pinned-python -B -m pytest x -q")
 
 
-def test_weekly_eats_shape_matches_no_old_rule():
+def test_leading_assignments_shape_matches_no_old_rule():
     # axis: break-it — the pre-#2275 rules refuse the field shape, so the old refusal reads red
-    assert _matching(_PRE_2275_RULES, _WEEKLY_EATS) == []
+    assert _matching(_PRE_2275_RULES, _LEADING_ASSIGNMENTS) == []
 
 
 def test_assignment_before_a_non_family_command_matches_no_rule():

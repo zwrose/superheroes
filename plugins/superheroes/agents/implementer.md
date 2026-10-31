@@ -104,12 +104,12 @@ overrunning or silently truncating.
   hide a failure in a path your change touches. A filter that cannot match your own new files — e.g.
   filtering `tsc` to `services/items` while your new test lives at
   `services/__tests__/items.test.ts` — makes a real type error invisible behind a green-looking
-  receipt (two weekly-eats cursor implementers did exactly this: `tsc` filtered by patterns that could
-  not match their just-written test files, so the error stayed invisible while the receipt looked
-  green). If you believe a filter is unavoidable it must provably cover every path your order touches;
-  the simplest safe choice is no filter at all. **Narrowing the command you run is legitimate, but a
-  narrowed command must provably cover every path your order touches — including files you just created
-  at other paths; filtering the output of a command you ran is not.**
+  receipt (two cursor implementers in a consuming project did exactly this: `tsc` filtered by patterns
+  that could not match their just-written test files, so the error stayed invisible while the receipt
+  looked green). If you believe a filter is unavoidable it must provably cover every path your order
+  touches; the simplest safe choice is no filter at all. **Narrowing the command you run is legitimate,
+  but a narrowed command must provably cover every path your order touches — including files you just
+  created at other paths; filtering the output of a command you ran is not.**
 - **In-dispatch verification is targeted.** Your in-dispatch verification covers the tests for **the
   behaviour your order changes**, plus a typecheck and lint over your order's surface — nothing wider.
   **Targeted is keyed to the changed behaviour and the work-order surface, not to "the files you
