@@ -293,7 +293,7 @@ def _status_reviewers(state, setup=None, rows=()):
         unfilled = receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd)) \
             & set(round_phases.DIMENSIONS)
         for seat in sorted(seats):
-            if seat in unfilled:
+            if round_phases.seat_lens(seat) in unfilled:
                 continue  # listed below as an unfilled seat
             commit = _panel_head(state, rnd, setup)
             ran = seats[seat] == "run" and commit is not None  # any other value, or a panel with no recoverable head, is never credited
@@ -383,7 +383,7 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
     out, raw = [], []
     for key, (att, r) in slots.items():
         phase, rnd, seat, _ = key
-        if phase == sc.PANEL_PHASE and seat in unfilled.get(rnd, ()):
+        if phase == sc.PANEL_PHASE and round_phases.seat_lens(seat) in unfilled.get(rnd, ()):
             continue  # listed below as an unfilled seat, whether or not a slot was journaled for it
         env = envs[key]
         body = env.get("payload") if isinstance(env, dict) else None
@@ -823,7 +823,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
             # axis: a break-it proposal whose test passed was dropped before compile and is no defect; kept for a session that began under the earlier rules, since the current intercept drops nothing — see bite-proof record c1l1_wo_b_session_seam
             # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
-            settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
+            settled = phase == round_phases.P_PANEL and round_phases.seat_lens(seat) == break_it.ROLE and break_it.is_break_it(f) \
                 and (rnd, f["title"], _file_key(f.get("file"))) in passed
             if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
                 continue

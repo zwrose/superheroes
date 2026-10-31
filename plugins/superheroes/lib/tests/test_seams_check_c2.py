@@ -67,7 +67,17 @@ def _round_one_state(plan=None):
 
 
 def _fold_panel_with(state, *findings):
-    RD._fold(state, state["config"], RD.P_PANEL, _panel_artifact(*findings))
+    """Fold a panel artifact holding ``findings``. On a sliced round 1 the panel seats are the roster's (whole-change seats and
+    ``<lens>:<id>`` slice seats), so the findings are keyed under the first ``code-reviewer:<id>`` slice seat; an unsliced round
+    keeps the plain ``code-reviewer`` key."""
+    roster = RP.panel_roster(state, state["config"])
+    slice_seat = next((s for s in roster if s.startswith("code-reviewer:")), None)
+    if slice_seat is None:
+        artifact = _panel_artifact(*findings)
+    else:
+        artifact = {"seats": {s: {"findings": []} for s in roster}}
+        artifact["seats"][slice_seat]["findings"] = list(findings)
+    RD._fold(state, state["config"], RD.P_PANEL, artifact)
     return state
 
 
@@ -178,8 +188,11 @@ def test_a_three_thousand_line_diff_has_no_shards_in_the_panel_payload():
     state = RD.new_state(dict(CFG, diff=big))
     state["reviewedDiff"] = big
     payload = RD._advance(state, state["config"])["payload"]
-    assert set(payload) == {"dimensions", "tier"}
-    assert payload["dimensions"] == list(RD._panel_dimensions(state["config"]))
+    assert "shards" not in payload
+    assert set(payload) == {"dimensions", "tier", "slices"}
+    assert payload["dimensions"] == RP.panel_roster(state, state["config"])
+    assert isinstance(payload["slices"], list) and payload["slices"]
+    assert [s["id"] for s in payload["slices"]] == [s["id"] for s in state["slicePlan"]["slices"]]
     assert payload["tier"] == RD.DEEP
     for gone in ("shard_plan", "_shard_payload", "CROSS_CUTTING_LENSES", "DEFAULT_SHARD_MAX_LINES"):
         assert not hasattr(RD, gone) and not hasattr(RD.delta_surface, gone), gone

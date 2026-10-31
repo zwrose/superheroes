@@ -2,6 +2,7 @@
 """Disclosure-channel vocabulary, selection rule, and degraded-prose collector — leaf module."""
 import liveness_cache
 import model_registry
+import round_phases
 import seat_map
 import seat_map_receipts
 import session_contract
@@ -342,13 +343,17 @@ def nonpanel_reviewer(config, seat_map_, role, preferred_vendor, maker_families=
     return None, None
 
 
-def unfilled_seats(seat_map):
-    """Names of the seats the map marks `source == "unfilled"` (no candidate outside the makers)."""
+def unfilled_seats(seat_map, roster=()):
+    """Names of the seats the map marks `source == "unfilled"` (no candidate outside the makers), and the seats of
+    `roster` whose lens the map leaves unfilled (a slice seat is unfilled when its lens is)."""
     seats = seat_map.get("seats") if isinstance(seat_map, dict) else None
     if not isinstance(seats, dict):
         return frozenset()
-    return frozenset(name for name, entry in seats.items()
-                     if seat_is_unfilled(entry))
+    names = frozenset(name for name, entry in seats.items()
+                      if seat_is_unfilled(entry))
+    if not names or not isinstance(roster, (list, tuple)):
+        return names
+    return names | frozenset(key for key in roster if round_phases.seat_lens(key) in names)
 
 
 def maker_families(seat_map):

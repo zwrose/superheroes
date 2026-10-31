@@ -99,6 +99,7 @@ import seat_map  # noqa: E402
 import seat_map_receipts  # noqa: E402
 import session_contract  # noqa: E402
 import session_mode  # noqa: E402
+import slicing  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
 from finding_identity import finding_identity, finding_label, normalize_title  # noqa: E402
@@ -1387,9 +1388,50 @@ def new_state(config=None):
     _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
     _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
+    _plan_slices(state, cfg)
     if not state["terminal"]:
         _seed_returning_round(state, cfg)
     return state
+
+
+def _slice_security(dims, repo_root, parts):
+    """True when a slice seats the security lens: the panel holds it and the slice's files touch a risk area, or the risk areas
+    are not set (an unclear risk counts as touching). An exception reads as touching."""
+    if "security-reviewer" not in dims:
+        return False
+    try:
+        files = sorted({p["file"] for p in parts if isinstance(p, dict) and isinstance(p.get("file"), str)})
+        found = risk_areas.touched(repo_root, files)
+        return found.get("riskAreas") == "not-set" or bool(found.get("touched"))
+    except Exception:  # fail toward seating the lens
+        return True
+
+
+def _plan_slices(state, cfg):
+    """Cut the round-1 change into size slices once, at fresh state, and store the plan (without the slices' diff text) and the
+    count it was cut from. Writes nothing when there is no round-1 diff text."""
+    diff_text = cfg.get("diff")
+    if not isinstance(diff_text, str):
+        return
+    repo_root = cfg.get("repoRoot") or os.getcwd()
+    proven = state.get("provenCopies") or []
+    try:
+        count = countable_lines.count(diff_text, repo_root, proven=proven,
+                                      head=state.get("provenCopiesHead") or _resolve_head_commit(repo_root))
+    except Exception:  # an unreadable count slices on raw changed lines
+        count = None
+    plan = slicing.plan(diff_text, count, proven=proven)
+    state["sliceCount"] = count
+    if plan["sliced"] is not True:
+        state["slicePlan"] = {"sliced": False, "countable": plan["countable"], "bar": plan["bar"], "slices": []}
+        return
+    dims = round_phases.panel_dimensions(cfg)
+    state["slicePlan"] = {
+        "sliced": True, "countable": plan["countable"], "bar": plan["bar"],
+        "slices": [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
+                    "security": _slice_security(dims, repo_root, sl["parts"])}
+                   for sl in plan["slices"]],
+    }
 
 
 COPY_PROOF_HEAD_TIMEOUT = 60
@@ -3216,6 +3258,21 @@ def _panel_dimensions(config):
     return round_phases.panel_dimensions(config)
 
 
+def _panel_slices(state, roster):
+    """The panel payload's cut: each slice by id with the seats of ``roster`` that review it (empty when the roster is not sliced)."""
+    plan = state.get("slicePlan") if isinstance(state, dict) else None
+    slices = plan.get("slices") if isinstance(plan, dict) and plan.get("sliced") is True else None
+    out = []
+    for sl in slices if isinstance(slices, list) else []:
+        sid = sl.get("id") if isinstance(sl, dict) else None
+        if not isinstance(sid, str) or not sid:
+            continue
+        seats = [k for k in roster if round_phases.seat_lens(k) != k and k.partition(":")[2] == sid]
+        if seats:
+            out.append({"id": sid, "seats": seats})
+    return out
+
+
 # The held finding's fields the second-test seat reads: the finding as staged, its first test, that
 # test's runs with their output, and the note the verifier gave for holding it.
 _SECOND_TEST_ENTRY_FIELDS = ("id", "title", "file", "line", "severity", "body", "consequence",
@@ -3239,9 +3296,10 @@ def _advance(state, config):
     step = state["step"]
     rnd = state["round"]
     payload = {}
-    dims = _panel_dimensions(config)
     if step == P_PANEL:
-        payload = {"dimensions": list(dims), "tier": DEEP}  # round 1 / full panels are always reviewer-deep
+        roster = round_phases.panel_roster(state, config)
+        # round 1 / full panels are always reviewer-deep
+        payload = {"dimensions": list(roster), "tier": DEEP, "slices": _panel_slices(state, roster)}
     elif step == P_VERIFIERS:
         staged = verification.stage_ids(state.get("_toVerify") or [])
         payload = {"clusters": verification.cluster_findings(staged)}
@@ -3463,7 +3521,7 @@ def _seat_map_configured_vendor(seat_map, dim):
     """Configured vendor for `dim` from a #510 seat map, or None if absent/unknown."""
     if not isinstance(seat_map, dict) or not isinstance(seat_map.get("seats"), dict):
         return None
-    c = seat_map["seats"].get(dim)
+    c = seat_map["seats"].get(round_phases.seat_lens(dim))
     v = c.get("vendor") if isinstance(c, dict) else None
     return v if isinstance(v, str) and v in _PANEL_VENDORS else None
 
@@ -3580,9 +3638,13 @@ def _fold_panel(state, config, artifact, session_dir=None):
     never silently dropped (coordination note 2)."""
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
+    # A later unread wave folds into the round's existing record: what the first wave recorded stays and this wave adds to it.
+    wave = _slice_wave(state)
+    later = wave > 1
     # A submitted map never releases a seat the map already governing this round left unfilled.
+    roster = round_phases.panel_roster(state, config)
     unfilled = receipt_disclosures.unfilled_seats(
-        seat_map_receipts.round_governing_map(state, state["round"]))
+        seat_map_receipts.round_governing_map(state, state["round"]), roster)
     if seat_map:
         receipts = state.get("seatMapReceipts")
         if not isinstance(receipts, list):
@@ -3592,7 +3654,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # A seat the governing map leaves unfilled never ran, whatever payload was submitted for it:
     # drop it so the dimension folds `missing` and none of its findings are credited.
     unfilled = unfilled | receipt_disclosures.unfilled_seats(
-        seat_map_receipts.round_governing_map(state, state["round"]))
+        seat_map_receipts.round_governing_map(state, state["round"]), roster)
     if unfilled and isinstance(seats, dict):
         seats = {dim: seat for dim, seat in seats.items() if dim not in unfilled}
     raw = []
@@ -3602,7 +3664,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     missing_dims = []
     vacuous_dims = []
     engaged_artifact_dims = []
-    for dim in _panel_dimensions(config):
+    for dim in roster:
         seat = seats.get(dim) if isinstance(seats, dict) else None
         findings = _usable_findings(seat)
         status = "run"
@@ -3627,23 +3689,23 @@ def _fold_panel(state, config, artifact, session_dir=None):
         seat_status[dim] = status
         for f in findings:
             g = dict(f)
-            g.setdefault("dimension", dim)
+            g.setdefault("dimension", round_phases.seat_lens(dim))
             if status == "missing":
                 g["unverified"] = True
                 unverified.append({"dimension": dim, "title": g.get("title"),
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
             # axis: only the test role's own seat can trigger a run; the trust is the roster seat key, never the finding's own dimension or taxonomy
-            if dim == break_it.ROLE:
+            if round_phases.seat_lens(dim) == break_it.ROLE:
                 break_it_raw.append(g)
     if vacuous_dims:
-        _record_round(state, "vacuousSeats", list(vacuous_dims))
+        _record_round_wave(state, "vacuousSeats", list(vacuous_dims), later)
         _decision(state, "seat-vacuous",
                   "%d seat(s) returned no findings and no verifiable investigation record (%s) — "
                   "classed as never-ran; certification cannot rest on them"
                   % (len(vacuous_dims), ", ".join(vacuous_dims)))
     if engaged_artifact_dims:
-        _record_round(state, "engagedArtifactSeats", list(engaged_artifact_dims))
+        _record_round_wave(state, "engagedArtifactSeats", list(engaged_artifact_dims), later)
         _decision(state, "seat-engaged-artifact",
                   "%d seat(s) produced a review our transport could not carry (%s) — they do "
                   "not count toward certification; salvaged artifacts are available for "
@@ -3669,29 +3731,36 @@ def _fold_panel(state, config, artifact, session_dir=None):
     compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped)
     if runs:
         runs = _break_it_run_keys(runs, compiled)
-        _record_round(state, "breakItRuns", runs)
+        _record_round_wave(state, "breakItRuns", runs, later)
         _decision(state, "break-it-run",
                   "%d run: %d exited 0, %d exited non-zero, %d not run"
                   % (len(runs),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_PASSED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_FAILED),
                      sum(1 for r in runs if r.get("outcome") == break_it.OUTCOME_NOT_RUN)))
-    _record_round(state, "seatStatus", seat_status)
-    _panel_dims = _panel_dimensions(config)
+    prior_rec = state["rounds"].get(str(state["round"])) if later else None
+    prior_rec = prior_rec if isinstance(prior_rec, dict) else {}
+    # axis: a later wave's seat statuses are added to the first wave's, never written over them
+    prior_status = prior_rec.get("seatStatus") if isinstance(prior_rec.get("seatStatus"), dict) else {}
+    _record_round(state, "seatStatus", {**prior_status, **seat_status})
+    _panel_dims = roster
     _expected = len(_panel_dims)
     if _expected > 0:
         _ran = sum(1 for d in _panel_dims if seat_status.get(d) == "run")
+        prior_cov = prior_rec.get("lensCoverage") if isinstance(prior_rec.get("lensCoverage"), dict) else {}
         _record_round(state, "lensCoverage",
-                      {"ran": _ran, "expected": _expected, "floor": incomplete})
+                      {"ran": _ran + (prior_cov.get("ran") if _is_plain_int(prior_cov.get("ran")) else 0),
+                       "expected": _expected + (prior_cov.get("expected") if _is_plain_int(prior_cov.get("expected")) else 0),
+                       "floor": incomplete or prior_cov.get("floor") is True})
     # #563 DoD1 — loud fall-open by MACHINERY, not builder discipline: compare the trusted ranManifest
     # against the #510 seat map's configured vendors and record a per-round dispatch-provenance row for
     # any `run` seat that fell open to a different vendor; disclose an omitted manifest too (below).
     ran_manifest = artifact.get("ranManifest") if isinstance(artifact.get("ranManifest"), dict) else None
     fell_open, prov_missing = _fell_open_rows(_sm_latest_with_seats(state), ran_manifest, seat_status)
     if fell_open:
-        _record_round(state, "fellOpen", fell_open)
+        _record_round_wave(state, "fellOpen", fell_open, later)
     if prov_missing:
-        _record_round(state, "fellOpenProvenanceMissing", prov_missing)
+        _record_round_wave(state, "fellOpenProvenanceMissing", prov_missing, later)
     # #563 DoD1 v7 / #681: an ABSENT seat-map baseline would silently disable all fall-open detection
     # (both outputs anchor on the configured seat map). If no seat map was submitted, disclose
     # provenance-unavailable for the whole panel — regardless of which panel vendors are live.
@@ -3719,30 +3788,31 @@ def _fold_panel(state, config, artifact, session_dir=None):
             _parts.append("%s@%s" % (c, s) if s else c)
         _decision(state, "seat-map-constraint-violated",
                   "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
-    _record_round(state, "compileDrops", drops)
+    _record_round_wave(state, "compileDrops", drops, later)
     if unverified:
-        _record_round(state, "unverified", unverified)
+        _record_round_wave(state, "unverified", unverified, later)
         _decision(state, "receipt-missing-seat",
                   "%d finding(s) carried unverified from receipt-missing seat(s)" % len(unverified))
     if incomplete:
         if missing_dims:
-            _record_round(state, "missingSeats", list(missing_dims))
+            _record_round_wave(state, "missingSeats", list(missing_dims), later)
             _decision(state, "panel-seat-missing",
                       "panel incomplete — %d configured lens(es) did not run (%s); certification cannot "
                       "be full-panel-confirmed" % (len(missing_dims), ", ".join(missing_dims)))
     # Only a COMPLETE panel can anchor a full-panel-confirmed certification. A missing seat leaves
     # fullPanelRan False so a clean finish downgrades to audited-chain and names the gap.
-    state["fullPanelRan"] = not incomplete
+    # axis: the full panel ran only when every wave's seats ran
+    state["fullPanelRan"] = not incomplete and (state.get("fullPanelRan") is True if later else True)
     # Track the OUTSTANDING coverage gap across the loop: an incomplete panel arms it (a converge
     # resting on it is withheld — a lens never ran); a COMPLETE panel recovers coverage and clears it
     # (#507 R2 residual-1). A scoped delta round leaves it untouched, so a round-1 gap never silently
     # clears on a delta finish.
-    state["_incompletePanel"] = incomplete
+    state["_incompletePanel"] = incomplete or (later and state.get("_incompletePanel") is True)
     # In-memory review record for the challenged-coverage / recurrence breaker: only round 1 runs a
     # full panel, so its record is the `baseline`.
     kind = "baseline"
     dim_map = {}
-    for dim in _panel_dimensions(config):
+    for dim in roster:
         seat = seats.get(dim) if isinstance(seats, dict) else None
         s_findings = []
         # A missing seat defaults to LOW confidence, never high — an absent lens must never lend a
@@ -3758,8 +3828,17 @@ def _fold_panel(state, config, artifact, session_dir=None):
             s_findings = seat
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
-    _append_review_record(state, state["round"], kind, dim_map, compiled)
-    _after_panel_findings(state, config, _with_carried(state, compiled))  # a returning round's carried findings go to the verifier with the panel's
+    record_findings = compiled
+    if later:
+        # a later wave adds its seats and findings to the round's record, the first wave's stay
+        first = next((r for r in state.get("_records") or [] if r.get("round") == state["round"]), None)
+        if isinstance(first, dict):
+            dim_map = {**(first.get("dimensions") or {}), **dim_map}
+            record_findings = list(first.get("findings") or []) + list(compiled)
+    _append_review_record(state, state["round"], kind, dim_map, record_findings)
+    # a returning round's carried findings go to the verifier with the panel's; only the first wave takes them, once
+    this_wave = _with_carried(state, compiled) if wave == 1 else compiled
+    _after_panel_wave(state, config, roster, seats, seat_status, this_wave)
 
 
 def _staged_by_id_map(staged):
@@ -4595,6 +4674,108 @@ def _seams_slices(state):
             if isinstance(parts, list) else set()
         out.append({"id": sl.get("id"), "files": sorted(files)})
     return out
+
+
+# The most panel waves one sliced round 1 runs: the first wave plus at most two waves over what the slice readers left unread.
+UNREAD_WAVE_BOUND = 3
+
+
+def _slice_wave(state):
+    """The panel wave a sliced round 1 stands in: 1 for the first, one more for each unread wave opened."""
+    wave = state.get("_sliceWave")
+    return wave if _is_plain_int(wave) and wave >= 1 else 1
+
+
+def _record_round_wave(state, key, value, later):
+    """Record a per-round list; a later wave's list is added to the one the round already holds, the first wave's stay."""
+    held = state["rounds"].get(str(state["round"]), {}).get(key)
+    _record_round(state, key, held + value if later and isinstance(held, list) and isinstance(value, list) else value)
+
+
+def _cut_wave(plan_slices, unread, wave, count):
+    """The slices of wave ``wave`` (ids ``w<wave>u<k>``, each with its diff text) cut from ``unread`` parts, from the
+    slices of ``plan_slices`` that show those parts' hunks."""
+    cut = slicing.slice_parts_for(unread, {"slices": plan_slices}, count)
+    return [dict(sl, id="w%du%d" % (wave, k)) for k, sl in enumerate(cut, 1)]
+
+
+def _wave_slices(state):
+    """Every slice of the sliced round-1 change with its diff text: the planned slices re-derived from the round's inputs (the
+    plan is deterministic), then each unread wave already opened re-cut from the unread parts it recorded."""
+    derived = slicing.plan(state.get("reviewedDiff"), state.get("sliceCount"), proven=state.get("provenCopies") or [])
+    slices = list(derived["slices"])
+    for rec in state.get("_sliceWaves") or []:
+        slices.extend(_cut_wave(slices, rec.get("unread") or [], rec.get("wave"), state.get("sliceCount")))
+    return slices
+
+
+def _unread_of_wave(state, roster, seats, seat_status):
+    """The parts of the change this wave's slice seats were given and did not list as read, each seat held to its own list:
+    ``slicing.unread_obligations`` over ``{seat: parts of its slice}`` and ``{seat: its payload's readParts}``. A seat
+    that did not run has no list, so it read nothing."""
+    by_id = {s["id"]: s for s in state["slicePlan"].get("slices") or []
+             if isinstance(s, dict) and isinstance(s.get("id"), str)}
+    assigned, read_lists = {}, {}
+    for seat in roster:
+        if not round_phases.is_slice_seat(seat):
+            continue
+        sl = by_id.get(seat.partition(":")[2])
+        if sl is None:
+            continue
+        assigned[seat] = sl.get("parts") or []
+        payload = seats.get(seat) if isinstance(seats, dict) else None
+        if seat_status.get(seat) == "run" and isinstance(payload, dict):
+            read_lists[seat] = payload.get("readParts")
+    return slicing.unread_obligations(assigned, read_lists)
+
+
+def _open_unread_wave(state, config, unread, wave, this_wave):
+    """Open wave ``wave + 1`` over ``unread``: cut it into slices, add them to the plan (without their diff text), seat them,
+    keep this wave's findings, and send the round back to the panel. False, with nothing changed, when no slice or seat results."""
+    nxt = wave + 1
+    dims = round_phases.panel_dimensions(config)
+    repo_root = config.get("repoRoot") or os.getcwd()
+    count = state.get("sliceCount")
+    cut = _cut_wave(_wave_slices(state), unread, nxt, count)
+    marked = [{"id": sl["id"], "weight": sl["weight"], "parts": sl["parts"],
+               "security": _slice_security(dims, repo_root, sl["parts"]), "wave": nxt} for sl in cut]
+    risky = [sl for sl in marked if sl["security"]]
+    roster = round_phases.wave_roster(dims, marked, with_whole=bool(risky))
+    if not marked or not roster:
+        return False
+    state.setdefault("_sliceWaves", []).append(
+        {"wave": nxt, "unread": unread, "riskParts": slicing.merge_parts([p for sl in risky for p in sl["parts"]])})
+    state["slicePlan"]["slices"].extend(marked)
+    # axis: the findings of every wave already folded are kept for the one hand-on after the last wave
+    state["_sliceCarry"] = (state.get("_sliceCarry") or []) + this_wave
+    state["_sliceWave"] = nxt
+    state["_sliceWaveRoster"] = roster
+    state["step"] = P_PANEL
+    return True
+
+
+def _after_panel_wave(state, config, roster, seats, seat_status, this_wave):
+    """Where one panel wave's findings go. On a sliced round 1 whatever the wave's slice seats left unread is cut into slices and
+    reviewed in a next wave, up to ``UNREAD_WAVE_BOUND`` waves; what is still unread then, or cannot be cut into a slice, is
+    recorded and shown. The change's unread share is always filled. The waves' findings reach the verifiers together, once."""
+    if not (_round_is_sliced(state) and state["round"] == 1 and not state.get("_seamsChecked")):
+        _after_panel_findings(state, config, this_wave)
+        return
+    wave = _slice_wave(state)
+    unread = _unread_of_wave(state, roster, seats, seat_status)
+    # axis: the bound stops the waves; one past it would review without end
+    if unread and wave < UNREAD_WAVE_BOUND and _open_unread_wave(state, config, unread, wave, this_wave):
+        return
+    residual = unread
+    state["unreadShare"] = slicing.unread_share(residual, state["slicePlan"], state.get("sliceCount"))
+    if residual:
+        share = state["unreadShare"]
+        _decision(state, "unread-after-waves",
+                  "%d countable line(s) in %d file(s) of the change were left unread by the slice reviewers after %d panel wave(s)"
+                  % (share["unreadLines"], len(share["parts"]), wave))
+    state.pop("_sliceWave", None)
+    state.pop("_sliceWaveRoster", None)
+    _after_panel_findings(state, config, (state.pop("_sliceCarry", None) or []) + this_wave)
 
 
 def _after_panel_findings(state, config, staged):
@@ -9873,7 +10054,7 @@ def _run_seam(seams, action, payload, state, config):
     io = seams.get("io") or {}
     if action == P_PANEL:
         seats = {}
-        for dim in _panel_dimensions(config):
+        for dim in round_phases.panel_roster(state, config):
             tier = payload.get("tier", DEEP)
             result = seams["reviewer"](dim, tier, state["round"], payload)
             # bounded re-dispatch on a receipt-missing/stale seat (REDISPATCH_BUDGET), then missing.
@@ -11667,7 +11848,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
     # clusters and every seat `missing` — four recorded occurrences. Refuse HERE, before the fold, so
     # the pending step survives and recovery is a plain re-keyed resubmit on the same attempt/hash.
     if phase == P_PANEL:
-        fault = panel_seat_key_fault(_panel_dimensions(state["config"]), artifact)
+        fault = panel_seat_key_fault(round_phases.panel_roster(state, state["config"]), artifact)
         if fault:
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
@@ -12542,9 +12723,10 @@ def _shipped_rubric_path():
 
 def _role_brief_path(seat_key):
     """Absolute path of the seat's agent file when its panel order names one; else empty."""
-    if seat_key not in ROLE_BRIEF_SEATS:
+    lens = round_phases.seat_lens(seat_key)
+    if lens not in ROLE_BRIEF_SEATS:
         return ""
-    return os.path.join(_plugin_resource_root(), "agents", "%s.md" % seat_key)
+    return os.path.join(_plugin_resource_root(), "agents", "%s.md" % lens)
 
 
 _RISK_AREAS_MATCHED_SHOWN = 5
@@ -12587,7 +12769,7 @@ def _risk_areas_text(seat_key, repo_root, base, head, leave_out=()):
     touches, as read by `risk_areas.touched` over every changed path less the `leave_out` paths (the
     proven copies no seat is given). Empty for any other seat.
     Never raises; a change that cannot be read says so rather than claiming it touches none."""
-    if seat_key != "test-role":
+    if round_phases.seat_lens(seat_key) != "test-role":
         return ""
     try:
         paths, unreadable = _risk_areas_changed_paths(repo_root, base, head)
@@ -12621,7 +12803,7 @@ def _break_it_grammar_text(seat_key):
     its `run` line and the rules its content must meet, built only from the three `break_it` constants.
     Empty for any other seat."""
     # axis: only the test role's order carries the grammar; every other seat's order stays free of it
-    if seat_key != "test-role":
+    if round_phases.seat_lens(seat_key) != "test-role":
         return ""
     return "```\n%s\n```\n\n%s\n\n%s" % (break_it.BLOCK_TEMPLATE, break_it.RUN_RULES, break_it.CONTENT_RULES)
 
@@ -12974,7 +13156,7 @@ def _seat_transport_fault(row, seat_key):
 
 def _panel_dimension_label(seat_key):
     """Rubric dimension label for a panel seat — from SUBJECT_FALLBACK, not filename stem."""
-    return review_seats.dimension_label(seat_key)
+    return review_seats.dimension_label(round_phases.seat_lens(seat_key))
 
 
 def _label(value):
@@ -13077,6 +13259,7 @@ ORDER_DERIVED_PLACEHOLDERS = frozenset({
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
     "BREAK_IT_GRAMMAR_BLOCK",
+    "SLICE_SCOPE_LINE",
     "MODE",
     "MODE_EVIDENCE",
     "REPO",
@@ -13531,6 +13714,70 @@ def _pr_body_line(phase, session_dir, rnd, state, meta, cfg, materialize_shared_
             % (paths["staged"], paths["original"]))
 
 
+def _panel_findings_stem(seat_key, occurrence):
+    """The file stem of a panel seat's findings file: the lens's agent stem for a whole-change seat, the seat's storage key for a
+    slice seat (two slices of one lens never share a file)."""
+    if round_phases.seat_lens(seat_key) != seat_key:
+        return round_records.storage_key(seat_key, occurrence)
+    return AGENT_SUFFIX.get(seat_key, seat_key)
+
+
+def _parts_text(parts):
+    """``file: a-b, c-d; other-file`` for the parts of a change (a file with no range is listed by name)."""
+    entries = []
+    for part in parts if isinstance(parts, list) else []:
+        file = part.get("file") if isinstance(part, dict) else None
+        if not isinstance(file, str) or not file:
+            continue
+        ranges = [r for r in part.get("lines") or [] if isinstance(r, (list, tuple)) and len(r) == 2]
+        entries.append("%s: %s" % (file, ", ".join("%s-%s" % (r[0], r[1]) for r in ranges)) if ranges else file)
+    return "; ".join(entries)
+
+
+def _slice_scope_line(slice_id, parts):
+    """The one paragraph that tells a slice seat which parts of the change are its own."""
+    return ("Your slice: %s. Review only these parts of the change, and return in your read list only what you "
+            "read: %s. A file listed with no range is a whole-file change (a deletion or a binary file)."
+            % (slice_id, _parts_text(parts)))
+
+
+def _wave_whole_scope_line(state, wave_id):
+    """The scope line of a later wave's whole-change seat: it reads the whole change and covers the wave's risk-touching unread parts too."""
+    rec = next((r for r in state.get("_sliceWaves") or [] if isinstance(r, dict) and "w%s" % r.get("wave") == wave_id), None)
+    if rec is None:
+        raise ValueError("order-render-refused:unknown-wave:%s" % wave_id)
+    return ("Read the whole change. Make sure your read list covers these parts too: %s."
+            % _parts_text(rec.get("riskParts")))
+
+
+def _slice_seat_scope(state, session_dir, rnd, seat_key, occurrence, reviewer_diff_path, native):
+    """``(diff path, scope line)`` for a panel seat. A whole-change seat keeps the reviewer diff and has no scope line. A slice
+    seat is told its parts; a native seat is also given a diff holding only its slice, re-derived from the round's inputs
+    (the plan is deterministic), and falls back to the reviewer diff when the re-derived plan does not hold that slice.
+    An engine seat keeps the reviewer diff and the engine's patch, and is narrowed by the scope line alone."""
+    if round_phases.seat_lens(seat_key) == seat_key:
+        return reviewer_diff_path, ""
+    slice_id = seat_key.partition(":")[2]
+    if not round_phases.is_slice_seat(seat_key):
+        return reviewer_diff_path, _wave_whole_scope_line(state, slice_id)
+    plan = state.get("slicePlan") if isinstance(state, dict) else None
+    stored = next((s for s in (plan.get("slices") if isinstance(plan, dict) else None) or []
+                   if isinstance(s, dict) and s.get("id") == slice_id), None)
+    if stored is None:
+        raise ValueError("order-render-refused:unknown-slice:%s" % seat_key)
+    scope_line = _slice_scope_line(slice_id, stored.get("parts"))
+    if not native:
+        return reviewer_diff_path, scope_line
+    found = next((s for s in _wave_slices(state) if s["id"] == slice_id), None)
+    # axis: a slice seat reads its own diff only when the re-derived plan holds that slice with the stored parts; any mismatch gives the reviewer diff
+    if found is None or found["parts"] != stored.get("parts"):
+        return reviewer_diff_path, scope_line
+    path = os.path.join(round_records.round_dir(session_dir, rnd), "slices",
+                        round_records.storage_key(seat_key, occurrence) + ".diff")
+    _ensure_bytes_at_path(session_dir, path, found["diff"].encode("utf-8"))
+    return path, scope_line
+
+
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
                         session_dir, rnd, paths, channel, roster=None,
                         materialize_shared_inputs=True):
@@ -13561,12 +13808,14 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
         mode_resolved = session_mode.resolve(meta, cfg)
         prior_comments_path = _resolve_prior_comments_path(session_dir, state)
+        seat_diff_path, scope_line = _slice_seat_scope(
+            state, session_dir, rnd, seat_key, occurrence, diff_path, native=channel == CHANNEL_FILE)
         ph = {
             "MODE": mode_resolved["mode"],
             "MODE_EVIDENCE": session_mode.evidence_line(mode_resolved),
             "REPO": meta.get("repo") or cfg.get("repo") or "unknown",
             "TARGET": meta.get("branch") or cfg.get("branch") or "unknown",
-            "DIFF_PATH": diff_path,
+            "DIFF_PATH": seat_diff_path,
             "RUBRIC_PATH": rubric_path,
             "ROLE_BRIEF_PATH": _role_brief_path(seat_key),
             "RISK_AREAS_TEXT": _risk_areas_text(
@@ -13580,8 +13829,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "DIMENSION": dim_label,
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
-            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % AGENT_SUFFIX.get(
-                seat_key, seat_key)),
+            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % _panel_findings_stem(
+                seat_key, occurrence)),
+            "SLICE_SCOPE_LINE": scope_line,
         }
     elif phase == P_VERIFIERS:
         prefix = "verifier:"
@@ -13866,7 +14116,7 @@ def _seat_dispatch_row(state, seat_key, seat_map=None):
     if seat_map is None:
         seat_map = _effective_seat_map(state)
     seats = (seat_map or {}).get("seats")
-    entry = seats.get(seat_key) if isinstance(seats, dict) else None
+    entry = seats.get(round_phases.seat_lens(seat_key)) if isinstance(seats, dict) else None
     if not isinstance(entry, dict):
         return {"vendor": None, "model": None, "engine": None}
     return {"vendor": entry.get("vendor"), "model": entry.get("model"),
@@ -13964,7 +14214,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                         "session.")
                 raise AuditorUnseatable(detail, _live_vendors(cfg), cfg.get("fixerVendor"))
     seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
-    unfilled = receipt_disclosures.unfilled_seats(seat_map) if phase == P_PANEL else frozenset(noauditor_ids)
+    unfilled = (receipt_disclosures.unfilled_seats(seat_map, [k for k, _occ in round_records.roster_slots(roster)])
+                if phase == P_PANEL else frozenset(noauditor_ids))
     if phase in _NONPANEL_REVIEWER_PHASES:
         cfg = state.get("config") or {}
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")

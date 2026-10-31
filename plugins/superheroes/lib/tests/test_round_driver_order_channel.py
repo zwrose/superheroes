@@ -530,6 +530,7 @@ _DERIVED_PLACEHOLDER_NAMES = frozenset({
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
     "BREAK_IT_GRAMMAR_BLOCK",
+    "SLICE_SCOPE_LINE",
 })
 
 # Auxiliary inputs consumed by derivation but not declared in the template body.

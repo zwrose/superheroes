@@ -24,6 +24,7 @@ import shlex
 import subprocess
 import sys
 import time
+from unittest import mock
 
 import pytest
 
@@ -368,11 +369,27 @@ def _verdict_for(finding):
             "reason": "reproduced the cited line", "evidence": "read %s" % finding.get("file")}
 
 
+def _seat_raising(state, finding):
+    """The roster seat that raises ``finding``: the seat it names in `_seat` (the finding seat when it
+    names none). In a sliced round the roster holds `<lens>:<slice id>` seats rather than the bare
+    lens, so the finding goes to its lens's seat for the slice that holds its file (the first slice
+    when none does)."""
+    seat = finding.get("_seat", FINDING_SEAT)
+    plan = state.get("slicePlan") or {}
+    slices = plan.get("slices") or [] if plan.get("sliced") is True else []
+    if not slices:
+        return seat
+    for sl in slices:
+        if any(p["file"] == finding.get("file") for p in sl["parts"]):
+            return "%s:%s" % (seat, sl["id"])
+    return "%s:%s" % (seat, slices[0]["id"])
+
+
 def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path):
     phase = pend["phase"]
     if phase == round_driver.P_PANEL:
         # a finding names the seat that raises it in `_seat` (the finding seat when it names none)
-        findings = [f for f in panel_findings if f.get("_seat", FINDING_SEAT) == seat] \
+        findings = [f for f in panel_findings if _seat_raising(state, f) == seat] \
             if state["round"] == 1 else []
         return {"findings": [{k: v for k, v in f.items() if k != "_seat"} for f in findings],
                 "confidence": "high", "tier": round_driver.DEEP}
@@ -491,9 +508,22 @@ def _fixture_repo(tmp_path, name):
     return str(repo_root)
 
 
-def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, sliced=True, **cfg_over):
-    """A bootstrapped session. ``sliced`` (the default) gives it a slice plan, so round 1 routes the
-    panel's findings through `dispatch-seams-check`; ``sliced=False`` leaves the change in one piece."""
+def _fixture_slice_plan(state, cfg):
+    """Stands in for `round_driver._plan_slices` when a test asks for a sliced round: it stores the
+    fixture's hand-made `SLICE_PLAN` where the real planner would store its own."""
+    state["slicePlan"] = copy.deepcopy(SLICE_PLAN)
+
+
+def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, sliced=False, **cfg_over):
+    """A bootstrapped session. By default the change is in one piece (a small fixture diff is not a big
+    change). ``sliced=True`` gives it the fixture's slice plan, so round 1 routes the panel's findings
+    through `dispatch-seams-check`.
+
+    The plan is in the state BEFORE the first panel emission, as in a real session (`new_state` plans
+    the slices before the first `cmd_next` emits): the one real `cmd_next` runs with `_plan_slices`
+    swapped for `_fixture_slice_plan`, so the emitted orders, the dispatch anchor and the roster all
+    read the same plan. Writing the plan into saved state AFTER `cmd_next` would leave the anchor
+    holding plain-roster orders and refuse every slice seat `manifest-anchor-mismatch`."""
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
     gitdir = str(tmp_path / (name + "-gitdir"))
@@ -516,12 +546,12 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, sliced=True, **cfg
     repo_root = _fixture_repo(tmp_path, name)
     cfg_over.setdefault("repoRoot", repo_root)
     enter_checkout(repo_root)
-    out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
-    assert out["ok"], out
     if sliced:
-        state = _state(session_dir)
-        state["slicePlan"] = copy.deepcopy(SLICE_PLAN)
-        round_driver.save_state(session_dir, state)
+        with mock.patch.object(round_driver, "_plan_slices", _fixture_slice_plan):
+            out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
+    else:
+        out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
+    assert out["ok"], out
     return session_dir, gitdir, head_diff_path
 
 
@@ -594,7 +624,7 @@ def test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt(tmp_
     # session meta, the interpreter named) and the test role raises such a finding beside the ordinary one.
     head = make_checkout(_fixture_repo(tmp_path, "s"))
     session_dir, gitdir, head_path = _bootstrap(
-        tmp_path, head_sha=head, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"),
+        tmp_path, head_sha=head, sliced=True, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"),
         breakItInterpreter=shlex.quote(sys.executable))
     folded = _drive_to_terminal(session_dir, gitdir,
                                 [_blocking_finding("missing bounds guard", 2), _test_finding()], head_path)

@@ -75,7 +75,9 @@ def _finding(title, line, severity="Important", kind="real"):
 
 
 def _session(tmp_path, findings, to_phase=P_APPLY_FIXES, name="c7", **cfg):
-    """A session driven to `to_phase` pending: (session_dir, gitdir, head_diff_path)."""
+    """A session driven to `to_phase` pending: (session_dir, gitdir, head_diff_path). A session driven to the
+    seams check is a sliced round (the `dispatch-seams-check` step exists only for one); any other is not."""
+    cfg.setdefault("sliced", to_phase == RD.P_SEAMS)
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name=name, **cfg)
     _drive_to_phase(session_dir, gitdir, findings, head_path, to_phase)
     return session_dir, gitdir, head_path
