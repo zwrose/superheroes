@@ -147,6 +147,38 @@ def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     assert why["reviewerCostPerPr.tokens"] == "cost-not-recorded"
 
 
+def test_a_null_among_the_rows_makes_the_sum_unmeasured_never_a_partial_sum():
+    """Axis: a PR's (or a seat's) figure is a measured sum only when every row it covers is measured."""
+    pair = [_row("security-reviewer (round 1)", tokens=100), _row("premortem-reviewer (round 1)", tokens=None)]
+    cost = RM.compute(_full(records=[_rec(1, rows=pair)]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]
+    assert cost["tokens"] == U
+    one_seat = [_row("security-reviewer (round 1)", tokens=100), _row("security-reviewer (round 2)", tokens=None)]
+    seats = RM.compute(_full(records=[_rec(2, rows=one_seat)], ciRuns=[{"pr": 2, "minutes": 1}]), FROM, UNTIL)["measures"]["seats"]
+    assert seats["security-reviewer"]["tokens"] == U
+
+
+def test_a_record_written_before_per_row_cost_gives_its_pr_cost_from_the_record_level_cost():
+    seen = {"observation": {"tokens": 3267465, "wallSeconds": 400}}  # a 0.46.x row: observed, but no `cost` key
+    rows = [dict(seen, name="security-reviewer (round 1)", ran="engine-record", commit="c1"),
+            dict(seen, name="premortem-reviewer (round 1)", ran="engine-record", commit="c1"),
+            {"name": "grounding-seat", "ran": "not-run", "commit": "c1"}]
+    record_cost = {"unit": "reviewer-minutes", "minutes": 13.4, "tokens": 6534930, "source": "engine records",
+                   "notCounted": ["grounding-seat"]}
+
+    def measures(**over):
+        return RM.compute(_full(records=[dict(_rec(1, rows=rows), cost=dict(record_cost, **over))]), FROM, UNTIL)["measures"]
+    m = measures()
+    assert m["reviewerCostPerPr"]["tokens"] != U and m["reviewerCostPerPr"]["minutes"] != U
+    assert m["reviewerCostPerPr"]["tokens"]["total"] == 6534930 and m["reviewerCostPerPr"]["minutes"]["total"] == 13.4
+    assert m["seats"]["security-reviewer"]["tokens"] == U and m["seats"]["premortem-reviewer"]["tokens"] == U  # per seat: per-row only
+    for over in ({"notCounted": ["security-reviewer (round 1)"]}, {"notCounted": "grounding-seat"}, {"tokens": None}):
+        assert measures(**over)["reviewerCostPerPr"] == {"tokens": U, "minutes": U}
+    assert RM.compute(_full(records=[_rec(1, rows=rows)]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"] == U  # no cost at all
+    # a record with per-row cost keys never reads its record-level cost
+    both = dict(_rec(1, rows=[_row("security-reviewer (round 1)")]), cost={"tokens": 999, "minutes": 9, "notCounted": []})
+    assert RM.compute(_full(records=[both]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"]["total"] == 100
+
+
 def test_the_top_tenth_share_is_the_costliest_tenth_of_prs():
     recs = [_rec(n, rows=[_row("code-reviewer (round 1)", tokens=10 if n < 10 else 910)]) for n in range(1, 11)]
     ci = [{"pr": n, "minutes": 1} for n in range(1, 11)]
@@ -303,6 +335,15 @@ def test_each_cap_choice_reads_the_follow_up_record_it_names():
     assert _caps("rethink", [_rec(1)]) == {"pending": 1}
 
 
+def test_a_rethink_reads_the_latest_record_of_the_first_follow_up_session():
+    def later(first, second):
+        return [_rec(1, "x", "2026-10-05T00:00:00Z", findings=[_f("k1", first)]),
+                _rec(1, "x", "2026-10-06T00:00:00Z", findings=[_f("k1", second)]),
+                _rec(1, "y", "2026-10-07T00:00:00Z", findings=[_f("k1", None)])]
+    assert _caps("rethink", later(None, "fixed")) == {"converged": 1}
+    assert _caps("rethink", later("fixed", None)) == {"not-converged": 1}
+
+
 def test_a_follow_up_outside_the_window_settles_a_cap_choice_and_nothing_else_reads_it():
     late = _audit("2026-10-09T00:00:00Z", "b", _f("k1"), count=9)
     body = "\n".join([_cap("extra-audit-round"), _cap("rethink", "k2")])
@@ -406,14 +447,19 @@ def test_one_command_appends_the_row_and_a_second_run_replaces_that_windows_row(
     inp.write_text(json.dumps(_full(records=[_rec(1, count=5)])))
     code, got = _cli(tmp_path, repo, *base, "--from", "2026-10-01")
     assert code == 0 and got["outcome"] == "replaced"
+    inp.write_text(json.dumps(_full(records=[_rec(1, count=7)])))  # the second window is written from other records
     _cli(tmp_path, repo, *base, "--from", "2026-10-02")
     with open(got["table"], encoding="utf-8") as fh:
         rows = [json.loads(x) for x in fh]
     assert [r["window"]["from"] for r in rows] == ["2026-10-01", "2026-10-02"]
-    assert rows[0]["measures"]["roundsPerPr"]["median"] == 5 and all(RM.problems(r) == [] for r in rows)
+    assert [r["measures"]["roundsPerPr"]["median"] for r in rows] == [5, 7] and all(RM.problems(r) == [] for r in rows)
     code, shown = _cli(tmp_path, repo, "render")
-    assert code == 0 and "| roundsPerPr.median | 5 |" in shown["markdown"]
-    assert "median rounds per PR" in shown["markdown"] and "Unmeasured: repeatFindingLocations" in shown["markdown"]
+    lines = shown["markdown"].splitlines()
+    assert code == 0 and "| roundsPerPr.median | 7 |" in lines and "| roundsPerPr.median | 5 |" not in lines
+    assert lines[0].startswith("**Review-loop measures, 2026-10-02 to 2026-10-07**")  # the latest window heads the table
+    assert "Unmeasured: repeatFindingLocations" in shown["markdown"]
+    chart = lines[lines.index("median rounds per PR") + 1:]
+    assert [(ln.split()[0], ln.split()[-1]) for ln in chart[:chart.index("```")]] == [("2026-10-01", "5"), ("2026-10-02", "7")]
 
 
 def test_the_cli_refuses_bad_dates_and_a_non_object_input(tmp_path, repo):

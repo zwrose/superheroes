@@ -24,7 +24,8 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
   - A session's figures come from its latest record. Rounds per PR sum the sessions' `rounds.count`.
   - Reviewer cost sums `reviewers[].cost` over every record of the PR, each row once per (record `sessionId`, `name`,
     `commit`), rows that did not run and rows carried from an earlier review (a `carried` key) left out; any null
-    among them makes that PR's (or that seat's) figure unmeasured.
+    among them makes that PR's (or that seat's) figure unmeasured. A PR's sum is per session; a session whose latest
+    record has no row `cost` key reads its record-level `cost` instead. A seat's figure is per-row only.
   - Finding outcomes by lens read each PR's latest record, one per finding key, merged members left out; an
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
@@ -129,6 +130,26 @@ def _sum(vals, k):
     return round(sum(vals), 1) if k == "minutes" else sum(vals)
 
 
+def _pr_cost(rs, k):
+    """A PR's reviewer cost for `k`, the sum of its sessions' (`rs` is its in-window records). A session whose latest
+    record has no row `cost` key (written before per-row cost) reads that record's record-level `cost` instead, and
+    only when it counted every row that ran and has tokens; per-seat cost never reads it."""
+    by = collections.defaultdict(list)
+    for r in rs:
+        by[r["sessionId"]].append(r)
+    figures = []
+    for recs in by.values():
+        last = _latest(recs)
+        c, ran = last.get("cost"), [x["name"] for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN]
+        if any("cost" in x for x in last["reviewers"]):
+            figures.append(_sum([_cost(row, k) for row in _rows(recs)], k))
+        elif isinstance(c, dict) and _num(c.get("tokens")) is not None and isinstance(c.get("notCounted"), list) and not any(n in ran for n in c["notCounted"]):
+            figures.append(_sum([_num(c.get(k))], k))
+        else:
+            figures.append(None)
+    return _sum(figures, k)
+
+
 def _cap_outcome(choice, key, pr, later, escapes):
     """What happened next. `later` is every valid record of the PR written after the vet, in or out of the window;
     `escapes` is the misses log, already known to be a list."""
@@ -189,7 +210,7 @@ def compute(inp, start, end, written_at=None):
         m["sessionsPerPr"] = dict(_spread(n), shareOverOne=round(sum(x > 1 for x in n) / len(n), 3))
         m["reviewerCostPerPr"] = {}
         for k in ("tokens", "minutes"):
-            totals = [_sum([_cost(row, k) for row in _rows(rs)], k) for rs in prs.values()]
+            totals = [_pr_cost(rs, k) for rs in prs.values()]
             if any(t is None for t in totals):
                 m["reviewerCostPerPr"][k] = miss("reviewerCostPerPr." + k, "cost-not-recorded")
                 continue

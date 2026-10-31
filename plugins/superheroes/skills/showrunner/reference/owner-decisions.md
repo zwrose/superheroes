@@ -748,7 +748,8 @@ read at the first pass after they elapse, never earlier**. A pass is the reading
 list is taking too long, **or an issue is filed to automate any part of it**, the response is **fewer
 and coarser components on the keep-or-retire list, never automation**. **There is no timing comparison**.
 The owner's own judgment is the trigger. **The keep-or-retire list is an instrument read by a person
-and never gets a guard.** This section is the one home of that rule.
+and never gets a guard.** This section is the one home of that rule. A measure that computes figures the pass
+reads, such as the review-loop measures row in duty 3, is not automation of the pass in this sense: it decides nothing.
 
 ## Calibration changes and time complaints
 
