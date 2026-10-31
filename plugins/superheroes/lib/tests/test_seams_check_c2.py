@@ -275,6 +275,67 @@ def test_the_retired_step_handler_leaves_other_states_as_they_are():
         assert json.dumps(state, sort_keys=True) == before
 
 
+def _past_retired_pass(tmp_path, carry):
+    session_dir = str(tmp_path / "past-retired")
+    os.makedirs(session_dir)
+    state = RD.new_state(dict(CFG))
+    state["reviewedDiff"] = DIFF
+    state["findings"] = []
+    state["step"] = RD.P_VERIFIERS
+    state["pending"] = {"action": RD.P_VERIFIERS, "phase": RD.P_VERIFIERS, "round": 1, "attempt": 0, "payload": {}}
+    if carry is not None:
+        blocker = _finding("verified blocker", "a.py")
+        state["_verifiedCarry"] = [blocker]
+        state["findings"] = [blocker]
+    RD.save_state(session_dir, state)
+    return session_dir
+
+
+def test_a_session_already_past_the_retired_pass_with_verified_blockers_is_handed_back(tmp_path):
+    session_dir = _past_retired_pass(tmp_path, carry=True)
+    assert RD._commit_recover_or_refuse(session_dir, "next") is None
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    assert state["terminal"] == "handed-back"
+    assert state["certification"]["shape"] is None
+    assert state.get("pending") is None
+    assert "_verifiedCarry" not in state
+    assert [f["title"] for f in state["findings"]] == ["verified blocker"]
+
+
+def test_a_session_past_the_retired_pass_without_a_verified_carry_is_unchanged(tmp_path):
+    state = RD.load_state(_past_retired_pass(tmp_path, carry=None))[1]
+    before = json.dumps(state, sort_keys=True)
+    assert RD._finish_retired_extra_pass(state) is False
+    assert json.dumps(state, sort_keys=True) == before
+
+
+def test_a_finding_two_waves_both_report_reaches_the_verifiers_once():
+    state = _round_one_state(SLICE_PLAN)
+    twice = _finding("same bug", "a.py")
+    state["_sliceCarry"] = [dict(twice)]
+    roster = RP.panel_roster(state, state["config"])
+    with mock.patch.object(RD, "_unread_of_wave", return_value=[]):
+        RD._after_panel_wave(state, state["config"], roster, {}, {}, [dict(twice)])
+    assert state["step"] == RD.P_SEAMS
+    assert [f["title"] for f in state["_panelStaged"]] == ["same bug"]
+
+
+def test_a_seams_candidate_at_a_panel_findings_place_is_merged_with_it():
+    state = _round_one_state(SLICE_PLAN)
+    _fold_panel_with(state, _finding("same bug", "a.py"))
+    RD._fold(state, state["config"], RD.P_SEAMS, {"findings": [_finding("same bug", "a.py")]})
+    assert [f["title"] for f in state["_toVerify"]] == ["same bug"]
+
+
+def test_held_panel_findings_reach_the_receipt_when_the_seams_check_fails_authentication():
+    state = _round_one_state(SLICE_PLAN)
+    _fold_panel_with(state, _finding("panel bug", "a.py"))
+    assert not state.get("findings")
+    RD._retain_unauthenticated_finder_findings(state, {"findings": [_finding("seam bug", "b.py")]})
+    assert sorted(f["title"] for f in state["findings"]) == ["panel bug", "seam bug"]
+
+
 # --- the census: nothing shipped names the retired pass or the folder split -----------------------------------------
 
 # the saved-state handler and its decision kind are the only places that name the retired pass

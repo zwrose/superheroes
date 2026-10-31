@@ -4852,7 +4852,9 @@ def _after_panel_wave(state, config, roster, seats, seat_status, this_wave):
                   % (share["unreadLines"], len(share["parts"]), wave))
     state.pop("_sliceWave", None)
     state.pop("_sliceWaveRoster", None)
-    _after_panel_findings(state, config, (state.pop("_sliceCarry", None) or []) + this_wave)
+    # each wave compiles on its own, so a finding two waves both report is merged by its per-location anchor
+    # here, before staging gives each copy its own id
+    _after_panel_findings(state, config, _compile_by_anchor((state.pop("_sliceCarry", None) or []) + this_wave))
 
 
 def _after_panel_findings(state, config, staged):
@@ -4878,7 +4880,9 @@ def _fold_seams(state, config, artifact):
     _record_compile_drops(state, drops)
     held = state.pop("_panelStaged", None) or []
     _stage_findings(state, compiled)
-    state["_toVerify"] = list(held) + list(state.get("_toVerify") or [])
+    combined = list(held) + list(state.get("_toVerify") or [])
+    # a seams candidate at a panel finding's place is that finding: merge before the verifiers number them
+    state["_toVerify"] = _compile_by_anchor(combined) if all(isinstance(f, dict) for f in combined) else combined
     state["step"] = P_VERIFIERS
 
 
@@ -10374,6 +10378,9 @@ def _retain_unauthenticated_finder_findings(state, artifact):
     found = artifact.get("findings") if isinstance(artifact, dict) else None
     existing = state.get("findings")
     rows = list(existing) if isinstance(existing, list) else []
+    # the panel's candidates held at the seams step are not on `findings` yet: the receipt owes them too
+    held = state.get("_panelStaged")
+    rows.extend(dict(f) for f in (held if isinstance(held, list) else ()) if isinstance(f, dict))
     for f in found if isinstance(found, list) else ():
         if isinstance(f, dict):
             row = dict(f)
