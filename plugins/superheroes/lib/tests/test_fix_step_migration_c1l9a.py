@@ -125,7 +125,7 @@ def test_e12_the_replaced_external_fixers_family_stays_a_maker_so_its_commits_ar
     state["config"]["seatMap"] = {"hostFamily": "openai"}
     state["seatMapReceipts"] = []
     state.pop("seatMap", None)
-    former_family = RD.model_registry.family_for("code-fixer", "claude")
+    former_family = RD.model_registry.family_for("implementer", "claude")
     host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
     assert former_family is not None and host_vendor not in (None, "claude")
     RD.save_state(session_dir, state)
@@ -167,7 +167,7 @@ def _continued_at_apply_fixes(tmp_path, seat_map):
 
 def test_e12_a_continued_session_past_the_fixer_step_also_takes_the_build_session_as_fix_maker(tmp_path):
     session_dir = _continued_at_apply_fixes(tmp_path, {"hostFamily": "openai"})
-    former_family = RD.model_registry.family_for("code-fixer", "claude")
+    former_family = RD.model_registry.family_for("implementer", "claude")
     host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
     assert former_family is not None and host_vendor not in (None, "claude")
     RD.cmd_next(session_dir)
@@ -196,7 +196,7 @@ def test_e12_a_configured_fixer_vendor_that_did_no_work_is_not_made_a_maker(tmp_
     after = _state(session_dir)
     assert after["config"]["fixerVendor"] == host_vendor and after[RD.FIX_MAKER_MARK] is True
     assert "formerFixerFamilies" not in after
-    assert RD.model_registry.family_for("code-fixer", "claude") not in (
+    assert RD.model_registry.family_for("implementer", "claude") not in (
         RD.receipt_disclosures.accumulated_maker_families(after))
 
 
@@ -206,7 +206,7 @@ def test_e12_a_former_fixer_vendor_with_a_recorded_fix_stays_a_maker_before_the_
     _record_fix_work(state)
     RD.save_state(session_dir, state)
     RD.cmd_next(session_dir)
-    assert _state(session_dir)["formerFixerFamilies"] == [RD.model_registry.family_for("code-fixer", "claude")]
+    assert _state(session_dir)["formerFixerFamilies"] == [RD.model_registry.family_for("implementer", "claude")]
 
 
 def test_e12_a_former_fixer_whose_only_work_was_a_pr_body_edit_stays_a_maker_before_its_audit(tmp_path):
@@ -217,7 +217,7 @@ def test_e12_a_former_fixer_whose_only_work_was_a_pr_body_edit_stays_a_maker_bef
     state["rounds"]["1"]["prBodyFix"] = {"before": "a" * 64, "after": "b" * 64}
     state["_fixStepHead"] = RD._fix_step_head(state["config"])
     RD.save_state(session_dir, state)
-    former_family = RD.model_registry.family_for("code-fixer", "claude")
+    former_family = RD.model_registry.family_for("implementer", "claude")
     host_vendor = RD._build_session_vendor({"hostFamily": "openai"})
     assert former_family is not None and host_vendor not in (None, "claude")
     RD.cmd_next(session_dir)
@@ -249,7 +249,7 @@ def test_e12_a_continued_session_whose_host_family_maps_to_no_vendor_leaves_the_
     after = _state(session_dir)
     # a stale external vendor is never kept as the maker: the audit degrades instead
     assert after["config"]["fixerVendor"] is None and after[RD.FIX_MAKER_MARK] is True
-    assert after["formerFixerFamilies"] == [RD.model_registry.family_for("code-fixer", "claude")]
+    assert after["formerFixerFamilies"] == [RD.model_registry.family_for("implementer", "claude")]
 
 
 def test_e12_a_new_session_keeps_a_fixer_vendor_it_was_given(tmp_path):
