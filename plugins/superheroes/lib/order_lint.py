@@ -15,28 +15,25 @@ Tokens (one finding each when triggered):
 - ``order-placeholder-unfilled`` — a ``{{NAME}}`` or ``{name}`` placeholder remains in the
   text outside inline backticks and fenced blocks (``{ {NAME}}`` is checked everywhere).
 - ``order-result-shape-ambiguous`` — the write-report sentinel sits beside a native-typed
-  literal (``"resultKind"`` or ``--output-schema``), or the fixer literal ``{"fixes"`` appears
-  while ``--expect-item`` declarations were passed.
-- ``order-result-shape-authored`` — a fixer order names a graded result shape in the driver's
-  text (the fixer literal or a ``## Payload contract`` heading).
+  literal (``"resultKind"`` or ``--output-schema``), or the apply-fixes result literal ``{"fixes"``
+  appears while ``--expect-item`` declarations were passed.
 - ``order-budget-missing`` — an implementer order lacks a command-budget declaration.
-- ``order-kind-unknown`` — ``--kind`` is not ``implementer`` or ``fixer``.
+- ``order-kind-unknown`` — ``--kind`` is not ``implementer``.
 Warnings (never a refusal): the result's ``warnings`` list never changes ``ok``, ``findings``
 or the CLI exit code. ``order-timeout-missing`` — an implementer order names a test suite or
 long-running command (``pytest``, ``npm test``, ``go test``, ``full suite`` …) and sets no
 ``--timeout``; checked on the template-masked text with code spans and fences kept.
 Per-kind table:
-| check | implementer | fixer |
-|---|---|---|
-| order-unreadable | yes | yes |
-| order-repo-root-unresolved | yes | yes |
-| order-path-unresolved | yes | yes |
-| order-placeholder-unfilled | yes | yes |
-| order-result-shape-ambiguous | yes | yes |
-| order-result-shape-authored | no | yes |
-| order-budget-missing | yes | no |
-| order-timeout-missing (warning) | yes | no |
-| order-kind-unknown | other kind; alone | |
+| check | implementer |
+|---|---|
+| order-unreadable | yes |
+| order-repo-root-unresolved | yes |
+| order-path-unresolved | yes |
+| order-placeholder-unfilled | yes |
+| order-result-shape-ambiguous | yes |
+| order-budget-missing | yes |
+| order-timeout-missing (warning) | yes |
+| order-kind-unknown | other kind; alone |
 
 Limitations: no-slash/extensionless tokens skip the path check; a ``budget`` word
 within 60 characters of any integer satisfies the budget rule.
@@ -55,14 +52,12 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import guardian_lens_docs  # noqa: E402
-import order_contract  # noqa: E402
 
 TOKEN_UNREADABLE = "order-unreadable"
 TOKEN_REPO_ROOT_UNRESOLVED = "order-repo-root-unresolved"
 TOKEN_PATH_UNRESOLVED = "order-path-unresolved"
 TOKEN_PLACEHOLDER_UNFILLED = "order-placeholder-unfilled"
 TOKEN_RESULT_SHAPE_AMBIGUOUS = "order-result-shape-ambiguous"
-TOKEN_RESULT_SHAPE_AUTHORED = "order-result-shape-authored"
 TOKEN_BUDGET_MISSING = "order-budget-missing"
 TOKEN_KIND_UNKNOWN = "order-kind-unknown"
 WARN_TIMEOUT_MISSING = "order-timeout-missing"
@@ -70,9 +65,9 @@ WARNINGS = (WARN_TIMEOUT_MISSING,)
 TOKENS = (
     TOKEN_UNREADABLE, TOKEN_REPO_ROOT_UNRESOLVED, TOKEN_PATH_UNRESOLVED,
     TOKEN_PLACEHOLDER_UNFILLED, TOKEN_RESULT_SHAPE_AMBIGUOUS,
-    TOKEN_RESULT_SHAPE_AUTHORED, TOKEN_BUDGET_MISSING, TOKEN_KIND_UNKNOWN,
+    TOKEN_BUDGET_MISSING, TOKEN_KIND_UNKNOWN,
 )
-KINDS = ("implementer", "fixer")
+KINDS = ("implementer",)
 EXTENSIONS = (
     ".py", ".md", ".json", ".yml", ".yaml", ".txt", ".sh", ".toml", ".ini", ".cfg",
     ".js", ".ts", ".tsx", ".jsx", ".css", ".html", ".sql", ".csv", ".jsonl",
@@ -133,17 +128,16 @@ def mask_template(text):
 def _load_result_vocab():
     import engine_adapter
     import payload_contracts
-    contract, reason = payload_contracts.payload_contract(payload_contracts.P_FIXER)
+    contract, reason = payload_contracts.payload_contract(payload_contracts.P_APPLY_FIXES)
     if reason:
         raise RuntimeError(reason)
     key = contract["required"][0]
     return engine_adapter.WRITE_REPORT_SENTINEL, '{"' + key + '"'
 
 
-_WRITE_SENTINEL, _FIXER_LITERAL = _load_result_vocab()
-_FIXER_OBJECT = re.compile(r'\{\s*"' + re.escape(_FIXER_LITERAL[2:].strip('"')) + r'"')
-_PAYLOAD_CONTRACT_HEADING = order_contract.PAYLOAD_CONTRACT_HEADING
-_STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXER_LITERAL)
+_WRITE_SENTINEL, _FIXES_LITERAL = _load_result_vocab()
+_FIXES_OBJECT = re.compile(r'\{\s*"' + re.escape(_FIXES_LITERAL[2:].strip('"')) + r'"')
+_STDOUT_PROTOCOL = (_WRITE_SENTINEL, _FIXES_LITERAL)
 
 
 def _mask_fences(text):
@@ -338,17 +332,12 @@ def _placeholders(text):
     return out, len(seen)
 
 
-def _shape(text, expect_items, kind="implementer", allow_payload_contract=False):
+def _shape(text, expect_items):
     native = [s for s in _NATIVE if s in text]
     if _WRITE_SENTINEL in text and native:
         return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, "+".join([_WRITE_SENTINEL] + native))
-    if _FIXER_OBJECT.search(text) and expect_items:
-        return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXER_LITERAL + "+expect-item")
-    if kind == "fixer":
-        if not allow_payload_contract and _PAYLOAD_CONTRACT_HEADING in text:
-            return _f(TOKEN_RESULT_SHAPE_AUTHORED, "payload-contract-heading")
-        if _FIXER_OBJECT.search(text):
-            return _f(TOKEN_RESULT_SHAPE_AUTHORED, _FIXER_LITERAL)
+    if _FIXES_OBJECT.search(text) and expect_items:
+        return _f(TOKEN_RESULT_SHAPE_AMBIGUOUS, _FIXES_LITERAL + "+expect-item")
     return None
 
 
@@ -368,7 +357,7 @@ def _root_ok(path):
 
 
 def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer",
-               allow_payload_contract=False, create_items=()):
+               create_items=()):
     if not isinstance(text, str):
         return _refuse(kind, TOKEN_UNREADABLE, "not-text")
     if not text.strip():
@@ -405,20 +394,19 @@ def check_text(text, repo_root, expect_items=(), alt_roots=(), kind="implementer
     findings.extend(ph)
     pf, path_n = _paths(text, expect, roots, skip, create)
     findings.extend(pf)
-    amb = _shape(text, expect_items, kind=kind,
-                 allow_payload_contract=allow_payload_contract)
+    amb = _shape(text, expect_items)
     if amb:
         findings.append(amb)
-    if kind == "implementer" and not _budget_ok(text):
+    if not _budget_ok(text):
         findings.append(_f(TOKEN_BUDGET_MISSING, ""))
     return {"ok": not findings, "kind": kind, "findings": findings,
             "checked": {"paths": path_n, "placeholders": pc},
             "vocabSource": "canonical", "templateCopiesMasked": template_n,
-            "warnings": _timeout_warnings(text) if kind == "implementer" else []}
+            "warnings": _timeout_warnings(text)}
 
 
 def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implementer",
-          allow_payload_contract=False, create_items=()):
+          create_items=()):
     try:
         with open(order_path, encoding="utf-8", errors="strict") as fh:
             text = fh.read()
@@ -430,8 +418,7 @@ def check(order_path, repo_root, expect_items=(), alt_roots=(), kind="implemente
         return _refuse(kind, TOKEN_UNREADABLE, str(exc))
     if not text.strip():
         return _refuse(kind, TOKEN_UNREADABLE, "empty")
-    return check_text(text, repo_root, expect_items, alt_roots, kind,
-                      allow_payload_contract=allow_payload_contract, create_items=create_items)
+    return check_text(text, repo_root, expect_items, alt_roots, kind, create_items=create_items)
 
 
 class _LintArgumentParser(argparse.ArgumentParser):

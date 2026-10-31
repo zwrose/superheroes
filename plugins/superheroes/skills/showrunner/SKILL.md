@@ -31,7 +31,7 @@ reviewer **outside every maker's family** and (b) the owner's **per-change autho
 standing grants; every micro change is authorized on its own, and the authorizing owner is
 independent of the maker **but is not comparing the change against a build record they have read**:
 no build brief, no advisor vet — the reviewer receipt and the explicit authorization are what stand
-in; post both where `review-discipline.md` names their durable home (`### Micro — owner authorization`).
+in; post both where `review-discipline.md` names their durable home (`### Micro — owner authorization`). That reviewer keeps the same 4-round cap and only-what-changed rule as every lane.
 
 The change must **pass the quiet-failure question** unless the owner **explicitly waives it** —
 **owner-only, per change, never a standing grant; the risk must be stated explicitly** (the single
@@ -314,6 +314,8 @@ above).
    - **Currency spot-check** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § Currency defines it. **A stale What or DoD fails the spot-check even when the anchor link resolves.**
    - **The standing anchor-coverage row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing anchor-coverage vet row defines it.
    - **The review record checks** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § The review record checks defines them.
+   - **A handback with open findings** — settled as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § A handback with open findings defines: each code-quality finding decided and listed for the owner's veto, and one next step chosen and recorded for each finding with a real owner consequence.
+   - **The claims check** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § The claims check defines it: every claim the PR body makes that tests ran, every definition-of-done row, and every claim that the verify command passed, each listed with its result and evidence.
    - **The standing NFR row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing NFR vet row defines it, at **every** child PR vet in a spec package.
    - **The standing register row** — the row `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` defines. It is graded at
      **every** child PR vet in a package that has a register (and is simply **not applicable** where

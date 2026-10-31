@@ -93,24 +93,8 @@ def test_codex_dispatch_probe_checks_the_sol_capability_by_default(tmp_path):
 
 
 def test_codex_probe_uses_configured_write_pins(tmp_path, monkeypatch):
-    # #409: when both codex write roles are pinned, the probe dispatches the strongest of those pins so
-    # a project pinned entirely to an older family is not falsely marked not-ready by a hard sol probe.
-    import engine_pref
-    pin = MR.pin_only_models("codex")[0]
-    monkeypatch.setattr(engine_pref, "load_engine_prefs",
-                        lambda cwd, root=None: {"codexModels": {"implementer": pin,
-                                                                "code-fixer": pin}})
-    seen = {}
-    def run(args, **k):
-        seen["argv"] = args
-        return _Proc(returncode=0)
-    AZ.implementation_dispatch_allowed(str(tmp_path), "codex", run=run)
-    assert seen["argv"][seen["argv"].index("-m") + 1] == pin
-
-
-def test_codex_probe_clamps_to_sol_floor_when_a_write_role_is_unpinned(tmp_path, monkeypatch):
-    # #409 premortem regression: with implementer pinned to a weaker valid model but code-fixer
-    # UNPINNED (code-fixer derives the opus-tier peer), the probe must clamp up to the sol floor.
+    # #409: when the codex write role is pinned, the probe dispatches that pin so a project pinned
+    # to an older family is not falsely marked not-ready by a hard sol probe.
     import engine_pref
     pin = MR.pin_only_models("codex")[0]
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
@@ -120,17 +104,16 @@ def test_codex_probe_clamps_to_sol_floor_when_a_write_role_is_unpinned(tmp_path,
         seen["argv"] = args
         return _Proc(returncode=0)
     AZ.implementation_dispatch_allowed(str(tmp_path), "codex", run=run)
-    assert seen["argv"][seen["argv"].index("-m") + 1] == MR.codex_peer_for_claude_tier("opus")
+    assert seen["argv"][seen["argv"].index("-m") + 1] == pin
 
 
 def test_codex_probe_clamps_to_sol_floor_when_implementer_is_unpinned(tmp_path, monkeypatch):
-    # #409 symmetric to the above: code-fixer pinned to a weaker valid model, implementer UNPINNED
-    # (derives the opus-tier peer) -> the probe clamps up to the sol floor. Exercises the
-    # implementer-unpinned axis.
+    # #409: implementer UNPINNED (derives the opus-tier peer) -> the probe clamps up to the sol
+    # floor; a pin on a read-only role does not lower it.
     import engine_pref
     pin = MR.pin_only_models("codex")[0]
     monkeypatch.setattr(engine_pref, "load_engine_prefs",
-                        lambda cwd, root=None: {"codexModels": {"code-fixer": pin}})
+                        lambda cwd, root=None: {"codexModels": {"reviewer": pin}})
     seen = {}
     def run(args, **k):
         seen["argv"] = args
@@ -196,8 +179,7 @@ def test_codex_probe_reads_pin_from_core_md_end_to_end(tmp_path, monkeypatch):
     cm.write(repo, {"verifyCommand": "npm test", "stackTags": [], "threatModel": "x",
                     "patterns": "", "enginePreferences": {
                         "implementation": "codex",
-                        "codexModels": {"implementer": pin,
-                                        "code-fixer": pin}}},
+                        "codexModels": {"implementer": pin}}},
              "confirmed", root=store, now="2026-06-30")
     seen = {}
     def run(args, **k):

@@ -441,7 +441,7 @@ def second_round_script(monkeypatch, tmp_path):
     def scripted(session_dir, state, pend, seat, panel_findings, head_diff_path):
         if pend["phase"] == RD.P_SCOPED and state["round"] == 2:
             return {"findings": [dict(SECOND_FINDING)]}
-        if pend["phase"] == RD.P_FIXER and state["round"] == 2:
+        if pend["phase"] == RD.P_APPLY_FIXES and state["round"] == 2:
             head_diff_path = second_head_path
         return original(session_dir, state, pend, seat, panel_findings, head_diff_path)
 

@@ -495,6 +495,7 @@ def _legacy_stdout_to_native_review_branch(stdout):
         "id": obj.get("id"),
         "ruling": obj.get("ruling"),
         "reason": obj.get("reason"),
+        "checks": obj.get("checks"),
     }
     contract, _ = PC.payload_contract(PC.P_AUDITS)
     for opt in contract.get("optional") or ():
@@ -1140,7 +1141,7 @@ def test_dispatch_review_prompt_has_new_preamble(tmp_path):
 @pytest.mark.parametrize("with_pr_body", [False, True])
 def test_hand_written_prompt_reaches_engine_with_review_seat_rule(tmp_path, mode, with_pr_body):
     # #2071: a seat whose prompt round_orders never rendered (light-lane reviewer, brief check,
-    # grounding seat via --pr-body-path) still gets the rule, through the preamble it is fed.
+    # a reviewer fed a PR body via --pr-body-path) still gets the rule, through the preamble it is fed.
     import round_orders as RO
     repo_root = _repo(tmp_path)
     kwargs = {}
@@ -5018,9 +5019,11 @@ def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
     assert "findings" not in grade
 
 
-_VALID_GROUPING_STDOUT = json.dumps({"grouping": [{"member_ids": ["f1"]}]})
+_VALID_GROUPING_STDOUT = json.dumps({"grouping": [{"member_ids": ["f1"], "repeatOf": None}]})
 _VALID_RULING_STDOUT = json.dumps(
-    {"id": "f1", "ruling": "discharged", "reason": "resolved in diff"},
+    {"id": "f1", "ruling": "discharged", "reason": "resolved in diff",
+     "checks": {name: {"answer": "yes", "why": "checked"}
+                for name in ("right", "brokeNothing", "testWouldFail")}},
 )
 
 
@@ -7058,6 +7061,8 @@ def _matrix_investigated_only_stdout(kind, path="good.py"):
             "id": "f1",
             "ruling": "discharged",
             "reason": "resolved in diff",
+            "checks": {name: {"answer": "yes", "why": "checked"}
+                       for name in ("right", "brokeNothing", "testWouldFail")},
             "investigated": [path],
         })
     raise AssertionError("unsupported kind %r" % kind)
@@ -11871,6 +11876,9 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
+            "readParts": None,
             "investigated": investigated,
         }
     elif kind == "verdicts":
@@ -11901,6 +11909,9 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
+            "readParts": None,
             "investigated": investigated,
         }
     elif kind == "grouping":
@@ -11908,7 +11919,7 @@ def _native_review_branch(kind, **overrides):
             "resultKind": "grouping",
             "findings": None,
             "verdicts": None,
-            "grouping": [{"member_ids": ["a-001", "b-002"]}],
+            "grouping": [{"member_ids": ["a-001", "b-002"], "repeatOf": None}],
             "id": None,
             "ruling": None,
             "reason": None,
@@ -11919,6 +11930,9 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeAllowedBySeq": None,
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
+            "checks": None,
+            "testMatch": None,
+            "readParts": None,
             "investigated": investigated,
         }
     else:
@@ -11927,6 +11941,8 @@ def _native_review_branch(kind, **overrides):
             "id": "audit-seat",
             "ruling": contract["enums"]["ruling"][0],
             "reason": "grounds",
+            "checks": {name: {"answer": "yes", "why": "checked"}
+                       for name in ("right", "brokeNothing", "testWouldFail")},
         }
         for opt in contract.get("optional") or ():
             ruling[opt] = None
@@ -11935,6 +11951,7 @@ def _native_review_branch(kind, **overrides):
             "findings": None,
             "verdicts": None,
             "grouping": None,
+            "readParts": None,
             "investigated": investigated,
             **ruling,
         }

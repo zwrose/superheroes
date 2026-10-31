@@ -1650,6 +1650,7 @@ def test_event_precedence_order():
         ww.EVENT_LANE_BLOCKED,
         ww.EVENT_BUILDER_EXITED,
         ww.EVENT_BUILDER_NOTE,
+        ww.EVENT_ACCOUNT_LIMITED,
         ww.EVENT_STACK_STATE_CHANGED,
         ww.EVENT_PR_SET_CHANGED,
         ww.EVENT_LANE_STALE,
@@ -5579,12 +5580,12 @@ def test_loop_honours_caller_supplied_membership_reader(tmp_path, monkeypatch, w
 # --- stack-state-changed (#1340 layer 2f) -------------------------------------
 
 
-import grounding_stage as gs  # noqa: E402
+import pr_body_regions as regions  # noqa: E402
 
 _STACK_NUM = 100
 _HEAD_SHA = "abcdef0123456789abcdef0123456789abcdef01"
 _STALE_SHA = "1234567890abcdef1234567890abcdef12345678"
-_VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+_VET_MARKER = regions.REGION_MARKERS["advisor-vet"]
 
 
 def _stack_premise(stack, layer_position, layers_planned=None):

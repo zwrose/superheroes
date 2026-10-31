@@ -2,7 +2,7 @@
 """PreToolUse(Bash) approver — the plugin approves its own review-loop and build helper scripts (#2140).
 
 Reads the PreToolUse payload from stdin. When the Bash command is, as a whole, one plain call
-`python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` on `APPROVED_SCRIPTS` (nine of THIS
+`python3 [-B] <plugin root>/lib/<name>.py [args…]` with `<name>` on `APPROVED_SCRIPTS` (eight of THIS
 plugin's own scripts), and the worktree guard's classifier does not deny it, it emits
 `permissionDecision: "allow"`. For every other input it stays silent.
 
@@ -41,12 +41,11 @@ from iphone_allow import _REFUSED_CHARS, _is_operator, plugin_roots  # noqa: E40
 from session_contract import MIRROR_FILE, STATE_FILE  # noqa: E402
 
 APPROVED_SCRIPTS = frozenset((
-    "round_driver.py", "break_it.py", "review_store.py", "grounding_stage.py",
-    "mode_reconcile.py", "calibration_resolve.py", "size_count.py", "order_lint.py",
-    "dispatch_guard.py",
+    "round_driver.py", "break_it.py", "review_store.py", "mode_reconcile.py",
+    "calibration_resolve.py", "size_count.py", "order_lint.py", "dispatch_guard.py",
 ))
 ROUND_DRIVER_VERBS = frozenset((
-    "next", "submit", "record-result", "record-missing", "advance", "correct-fixer-refusals",
+    "next", "submit", "record-result", "record-missing", "advance",
     "attest", "checkpoint",
 ))
 COMMAND_FLAGS = ("verify-command", "break-it-interpreter", "records-path")

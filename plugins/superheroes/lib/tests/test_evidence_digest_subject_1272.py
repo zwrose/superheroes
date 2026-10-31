@@ -20,6 +20,9 @@ import session_contract  # noqa: E402
 
 RD = importlib.import_module("round_driver")
 
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in audits.CHECK_NAMES}
+
 _PHASE_FOR_KIND = {
     "findings": round_phases.P_PANEL,
     "verdicts": round_phases.P_VERIFIERS,
@@ -47,10 +50,11 @@ _PAYLOAD_FIXTURES = {
         "mismatched-kind": {"findings": []},
     },
     "ruling": {
-        "well-formed": {"id": "a1", "ruling": "discharged", "reason": "ok", "evidence": "e"},
+        "well-formed": {"id": "a1", "ruling": "discharged", "reason": "ok", "evidence": "e",
+                        "checks": _AUDIT_CHECKS},
         "missing-key": {},
-        "wrong-type": {"id": "a1", "ruling": 123, "reason": "ok"},
-        "empty-ruling": {"id": "a1", "ruling": "", "reason": "ok"},
+        "wrong-type": {"id": "a1", "ruling": 123, "reason": "ok", "checks": _AUDIT_CHECKS},
+        "empty-ruling": {"id": "a1", "ruling": "", "reason": "ok", "checks": _AUDIT_CHECKS},
         "mismatched-kind": {"findings": []},
     },
 }
@@ -108,7 +112,8 @@ def test_apply_audit_results_stamps_unauthenticated_cause_no_auditor():
     target = {"id": "v0", "file": "f.py", "line": 1, "title": "bug", "severity": "Important"}
     out = audits.apply_audit_results(
         [target],
-        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex",
+          "checks": _AUDIT_CHECKS}],
         expected_auditors={})
     entry = next(a for a in out["audits"] if a["id"] == "v0")
     assert entry["unauthenticatedCause"] == audits.UNAUTHENTICATED_NO_AUDITOR_RECORDED
@@ -117,7 +122,8 @@ def test_apply_audit_results_stamps_unauthenticated_cause_no_auditor():
 def test_apply_audit_results_stamps_unauthenticated_cause_missing_manifest_entry():
     out = audits.apply_audit_results(
         [{"id": "v0", "file": "f.py", "line": 1, "title": "bug", "severity": "Important"}],
-        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex",
+          "checks": _AUDIT_CHECKS}],
         expected_auditors={"v0": "codex"},
         collection_manifest={})
     entry = next(a for a in out["audits"] if a["id"] == "v0")
@@ -127,7 +133,8 @@ def test_apply_audit_results_stamps_unauthenticated_cause_missing_manifest_entry
 def test_apply_audit_results_stamps_unauthenticated_cause_vendor_mismatch():
     out = audits.apply_audit_results(
         [{"id": "v0", "file": "f.py", "line": 1, "title": "bug", "severity": "Important"}],
-        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex"}],
+        [{"id": "v0", "ruling": "discharged", "reason": "verified", "auditorVendor": "codex",
+          "checks": _AUDIT_CHECKS}],
         expected_auditors={"v0": "codex"},
         collection_manifest={"v0": "claude"})
     entry = next(a for a in out["audits"] if a["id"] == "v0")

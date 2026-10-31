@@ -93,6 +93,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "verifyPasses": dict_list,
     "verifierProvenance": dict_list,
     "synthesisUnseatable": dict_list,
+    "secondTestUnseatable": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
@@ -176,11 +177,11 @@ def live_vendors(config):
 
 def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=frozenset(),
                         pinned_vendors=None):
-    """The first live vendor whose auditor family is neither the fixer's nor any maker's.
+    """The first live vendor whose auditor family is neither the build session's nor any maker's.
 
     ``maker_families`` are the families the seat map lists as makers; ``pinned_vendors``, when a
     non-empty set, narrows the pool to those vendors (a pinned roster names who may audit)."""
-    fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+    fixer_fam = model_registry.family_for("implementer", fixer_vendor)
     if fixer_fam is None:
         return None, None
     barred = set(maker_families or ())
@@ -229,7 +230,7 @@ def reviewer_ineligible(maker_families=frozenset(), fixer_vendor=None,
     its family and is ineligible when that is None or not a non-empty string (host model unknown)."""
     barred = set(maker_families or ())
     if fixer_vendor:
-        fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+        fixer_fam = model_registry.family_for("implementer", fixer_vendor)
         if fixer_fam is not None:
             barred.add(fixer_fam)
 
@@ -375,11 +376,16 @@ def pinned_auditor_vendors(seat_map):
 def accumulated_maker_families(state):
     """Every maker family any submitted seat map named, plus the effective map's: a later, recomposed
     map that omits an earlier maker does not release it — the receipt writer unions them, so the
-    decisions that read makers do too. Seat identities still come from the latest map alone."""
+    decisions that read makers do too. Seat identities still come from the latest map alone. The
+    families of external fixers a session upgrade replaced (`state["formerFixerFamilies"]`) join
+    them: their commits stay in the step, so they stay makers."""
     if not isinstance(state, dict):
         return frozenset()
+    former = state.get("formerFixerFamilies")
     return (maker_families(seat_map_receipts.effective_seat_map(state))
-            | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset()))
+            | (seat_map_receipts.maker_family_union(seat_map_receipts.receipts(state)) or frozenset())
+            | frozenset(f for f in (former if isinstance(former, list) else ())
+                        if isinstance(f, str) and f))
 
 
 def nonpanel_barred(state, config):
@@ -416,15 +422,30 @@ def base_degraded(state):
 
 def author_family(state):
     cfg = state.get("config") or {}
-    return model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    return model_registry.family_for("implementer", cfg.get("fixerVendor"))
 
 
 def maker_author_family(state):
     return author_family(state)
 
 
+def seat_judgment_family(state):
+    """The author family every seat-map judgment (violations, same-family seats, pin excuses,
+    unjudgeable receipts) is made against. `config.fixerVendor` names the fix maker (the build
+    session's host family on the CLI path), which differs from the original author when the map
+    declares a distinct `hostFamily`: then the map's own `authorFamily` is the author, so a legitimate
+    split-family composition is not recorded as an `author-family-mismatch`."""
+    family = author_family(state)
+    seat_map_obj = seat_map_receipts.effective_seat_map(state) if isinstance(state, dict) else {}
+    host, author = seat_map_obj.get("hostFamily"), seat_map_obj.get("authorFamily")
+    if (isinstance(host, str) and host and isinstance(author, str) and author
+            and host != author and family == host):
+        return author
+    return family
+
+
 def same_family_seats(state):
-    return seat_map_receipts.same_family_seats(state, author_family(state))
+    return seat_map_receipts.same_family_seats(state, seat_judgment_family(state))
 
 
 def same_family_seats_for_receipt(state):
@@ -452,7 +473,7 @@ def seat_map_violations(state):
                 continue
             seen.add(key)
             merged.append(v)
-    for v in seat_map_receipts.unexcused_violations(state, author_family(state)):
+    for v in seat_map_receipts.unexcused_violations(state, seat_judgment_family(state)):
         key = (str(v.get("constraint", "")), str(v.get("seat") or ""))
         if key in seen:
             continue
@@ -489,7 +510,7 @@ def seat_map_violation_breach_prose(v):
 
 def seat_pin_excused_seats(state):
     seats = set()
-    for rec in seat_map_receipts.pin_excused_records(state, author_family(state)):
+    for rec in seat_map_receipts.pin_excused_records(state, seat_judgment_family(state)):
         for s in rec.get("excusedSeats") or []:
             if isinstance(s, str) and s:
                 seats.add(s)
@@ -502,7 +523,7 @@ def seat_map_unjudgeable(state):
             continue
         if rec.get("seatMapUnjudgeable"):
             return True
-    return bool(seat_map_receipts.unjudgeable_receipts(state, author_family(state)))
+    return bool(seat_map_receipts.unjudgeable_receipts(state, seat_judgment_family(state)))
 
 
 def latest_recorded_events(journal):
@@ -663,6 +684,7 @@ def build_degraded_prose(state, form, journal=None):
                     "judgment-fail-closed (round %s): %d judgment blocker(s) had no valid owner "
                     "disposition — owner ruling not recorded; loop defaulted to fix-as-suggested"
                     % (rkey, len(fail_closed)))
+        # Nothing writes this channel now; it reads only an older session's stored disclosure.
         ggc = declared.get("gateGuidanceRowCarried")
         if ggc:
             degraded_out.append(
@@ -702,7 +724,13 @@ def build_degraded_prose(state, form, journal=None):
             degraded_out.append(
                 "synthesis-unseatable (round %s): no grouping seat outside the makers' families on a "
                 "proven cell — findings were not grouped (nothing dropped)" % rkey)
-        bik = declared.get("breakItKept")
+        stu = declared.get("secondTestUnseatable")
+        if stu:
+            degraded_out.append(
+                "second-test-unseatable (round %s): no second-test seat outside the makers' families on a "
+                "proven cell — %d held finding(s) were graded with the test they have (nothing dropped)"
+                % (rkey, sum(len(r.get("held") or []) for r in stu if isinstance(r, dict))))
+        bik =declared.get("breakItKept")
         if bik:
             # axis: a row the owner ruled out of scope and the audit cleared is not a test the final change failed to hold — see bite-proof record wo_a_2072_ruled_exempt
             not_kept = [r for r in bik if r.get("outcome") not in ("kept", "not-required", "ruled-out-of-scope")]
@@ -750,7 +778,7 @@ def build_degraded_prose(state, form, journal=None):
                     % (rkey, phase_name, "; ".join(parts)))
     _run_unj = seat_map_receipts.unjudgeable_run_level_disclosure(
         state,
-        author_family(state),
+        seat_judgment_family(state),
         per_round_emitted=_emitted_seat_map_unjudgeable,
         no_seat_map_submitted=not seat_map_receipts.any_seats(state),
     )
@@ -797,6 +825,7 @@ __all__ = (
     "base_degraded",
     "author_family",
     "maker_author_family",
+    "seat_judgment_family",
     "same_family_seats",
     "same_family_seats_for_receipt",
     "same_family_degraded",

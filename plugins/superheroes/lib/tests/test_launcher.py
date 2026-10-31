@@ -509,6 +509,13 @@ def test_premise_stamps_standing_exclusions(tmp_path):
     assert result["premise"]["standingExclusions"] == L.STANDING_EXCLUSIONS
 
 
+def test_premise_stamps_the_stand_down_even_over_a_caller_value(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    assert L.validate_premise(_valid_premise(repo), repo)["premise"]["standDown"] == 1
+    result = L.validate_premise(dict(_valid_premise(repo), standDown=0), repo)
+    assert result["ok"] is True and result["premise"]["standDown"] == 1
+
+
 # --- compose -----------------------------------------------------------------
 
 
@@ -7126,9 +7133,9 @@ def test_stack_gate_passes_when_github_heads_are_uppercase(tmp_path, monkeypatch
 # --- dependency premise field and gate (I3) ----------------------------------
 
 
-import grounding_stage as gs  # noqa: E402
+import pr_body_regions as regions  # noqa: E402
 
-_VET_MARKER = gs.REGION_MARKERS["advisor-vet"]
+_VET_MARKER = regions.REGION_MARKERS["advisor-vet"]
 
 
 def _dependency_premise(repo, dependency, **overrides):

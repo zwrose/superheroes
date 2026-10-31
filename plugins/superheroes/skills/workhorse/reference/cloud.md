@@ -84,6 +84,18 @@ history. There is no app to bring up on the owner's machine and no slot.
 after. The pushed branch is the only work the advisor can recover if the session stops. Never
 force-push.
 
+**At intake, at every wake, and before every push, check for a newer launch.** Run
+`python3 -B <plugin root>/lib/cloud_builder.py superseded --repo <o>/<r> --issue <n> --launch-id <your launch id>`.
+On `superseded: true`, push nothing, post its `comment` on the issue as it is, and end the turn; do
+not post a park or handback. On a refusal, push nothing and end the turn. A wake is any turn that
+begins after an earlier turn ended: a message, PR activity, or a session that came back after a
+usage limit. Your launch id comes from your own session name: read the name with the session-describing
+tool called with no id (or from your session listing); it is `issue-<n>-<hash>`, and your launch id is
+`launch-<hash>`. A newer launch is shown only by a supersession notice that names exactly your launch
+id, whatever its time, so a builder whose intake came late after a usage limit still finds a notice
+posted before it. A notice naming another launch never supersedes you, and an intake comment never
+orders launches.
+
 **A stack layer.** A layer of a stack builds in a cloud session like any other build, and none of
 its steps uses GitHub's GraphQL interface. The launch's base commit is the head of the layer below,
 which the launcher checked on the owner's machine before launch. The order names the layer below's
@@ -369,6 +381,7 @@ off a cloud build's path:
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
 | `lib/vet_slot.py`, `--pr <n> --repo <owner/name>` | the PR body through `gh api repos/<o>/<r>/pulls/<n>` (REST); `write` also edits it with `gh pr edit` | the body read works; `write` is the advisor's, not a builder's path |
 | `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issue comes from the PR body's first line |
+| `lib/pr_body_stage.py publish` (review-code, after a `converged` terminal) | `gh api repos/{owner}/{repo}/pulls/<n>` (REST) to read the body, `gh api -X PATCH repos/{owner}/{repo}/pulls/<n>` to edit it | works |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `rubric/native-stacks.md`, linking a layer | `gh stack link` | the advisor's, at handback: § Workspace, "A stack layer" |
 | `lib/pr_comment.py`, `lib/cloud_builder.py` | `gh api` (REST) | works |

@@ -107,7 +107,7 @@ def test_unmatched_verdict_id_reported():
 def test_empty_and_garbage_inputs_never_raise_or_drop():
     assert V.apply_verdicts([], []) == {
         "findings": [], "drops": [], "downgrades": [], "unmatched": [],
-        "unverified": [], "ambiguous": [], "notExecuted": [],
+        "unverified": [], "ambiguous": [], "notExecuted": [], "held": [],
     }
     findings = _stage([_f("a.py", "bug", "Important")])
     out = V.apply_verdicts(findings, "not-a-list")

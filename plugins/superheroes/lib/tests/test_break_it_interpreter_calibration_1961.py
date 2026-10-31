@@ -465,8 +465,9 @@ def _break_it_args(verify_json):
 ])
 def test_c5_the_shipped_shell_builds_the_handoff_argv(value, expected):
     # axis: C5 the setup.md snippet itself passes the flag on presence (not non-empty), as one argv element
-    assert _break_it_args(json.dumps({_KEY: value})) == expected
-    assert _break_it_args(json.dumps({})) == []
+    resolved = {"verifyCommand": "pytest -q", "verifyRefusal": None}
+    assert _break_it_args(json.dumps({**resolved, _KEY: value})) == expected
+    assert _break_it_args(json.dumps(resolved)) == []
 
 
 def _driver_state(tmp_path, next_args):
@@ -531,7 +532,7 @@ def test_c5_the_other_output_keys_are_unchanged(tmp_path):
     # axis: C5 resolve adds exactly one key
     repo, store = _setup_repo(tmp_path)
     assert set(review_code_config.resolve(repo, root=store)) == {
-        "verifyCommand", "verifyMode", "tiers", "calibrationRefusal", "breakItInterpreter"}
+        "verifyCommand", "verifyRefusal", "tiers", "calibrationRefusal", "breakItInterpreter"}
 
 
 # --- C6: one validator ------------------------------------------------------------------------

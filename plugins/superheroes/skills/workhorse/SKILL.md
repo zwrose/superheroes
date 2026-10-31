@@ -422,7 +422,7 @@ calibration where configured, judged and disclosed in the work order where not. 
 silently inherit your session tier. **Record the effective engine + model in every work order**, so
 the dispatch's provenance is explicit.
 
-**The registry is the model authority.** For **each** of the five dispatch kinds this charter sanctions — an **implementer order**, a **fix-batch order**, a **`check-runner` dispatch**, an **`order-linter` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on the effective seat model before dispatching. An unlisted model is a park, never a pick. Record the resolved `model_id`
+**The registry is the model authority.** For **each** of the four dispatch kinds this charter sanctions — an **implementer order**, a **`check-runner` dispatch**, an **`order-linter` dispatch**, and a **hand-rolled fallback dispatch** — you **run the model gate** on the effective seat model before dispatching. An unlisted model is a park, never a pick. Record the resolved `model_id`
 and `effort` in the dispatch-provenance table.
 
 **Read `skills/workhorse/reference/orders.md` § The model gate when you run the gate or read a refusal.**
@@ -602,7 +602,7 @@ PR records test-pilot N/A with its stand-in evidence.
 ## 10. Review before handback
 
 **Full lane: run `review-code` with a vendor-mixed panel (the roster its seat map composes from the lane call), as its own fix loop, to convergence.** The
-loop reviews, routes each fix back as an implementer work order, and re-reviews, until no blocking
+loop reviews, has you apply each confirmed fix yourself at its `apply-fixes` step (each committed with its break-it test; no implementer work order is dispatched for a review fix), and re-reviews, until no blocking
 finding remains or you honestly park on an open blocker. Round scoping and cap economics are
 `review-code`'s own contract, and §12's delta grading does not apply here. Open the PR as a draft
 before the review runs, so the review runs in PR mode and writes its review record against the PR.
@@ -611,13 +611,19 @@ before the review runs, so the review runs in PR mode and writes its review reco
 record showing its reading, as Build lanes says. Review fixes stay orchestrator-typed, and work that needs an
 implementer dispatch is an escalation. An escalated build records every maker family in dispatch
 provenance. Every maker family the build records is passed to compose, so no maker's family is seated. Prefer keeping an escalated light build to one
-maker family. Re-review to convergence on that single seat, or honestly park on an open blocker.
+maker family. Re-review to convergence on that single seat within the same 4-round cap as the full lane, or honestly park on an open blocker.
 
 **Record each finding's handling in a dispositions table** in the PR body. Post the review results
 on the PR as a durable receipt that names the head commit it reviewed, so a later reader can tell
 whether the PR moved after the review. The owner-ratified scope rule (§1) defers only proposals
 unrelated to the behavior the diff introduces or worsens. A blocking correctness or security finding
 on that behavior is fixed or honestly parked, never deferred as out of scope.
+
+**A stacked layer catches up before handback.** The review session keeps the lower-layer commit it
+pinned, and a lower-layer move never restarts it. Before the PR is marked ready, the layer is caught up
+(`rubric/native-stacks.md` § How a stack stays current), verified on the caught-up head, and its
+catch-up reviewed as a returning review; `vet_slot.py handback --pr <n> --repo <owner/name>` refuses
+`stack-not-caught-up` until it is.
 
 When the owner rules on a leftover during the build, record the ruling as the standard chat-ruling record
 composed by `lib/canon.py ruling-record`. Hand its permalink and the owner's words to the next record write in `ownerRulings`, as
@@ -635,7 +641,9 @@ blocker, and the dispositions table and the durable review receipt are posted.
 ## 11. Hand back the ready PR
 
 **A full-lane PR, opened as a draft before review, is marked ready at handback. A light-lane PR
-opens ready.** Its body has two addressees and one home per fact. The **owner
+opens ready, except that a stacked light-lane layer opens as a draft and is marked ready only after
+the PR-mode handback check passes on its pushed head: no stacked layer, on any lane, is marked or
+opened ready before that check passes.** Its body has two addressees and one home per fact. The **owner
 half** answers *what is different, and do I accept it?* in consequences. The **build record**
 answers *did the process hold, and what must I route?* with mechanism. The owner half is not a
 summary of the build record.
@@ -719,10 +727,18 @@ pre-handback review (§10, always the full loop):
 | a fix **inside an already-reviewed surface** | scoped single-reviewer pass on the diff-since-last-review, ending with a review record written on the head it reviewed |
 | new surface/behavior, or anything that invalidates a prior review conclusion | full `review-code` loop again |
 
+**A returning light-lane PR is re-reviewed for what changed.** The returning-review decider answers `full` or `changed`; on `changed` the new session reads only what changed since the last reviewed commit.
+
 **The scoped pass writes a review record.** It ends with `review_record.py write` on the head it
 reviewed, as `skills/review-code/reference/review-record.md` says. The new record relists every
 finding the earlier record listed, with its outcome, plus the scoped pass's own. The vet reads only
 the latest record, so a scoped pass with no record of its own reaches its re-vet held on paperwork.
+
+**A stacked layer catches up between review sessions, never inside one.** When the lower layer moves
+after handback, bring the layer current by a local `--no-ff` merge, run the calibrated verify on the
+merged head, review the catch-up as a returning review, and re-run the handback check
+(`vet_slot.py handback --pr <n> --repo <owner/name>`, which refuses `stack-not-caught-up` until the
+pushed head holds the lower layer's current head; `rubric/native-stacks.md` § How a stack stays current).
 
 **Keep the PR body correct as you go.** Every body edit here carries the advisor's vet write forward
 byte-for-byte (§11). **When you are blocked on the owner**, by a consequential flag, an ambiguous

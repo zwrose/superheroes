@@ -19,6 +19,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 import time
@@ -51,6 +52,10 @@ if _HERE not in sys.path:
 from session_checkout import enter_checkout, make_checkout  # noqa: E402
 
 _CODEX_IMPLEMENTER_MODEL = model_registry.matrix_config("implementer", "codex")[0]
+
+# The three checks every audit result owes, each answered `yes`.
+AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                for name in ("right", "brokeNothing", "testWouldFail")}
 
 # =============================================================================================
 # the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
@@ -107,6 +112,28 @@ def _blocking_finding(title, line):
     return {"file": FIXED_FILE, "line": line, "title": title, "severity": "Important",
             "detail": "%s at %s:%d" % (title, FIXED_FILE, line),
             "consequence": "a reviewer-found defect stays in the change"}
+
+
+# The test role's finding whose attached test passes on the unfixed code: the verifier says the test never
+# reached the finding's path, so the finding is held for one more test, which the verifier then refutes on.
+TEST_FINDING_TITLE = "a retried write is applied twice"
+FIRST_TEST_PATH = "tests/test_first_try.py"
+SECOND_TEST_PATH = "tests/test_second_try.py"
+FIRST_TEST_CONTENT = "print('first test ran')\n"
+SECOND_TEST_CONTENT = "print('second test ran')\n"
+
+
+def _block(path, content):
+    return "break-it-test v1\npath: %s\nrun: %s %s\n---\n%s" % (
+        path, shlex.quote(sys.executable), shlex.quote(path), content)
+
+
+def _test_finding():
+    """A test-role finding carrying an attached test that passes (exit 0) in the session's working copy."""
+    return {"_seat": "test-role", "file": FILES[1], "line": 2, "title": TEST_FINDING_TITLE,
+            "severity": "Important", "detail": "the retry path writes twice at %s:2" % FILES[1],
+            "consequence": "a reviewer-found defect stays in the change",
+            "suggestion": _block(FIRST_TEST_PATH, FIRST_TEST_CONTENT)}
 
 
 # =============================================================================================
@@ -322,30 +349,49 @@ def _verify_payload_via_verb(session_dir):
     return payload
 
 
+def _verdict_for(finding):
+    """The verifier's verdict on one clustered finding. The test finding's first test passed but never
+    reached its path (`pathReached: false`, PLAUSIBLE: the finding is held); once it has had its one more
+    test (`secondTest`) the verifier refutes it. Every other finding is CONFIRMED."""
+    if finding.get("title") == TEST_FINDING_TITLE:
+        if finding.get("secondTest") is True:
+            return {"id": finding["id"], "verdict": "REFUTED",
+                    "reason": "the second test ran down the path and passed: the guard holds"}
+        return {"id": finding["id"], "verdict": "PLAUSIBLE", "pathReached": False,
+                "reason": "the first test never reached the path the finding names"}
+    return {"id": finding["id"], "verdict": "CONFIRMED", "severity": "Important",
+            "reason": "reproduced the cited line", "evidence": "read %s" % finding.get("file")}
+
+
 def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path):
     phase = pend["phase"]
     if phase == round_driver.P_PANEL:
-        findings = panel_findings if (seat == FINDING_SEAT and state["round"] == 1) else []
-        return {"findings": [dict(f) for f in findings], "confidence": "high",
-                "tier": round_driver.DEEP}
+        # a finding names the seat that raises it in `_seat` (the finding seat when it names none)
+        findings = [f for f in panel_findings if f.get("_seat", FINDING_SEAT) == seat] \
+            if state["round"] == 1 else []
+        return {"findings": [{k: v for k, v in f.items() if k != "_seat"} for f in findings],
+                "confidence": "high", "tier": round_driver.DEEP}
     if phase == round_driver.P_VERIFIERS:
         cluster = _cluster_for(pend, seat)
-        return {"verdicts": [{"id": f["id"], "verdict": "CONFIRMED", "severity": "Important",
-                              "reason": "reproduced the cited line",
-                              "evidence": "read %s" % f.get("file")}
-                             for f in cluster.get("findings") or []]}
+        return {"verdicts": [_verdict_for(f) for f in cluster.get("findings") or []]}
+    if phase == round_driver.P_SECOND_TEST:
+        # the test reviewer's one more test for each held finding, returned under its staged id
+        return {"findings": [{"id": f["id"], "title": f["title"], "file": f["file"], "line": f["line"],
+                              "severity": f["severity"], "consequence": f["consequence"],
+                              "suggestion": _block(SECOND_TEST_PATH, SECOND_TEST_CONTENT)}
+                             for f in (pend.get("payload") or {}).get("findings") or []]}
     if phase == round_driver.P_SYNTHESIS:
         return {"grouping": None}
     if phase in (round_driver.P_GAPSWEEP, round_driver.P_SCOPED):
         return {"findings": []}
-    if phase == round_driver.P_FIXER:
+    if phase == round_driver.P_APPLY_FIXES:
         return {"fixes": [{"file": FIXED_FILE, "summary": "guard restored"}],
-                "escalated": False, "headDiffPath": head_diff_path}
+                "headDiffPath": head_diff_path}
     if phase == round_driver.P_VERIFY:
         return _verify_payload_via_verb(session_dir)
     if phase == round_driver.P_AUDITS:
         return {"id": seat, "ruling": "discharged", "auditorVendor": "claude",
-                "reason": "re-read the fixed hunk; the cited defect is gone"}
+                "reason": "re-read the fixed hunk; the cited defect is gone", "checks": AUDIT_CHECKS}
     raise AssertionError("no payload for phase %r" % phase)
 
 
@@ -365,6 +411,8 @@ def _auditor_vendor_for(state):
             return selected[round_driver.P_GAPSWEEP]
         if seat == round_adapters.SEAT_SCOPED:
             return selected[round_driver.P_SCOPED]
+        if seat == round_adapters.SEAT_SECOND_TEST:
+            return selected[round_driver.P_SECOND_TEST]
         if seat == round_adapters.SEAT_SYNTHESIS:
             return selected[round_driver.P_SYNTHESIS]
         return by_id.get(seat, "claude")
@@ -530,10 +578,15 @@ def test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt(tmp_
     reaches its terminal receipt through `advance` alone — no hand `submit` anywhere."""
     # The synthesis seat is seated only outside the makers' families: a fixer outside the anthropic
     # family and a known host family seat it on `claude`, so `dispatch-synthesis` is emitted and folds.
+    # The second-test seat is seated the same way. Its phase folds only when a finding's attached test passes
+    # and the verifier says it never reached the path, so the session runs in a real checkout (its head in the
+    # session meta, the interpreter named) and the test role raises such a finding beside the ordinary one.
+    head = make_checkout(_fixture_repo(tmp_path, "s"))
     session_dir, gitdir, head_path = _bootstrap(
-        tmp_path, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"))
+        tmp_path, head_sha=head, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"),
+        breakItInterpreter=shlex.quote(sys.executable))
     folded = _drive_to_terminal(session_dir, gitdir,
-                                [_blocking_finding("missing bounds guard", 2)], head_path)
+                                [_blocking_finding("missing bounds guard", 2), _test_finding()], head_path)
 
     unexercised = [p for p in round_adapters.ADAPTER_PHASES if p not in folded]
     assert not unexercised, ("phases that never folded through the real adapter: %s (folded: %s)"
@@ -541,6 +594,14 @@ def test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt(tmp_
 
     state = _state(session_dir)
     assert state["terminal"] == "converged", state.get("certification")
+    # the held finding had its one more test (run in the working copy, appended to the round's history) and
+    # the verifier's second pass refuted it: closed `wrong`, never fixed
+    round_one = state["rounds"]["1"]
+    assert [p["held"] for p in round_one["verifyPasses"]] == [1, 0], round_one["verifyPasses"]
+    assert [r["outcome"] for r in round_one["breakItRuns"]] == ["passed", "passed"], round_one["breakItRuns"]
+    assert [r["path"] for r in round_one["breakItRuns"]] == [FIRST_TEST_PATH, SECOND_TEST_PATH]
+    (row,) = [e for e in state[session_contract.DISPOSITION_LEDGER_KEY] if e.get("title") == TEST_FINDING_TITLE]
+    assert row["disposition"] == "refuted" and row["grade"]["verdict"] == "wrong", row
     # a terminal receipt exists, validates, and carries the driver's own ran evidence
     with open(os.path.join(session_dir, round_driver.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
@@ -663,7 +724,7 @@ def test_two_same_titled_targets_at_different_lines_one_discharged_sibling_not(t
     _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
     _land(session_dir, state, pend, tid0,
           {"id": tid0, "ruling": "discharged", "auditorVendor": "claude",
-           "reason": "re-read line 2; the defect is gone"})
+           "reason": "re-read line 2; the defect is gone", "checks": AUDIT_CHECKS})
     assert _record(session_dir, tid0)["ok"] is True
     out = round_driver.cmd_record_missing(session_dir, tid1, pend["attempt"], "forfeit")
     assert out["ok"] is True, out
@@ -705,7 +766,8 @@ def test_a_missing_second_occurrence_is_named_by_slot_not_by_seat(tmp_path):
     pend = state["pending"]
     _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
     _land(session_dir, state, pend, tid0,
-          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": AUDIT_CHECKS})
     assert _record(session_dir, tid0)["ok"] is True
 
     out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
@@ -725,7 +787,8 @@ def test_record_missing_addresses_the_second_target(tmp_path):
     assert tid0 != tid1, targets
     pend = state["pending"]
     _land(session_dir, state, pend, tid0,
-          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": AUDIT_CHECKS})
     assert _record(session_dir, tid0)["ok"] is True
     out = round_driver.cmd_record_missing(session_dir, tid1, pend["attempt"], "forfeit")
     assert out["ok"] is True, out
@@ -753,7 +816,8 @@ def test_recording_an_occurrence_outside_the_roster_is_refused(tmp_path, occurre
     tid = state["_auditTargets"][0]["id"]
     pend = state["pending"]
     _land(session_dir, state, pend, tid,
-          {"id": tid, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"},
+          {"id": tid, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": AUDIT_CHECKS},
           occurrence=occurrence)
     out = _record(session_dir, tid, occurrence=occurrence)
     assert out["ok"] is False and out["reason"] == "unknown-occurrence", out
@@ -1288,7 +1352,8 @@ def _fixer_envelope_for_write_run(record, *, order_sha=None):
     }
 
 
-def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
+def test_assemble_dispatch_evidence_write_run_is_refused_for_every_phase(tmp_path):
+    # axis: no phase admits a write run's execution-only evidence — the build session writes its own fixes
     order_path = str(tmp_path / "fixer-order.txt")
     with open(order_path, "w", encoding="utf-8") as fh:
         fh.write("Fix the bug.\n")
@@ -1296,14 +1361,14 @@ def test_assemble_dispatch_evidence_write_run_fixer_envelope(tmp_path):
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record)
-    assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
-    assert refusal is None, extra
-    assert assembled is not None
-    assert cited_head_source == round_records.CITED_HEAD_SOURCE_ORDER_ANCHOR
-    assert assembled["executionEvidence"]["resultKind"] == session_contract.WRITE_RESULT_KIND
-    assert assembled["envelopeSha256"] == round_records.envelope_sha256(
-        envelope["payload"], assembled["executionEvidence"])
+    assert round_driver.P_APPLY_FIXES in round_driver.round_phases.ALL_PHASES
+    for phase in round_driver.round_phases.ALL_PHASES:
+        assembled, refusal, extra, cited_head_source = round_driver._assemble_dispatch_evidence(
+            str(tmp_path / "session"), envelope, run_dir, "abc", phase)
+        assert assembled is None, phase
+        assert refusal == "evidence-run-kind-mismatch", (phase, refusal)
+        assert extra == {"runKind": "write", "phase": phase}
+        assert cited_head_source is None
 
 
 def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
@@ -1315,7 +1380,7 @@ def test_assemble_dispatch_evidence_write_run_order_mismatch_refuses(tmp_path):
     assert err is None, err
     envelope = _fixer_envelope_for_write_run(record, order_sha="0" * 64)
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_APPLY_FIXES)
     assert assembled is None
     assert refusal == "evidence-order-mismatch"
 
@@ -1338,17 +1403,17 @@ def test_assemble_dispatch_evidence_write_run_binding_incomplete_refuses(tmp_pat
     assert "resultDigest" not in record
     envelope = _fixer_envelope_for_write_run(record)
     assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
+        str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_APPLY_FIXES)
     assert assembled is None
     assert refusal == "evidence-run-dir-unreadable"
     assert extra.get("detail") == "result-binding-incomplete"
 
 
 def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
-    order_path = str(tmp_path / "fixer-order-unknown-kind.txt")
+    order_path = str(tmp_path / "review-order-unknown-kind.txt")
     with open(order_path, "w", encoding="utf-8") as fh:
-        fh.write("Fix the bug.\n")
-    run_dir = _write_execution_run_dir(tmp_path, order_path)
+        fh.write("Review this.\n")
+    run_dir = _execution_run_dir(tmp_path, order_path, [])
     record, err = engine_dispatch.run_execution_record(run_dir)
     assert err is None, err
     real_record = engine_dispatch.run_execution_record
@@ -1362,9 +1427,9 @@ def test_assemble_dispatch_evidence_kind_not_in_payload_refuses(tmp_path):
 
     engine_dispatch.run_execution_record = _patched
     try:
-        envelope = _fixer_envelope_for_write_run(record)
+        envelope = {"orderSha256": record["orderPromptSha256"], "payload": {"fixes": []}}
         assembled, refusal, extra, _source = round_driver._assemble_dispatch_evidence(
-            str(tmp_path / "session"), envelope, run_dir, "abc", round_driver.P_FIXER)
+            str(tmp_path / "session"), envelope, run_dir, "abc123fake", round_driver.P_PANEL)
     finally:
         engine_dispatch.run_execution_record = real_record
     assert assembled is None

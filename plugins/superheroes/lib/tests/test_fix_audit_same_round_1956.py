@@ -49,7 +49,8 @@ def _target(round_findings=("m",), reported=("r2:a",), **extra):
 
 
 def _fold(result, allowed=(), target=None, **kw):
-    body = {"id": "a", "ruling": "discharged", "reason": "the fix resolves it"}
+    body = {"id": "a", "ruling": "discharged", "reason": "the fix resolves it",
+            "checks": TRD.audit_checks()}
     body.update(result)
     return AU.apply_audit_results([target or _target()], [body], change_allowed_ids=allowed, **kw)
 
@@ -231,7 +232,8 @@ def test_the_submit_guard_refuses_a_malformed_claim(field, value):
     # axis: the submit guard refuses a claim the fold would call malformed, by the same predicate
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/fix_audit_same_round_1956.md
     targets = [{"id": "a"}]
-    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed"}]}
+    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed",
+                       "checks": TRD.audit_checks()}]}
     assert RD.audit_results_fault(ok, targets) is None
     for fine in (None, [], ["m"]):
         ok["results"][0][field] = fine
@@ -306,7 +308,7 @@ def test_a_fixes_claim_naming_an_owner_skipped_finding_is_refused_at_the_fold():
     _decide(state, _key("Stale comment", 9), "out-of-scope", 1)
     (target,) = _targets(state)
     body = {"id": target["id"], "ruling": "discharged", "reason": "ok", "unnamedChange": UNNAMED,
-            "unnamedChangeFixes": [_key("Stale comment", 9)]}
+            "unnamedChangeFixes": [_key("Stale comment", 9)], "checks": TRD.audit_checks()}
     out = AU.apply_audit_results(
         [target], [body], expected_auditors={target["id"]: "codex"},
         collection_manifest={target["id"]: "codex"})
@@ -379,7 +381,7 @@ def _same_round_loop(captured_state, claims_by_round, extra=()):
     """Round 1 raises the Important (the fix batch) and `extra` findings outside the batch; each audit
     round reports an unnamed change plus whatever `claims_by_round[rnd](target)` returns."""
     batch_key = _key("Null deref")
-    offers, seen, stalls = [], [], []
+    offers, seen = [], []
 
     def reviewer(dim, tier, rnd, ctx):
         if rnd == 1 and dim == "code-reviewer":
@@ -396,20 +398,27 @@ def _same_round_loop(captured_state, claims_by_round, extra=()):
         out = []
         for t in targets or []:
             result = {"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": TRD.audit_checks()}
             if rnd in claims_by_round:
                 result["unnamedChange"] = UNNAMED
                 result.update(claims_by_round[rnd](t))
             out.append(result)
         return out
 
-    def stall_menu(payload):
-        stalls.append(payload)
-        return "hold"
+    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor)
+    # the fix changed a file, so the round's scoped finder runs; the proven non-panel cells let it seat
+    # on the vendor outside the fixer's family instead of parking the review
+    _result, state = TRD._run_loop_capturing_state(
+        seams, TRD._cfg_cert(seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
+    return batch_key, state, offers, seen
 
-    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor, io={"stall_menu": stall_menu})
-    _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
-    return batch_key, state, offers, seen, stalls
+
+_OWNER_STALL_KINDS = frozenset({"stall-menu", "stall-choice", "fix-keeps-failing"})
+
+
+def _stall_kinds(state):
+    return _OWNER_STALL_KINDS & {d["kind"] for d in state["decisions"]}
 
 
 def test_a_same_round_fix_in_the_fixers_diff_does_not_stop_the_batch_at_the_owner_gate(captured_state):
@@ -418,7 +427,7 @@ def test_a_same_round_fix_in_the_fixers_diff_does_not_stop_the_batch_at_the_owne
     # line 2 is the other line of the round's diff: a finding outside the diff is dropped at compile
     minor = _finding("Stale comment", line=2, severity="Minor", body="the comment is out of date")
     minor_key = _key("Stale comment", 2)  # computed here, never read off the target
-    key, state, offers, seen, stalls = _same_round_loop(
+    key, state, offers, seen = _same_round_loop(
         captured_state, {2: lambda t: {"unnamedChangeFixes": [minor_key]}}, extra=[minor])
     assert state["terminal"] == "converged"
     audit = state["rounds"]["2"]["audits"][0]
@@ -431,7 +440,7 @@ def test_a_same_round_fix_in_the_fixers_diff_does_not_stop_the_batch_at_the_owne
     row = _ledger(state)[key]
     assert row["disposition"] == "fixed" and row["dispositionRound"] == 2
     assert offers == [(1, [key])]
-    assert stalls == []
+    assert _stall_kinds(state) == set()
     (rnd, targets), = [s for s in seen if s[0] == 2]
     assert [r["id"] for r in targets[0]["roundFindings"]] == [minor_key]
     assert key not in [r["id"] for r in targets[0]["roundFindings"]]
@@ -447,7 +456,7 @@ def test_a_revert_of_an_earlier_reported_change_is_discharged_and_does_not_stall
         ref_seen["targets"] = [r for r in target["reportedUnnamedChanges"]]
         return {"unnamedChangeReverts": [target["reportedUnnamedChanges"][0]["ref"]]}
 
-    key, state, offers, seen, stalls = _same_round_loop(
+    key, state, offers, seen = _same_round_loop(
         captured_state, {2: lambda t: {}, 3: revert_round_three})
     assert state["terminal"] == "converged"
     assert state["rounds"]["2"]["auditUnnamedChange"] == [key]
@@ -458,13 +467,13 @@ def test_a_revert_of_an_earlier_reported_change_is_discharged_and_does_not_stall
     assert ref_seen["targets"] == [{"ref": "r2:%s" % key, "round": 2, "id": key, "text": UNNAMED}]
     assert state["rounds"]["3"]["auditAttributedChange"] == [key]
     assert offers == [(1, [key]), (2, [key])]
-    assert stalls == []
+    assert _stall_kinds(state) == set()
     assert _ledger(state)[key]["disposition"] == "fixed"
 
 
 def test_an_unclaimed_unnamed_change_still_ends_with_an_unnamed_change_on_the_round(captured_state):
     minor = _finding("Stale comment", line=2, severity="Minor")
-    key, state, offers, seen, _stalls = _same_round_loop(captured_state, {2: lambda t: {}}, extra=[minor])
+    key, state, offers, seen = _same_round_loop(captured_state, {2: lambda t: {}}, extra=[minor])
     assert state["terminal"] == "converged"
     audit = state["rounds"]["2"]["audits"][0]
     assert audit["ruling"] == "not-discharged"
@@ -477,7 +486,7 @@ def test_an_unclaimed_unnamed_change_still_ends_with_an_unnamed_change_on_the_ro
 
 def test_a_claim_naming_a_finding_that_is_not_a_round_finding_still_ends_with_an_unnamed_change(
         captured_state):
-    key, state, _offers, _seen, _stalls = _same_round_loop(
+    key, state, _offers, _seen = _same_round_loop(
         captured_state, {2: lambda t: {"unnamedChangeFixes": ["f.py::invented@L4"]}})
     assert state["rounds"]["2"]["auditUnnamedChange"] == [key]
     assert state["rounds"]["2"]["audits"][0]["ruling"] == "not-discharged"

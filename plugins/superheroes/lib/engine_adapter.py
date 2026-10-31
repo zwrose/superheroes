@@ -208,9 +208,6 @@ REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
 REFUSAL_SANDBOX_ACCESS_MALFORMED = "sandbox-access-malformed"
 REFUSAL_SANDBOX_ACCESS_UNREADABLE = "sandbox-access-unreadable"
 REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM = "sandbox-access-unsupported-platform"
-REFUSAL_SANDBOX_LANDING_DIR_INVALID = "sandbox-landing-dir-invalid"
-REFUSAL_SANDBOX_LANDING_DIR_DENIED = "sandbox-landing-dir-denied"
-REFUSAL_SANDBOX_LANDING_DIR_MISMATCH = "sandbox-landing-dir-mismatch"
 
 # Named refusal tokens from build_argv_result (issue #636). The dispatch runner surfaces them as
 # detail=engine-config:<token>; the build-argv CLI prints detail=<token> directly.
@@ -232,9 +229,6 @@ BUILD_ARGV_REFUSAL_TOKENS = frozenset({
     REFUSAL_SANDBOX_ACCESS_MALFORMED,
     REFUSAL_SANDBOX_ACCESS_UNREADABLE,
     REFUSAL_SANDBOX_ACCESS_UNSUPPORTED_PLATFORM,
-    REFUSAL_SANDBOX_LANDING_DIR_INVALID,
-    REFUSAL_SANDBOX_LANDING_DIR_DENIED,
-    REFUSAL_SANDBOX_LANDING_DIR_MISMATCH,
 })
 
 REFUSAL_BUILDER_PROMPT_MISSING = "builder-prompt-missing"
@@ -281,10 +275,6 @@ def claude_write_sandbox_valid(sandbox):
             return False
     if "localBinding" in sandbox and type(sandbox["localBinding"]) is not bool:
         return False
-    if "landingDir" in sandbox:
-        landing = sandbox["landingDir"]
-        if not _abs_str(landing) or sandbox_path_has_glob(landing):
-            return False
     return _sandbox_access_valid(sandbox.get("access"))
 
 
@@ -358,8 +348,6 @@ def claude_write_sandbox_settings(sandbox):
         allow_write.append(uv_cache)
     allow_write.extend(sandbox.get("tmpWriteRoots") or [])
     allow_write.extend(extra_paths)
-    if sandbox.get("landingDir") is not None:
-        allow_write.append(sandbox["landingDir"])
     network = {"allowedDomains": list(domains), "strictAllowlist": True}
     if sandbox.get("localBinding") is True or access.get("localPorts"):
         network["allowLocalBinding"] = True
@@ -730,12 +718,6 @@ def build_argv_result(seat, role_kind, opts):
                 "--permission-mode", "acceptEdits", "--restricted",
                 "--tools", CLAUDE_WRITE_TOOLS,
                 "--strict-mcp-config",
-            ]
-            landing = opts["claudeWriteSandbox"].get("landingDir")
-            if landing is not None:
-                # variadic: the next token must stay a flag or the prompt is swallowed
-                argv += ["--add-dir", landing]
-            argv += [
                 "--settings", claude_write_sandbox_settings(opts["claudeWriteSandbox"]),
             ]
         return _ok(argv)
@@ -1708,9 +1690,11 @@ def _scrub_findings(findings, *, echo_nonce=None):
             if key in _FINDING_STRUCTURAL_KEYS:
                 continue
             g[key] = _scrub_finding_value(val)
-        if (break_it.is_break_it(g)
-                and g.get("suggestion") != review_findings_schema.normalize_member(f0).get("suggestion")):
-            # the suggestion carries executable test bytes; flag that the scrub altered them
+        original = review_findings_schema.normalize_member(f0).get("suggestion")
+        if ((break_it.is_break_it(g) or break_it.parse_block(original)[0] is not None)
+                and g.get("suggestion") != original):
+            # the suggestion carries executable test bytes (a per-area finding's, or a block attached to any
+            # other finding); flag that the scrub altered them
             g[break_it.REDACTED_FIELD] = True
         accepted.append(g)
     return accepted, rejected
@@ -1974,16 +1958,19 @@ def _scrub_ruling_object(obj):
         "reason": _scrub(obj["reason"]) if isinstance(obj.get("reason"), str) else obj.get("reason"),
     }
     contract, _reason = payload_contracts.payload_contract(payload_contracts.P_AUDITS)
-    for opt in contract.get("optional") or ():
-        if opt in obj:
-            val = obj.get(opt)
-            if opt == "newIssues" and isinstance(val, list):
-                out[opt] = [_scrub_mapping(x) if isinstance(x, dict) else _scrub_finding_value(x)
-                            for x in val]
-            elif isinstance(val, str):
-                out[opt] = _scrub(val)
-            else:
-                out[opt] = val
+    # `checks` is a required contract field the three above do not cover; `testMatch` is optional. Both
+    # are objects whose `why` strings are free text, scrubbed like the rest.
+    for field in tuple(contract.get("required") or ()) + tuple(contract.get("optional") or ()):
+        if field in out or field not in obj:
+            continue
+        val = obj.get(field)
+        if field == "newIssues" and isinstance(val, list):
+            out[field] = [_scrub_mapping(x) if isinstance(x, dict) else _scrub_finding_value(x)
+                          for x in val]
+        elif isinstance(val, (str, dict)):
+            out[field] = _scrub_mapping(val)
+        else:
+            out[field] = val
     return out
 
 
@@ -2043,6 +2030,8 @@ def _parse_review_findings_object(obj, outer_envelope_error, *, echo_nonce=None)
             return {"ok": False, "reason": "unreadable"}
     result = {"ok": True, "resultKind": "findings",
               "findings": findings_list, "investigated": investigated}
+    if isinstance(obj.get("readParts"), list):
+        result["readParts"] = obj["readParts"]  # the reviewer's read list; the record judges its shape
     result = _attach_findings_parse_rejections(result, findings_rejected)
     return _attach_investigated_parse_rejections(result, inv_rejected)
 

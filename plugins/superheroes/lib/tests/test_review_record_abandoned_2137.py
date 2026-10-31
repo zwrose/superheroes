@@ -12,15 +12,17 @@ if _HERE not in sys.path:
 
 import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
+import round_phases  # noqa: E402
 
 from test_review_record_session import (  # noqa: E402
-    CODEX, EARLIER, GOOD_RUN, HEAD, KEY, Fake, Session, extras, ledger_row, put_envelope, put_extras, raw_comments,
+    CODEX, EARLIER, GOOD_RUN, HEAD, KEY, WRONG, Fake, Session, extras, ledger_row, put_envelope, put_extras, raw_comments,
 )
 
 REASON = "owner stopped the loop"
+PANEL, GAPSWEEP, SCOPED = round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED
 ABANDONED_LINE = "session abandoned: the review loop was closed before it ended, so this record cannot read reviewed"
 CHECKED_ABANDONED = "the review loop was abandoned before it ended: " + REASON
-CHECKED_UNFOLDED = "findings in seat results that were recorded but never folded appear only in the raw findings files"
+CHECKED_UNFOLDED = "findings in seat results that were recorded but never folded are listed as open findings"
 LIVE_FINDING = {"findingKey": KEY, "id": "f-1", "title": "t", "severity": "Important", "file": "a.py", "line": 3,
                 "detail": "d", "dimension": "code-reviewer"}
 
@@ -132,8 +134,8 @@ def test_any_other_refusal_still_stands_for_an_abandoned_session(tmp_path):
 
 
 def test_findings_in_a_seat_result_never_folded_reach_the_record_through_its_raw_file(tmp_path):
-    """axis: a recorded-but-never-folded seat result becomes no finding row; its findings are in the raw findings
-    file the record lists."""
+    """axis: a recorded-but-never-folded seat result becomes one open finding row; its findings are also in the raw
+    findings file the record lists."""
     session = Session(tmp_path, terminal=None).seat("code-reviewer").save()
     put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
         {"title": "Unfolded defect", "severity": "Important", "consequence": "a defect stays in the change"}]}})
@@ -141,11 +143,190 @@ def test_findings_in_a_seat_result_never_folded_reach_the_record_through_its_raw
     out = _write(tmp_path, session, fake, abandoned=REASON)
     assert out["ok"] and out["status"] == "not-reviewed", out
     rec = rr.read(7, readers=fake.readers())
-    assert rec["findings"] == []
+    assert len(rec["findings"]) == 1
+    row = rec["findings"][0]
+    assert row["outcome"] is None and row["reason"] == rs.UNFOLDED_OPEN and row["title"] == "Unfolded defect"
     assert len(rec["rawOutputs"]) == 1 and "code-reviewer" in rec["rawOutputs"][0]["file"]
     posted = raw_comments(fake)
     assert len(posted) == 1 and "Unfolded defect" in posted[0]
     assert CHECKED_UNFOLDED in rec["checked"]
+
+
+def _abandoned_slots(tmp_path, rounds, slots):
+    """The (title, line) of each open row an abandoned session lists; `slots` is [(seat, phase, round, findings)]."""
+    s = Session(tmp_path, terminal=None, rounds=rounds)
+    for seat, phase, rnd, _ in slots:
+        s.seat(seat, phase=phase, rnd=rnd)
+    session = s.save()
+    for seat, phase, rnd, raised in slots:
+        put_envelope(session, seat, {"vendor": "codex", "model": CODEX, "payload": {"findings": raised}}, phase=phase, rnd=rnd)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    return [(f["title"], f["line"]) for f in account["findings"]]
+
+
+def _abandoned_titles(tmp_path, rounds, raised):
+    return _abandoned_slots(tmp_path, rounds, [("code-reviewer", PANEL, 1, raised)])
+
+
+def test_a_same_titled_finding_at_another_line_survives_a_compile_drop_in_an_abandoned_session(tmp_path):
+    """axis: the compile-drop match includes the line, so only the dropped location is left out of the unfolded rows."""
+    drop = {"title": "Same title", "file": "a.py", "line": 10, "reason": "out of scope"}
+    got = _abandoned_titles(tmp_path, {"1": {"compileDrops": [drop]}}, [
+        {"title": "Same title", "file": "a.py", "line": 10, "severity": "Important", "consequence": "c"},
+        {"title": "Same title", "file": "a.py", "line": 20, "severity": "Important", "consequence": "c"}])
+    assert got == [("Same title", 20)]
+
+
+def test_a_compile_drop_with_no_file_and_no_line_matches_its_finding_on_round_and_title_in_an_abandoned_session(tmp_path):
+    """axis: a drop whose file is not a string lost its line, so it is matched on round, title and file alone; a drop with a
+    string file stays line-exact — see bite-proof record c1l1_wo_b_session_seam"""
+    drop = {"title": "Same title", "file": None, "line": None, "reason": "no file to cite"}
+    got = _abandoned_titles(tmp_path, {"1": {"compileDrops": [drop]}}, [
+        {"title": "Same title", "file": None, "line": 7, "severity": "Important", "consequence": "c"},
+        {"title": "Same title", "file": "a.py", "line": 9, "severity": "Important", "consequence": "c"}])
+    assert got == [("Same title", 9)]
+
+
+def test_a_compile_drop_with_a_string_file_and_no_line_matches_only_a_finding_with_no_line(tmp_path):
+    """axis: a string-file drop with a null line is still matched line-exact (null against null only) — see bite-proof record c1l1_wo_b_session_seam"""
+    drop = {"title": "Same title", "file": "a.py", "line": None, "reason": "no line to cite"}
+    got = _abandoned_titles(tmp_path, {"1": {"compileDrops": [drop]}}, [
+        {"title": "Same title", "file": "a.py", "line": None, "severity": "Important", "consequence": "c"},
+        {"title": "Same title", "file": "a.py", "line": 7, "severity": "Important", "consequence": "c"}])
+    assert got == [("Same title", 7)]
+
+
+PASSED_RUN = {"title": "Break it", "file": "tests/test_x.py", "outcome": "passed", "findingKey": None}
+PROPOSAL = {"title": "Break it", "file": "tests/test_x.py", "line": 1, "severity": "Important", "consequence": "c",
+            "taxonomy": "break-it-test"}
+SAME_PLACE = {"title": "Break it", "file": "tests/test_x.py", "line": 9, "severity": "Important", "consequence": "c"}
+
+
+def test_a_passing_break_it_proposal_is_not_recovered_as_an_open_finding_in_an_abandoned_session(tmp_path):
+    """axis: a test-role panel proposal whose break-it test passed was dropped before compile and is not listed open on
+    abandonment."""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [("test-role", PANEL, 1, [
+        PROPOSAL, {"title": "Real defect", "file": "a.py", "line": 4, "severity": "Important", "consequence": "c"}])])
+    assert got == [("Real defect", 4)]
+
+
+def test_a_gap_sweep_finding_sharing_a_passed_proposals_title_and_file_is_listed_open(tmp_path):
+    """axis: the passed-proposal skip settles only the test role's panel proposal; a gap-sweep finding of the same title
+    and file at another line stays open — see bite-proof record c1l1_wo_b_session_seam"""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [
+        ("test-role", PANEL, 1, [PROPOSAL]), ("gap-sweep", GAPSWEEP, 1, [SAME_PLACE])])
+    assert got == [("Break it", 9)]
+
+
+def test_a_code_reviewer_finding_sharing_a_passed_proposals_title_and_file_is_listed_open(tmp_path):
+    """axis: a code-reviewer panel finding of the same title and file as a passed proposal stays open."""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [
+        ("test-role", PANEL, 1, [PROPOSAL]), ("code-reviewer", PANEL, 1, [SAME_PLACE])])
+    assert got == [("Break it", 9)]
+
+
+@pytest.mark.parametrize("seat,phase,rnd,raised,why", [
+    ("test-role", PANEL, 1, dict(PROPOSAL, taxonomy="other"), "E1 a test-role finding that is not a break-it proposal"),
+    ("test-role", PANEL, 1, {k: v for k, v in PROPOSAL.items() if k != "taxonomy"}, "E1 a test-role finding with no taxonomy"),
+    ("code-reviewer", PANEL, 1, PROPOSAL, "E2 a break-it proposal from another seat"),
+    ("test-role", GAPSWEEP, 1, PROPOSAL, "E3 a break-it proposal from the test role in a gap-sweep slot"),
+    ("test-role", SCOPED, 1, PROPOSAL, "E3 a break-it proposal from the test role in a scoped-finder slot"),
+    ("test-role", PANEL, 2, PROPOSAL, "E4 a passing run recorded for another round"),
+])
+def test_a_finding_the_passed_rule_does_not_cover_is_listed_open(tmp_path, seat, phase, rnd, raised, why):
+    """axis: the passed-proposal skip needs the panel phase, the test-role seat, the break-it taxonomy and a passing run
+    of the same round, title and file — see bite-proof record c1l1_wo_b_session_seam"""
+    got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [(seat, phase, rnd, [raised])])
+    assert got == [("Break it", 1)], why
+
+
+@pytest.mark.parametrize("phase,reopened", [
+    (SCOPED, True),  # runs after the round's fix audit settled the finding: the defect came back
+    (PANEL, False),  # runs before the round's fix: the settlement answers it
+    (GAPSWEEP, False),
+])
+def test_a_same_round_report_after_the_settling_audit_reopens_the_finding_in_an_abandoned_session(tmp_path, phase, reopened):
+    """axis: a finding settled (fixed) in round N and reported again in round N by a phase that runs after the audit
+    (the scoped finder) reads open on abandonment; a same-round report from a phase before the fix does not."""
+    s = Session(tmp_path, terminal=None, dispositionLedger=[ledger_row()], rounds={"1": {}, "2": {}})
+    session = s.seat("code-reviewer", phase=phase, rnd=2).save()
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
+        {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}]}}, phase=phase, rnd=2)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
+    assert (row["outcome"] is None) is reopened, row
+    assert (row["reason"] == rs.UNFOLDED_OPEN) is reopened, row
+
+
+def test_a_same_round_scoped_report_refuted_after_its_fold_stays_refuted_in_an_abandoned_session(tmp_path):
+    """axis: a scoped finding folded and then refuted in the same round keeps its shown-wrong outcome and reason on
+    abandonment; a refutation is recorded after the scoped report is folded."""
+    refuted = ledger_row(disposition="refuted", refutedReason="the code does not do that", grade=WRONG)
+    s = Session(tmp_path, terminal=None, dispositionLedger=[refuted], rounds={"1": {}, "2": {}})
+    session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
+        {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}]}}, phase=SCOPED, rnd=2)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
+    assert row["outcome"] is not None, row
+    assert row["reason"] != rs.UNFOLDED_OPEN, row
+
+
+def test_a_same_round_scoped_report_followed_by_an_out_of_scope_skip_keeps_the_skip_in_an_abandoned_session(tmp_path):
+    """axis: only a fix audit's `fixed` is reopened by a same-round scoped report; an out-of-scope skip the owner
+    recorded after the scoped report was folded keeps its outcome and reason on abandonment."""
+    parked = ledger_row(disposition="out-of-scope", outOfScopeReason="a later change")
+    s = Session(tmp_path, terminal=None, dispositionLedger=[parked], rounds={"1": {}, "2": {}})
+    session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
+        {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}]}}, phase=SCOPED, rnd=2)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
+    assert row["outcome"] is not None, row
+    assert row["reason"] != rs.UNFOLDED_OPEN, row
+
+
+AUDIT = round_phases.P_AUDITS
+NEW_ISSUE = {"title": "Regression", "file": "b.py", "line": 8, "severity": "Important", "consequence": "c"}
+
+
+def test_a_stored_audit_new_issue_not_yet_folded_is_listed_open_in_an_abandoned_session(tmp_path):
+    """axis: a discharged-but-new-issue audit result stored but never folded reaches the abandoned account's open
+    findings."""
+    s = Session(tmp_path, terminal=None, rounds={"1": {}, "2": {}})
+    session = s.seat("auditor", phase=AUDIT, rnd=2).save()
+    put_envelope(session, "auditor", {"vendor": "codex", "model": CODEX, "payload": {
+        "id": "f-1", "ruling": "discharged-but-new-issue", "reason": "r", "newIssues": [NEW_ISSUE]}}, phase=AUDIT, rnd=2)
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    assert [(f["title"], f["outcome"], f["reason"]) for f in account["findings"]] == [("Regression", None, rs.UNFOLDED_OPEN)]
+
+
+def test_pending_audit_new_issues_awaiting_the_scoped_fold_are_listed_open_in_an_abandoned_session(tmp_path):
+    """axis: an audit fold's pending `_newIssues` (reached only through the scoped fold) is listed open on abandonment,
+    and a compile-dropped one stays under refused."""
+    dropped = dict(NEW_ISSUE, title="Dropped", line=9)
+    s = Session(tmp_path, terminal=None, round=2, rounds={"1": {}, "2": {"compileDrops": [
+        {"title": "Dropped", "file": "b.py", "line": 9, "reason": "out of scope"}]}},
+        _newIssues=[NEW_ISSUE, dropped])
+    session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    assert [(f["title"], f["outcome"]) for f in account["findings"]] == [("Regression", None)]
+
+
+@pytest.mark.parametrize("kind,reopened", [("fixed", True), ("refuted", False), ("out-of-scope", False)])
+def test_a_pending_audit_new_issue_sharing_a_key_settled_this_round_reopens_only_a_fixed_row(tmp_path, kind, reopened):
+    """axis: a pending audit candidate repeating a finding the same round's audit discharged reads open (the audit
+    fold records the discharge before it stores the candidate); a refutation or owner skip is recorded after it."""
+    extra = {"refutedReason": "the code does not do that", "grade": WRONG} if kind == "refuted" else (
+        {"outOfScopeReason": "a later change"} if kind == "out-of-scope" else {})
+    row_in = ledger_row(disposition=kind, **extra)
+    same = {"title": "t", "file": "a.py", "line": 3, "severity": "Important", "consequence": "c"}
+    s = Session(tmp_path, terminal=None, round=2, dispositionLedger=[row_in], rounds={"1": {}, "2": {}}, _newIssues=[same])
+    session = s.seat("code-reviewer", phase=SCOPED, rnd=2).save()
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned=REASON)
+    (row,) = [f for f in account["findings"] if f["findingKey"] == KEY]
+    assert (row["outcome"] is None) is reopened, row
+    assert (row["reason"] == rs.UNFOLDED_OPEN) is reopened, row
 
 
 def test_the_record_writer_needs_a_reviewer_unless_the_account_is_abandoned(tmp_path):

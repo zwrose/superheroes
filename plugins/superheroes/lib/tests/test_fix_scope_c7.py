@@ -230,12 +230,15 @@ def test_t1_a_critical_out_of_scope_finding_is_offered_to_a_fixer_once(captured_
         return {"fixes": [], "headDiff": TRD._headf(len(offers)), "changedSubjects": ["Code"]}
 
     def auditor(targets, rnd):
-        return [{"id": t["id"], "ruling": "not-discharged", "reason": "still open"}
+        return [{"id": t["id"], "ruling": "not-discharged", "reason": "still open",
+                 "checks": TRD.audit_checks(right="no")}
                 for t in (targets or [])]
 
-    seams = TRD._seams(reviewer=reviewer, verifier=verifier, fix_step=fix_step, auditor=auditor,
-                       io={"stall_menu": lambda payload: "hold"})
-    _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
+    seams = TRD._seams(reviewer=reviewer, verifier=verifier, fix_step=fix_step, auditor=auditor)
+    # the fix changed a file, so the round's scoped finder runs; the proven non-panel cells let it seat
+    # on the vendor outside the fixer's family instead of parking the review
+    _result, state = TRD._run_loop_capturing_state(
+        seams, TRD._cfg_cert(seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
     assert state["terminal"]
     assert offers == [(1, [key])]  # offered once; the next round's batch left it out
     assert state["outOfScopeFixerRounds"][key] == {"episode": 1, "rounds": [1]}
@@ -277,7 +280,8 @@ def test_t2_an_out_of_scope_low_severity_real_finding_ends_as_a_leftover(capture
 
 def _fold(result, allowed=(), target=None, **kw):
     target = target or {"id": "a", "file": "f.py", "line": 1, "title": "t", "severity": "Important"}
-    body = {"id": "a", "ruling": "discharged", "reason": "the fix resolves it"}
+    body = {"id": "a", "ruling": "discharged", "reason": "the fix resolves it",
+            "checks": TRD.audit_checks()}
     body.update(result)
     return AU.apply_audit_results([target], [body], change_allowed_ids=allowed, **kw)
 
@@ -364,7 +368,8 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_
         out = []
         for t in targets or []:
             result = {"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": TRD.audit_checks()}
             if rnd in unnamed_rounds:
                 result["unnamedChange"] = UNNAMED
                 if t.get("ownerRulingSeq") is not None:
@@ -374,9 +379,11 @@ def _unnamed_change_loop(captured_state, *, allow, unnamed_rounds=(2,), refusal_
             out.append(result)
         return out
 
-    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor,
-                       io={"stall_menu": lambda payload: "hold"})
-    _result, state = TRD._run_loop_capturing_state(seams, TRD._cfg_cert())
+    seams = TRD._seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor)
+    # the fix changed a file, so the round's scoped finder runs; the proven non-panel cells let it seat
+    # on the vendor outside the fixer's family instead of parking the review
+    _result, state = TRD._run_loop_capturing_state(
+        seams, TRD._cfg_cert(seatMap=TRD._nonpanel_cell_proof(["claude", "codex"])))
     return key, state, offers, seen_targets, history
 
 
@@ -567,8 +574,9 @@ def _native_ruling_branch(**over):
     contract, reason = PC.payload_contract(PC.P_AUDITS)
     assert reason is None
     branch = {"resultKind": "ruling", "findings": None, "verdicts": None, "grouping": None,
-              "investigated": ["f.py"], "id": "audit-seat",
-              "ruling": contract["enums"]["ruling"][0], "reason": "grounds"}
+              "readParts": None, "investigated": ["f.py"], "id": "audit-seat",
+              "ruling": contract["enums"]["ruling"][0], "reason": "grounds",
+              "checks": TRD.audit_checks()}
     for opt in contract.get("optional") or ():
         branch[opt] = None
     branch.update(over)
@@ -686,7 +694,8 @@ def test_the_audit_order_names_the_fixer_delta():
 @pytest.mark.parametrize("value", [[], 5, {"a": 1}, True])
 def test_the_submit_guard_refuses_a_non_string_unnamed_change(value):
     targets = [{"id": "a"}]
-    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed"}]}
+    ok = {"results": [{"id": "a", "ruling": "discharged", "reason": "fixed",
+                       "checks": TRD.audit_checks()}]}
     assert RD.audit_results_fault(ok, targets) is None
     ok["results"][0]["unnamedChange"] = "it also stops retrying"
     assert RD.audit_results_fault(ok, targets) is None
@@ -879,7 +888,8 @@ def test_a_merged_members_newer_ruling_decides_the_allowance_and_the_audit_targe
     artifact = {"results": [{"id": key_a, "ruling": "discharged", "reason": "fixed",
                              "evidence": "tests", "unnamedChange": UNNAMED,
                              "unnamedChangeAllowedBySeq": target.get("ownerRulingSeq"),
-                             "auditorVendor": target.get("auditorVendor")}],
+                             "auditorVendor": target.get("auditorVendor"),
+                             "checks": TRD.audit_checks()}],
                 "collectionManifest": {key_a: target.get("auditorVendor")}}
     RD._fold_audits(state, state["config"], artifact)
     discharged = state["_auditOutcome"]["discharged"]
@@ -895,7 +905,8 @@ def test_a_ruling_recorded_after_the_audit_target_stays_pending():
     newer = _decide(state, key_a, "guidance", 1, allowsChange=True)
     artifact = {"results": [{"id": key_a, "ruling": "discharged", "reason": "fixed",
                              "evidence": "tests", "unnamedChange": UNNAMED,
-                             "auditorVendor": target.get("auditorVendor")}],
+                             "auditorVendor": target.get("auditorVendor"),
+                             "checks": TRD.audit_checks()}],
                 "collectionManifest": {key_a: target.get("auditorVendor")}}
     RD._fold_audits(state, state["config"], artifact)
     outcome = state["_auditOutcome"]
@@ -967,7 +978,7 @@ def test_two_findings_sharing_a_lineage_root_each_keep_their_own_offer_episode(e
 def _fold_one(state, target, key, **extra):
     state["_auditTargets"] = [target]
     result = {"id": key, "ruling": "discharged", "reason": "fixed", "evidence": "tests",
-              "auditorVendor": target.get("auditorVendor")}
+              "auditorVendor": target.get("auditorVendor"), "checks": TRD.audit_checks()}
     result.update(extra)
     RD._fold_audits(state, state["config"], {
         "results": [result], "collectionManifest": {key: target.get("auditorVendor")}})
@@ -1097,7 +1108,8 @@ def test_a_discharged_but_new_issue_result_marks_its_allowing_ruling_delivered()
 
 @pytest.mark.parametrize("value", ["3", 3.0, True, [3]])
 def test_the_submit_guard_refuses_a_non_integer_named_seq(value):
-    entry = {"id": "a", "ruling": "discharged", "reason": "fixed", "unnamedChangeAllowedBySeq": 3}
+    entry = {"id": "a", "ruling": "discharged", "reason": "fixed", "unnamedChangeAllowedBySeq": 3,
+             "checks": TRD.audit_checks()}
     assert RD._audit_result_entry_fault(entry, 0, {"a"}) is None
     entry["unnamedChangeAllowedBySeq"] = value
     fault = RD._audit_result_entry_fault(entry, 0, {"a"})

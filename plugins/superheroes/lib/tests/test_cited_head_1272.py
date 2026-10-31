@@ -260,42 +260,6 @@ def test_assemble_refuses_write_run_for_review_phase(tmp_path):
     assert extra == {"runKind": engine_dispatch.RUN_KIND_WRITE, "phase": RD.P_PANEL}
 
 
-def test_assemble_refuses_review_run_for_fixer_phase(tmp_path):
-    record = _runner_record(runKind=engine_dispatch.RUN_KIND_REVIEW)
-    envelope = {
-        "phase": RD.P_FIXER,
-        "orderSha256": "a" * 64,
-        "payload": PANEL_PAYLOAD,
-    }
-    assembled, refusal, extra, source = _assemble_with_record(
-        tmp_path, envelope, record, anchor_head=ANCHOR_HEAD, phase=RD.P_FIXER)
-    assert assembled is None
-    assert source is None
-    assert refusal == "evidence-run-kind-mismatch"
-    assert extra == {"runKind": engine_dispatch.RUN_KIND_REVIEW, "phase": RD.P_FIXER}
-
-
-def test_assemble_write_run_declares_order_anchor_without_view_head(tmp_path):
-    fixes = [{"file": "a.py", "description": "x"}]
-    record = _runner_record(
-        runKind=engine_dispatch.RUN_KIND_WRITE,
-        viewHeadSha=None,
-        resultKind=session_contract.WRITE_RESULT_KIND,
-        resultDigest=RR.payload_sha256(fixes),
-    )
-    envelope = {
-        "phase": RD.P_FIXER,
-        "orderSha256": "a" * 64,
-        "payload": {"fixes": fixes},
-    }
-    assembled, refusal, extra, source = _assemble_with_record(
-        tmp_path, envelope, record, anchor_head=ANCHOR_HEAD, phase=RD.P_FIXER)
-    assert refusal is None, extra
-    assert assembled is not None
-    assert source == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
-    assert "headSha" not in assembled
-
-
 def test_recorded_row_fields_rejects_missing_or_unknown_cited_head_source():
     envelope = {"schema": RR.SEAT_RESULT_SCHEMA_V2, "payload": {"findings": []},
                 "payloadSha256": "x" * 64}
@@ -398,6 +362,7 @@ def test_record_result_refuses_view_head_anchor_mismatch_without_side_effects(tm
         "ruling": "discharged",
         "reason": "re-read the hunk; the defect is gone",
         "auditorVendor": "codex",
+        "checks": _TSP._TRD.audit_checks(),
     }
     state = _state(session_dir)
     _TDI._dispatch_observed_land(session_dir, state, pend, seat, ruling_payload)
@@ -434,6 +399,7 @@ def test_record_result_review_run_carries_runner_view_cited_head(tmp_path):
         "ruling": "discharged",
         "reason": "re-read the hunk; the defect is gone",
         "auditorVendor": "codex",
+        "checks": _TSP._TRD.audit_checks(),
     }
     state = _state(session_dir)
     _TDI._dispatch_observed_land(session_dir, state, pend, seat, ruling_payload)
@@ -482,31 +448,6 @@ def test_advance_reappend_row_declares_order_anchor_cited_head_source(tmp_path, 
     assert reappended[0]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
 
 
-def _fixer_session(tmp_path, adapters, name="cited-head-fixer"):
-    d = _session(tmp_path, name=name)
-    state = _state(d)
-    state["step"] = RD.P_FIXER
-    state["pending"] = {"action": RD.P_FIXER, "round": 1, "phase": RD.P_FIXER, "attempt": 0,
-                        "payload": {}}
-    RD.save_state(d, state)
-    return d
-
-
-def test_fixer_head_diff_row_declares_order_anchor_cited_head_source(tmp_path, adapters):
-    d = _fixer_session(tmp_path, adapters)
-    head_path = str(tmp_path / "head.diff")
-    with open(head_path, "w", encoding="utf-8") as fh:
-        fh.write("diff --git a/f.py b/f.py\n+fixed\n")
-    _land(d, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path}, headSha=None)
-    out = RD.cmd_record_result(d, "dispatch-fixer")
-    assert out["ok"], out
-    rows = [r for r in RD.read_journal(d)
-            if r.get("outcome") == "recorded" and r.get("phase") == RD.P_FIXER
-            and r.get("seat") == "dispatch-fixer"]
-    assert rows
-    assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
-
-
 def test_reappend_preserves_runner_view_cited_head_source(tmp_path, adapters):
     d = _session(tmp_path)
     _record_all_panel_seats(d)
@@ -524,40 +465,6 @@ def test_reappend_preserves_runner_view_cited_head_source(tmp_path, adapters):
     reappended = [e for e in RD.read_journal(d) if e.get("reappended") is True]
     assert len(reappended) == 1
     assert reappended[0]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_RUNNER_VIEW
-
-
-def _setup_fixer_sweep_fresh_head_diff(tmp_path):
-    findings = [_TDI._blocking_finding("missing bounds guard", 2)]
-    session_dir, gitdir, head_path = _TDI._bootstrap(tmp_path, name="cited-head-sweep-bind")
-    _TDI._drive_to_phase(session_dir, gitdir, findings, head_path, RD.P_FIXER)
-    state = _state(session_dir)
-    pend = state["pending"]
-    roster, _ = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
-    seat = roster[0]
-    slots = _TDI._slots_of(roster)
-    _TDI._write_dispatch_manifest(session_dir, pend, slots, _TDI._auditor_vendor_for(state))
-    bind_head_path = str(tmp_path / "fixer-sweep-bind-head.diff")
-    with open(bind_head_path, "w", encoding="utf-8") as fh:
-        fh.write("diff --git a/f.py b/f.py\n+sweep-bind\n")
-    payload = _TDI._payload_for(session_dir, state, pend, seat, findings, bind_head_path)
-    _TDI._land(session_dir, state, pend, seat, payload, occurrence=0)
-    return session_dir, pend, seat
-
-
-def test_sweep_store_head_diff_declares_order_anchor_cited_head_source(tmp_path):
-    session_dir, pend, seat = _setup_fixer_sweep_fresh_head_diff(tmp_path)
-    out = RD.cmd_record_result(session_dir, sweep=True)
-    assert out["ok"], out
-    spath = RR.store_path(session_dir, pend["round"], pend["phase"],
-                          RR.storage_key(seat), pend["attempt"])
-    stored, err = RR.read_json(spath)
-    assert err is None
-    assert stored["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
-    rows = [r for r in RD.read_journal(session_dir)
-            if r.get("outcome") == "recorded" and r.get("cmd") == "record-result"
-            and r.get("seat") == seat]
-    assert rows
-    assert rows[-1]["citedHeadSource"] == RR.CITED_HEAD_SOURCE_ORDER_ANCHOR
 
 
 def test_sweep_record_journal_declares_order_anchor_cited_head_source(tmp_path):

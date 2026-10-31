@@ -114,15 +114,19 @@ NOTIFY: take the returned `.mode` from `decide-location`, record mode/source/pro
 
 Do not interview. Build the profile from Step 1 detection + `CLAUDE.md` + named provisional
 defaults. Write `status: provisional` always on this path — the interview branch that produced
-`status: confirmed` is retired; only `/superheroes:configure` confirms a profile with a real verify
-story. State in the **review-crew layer body** (`$REVIEW_LAYER_BODY`, `## Setup disclosures`
+`status: confirmed` is retired; only `/superheroes:configure` confirms a profile that has a verify
+command. State in the **review-crew layer body** (`$REVIEW_LAYER_BODY`, `## Setup disclosures`
 section piped to `core_md.py write-layer` in Step 4b) which fields were defaulted rather than
 answered.
 
 Defaults when detection + `CLAUDE.md` did not answer:
 
 1. **Threat model** — `strict` (provisional default when unknown).
-2. **Verify command** — if none was detected, `mode: review-only` (provisional default). If
+2. **Verify command** — if none was detected, record none (`verifyCommand` left unset in
+   `$CORE_FACTS_JSON`) and disclose in `## Setup disclosures` the message the resolver gives: once the
+   core is written (Step 4b), run `python3 -B "$ROOT_DIR/lib/review_code_config.py"` from the
+   project root and quote its `verifyRefusal.message`, which tells the owner code review is not
+   available until a verify command is set. If
    only a full-gate candidate was detected, propose it and disclose that
    `skills/configure/reference/set-up.md` § 3 advises a fast iteration check, which the owner can
    set through `/superheroes:configure`.
@@ -159,7 +163,7 @@ untracked**. State that in the run output; the owner commits via git or confirms
 `/superheroes:configure`.
 
 `status` is always `provisional` on this create path; `confirmed` is reached only through
-`/superheroes:configure` after a real verify story.
+`/superheroes:configure` after a verify command is set.
 
 ### Step 4b — Write the shared brain (core.md) + the review-crew layer
 
@@ -180,6 +184,8 @@ STATUS=provisional   # always on this create path; confirmed only via /superhero
 # `proposed`/`deferred` action is surfaced, never silently overwritten).
 printf '%s' "$CORE_FACTS_JSON" \
   | python3 -B "$ROOT_DIR/lib/core_md.py" write --status "$STATUS"
+# No verify command recorded: run lib/review_code_config.py now and add its verifyRefusal.message
+# to the `## Setup disclosures` section of $REVIEW_LAYER_BODY before the layer is written (Step 3).
 # CREATE: review-crew's own sections → its layer file (FR-3).
 printf '%s' "$REVIEW_LAYER_BODY" \
   | python3 -B "$ROOT_DIR/lib/core_md.py" write-layer --hero review-crew --status "$STATUS" --rubric-version "$RUBRIC_VERSION"
@@ -243,7 +249,7 @@ nudge (already surfaced in Step 2). See CONVENTIONS §2.1 (layout) and §2.2 (fo
    `plugin` (set `rubric-version` to the engine's current value, clearing any
    drift detected in step 4). **Preserve the `nudge-ack` map** (carry the existing
    acks forward unchanged). `status` stays `provisional` until `/superheroes:configure` confirms
-   with a real verify story.
+   with a verify command set.
 
 ## Common mistakes
 

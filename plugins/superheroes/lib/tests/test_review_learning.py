@@ -679,7 +679,8 @@ def test_merged_member_carried_into_a_later_review_still_names_its_representativ
               "reason": "fixed and audited" + rs.MERGED_INTO_FORMAT.format("kb")}
     rep = {"id": "B", "findingKey": "kb", "outcome": "fixed", "reviewer": "Code", "reason": "fixed"}
     monkeypatch.setattr(review_record, "read", lambda pr, repo, readers: {"ok": True, "findings": [member, rep]})
-    carried = rs._carried({"pr": 1, "findings": []}, {"repo": "r"}, "/unused", None)
+    account = {"pr": 1, "findings": []}
+    carried = rs._carried(account, rs._earlier(account, {"repo": "r"}, "/unused", None))
     carried_member = next(f for f in carried if f["id"] == "A")
     assert carried_member["reason"].endswith(rs.CARRIED)
     assert rs.merged_into(carried_member["reason"]) == "kb"
@@ -922,3 +923,245 @@ def test_adoption_day_reads_and_writes_the_requested_project_under_an_inherited_
     monkeypatch.delenv("GIT_WORK_TREE")
     assert RL.adoption_day(repo, store) == {"since": "2026-10-13", "reason": None}
     assert RL.adoption_day(str(other), store) == {"since": None, "reason": "not-recorded"}
+
+
+# --- the revisit checks: the false PR claim count and the seating numbers ---
+
+_PLUGIN = os.path.dirname(_LIB)
+_DOCTRINE = {"owner-decisions": os.path.join(_PLUGIN, "skills", "showrunner", "reference", "owner-decisions.md"),
+             "vet-receipt": os.path.join(_PLUGIN, "skills", "showrunner", "reference", "vet-receipt.md"),
+             "glossary": os.path.join(_PLUGIN, "rubric", "glossary.md")}
+UNMEASURED = "unmeasured"
+SEAT_ROW = {"outcomes": {"fixed": 3, "shown-wrong": 0, "craft": 1, "left-for-owner": 2.5, "ruling": 0}, "tokens": 12000, "minutes": 4.5}
+
+
+def _claim(day=D, call="missed", **over):
+    return dict({"pr": 9, "reviewedAt": day, "call": call, "record": "r", "marker": RL.FALSE_CLAIM_MARKER}, **over)
+
+
+def _tally_escapes(escapes):
+    return RL.tally([], escapes, D, until="2026-10-11")
+
+
+# axis: the guarding test for the false-claim count — a false PR claim is counted apart and never adds to missed or seen-and-left
+def test_tally_false_pr_claims_are_counted_apart_from_escapes():
+    escapes = _escapes() + [_claim(D, "missed"), _claim("2026-10-11", "seen-and-left")]
+    got = RL.tally(_truth_table_records(), escapes, D, until="2026-10-11")
+    assert got["measured"] is True and got["reason"] is None
+    assert got["escapes"] == {"missed": 1, "seenAndLeft": 1}
+    assert got["falsePrClaims"] == 2
+    assert got["leftOut"] == {"beforeWindow": 2, "afterWindow": 0, "undated": 0, "malformed": 0}
+
+
+def test_tally_an_item_without_a_marker_counts_as_an_escape():
+    got = _tally_escapes([{"pr": 1, "reviewedAt": D, "call": "missed"}, {"pr": 2, "reviewedAt": D, "call": "seen-and-left"}])
+    assert got["escapes"] == {"missed": 1, "seenAndLeft": 1} and got["falsePrClaims"] == 0
+
+
+def test_tally_falsePrClaims_is_zero_when_there_are_none_and_the_tally_is_measured():
+    got = RL.tally(_truth_table_records(), _escapes(), D, until="2026-10-11")
+    assert got["measured"] is True
+    assert got["falsePrClaims"] == 0 and isinstance(got["falsePrClaims"], int) and not isinstance(got["falsePrClaims"], bool)
+    short = RL.tally([], [_claim()], D, until="2026-10-11", window_days=5)
+    assert short["reason"] == "short-of-window" and short["falsePrClaims"] == 1
+
+
+# axis: the guarding test for the unmeasured false-claim count — an unmeasured tally leaves it None, never zero
+def test_tally_falsePrClaims_is_none_wherever_the_tally_is_unmeasured():
+    undated = _record(1, "s1", D, [_row("code-reviewer")])
+    undated["writtenAt"] = "soon"
+    cases = [RL.tally([undated], [_claim()], D, until="2026-10-11"),
+             RL.tally([], [_claim()], None),
+             RL.tally([], [_claim()], D, until="2026-10-09")]
+    assert [c["reason"] for c in cases] == ["incomplete-evidence", "no-adoption-day", "bad-input"]
+    for got in cases:
+        assert got["measured"] is False and got["falsePrClaims"] is None, got["reason"]
+        assert got["escapes"] == {"missed": None, "seenAndLeft": None}
+
+
+# E1 — axis: the guarding test for an unknown marker — it reads malformed and incomplete, never a claim or an escape
+@pytest.mark.parametrize("marker", ["false-pr-claim ", "False-PR-Claim", "review-escape", "", None, 7, True, ["false-pr-claim"], {"a": 1}])
+def test_tally_an_unknown_marker_reads_malformed_not_counted(marker):
+    got = _tally_escapes([_claim(marker=marker)])
+    assert got["measured"] is False and got["reason"] == "incomplete-evidence"
+    assert got["leftOut"]["malformed"] == 1 and got["leftOut"]["undated"] == 0
+    assert got["falsePrClaims"] is None and got["escapes"] == {"missed": None, "seenAndLeft": None}
+
+
+@pytest.mark.parametrize("item", [{"call": "missed"}, {"reviewedAt": "2026-13-45", "call": "missed"}, {"reviewedAt": "soon", "call": "missed"},
+                                  {"reviewedAt": None, "call": "missed"}])
+def test_tally_a_marked_item_without_a_valid_date_reads_undated_and_incomplete(item):  # E2
+    got = _tally_escapes([dict(item, marker=RL.FALSE_CLAIM_MARKER)])
+    assert got["measured"] is False and got["reason"] == "incomplete-evidence"
+    assert got["leftOut"]["undated"] == 1 and got["leftOut"]["malformed"] == 0
+    assert got["falsePrClaims"] is None
+
+
+@pytest.mark.parametrize("item", [{"reviewedAt": D}, {"reviewedAt": D, "call": "other"}, {"reviewedAt": D, "call": None},
+                                  {"reviewedAt": D, "call": ["missed"]}])
+def test_tally_a_marked_item_without_a_known_call_reads_malformed_and_incomplete(item):  # E3
+    got = _tally_escapes([dict(item, marker=RL.FALSE_CLAIM_MARKER)])
+    assert got["measured"] is False and got["reason"] == "incomplete-evidence"
+    assert got["leftOut"]["malformed"] == 1 and got["leftOut"]["undated"] == 0
+    assert got["falsePrClaims"] is None
+
+
+def test_tally_a_marked_item_outside_the_window_is_left_out_and_does_not_make_the_tally_incomplete():  # E4, T5
+    got = _tally_escapes([_claim("2026-10-09"), _claim("2026-10-12"), _claim(D), _claim("2026-10-11", "seen-and-left")])
+    assert got["measured"] is True and got["reason"] is None
+    assert got["falsePrClaims"] == 2 and got["escapes"] == {"missed": 0, "seenAndLeft": 0}
+    assert got["leftOut"] == {"beforeWindow": 1, "afterWindow": 1, "undated": 0, "malformed": 0}
+    only_early = _tally_escapes([_claim("2026-10-09")])
+    assert only_early["measured"] is True and only_early["falsePrClaims"] == 0 and only_early["leftOut"]["beforeWindow"] == 1
+
+
+def test_tally_a_non_dict_escape_item_reads_malformed_and_the_claim_count_none():
+    got = _tally_escapes(["junk"])
+    assert got["measured"] is False and got["falsePrClaims"] is None
+    assert got["reason"] == "incomplete-evidence"
+    assert got["leftOut"] == {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 1}
+
+
+# --- the seating numbers ---
+
+def _seat_row(**over):
+    return {"security": SEAT_ROW, "premortem": {"outcomes": dict.fromkeys(RL.review_findings_schema.OUTCOMES, 0), "tokens": 0, "minutes": 0}, **over}
+
+
+def test_seating_echoes_the_numbers_read_and_keeps_a_real_zero():
+    got = RL.seating(_seat_row(**{"other-seat": SEAT_ROW}))
+    assert got["ok"] is True and got["unmeasured"] == []
+    assert list(got["seats"]) == list(RL.SEATING_SEATS) == ["security", "premortem"]
+    assert list(got["seats"]["security"]["outcomes"]) == list(RL.review_findings_schema.OUTCOMES)
+    assert got["seats"]["security"] == SEAT_ROW
+    zero = got["seats"]["premortem"]
+    assert zero["tokens"] == 0 and type(zero["tokens"]) is int
+    assert zero["minutes"] == 0 and type(zero["minutes"]) is int
+    assert all(n == 0 and type(n) is int for n in zero["outcomes"].values())
+    ignored = RL.seating({"security": dict(SEAT_ROW, outcomes=dict(SEAT_ROW["outcomes"], bogus=4))})
+    assert "bogus" not in ignored["seats"]["security"]["outcomes"]
+
+
+def test_seating_a_number_not_given_reads_unmeasured_never_zero():
+    row = {"security": {"outcomes": {"fixed": True, "shown-wrong": -1, "craft": "5", "left-for-owner": 2}, "minutes": None}}
+    got = RL.seating(row)
+    sec, pre = got["seats"]["security"], got["seats"]["premortem"]
+    assert sec["outcomes"] == {"fixed": UNMEASURED, "shown-wrong": UNMEASURED, "craft": UNMEASURED, "left-for-owner": 2, "ruling": UNMEASURED}
+    assert sec["tokens"] == UNMEASURED and sec["minutes"] == UNMEASURED
+    assert pre == {"outcomes": dict.fromkeys(RL.review_findings_schema.OUTCOMES, UNMEASURED), "tokens": UNMEASURED, "minutes": UNMEASURED}
+    expected = (["security.outcomes.%s" % o for o in ("fixed", "shown-wrong", "craft", "ruling")] + ["security.tokens", "security.minutes"]
+                + ["premortem.outcomes.%s" % o for o in RL.review_findings_schema.OUTCOMES] + ["premortem.tokens", "premortem.minutes"])
+    assert got["unmeasured"] == sorted(expected)
+
+
+# axis: the guarding test for _measured — a missing, null, boolean, negative or non-numeric number is never shown as 0
+@pytest.mark.parametrize("bad", [None, True, False, -1, -0.5, "5", "", [], {}, float("nan"), float("inf"), float("-inf")])
+def test_seating_measured_never_turns_a_bad_number_into_zero(bad):
+    assert RL._measured(bad) == UNMEASURED
+    got = RL.seating({"security": {"outcomes": {"fixed": bad}, "tokens": bad, "minutes": bad}})
+    sec = got["seats"]["security"]
+    assert sec["outcomes"]["fixed"] == UNMEASURED and sec["tokens"] == UNMEASURED and sec["minutes"] == UNMEASURED
+    assert {"security.outcomes.fixed", "security.tokens", "security.minutes"} <= set(got["unmeasured"])
+
+
+@pytest.mark.parametrize("good", [0, 0.0, 7, 2.5])
+def test_seating_measured_keeps_a_real_number(good):
+    assert RL._measured(good) == good and type(RL._measured(good)) is type(good)
+
+
+# axis: the guarding test for the huge-integer branch of _measured — an integer past the float range never raises and never reads as a float
+def test_seating_measured_a_huge_integer_never_raises():
+    huge = 10 ** 400
+    assert RL._measured(-huge) == UNMEASURED
+    kept = RL._measured(huge)
+    assert kept == huge and type(kept) is int
+    got = RL.seating({"security": {"tokens": huge, "minutes": -huge}})
+    sec = got["seats"]["security"]
+    assert sec["tokens"] == huge and type(sec["tokens"]) is int and sec["minutes"] == UNMEASURED
+    assert "security.minutes" in got["unmeasured"] and "security.tokens" not in got["unmeasured"]
+
+
+@pytest.mark.parametrize("seat", ["lots", 5, None, [], {"outcomes": [1, 2], "tokens": 3}])
+def test_seating_a_seat_that_is_not_a_usable_dict_reads_unmeasured_where_it_is_missing(seat):
+    got = RL.seating({"security": seat})
+    outcomes = got["seats"]["security"]["outcomes"]
+    assert all(n == UNMEASURED for n in outcomes.values())
+    assert got["seats"]["security"]["minutes"] == UNMEASURED
+    assert got["seats"]["security"]["tokens"] == (3 if isinstance(seat, dict) else UNMEASURED)
+
+
+@pytest.mark.parametrize("row", [None, [], "x", 5, True])
+def test_seating_a_row_that_is_not_a_dict_is_refused(row):
+    got = RL.seating(row)
+    assert got["ok"] is False and got["outcome"] == "refused" and got["reason"] == "bad-input"
+    assert got["seats"] is None and got["unmeasured"] is None
+
+
+def test_cli_seating_round_trip_and_exit_codes(tmp_path, capsys):
+    code, out = _cli(capsys, "seating", "--row", _json_file(tmp_path, "row.json", _seat_row()))
+    assert code == 0 and out["ok"] is True and out["seats"]["security"] == SEAT_ROW and out["unmeasured"] == []
+    code, out = _cli(capsys, "seating", "--row", _json_file(tmp_path, "part.json", {"security": {"tokens": 5}}))
+    assert code == 0 and out["seats"]["security"]["tokens"] == 5 and "premortem.tokens" in out["unmeasured"]
+    assert RL.main(["review_learning.py", "seating", "--row", _json_file(tmp_path, "again.json", _seat_row())]) == 0
+    capsys.readouterr()
+    code, out = _cli(capsys, "seating", "--row", str(tmp_path / "missing.json"))
+    assert (code, out["ok"], out["reason"], out["seats"]) == (1, False, "bad-input", None)
+    (tmp_path / "text.json").write_text("not json")
+    code, out = _cli(capsys, "seating", "--row", str(tmp_path / "text.json"))
+    assert (code, out["reason"]) == (1, "bad-input")
+    code, out = _cli(capsys, "seating", "--row", _json_file(tmp_path, "list.json", []))
+    assert (code, out["reason"]) == (1, "bad-input")
+
+
+def test_cli_seating_a_huge_integer_is_echoed_or_read_unmeasured(tmp_path, capsys):
+    huge = 10 ** 400
+    row = _json_file(tmp_path, "huge.json", {"security": {"tokens": huge, "minutes": -huge}})
+    code, out = _cli(capsys, "seating", "--row", row)
+    assert code == 0 and out["ok"] is True
+    assert out["seats"]["security"]["tokens"] == huge and out["seats"]["security"]["minutes"] == UNMEASURED
+
+
+def test_cli_tally_carries_falsePrClaims(tmp_path, capsys):
+    recs = _json_file(tmp_path, "r.json", _truth_table_records())
+    escs = _json_file(tmp_path, "e.json", _escapes() + [_claim()])
+    code, out = _cli(capsys, "tally", "--records", recs, "--escapes", escs, "--since", D, "--until", "2026-10-11")
+    assert code == 0 and out["falsePrClaims"] == 1 and out["escapes"] == {"missed": 1, "seenAndLeft": 1}
+    code, out = _cli(capsys, "tally", "--records", recs, "--escapes", _json_file(tmp_path, "none.json", _escapes()), "--since", D,
+                     "--until", "2026-10-11")
+    assert code == 0 and out["falsePrClaims"] == 0
+
+
+# --- the doctrine census ---
+
+def _doctrine(name):
+    with open(_DOCTRINE[name], encoding="utf-8") as fh:
+        return " ".join(fh.read().split())
+
+
+# axis: the guarding test for the misses-log census — every site that lists the classes names the false PR claim
+@pytest.mark.parametrize("name, sites", [("owner-decisions", 1), ("vet-receipt", 2), ("glossary", 1)])
+def test_every_misses_log_class_list_names_the_false_pr_claim(name, sites):
+    text = _doctrine(name)
+    starts = [i for i in range(len(text)) if text.startswith("declined-then-escaped", i)]
+    assert len(starts) == sites, "a class list was added or removed: update this census"
+    for i in starts:
+        assert "false PR claim" in text[i:i + 260], (name, text[i:i + 260])
+
+
+# axis: the guarding test for the closed duties list — the revisit checks sit after the memory-gardening lead-in, outside the eight duties
+def test_owner_decisions_revisit_checks_sit_outside_the_closed_duties_list():
+    text = _doctrine("owner-decisions")
+    lead = "**The two revisit checks at the pass.**"
+    assert text.count(lead) == 1
+    after = text.index(lead)
+    assert after > text.index("**Memory gardening at the pass.**")
+    assert text.index("**The false-claim check.**") > after
+    assert text.index("**The seating check.**") > after
+
+
+def test_owner_decisions_spells_the_marker_line_and_the_tally_marker():
+    text = _doctrine("owner-decisions")
+    assert "false PR claim: <the claim> — shown false by <what showed it false>" in text
+    assert '`"marker": "%s"`' % RL.FALSE_CLAIM_MARKER in text and RL.FALSE_CLAIM_MARKER == "false-pr-claim"
+    assert "The false-claim check." in text and "The seating check." in text
+    assert "falsePrClaims" in text and "seating --row" in text

@@ -1,8 +1,8 @@
 """#2011 WO-1: the refused-command stop rule has one home and reaches every plugin-written write order.
 
 Part one pins `refusals_fault` and the composition of `ORDER_TEXT`. Part two is the census: each of
-the four order surfaces (fixer order, write-engine prompt, native preamble, implementer agent) is
-rendered or read on its own and must carry the constant's text.
+the three order surfaces (write-engine prompt, native preamble, implementer agent) is rendered or
+read on its own and must carry the constant's text.
 """
 import os
 
@@ -19,9 +19,7 @@ from test_engine_dispatch_write import (  # noqa: F401  (the autouse pin is a fi
 from test_native_engine_1947 import (  # noqa: F401  (the autouse pin is a fixture)
     _make_repo, _open, _pin_env, _routed,
 )
-from test_round_orders import (
-    _GOLDEN_CONTEXTS, _SESSION, _base_context, _fixer_placeholders, _panel_placeholders,
-)
+from test_round_orders import _GOLDEN_CONTEXTS, _base_context, _panel_placeholders
 
 _PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _IMPLEMENTER_MD = os.path.join(_PLUGIN_ROOT, "agents", "implementer.md")
@@ -158,28 +156,7 @@ def test_refusal_meaning_names_each_kind(phrase):
 # --- the census: one test per order surface ------------------------------------------------
 
 
-def _fixer_context(host_seat):
-    return _base_context(
-        host_seat=host_seat,
-        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer",
-                                  "fixer.a0.payload.json"),
-        placeholders=_fixer_placeholders(),
-    )
-
-
-def test_census_fixer_order():
-    engine, reason = RO.render_order(RP.P_FIXER, "fixer", _fixer_context(host_seat=False))
-    assert reason is None, reason
-    host, reason = RO.render_order(RP.P_FIXER, "fixer", _fixer_context(host_seat=True))
-    assert reason is None, reason
-    # axis: the stop rule reaches every plugin-written write order — see bite-proof record wo1_2011_stop_rule
-    assert CR.ORDER_TEXT in engine, "engine-branch fixer order lacks the refused-command rule"
-    assert CR.ORDER_TEXT in host, "host-seat fixer order lacks the refused-command rule"
-    for text in (engine, host):
-        assert text.count(_BLOCK_HEADING + "\n\n" + CR.ORDER_TEXT) == 1
-
-
-def test_non_fixer_order_carries_no_refusal_block():
+def test_review_order_carries_no_refusal_block():
     ctx = _GOLDEN_CONTEXTS[RP.P_PANEL]()
     text, reason = RO.render_order(RP.P_PANEL, "golden-seat", ctx)
     assert reason is None, reason
@@ -238,7 +215,7 @@ def test_census_implementer_md():
     assert ladder < body.index("**Refused or denied commands.**") < rung_one
 
 
-# --- the file-write rule (#2126): one home, every implementer and fixer order --------------
+# --- the file-write rule (#2126): one home, every implementer order -------------------------
 
 
 def test_census_file_write_rule_write_prompt(tmp_path):
@@ -264,13 +241,6 @@ def test_census_file_write_rule_native_preamble(tmp_path, monkeypatch, capsys):
     # axis: the file-write rule reaches every implementer order — see bite-proof record wo_2126_file_write
     assert prompt.count(CR.FILE_WRITE_RULE) == 1
     assert prompt.index(CR.FILE_WRITE_RULE) < prompt.index("The order follows, verbatim.")
-
-
-def test_census_file_write_rule_fixer_order():
-    for host_seat in (False, True):
-        text, reason = RO.render_order(RP.P_FIXER, "fixer", _fixer_context(host_seat=host_seat))
-        assert reason is None, reason
-        assert text.count(CR.FILE_WRITE_RULE) == 1
 
 
 def test_file_write_rule_has_one_home():

@@ -206,7 +206,7 @@ def test_e5_intercept_forwards_an_interpreter_only_when_one_is_supplied(repo):
     assert seen == [{}, {"interpreter": FAKE}, {"interpreter": None}]
 
 
-# ---- T5: the kept-check and the fixer handoff -----------------------------------------------
+# ---- T5: the kept-check -----------------------------------------------
 
 def test_t5_check_kept_reruns_under_the_launcher(launcher_repo):
     # axis: the kept-check re-run uses the supplied launcher, so a kept test is judged on the project's interpreter
@@ -225,14 +225,6 @@ def test_t5_check_kept_with_no_launcher_is_not_a_pass(launcher_repo):
     result = break_it.check_kept(str(launcher_repo), base, head, record, interpreter=None)
     assert (result["outcome"], result["reason"]) == ("failing", "interpreter-unresolved")
     assert result["run"]["outcome"] == "not-run"
-
-
-def test_t5_the_fixer_order_tells_the_fixer_to_use_the_recorded_interpreter():
-    # axis: the dispatch-fixer order text carries the instruction to run the test under the recorded interpreter
-    path = os.path.join(os.path.dirname(_LIB), "rubric", "orders", "dispatch-fixer.md")
-    with open(path, encoding="utf-8") as fh:
-        text = " ".join(fh.read().split())
-    assert "names an `interpreter`" in text
 
 
 def test_the_run_rules_state_the_launcher_rule():

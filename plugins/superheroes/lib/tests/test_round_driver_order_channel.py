@@ -260,6 +260,7 @@ def test_driver_context_gives_both_consumers_the_same_channel(tmp_path, phase):
     ok, state = RD.load_state(session_dir)
     assert ok, state
     state["headDiff"] = DIFF
+    state["_fixDeltaDiff"] = DIFF
 
     cfg = state.get("config") or {}
     repo_root = cfg.get("repoRoot") or session_dir
@@ -336,17 +337,6 @@ def _payload_for(phase):
     if phase == RD.P_AUDITS:
         return {"targets": [{"id": "t1", "auditorVendor": "claude"}]}
     return {}
-
-
-def test_the_fixer_is_not_swept_into_the_read_only_fold():
-    """`dispatch-fixer` writes in place and its vendor is UNKNOWN by default (#608).
-
-    Folding its absent vendor to stdout would rewrite a deliberate default rather than close a
-    forfeit, so it is excluded by name — pinned here so a later edit cannot quietly add it.
-    """
-    assert RD.P_FIXER not in RD._READ_ONLY_CHANNEL_PHASES
-    row = {"vendor": None, "model": None, "engine": None}
-    assert RD._seat_channel(RD.P_FIXER, row) == RD.CHANNEL_FILE
 
 
 # =================================================================================================
@@ -481,6 +471,7 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     ok, state = RD.load_state(session_dir)
     assert ok, state
     state["headDiff"] = DIFF
+    state["_fixDeltaDiff"] = DIFF
     rnd_key = str(state["round"])
     state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)   # clear round-1
 
@@ -510,6 +501,7 @@ def test_a_configured_reviewer_vendor_is_not_disclosed_as_a_gap(tmp_path, monkey
     ok, state = RD.load_state(session_dir)
     assert ok, state
     state["headDiff"] = DIFF
+    state["_fixDeltaDiff"] = DIFF
     rnd_key = str(state["round"])
     state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)
 
@@ -522,31 +514,6 @@ def test_a_configured_reviewer_vendor_is_not_disclosed_as_a_gap(tmp_path, monkey
     assert not any(g.get("seat") == seat for g in gaps), gaps
 
 
-@pytest.mark.parametrize("vendor", _TRUTH_TABLE_VENDORS)
-def test_seat_channel_fixer_folds_on_the_same_table_but_never_via_the_read_only_exclusion(vendor):
-    """`P_FIXER` is deliberately excluded from the READ-ONLY fold — pinned across the same vendor
-    sweep as the read-only phases above, so the exclusion is checked on the SAME table.
-
-    An engine vendor (`codex`/`cursor`) still folds to `CHANNEL_STDOUT` on the fixer phase — that is
-    the vendor-is-an-engine check (`_seat_is_engine`), which fires for every phase and is correct: a
-    genuine codex/cursor fixer really is sandboxed and needs the stdout contract (pinned separately
-    in `test_round_orders.py::test_engine_fixer_order_landing_block_uses_fixes_stdout_contract`).
-    What `P_FIXER`'s exclusion from `_READ_ONLY_CHANNEL_PHASES` protects is narrower: an UNRESOLVED
-    vendor (`None`/empty) must stay `CHANNEL_FILE` — the fixer's deliberate default-to-write (#608)
-    — rather than falling to stdout the way an unresolved read-only-phase seat would.
-
-    Bite axis: `P_FIXER` collapsing an UNRESOLVED vendor onto `CHANNEL_STDOUT`, which would silently
-    drop the fixer's deliberate default-to-write behaviour — the one fold this exclusion must never
-    let happen. (An engine vendor going to stdout is the correct, unrelated branch, asserted too so
-    the table stays honest rather than only testing the branch the bite axis cares about.)
-    """
-    if vendor in ("codex", "cursor"):
-        expected = RD.CHANNEL_STDOUT
-    else:
-        expected = RD.CHANNEL_FILE
-    assert RD._seat_channel(RD.P_FIXER, {"vendor": vendor}) == expected, vendor
-
-
 # --- rendering helper (isolated renderer, for the phase census) ----------------------------------
 
 SESSION = "/tmp/rd1035-census"
@@ -557,23 +524,22 @@ _DIFF = SESSION + "/round-1/diff.txt"
 # Populated by `round_orders._panel_derived_placeholders` / `_channel_derived_placeholders`.
 _DERIVED_PLACEHOLDER_NAMES = frozenset({
     "OUTPUT_CHANNEL_BLOCK",
-    "PR_CHECKOUT_CONTEXT_LINE",
     "PRIOR_COMMENTS_CONTEXT_LINE",
     "PRIOR_COMMENTS_INSTRUCTION_BLOCK",
     "FOCUS_CONTEXT_LINE",
     "ROLE_BRIEF_LINE",
     "RISK_AREAS_LINE",
     "BREAK_IT_GRAMMAR_BLOCK",
-    "PR_CHECKOUT_INSTRUCTION_BLOCK",
 })
 
 # Auxiliary inputs consumed by derivation but not declared in the template body.
 _FIXTURE_AUX_INPUTS = {
-    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PR_CHECKOUT_PATH", "PRIOR_COMMENTS_PATH",
+    RD.P_PANEL: frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH", "PRIOR_COMMENTS_PATH",
                            "ROLE_BRIEF_PATH", "RISK_AREAS_TEXT", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_VERIFIERS: frozenset({"CHANNEL"}),
     RD.P_SYNTHESIS: frozenset({"CHANNEL", "GROUPING_OUTPUT_PATH"}),
     RD.P_GAPSWEEP: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
+    RD.P_SECOND_TEST: frozenset({"CHANNEL", "ROLE_BRIEF_PATH", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_AUDITS: frozenset({"CHANNEL"}),
     RD.P_SCOPED: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
 }
@@ -592,7 +558,6 @@ _KNOWN_REALISTIC_VALUES = {
         "ROLE_BRIEF_PATH": "/plugin/agents/code-reviewer.md",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
-        "PR_CHECKOUT_PATH": "",
         "PRIOR_COMMENTS_PATH": SESSION + "/prior-comments.json",
         "FOCUS_NOTES": "",
         "DIMENSION": "correctness",
@@ -622,6 +587,14 @@ _KNOWN_REALISTIC_VALUES = {
         "VERIFICATION_ROOT": "/proj",
         "FINDINGS_OUTPUT_PATH": SESSION + "/round-1/gap-sweep-findings.json",
     },
+    RD.P_SECOND_TEST: {
+        "HELD_FINDINGS_PATH": SESSION + "/round-1/second-test-held.json",
+        "DIFF_PATH": _DIFF,
+        "RUBRIC_PATH": "/plugin/rubric/review-base.md",
+        "VERIFICATION_ROOT": "/proj",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
+        "ROLE_BRIEF_PATH": "/plugin/agents/test-role.md",
+    },
     RD.P_AUDITS: {
         "TARGET_SUMMARY_PATH": SESSION + "/round-1/audit-targets/x.json",
         "HEAD_DIFF_PATH": SESSION + "/round-1/head.diff",
@@ -634,7 +607,7 @@ _KNOWN_REALISTIC_VALUES = {
     },
     RD.P_SCOPED: {
         "HUNKS_PATH": SESSION + "/round-1/scoped-hunks.json",
-        "HEAD_DIFF_PATH": SESSION + "/round-1/head.diff",
+        "FIX_DIFF_PATH": SESSION + "/round-1/fix-delta.diff",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
         "VERIFICATION_ROOT": "/proj",
@@ -678,7 +651,7 @@ def _phase_placeholders(phase, channel):
 
 
 def test_read_only_channel_phases_is_derived_not_hand_typed():
-    """`_READ_ONLY_CHANNEL_PHASES` must track `round_orders.ORDER_PHASES` minus the fixer exactly.
+    """`_READ_ONLY_CHANNEL_PHASES` must track `round_orders.ORDER_PHASES` exactly.
 
     Bite axis: set MEMBERSHIP drift between the two registries — a phase added to `ORDER_PHASES`
     and forgotten in the fold, or a phase named in the fold that `ORDER_PHASES` does not know about
@@ -686,10 +659,8 @@ def test_read_only_channel_phases_is_derived_not_hand_typed():
     """
     order_phases = set(RO.ORDER_PHASES)
     fold = set(RD._READ_ONLY_CHANNEL_PHASES)
-    expected = order_phases - {RD.P_FIXER}
-    missing = expected - fold
-    assert not missing, "phase(s) in ORDER_PHASES (minus the fixer) missing from the fold: %s" % sorted(missing)
-    assert RD.P_FIXER not in fold, "the fixer must stay excluded from the fold"
+    missing = order_phases - fold
+    assert not missing, "phase(s) in ORDER_PHASES missing from the fold: %s" % sorted(missing)
     extra = fold - order_phases
     assert not extra, "fold names phase(s) ORDER_PHASES does not know about: %s" % sorted(extra)
 

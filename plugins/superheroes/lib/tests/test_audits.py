@@ -1,4 +1,17 @@
-from audits import apply_audit_results, AUDIT_RULINGS
+import audits
+from audits import AUDIT_RULINGS
+
+# The three checks every audit result owes (`audits.audit_checks_fault`), each answered `yes`.
+_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in audits.CHECK_NAMES}
+
+
+def apply_audit_results(audited, results, *args, **kwargs):
+    """The fold, with `_CHECKS` put on each result dict that carries no `checks`, so a test below states only
+    the part of the result it is about."""
+    if isinstance(results, list):
+        results = [dict(r, checks=_CHECKS) if isinstance(r, dict) and "checks" not in r else r
+                   for r in results]
+    return audits.apply_audit_results(audited, results, *args, **kwargs)
 
 
 def finding(fid, file="src/a.py", line=5, title="bug", severity="Important"):
@@ -163,7 +176,7 @@ def test_never_raises_on_junk_input():
         assert set(out) == {"audits", "discharged", "notDischarged", "newIssues",
                             "unaudited", "ambiguous", "malformed", "unmatched",
                             "unauthenticated", "echoMismatch", "unnamedChange",
-                            "attributedChange"}
+                            "attributedChange", "testMismatch"}
 
 
 def test_idless_finding_is_kept_not_discharged():

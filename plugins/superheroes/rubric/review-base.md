@@ -1,4 +1,4 @@
-<!-- rubric-version: 13 -->
+<!-- rubric-version: 14 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -101,7 +101,7 @@ your channel.
 **stdout channel** — external, sandboxed seats that cannot write a file. Your
 final stdout is a single JSON object and nothing after it:
 
-`{"findings": [], "investigated": ["src/orders.py"]}`
+`{"findings": [], "investigated": ["src/orders.py"], "readParts": [{"file": "src/orders.py", "lines": [[10, 42]]}]}`
 
 Wrap the finding array below as the `findings` value. List in `investigated`
 every repo-relative path you actually read to ground the review — always,
@@ -112,7 +112,18 @@ investigation record must forfeit as vacuous.
 
 **file channel** — in-process seats that can write. Emit the JSON array below
 at the path the dispatching skill names. Write `[]` when you have nothing to
-flag — do not skip the file.
+flag — do not skip the file. A panel reviewer writes instead the object
+`{"findings": [...], "readParts": [...]}` at that path, `findings` being the
+array below.
+
+**`readParts` — the read list (panel reviewers only).** One entry per file you
+read: `{"file": "<path relative to repo root>", "lines": [[start, end], ...]}`,
+the line ranges of that file you actually read, each `1 <= start <= end`. Line
+numbers are the file's at the reviewed head; a deletion inside a file that
+survives sits at the head line where it was removed. List only what you read —
+never the whole change by default. A reviewer that read nothing returns `[]`.
+Every other seat leaves `readParts` out (a stdout seat under the strict result
+schema emits `null`).
 
 The dispatching skill must name a channel the seat can actually use — that is
 the real prevention. If you are nevertheless told to use the file channel but
@@ -166,18 +177,6 @@ adding one later is a single-place change): `Architecture`, `Code`, `Security`,
 leg. Each dispatching skill names the subset it runs and assigns each agent its dimension
 and its `id` prefix; a leg runs one agent per dimension (e.g. the Security reviewer
 emits `security-001`, …; the Failure-Mode reviewer emits `premortem-001`, …).
-
-Separately from those five risk-domain dimensions, the review crew has one **narrow
-sixth seat — the grounding seat** (`agents/grounding-seat.md`), which is **NOT** one of
-the five code-leg risk lenses above and must not be counted as one: it adds no risk
-lens, it checks the PR's self-claims against the repo. It runs at the `reviewer` model
-tier and **never** `mechanical` — a false "the claims check out" is a silence nothing
-downstream re-checks, so it must not go to the tier whose failure mode is confident wrong
-fills. On the **code leg** it is **live-dispatched** under #609 and emits
-**verdicts** (the orchestrator mints findings from `REFUTED` rows); the retained
-orchestrator-inline PR-body honesty check remains a second leg. As a code-leg lens it is
-not part of review-code's five risk dimensions, and no code-leg drift test should read it
-as one.
 
 ## Severity caps
 

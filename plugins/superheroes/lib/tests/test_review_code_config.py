@@ -29,30 +29,14 @@ def test_verify_command_none_when_absent_or_unreadable(tmp_path):
     assert RC.resolve_verify_command(None) == "none"
 
 
-def test_resolve_verify_from_profile_review_only(tmp_path):
-    p = tmp_path / "p.md"
-    p.write_text("## Verify\nmode: review-only\n")
-    mode, cmd = RC.resolve_verify_from_profile(str(p))
-    assert mode == "review-only"
-    assert cmd == "none"
-
-
-def test_resolve_verify_from_profile_unverified(tmp_path):
-    p = tmp_path / "p.md"
-    p.write_text("## Verify\nmode: unverified\n")
-    mode, cmd = RC.resolve_verify_from_profile(str(p))
-    assert mode == "unverified"
-    assert cmd == "none"
-
-
 def test_tiers_default_policy():
     assert RC.resolve_tiers({}) == {
-        "reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus", "fixer": "sonnet"}
+        "reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus"}
 
 
 def test_tiers_honor_override():
-    t = RC.resolve_tiers({"reviewer-deep": "sonnet", "code-fixer": "haiku"})
-    assert t["reviewerDeep"] == "sonnet" and t["fixer"] == "haiku"
+    t = RC.resolve_tiers({"reviewer-deep": "sonnet", "synthesis": "haiku"})
+    assert t["reviewerDeep"] == "sonnet" and t["synthesis"] == "haiku"
 
 
 def test_resolve_composes_verify_and_tiers(tmp_path, monkeypatch):
@@ -71,7 +55,7 @@ def test_resolve_composes_verify_and_tiers(tmp_path, monkeypatch):
     out = RC.resolve(repo)
     assert out["verifyCommand"] == "pytest -q"
     assert out["tiers"]["reviewerDeep"] == "sonnet"   # layer override honored
-    assert out["tiers"]["fixer"] == "sonnet"           # FR-7 code-context default
+    assert out["tiers"]["synthesis"] == "opus"         # FR-7 default
 
 
 def test_resolve_failopen_when_no_profile(tmp_path, monkeypatch):
@@ -81,7 +65,7 @@ def test_resolve_failopen_when_no_profile(tmp_path, monkeypatch):
                                                       "legacy_path": None})
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
-    assert out["tiers"] == {"reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus", "fixer": "sonnet"}
+    assert out["tiers"] == {"reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus"}
 
 
 def test_resolve_failopen_on_calibration_error(tmp_path, monkeypatch):
@@ -94,8 +78,8 @@ def test_resolve_failopen_on_calibration_error(tmp_path, monkeypatch):
     monkeypatch.setattr(cr, "resolve", boom)
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
-    assert out["verifyMode"] is None
-    assert out["tiers"]["fixer"] == "sonnet"
+    assert "verifyMode" not in out
+    assert out["tiers"]["synthesis"] == "opus"
 
 
 def test_resolve_surfaces_legacy_profile_refusal(tmp_path):
@@ -114,7 +98,7 @@ def test_resolve_surfaces_legacy_profile_refusal(tmp_path):
     assert refusal["paths"]
     assert refusal["remedy"]
     assert out["tiers"] == {
-        "reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus", "fixer": "sonnet"}
+        "reviewer": "sonnet", "reviewerDeep": "opus", "synthesis": "opus"}
 
 
 def test_resolve_no_calibration_refusal_when_core_present(tmp_path):
@@ -174,8 +158,8 @@ def test_resolve_fallopen_when_calibration_resolve_unimportable(tmp_path, monkey
     monkeypatch.setitem(sys.modules, "calibration_resolve", None)
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
-    assert out["verifyMode"] is None
-    assert out["tiers"]["fixer"] == "sonnet"
+    assert "verifyMode" not in out
+    assert out["tiers"]["synthesis"] == "opus"
 
 
 def test_resolve_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeypatch):
@@ -191,7 +175,7 @@ def test_resolve_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeyp
     monkeypatch.setitem(sys.modules, "calibration_resolve", stub)
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
-    assert out["verifyMode"] is None
+    assert "verifyMode" not in out
 
 
 def test_load_failopen_when_profile_unreadable(tmp_path):

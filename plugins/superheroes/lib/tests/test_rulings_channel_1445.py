@@ -1,9 +1,7 @@
 """#1445 WO-1 — owner/advisor rulings channel (`rule` verb)."""
-import hashlib
 import importlib.util
 import json
 import os
-import re
 import sys
 
 import pytest
@@ -36,16 +34,12 @@ _state = _TRI._state
 _fake_git = _TRI._fake_git
 _drive_to_phase = _TRI._drive_to_phase
 _drive_one_phase = _TRI._drive_one_phase
-_write_execution_run_dir = _TRI._write_execution_run_dir
-_fixer_envelope_for_write_run = _TRI._fixer_envelope_for_write_run
-_anchor_hashes = _TRI._anchor_hashes
 _land = _TRI._land
-_dispatch_observed_land = _TRI._dispatch_observed_land
 _write_dispatch_manifest = _TRI._write_dispatch_manifest
 _slots_of = _TRI._slots_of
 _auditor_vendor_for = _TRI._auditor_vendor_for
 
-P_FIXER = RD.P_FIXER
+P_APPLY_FIXES = RD.P_APPLY_FIXES
 STATE_PATH = session_contract.STATE_FILE
 
 
@@ -78,81 +72,32 @@ def _rule(session_dir, ruling_path, by="owner"):
     return RD.cmd_rule(session_dir, ruling_path, by)
 
 
-def _fixer_order_text(session_dir):
-    state = _state(session_dir)
-    pend = state["pending"]
-    assert pend["phase"] == P_FIXER
-    roster, reason = __import__("round_adapters").roster_for(
-        pend["phase"], state, state.get("config") or {})
-    assert reason is None
-    seat, occurrence = __import__("round_records").roster_slots(roster)[0]
-    cfg = state.get("config") or {}
-    repo_root = cfg.get("repoRoot") or os.getcwd()
-    row = RD._seat_transport_row(state, pend["phase"], seat, occurrence, cfg,
-                                 pend.get("payload") or {}, repo_root)
-    ctx, _paths = RD._build_order_render_context(
-        session_dir, state, pend["round"], pend["phase"], pend["attempt"],
-        seat, occurrence, pend.get("payload") or {}, row, roster=roster)
-    import round_orders as RO
-    text, render_reason = RO.render_order(pend["phase"], seat, ctx)
-    assert render_reason is None, render_reason
+def _apply_fixes_text(session_dir):
+    """What the pending `apply-fixes` step hands the build session: its batch file and, when there
+    is guidance for it, its guidance file (the step makes no order)."""
+    pend = _state(session_dir)["pending"]
+    assert pend["phase"] == P_APPLY_FIXES
+    payload = pend["payload"]
+    with open(payload["fixBatchPath"], encoding="utf-8") as fh:
+        text = fh.read()
+    if payload.get("guidancePath"):
+        with open(payload["guidancePath"], encoding="utf-8") as fh:
+            text += "\n" + fh.read()
     return text
 
 
-def _deliver_rulings(order_text, rulings):
-    """Operator-style appendix when the hashed order already carries rulings."""
-    guidance_ok = all(
-        isinstance(r.get("guidance"), str) and r["guidance"] in order_text
-        for r in rulings if r.get("ruling") == "guidance")
-    sha_match = re.search(r"Fix batch sha256: ([0-9a-f]{64})", order_text)
-    batch_path_match = re.search(r"Findings to fix: (.+?) \(", order_text)
-    batch_ok = True
-    if sha_match and batch_path_match:
-        batch_path = batch_path_match.group(1).strip()
-        try:
-            with open(batch_path, encoding="utf-8") as fh:
-                batch_doc = json.load(fh)
-        except (OSError, ValueError):
-            batch_ok = False
-        else:
-            oos_keys = {r.get("findingKey") or r.get("id") for r in rulings
-                        if r.get("ruling") == "out-of-scope"}
-            for row in batch_doc if isinstance(batch_doc, list) else []:
-                key = RD._fix_batch_row_key(row) or row.get("id")
-                if key in oos_keys:
-                    batch_ok = False
-                    break
-    if guidance_ok and batch_ok:
-        return order_text
-    appendix = "\n\n## Rulings\n" + json.dumps(rulings, indent=2)
-    return order_text + appendix
-
-
-def _strip_fixer_orders_emitted(session_dir):
-    """Harness reaches fixer pending with orders-emitted; rulings before emit strip that row."""
-    journal_path = os.path.join(session_dir, session_contract.JOURNAL_FILE)
-    journal = RD.read_journal(session_dir)
-    kept = [row for row in journal
-            if not (row.get("phase") == P_FIXER and row.get("outcome") == "orders-emitted")]
-    with open(journal_path, "w", encoding="utf-8") as fh:
-        for row in kept:
-            fh.write(json.dumps(row) + "\n")
-
-
-def _pending_fixer_two_findings(tmp_path, *, fixer_orders_emitted=False):
+def _pending_apply_fixes_two_findings(tmp_path):
     f_a = _blocking_finding("bounds A", 2)
     f_b = _blocking_finding("bounds B", 3)
     f_b["severity"] = "Minor"
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="rulings-1445", fixBatchCap=1)
-    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_FIXER)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_APPLY_FIXES)
     state = _state(session_dir)
-    assert state["pending"]["phase"] == P_FIXER
+    assert state["pending"]["phase"] == P_APPLY_FIXES
     batch = state.get("_fixBatch") or []
     queue = state.get("_fixQueue") or []
     assert batch and (queue or len(batch) >= 2)
     row_b = queue[0] if queue else batch[1]
-    if not fixer_orders_emitted:
-        _strip_fixer_orders_emitted(session_dir)
     return session_dir, gitdir, head_path, batch[0], row_b
 
 
@@ -171,7 +116,7 @@ def _pending_fixer_two_findings(tmp_path, *, fixer_orders_emitted=False):
     ("disposition-ledger-malformed", "malformed_ledger"),
 ])
 def test_rule_refusal_tokens(tmp_path, token, setup):
-    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    session_dir, gitdir, head_path, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     ruling_path = tmp_path / "rulings.json"
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     before = _state_bytes(session_dir)
@@ -247,7 +192,7 @@ def test_rule_refusal_tokens(tmp_path, token, setup):
 
 
 def test_edge2_ruling_off_batch_logged(tmp_path):
-    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    session_dir, gitdir, head_path, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     path = _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "guidance", "reason": "defer", "guidance": "only fix A"}])
@@ -263,7 +208,7 @@ def test_edge3_restage_reapplies_out_of_scope(tmp_path):
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_rulings_channel_1445.md (BP-3)
     """
-    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    session_dir, gitdir, head_path, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     path = _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "later",
@@ -279,8 +224,8 @@ def test_edge3_restage_reapplies_out_of_scope(tmp_path):
 
 
 def test_edge4_guidance_lifts_out_of_scope(tmp_path):
-    """axis: guidance superseding out-of-scope clears the ledger family and restores the fixer row."""
-    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    """axis: guidance superseding out-of-scope clears the ledger family and restores the fix row."""
+    session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     key_b = RD._fix_batch_row_key(row_b)
     id_b = row_b.get("id") or key_b
     p1 = _write_ruling_file(tmp_path / "r1.json", [
@@ -305,7 +250,7 @@ def test_edge4_guidance_lifts_out_of_scope(tmp_path):
 
 
 def test_critical_restage_not_suppressed_by_stale_out_of_scope(tmp_path):
-    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     path = _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "later",
@@ -338,10 +283,11 @@ def test_ruling_target_ambiguous_when_staged_id_reused():
     assert fault == RD.RULING_TARGET_AMBIGUOUS
 
 
-def test_rule_accepts_when_fixer_orders_already_emitted(tmp_path):
-    """axis: rule records a ruling once the pending fixer attempt has emitted orders (it used to
-    refuse ruling-attempt-pending) and leaves that attempt's pending step and batch as they were."""
-    session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
+def test_rule_accepts_while_apply_fixes_is_pending_and_leaves_the_attempt(tmp_path):
+    """axis: rule records a ruling while the `apply-fixes` step is pending (it used to refuse
+    ruling-attempt-pending) and the step stays pending at the same attempt; a ruled-out row leaves
+    the schedule."""
+    session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     before = _state(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
@@ -349,42 +295,47 @@ def test_rule_accepts_when_fixer_orders_already_emitted(tmp_path):
          "followUp": _follow_up()}]))
     assert out.get("ok") is True, out
     after = _state(session_dir)
-    assert after["pending"] == before["pending"]
+    assert (after["pending"]["phase"], after["pending"]["attempt"]) == (
+        before["pending"]["phase"], before["pending"]["attempt"])
     assert after["_fixBatch"] == before["_fixBatch"]
-    assert after["_fixQueue"] == before["_fixQueue"]
+    assert RD._fix_batch_row_key(row_b) not in {
+        RD._fix_batch_row_key(row) for row in after.get("_fixQueue") or []}
     assert len(after["rulingsLog"]) == len(before.get("rulingsLog") or []) + 1
 
 
-def test_fixer_order_pins_fix_batch_sha256(tmp_path):
+def test_a_ruling_on_a_batch_row_while_apply_fixes_is_pending_rewrites_the_batch_file(tmp_path):
+    """axis: a ruling on a row of the step's batch rewrites `fix-batch.json` to the batch without it
+    (the session reads the files the step names), at the same attempt; the file is the one the step
+    named, still readable, and the payload's own path."""
     f_a = _blocking_finding("bounds A", 2)
     f_b = _blocking_finding("bounds B", 3)
     f_b["severity"] = "Minor"
     session_dir, gitdir, head_path = _bootstrap(
         tmp_path, name="rulings-1445-sha", fixBatchCap=2)
-    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_FIXER)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_APPLY_FIXES)
     state = _state(session_dir)
     pend = state["pending"]
     rnd = pend["round"]
-    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
-    with open(batch_path, "rb") as fh:
-        batch_sha = hashlib.sha256(fh.read()).hexdigest()
-    order_text = _fixer_order_text(session_dir)
-    sha_line_before = f"- Fix batch sha256: {batch_sha}"
-    assert sha_line_before in order_text
+    batch_path = pend["payload"]["fixBatchPath"]
     row_b = (state.get("_fixBatch") or [None, {}])[1]
     if not isinstance(row_b, dict):
         row_b = (state.get("_fixQueue") or [{}])[0]
-    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
-    before = _state(session_dir)
+    key_b = RD._fix_batch_row_key(row_b)
+    id_b = row_b.get("id") or key_b
+    with open(batch_path, encoding="utf-8") as fh:
+        assert key_b in fh.read()
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "out-of-scope", "reason": "defer B",
          "followUp": _follow_up()}]))
-    assert out.get("ok") is True, out
-    after = _state(session_dir)
-    assert after["pending"] == before["pending"]
-    assert RD._ensure_fix_batch_file(session_dir, rnd, after) == batch_path
+    # the bytes `rule` left, read before anything else can rewrite the file from state
     with open(batch_path, "rb") as fh:
-        assert hashlib.sha256(fh.read()).hexdigest() == batch_sha
+        left_by_rule = fh.read()
+    assert out.get("ok") is True, out
+    assert key_b.encode("utf-8") not in left_by_rule
+    after = _state(session_dir)
+    assert after["pending"]["attempt"] == pend["attempt"]
+    assert RD._ensure_fix_batch_file(session_dir, rnd, after) == batch_path
+    assert after["pending"]["payload"]["fixBatchPath"] == batch_path
 
 
 def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
@@ -392,8 +343,7 @@ def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
     f_b = _blocking_finding("cap B", 3)
     f_b["severity"] = "Minor"
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="edge5-cap", fixBatchCap=4)
-    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_FIXER)
-    _strip_fixer_orders_emitted(session_dir)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_APPLY_FIXES)
     state = _state(session_dir)
     batch = state.get("_fixBatch") or []
     assert batch
@@ -420,8 +370,72 @@ def test_edge5_aggregate_cap_refuses_ruling_omitted(tmp_path):
         assert fh.read() == batch_bytes_before
 
 
+def test_a_render_refusal_while_apply_fixes_is_pending_leaves_loop_state_byte_identical(tmp_path):
+    """axis: an aggregate guidance overflow while the step is pending refuses `rule` and leaves
+    loop-state.json byte-identical."""
+    f_a = _blocking_finding("cap A", 2)
+    f_b = _blocking_finding("cap B", 3)
+    f_b["severity"] = "Minor"
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="e4-cap", fixBatchCap=4)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_APPLY_FIXES)
+    state = _state(session_dir)
+    row_a = (state.get("_fixBatch") or [])[0]
+    rnd = state["round"]
+    chunk = "z" * RD.GATE_GUIDANCE_ROW_BYTE_CAP
+    state.setdefault("rounds", {}).setdefault(str(rnd), {})["judgmentDispositions"] = [
+        {"disposition": "fix-with-guidance", "id": "gate-%d" % i,
+         RD.GATE_GUIDANCE_RECORD_KEY: chunk, "title": "t", "file": "f.py", "line": i}
+        for i in range(6)]
+    RD.save_state(session_dir, state)
+    state_before = _state_bytes(session_dir)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": row_a.get("id") or RD._fix_batch_row_key(row_a), "ruling": "guidance",
+         "reason": "cap", "guidance": "must appear whole"}]))
+    assert out.get("ok") is False
+    assert out.get("reason") == "order-render-refused"
+    assert "ruling-guidance-omitted" in str(out.get("detail", ""))
+    assert _state_bytes(session_dir) == state_before
+
+
+def test_a_render_refusal_while_apply_fixes_is_pending_leaves_the_batch_file_and_state_untouched(tmp_path):
+    """axis: a ruling that would change the pending step's batch, given with guidance the render
+    refuses, answers `order-render-refused` and writes nothing: `fix-batch.json` and loop-state.json
+    keep their bytes (c1l9a_wo7_render_first)."""
+    f_a = _blocking_finding("cap A", 2)
+    f_b = _blocking_finding("cap B", 3)
+    f_b["severity"] = "Minor"
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="e4-render-first", fixBatchCap=2)
+    _drive_to_phase(session_dir, gitdir, [f_a, f_b], head_path, P_APPLY_FIXES)
+    state = _state(session_dir)
+    rnd = state["round"]
+    batch = state.get("_fixBatch") or []
+    assert len(batch) == 2
+    row_a, row_b = batch
+    chunk = "z" * RD.GATE_GUIDANCE_ROW_BYTE_CAP
+    state.setdefault("rounds", {}).setdefault(str(rnd), {})["judgmentDispositions"] = [
+        {"disposition": "fix-with-guidance", "id": "gate-%d" % i,
+         RD.GATE_GUIDANCE_RECORD_KEY: chunk, "title": "t", "file": "f.py", "line": i}
+        for i in range(6)]
+    RD.save_state(session_dir, state)
+    batch_path = RD._ensure_fix_batch_file(session_dir, rnd, state)
+    with open(batch_path, "rb") as fh:
+        batch_bytes_before = fh.read()
+    state_before = _state_bytes(session_dir)
+    id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
+    id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
+    out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
+        {"id": id_b, "ruling": "out-of-scope", "reason": "defer B", "followUp": _follow_up()},
+        {"id": id_a, "ruling": "guidance", "reason": "cap", "guidance": "must appear whole"}]))
+    assert out.get("ok") is False
+    assert out.get("reason") == "order-render-refused"
+    assert "ruling-guidance-omitted" in str(out.get("detail", ""))
+    with open(batch_path, "rb") as fh:
+        assert fh.read() == batch_bytes_before
+    assert _state_bytes(session_dir) == state_before
+
+
 def test_edge6_two_rule_calls_append(tmp_path):
-    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     assert _rule(session_dir, _write_ruling_file(tmp_path / "r1.json", [
@@ -433,24 +447,25 @@ def test_edge6_two_rule_calls_append(tmp_path):
 
 
 def test_edge7_guidance_off_batch_no_supersede(tmp_path):
-    """axis: guidance on a row outside the emitted batch is recorded at once and leaves the pending
-    attempt and its emitted batch as they were."""
-    session_dir, _, _, _, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
+    """axis: guidance on a row outside the step's batch is recorded at once and leaves the pending
+    attempt and its batch as they were."""
+    session_dir, _, _, _, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     before = _state(session_dir)
     out = _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_b, "ruling": "guidance", "reason": "off batch", "guidance": "later"}]))
     assert out.get("ok") is True, out
     after = _state(session_dir)
-    assert after["pending"] == before["pending"]
+    assert (after["pending"]["phase"], after["pending"]["attempt"]) == (
+        before["pending"]["phase"], before["pending"]["attempt"])
     assert after["_fixBatch"] == before["_fixBatch"]
     assert len(after["rulingsLog"]) == len(before.get("rulingsLog") or []) + 1
 
 
-def test_rule_accepts_emitted_fixer_when_ruling_would_empty_batch(tmp_path):
-    """axis: rule records rulings that would empty the emitted fixer batch (it used to refuse
-    ruling-attempt-pending) and leaves that batch alone: a fix under way is never stopped."""
-    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path, fixer_orders_emitted=True)
+def test_rule_accepts_while_apply_fixes_is_pending_when_ruling_would_empty_batch(tmp_path):
+    """axis: rule records rulings that would empty the pending `apply-fixes` batch (it used to refuse
+    ruling-attempt-pending)."""
+    session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     before = _state(session_dir)
@@ -459,14 +474,12 @@ def test_rule_accepts_emitted_fixer_when_ruling_would_empty_batch(tmp_path):
         {"id": id_b, "ruling": "out-of-scope", "reason": "b", "followUp": _follow_up()}]))
     assert out.get("ok") is True, out
     after = _state(session_dir)
-    assert after["pending"] == before["pending"]
-    assert after["_fixBatch"] == before["_fixBatch"]
     assert len(after["rulingsLog"]) == len(before.get("rulingsLog") or []) + 2
 
 
 def test_edge8_empty_batch_advances(tmp_path):
-    """axis: pre-emission out-of-scope on every remaining fixer row settles via empty-batch convergence."""
-    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    """axis: pre-emission out-of-scope on every remaining fix row settles via empty-batch convergence."""
+    session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     state["pending"] = None
     RD.save_state(session_dir, state)
@@ -483,7 +496,7 @@ def test_edge8_empty_batch_advances(tmp_path):
 
 def test_preemission_out_of_scope_drops_current_fix_batch_row(tmp_path):
     """axis: a pre-emission out-of-scope ruling drops the target from `_fixBatch` before the next emit."""
-    session_dir, _, _, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     state["pending"] = None
     RD.save_state(session_dir, state)
@@ -506,12 +519,12 @@ def test_preemission_out_of_scope_drops_current_fix_batch_row(tmp_path):
     assert key_a not in payload_keys
 
 
-def test_out_of_scope_queue_row_absent_after_fixer_landing(tmp_path):
-    """axis: live out-of-scope keys are excluded from the post-landing fix-batch re-slice.
+def test_out_of_scope_queue_row_absent_after_the_apply_fixes_fold(tmp_path):
+    """axis: live out-of-scope keys are excluded from the post-fold fix-batch re-slice.
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_rulings_channel_1445.md (BP-2)
     """
-    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+    session_dir, gitdir, head_path, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     state["pending"] = None
     RD.save_state(session_dir, state)
@@ -529,7 +542,7 @@ def test_out_of_scope_queue_row_absent_after_fixer_landing(tmp_path):
     nxt = RD.cmd_next(session_dir)
     assert nxt.get("ok"), nxt
     phase, adv = _drive_one_phase(session_dir, gitdir, [], head_path)
-    assert phase == P_FIXER
+    assert phase == P_APPLY_FIXES
     assert adv.get("ok"), adv
     state = _state(session_dir)
     later = {RD._fix_batch_row_key(row)
@@ -550,23 +563,9 @@ def test_out_of_scope_queue_row_absent_after_fixer_landing(tmp_path):
         assert key_b not in keys
 
 
-def test_fix_batch_unreadable_refuses_order_render(tmp_path, monkeypatch):
-    session_dir, _, _, _, _ = _pending_fixer_two_findings(tmp_path)
-    state = _state(session_dir)
-    rnd = state["round"]
-    missing = str(tmp_path / "no-such-fix-batch.json")
-
-    def _broken_ensure(_session_dir, _rnd, _state):
-        return missing
-
-    monkeypatch.setattr(RD, "_ensure_fix_batch_file", _broken_ensure)
-    with pytest.raises(ValueError, match="order-render-refused:fix-batch-unreadable"):
-        RD._fix_batch_file_sha256(session_dir, rnd, state)
-
-
-def test_edge9_non_fixer_step_accepts_guidance(tmp_path):
-    """axis: guidance is accepted at a step that is not the fixer step (it used to be refused)."""
-    session_dir, gitdir, head_path, row_a, _ = _pending_fixer_two_findings(tmp_path)
+def test_edge9_non_apply_fixes_step_accepts_guidance(tmp_path):
+    """axis: guidance is accepted at a step that is not the `apply-fixes` step (it used to be refused)."""
+    session_dir, gitdir, head_path, row_a, _ = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     rnd = state["round"]
     pend = {"action": RD.P_AUDITS, "round": rnd, "phase": RD.P_AUDITS, "attempt": 0,
@@ -591,7 +590,7 @@ def _owner_absent(state):
 
 
 def test_rule_refuses_malformed_rulings_log(tmp_path):
-    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _ = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     state["rulingsLog"] = {"not": "a-list"}
     RD.save_state(session_dir, state)
@@ -605,7 +604,7 @@ def test_rule_refuses_malformed_rulings_log(tmp_path):
 
 
 def test_rule_refuses_malformed_ruling_seq_counter(tmp_path):
-    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _ = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     state["rulingSeqCounter"] = "not-an-int"
     RD.save_state(session_dir, state)
@@ -620,7 +619,7 @@ def test_rule_refuses_malformed_ruling_seq_counter(tmp_path):
 
 @pytest.mark.parametrize("bad_log", [{"not": "a-list"}, None])
 def test_rule_refuses_malformed_rulings_log_owner_absent(tmp_path, bad_log):
-    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _ = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     _owner_absent(state)
     state["rulingsLog"] = bad_log
@@ -635,7 +634,7 @@ def test_rule_refuses_malformed_rulings_log_owner_absent(tmp_path, bad_log):
 
 
 def test_rule_refuses_malformed_ruling_seq_counter_owner_absent(tmp_path):
-    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _ = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     _owner_absent(state)
     state["rulingSeqCounter"] = "not-an-int"
@@ -650,7 +649,7 @@ def test_rule_refuses_malformed_ruling_seq_counter_owner_absent(tmp_path):
 
 
 def test_preemission_ruling_journal_carries_round_phase(tmp_path):
-    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _ = _pending_apply_fixes_two_findings(tmp_path)
     state = _state(session_dir)
     session_round = state["round"]
     session_step = state.get("step")
@@ -671,7 +670,7 @@ def test_preemission_ruling_journal_carries_round_phase(tmp_path):
 
 
 def test_receipt_parity_rulings_field(tmp_path):
-    session_dir, _, _, row_a, _ = _pending_fixer_two_findings(tmp_path)
+    session_dir, _, _, row_a, _ = _pending_apply_fixes_two_findings(tmp_path)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     assert _rule(session_dir, _write_ruling_file(tmp_path / "r.json", [
         {"id": id_a, "ruling": "guidance", "reason": "r", "guidance": "g"}]))["ok"]
@@ -681,8 +680,8 @@ def test_receipt_parity_rulings_field(tmp_path):
     assert driver_receipt["rounds"][0].get("rulings") == state["rounds"][rnd].get("rulings")
 
 
-def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
-    session_dir, gitdir, head_path, row_a, row_b = _pending_fixer_two_findings(tmp_path)
+def test_binding_ruling_rides_the_apply_fixes_files_and_certifies(tmp_path):
+    session_dir, gitdir, head_path, row_a, row_b = _pending_apply_fixes_two_findings(tmp_path)
     id_a = row_a.get("id") or RD._fix_batch_row_key(row_a)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     path = _write_ruling_file(tmp_path / "r.json", [
@@ -698,21 +697,8 @@ def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
     assert nxt.get("ok"), nxt
     state = _state(session_dir)
     pend = state["pending"]
-    roster, _ = __import__("round_adapters").roster_for(
-        pend["phase"], state, state.get("config") or {})
-    seat, occurrence = RR.roster_slots(roster)[0]
-    skey = RR.storage_key(seat, occurrence)
-    order_path = RR.order_prompt_path(
-        session_dir, pend["round"], pend["phase"], skey, pend["attempt"])
-    with open(order_path, "rb") as fh:
-        driver_order_bytes = fh.read()
-    _manifest_sha, anchored_order_sha = _anchor_hashes(
-        session_dir, state, pend, seat, occurrence)
-    driver_order_sha = hashlib.sha256(driver_order_bytes).hexdigest()
-    assert driver_order_sha == anchored_order_sha
-    driver_order_text = driver_order_bytes.decode("utf-8")
     key_b = RD._fix_batch_row_key(row_b)
-    batch_path = RD._ensure_fix_batch_file(session_dir, pend["round"], state)
+    batch_path = pend["payload"]["fixBatchPath"]
     with open(batch_path, encoding="utf-8") as fh:
         batch_doc = json.load(fh)
     batch_keys = {
@@ -720,20 +706,7 @@ def test_binding_ruling_rides_hashed_order_and_certifies(tmp_path):
         for row in (batch_doc if isinstance(batch_doc, list) else [])
         if isinstance(row, dict)}
     assert key_b not in batch_keys
-    order_text = _fixer_order_text(session_dir)
-    log_rows = state.get("rulingsLog") or []
-    prompt = _deliver_rulings(order_text, log_rows)
-    delivered_path = tmp_path / "delivered-fixer-order.md"
-    delivered_path.write_text(prompt, encoding="utf-8")
-    run_dir = _write_execution_run_dir(tmp_path, str(delivered_path), echo_nonce="rulings-bind")
-    payload = _TRI._payload_for(session_dir, state, pend, seat, [], head_path)
-    _dispatch_observed_land(session_dir, state, pend, seat, payload, occurrence=occurrence)
-    rec_out = RD.cmd_record_result(session_dir, seat, occurrence=occurrence,
-                                   evidence_run_dir=run_dir)
-    assert rec_out.get("ok"), rec_out
-    assert "apply guard A" in driver_order_text
-    adv = RD.cmd_advance(session_dir, git=_fake_git(gitdir))
-    assert adv.get("ok"), adv
+    assert "apply guard A" in _apply_fixes_text(session_dir)
     while not _state(session_dir).get("terminal"):
         phase, out = _drive_one_phase(session_dir, gitdir, [], head_path)
         assert out.get("ok"), (phase, out)

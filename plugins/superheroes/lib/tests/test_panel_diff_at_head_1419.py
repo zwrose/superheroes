@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""#1419 — unknown-surface full panel reviews git-derived head diff, never a stale reviewed diff."""
+"""#1419 — the post-fix head diff is git-derived at the fix-fold head, never a stale reviewed diff; a fix
+surface git cannot derive hands the PR back (the unknown-surface panel it once fed is gone)."""
 import importlib.util
 import json
 import os
@@ -77,20 +78,6 @@ def _commit_file(repo, path, body, message="fix"):
     _git(repo, "commit", "-qm", message)
 
 
-def _unknown_surface_state(config):
-    state = RD.new_state(config)
-    state["round"] = 2
-    state["rounds"] = {"2": {}}
-    state["_headDiffUnknown"] = True
-    state["_headDiffSource"] = "unknown"
-    state["decisions"] = []
-    panel_head = config.get(RD.FIX_FOLD_HEAD_KEY) if isinstance(config, dict) else None
-    if not isinstance(panel_head, str) or not panel_head:
-        panel_head = None
-    RD._enter_delta_round(state, config, panel_head=panel_head)
-    return state
-
-
 _A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
                "consequence": "a reviewer-found defect stays in the change"}]
 
@@ -103,12 +90,12 @@ def test_b1_fixer_without_head_diff_derives_git_and_audits(tmp_path):
     diff_round1 = diff_commit1
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_FIXER and rnd == 1:
+        if phase == RD.P_APPLY_FIXES and rnd == 1:
             _commit_file(repo, "f.py", "fixed head\n", "fixer commit")
             return {"fixes": [{"file": "f.py"}], "changedSubjects": ["Code"]}
         return _responder(round1_findings=_A_FINDING)(phase, payload, rnd)
 
-    n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
+    n = _drive_to_phase(d, cfg, respond, RD.P_APPLY_FIXES)
     fix_round = n["round"]
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       respond(n["phase"], n["payload"], n["round"]))
@@ -125,11 +112,12 @@ def test_b1_fixer_without_head_diff_derives_git_and_audits(tmp_path):
     assert state["reviewedDiff"] != diff_round1
 
 
-def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path, monkeypatch):
+def test_b1_a_fix_whose_post_fix_diff_git_cannot_derive_hands_the_pr_back(tmp_path, monkeypatch):
+    """Re-pinned from the unknown-surface panel tests (b1-b4): the post-fix diff the fold derives from
+    git refuses once, so the surface is unknown; the next round hands the PR back with its findings
+    open and no panel is scheduled. The tests of the removed panel-diff refresh and its park
+    (the `panel-diff-underivable` cause, the verify-then-panel gate) are deleted with them."""
     repo, base_sha, diff_round1 = _init_two_commit_repo(tmp_path)
-    # The fixer fold derives its post-fix diff from git; to keep this test on the unknown-surface
-    # path (no post-fix diff -> full panel at the verified head) the fold's own derivation is made
-    # to refuse once, on its first call; every later derivation is the real one.
     real_derive = RD._derive_panel_diff_at_head
     calls = []
 
@@ -145,200 +133,23 @@ def test_b1_panel_diff_follows_head_moved_between_fixer_and_verify(tmp_path, mon
     cfg = _cfg(verifyCommand="pytest -q", diff=diff_round1, repoRoot=repo, baseRef=base_sha)
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_FIXER and rnd == 1:
+        if phase == RD.P_APPLY_FIXES and rnd == 1:
             _commit_file(repo, "f.py", "fixed head\n", "fixer commit")
             return {"fixes": [{"file": "f.py"}], "changedSubjects": ["Code"]}
         return _responder(round1_findings=_A_FINDING)(phase, payload, rnd)
 
-    n = _drive_to_phase(d, cfg, respond, RD.P_FIXER)
+    n = _drive_to_phase(d, cfg, respond, RD.P_APPLY_FIXES)
     s = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                       respond(n["phase"], n["payload"], n["round"]))
     assert s["ok"], s
     n2 = RD.cmd_next(d)
-    assert n2["phase"] == RD.P_VERIFY
-    _commit_file(repo, "f.py", "verify-interval head\n", "post-fix verify commit")
-    diff_at_verify_head = _git_diff(repo, base_sha)
-    s2 = RD.cmd_submit(d, n2["phase"], n2["attempt"], n2["expectedStateHash"], {"result": "pass"})
-    assert s2["ok"], s2
-    n3 = RD.cmd_next(d)
-    assert n3["phase"] == RD.P_PANEL
+    assert n2["phase"] == RD.P_TERMINAL
     ok, state = RD.load_state(d)
     assert ok
-    panel_round = state["round"]
-    rdir = round_records.round_dir(d, panel_round)
-    materialized = open(os.path.join(rdir, "diff.txt"), encoding="utf-8").read()
-    assert materialized == diff_at_verify_head
-    assert "verify-interval head" in materialized
-
-
-@pytest.mark.parametrize(
-    "edge_id,config_over,monkey",
-    [
-        ("repoRoot missing", {"repoRoot": None, "baseRef": "abc"}, None),
-        ("baseRef missing", {"baseRef": None}, "repo"),
-        ("baseRef not a commit", {"baseRef": "not-a-commit"}, "repo"),
-        ("empty diff", {}, "empty"),
-    ],
-)
-def test_b2_parks_when_panel_diff_underivable(tmp_path, edge_id, config_over, monkey):
-    repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    head_sha = _rev_parse(repo)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha, **{RD.FIX_FOLD_HEAD_KEY: head_sha})
-    cfg.update(config_over)
-    if monkey == "repo":
-        pass
-    elif monkey == "empty":
-        cfg["baseRef"] = _rev_parse(repo)
-    state = _unknown_surface_state(cfg)
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
     assert state["step"] != RD.P_PANEL
-
-
-def test_b2_git_unavailable_parks(tmp_path, monkeypatch):
-    repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
-               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
-    real_run = subprocess.run
-
-    def _wrapped(*args, **kwargs):
-        cmd = args[0] if args else []
-        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git" and "diff" in cmd:
-            raise FileNotFoundError("git")
-        return real_run(*args, **kwargs)
-
-    monkeypatch.setattr(rdb.subprocess, "run", _wrapped)
-    state = _unknown_surface_state(cfg)
-    assert state["certification"]["reason"].startswith(
-        "%s: git unavailable" % RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert state["step"] != RD.P_PANEL
-
-
-def test_b2_git_diff_nonzero_parks(tmp_path, monkeypatch):
-    repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
-               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
-    real_run = subprocess.run
-
-    def _wrapped(*args, **kwargs):
-        cmd = args[0] if args else []
-        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git" and "diff" in cmd:
-            class _Proc:
-                returncode = 128
-                stdout = b""
-                stderr = b"fatal: bad"
-            return _Proc()
-        return real_run(*args, **kwargs)
-
-    monkeypatch.setattr(rdb.subprocess, "run", _wrapped)
-    state = _unknown_surface_state(cfg)
-    assert "git diff exit" in state["certification"]["reason"]
-    assert state["step"] != RD.P_PANEL
-
-
-def test_b2_git_timeout_parks(tmp_path, monkeypatch):
-    repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
-               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
-    real_run = subprocess.run
-
-    def _wrapped(*args, **kwargs):
-        cmd = args[0] if args else []
-        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git" and "diff" in cmd:
-            raise subprocess.TimeoutExpired(cmd="git", timeout=120)
-        return real_run(*args, **kwargs)
-
-    monkeypatch.setattr(rdb.subprocess, "run", _wrapped)
-    state = _unknown_surface_state(cfg)
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "git diff failed" in state["certification"]["reason"]
-    assert state["step"] != RD.P_PANEL
-
-
-def test_b2_git_diff_non_utf8_parks(tmp_path, monkeypatch):
-    repo, base_sha, _diff = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha,
-               **{RD.FIX_FOLD_HEAD_KEY: _rev_parse(repo)})
-    real_run = subprocess.run
-
-    def _wrapped(*args, **kwargs):
-        cmd = args[0] if args else []
-        if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "git" and "diff" in cmd:
-            class _Proc:
-                returncode = 0
-                stdout = b"diff --git a/f.py b/f.py\n+\xff\n"
-                stderr = b""
-            return _Proc()
-        return real_run(*args, **kwargs)
-
-    monkeypatch.setattr(rdb.subprocess, "run", _wrapped)
-    state = _unknown_surface_state(cfg)
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "diff not UTF-8" in state["certification"]["reason"]
-    assert state["step"] != RD.P_PANEL
-
-
-def test_b3_review_diff_producer_byte_identical_across_consumers(tmp_path):
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    repo = str(repo_path)
-    _git(repo, "init", "-q", "-b", "main")
-    big_body = "".join("payload line %02d same shape\n" % i for i in range(20))
-    _commit_file(repo, "big.py", big_body, "add big")
-    base_sha = _rev_parse(repo)
-    _git(repo, "mv", "big.py", "moved.py")
-    _git(repo, "commit", "-qm", "rename")
-    head_sha = _rev_parse(repo)
-    diff_with_renames = subprocess.run(
-        ["git", "diff", "%s...%s" % (base_sha, head_sha)],
-        cwd=repo, capture_output=True, text=True, check=True)
-    assert "rename from" in diff_with_renames.stdout
-    diff_no_renames = subprocess.run(
-        ["git", "diff", "--no-renames", "%s...%s" % (base_sha, head_sha)],
-        cwd=repo, capture_output=True, text=True, check=True)
-    assert diff_no_renames.stdout != diff_with_renames.stdout
-    proc = rdb.run_git_diff_three_dot(repo, base_sha, head_sha, timeout=120)
-    assert proc.returncode == 0
-    panel_bytes = proc.stdout
-    assert panel_bytes.decode("utf-8") == diff_with_renames.stdout
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha, **{RD.FIX_FOLD_HEAD_KEY: head_sha})
-    state = _unknown_surface_state(cfg)
-    assert state.get("terminal") != "cannot-certify"
-    assert state["reviewedDiff"] == panel_bytes.decode("utf-8")
-    assert state["headDiff"] == panel_bytes.decode("utf-8")
-
-
-def test_b4_commit_after_verify_panel_reviews_verified_head(tmp_path):
-    repo, base_sha, _diff_h1 = _init_two_commit_repo(tmp_path)
-    h1 = _rev_parse(repo)
-    _commit_file(repo, "f.py", "after verify\n", "post verify")
-    h2 = _rev_parse(repo)
-    diff_at_h1 = _git_diff_at(repo, base_sha, h1)
-    diff_at_h2 = _git_diff_at(repo, base_sha, h2)
-    assert diff_at_h1 != diff_at_h2
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
-    state = RD.new_state(cfg)
-    state["round"] = 2
-    state["rounds"] = {"2": {}}
-    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
-    RD._fold_verify(state, cfg, {"result": "pass"}, resolution=(h1, None))
-    assert state["reviewedDiff"] == diff_at_h1
-    assert state["reviewedDiff"] != diff_at_h2
-    assert state["step"] == RD.P_PANEL
-
-
-def test_b4_unresolved_panel_head_parks(tmp_path):
-    repo, base_sha, _ = _init_two_commit_repo(tmp_path)
-    cfg = _cfg(repoRoot=repo, baseRef=base_sha)
-    state = RD.new_state(cfg)
-    state["round"] = 2
-    state["rounds"] = {"2": {}}
-    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
-    RD._fold_verify(state, cfg, {"result": "pass"}, resolution=(None, "refused"))
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "head unresolved" in state["certification"]["reason"]
+    assert not any(dec["kind"] == "unknown-surface" for dec in state["decisions"])
 
 
 def test_b4_producer_refuses_live_head(tmp_path):

@@ -21,15 +21,12 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 {{ROLE_BRIEF_LINE}}
 {{RISK_AREAS_LINE}}
 {{BREAK_IT_GRAMMAR_BLOCK}}
-{{PR_CHECKOUT_CONTEXT_LINE}}
 {{PRIOR_COMMENTS_CONTEXT_LINE}}
 {{FOCUS_CONTEXT_LINE}}
 
 ## Calibration precedence
 Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
 > strict fallback when a needed field is absent in all of them.
-
-{{PR_CHECKOUT_INSTRUCTION_BLOCK}}
 
 ## Diff-scope rule — CRITICAL
 You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing
@@ -61,6 +58,10 @@ drop decision: it may drop only a non-CONFIRMED finding (quoting the
 justification); a CONFIRMED finding survives stamped
 `challenge: "author-justified"`. Outdated comments (where
 `position == null`) still count.
+
+## What you read
+Return your read list as the base rubric's panel output-format section defines it,
+covering only what you actually read.
 
 ## Delivery
 Deliver per the base rubric's panel output-format section. Set `tradeoff: true` only when an

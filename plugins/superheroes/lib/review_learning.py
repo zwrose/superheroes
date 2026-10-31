@@ -7,12 +7,14 @@ CLI (`python3 -B lib/review_learning.py <verb>`; one JSON object on stdout; exit
   since --cwd D [--root R]                        # read it back
   apply --cwd D [--root R] --canon-root R --session-id S --proposal F --approval F
   tally --records F --escapes F (--since YYYY-MM-DD | --cwd D [--root R]) [--until D] [--window-days N]
+  seating --row F                                 # the security and premortem seats' numbers; a number not given reads "unmeasured"
 """
 import argparse
 import collections
 import contextlib
 import datetime
 import json
+import math
 import os
 import re
 import subprocess
@@ -44,6 +46,9 @@ SUPERSEDES_KEY = "supersedes"  # optional on either kind: the Canon entry id a r
 DIMENSION_SEAT = review_seats.DIMENSION_SEAT
 _SEATS = set(DIMENSION_SEAT.values())
 _KNOWN = set(DIMENSION_SEAT) | _SEATS
+FALSE_CLAIM_MARKER = "false-pr-claim"  # an escape input item carrying this "marker" is a false PR claim, counted apart from escapes
+SEATING_SEATS = ("security", "premortem")
+UNMEASURED = "unmeasured"
 
 
 def _canon_id(value):
@@ -338,12 +343,13 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     """The input is one review record per PR, the latest, as the record writer reads it (`review_record.py read --pr <n>`);
     a PR is dated by that record's `writtenAt`, and counts when that day is on or after the adoption day and inside the window.
     Its reviews are its seat rows that ran; its catches are its fixed findings, one per finding key, credited to every seat the
-    finding's rows name, leaving out merged members (the representative carries the catch). A PR supplied more than once reads `incomplete-evidence`."""
+    finding's rows name, leaving out merged members (the representative carries the catch). A PR supplied more than once reads `incomplete-evidence`.
+    An escape item marked `"marker": "false-pr-claim"` is counted in `falsePrClaims`, never in `escapes`; `falsePrClaims` is None wherever `escapes` reads None."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
            "measured": False, "reason": None, "seats": {}, "unattributedCatches": None,
-           "escapes": {"missed": None, "seenAndLeft": None}, "leftOut": dict.fromkeys(left)}
+           "escapes": {"missed": None, "seenAndLeft": None}, "falsePrClaims": None, "leftOut": dict.fromkeys(left)}
     if since is None:
         return dict(out, reason="no-adoption-day")
     start = _day(since)
@@ -413,12 +419,17 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         for seats in fixed.values():
             unattributed += not seats
             caught.update(seats)
-    counts = {"missed": 0, "seenAndLeft": 0}
+    counts, claims = {"missed": 0, "seenAndLeft": 0}, 0
     for esc in escapes if isinstance(escapes, list) else []:
         day = _day(esc.get("reviewedAt")) if isinstance(esc, dict) else None
         call = esc.get("call") if isinstance(esc, dict) else None
         label = {"missed": "missed", "seen-and-left": "seenAndLeft"}.get(call) if isinstance(call, str) else None
-        if day is None and isinstance(esc, dict):
+        marked = isinstance(esc, dict) and esc.get("marker") == FALSE_CLAIM_MARKER
+        if isinstance(esc, dict) and "marker" in esc and not marked:
+            # axis: a marker other than the false-claim marker reads malformed, never counted — see bite-proof record wo_revisit_unknown-marker
+            left["malformed"] += 1
+            incomplete = True
+        elif day is None and isinstance(esc, dict):
             left["undated"] += 1
             incomplete = True
         elif label is None:
@@ -426,13 +437,54 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             incomplete = True
         elif outside(day):
             left[outside(day)] += 1
+        elif marked:
+            # axis: a false PR claim never adds to the missed or seen-and-left counts — see bite-proof record wo_revisit_claim-apart
+            claims += 1
         else:
             counts[label] += 1
     if incomplete:  # missing evidence reads unmeasured, never zero (owner-decisions.md, the gardening pass)
+        # axis: an unmeasured tally leaves the false-claim count None, never zero — see bite-proof record wo_revisit_claims-unmeasured
         return dict(out, measured=False, reason=out["reason"] or "incomplete-evidence", leftOut=left)
     out.update(seats={s: {"reviews": len(reviews[s]), "caught": caught[s]} for s in sorted(set(reviews) | set(caught))},
-               unattributedCatches=unattributed, escapes=counts, leftOut=left)
+               unattributedCatches=unattributed, escapes=counts, falsePrClaims=claims, leftOut=left)
     return out
+
+
+# --- the seating numbers ---
+
+def _measured(value):
+    """The one chokepoint for every number the seating record shows: the number itself when it is a finite
+    int or float of zero or more, else "unmeasured". Anything not given is never shown as 0."""
+    # axis: a bool is not a number — see bite-proof record wo_revisit_measured-bool
+    if isinstance(value, bool):
+        return UNMEASURED
+    # axis: a huge integer is compared as an integer, never converted to a float — see bite-proof record wo_revisit_measured-huge-int
+    if isinstance(value, int):
+        return value if value >= 0 else UNMEASURED
+    # axis: a missing or null number reads unmeasured, never zero — see bite-proof record wo_revisit_measured-none
+    # axis: a negative or non-numeric value reads unmeasured — see bite-proof record wo_revisit_measured-range
+    if not isinstance(value, float) or not math.isfinite(value) or value < 0:
+        return UNMEASURED
+    return value
+
+
+def seating(row):
+    """The numbers the seating check reads, for the security and premortem seats: each seat's finding outcomes by
+    outcome, its tokens and its minutes. `row` is a dict keyed by seat name; every number passes through `_measured`,
+    so a number the row does not give reads "unmeasured" and is listed in `unmeasured`, never shown as 0."""
+    if not isinstance(row, dict):
+        return _result(False, "refused", "bad-input", "the seating row is a JSON object keyed by seat name",
+                       seats=None, unmeasured=None)
+    seats, unmeasured = {}, []
+    for seat in SEATING_SEATS:
+        given = row.get(seat) if isinstance(row.get(seat), dict) else {}
+        outcomes = given.get("outcomes") if isinstance(given.get("outcomes"), dict) else {}
+        shown = {"outcomes": {o: _measured(outcomes.get(o)) for o in review_findings_schema.OUTCOMES},
+                 "tokens": _measured(given.get("tokens")), "minutes": _measured(given.get("minutes"))}
+        seats[seat] = shown
+        unmeasured += ["%s.outcomes.%s" % (seat, o) for o, n in shown["outcomes"].items() if n == UNMEASURED]
+        unmeasured += ["%s.%s" % (seat, k) for k in ("tokens", "minutes") if shown[k] == UNMEASURED]
+    return {"ok": True, "seats": seats, "unmeasured": sorted(unmeasured)}
 
 
 # --- the CLI ---
@@ -453,6 +505,7 @@ def _parser():
         s.add_argument("--root")
         if name != "tally":
             s.add_argument("--cwd", required=True)
+    sub.add_parser("seating").add_argument("--row", required=True)
     sub.choices["adopt"].add_argument("--date", required=True)
     for f in ("canon-root", "session-id", "proposal", "approval"):
         sub.choices["apply"].add_argument("--" + f, required=True)
@@ -468,7 +521,7 @@ def _parser():
 
 def main(argv=None):
     argv = sys.argv[1:] if argv is None else list(argv)
-    if argv and argv[0] not in ("adopt", "since", "apply", "tally"):
+    if argv and argv[0] not in ("adopt", "since", "apply", "tally", "seating"):
         argv = argv[1:]  # a full sys.argv, program name first
     a = _parser().parse_args(argv)
     if a.verb == "adopt":
@@ -479,6 +532,8 @@ def main(argv=None):
     elif a.verb == "apply":
         out = apply(a.cwd, _load(a.proposal), _load(a.approval), canon_root=a.canon_root,
                     session_id=a.session_id, root=a.root)
+    elif a.verb == "seating":
+        out = seating(_load(a.row))
     else:
         records, escapes = _load(a.records), _load(a.escapes)
         if not isinstance(records, list) or not isinstance(escapes, list) or bool(a.since) == bool(a.cwd):

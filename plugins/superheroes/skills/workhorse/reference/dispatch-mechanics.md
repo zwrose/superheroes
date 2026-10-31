@@ -783,16 +783,7 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `/tmp` needs a project-side setting (for example mongod `--nounixsocket`, or passing `TMPDIR`
   through). If the sandbox cannot start, the run fails instead of running unsandboxed.
 - **Settings files:** `--restricted` ignores user, project, and local settings and confines
-  Write and Edit to the working directory. A run opened with `--landing-dir <dir>` also grants
-  those tools that one directory, `<dir>`'s realpath, through `--add-dir` placed before `--settings`
-  and `sandbox.filesystem.allowWrite`, so a review fixer writes its own payload into its landing
-  slot. `<dir>` must be absolute, free of glob characters, an existing directory ending
-  `round-<N>/landing/<phase>`; otherwise the open refuses `engine-config:sandbox-landing-dir-invalid`.
-  A `<dir>` that equals, sits inside, or contains a deny entry (as spelled or by realpath) refuses
-  `engine-config:sandbox-landing-dir-denied`: deny wins. A continuation that names a different
-  `--landing-dir`, or one when none was journaled, refuses `engine-config:sandbox-landing-dir-mismatch`
-  with nothing spawned; omitting the flag on a continuation is fine, the journal governs. Other
-  engines accept the flag and ignore it.
+  Write and Edit to the working directory.
 - **uv is offline** (`UV_OFFLINE=1`) unless `allowedDomains` is non-empty: the order's Python
   dependencies must already be in the uv cache, or the install fails.
 - **Project access options.** A project opens access through `sandboxAccess` in its calibration, set
@@ -810,10 +801,8 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   `claudeWriteSandbox` in the run-opened record; continuations and spawns reuse them. The access
   options are read once at open and journaled with the roots as `claudeWriteSandbox.access`, and the
   two defaults are journaled as `claudeWriteSandbox.tmpWriteRoots` and
-  `claudeWriteSandbox.localBinding`, and `--landing-dir` as `claudeWriteSandbox.landingDir` (absent
-  when the flag was not passed), so a
-  calibration edit mid-run does not change a running run's sandbox; a run opened without that field
-  reads as all off. A run opened without the roots refuses `engine-config:sandbox-roots-missing`. A
+  `claudeWriteSandbox.localBinding`, so a calibration edit mid-run does not change a running run's
+  sandbox; a run opened without that field reads as all off. A run opened without the roots refuses `engine-config:sandbox-roots-missing`. A
   root that cannot be resolved refuses at open, with nothing opened:
   `engine-config:sandbox-roots-unresolvable` or `engine-config:sandbox-uv-cache-unresolvable`. So does
   a `sandboxAccess` the open cannot use: `engine-config:sandbox-access-malformed`, or

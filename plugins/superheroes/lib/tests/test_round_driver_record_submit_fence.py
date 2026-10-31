@@ -19,8 +19,6 @@ if _LIB not in sys.path:
 
 import round_adapters  # noqa: E402
 import round_driver  # noqa: E402
-import round_orders  # noqa: E402
-import round_phases as RP  # noqa: E402
 import round_records  # noqa: E402
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -28,6 +26,10 @@ _SPEC = importlib.util.spec_from_file_location(
     os.path.join(_HERE, "test_round_driver_integration.py"))
 _TDI = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_TDI)
+
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                 for name in ("right", "brokeNothing", "testWouldFail")}
 
 _bootstrap = _TDI._bootstrap
 _land = _TDI._land
@@ -86,8 +88,9 @@ def _expected_cmd_names():
 _EXPECTED_CMD_NAMES = (
     "cmd_advance",
     "cmd_attest",
+    "cmd_break_it_change",  # session state + mirror + one journal row; no durable seat records
     "cmd_checkpoint",
-    "cmd_correct_fixer_refusals",  # rewrites the pending fixer landing + journal; no durable seat records
+    "cmd_extra_audit",  # session state + mirror + one journal row, copies the receipt to round-receipt.superseded-1.json; no durable seat records
     "cmd_next",
     "cmd_record_missing",
     "cmd_record_result",
@@ -186,30 +189,6 @@ def test_advance_still_folds_with_records_present(tmp_path):
     assert out["folded"]["phase"] == round_driver.P_PANEL
 
 
-def test_hand_submit_non_adapter_phase_no_spurious_roster_journal(tmp_path):
-    """Hand submit of a gate phase must not journal a roster-unavailable refusal."""
-    session_dir, _gitdir, _head_path = _bootstrap(tmp_path, name="judgment-fence")
-    state = _state(session_dir)
-    finding = {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
-               "tradeoff": True}
-    state["step"] = round_driver.P_JUDGMENT
-    state["_judgmentFindings"] = [finding]
-    state["_judgmentMechanical"] = []
-    state["pending"] = {"action": round_driver.P_JUDGMENT, "round": 1,
-                        "phase": round_driver.P_JUDGMENT, "attempt": 0, "payload": {}}
-    round_driver.save_state(session_dir, state)
-    state = _state(session_dir)
-    before = len(round_driver.read_journal(session_dir))
-    row_id = round_driver._judgment_row_ids([finding])[0]
-    art = {"dispositions": [{"id": row_id, "disposition": "skip", "reason": "owner declined"}]}
-    out = round_driver.cmd_submit(session_dir, round_driver.P_JUDGMENT, 0,
-                                  round_driver.state_hash(state), art)
-    assert out["ok"] is True, out
-    added = round_driver.read_journal(session_dir)[before:]
-    spurious = [e for e in added if e.get("reason") == "roster-unavailable"]
-    assert spurious == [], spurious
-
-
 def test_durable_slot_records_broken_symlink_fires_fence(tmp_path):
     """Existence probe: a broken symlink at the pending attempt counts as present."""
     session_dir = str(tmp_path / "symlink-probe")
@@ -261,7 +240,8 @@ def test_second_distinct_audit_target_record_fires_fence_on_hand_submit(tmp_path
     pend = state["pending"]
     _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
     _land(session_dir, state, pend, tid1,
-          {"id": tid1, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+          {"id": tid1, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone",
+           "checks": _AUDIT_CHECKS})
     assert round_driver.cmd_record_result(session_dir, tid1, occurrence=0)["ok"] is True
     state = _state(session_dir)
     # Prior phases folded via `advance`; isolate the record-submit fence under test.
@@ -270,8 +250,8 @@ def test_second_distinct_audit_target_record_fires_fence_on_hand_submit(tmp_path
     state = _state(session_dir)
     out = round_driver.cmd_submit(
         session_dir, pend["phase"], pend["attempt"], round_driver.state_hash(state),
-        {"results": [{"id": tid0, "ruling": "discharged", "reason": "ok"},
-                     {"id": tid1, "ruling": "discharged", "reason": "ok"}]})
+        {"results": [{"id": tid0, "ruling": "discharged", "reason": "ok", "checks": _AUDIT_CHECKS},
+                     {"id": tid1, "ruling": "discharged", "reason": "ok", "checks": _AUDIT_CHECKS}]})
     assert out["ok"] is False and out["reason"] == "record-submit-interleaved", out
     assert out.get("seats") == [tid1], out
 
@@ -403,7 +383,8 @@ def test_advance_audits_without_manifest_discloses_absent(tmp_path):
     for tid in (tid0, tid1):
         _land(session_dir, state, pend, tid,
               {"id": tid, "ruling": "discharged", "auditorVendor": "claude",
-               "reason": "re-read the fixed hunk; the cited defect is gone"})
+               "reason": "re-read the fixed hunk; the cited defect is gone",
+               "checks": _AUDIT_CHECKS})
         assert round_driver.cmd_record_result(session_dir, tid, occurrence=0)["ok"]
     expected = os.path.abspath(round_records.dispatch_manifest_path(
         session_dir, pend["round"], pend["phase"], pend["attempt"]))
@@ -693,10 +674,6 @@ def test_record_orphans_ignored_atomic_when_fold_aborts(tmp_path, monkeypatch):
     assert not orphan_rows
 
 
-# Owner-gate phases park by design — outside the no-dead-end fold-path guarantee
-# (reference/round-driver.md § record-submit interleave / no dead ends).
-_OWNER_GATE_PHASES = frozenset({round_driver.P_JUDGMENT, round_driver.P_STALL})
-
 _REFUSE_FOLD_PHASES = frozenset(
     phase for phase in round_adapters._MISSING_POLICY
     if round_adapters.missing_policy(phase) == round_adapters.MISSING_REFUSE_FOLD)
@@ -798,10 +775,7 @@ def _install_census_records(session_dir, gitdir, head_path, pend, panel_findings
 def test_no_dead_end_census(tmp_path, phase, latch):
     """Axis: phase kind × committed-path latch — every adapter phase keeps a legal fold command.
 
-    Owner-gate phases (`present-judgment`, `present-stall-menu`) are excluded: their park is an
-    intervention by design (reference/round-driver.md).
     """
-    assert phase not in _OWNER_GATE_PHASES
     panel_findings = _census_panel_findings()
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="%s-%s" % (phase, latch))
     pend = _drive_census_phase(session_dir, gitdir, head_path, phase, panel_findings)
@@ -833,95 +807,3 @@ def test_record_path_folds_after_fence_refusal(tmp_path):
     assert out["folded"]["phase"] == round_driver.P_PANEL
 
 
-_OWNER_ARTIFACT_SEAT_PHASES = tuple(round_orders.ORDER_PHASES) + (RP.P_VERIFY,)
-_OWNER_ARTIFACT_GATE_PHASES = (RP.P_JUDGMENT, RP.P_STALL)
-_OWNER_ARTIFACT_CENSUS_PHASES = _OWNER_ARTIFACT_SEAT_PHASES + _OWNER_ARTIFACT_GATE_PHASES
-
-
-def test_owner_gate_phases_membership_census():
-    """`OWNER_GATE_PHASES` membership is pinned independently of the driver's tuple.
-
-    This constant decides which phases accept a hand-supplied artifact, so its membership is
-    pinned independently — widening it is a fence change that must be argued for, not slipped in.
-    """
-    assert set(round_driver.OWNER_GATE_PHASES) == {RP.P_JUDGMENT, RP.P_STALL}
-
-
-def test_owner_artifact_census_completeness():
-    """Every foldable pending phase appears in exactly one owner-artifact census arm.
-
-    `terminal` is excluded because it is not a foldable pending phase. A new phase must be
-    added to one arm deliberately.
-    """
-    seat_phases = set(_OWNER_ARTIFACT_SEAT_PHASES)
-    gate_phases = set(_OWNER_ARTIFACT_GATE_PHASES)
-    foldable = set(RP.ALL_PHASES) - {RP.P_TERMINAL}
-    overlap = seat_phases & gate_phases
-    unclassified = foldable ^ (seat_phases | gate_phases)
-    assert not overlap, "phases in both arms: %s" % sorted(overlap)
-    assert not unclassified, "unclassified phases: %s" % sorted(unclassified)
-
-
-def _park_owner_gate_for_census(session_dir, phase):
-    state = _state(session_dir)
-    state["step"] = phase
-    state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
-    if phase == round_driver.P_JUDGMENT:
-        state["_judgmentFindings"] = [
-            {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
-             "tradeoff": True}]
-        state["_judgmentMechanical"] = []
-    if phase == round_driver.P_STALL:
-        state["_stallChoices"] = list(round_driver.STALL_CHOICES)
-        state["_acceptRiskEligible"] = False
-    round_driver.save_state(session_dir, state)
-
-
-def _owner_artifact_path_for_phase(session_dir, phase, tmp_path):
-    if phase == round_driver.P_JUDGMENT:
-        state = _state(session_dir)
-        finding = state["_judgmentFindings"][0]
-        artifact = {"dispositions": [{"id": round_driver._finding_key_of(finding),
-                                      "disposition": "fix-as-suggested"}]}
-    elif phase == round_driver.P_STALL:
-        artifact = {"choice": round_driver.HOLD_CHOICE}
-    else:
-        artifact = {"placeholder": True}
-    path = tmp_path / ("owner-artifact-%s.json" % phase)
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(artifact, fh)
-    return str(path)
-
-
-@pytest.mark.parametrize("phase", _OWNER_ARTIFACT_CENSUS_PHASES)
-def test_owner_artifact_seat_phase_fence_census(tmp_path, phase):
-    """Seat phases refuse advance --owner-artifact with advance-submit-interleaved; gate phases do not.
-
-    Seat and gate arms are derived from `round_orders` and `round_phases` — never from
-    `round_driver.OWNER_GATE_PHASES`.
-    """
-    assert len(_OWNER_ARTIFACT_CENSUS_PHASES) >= 9
-    assert _OWNER_ARTIFACT_SEAT_PHASES
-    assert _OWNER_ARTIFACT_GATE_PHASES
-    seat_phases = set(_OWNER_ARTIFACT_SEAT_PHASES)
-    gate_phases = set(_OWNER_ARTIFACT_GATE_PHASES)
-    panel_findings = _census_panel_findings()
-    session_dir, gitdir, head_path = _bootstrap(
-        tmp_path, name="owner-artifact-census-%s" % phase)
-    if phase in gate_phases:
-        _park_owner_gate_for_census(session_dir, phase)
-    else:
-        pend = _drive_census_phase(session_dir, gitdir, head_path, phase, panel_findings)
-        _install_census_records(session_dir, gitdir, head_path, pend, panel_findings,
-                                "advance_used")
-    state = _state(session_dir)
-    state["_advanceUsed"] = True
-    round_driver.save_state(session_dir, state)
-    artifact_path = _owner_artifact_path_for_phase(session_dir, phase, tmp_path)
-    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir),
-                                   owner_artifact_path=artifact_path)
-    if phase in gate_phases:
-        assert out.get("reason") != "advance-submit-interleaved", (phase, out)
-    else:
-        assert out.get("ok") is False and out.get("reason") == "advance-submit-interleaved", (
-            phase, out)

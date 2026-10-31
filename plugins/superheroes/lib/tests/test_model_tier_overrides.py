@@ -118,11 +118,11 @@ def test_cli_explicit_profile_still_wins(tmp_path, monkeypatch, capsys):
     # (c) an explicit --profile is honored even when an in-repo profile would also resolve.
     _seed_inrepo_profile(tmp_path, "## Model tiers\nreviewer: sonnet\n")
     explicit = tmp_path / "explicit.md"
-    explicit.write_text("## Model tiers\nfixer: opus\n", encoding="utf-8")
+    explicit.write_text("## Model tiers\nimplementer: opus\n", encoding="utf-8")
     _chdir(monkeypatch, tmp_path)
     rc = MTO.main(["model_tier_overrides.py", "--profile", str(explicit)])
     out = json.loads(capsys.readouterr().out)
-    assert rc == 0 and out == {"code-fixer": "opus"}
+    assert rc == 0 and out == {"implementer": "opus"}
 
 
 def test_cli_autoresolve_broken_profile_failsafe(tmp_path, monkeypatch, capsys):
@@ -193,59 +193,60 @@ def test_effective_tiers_merges_defaults_with_profile_overrides(tmp_path):
     assert effective["mechanical"] == "haiku"
 
 
-def test_legacy_fixer_alias_read_maps_to_code_fixer(tmp_path):
+def test_retired_fixer_role_lines_are_dropped_on_read(tmp_path):
+    # C1-L9c: `fixer` and `code-fixer` are unknown roles and carry no alias — fail-open drop.
     p = tmp_path / "profile.md"
-    p.write_text("## Model tiers\nfixer: haiku\n", encoding="utf-8")
-    assert MTO.load_overrides(str(p)) == {"code-fixer": "haiku"}
+    p.write_text("## Model tiers\nfixer: haiku\ncode-fixer: opus\nreviewer: sonnet\n",
+                 encoding="utf-8")
+    assert MTO.load_overrides(str(p)) == {"reviewer": "sonnet"}
+    assert MTO.overrides_for_gate(str(p)).overrides == {"reviewer": "sonnet"}
 
 
-def test_legacy_fixer_alias_write_remaps_with_warning(tmp_path):
+def test_retired_fixer_role_set_is_dropped_as_an_unknown_role(tmp_path):
     p = tmp_path / "profile.md"
     p.write_text("## Model tiers\n", encoding="utf-8")
-    result = MTO.update_overrides(str(p), {"fixer": "haiku"}, [])
-    assert any("'fixer' is a legacy alias for 'code-fixer' (remapped)" in w
-               for w in result["warnings"])
-    text = p.read_text(encoding="utf-8")
-    assert "code-fixer: haiku" in text
-    assert not any(line.strip() == "fixer: haiku" for line in text.splitlines())
-    assert MTO.load_overrides(str(p)) == {"code-fixer": "haiku"}
-
-
-def test_legacy_fixer_alias_clear_remaps_to_code_fixer(tmp_path):
-    p = tmp_path / "profile.md"
-    p.write_text("## Model tiers\ncode-fixer: haiku\n", encoding="utf-8")
-    result = MTO.update_overrides(str(p), clear_roles=["fixer"])
-    assert result["warnings"] == []
-    text = p.read_text(encoding="utf-8")
-    assert "code-fixer" not in text
+    result = MTO.update_overrides(str(p), {"fixer": "haiku", "code-fixer": "haiku"}, [])
+    assert result["warnings"] == ["unknown role: fixer (dropped)",
+                                  "unknown role: code-fixer (dropped)"]
+    assert "fixer" not in p.read_text(encoding="utf-8")
     assert MTO.load_overrides(str(p)) == {}
+
+
+def test_retired_fixer_role_clear_is_dropped_and_the_stale_line_is_rewritten_away(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text("## Model tiers\ncode-fixer: haiku\nreviewer: sonnet\n", encoding="utf-8")
+    result = MTO.update_overrides(str(p), clear_roles=["fixer", "code-fixer"])
+    assert result["warnings"] == ["unknown role: fixer (dropped)",
+                                  "unknown role: code-fixer (dropped)"]
+    assert "fixer" not in p.read_text(encoding="utf-8")
+    assert MTO.load_overrides(str(p)) == {"reviewer": "sonnet"}
 
 
 def test_write_model_tiers_block_creates_and_preserves_other_sections(tmp_path):
     p = tmp_path / "profile.md"
     p.write_text("## Threat model\nsingle-user\n\n## Conventions\nkeep me\n", encoding="utf-8")
-    result = MTO.update_overrides(str(p), {"reviewer": "fable", "code-fixer": "opus"}, [])
+    result = MTO.update_overrides(str(p), {"reviewer": "fable", "implementer": "opus"}, [])
     text = p.read_text(encoding="utf-8")
     assert result["warnings"] == []
     assert "## Threat model\nsingle-user" in text
     assert "## Conventions\nkeep me" in text
-    assert "## Model tiers\nreviewer: fable\ncode-fixer: opus\n" in text
-    assert MTO.load_overrides(str(p)) == {"reviewer": "fable", "code-fixer": "opus"}
+    assert "## Model tiers\nreviewer: fable\nimplementer: opus\n" in text
+    assert MTO.load_overrides(str(p)) == {"reviewer": "fable", "implementer": "opus"}
 
 
 def test_write_model_tiers_block_replaces_clears_and_drops_unknown_roles(tmp_path):
     p = tmp_path / "profile.md"
     p.write_text("before\n\n## Model tiers\nreviewer: sonnet\nsynthesis: opus\n\n## After\nkept\n",
                  encoding="utf-8")
-    result = MTO.update_overrides(str(p), {"bogus": "opus", "code-fixer": "haiku"}, ["reviewer"])
+    result = MTO.update_overrides(str(p), {"bogus": "opus", "implementer": "haiku"}, ["reviewer"])
     text = p.read_text(encoding="utf-8")
     assert any("unknown role: bogus" in w for w in result["warnings"])
     assert "reviewer: sonnet" not in text
     assert "synthesis: opus" in text
-    assert "code-fixer: haiku" in text
+    assert "implementer: haiku" in text
     assert text.startswith("before\n\n")
     assert "\n## After\nkept\n" in text
-    assert MTO.load_overrides(str(p)) == {"synthesis": "opus", "code-fixer": "haiku"}
+    assert MTO.load_overrides(str(p)) == {"synthesis": "opus", "implementer": "haiku"}
 
 
 def test_write_unknown_model_warns_but_keeps_override(tmp_path):
