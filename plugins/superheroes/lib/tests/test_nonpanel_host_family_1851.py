@@ -23,7 +23,7 @@ import receipt_disclosures as RDS  # noqa: E402
 import round_adapters as RA  # noqa: E402
 import round_driver as RD  # noqa: E402
 
-NONPANEL = (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED)
+NONPANEL = (RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED)
 
 
 def _proof(*vendors):

@@ -298,7 +298,7 @@ def _dispatched_cell(role, vendor):
 
 def nonpanel_cell_proven(config, seat_map_, vendor, role):
     """True when ``vendor``'s dispatched cell for the non-panel ``role`` (`verifier` for verifiers,
-    `reviewer-deep` for gap sweep and scoped) is proven live: `claude` always (a host seat, never
+    `reviewer-deep` for seams check and scoped) is proven live: `claude` always (a host seat, never
     probed — the panel's rule); for any other vendor only when the map's `nonPanelLiveCells` lists the
     cell under a `probed` / `synthesized` source. Any other shape proves nothing, including a map with
     none of the cell-proof keys and no map at all."""

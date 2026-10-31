@@ -102,7 +102,7 @@ _TERMINAL_MAP = {
 _EVAL_BUILD_SESSION_VENDOR = "cursor"
 _EVAL_LIVE_POOL = ["claude", "codex"]
 # The non-panel phase each finder dimension runs as.
-_FINDER_PHASE = {"scoped-finder": RD.P_SCOPED, "gap-sweep": RD.P_GAPSWEEP}
+_FINDER_PHASE = {"scoped-finder": RD.P_SCOPED, "seams-check": RD.P_SEAMS}
 
 
 def _receipt(run_id, round_no, coverage_decisions=None):
@@ -309,7 +309,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
     fix_results = []
     # Live coverage decisions accumulated during the run.
     live_coverage = []
-    # The vendor each non-panel callback (verifier, gap sweep, scoped finder, grouping) simulates, keyed by
+    # The vendor each non-panel callback (verifier, seams check, scoped finder, grouping) simulates, keyed by
     # phase: the non-panel selection for that phase under the run's config, set before `run_loop`
     # (a phase with no entry is unseatable, so the guard's park stays honest).
     finder_vendor = {}
@@ -347,11 +347,11 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
         return cand[0] if cand else None
 
     def reviewer(dim, tier, rnd, payload):
-        # Scoped-finder / gap-sweep (a DELTA scan): surface the next fixture event-round that
+        # Scoped-finder / seams-check (a DELTA scan): surface the next fixture event-round that
         # carried findings, at this driver round. Empty fixture rounds are the driver's own clean
         # deltas (they trigger the converged-candidate / confirmation-rearm decision), so we skip
         # them rather than emit a dead seat.
-        if dim in ("scoped-finder", "gap-sweep"):
+        if dim in ("scoped-finder", "seams-check"):
             target = _next_delta_round()
             if target is None:
                 seen.append({"reviewer": "scoped-finder", "round": rnd, "tier": tier,
@@ -629,7 +629,7 @@ def run_fixture(fixture, fail_telemetry=False, run_dir=None,
             selection_state = RD.new_state(
                 dict(config, seatMap=seat_map_obj) if seat_map_obj is not None else config)
             selected = {phase: RD._nonpanel_selection(selection_state, None, phase)[0]
-                        for phase in (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_SYNTHESIS)}
+                        for phase in (RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED, RD.P_SYNTHESIS)}
         except (RD.MaxRoundsRefusal, RD.FixBatchCapRefusal):
             selected = {}  # run_loop parks the same refusal itself
         for phase, vendor in selected.items():

@@ -153,7 +153,7 @@ def _responder(round1_findings=None):
                 for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
-        if phase == RD.P_GAPSWEEP:
+        if phase == RD.P_SEAMS:
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [
@@ -587,7 +587,7 @@ def test_records_path_relative_persisted_absolute_and_submit_from_other_cwd(tmp_
 
 
 class _FakeAdapters(object):
-    ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
+    ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_SEAMS, RD.P_AUDITS,
                       RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def __init__(self):

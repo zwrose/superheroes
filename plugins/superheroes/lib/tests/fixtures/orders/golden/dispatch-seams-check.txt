@@ -1,9 +1,11 @@
-You are the gap-sweep finder for a big-diff review round. You receive the **full** diff and
-scan it for issues the sharded panel may have missed at shard boundaries or in cross-cutting
-concerns.
+You are the seams-check finder for a sliced review round. The change was too big for one
+reader, so it was cut into slices and each slice was reviewed on its own. You receive the
+**full** diff and look for the problems that sit **across** slices, where no single slice's
+reviewer could see both sides.
 
 ## Input
 - Full diff (read in bounded chunks): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
+- Slice list (where the cuts fell: each slice's id and the files it holds): /tmp/superheroes-session-wo4-golden/round-2/seams-slices.json
 - Base rubric (severity, verification rules, panel output format): /private/tmp/claude-501/-Users-zwrose--superheroes-worktrees-superheroes-issue-1272-3f5292aa7e89b0ea/e27eb96f-ee0c-49d2-870c-1507a21ea6d1/scratchpad/wo-B/plugins/superheroes/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
@@ -13,7 +15,11 @@ concerns.
 ## Your assignment
 Read the full diff at /tmp/superheroes-session-wo4-golden/round-2/diff.txt in bounded chunks (<=800 lines): use Read offset/limit when
 available, or an equivalent bounded shell range. Never one whole-file read. Continue with later
-offsets until the diff is covered. Apply the diff-scope rule: only flag code in `+` or `-` lines.
+offsets until the diff is covered. Then read the slice list, and look for problems that sit
+across slices: a caller in one slice and its callee in another, a contract changed on one side
+and not the other, a rename half-applied, an invariant one slice breaks and another relies on.
+Do not re-review each slice on its own; a problem wholly inside one slice was that slice's
+reviewer's to find. Apply the diff-scope rule: only flag code in `+` or `-` lines.
 
 ## Diff-scope rule — CRITICAL
 You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing issues. Only flag
@@ -32,7 +38,7 @@ files are pre-existing — SKIP them, even if they violate conventions.
 ## Hard rules
 - Do NOT decide the run's outcome or re-run panel seats.
 - **Never change the repository, and never claim a run you did not make.**
-- Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-gap-sweep/gap-sweep.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
+- Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-seams-check/seams-check.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
 
 ## What you may run
 
@@ -73,4 +79,4 @@ reviewerVendor type: string
 
 Write **only** your payload artifact to the landing path below — no envelope header, no stub copy.
 
-- Payload landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-gap-sweep/gap-sweep.a0.payload.json
+- Payload landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-seams-check/seams-check.a0.payload.json

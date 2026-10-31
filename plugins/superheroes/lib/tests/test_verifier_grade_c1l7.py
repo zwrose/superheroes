@@ -343,7 +343,7 @@ def test_a_reraised_finding_the_next_verifier_is_silent_on_loses_the_stale_wrong
     # the first verifier pass refuted it and graded it wrong
     RD._record_grade(state, key, {"verdict": "wrong", "reason": _REFUTED_REASON})
     RD._record_disposition(state, key, "refuted", state["round"], refutedReason=_REFUTED_REASON)
-    # a same-round gap sweep re-raises it: the closing grade is carried over on the ledger row
+    # a same-round second staging re-raises it: the closing grade is carried over on the ledger row
     RD._stage_findings(state, [dict(c) for c in compiled])
     assert _ledger(state)[key]["grade"]["verdict"] == "wrong"
     # the next verifier is silent on it

@@ -252,10 +252,10 @@ def test_base_guard_reason_tokens_in_round_driver_doc():
         % [(n, reasons[n]) for n in missing])
 
 
-# --- Cluster: gap-sweep stale-landing token (round_records → round-driver.md) -
+# --- Cluster: re-emission stale-landing token (round_records → round-driver.md) -
 
 def test_stale_landing_refusal_token_in_round_driver_doc():
-    """§11: round-driver.md's gap-sweep re-emission trap restates round_records.py's own
+    """§11: round-driver.md's re-emission trap restates round_records.py's own
     `stale-landing` sweep refusal literally — a rename of that refusal reason would silently
     strand the doc's recovery guidance behind a token `record-result --sweep` no longer emits."""
     home = _read(os.path.join("lib", "round_records.py"))
@@ -265,7 +265,7 @@ def test_stale_landing_refusal_token_in_round_driver_doc():
     )
     doc = _read("skills/review-code/reference/round-driver.md")
     assert "stale-landing" in doc, (
-        "round-driver.md: gap-sweep re-emission trap must name the `stale-landing` refusal "
+        "round-driver.md: re-emission trap must name the `stale-landing` refusal "
         "that round_records.sweep_landing raises when a stray landing file maps to no roster "
         "slot in the current manifest"
     )

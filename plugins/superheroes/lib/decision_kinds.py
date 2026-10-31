@@ -45,6 +45,7 @@ DECISION_KINDS = (
     "owner-choice-open",
     "panel-seat-missing",
     "receipt-missing-seat",
+    "retired-gap-sweep",
     "returning-review",
     "ruling-carried",
     "ruling-carry-revoked",

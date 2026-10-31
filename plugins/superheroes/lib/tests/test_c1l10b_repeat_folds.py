@@ -190,7 +190,7 @@ def test_4_a_second_synthesis_wave_of_one_round_keeps_the_first_waves_marks():
     TRM._synth(state, None)  # the panel's wave
     assert [m["repeatOf"]["findingKey"] for m in state["rounds"]["2"]["repeatMarks"]] == [TRM._key(first)]
     TRM._verify(state, [second], {"ruled b": "CONFIRMED"})
-    TRM._synth(state, None)  # the gap sweep's wave
+    TRM._synth(state, None)  # the second wave
     marks = state["rounds"]["2"]["repeatMarks"]
     assert [m["repeatOf"]["findingKey"] for m in marks] == [TRM._key(first), TRM._key(second)], marks
     assert [m["kept"] for m in marks] == [True, True]

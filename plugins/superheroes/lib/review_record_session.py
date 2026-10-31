@@ -67,10 +67,10 @@ _OWNER_SUPPLIED = "owner-supplied"
 _LEGACY_JUDGMENT_PHASE = "present-judgment"  # reads `_policyApplied` rows an earlier version wrote
 _HANDED_BACK = "handed-back"
 _HANDED_BACK_AT_CAP = ("round-cap", "extra-audit-open")
-_RAW_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED)
+_RAW_PHASES = (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_SCOPED)
 # the second-test seat is a test reviewer run on the held findings: it reads before the round's fix, and
 # its results are tests for findings already raised, so it is listed as a reviewer but never as a raw report
-_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_VERIFIERS,
+_PRE_FIX_PHASES = (round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_VERIFIERS,
                    round_phases.P_SECOND_TEST)
 # synthesis only groups already-raised findings into root causes: it raises, confirms, audits and grades
 # nothing, so it is not a reviewer of the change and the account does not list it
@@ -196,7 +196,7 @@ REVIEWER_ROUND_SUFFIX = re.compile(r"\s*\(round \d+\)$")
 
 
 def _step(rnd, phase):
-    """Where in the loop a reviewer sat: two steps a round, a panel, gap-sweep or verifier read before the
+    """Where in the loop a reviewer sat: two steps a round, a panel, seams-check or verifier read before the
     round's fix (even), every other review phase after it (odd)."""
     return 2 * rnd + (0 if phase in _PRE_FIX_PHASES else 1)
 
@@ -318,11 +318,11 @@ def _status_reviewers(state, setup=None, rows=()):
         if phase == round_phases.P_VERIFIERS and _nothing_to_verify(state, rnd):
             continue
         prov = [p.get("ran") for p in ((state["rounds"].get(str(rnd)) or {}).get("verifierProvenance") or ()) if isinstance(p, dict)
-                and p.get("outcome") == "verdicts-folded"] if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, gap sweep or scoped finder journals no seat: one row a phase; a verifier whose verdicts were ignored or empty never ran
+                and p.get("outcome") == "verdicts-folded"] if phase == round_phases.P_VERIFIERS else []  # a hand-accepted verifier, seams check or scoped finder journals no seat: one row a phase; a verifier whose verdicts were ignored or empty never ran
         head = _panel_head(state, rnd, setup, phase)
         out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head) and (bool(prov) or phase != round_phases.P_VERIFIERS),
                              {"vendor": _text(*prov, _panel_head(state, rnd, None, phase, "vendor")) or "unknown", "model": "unknown"}, commit=head, phase=phase))
-    # axis: a hand-submit session with no seat status in any round and no audit, scoped-finder, verifier, gap-sweep or second-test row holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
+    # axis: a hand-submit session with no seat status in any round and no audit, scoped-finder, verifier, seams-check or second-test row holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
     # axis: a returning session that ran no panel lists the phases it did run, and refuses only when none ran — see bite-proof record c1l11b_wo_h_panel_free_record
     if not any(status.values()) and not out:
         raise Refusal(UNSUPPORTED, NO_SEAT_RESULT)

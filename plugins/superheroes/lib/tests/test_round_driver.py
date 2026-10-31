@@ -23,6 +23,7 @@ import os
 import re
 import subprocess
 import sys
+from unittest import mock
 
 import pytest
 
@@ -147,12 +148,12 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
     base_reviewer = reviewer or default_reviewer
 
     def finder_reporting_reviewer(dim, tier, rnd, ctx):
-        # Like the verifier above: the gap-sweep / scoped-finder callbacks report the vendor they ran
+        # Like the verifier above: the seams-check / scoped-finder callbacks report the vendor they ran
         # on ({"findings": [...], "vendor": v}); with the default fixer `claude` the independent
         # selection is `codex`, and an unreported finder result does not count once it replaced the
         # reviewer engine (#1851 L4 K).
         result = base_reviewer(dim, tier, rnd, ctx)
-        if dim not in ("gap-sweep", "scoped-finder"):
+        if dim not in ("seams-check", "scoped-finder"):
             return result
         if isinstance(result, list):
             return {"findings": result, "vendor": "codex"}
@@ -463,7 +464,7 @@ def _seed_repo_root_if_missing(session_dir, checkout_path):
 def _claim_reviewer(session_dir, phase, art):
     """A hand-submitting orchestrator names the vendor it dispatched the single-seat reviewer on
     (`reviewerVendor`), which the driver requires when independence replaced the reviewer engine."""
-    if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) and isinstance(art, dict) and "reviewerVendor" not in art:
+    if phase in (RD.P_SEAMS, RD.P_SCOPED) and isinstance(art, dict) and "reviewerVendor" not in art:
         ok, state = RD.load_state(session_dir)
         vendor = RD._nonpanel_selection(state, session_dir, phase)[0] if ok else None
         if vendor:
@@ -519,7 +520,7 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
             return {"verdicts": out}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}
-        if phase == RD.P_GAPSWEEP:
+        if phase == RD.P_SEAMS:
             return {"findings": []}
         if phase == RD.P_AUDITS:
             # The orchestrator records its dispatch manifest out-of-band from the results — the vendor
@@ -1292,7 +1293,7 @@ def test_unknown_delta_surface_hands_the_pr_back_and_runs_no_panel(tmp_path, mon
             return {"fixes": [], "headDiff": bad_head, "changedSubjects": []}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
-        if phase in (RD.P_AUDITS, RD.P_SCOPED, RD.P_GAPSWEEP):
+        if phase in (RD.P_AUDITS, RD.P_SCOPED, RD.P_SEAMS):
             return {"results": [], "findings": []}
         return {}
 
@@ -1473,7 +1474,7 @@ def test_fixer_unreadable_head_diff_path_with_repository_derives_git(tmp_path):
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
-        if phase == RD.P_GAPSWEEP:
+        if phase == RD.P_SEAMS:
             return {"findings": []}
         return {}
 
@@ -1585,31 +1586,12 @@ def test_run_seam_verifier_reason_less_verdict_returns_fault_directly():
 
 
 def test_two_verifier_faults_in_one_round_are_both_recorded():
-    wave = {"n": 0}
-
-    def wave_verifier(clusters, rnd):
-        wave["n"] += 1
-        ids = [i for c in (clusters or []) for i in (c.get("ids") or [])]
-        if wave["n"] == 1:
-            return [{"id": i, "verdict": "CONFIRMED"} for i in ids]
-        return [{"verdict": "CONFIRMED", "reason": "checked"} for _i in ids]
-
-    finding = {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f0.py", "line": 1}
-    gap_finding = {"title": "gap", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f1.py", "line": 1}
-
-    def reviewer(dim, tier, rnd, ctx):
-        if dim == "gap-sweep":
-            return {"findings": [gap_finding]}
-        if rnd == 1 and dim == "code-reviewer":
-            return {"findings": [finding]}
-        return []
-
-    _result, state = _run_loop_capturing_state(
-        _seams(reviewer=reviewer, verifier=wave_verifier, vendors=["claude", "codex"]),
-        _cfg_cert(diff=_big_diff(25)),
-    )
+    # a round that holds two verifier waves appends its second fault beside the first, never over it
+    state = RD.new_state(_cfg())
+    for reason in ("verdict 0 has no `reason`", "verdict 1 has no `id`"):
+        RD._record_round_append(state, "verifierArtifactFault", {"fault": reason, "round": state["round"]})
     faults = _state_verifier_faults(state)
-    assert len(faults) == 2
+    assert [f["fault"] for f in faults] == ["verdict 0 has no `reason`", "verdict 1 has no `id`"]
     assert faults[0]["round"] == 1
     assert faults[1]["round"] == 1
     assert "reason" in faults[0]["fault"]
@@ -1847,31 +1829,21 @@ def test_a_scoped_critical_is_fixed_and_audited_in_the_next_round_not_confirmed_
 
 
 # =============================================================================
-# big diff → sharded panel + gap-sweep; degraded independence; receipt-missing
+# a sliced round gets one seams check; degraded independence; receipt-missing
 # =============================================================================
 
-def test_big_diff_shards_panel_with_wholediff_crosscutting_lenses(tmp_path):
-    state = RD.new_state(_cfg(diff=_big_diff(25)))
-    step = RD._advance(state, state["config"])
-    payload = step["payload"]
-    assert payload["big"] is True and "shards" in payload
-    assert payload["shards"]["architecture-reviewer"]["wholeDiff"] is True
-    assert payload["shards"]["premortem-reviewer"]["wholeDiff"] is True
-    assert "shards" in payload["shards"]["code-reviewer"]  # a local lens gets sharded
-
-
-def test_big_diff_schedules_gap_sweep(tmp_path):
-    """A big diff schedules a gap-sweep after verification (before the fix leg)."""
-    seen = {"gap": False}
+def test_sliced_round_schedules_the_seams_check(tmp_path):
+    """A sliced round 1 schedules a seams check after the panel (before the verifiers)."""
+    seen = {"seams": 0}
 
     def reviewer(dim, tier, rnd, ctx):
-        if dim == "gap-sweep":
-            seen["gap"] = True
-            return []
+        if dim == "seams-check":
+            seen["seams"] += 1
         return []
 
-    RD.run_loop(_seams(reviewer=reviewer), _cfg(diff=_big_diff(25)))
-    assert seen["gap"] is True
+    with mock.patch.object(RD, "_round_is_sliced", lambda state: True):
+        RD.run_loop(_seams(reviewer=reviewer), _cfg(diff=_big_diff(25)))
+    assert seen["seams"] == 1
 
 
 def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(tmp_path):
@@ -6040,7 +6012,7 @@ def _rearm_forever_seams():
     leg_rnds = {"fix": [], "verify": []}
 
     def reviewer(dim, tier, rnd, ctx):
-        if dim == "gap-sweep":
+        if dim == "seams-check":
             return []
         if dim == "scoped-finder":
             seq["n"] += 1
@@ -6138,7 +6110,7 @@ def _rearm_until_converge_seams(converge_at):
     def reviewer(dim, tier, rnd, ctx):
         if rnd >= converge_at:
             return []
-        if dim == "gap-sweep":
+        if dim == "seams-check":
             return []
         if dim == "scoped-finder":
             seq["n"] += 1
