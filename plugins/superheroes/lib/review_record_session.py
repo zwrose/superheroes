@@ -74,7 +74,7 @@ _UNLISTED_PHASES = (round_phases.P_SYNTHESIS,)
 _INGEST_CMDS = ("record-result", "record-missing", "advance")
 _FIXED, _SHOWN_WRONG, _CRAFT, _LEFT_FOR_OWNER, _RULING = review_findings_schema.OUTCOMES
 # the finding parts a later row must not erase: the live row's value wins, else the ledger row's
-_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake")
+_FINDING_PARTS = ("grade", "repeatOf", "breakItRuns", "kindOfMistake", "tradeoff")  # tradeoff: the owner-choice hold survives a carried row
 
 
 def _int(v):
@@ -280,9 +280,6 @@ def _status_reviewers(state, setup=None, rows=()):
     """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
     status says which seats ran, and the reviewers' raw outputs were not stored."""
     status = _panel_rounds_with_status(state)
-    # axis: a hand-submit session with no seat status in any round holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
-    if not any(status.values()):
-        raise Refusal(UNSUPPORTED, NO_SEAT_RESULT)
     out, ran_in = [], {}
     for rnd, seats in status.items():
         for seat, value in seats.items():
@@ -306,7 +303,7 @@ def _status_reviewers(state, setup=None, rows=()):
                                  commit=commit, phase=sc.PANEL_PHASE))
         out += [_unfilled_reviewer(rnd, seat) for seat in sorted(unfilled)
                 if not any(r > rnd for r in ran_in.get(seat, ()))]
-    by_round = {int(n): rec["audits"] for n, rec in state["rounds"].items()
+    by_round = {int(n): rec["audits"] for n, rec in (state.get("rounds") if isinstance(state.get("rounds"), dict) else {}).items()
                 if str(n).isdigit() and isinstance(rec, dict) and isinstance(rec.get("audits"), list)}
     for rnd, audits in by_round.items():
         later = {_audit_key(a) for r, rows in by_round.items() if r > rnd for a in rows if isinstance(a, dict) and not _audit_silent(a)}
@@ -321,6 +318,10 @@ def _status_reviewers(state, setup=None, rows=()):
         head = _panel_head(state, rnd, setup, phase)
         out.append(_reviewer(state, rnd, "reviewer", phase.removeprefix("dispatch-") + " ", bool(head) and (bool(prov) or phase != round_phases.P_VERIFIERS),
                              {"vendor": _text(*prov, _panel_head(state, rnd, None, phase, "vendor")) or "unknown", "model": "unknown"}, commit=head, phase=phase))
+    # axis: a hand-submit session with no seat status in any round and no audit, scoped-finder, verifier, gap-sweep or second-test row holds nothing that says a reviewer ran — see bite-proof record c7l3_wo2_session_writer
+    # axis: a returning session that ran no panel lists the phases it did run, and refuses only when none ran — see bite-proof record c1l11b_wo_h_panel_free_record
+    if not any(status.values()) and not out:
+        raise Refusal(UNSUPPORTED, NO_SEAT_RESULT)
     return out
 
 

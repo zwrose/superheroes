@@ -112,7 +112,7 @@ def earlier_record(sha, *, covers=True, touched=(), unclear=False, basis=None):
         "source": "lane rule over the PR's changed files",
     }
     return {
-        "ok": True, "finalCommit": {"sha": sha, "source": "GitHub PR"},
+        "ok": True, "status": "reviewed", "finalCommit": {"sha": sha, "source": "GitHub PR"},
         "reviewers": [{"seat": "panel-1", "coversFinalCommit": covers}],
         "laneBasis": laneBasis if basis is None else basis, "findings": [],
     }

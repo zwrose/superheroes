@@ -182,6 +182,7 @@ Refusals, before anything is posted:
 - `review-record-unaccounted`: relist each named earlier finding in the account and write again.
 - `review-account-invalid`: the account is wrong. Fix it and write again.
 - `review-record-too-large`: a raw output file is over GitHub's limit (split it), or the summary alone cannot fit one comment (shorten the account's long names or lists); then write again. A long record is not refused for its length: it posts in parts.
+- `review-record-round-cap-exceeded`: the light or micro lane's review ran more counted rounds than its cap allows (`rounds.count` over 4; the one extra audit round is never counted); the detail names the lane, the count and the cap. The record is not written. Hand back with the park the lane doctrine names (`rubric/review-discipline.md` § Review lanes).
 - `review-record-forbidden-claim`: rewrite the account text the writer quotes in its summary.
 - `review-record-gh-failed`: GitHub could not be read or written. Retry; else park and report.
 - `review-record-internal-error`: park the PR and report it.

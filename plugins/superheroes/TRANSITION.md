@@ -18,6 +18,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **A light- or micro-lane review record over four rounds (five with the extra audit round) is refused `review-record-round-cap-exceeded`; a session that wrote one now parks instead.** See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
+
 - **Before switching.** **Finish or hand back any review session in flight before upgrading.** A session caught in a later round's audit, post-audit verify or scoped-finder step, or holding a build-session test change without the reviewer's original, is handed back with its findings open and reviewed again in a fresh review. See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
 
 - **After switching.** **A build that runs code review in PR mode passes `--earlier-findings` on the first `next`; a session that does not gets repeat matching against its own earlier rounds only.** See [Review: a finding that repeats an earlier one keeps its outcome](#review-a-finding-that-repeats-an-earlier-one-keeps-its-outcome).

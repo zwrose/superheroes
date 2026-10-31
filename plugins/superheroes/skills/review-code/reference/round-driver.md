@@ -28,7 +28,8 @@ obeys. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT}`.
 
 ## The one entrypoint
 
-Round 1 is always a full `reviewer-deep` baseline panel. Rounds 2+ are **delta rounds**, and only
+Round 1 is a full `reviewer-deep` baseline panel, except for a returning pull request (next
+paragraph). Rounds 2+ are **delta rounds**, and only
 that: the [fix auditor](../../../rubric/glossary.md#fix-auditor) over each just-fixed finding plus the
 [scoped finder](../../../rubric/glossary.md#scoped-finder) over the code the fixes touched. No later
 round runs a full panel, and no separate pass runs on the final commit: a converged review that
@@ -37,6 +38,15 @@ fixes changed (the **fix surface is unknown**), it does not run a panel to cover
 the PR back with its findings still open, decision kind `fix-surface-unknown`. On
 the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
 calls `next`, dispatches the emitted order, and `submit`s the artifact.
+
+A **returning pull request** gets a different round 1. When a fresh PR-mode session holds an earlier
+record (`earlier-findings.json`) and the returning-review decider (`lib/returning_review.py`) answers
+`changed` on it, round 1 is a **returning round**: no panel, and the scoped finder reads only what
+changed since the last reviewed commit (round kind `returning`). Every other fresh session — no earlier
+record, a `full` answer, a decision that could not be made, a surface the driver cannot work out — runs
+round 1 as above. The first `next` takes the decision once and stores it as the config's `returning`; a
+later `next` never takes it again. Round 1's record carries it as `returning`: `read`, `lastReviewed`,
+`countable`, `newAreas`, `why`. A proven copy is in no input of a returning round.
 
 Every round from 2 on records its `focus` on its round record: `{"on": "fixes", "fixes": [<finding
 keys of the previous round's fix batch>]}`. Round 1 records no `focus`. A review record from an
@@ -1257,7 +1267,8 @@ A finding about the PR body cites `SUPERHEROES_PR_BODY.md` (`pr_body_stage.CITAT
 
 Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.py`):
 
-- Round 1 = full `reviewer-deep` baseline; it is the only round that runs a panel. Unknown changed
+- Round 1 = full `reviewer-deep` baseline (or a returning round, which runs no panel; see The one
+  entrypoint); it is the only round that can run a panel. Unknown changed
   surface → handed back (`handed-back` / `fix-surface-unknown`), never a blind skip and never a panel.
 - Every later round = the fix auditor over each fix plus the scoped finder over the fixes' own
   diff; a review that needed fixes converges on such a round (`audited-chain`).

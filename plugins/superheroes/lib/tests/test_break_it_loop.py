@@ -356,6 +356,21 @@ def test_l4_merge_and_rank_never_merges_a_break_it_finding():
     assert sorted(f["id"] for f in out["findings"]) == ["v0", "v1"] and out["merges"] == []
 
 
+def test_l4b_merge_and_rank_never_merges_a_carried_test_lost_finding():
+    def finding(fid, **extra):
+        out = {"id": fid, "file": "f%s.py" % fid, "line": 1, "title": "t%s" % fid,
+               "severity": "Minor", "suggestion": "s-%s" % fid}
+        out.update(extra)
+        return out
+
+    lost = finding("v0", carriedTestLost=True)
+    other = finding("v1", severity="Important")
+    out = verification.merge_and_rank([lost, other], [{"group_id": "g0", "member_ids": ["v0", "v1"]}])
+    by_id = {f["id"]: f for f in out["findings"]}
+    assert sorted(by_id) == ["v0", "v1"] and out["merges"] == []
+    assert by_id["v0"]["carriedTestLost"] is True
+
+
 def test_l5_a_fixed_break_it_test_that_is_kept_certifies(world):
     world.fold_panel(_break_it_finding())
     world.disposition("fixed")

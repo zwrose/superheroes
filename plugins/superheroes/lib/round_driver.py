@@ -89,6 +89,7 @@ import review_seats  # noqa: E402
 import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import repeat_marks  # noqa: E402
+import returning_review  # noqa: E402
 import review_findings_schema  # noqa: E402
 import round_commit  # noqa: E402
 import round_orders  # noqa: E402
@@ -1390,6 +1391,8 @@ def new_state(config=None):
     _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
     _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
+    if not state["terminal"]:
+        _seed_returning_round(state, cfg)
     return state
 
 
@@ -1408,22 +1411,355 @@ def _resolve_head_commit(repo_root):
     return sha or None
 
 
+def _copy_proof_applies(cfg):
+    """True when ``cfg`` holds a round-1 diff and a well-formed copy proof, so there is something to check."""
+    return isinstance(cfg.get("diff"), str) and countable_lines.proof_fault(cfg.get("copyProof")) is None
+
+
+def _proven_copies_at(cfg, head):
+    """``(proven, rejected)``: the copies ``cfg``'s copy proof proves in its round-1 diff at ``head`` — the one
+    computation of the session's proven copies, shared by ``_check_copy_proof`` and the returning-review decision.
+    ``([], [])`` when ``_copy_proof_applies`` is false."""
+    if not _copy_proof_applies(cfg):
+        return [], []
+    return countable_lines.proven_copies(cfg["diff"], cfg.get("repoRoot") or os.getcwd(), cfg["copyProof"], head=head)
+
+
 def _check_copy_proof(state, cfg):
     """Check the configured copy proof once against the round-1 diff and the head commit, and store what it
     proved (each copy with its diff section's digest), what it rejected, and the head it was checked at. Writes
     nothing when there is no well-formed proof or no diff."""
-    proof = cfg.get("copyProof")
-    diff_text = cfg.get("diff")
-    if not isinstance(diff_text, str) or countable_lines.proof_fault(proof) is not None:
+    if not _copy_proof_applies(cfg):
         return
+    diff_text = cfg["diff"]
     repo_root = cfg.get("repoRoot") or os.getcwd()
     # A head that cannot be resolved is passed on as None, which the counter reads as unreadable for every copy.
     head = _resolve_head_commit(repo_root)
-    proven, rejected = countable_lines.proven_copies(diff_text, repo_root, proof, head=head)
+    proven, rejected = _proven_copies_at(cfg, head)
     state["provenCopies"] = [dict(copy, section=countable_lines.section_digest(diff_text, copy["file"]))
                              for copy in proven]
     state["copyProofRejected"] = rejected
     state["provenCopiesHead"] = head
+
+
+# --- a returning pull request's new session (FR-44, FR-45): the decision at fresh state, the seeding of round 1 ---
+
+# The decider, called through this name so a test can replace it. lib/returning_review.py states the rule.
+_returning_decide = returning_review.decide
+
+RETURNING_KIND = "returning"
+RETURNING_DECISION_KIND = "returning-review"
+RETURNING_RECORD_FIELDS = ("read", "lastReviewed", "countable", "newAreas", "why")
+RETURNING_BASELINE_TIMEOUT = 120
+RETURNING_MALFORMED = "returning-decision-malformed"
+RETURNING_FAILED = "returning-decision-failed"
+RETURNING_BASELINE_UNREADABLE = "returning-baseline-unreadable"
+RETURNING_SURFACE_UNKNOWN = "returning-surface-unknown"
+
+
+def _returning_full(token, text):
+    """A stored decision that reads ``full``, for a decision the driver could not take or trust."""
+    return {"read": returning_review.READ_FULL, "lastReviewed": None, "countable": None,
+            "bar": countable_lines.COUNTABLE_LINES_BAR, "unsettled": [], "changedFiles": [], "newAreas": [],
+            "overlap": [], "why": ["%s: %s" % (token, text)]}
+
+
+def _returning_answer(answer):
+    """``answer`` (the decider's) as the decision to store, without ``deltaDiff``; anything that is not a whole
+    answer, or a ``changed`` one that names no last reviewed commit, is a ``full`` decision that says so."""
+    why = answer.get("why") if isinstance(answer, dict) else None
+    well_formed = (isinstance(answer, dict) and answer.get("read") in (returning_review.READ_FULL, returning_review.READ_CHANGED)
+                   and isinstance(why, list) and all(isinstance(w, str) for w in why))
+    if well_formed and answer["read"] == returning_review.READ_CHANGED:
+        well_formed = returning_review._is_sha(answer.get("lastReviewed"))
+    if well_formed:
+        stored = {k: v for k, v in answer.items() if k != "deltaDiff"}
+        try:
+            json.dumps(stored)
+            return stored
+        except (TypeError, ValueError):
+            pass
+    return _returning_full(RETURNING_MALFORMED, "the returning-review decider gave no usable answer")
+
+
+def _returning_baseline_diff(repo_root, base, last_reviewed):
+    """The pinned diff ``base...last_reviewed`` (what the earlier session reviewed), or None when git cannot give it."""
+    try:
+        proc = review_diff_bytes.run_git_diff_three_dot(repo_root, base, last_reviewed, timeout=RETURNING_BASELINE_TIMEOUT)
+        return proc.stdout.decode("utf-8") if proc.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError, ValueError):  # ValueError covers a bad sha and undecodable bytes
+        return None
+
+
+def _returning_overrides(session_dir, overrides):
+    """The config keys the first ``next`` adds for a returning pull request: ``returning`` (the decision, without
+    ``deltaDiff``) and, for a ``changed`` decision, ``returningBaselineDiff``. ``{}`` when the session is not a
+    pull request's, or holds no earlier record (``earlier-findings.json`` in the session dir). Every fault is a
+    ``full`` decision with its reason; nothing here raises."""
+    if session_mode.resolve(_session_meta(session_dir), overrides)["mode"] != session_mode.MODE_PR:
+        return {}
+    path = _earlier_findings_canonical_path(session_dir)
+    if not os.path.isfile(path):
+        return {}
+    earlier, fault = round_records.read_json(path)
+    if fault is not None or earlier is None:
+        earlier = {"ok": False, "reason": "earlier-record-unreadable"}
+    repo_root, base = overrides.get("repoRoot"), overrides.get("baseRef")
+    repo_root = repo_root if isinstance(repo_root, str) and repo_root else None
+    head = _resolve_head_commit(repo_root) if repo_root else None
+    try:
+        proven, _ = _proven_copies_at(overrides, head)
+        answer = _returning_decide(repo_root, base, head, earlier, proven=proven)
+    except Exception as exc:  # noqa: BLE001 — a decision nobody could take is a full read, never a changed one
+        stored = _returning_full(RETURNING_FAILED, "the decision failed on %s: %s" % (type(exc).__name__, exc))
+    else:
+        stored = _returning_answer(answer)
+    out = {}
+    carried = _carried_findings(earlier)
+    if stored["read"] == returning_review.READ_CHANGED:
+        baseline = _returning_baseline_diff(repo_root, base, stored["lastReviewed"])
+        if baseline is None:
+            stored = dict(stored, read=returning_review.READ_FULL,
+                          why=list(stored["why"]) + ["%s: git could not produce the diff of the earlier review" % RETURNING_BASELINE_UNREADABLE])
+        else:
+            out["returningBaselineDiff"] = baseline
+    elif carried:
+        # a full read: the carried findings are audited against the change since the commit the earlier session ended on
+        audit_base = _carried_audit_base(stored, earlier)
+        if audit_base is not None:
+            baseline = _returning_baseline_diff(repo_root, base, audit_base)
+            if baseline is not None:
+                out["returningBaselineDiff"] = baseline
+                out["returningAuditBase"] = audit_base
+    if carried:
+        out["returningCarried"] = carried
+    out["returning"] = stored
+    return out
+
+
+def _carried_audit_base(stored, earlier):
+    """The commit a full read audits its carried findings against, or None (nothing is audited; they go to the verifier).
+    The decision's own ``lastReviewed`` when it names one; else, for an abandoned ok record, the record's own final commit.
+    That fallback is no coverage claim (the decision stays ``full`` and keeps its ``lastReviewed``): it only says which
+    lines changed since the findings were raised."""
+    if returning_review._is_sha(stored.get("lastReviewed")):
+        return stored["lastReviewed"]
+    # axis: a finding carried from an abandoned session is still audited against the change since that session's final commit — see bite-proof record c1l11b_wo_k_abandoned_carried_audit
+    if isinstance(earlier, dict) and earlier.get("ok") is True and earlier.get("abandoned"):
+        final = earlier.get("finalCommit")
+        sha = final.get("sha") if isinstance(final, dict) else None
+        if returning_review._is_sha(sha):
+            return sha
+    return None
+
+
+def _carried_findings(earlier):
+    """The earlier record's findings with no outcome, each once, as the rows the session seeds: the record's stored key
+    in ``findingKey``, and no outcome or reason of the record's own. ``[]`` for a record that holds none."""
+    findings = earlier.get("findings") if isinstance(earlier, dict) else None
+    out, held = [], set()
+    for finding in findings if isinstance(findings, list) else ():
+        entry = repeat_marks.record_entry(finding)
+        # axis: a record finding that has an outcome is never carried — it keeps that outcome (repeat marks) — see bite-proof record c1l11b_wo_d2_carried_findings
+        if entry is None or entry["outcome"] is not None or entry["key"] in held:
+            continue
+        held.add(entry["key"])
+        row = {k: v for k, v in finding.items() if k not in ("outcome", "reason")}
+        row[session_contract.FINDING_KEY_FIELD] = entry["key"]
+        # axis: a row read back from a record written before `tradeoff` was persisted is held for the owner, never autonomously fixed — see bite-proof record c1l11b_wo_k_legacy_tradeoff
+        row.setdefault("tradeoff", True)
+        # axis: a carried finding whose break-it test the record lost keeps a marker through every round, so no later audit or convergence can certify it without the test — see bite-proof record c1l11b_wo_k_carried_lost_test
+        if _carried_test_unrecoverable(row):
+            row[CARRIED_TEST_LOST_FIELD] = True
+        out.append(row)
+    return out
+
+
+def _record_returning(state, returning):
+    _record_round(state, "returning", {k: returning.get(k) for k in RETURNING_RECORD_FIELDS})
+    _decision(state, RETURNING_DECISION_KIND,
+              "returning review reads %s%s: %s" % (
+                  returning.get("read"),
+                  " since %s" % returning["lastReviewed"] if returning.get("lastReviewed") else "",
+                  "; ".join(returning.get("why") or [])))
+
+
+def _returning_diffs(state, cfg):
+    """``(baseline, head)``: the diff of what the earlier session reviewed and the round-1 diff, a proven copy's section
+    cut from both before any parser reads them; ``(None, None)`` when either is not text."""
+    baseline, head_diff = cfg.get("returningBaselineDiff"), state.get("reviewedDiff")
+    if not isinstance(baseline, str) or not isinstance(head_diff, str):
+        return None, None
+    left_out = [copy["file"] for copy in _left_out(state, head_diff)]
+    return countable_lines.reviewer_diff(baseline, left_out), countable_lines.reviewer_diff(head_diff, left_out)
+
+
+def _returning_surface(state, cfg):
+    """``(surface, text)`` of what changed since the last reviewed commit, or ``(None, why)``: the fix-delta
+    surface between ``base...lastReviewed`` and the round-1 diff, no proven copy in either diff."""
+    baseline, head_diff = _returning_diffs(state, cfg)
+    if baseline is None:
+        return None, "the earlier review's diff or the round-1 diff is not text"
+    try:
+        delta = _fix_delta_surface(state, baseline, head_diff)
+    except Exception as exc:  # noqa: BLE001 — a surface nobody could work out is a full panel, never a hand-back
+        return None, "the change since the last reviewed commit failed on %s: %s" % (type(exc).__name__, exc)
+    if delta is None:
+        return None, "the change since the last reviewed commit could not be worked out for every file"
+    return delta, None
+
+
+def _seed_carried(state, cfg, returning):
+    """Seed every carried finding (``cfg["returningCarried"]``, see `_carried_findings`) into the disposition ledger
+    under its stored key, once each, before any disposition is recorded on it. Then set up round 1's audit of them
+    against the change since the last reviewed commit (the fix-audit machinery, the returning baseline as the reviewed
+    diff): the carried findings whose line that change touches are the targets, in ``_carriedAudited``. Every other one
+    (no file or line, no hunk over its line, a proven copy, no usable last reviewed commit or baseline) is sent back at
+    once. A finding sent back waits in ``_carriedToVerify`` to join the round's candidates at the verifier, past the compile
+    step whose diff-scope rule would drop one whose line this round's diff does not hold. Returns True when audits are due."""
+    carried = [c for c in cfg.get("returningCarried") or [] if isinstance(c, dict)]
+    if not carried:
+        return False
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    rows = {}
+    for finding in carried:
+        key = _finding_identity_key(finding)
+        if key and key not in rows:  # two carried findings with one key are one row
+            rows[key] = finding
+            # axis: a carried finding is on the ledger, with a raised sequence, before its disposition is recorded — see bite-proof record c1l11b_wo_d2_carried_findings
+            _seed_ledger_entry(state, ledger, seen, finding, key, state["round"])
+    if not rows:
+        return False
+    state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = session_contract.DISPOSITION_LEDGER_OWNER_VALUE
+    audited, baseline, head_diff, hunks = {}, None, None, {}
+    if returning_review._is_sha(cfg.get("returningAuditBase") or returning.get("lastReviewed")):
+        baseline, head_diff = _returning_diffs(state, cfg)
+    usable = [f for f in rows.values() if isinstance(f.get("file"), str) and f["file"] and _coerce_line(f.get("line"))[0]]
+    if baseline is not None and usable:
+        split = delta_surface.split_fix_surface(baseline, head_diff, usable)
+        hunks = {} if split.get("unknown") else split.get("auditTargets") or {}
+    for key, finding in rows.items():
+        # a carried finding is audited only where the change since the last reviewed commit touches its line
+        # a carried finding whose record shows a break-it run has lost its test's bytes (the record keeps display fields only), so no audit can check the test: it goes to the verifier
+        if (finding in usable and not _carried_test_unrecoverable(finding) and _fix_hunks_over_line(hunks, finding["file"], finding.get("line"))
+                and _fixer_delta_lines(baseline, head_diff, finding["file"], finding.get("line"))):
+            audited[key] = finding
+    state["_carriedToVerify"] = [f for key, f in rows.items() if key not in audited]
+    _record_round(state, "carried", {"keys": list(rows), "auditBase": (cfg.get("returningAuditBase") or returning.get("lastReviewed")) if baseline is not None else None, "discharged": [], "sentBack": [_finding_identity_key(f) for f in state["_carriedToVerify"]]})
+    if not audited:
+        return False
+    state["_carriedAudited"] = audited
+    # the audit reads the round-1 diff as the head the change since the last reviewed commit ended on
+    state["headDiff"] = state.get("reviewedDiff")
+    state["fixBatch"] = list(audited.values())
+    state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
+    state["fixBatch"] = []
+    return True
+
+
+CARRIED_TEST_LOST_FIELD = "carriedTestLost"
+
+
+def _carried_test_lost_unresolved(state):
+    """Ledger rows of carried findings whose break-it test the earlier record lost and no reviewer attached again,
+    that stand fixed or out of scope: each is an obligation no round-level run registers, so the convergence gate
+    withholds certification on them. ``[]`` when the ledger cannot be read (the kept check reports that fault)."""
+    _, by_key, fault = _fixed_ledger_rows(state)
+    if fault is not None:
+        return []
+    return [key for key, entry in by_key.items()
+            if isinstance(entry, dict) and entry.get(CARRIED_TEST_LOST_FIELD) is True
+            and entry.get("disposition") in ("fixed", "out-of-scope") and not break_it.carries_test(entry)]
+
+
+def _carried_test_unrecoverable(finding):
+    """True when a carried finding's earlier record shows it carried a break-it test whose bytes the record does not
+    keep (the record's finding rows hold the display runs only, no suggestion block): such a finding is unresolved
+    until a reviewer attaches the test again, so it is sent to the verifier and never discharged by an audit."""
+    runs = finding.get(break_it.RUNS_FIELD) if isinstance(finding, dict) else None
+    return bool(runs) and not break_it.carries_test(finding)
+
+
+def _with_carried(state, compiled):
+    """``compiled`` and the findings held past the compile step (`_seed_carried`'s sent-back carried findings, the audits'
+    new issues on a full read), once each: a compiled finding that the stored key of a held one names is that finding,
+    so the two merge into one row (`_merge_same_finding`: the fresh report's severity, consequence and attached test
+    survive) that keeps the held row's stored key and raised round."""
+    held = [h for h in state.pop("_carriedToVerify", None) or [] if isinstance(h, dict)]
+    if not held:
+        return compiled
+    first = {}  # opaque key -> the first held row with it: the one a compiled finding of that key merges into
+    for h in held:
+        first.setdefault(repeat_marks.opaque_key(h), h)
+    rows, rest = {id(h): h for h in held}, []
+    for c in compiled:
+        h = first.get(repeat_marks.opaque_key(c))
+        if h is None:
+            rest.append(c)
+            continue
+        # axis: a fresh report that matches a carried finding is merged into it and its evidence survives, under the carried key — see bite-proof record c1l11b_wo_h_carried_merge
+        merged = _merge_same_finding(rows[id(h)], c)
+        fresh_key = _finding_identity_key(c)
+        for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
+            if field in h:
+                merged[field] = h[field]
+            else:
+                merged.pop(field, None)
+        # a merge the fresh report wins keeps the carried finding's lost-test marker unless the fresh report attached a test
+        if h.get(CARRIED_TEST_LOST_FIELD) is True and not break_it.carries_test(merged):
+            merged[CARRIED_TEST_LOST_FIELD] = True
+        rows[id(h)] = merged
+        # a break-it run bound to the fresh report's key is rebound to the carried key the merged row keeps, so the kept-check finds its disposition
+        new_key = _finding_identity_key(merged)
+        if fresh_key and new_key and fresh_key != new_key:
+            for run in state.get("rounds", {}).get(str(state.get("round")), {}).get("breakItRuns") or []:
+                if isinstance(run, dict) and run.get("findingKey") == fresh_key:
+                    run["findingKey"] = new_key
+    return rest + [rows[id(h)] for h in held]
+
+
+def _seed_returning_round(state, cfg):
+    """Round 1 of a fresh session whose config holds a returning-review decision. A ``changed`` decision makes
+    round 1 a returning round: no panel, the scoped finder over what changed since the last reviewed commit (an
+    empty change converges as a later round with an empty fix delta does). Any other decision, and a ``changed``
+    one whose surface cannot be worked out, leaves round 1 as it is — the full panel — and records why."""
+    returning = cfg.get("returning")
+    if not isinstance(returning, dict):
+        return
+    delta = None
+    if returning.get("read") == returning_review.READ_CHANGED:
+        delta, detail = _returning_surface(state, cfg)
+        if delta is None:
+            returning = dict(returning, read=returning_review.READ_FULL,
+                             why=list(returning.get("why") or []) + ["%s: %s" % (RETURNING_SURFACE_UNKNOWN, detail)])
+            cfg["returning"] = returning
+    _record_returning(state, returning)
+    audits_due = _seed_carried(state, cfg, returning)
+    # axis: the driver acts on a changed decision — round 1 is a returning round with no panel — see bite-proof record c1l11b_wo_d1_returning_session
+    if returning.get("read") != returning_review.READ_CHANGED:
+        cfg.pop("returningBaselineDiff", None)
+        cfg.pop("returningAuditBase", None)
+        if audits_due:  # a full read audits the carried findings first, then runs the panel round 1 always ran
+            state["_auditFirst"] = True
+            state["step"] = P_AUDITS
+        return
+    new_surface, fix_delta_text = delta
+    state["fullPanelRan"] = False
+    state["_auditTargets"] = state.get("_auditTargets") or []
+    state["_newSurface"], state["_fixDeltaDiff"] = new_surface, fix_delta_text
+    _record_round(state, "roundKind", RETURNING_KIND)
+    if audits_due:  # the carried findings are audited first; `_after_audits` then schedules the scoped finder
+        state["step"] = P_AUDITS
+        return
+    state["step"] = P_SCOPED
+    if not new_surface:
+        # nothing to read (the change touched only proven copies, or nothing): converge as an empty fix delta does
+        _record_round(state, "scopedFinder", "skipped-empty-surface")
+        _decision(state, "scoped-finder-skipped",
+                  "scopedFinder: skipped-empty-surface — the change since the last reviewed commit left an empty "
+                  "surface; the scoped new-finding scan was skipped")
+        _fold_scoped(state, cfg, {})
 
 
 def _finding_identity_key(finding):
@@ -1598,7 +1934,11 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
             [existing, entry])
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
-    held_runs = existing.get(break_it.RUNS_FIELD) if isinstance(existing, dict) else None
+    # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
+    if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
+            and not break_it.carries_test(entry)):
+        entry[CARRIED_TEST_LOST_FIELD] = True
+    held_runs =existing.get(break_it.RUNS_FIELD) if isinstance(existing, dict) else None
     if isinstance(held_runs, list):
         # axis: a finding raised again keeps the break-it runs it held; its new runs read after them, none twice
         new_runs = entry.get(break_it.RUNS_FIELD, [])
@@ -3435,7 +3775,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
         dim_map[dim] = {"dimension": dim, "status": seat_status.get(dim, "run"),
                         "confidence": confidence, "tier": tier, "findings": s_findings}
     _append_review_record(state, state["round"], kind, dim_map, compiled)
-    _stage_findings(state, compiled)
+    _stage_findings(state, _with_carried(state, compiled))  # a returning round's carried findings go to the verifier with the panel's
     state["step"] = P_VERIFIERS
 
 
@@ -4864,7 +5204,7 @@ def _drop_spent_out_of_scope_rows(state, rows):
 def _resolve_empty_fix_batch_convergence(state, config):
     """Route an exclusion-emptied batch through the path's own resolver (A2)."""
     round_rec = state.get("rounds", {}).get(str(state["round"]), {})
-    if round_rec.get("roundKind") == "delta":
+    if round_rec.get("roundKind") in ("delta", RETURNING_KIND):
         _settle_delta_converged(state, config)
         return
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
@@ -7477,6 +7817,19 @@ def _fold_audits(state, config, artifact, session_dir=None):
     rider_ids = set(spawned_from)
     riders_open = [i for i in outcome["notDischarged"] if i in rider_ids]
     outcome["notDischarged"] = [i for i in outcome["notDischarged"] if i not in rider_ids]
+    # A carried finding the audit did not discharge (a missing or refused result included) is sent back to the reviewers:
+    # it leaves `notDischarged` here, before anything builds a fix batch from that list, and joins the verifier's candidates.
+    carried_audited = state.pop("_carriedAudited", None)
+    carried_back = set()
+    if isinstance(carried_audited, dict) and carried_audited:
+        cleared = {i for i in outcome.get("discharged") or [] if isinstance(i, str)}
+        carried_back = {key for key in carried_audited if key not in cleared}
+        outcome["notDischarged"] = [i for i in outcome["notDischarged"] if not (isinstance(i, str) and i in carried_audited)]
+        # axis: a carried finding the audit did not discharge goes to the verifier, never to the fix queue — see bite-proof record c1l11b_wo_d2_carried_findings
+        state["_carriedToVerify"] = (state.get("_carriedToVerify") or []) + [carried_audited[key] for key in carried_audited if key in carried_back]
+        held = state["rounds"].get(str(state["round"]), {}).get("carried")
+        _record_round(state, "carried", dict(held, discharged=[key for key in carried_audited if key in cleared],
+                                             sentBack=list(held.get("sentBack") or []) + [key for key in carried_audited if key in carried_back]))
     state["_auditOutcome"] = outcome
     # the audit round for check_audit_breaker: identity + effective ruling PLUS the recurrence class
     # keys the alias-tolerant stall match consumes (#507 v0) — carried straight off each audit entry
@@ -7487,7 +7840,7 @@ def _fold_audits(state, config, artifact, session_dir=None):
         {"identity": a.get("identity"), "ruling": a.get("ruling"),
          "title": a.get("title"), "classKey": a.get("classKey"),
          "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
-        for a in outcome["audits"] if a.get("id") not in rider_ids]}
+        for a in outcome["audits"] if a.get("id") not in rider_ids and a.get("id") not in carried_back]}
     state["auditRounds"].append(audit_round)
     mismatch_ids = list(outcome.get("testMismatch") or [])
     if mismatch_ids:
@@ -7620,6 +7973,16 @@ def _after_audits(state, config):
     # axis: the extra audit round runs no scoped finder, gap sweep, fixer or verify after its audits — see bite-proof record c1l4b_wo_a
     if _is_extra_audit_round(state):
         _settle_extra_audit(state, config)
+        return
+    if state.pop("_auditFirst", False):
+        # a returning round 1 that reads in full: the carried findings were audited first, and the panel round 1 always ran
+        # follows. What the audits raised is compiled as a scoped finder's candidates are and waits with the carried findings
+        # sent back, to join the panel's candidates at the verifier.
+        raised, drops = mechanical_compile([ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)],
+                                           state.get("reviewedDiff"))
+        _record_compile_drops(state, drops)
+        state["_carriedToVerify"] = (state.get("_carriedToVerify") or []) + raised
+        state["step"] = P_PANEL
         return
     # Scoped-finder routing (#507 WO-R2b). Dispatch the scoped new-finding scan whenever the round's
     # fix delta left a NON-EMPTY surface (`_newSurface`, set by `_enter_delta_round`: the head-side
@@ -7791,6 +8154,7 @@ def _fold_scoped(state, config, artifact):
     compiled, drops = mechanical_compile(scoped + new_issues, state.get("reviewedDiff"))
     _bind_audit_spawned(state, new_issues, compiled)
     _record_compile_drops(state, drops)
+    compiled = _with_carried(state, compiled)  # the carried findings sent back go to the verifier with the round's candidates
     state["_postAudit"] = True
     if compiled:
         _stage_findings(state, compiled)
@@ -8509,6 +8873,11 @@ def _break_it_kept_step(state, config):
                     state, "break-it working copy not restored: %s (%s)"
                     % (run.get("path"), str(run.get("output") or "")[-200:]))
                 return True
+    # axis: a carried finding whose test was lost and never re-attached withholds certification, though no round-level run registers it — see bite-proof record c1l11b_wo_k_carried_lost_test
+    lost = _carried_test_lost_unresolved(state)
+    if lost:
+        _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
+        return True
     latest, latest_round = {}, {}
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
@@ -9512,7 +9881,12 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return {"ok": False, "reason": "session-id-unmintable", "detail": mint_reason}
         _bootstrap_review_session_marker(session_dir)
         try:
-            state = new_state(_with_build_session_vendor(config_overrides))
+            overrides = _with_build_session_vendor(config_overrides) or {}
+            # the decision is taken here, once, and stored in the config: a caller cannot supply it
+            overrides = dict({k: v for k, v in overrides.items()
+                              if k not in ("returning", "returningBaselineDiff", "returningCarried", "returningAuditBase")},
+                             **_returning_overrides(session_dir, overrides))
+            state = new_state(overrides or None)
         except MaxRoundsRefusal as refusal:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
                                           "attempt": None, "outcome": "refused-max-rounds",

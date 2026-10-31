@@ -12,16 +12,18 @@ The rule, in order; the first step that applies answers ``full``, otherwise the 
   1. No earlier record, or one that is not a usable ``ok`` record with a full-sha final commit: full.
   2. The final commit of the earlier review is not an ancestor of the head: full.
   3. No reviewer row of the earlier record covers that final commit: full.
-  4. The changed files are those whose section differs between ``base...lastReviewed`` and ``base...head``
+  4. The earlier record's ``status`` is not ``reviewed`` or ``awaits-owner``, or it carries ``abandoned``
+     (the earlier review did not finish): full.
+  5. The changed files are those whose section differs between ``base...lastReviewed`` and ``base...head``
      (proven copies left out); a diff git cannot produce is full; no changed file is changed, with nothing
      read.
-  5. The incremental diff is ``lastReviewed head`` (two-dot) over the changed files; the files a catch-up
+  6. The incremental diff is ``lastReviewed head`` (two-dot) over the changed files; the files a catch-up
      with the base also changed are named in ``overlap``, which can only raise the count.
-  6. The countable lines of the incremental diff, counting every file the counter could not settle, are over
+  7. The countable lines of the incremental diff, counting every file the counter could not settle, are over
      the bar: full.
-  7. The risk of the changed files against the earlier review's risk basis: an earlier basis that cannot be
+  8. The risk of the changed files against the earlier review's risk basis: an earlier basis that cannot be
      read, an area the earlier basis did not touch, or an unclear risk the earlier basis did not share: full.
-  8. Otherwise changed.
+  9. Otherwise changed.
 
 CLI:
   returning_review.py decide --repo-root DIR --base SHA --earlier-record FILE [--proof FILE] [--head SHA]
@@ -52,6 +54,7 @@ WHY_NO_EARLIER = "no-earlier-record"
 WHY_EARLIER_UNUSABLE = "earlier-record-unusable"
 WHY_NOT_ANCESTOR = "last-reviewed-not-ancestor"
 WHY_NOT_COVERED = "earlier-review-did-not-cover"
+WHY_INCOMPLETE = "earlier-review-incomplete"
 WHY_DIFF_UNREADABLE = "diff-unreadable"
 WHY_OVER_BAR = "over-bar"
 WHY_UNSETTLED = "unsettled-counted"
@@ -61,13 +64,14 @@ WHY_BASIS_UNUSABLE = "earlier-basis-unusable"
 WHY_OVERLAP = "catch-up-overlap"
 WHY_UNCLEAR_AS_BEFORE = "unclear-as-before"
 WHY_CHANGED_ONLY = "changed-only"
-WHY_TOKENS = (WHY_NO_EARLIER, WHY_EARLIER_UNUSABLE, WHY_NOT_ANCESTOR, WHY_NOT_COVERED, WHY_DIFF_UNREADABLE,
-              WHY_OVER_BAR, WHY_UNSETTLED, WHY_NEW_AREA, WHY_RISK_UNCLEAR, WHY_BASIS_UNUSABLE, WHY_OVERLAP,
+WHY_TOKENS = (WHY_NO_EARLIER, WHY_EARLIER_UNUSABLE, WHY_NOT_ANCESTOR, WHY_NOT_COVERED, WHY_INCOMPLETE,
+              WHY_DIFF_UNREADABLE, WHY_OVER_BAR, WHY_UNSETTLED, WHY_NEW_AREA, WHY_RISK_UNCLEAR, WHY_BASIS_UNUSABLE, WHY_OVERLAP,
               WHY_UNCLEAR_AS_BEFORE, WHY_CHANGED_ONLY)
 
 _SHA_RE = re.compile(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})")
 _UNCLEAR_PREFIXES = (lane_call.WHY_NOT_SET, lane_call.WHY_UNMATCHABLE, lane_call.WHY_NO_PATHS)
 _MISSING_RECORD = "review-record-missing"
+_FINISHED_STATUSES = ("reviewed", "awaits-owner")
 # Axis: a user's submodule settings (diff.ignoreSubmodules, diff.submodule) never hide or reshape a gitlink update.
 _DIFF_ARGS = (*review_diff_bytes.REVIEW_DIFF_ARGS, "--ignore-submodules=none", "--submodule=short")
 
@@ -236,7 +240,13 @@ def _decide(result, repo_root, base, head, earlier, proven, git):
     if not _covers_final_commit(earlier):
         return _full(result, WHY_NOT_COVERED, "no reviewer of the earlier record covers its final commit")
 
-    # 4. the changed files
+    # 4. the earlier session finished
+    # Axis: an earlier review that was abandoned or never reviewed reads full — see bite-proof record c1l11b_wo_d1_returning_session
+    if earlier.get("status") not in _FINISHED_STATUSES or "abandoned" in earlier:
+        return _full(result, WHY_INCOMPLETE, "the earlier review did not finish (status %r%s)"
+                     % (earlier.get("status"), ", abandoned" if "abandoned" in earlier else ""))
+
+    # 5. the changed files
     if not _is_sha(base):
         return _full(result, WHY_DIFF_UNREADABLE, "the base is not a full commit sha")
     diff_args = list(_DIFF_ARGS)
