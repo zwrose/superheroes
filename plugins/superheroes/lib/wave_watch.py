@@ -61,8 +61,8 @@ Contract:
 - ignore-launch: caller-supplied launch ids excluded from lane enumeration so
   an already-handled lane that cannot be terminalized does not re-fire.
 - ignore-events: caller-supplied (launchId, event) pairs suppress that event
-  for that lane only — lane-terminal, lane-blocked, builder-exited, and
-  lane-stale are suppressible; builder-note, stack-state-changed, pr-set-changed,
+  for that lane only — lane-terminal, lane-blocked, builder-exited,
+  lane-stale, and account-limited are suppressible; builder-note, stack-state-changed, pr-set-changed,
   and timer are not. Suppression
   affects actionability only. One note can be ignored by id: a (launchId, "builder-note",
   commentId) triple, on the CLI `LAUNCHID:builder-note:COMMENTID`, suppresses that one note on
@@ -105,6 +105,14 @@ Contract:
   read was partial, every watched lane's issue may hold an unread comment, so the result
   names them under `unreadIssues` ([{launchId, issue}], present only when non-empty; across an arm
   or a loop a lane named once stays named).
+- Account limit: when the builders' account is at its usage limit nothing on it can run. On every
+  tick the live started cloud lanes are grouped by their configDir and each account is read once with
+  cloud_relay.account_limit (a local read of the account's relay session record; a reading that is not
+  ok is no reading, and records no degradation). Every limited account surfaces as account-limited,
+  ranked directly below builder-note and ending the loop like it, with `launchIds` (every surviving
+  lane, sorted), `accounts` ([{configDir, limitType, resetsAt, resetsAtIso, launchIds}]) and
+  alsoObserved. While the limit holds, no lane on that account is lane-stale: the limit explains the
+  quiet. `--ignore-event LAUNCHID:account-limited` suppresses it for that lane only.
 - Fix orders: a terminal, started cloud lane is watched again, exactly like a live cloud lane, from
   the moment it is sent a fix order until its next ending. Openers: a `vet not-ready` amendment, or a
   fix-order relay record (cloud_relay.fix_orders, composed with --fix-order) whose check read delivered
@@ -276,6 +284,7 @@ EVENT_LANE_TERMINAL = "lane-terminal"
 EVENT_LANE_BLOCKED = "lane-blocked"
 EVENT_BUILDER_EXITED = "builder-exited"
 EVENT_BUILDER_NOTE = "builder-note"
+EVENT_ACCOUNT_LIMITED = "account-limited"
 EVENT_STACK_STATE_CHANGED = "stack-state-changed"
 EVENT_PR_SET_CHANGED = "pr-set-changed"
 EVENT_LANE_STALE = "lane-stale"
@@ -286,6 +295,7 @@ EVENTS = frozenset({
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
     EVENT_BUILDER_NOTE,
+    EVENT_ACCOUNT_LIMITED,
     EVENT_STACK_STATE_CHANGED,
     EVENT_PR_SET_CHANGED,
     EVENT_LANE_STALE,
@@ -304,9 +314,11 @@ BENIGN_EVENTS = frozenset({
     EVENT_TIMER,
 })
 
-# Ends the loop without ending a lane: the advisor is asked something and a builder waits.
+# Ends the loop without ending a lane: the advisor is asked something and a builder waits, or the
+# builders' account cannot run anything.
 ATTENTION_EVENTS = frozenset({
     EVENT_BUILDER_NOTE,
+    EVENT_ACCOUNT_LIMITED,
 })
 
 assert LANE_ENDING_EVENTS | BENIGN_EVENTS | ATTENTION_EVENTS == EVENTS
@@ -358,6 +370,9 @@ EVENT_PRECEDENCE = (
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
     EVENT_BUILDER_NOTE,
+    # Directly below builder-note: a limited account explains every quiet lane on it, so it ranks
+    # above the stack, PR-set and stale events that its lanes' silence would otherwise raise.
+    EVENT_ACCOUNT_LIMITED,
     # Above pr-set-changed so a completion wins on a tick where both hold; the
     # PR-set evaluator does not run that tick and so never advances pr_state.
     EVENT_STACK_STATE_CHANGED,
@@ -371,6 +386,7 @@ _SUPPRESSIBLE_EVENTS = frozenset({
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
     EVENT_LANE_STALE,
+    EVENT_ACCOUNT_LIMITED,
 })
 
 # --- heartbeat cross-boundary tokens (home: heartbeat.py) ---------------------
@@ -2475,6 +2491,36 @@ def _payload_builder_note(ctx):
     return payload
 
 
+def _payload_account_limited(ctx):
+    accounts = []
+    for account in ctx["limited_accounts"]:
+        # axis: the event is suppressed per lane, by (launch id, account-limited), like the lane events — see bite-proof record i2272_account_limit.md
+        kept = [
+            lid for lid in account["launchIds"]
+            if (lid, EVENT_ACCOUNT_LIMITED) not in ctx["ignore_set"]
+        ]
+        if kept:
+            accounts.append(dict(account, launchIds=kept))
+    if not accounts:
+        return None
+    launch_ids = sorted(lid for account in accounts for lid in account["launchIds"])
+    payload = {
+        "launchId": launch_ids[0],
+        "launchIds": launch_ids,
+        "accounts": accounts,
+    }
+    also = _build_also_observed(
+        EVENT_ACCOUNT_LIMITED,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
+        ctx["exited_launches"],
+        ctx["stale_live_launches"],
+    )
+    if also is not None:
+        payload["alsoObserved"] = also
+    return payload
+
+
 def _payload_pr_set_changed(ctx):
     pr_change = _evaluate_pr_set_changed(
         ctx.get("open_pr_numbers"),
@@ -2530,6 +2576,7 @@ _EVENT_PAYLOAD_BUILDERS = {
     EVENT_LANE_BLOCKED: _payload_lane_blocked,
     EVENT_BUILDER_EXITED: _payload_builder_exited,
     EVENT_BUILDER_NOTE: _payload_builder_note,
+    EVENT_ACCOUNT_LIMITED: _payload_account_limited,
     EVENT_STACK_STATE_CHANGED: _payload_stack_state_changed,
     EVENT_PR_SET_CHANGED: _payload_pr_set_changed,
     EVENT_LANE_STALE: _payload_lane_stale,
@@ -2791,6 +2838,34 @@ def _append_log_line(log_file, arm, elapsed_seconds, result):
     log_file.flush()
 
 
+def _limited_accounts(repo_root, live_lanes, env):
+    """[{configDir, limitType, resetsAt, resetsAtIso, launchIds}] of each account, among the started live
+    cloud lanes' accounts, whose relay record shows it at its usage limit now; sorted by configDir.
+
+    A lane whose configDir is not a non-empty string is skipped. A reading that is not ok, or that
+    raises, is no reading: no degradation is recorded for it. Local reads only."""
+    by_account = {}
+    for lid, info in live_lanes.items():
+        config_dir = info.get("configDir")
+        if _is_cloud_lane(info) and info.get("started") and isinstance(config_dir, str) and config_dir:
+            by_account.setdefault(config_dir, []).append(lid)
+    limited = []
+    for config_dir in sorted(by_account):
+        try:
+            reading = cr.account_limit(repo_root, config_dir, env=env, now=time.time())
+        except Exception:
+            continue
+        if reading.get("ok") is True and reading.get("limited") is True:
+            limited.append({
+                "configDir": config_dir,
+                "limitType": reading.get("limitType"),
+                "resetsAt": reading.get("resetsAt"),
+                "resetsAtIso": cr.reset_iso(reading.get("resetsAt")),
+                "launchIds": sorted(by_account[config_dir]),
+            })
+    return limited
+
+
 def _evaluate_tick(
     repo_root,
     batch_id,
@@ -2837,6 +2912,9 @@ def _evaluate_tick(
         degraded=degraded,
     )
     exited_launches = exited[1] if exited is not None else []
+    # The read is local and cheap, so it runs on every tick, whether or not a higher lane event is due.
+    limited_accounts = _limited_accounts(repo_root, live_lanes, env)
+    limited_lanes = {lid for account in limited_accounts for lid in account["launchIds"]}
 
     lane_event_due = _higher_precedence_lane_event_due(
         terminal_launches,
@@ -2976,6 +3054,17 @@ def _evaluate_tick(
         stale_cloud_launches = [
             entry for entry in stale_cloud_launches if entry["launchId"] not in closed
         ]
+        # axis: a limited account explains its lanes' quiet, so none of its lanes is stale while the limit holds — see bite-proof record i2272_account_limit.md
+        stale_cloud_launches = [
+            entry for entry in stale_cloud_launches if entry["launchId"] not in limited_lanes
+        ]
+        # axis: a reopened lane its comments show closed is no longer watched, so no limited account reports it either; an account left with no lane is dropped — see bite-proof record i2272_account_limit.md
+        limited_accounts = [
+            dict(account, launchIds=kept)
+            for account in limited_accounts
+            for kept in ([lid for lid in account["launchIds"] if lid not in closed],)
+            if kept
+        ]
         stale_live_launches = stale_live_launches + stale_cloud_launches
         # bite-axis: CLOUD ENDING — a cloud lane's ending comment joins the lane-terminal
         # set before the event is built, so it is reported and seen by alsoObserved.
@@ -3007,6 +3096,7 @@ def _evaluate_tick(
         "membership_reader": membership_reader,
         "repo_slug": repo_slug,
         "builder_notes": builder_notes,
+        "limited_accounts": limited_accounts,
     }
 
     for event in EVENT_PRECEDENCE:

@@ -391,7 +391,7 @@ def test_json_block_round_trip_vet_checks_only_diff():
             "written",
         ),
         ("write_project_config", {"mapping": {"lint": {"enabled": True}}}, "written"),
-        ("write_project_config_item", {"slug": "dial", "value": 3}, "written"),
+        ("write_project_config_item", {"slug": "stackingTool", "value": "gh-stack"}, "written"),
         ("write_declared_dependencies", {"mapping": {"eslint": "^9"}}, "written"),
         ("write_declared_dependency_item", {"slug": "eslint", "value": "^10"}, "written"),
     ],

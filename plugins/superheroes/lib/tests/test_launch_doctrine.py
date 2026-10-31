@@ -160,6 +160,71 @@ def test_doctrine_cloud_launch_missing_invariant_refuses(phrase):
     _assert_cloud_refusal(text, f"doctrine-cloud-launch-invariant-missing:{phrase}")
 
 
+_DETECTIVE_BEGIN = "<!-- launch-doctrine:cloud-detective:begin -->"
+_DETECTIVE_END = "<!-- launch-doctrine:cloud-detective:end -->"
+
+
+def test_shipped_doctrine_carries_the_detective_cloud_line():
+    # axis: the parser returns the detective block's own text, read here by plain string operations
+    text = _read_doctrine()
+    assert text.count(_DETECTIVE_BEGIN) == 1
+    assert text.count(_DETECTIVE_END) == 1
+    block = text.split(_DETECTIVE_BEGIN, 1)[1].split(_DETECTIVE_END, 1)[0].strip()
+    result = LD.load()
+    assert result["ok"] is True
+    assert result["detectiveCloudLine"] == block
+    assert block.count("\n") == 0
+    for phrase in LD.DETECTIVE_CLOUD_INVARIANTS:
+        assert phrase in block
+    assert result["detectiveCloudLine"] != result["cloudLaunchLine"]
+
+
+def _detective_line():
+    return LD.load()["detectiveCloudLine"]
+
+
+def _assert_detective_refusal(text, reason):
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == reason
+    assert result["detectiveCloudLine"] is None
+    assert result["cloudLaunchLine"] is None
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+
+
+def test_doctrine_missing_detective_cloud_block():
+    _assert_detective_refusal(
+        _read_doctrine().replace(_DETECTIVE_BEGIN, ""), "doctrine-missing-block:cloud-detective"
+    )
+
+
+def test_doctrine_empty_detective_cloud_block_is_malformed():
+    text = _mutate_once(_read_doctrine(), _detective_line() + "\n", "")
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert re.fullmatch(r"doctrine-malformed-line:\d+", result["reason"])
+    assert result["detectiveCloudLine"] is None
+
+
+def test_doctrine_two_line_detective_cloud_block_is_malformed():
+    text = _mutate_once(
+        _read_doctrine(), _detective_line(), _detective_line() + "\nAnd one more line."
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert re.fullmatch(r"doctrine-malformed-line:\d+", result["reason"])
+    assert result["detectiveCloudLine"] is None
+
+
+@pytest.mark.parametrize("phrase", LD.DETECTIVE_CLOUD_INVARIANTS)
+def test_doctrine_detective_cloud_missing_invariant_refuses(phrase):
+    line = _detective_line()
+    assert phrase in line
+    text = _mutate_once(_read_doctrine(), line, line.replace(phrase, "nothing at all"))
+    _assert_detective_refusal(text, f"doctrine-cloud-detective-invariant-missing:{phrase}")
+
+
 def test_opening_ruling_count_word_matches_ruling_ids():
     text = _read_doctrine()
     count_word = _opening_ruling_count_word(text)
