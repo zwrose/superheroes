@@ -1588,10 +1588,10 @@ def test_run_seam_verifier_reason_less_verdict_returns_fault_directly():
 def test_two_verifier_faults_in_one_round_are_both_recorded():
     # a round that holds two verifier waves appends its second fault beside the first, never over it
     state = RD.new_state(_cfg())
-    for reason in ("first wave fault", "second wave fault"):
+    for reason in ("verdict 0 has no `reason`", "verdict 1 has no `id`"):
         RD._record_round_append(state, "verifierArtifactFault", {"fault": reason, "round": state["round"]})
     faults = _state_verifier_faults(state)
-    assert [f["fault"] for f in faults] == ["first wave fault", "second wave fault"]
+    assert [f["fault"] for f in faults] == ["verdict 0 has no `reason`", "verdict 1 has no `id`"]
     assert faults[0]["round"] == 1
     assert faults[1]["round"] == 1
     assert "reason" in faults[0]["fault"]

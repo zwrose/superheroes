@@ -416,35 +416,44 @@ def test_a_ruling_on_a_reworded_finding_reaches_the_one_live_row():
     assert RD._gate_guidance_entries(state, 2)[0]["guidance"] == "G"
 
 
-def _merged_into_session(tmp_path):
-    """F1 and F2 reported together; the synthesis seat cannot be seated in this harness, so the merge
-    it would record is made through the driver's own writers (`_record_merged_into`, `_set_findings`)
-    at the seams-check step, before the fix batch is built. Returns
+def _merged_into_session(tmp_path, monkeypatch):
+    """F1 and F2 reported together; the synthesis seat is seated (a fixer outside the anthropic family,
+    a known host family) and groups both findings as one root cause, so the real synthesis fold records
+    the merge before the fix batch is built. Returns
     (session_dir, gitdir, head_path, member_key, kept_key)."""
+    wrapped = _TRI._payload_for
+
+    def grouping(session_dir, state, pend, seat, panel_findings, head_diff_path):
+        if pend["phase"] == RD.P_SYNTHESIS:
+            ids = [f["id"] for f in (pend.get("payload") or {}).get("findings") or []]
+            return {"grouping": [{"group_id": "g0", "member_ids": ids}]}
+        return wrapped(session_dir, state, pend, seat, panel_findings, head_diff_path)
+
+    monkeypatch.setattr(_TRI, "_payload_for", grouping)
     session_dir, gitdir, head_path = _session(
         tmp_path, [_finding("bounds F1", 1), _finding("bounds F2", 2)],
-        to_phase=RD.P_SEAMS, name="c7-merge")
-    state = _state(session_dir)
-    kept = _finding_key_by_title(state, "bounds F1")
-    member = _finding_key_by_title(state, "bounds F2")
-    RD._record_merged_into(state, member, kept)
-    RD._set_findings(state, [f for f in state["findings"] if _key(f) == kept])
-    RD.save_state(session_dir, state)
+        to_phase=RD.P_SEAMS, name="c7-merge", fixerVendor="cursor",
+        seatMap=dict(_TRI.SEAT_MAP, hostFamily="anthropic"))
     _drive_to_phase(session_dir, gitdir, [], head_path, P_APPLY_FIXES)
     state = _state(session_dir)
-    assert _batch_keys(state) == [kept]
-    assert _ledger_row(state, member)[session_contract.MERGED_INTO_FIELD] == kept
+    batch = _batch_keys(state)
+    assert len(batch) == 1
+    kept = batch[0]
+    members = [row for row in state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+               if row.get(session_contract.MERGED_INTO_FIELD) == kept]
+    assert len(members) == 1
+    member = RD._finding_identity_key(members[0])
     return session_dir, gitdir, head_path, member, kept
 
 
 def test_a_ruling_on_a_member_merged_into_another_reaches_the_one_live_row(
-        tmp_path, keep_severity):
+        tmp_path, keep_severity, monkeypatch):
     """axis: ATTACH — guidance given on a finding merged into another binds the representative: the
     representative is the row the pending `apply-fixes` step carries, with the member's guidance on it.
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 2)
     """
-    session_dir, gitdir, head_path, member, kept = _merged_into_session(tmp_path)
+    session_dir, gitdir, head_path, member, kept = _merged_into_session(tmp_path, monkeypatch)
     assert _rule(session_dir, _guidance_file(tmp_path, "g.json", member, "FOR-THE-MERGED"))["ok"]
     state = _state(session_dir)
     assert _batch_keys(state) == [kept] and _offered(state, session_dir, kept)

@@ -2962,6 +2962,9 @@ def _seed_findings_before_record_park(state):
     # round's FRESH candidates — so this merges rather than assigns, or the halted receipt
     # under-reports exactly the candidates the round just gathered.
     fresh = state.get("_toVerify")
+    held = state.get("_panelStaged")
+    if isinstance(held, list) and held:  # the panel's candidates held at the seams-check step
+        fresh = list(held) + (fresh if isinstance(fresh, list) else [])
     if not isinstance(fresh, list) or not fresh:
         return
     existing = state.get("findings") or []
@@ -4599,7 +4602,10 @@ def _after_panel_findings(state, config, staged):
     its findings staged together with the panel's; otherwise they go straight to the verifiers."""
     if _round_is_sliced(state) and state["round"] == 1 and not state.get("_seamsChecked"):
         state["_seamsChecked"] = True
-        state["_panelStaged"] = staged
+        # The panel's findings are seeded on the ledger now, so a ruling on one is accepted at the
+        # seams step; they are held out of `_toVerify` until the seams check has folded.
+        _stage_findings(state, staged)
+        state["_panelStaged"] = state.pop("_toVerify", None) or []
         state["step"] = P_SEAMS
         return
     _stage_findings(state, staged)
@@ -4612,7 +4618,9 @@ def _fold_seams(state, config, artifact):
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
     compiled, drops = mechanical_compile(candidates, state.get("reviewedDiff"))
     _record_compile_drops(state, drops)
-    _stage_findings(state, (state.pop("_panelStaged", None) or []) + compiled)
+    held = state.pop("_panelStaged", None) or []
+    _stage_findings(state, compiled)
+    state["_toVerify"] = list(held) + list(state.get("_toVerify") or [])
     state["step"] = P_VERIFIERS
 
 

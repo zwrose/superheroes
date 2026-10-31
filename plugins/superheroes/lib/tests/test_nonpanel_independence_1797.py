@@ -173,7 +173,8 @@ def test_unseatable_nonpanel_seat_gets_no_order_and_a_missing_record(tmp_path, p
     # axis: the unseatable non-panel seat getting NO order — see bite-proof record
     # wo_b_1797_seat_orders
     session_dir, gitdir, head_path = TRI._bootstrap(
-        tmp_path, name="b5-unseatable-" + phase, vendors=["claude"], fixerVendor="claude")
+        tmp_path, name="b5-unseatable-" + phase, vendors=["claude"], fixerVendor="claude",
+        sliced=False)
     TRI._drive_to_phase(session_dir, gitdir, [TRI._blocking_finding("bounds A", 2)], head_path,
                         RD.P_VERIFIERS)
     state = TRI._state(session_dir)
@@ -212,7 +213,7 @@ def test_unseatable_nonpanel_seat_gets_no_order_and_a_missing_record(tmp_path, p
 
 def _hand_unseatable_session(tmp_path, name):
     session_dir, gitdir, head_path = TRI._bootstrap(
-        tmp_path, name=name, vendors=["claude"], fixerVendor="claude")
+        tmp_path, name=name, vendors=["claude"], fixerVendor="claude", sliced=False)
     TRI._drive_to_phase(session_dir, gitdir, [TRI._blocking_finding("bounds A", 2)], head_path,
                         RD.P_VERIFIERS)
     state = TRI._state(session_dir)

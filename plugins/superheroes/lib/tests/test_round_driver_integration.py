@@ -491,7 +491,9 @@ def _fixture_repo(tmp_path, name):
     return str(repo_root)
 
 
-def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
+def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, sliced=True, **cfg_over):
+    """A bootstrapped session. ``sliced`` (the default) gives it a slice plan, so round 1 routes the
+    panel's findings through `dispatch-seams-check`; ``sliced=False`` leaves the change in one piece."""
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
     gitdir = str(tmp_path / (name + "-gitdir"))
@@ -516,9 +518,10 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     enter_checkout(repo_root)
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
-    state = _state(session_dir)
-    state["slicePlan"] = copy.deepcopy(SLICE_PLAN)
-    round_driver.save_state(session_dir, state)
+    if sliced:
+        state = _state(session_dir)
+        state["slicePlan"] = copy.deepcopy(SLICE_PLAN)
+        round_driver.save_state(session_dir, state)
     return session_dir, gitdir, head_diff_path
 
 
@@ -569,7 +572,7 @@ def test_advance_folds_the_panel_through_the_real_adapter(tmp_path):
     Pre-fix this refuses `assemble-refused` with `envelopes-not-a-list:dict` — the driver handed the
     adapter a mapping. Nothing about the driver's own bookkeeping was wrong, which is exactly why a
     stubbed adapter could not see it."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, sliced=False)
     phase, out = _drive_one_phase(session_dir, gitdir,
                                   [_blocking_finding("missing bounds guard", 2)], head_path)
     assert phase == round_driver.P_PANEL
