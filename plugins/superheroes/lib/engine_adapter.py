@@ -1951,16 +1951,19 @@ def _scrub_ruling_object(obj):
         "reason": _scrub(obj["reason"]) if isinstance(obj.get("reason"), str) else obj.get("reason"),
     }
     contract, _reason = payload_contracts.payload_contract(payload_contracts.P_AUDITS)
-    for opt in contract.get("optional") or ():
-        if opt in obj:
-            val = obj.get(opt)
-            if opt == "newIssues" and isinstance(val, list):
-                out[opt] = [_scrub_mapping(x) if isinstance(x, dict) else _scrub_finding_value(x)
-                            for x in val]
-            elif isinstance(val, str):
-                out[opt] = _scrub(val)
-            else:
-                out[opt] = val
+    # `checks` is a required contract field the three above do not cover; `testMatch` is optional. Both
+    # are objects whose `why` strings are free text, scrubbed like the rest.
+    for field in tuple(contract.get("required") or ()) + tuple(contract.get("optional") or ()):
+        if field in out or field not in obj:
+            continue
+        val = obj.get(field)
+        if field == "newIssues" and isinstance(val, list):
+            out[field] = [_scrub_mapping(x) if isinstance(x, dict) else _scrub_finding_value(x)
+                          for x in val]
+        elif isinstance(val, (str, dict)):
+            out[field] = _scrub_mapping(val)
+        else:
+            out[field] = val
     return out
 
 

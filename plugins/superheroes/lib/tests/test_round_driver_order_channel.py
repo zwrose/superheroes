@@ -260,6 +260,7 @@ def test_driver_context_gives_both_consumers_the_same_channel(tmp_path, phase):
     ok, state = RD.load_state(session_dir)
     assert ok, state
     state["headDiff"] = DIFF
+    state["_fixDeltaDiff"] = DIFF
 
     cfg = state.get("config") or {}
     repo_root = cfg.get("repoRoot") or session_dir
@@ -470,6 +471,7 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     ok, state = RD.load_state(session_dir)
     assert ok, state
     state["headDiff"] = DIFF
+    state["_fixDeltaDiff"] = DIFF
     rnd_key = str(state["round"])
     state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)   # clear round-1
 
@@ -499,6 +501,7 @@ def test_a_configured_reviewer_vendor_is_not_disclosed_as_a_gap(tmp_path, monkey
     ok, state = RD.load_state(session_dir)
     assert ok, state
     state["headDiff"] = DIFF
+    state["_fixDeltaDiff"] = DIFF
     rnd_key = str(state["round"])
     state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)
 
@@ -604,7 +607,7 @@ _KNOWN_REALISTIC_VALUES = {
     },
     RD.P_SCOPED: {
         "HUNKS_PATH": SESSION + "/round-1/scoped-hunks.json",
-        "HEAD_DIFF_PATH": SESSION + "/round-1/head.diff",
+        "FIX_DIFF_PATH": SESSION + "/round-1/fix-delta.diff",
         "CORE_PATH": "/proj/core.md",
         "LAYER_PATH": "/proj/layer.md",
         "VERIFICATION_ROOT": "/proj",

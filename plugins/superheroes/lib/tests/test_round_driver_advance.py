@@ -1933,6 +1933,7 @@ def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(t
     landed = _land_verify_via_verb(d)
     assert _advance(d, tmp_path)["ok"] is True                       # A/B: the fold itself works
     folded = _state(d)
+    folded["terminal"] = None   # the fold left a delta round with no baseline handed back; re-enter as pending
     folded["step"] = RD.P_VERIFY
     folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
                          "payload": {"command": "none"}}
@@ -1992,47 +1993,21 @@ def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, 
 
     initial_pend = _pending(d)
     initial_attempt = initial_pend["attempt"]
-
-    pend = initial_pend
-    seats = {dim: {"findings": []} for dim in RD.DIMENSIONS}
-    submit_out = RD.cmd_submit(
-        d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
-        {"seats": seats},
-    )
-    assert submit_out["ok"] is True, submit_out
-
-    state = _state(d)
-    assert state["seatMapReceipts"] == []
-    assert state["config"]["seatMap"]["seats"] == partial["seats"]
-
-    # Reach the next panel dispatch through the SUPPORTED re-arm — the #174 confirmation re-arm,
-    # which is how a fresh full panel is actually scheduled — rather than hand-setting
-    # `step`/`pending`/`lastAccepted` (PR #1028 rework finding 24). A hand-set state can emit a
-    # dispatch the driver would never have emitted, and the seat-map fallback assertion below would
-    # then prove nothing about the live path.
     rnd = initial_pend["round"]
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = ["Critical"]      # a Critical under budget owes one panel
-    state["fullPanelRan"] = False
-    state["findings"] = []
-    state["auditRounds"] = [{"round": rnd, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
-    state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
-    state["_changedSubjects"] = ["Code"]
+    assert rnd == 1 and state["step"] == RD.P_PANEL
+
+    # Only round 1 runs a panel now (a later round runs none), so the order under test is the round-1
+    # panel's: clear the pending order the session emitted without the fallback and emit it again with
+    # the seat map in config, the state having accumulated no seats.
     state["pending"] = None
-    RD._settle_delta(state, state["config"])
-    assert state.get("terminal") is None, "the re-arm must not certify"
-    assert state["step"] == RD.P_PANEL
-    assert any(dd["kind"] == "confirmation-rearm" for dd in state["decisions"])
-    assert state["round"] == rnd + 1
     RD.save_state(d, state)
 
     next_out = RD.cmd_next(d)
     assert next_out["ok"] is True, next_out
     fresh_pend = _pending(d)
     assert fresh_pend["phase"].startswith("dispatch-"), fresh_pend
-    assert (fresh_pend["round"], fresh_pend["attempt"]) != (rnd, initial_attempt), (
-        "must emit a fresh dispatch, not re-read the pre-submit manifest")
-    assert (fresh_pend["round"], fresh_pend["attempt"]) == (rnd + 1, 0), fresh_pend
+    assert fresh_pend["round"] == rnd, fresh_pend
+    assert _state(d)["seatMapReceipts"] == []
 
     manifest_path = RD._orders_manifest_path(
         d, fresh_pend["round"], fresh_pend["phase"], fresh_pend["attempt"])
@@ -3193,20 +3168,6 @@ def _above_ceiling_orchestrator_session(tmp_path, adapters,
     return d
 
 
-def _above_ceiling_panel_session(tmp_path, adapters,
-                                 ceiling=_CEILING_FIXTURE_CEILING,
-                                 reached_round=_CEILING_FIXTURE_REACHED):
-    d = _session(tmp_path, name="ceil-panel", maxRounds=ceiling)
-    state = _state(d)
-    _above_ceiling_state_baseline(state, reached_round)
-    state["step"] = RD.P_PANEL
-    state["pending"] = {"action": RD.P_PANEL, "round": reached_round, "phase": RD.P_PANEL,
-                        "attempt": 0, "payload": {}}
-    RD.save_state(d, state)
-    _record_all_panel_seats(d)
-    return d
-
-
 def _advance_rows_for_step(session_dir, phase, rnd, attempt):
     return [e for e in _journal(session_dir)
             if e.get("cmd") == "advance" and e.get("phase") == phase
@@ -3245,22 +3206,6 @@ def test_orchestrator_fulfilled_locked_hands_back_honestly_above_round_cap(tmp_p
     assert out["durableRecord"]["written"] is False
     assert out["durableRecord"]["reason"].strip()
     assert not os.path.exists(_verify_store_path(d, rnd=rnd))
-
-
-def test_advance_locked_hands_back_honestly_above_round_cap(tmp_path, adapters):
-    """Loaded state above the cap hands back through _advance_locked without a folded receipt."""
-    d = _above_ceiling_panel_session(tmp_path, adapters)
-    state = _state(d)
-    pend = state["pending"]
-    phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
-    out = RD._advance_locked(d, state, git=_fake_git(_gitdir(tmp_path)))
-    assert out["ok"] is True
-    assert "folded" not in out
-    assert out["notFolded"]["reason"] == "round-cap"
-    assert out["terminal"] == "handed-back"
-    assert "durableRecord" not in out
-    rows = _advance_rows_for_step(d, phase, rnd, attempt)
-    assert not any(r.get("outcome") == "advanced" for r in rows)
 
 
 # --- #1061 advance/submit refusal contract -------------------------------------

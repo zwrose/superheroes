@@ -23,6 +23,9 @@ FI = _load("finding_identity")
 RR = _load("round_records")
 SC = _load("session_contract")
 
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in AU.CHECK_NAMES}
+
 
 def _cfg(**over):
     base = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
@@ -90,7 +93,8 @@ def test_fold_audits_outcomes_identity_is_line_less():
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tgt = state["_auditTargets"][0]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+         "checks": _AUDIT_CHECKS}]})
     outcome = state["auditRounds"][-1]["outcomes"][0]
     assert outcome["identity"] == tgt["identity"]
     assert outcome["identity"] == FI.finding_identity(tgt)
@@ -106,7 +110,7 @@ def test_fold_audits_outcome_identity_classkey_free():
     state["_auditTargets"] = [{"id": loc_id, "identity": ident, "file": "f.py", "line": 9,
                                "title": "plain", "severity": "Important", "independence": "n/a"}]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": loc_id, "ruling": "not-discharged", "reason": "nope"}]})
+        {"id": loc_id, "ruling": "not-discharged", "reason": "nope", "checks": _AUDIT_CHECKS}]})
     outcome = state["auditRounds"][-1]["outcomes"][0]
     assert outcome["identity"] == ident
     assert "classKey" not in outcome or outcome.get("classKey") is None
@@ -119,7 +123,7 @@ def test_apply_audit_results_duplicate_target_ids_fail_closed():
     collided = "f.py::bug@L1"
     targets = [{"id": collided, "file": "f.py", "line": 1, "title": "bug"},
                {"id": collided, "file": "f.py", "line": 2, "title": "bug"}]
-    results = [{"id": collided, "ruling": "discharged", "reason": "ok"}]
+    results = [{"id": collided, "ruling": "discharged", "reason": "ok", "checks": _AUDIT_CHECKS}]
     out = AU.apply_audit_results(targets, results)
     assert out["ambiguous"] == [collided]
     assert out["discharged"] == []
@@ -156,8 +160,9 @@ def test_apply_audit_results_line_none_when_absent():
 
 # --- D5.1: critical severity lookup via target id ------------------------------
 
-def test_not_discharged_critical_reaches_surfaced_since_last_panel():
-    # axis: Critical severity lookup must key on per-location target id, not line-less identity
+def test_not_discharged_critical_keeps_no_surfaced_severity_tracker():
+    # re-pinned: the Critical lookup fed the confirmation re-arm, which is gone; a not-discharged
+    # Critical target is settled by the audit breaker and the settle keeps no such tracker
     state = RD.new_state(_cfg(maxRounds=20))
     f = _finding(severity="Critical", line=1)
     state["fixBatch"] = [f]
@@ -166,10 +171,9 @@ def test_not_discharged_critical_reaches_surfaced_since_last_panel():
     state["_auditOutcome"] = {"notDischarged": [tid], "discharged": []}
     state["auditRounds"] = [{"round": 2, "outcomes": []}]
     state["findings"] = []
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = []
     RD._settle_delta(state, state["config"])
-    assert "Critical" in state.get("surfacedSinceLastPanel", [])
+    assert "surfacedSinceLastPanel" not in state
+    assert state["step"] != RD.P_PANEL
 
 
 def test_not_discharged_important_does_not_surface_critical():
@@ -200,15 +204,13 @@ def test_not_discharged_important_does_not_surface_critical():
     assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_critical_not_discharged_rearms_confirmation():
-    # axis: discharged-then-not-discharged Critical must re-arm confirmation via per-location id
+def test_critical_not_discharged_never_rearms_a_confirmation_panel():
+    # re-pinned: a discharged-then-not-discharged Critical no longer re-arms a confirmation panel
     state = RD.new_state(_cfg(maxRounds=20))
     f = _finding(severity="Critical", line=1)
     state["fixBatch"] = [f]
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tid = state["_auditTargets"][0]["id"]
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = []
     state["round"] = 3
     state["findings"] = []
     state["fullPanelRan"] = False
@@ -216,15 +218,15 @@ def test_critical_not_discharged_rearms_confirmation():
         {"identity": FI.finding_identity(f), "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [tid], "discharged": []}
     RD._settle_delta(state, state["config"])
-    assert "Critical" in state["surfacedSinceLastPanel"]
+    assert "surfacedSinceLastPanel" not in state
     state["_auditOutcome"] = {"notDischarged": [], "discharged": [tid]}
     state["findings"] = []
     state.pop("_fixBatch", None)
     state["step"] = None
     state["terminal"] = None
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_PANEL
-    assert any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
 # --- D5.2/D5.3: alias-based stall selection -----------------------------------

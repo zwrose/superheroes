@@ -48,33 +48,18 @@ def _hand_session(tmp_path, status, **state):
     return Session(tmp_path, rounds=rounds, **state).save()
 
 
-def _refuse_derivation_at_the_fixer_fold(monkeypatch):
-    """The apply-fixes fold's git derivation refuses, so the fold takes the unknown path (a full second panel) and the
-    unknown path's own derivation at the verified head runs for real. Both driver copies a fixture reaches are patched."""
-    for mod in (RD, _TRD.RD):
-        real = mod._derive_panel_diff_at_head
-
-        def derive(config, head_sha, real=real):
-            if sys._getframe(1).f_code.co_name == "_fold_apply_fixes":
-                return None, "forced refusal at the apply-fixes fold"
-            return real(config, head_sha)
-
-        monkeypatch.setattr(mod, "_derive_panel_diff_at_head", derive)
-
-
-def _hand_submit_two_panels(base, monkeypatch):
-    """Drive a fixture review with `submit` alone to a terminal: round 1 raises a finding, the round-2 scoped
-    read raises a Critical one, so the loop seats a second full panel. Returns the session directory."""
-    _refuse_derivation_at_the_fixer_fold(monkeypatch)
+def _hand_submit_a_fixed_review(base, monkeypatch):
+    """Drive a fixture review with `submit` alone to a terminal: round 1 raises a finding, the fix is audited in
+    round 2 and the loop ends on that round. Returns the session directory."""
     base.mkdir()
     repo, base_sha, diff = _init_two_commit_repo(base)
     session = str(base / "session")
     seed_session_meta(session, repo)
     setup_head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
-    cfg = _cfg(verifyCommand="pytest -q", diff=diff, repoRoot=repo, baseRef=base_sha, headSha=setup_head)
+    cfg = _cfg(verifyCommand="pytest -q", diff=diff, repoRoot=repo, baseRef=base_sha, headSha=setup_head,
+               seatMap=_TRD._nonpanel_cell_proof(["claude", "codex"]))
     first = [{"title": "bug", "severity": "Important", "consequence": "a wrong answer", "file": "f.py", "line": 1}]
-    worse = [{"title": "worse bug", "severity": "Critical", "consequence": "data loss", "file": "f.py", "line": 1}]
-    answer = _responder(round1_findings=first, scoped=worse)
+    answer = _responder(round1_findings=first)
 
     def respond(phase, payload, rnd):
         if phase == RD.P_APPLY_FIXES:
@@ -101,21 +86,26 @@ def _names(account):
 # --- item 1: a session driven by hand submit -------------------------------------------------------
 
 def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(tmp_path, monkeypatch):
-    session = _hand_submit_two_panels(tmp_path / "hand", monkeypatch)
+    session = _hand_submit_a_fixed_review(tmp_path / "hand", monkeypatch)
     with open(os.path.join(session, "driver-journal.jsonl"), encoding="utf-8") as fh:
         journal = [json.loads(line) for line in fh if line.strip()]
     ok, state = RD.load_state(session)
     status = {int(n): r["seatStatus"] for n, r in state["rounds"].items() if "seatStatus" in r}
     # the fixture is the shape a hand submit really leaves: no journaled seat, a seat status for each panel round
     assert ok and not any(isinstance(r.get("seat"), str) for r in journal)
-    assert len(status) >= 2 and all(v == "run" for s in status.values() for v in s.values())
+    assert len(status) >= 1 and all(v == "run" for s in status.values() for v in s.values())
     account = rs.account_from_session(session, extras(), Fake().readers())
     # bites on: a hand-submit session refused, or its panel rounds' seats not listed as reviewers that ran
     expected = {f"{seat} (round {n})" for n, s in status.items() for seat in s}
     verifier_rounds = {r["round"] for r in journal if r.get("outcome") == "accepted" and r.get("phase") == RD.P_VERIFIERS}
     empty = {n for n in verifier_rounds if rs._nothing_to_verify(state, n)}  # a verifier phase with nothing to verify is no planned reviewer
     expected |= {"verifiers reviewer (round %d)" % n for n in verifier_rounds - empty}  # a hand-accepted verifier phase that had something to verify is a reviewer too
-    assert set(_names(account)) == expected and len(account["reviewers"]) == len(expected)
+    # the fix auditor and scoped finder of round 2 are listed too (the seats the later round runs); the
+    # session's panel seats are what the seat status plans
+    later_round = {"audits auditor codex (round 2)", "scoped-finder reviewer (round 2)"}
+    assert set(_names(account)) - later_round == expected
+    assert later_round <= set(_names(account))
+    assert len(account["reviewers"]) == len(expected) + len(later_round)
     assert not any("verifiers reviewer (round %d)" % n in _names(account) for n in empty)
     for v in account["reviewers"]:
         assert v["ran"] is (not v["name"].startswith("verifiers")) and v["planned"] is True and v["runDir"] is None  # the fixture's verifier submits no verdicts: it never ran
@@ -128,7 +118,7 @@ def test_a_session_driven_by_hand_submit_is_written_from_the_rounds_seat_status(
     out = send(tmp_path, session, fake)
     assert out["ok"], out
     rec = rr.read(7, readers=fake.readers())
-    assert {v["name"] for v in rec["reviewers"]} == expected
+    assert {v["name"] for v in rec["reviewers"]} - later_round == expected
     # the writer, not the adapter, decides whether a reviewer counts: no maker is named here, so none is credited
     assert {v["findingsCoverage"] for v in rec["reviewers"]} == {rr.SESSION} and {v["runDir"] for v in rec["reviewers"]} == {None}
     assert rs.HAND_SUBMIT_NOTE in json.dumps(rec)
@@ -477,7 +467,8 @@ def test_a_malformed_sheet_answers_or_base_ref_is_refused_naming_the_key(tmp_pat
 
 def test_a_rejection_by_the_selected_auditor_records_that_vendor_and_a_headless_audit_stays_a_missing_review(tmp_path):
     target = {"id": "f", "identity": "f", "file": "x.py", "line": 1, "title": "t", "auditorVendor": "codex"}
-    results = [{"id": "f", "ruling": "not-discharged", "reason": "the fix leaves the defect"}]
+    results = [{"id": "f", "ruling": "not-discharged", "reason": "the fix leaves the defect",
+                "checks": _TRD.audit_checks(right="no")}]
     # bites on: audits.apply_audit_results stamping the executing vendor only on clearing rulings
     got = audits.apply_audit_results([target], results, expected_auditors={"f": "codex"}, collection_manifest={"f": "codex"})
     assert got["audits"][0]["auditor"] == "codex"

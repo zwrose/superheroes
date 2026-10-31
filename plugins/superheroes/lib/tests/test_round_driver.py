@@ -7,9 +7,9 @@ mandated path is the easiest path. These pin BOTH layers over the shared core:
     hash mismatch rejected, exact-duplicate idempotent), v1-state refusal, per-call journalling.
   - Layer 1 (run_loop): the ported run-shape driven end-to-end with scripted seams.
 
-Ported invariants from the retired test_code_loop_plan.py (round-1 full-deep baseline; the #174
-confirmation economics incl. cap-parks-on-Critical; fail-toward-run-all on an unknown surface;
-exits only off a qualifying round — now also expressible as an audited-chain certification), plus
+Ported invariants from the retired test_code_loop_plan.py (round-1 full-deep baseline; rounds 2 and
+later run no panel; a fix surface the driver cannot work out hands the PR back; exits only off a
+qualifying round — now also expressible as an audited-chain certification), plus
 the new #507 mechanics: audit-keyed stall + self-recovery + hand-back, delta rounds, degraded
 independence, receipt-missing seats carried unverified, the author-justification POST-filter, and
 the driver receipt + its validator.
@@ -97,6 +97,21 @@ def _big_diff(n_files=25):
 
 # --- default scripted seams ---------------------------------------------------
 
+def audit_checks(**answers):
+    """The fix auditor's three answers (`right`, `brokeNothing`, `testWouldFail`) as an audit result
+    carries them in `checks`: every one `yes` unless a check is named with another answer."""
+    return {name: {"answer": answers.get(name, "yes"), "why": "checked: %s" % name}
+            for name in ("right", "brokeNothing", "testWouldFail")}
+
+
+def audit_test_match(target, answer="matches"):
+    """The `testMatch` an audit result owes for `target`: `{"testMatch": ...}` when the target's committed
+    break-it test was changed and explained, else nothing."""
+    if (target.get("breakIt") or {}).get("match") != "changed-explained":
+        return {}
+    return {"testMatch": {"answer": answer, "why": "compared the committed test with the test role's"}}
+
+
 def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=None,
            verify_runner=None, io=None, vendors=None, fixer_vendor="claude"):
     def default_reviewer(dim, tier, rnd, ctx):
@@ -114,8 +129,9 @@ def _seams(reviewer=None, verifier=None, synthesis=None, auditor=None, fix_step=
 
     def default_auditor(targets, rnd):
         # Echo the selected independent auditor vendor so the discharge passes the provenance gate.
-        return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                 "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+        return [dict({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": audit_checks()}, **audit_test_match(t))
                 for t in (targets or [])]
 
     def default_fix(batch, rnd, payload):
@@ -508,8 +524,9 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
         if phase == RD.P_AUDITS:
             # The orchestrator records its dispatch manifest out-of-band from the results — the vendor
             # it seated per target, read off the dispatch payload (never the result echo).
-            return {"results": [{"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
-                                 "auditorVendor": t.get("auditorVendor")}
+            return {"results": [dict({"id": t["id"], "ruling": audit, "reason": "r", "evidence": "e",
+                                      "auditorVendor": t.get("auditorVendor"),
+                                      "checks": audit_checks()}, **audit_test_match(t))
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -751,7 +768,7 @@ def _audit_artifact(n, **over):
     targets = n["payload"]["targets"]
     assert targets, "the audits payload carried no targets to key rulings against"
     result = {"id": targets[0]["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-              "auditorVendor": targets[0].get("auditorVendor")}
+              "auditorVendor": targets[0].get("auditorVendor"), "checks": audit_checks()}
     result.update(over)
     return ({"results": [result],
              "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}, targets)
@@ -821,8 +838,10 @@ def test_submit_audits_two_targets_one_colliding_id_not_refused():
     collapses two same-identity findings into one. The chokepoint behavior is pinned by the
     loop-level test above."""
     targets = [{"id": "f.py::unchecked return value"}, {"id": "f.py::unchecked return value"}]
-    one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"},
-                       {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"}]
+    one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r",
+                        "checks": audit_checks()},
+                       {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r",
+                        "checks": audit_checks()}]
     assert RD.audit_results_fault({"results": one_ruling_each}, targets) is None
 
 
@@ -920,7 +939,7 @@ def test_verify_result_fault_pure():
 
 
 def test_audit_results_fault_pure():
-    good = [{"id": "a1", "ruling": "not-discharged"}]
+    good = [{"id": "a1", "ruling": "not-discharged", "checks": audit_checks()}]
     assert RD.audit_results_fault({"results": good}, [{"id": "a1"}]) is None
     assert RD.audit_results_fault({}, [{"id": "a1"}]) is None
     # a non-dict ROOT can carry no rulings at all — refused, naming the envelope (never a `results`
@@ -931,7 +950,8 @@ def test_audit_results_fault_pure():
     # `ambiguous` handling governs (test_submit_audits_repeated_id_accepted_the_fold_governs)
     assert RD.audit_results_fault({"results": good + good}, [{"id": "a1"}, {"id": "a1"}]) is None
     # an empty target set judges no id — the seat-key guard's empty-key rule, audit-side
-    assert RD.audit_results_fault({"results": [{"id": "zz", "ruling": "not-discharged"}]}, []) is None
+    assert RD.audit_results_fault(
+        {"results": [{"id": "zz", "ruling": "not-discharged", "checks": audit_checks()}]}, []) is None
     assert "not an audit target" in RD.audit_results_fault({"results": good}, [{"id": "other"}])
     # a ruling with no binding id is refused even with NO targets to key against — the id branch
     # stands on its own, so its bite-proof reddens on the refusal axis rather than on a message
@@ -939,7 +959,8 @@ def test_audit_results_fault_pure():
         {"results": [{"id": None, "ruling": "not-discharged"}]}, [])
     assert "results[0] is str" in RD.audit_results_fault({"results": ["discharged"]}, [])
     # the entry index is named so a multi-result artifact says WHICH ruling is wrong
-    two = [{"id": "a1", "ruling": "not-discharged"}, {"id": "a2", "ruling": "nope"}]
+    two = [{"id": "a1", "ruling": "not-discharged", "checks": audit_checks()},
+           {"id": "a2", "ruling": "nope"}]
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
@@ -1190,7 +1211,7 @@ def test_new_issues_usability_agrees_with_the_running_fold():
         out = AU.apply_audit_results(
             [target],
             [{"id": "v0", "ruling": "discharged-but-new-issue", "reason": "fixed but leaked",
-              "newIssues": candidates}])
+              "newIssues": candidates, "checks": audit_checks()}])
         folded = out["audits"][0]["ruling"]
         if usable:
             assert folded == "discharged-but-new-issue", (candidates, out)
@@ -1230,9 +1251,9 @@ def test_clean_round1_certifies_full_panel_confirmed(tmp_path):
     assert payload["certification"]["shape"] == "full-panel-confirmed"
 
 
-def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
-    """A malformed/quoted-path head diff → unknown surface → a FULL reviewer-deep panel (the
-    existing unknown→run-everything rule), not a scoped audit. Git's answer is the malformed text
+def test_unknown_delta_surface_hands_the_pr_back_and_runs_no_panel(tmp_path, monkeypatch):
+    """A malformed/quoted-path head diff → unknown surface → the PR is handed back
+    (`fix-surface-unknown`), not a scoped audit and not a panel. Git's answer is the malformed text
     too, so the supplied diff cross-checks as a match and the split meets the malformed diff."""
     from test_round_driver_round_economy_1272 import _commit_in_repo, _init_ceiling_git_repo
 
@@ -1276,10 +1297,11 @@ def test_unknown_delta_surface_runs_full_panel(tmp_path, monkeypatch):
         return {}
 
     payload = _drive_cli(d, _cfg(repoRoot=repo, baseRef=init_head), respond)
-    assert seen["panel_r2"] is True
-    assert payload["verdict"] == "converged"
+    assert seen["panel_r2"] is False
+    assert payload["verdict"] == "handed-back"
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
+    assert receipt["decisions"][-1]["kind"] == "fix-surface-unknown", receipt["decisions"]
     first = receipt["rounds"][0]
     assert first["headDiffSource"] == "git", first
     assert first["headDiffCheck"] == "match", first
@@ -1300,10 +1322,18 @@ _R2B_HEAD_MF = ("diff --git a/f.py b/f.py\nindex 2..3 100644\n--- a/f.py\n+++ b/
                 "diff --git a/g.py b/g.py\nindex 0..1 100644\n--- a/g.py\n+++ b/g.py\n"
                 "@@ -0,0 +1,3 @@\n+alpha\n+beta\n+gamma\n")
 
+# The head-file lines the fix changed between _R2B_REVIEWED and _R2B_HEAD_MF: f.py line 2 (`+more` became
+# `+fixed`) and the new hunk at 50-51, and the three lines of the new file g.py.
+_R2B_FIX_LINES = {"f.py": [(2, 2), (50, 51)], "g.py": [(1, 3)]}
+
+
+def _line_ranges(hunks):
+    return {file: [(h["start"], h["end"]) for h in entries] for file, entries in hunks.items()}
+
 
 def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
-    """The dispatch-scoped-finder payload carries EXACTLY the split's computed `newSurface` hunks
-    (file → hunk ranges + text) — a multi-file surface must arrive intact, not empty (#507 WO-R2b:
+    """The dispatch-scoped-finder payload carries the fixes' own surface (file → the head lines the fixes
+    changed + the delta text) — a multi-file surface must arrive intact, not empty (#507 WO-R2b:
     the field-found defect was an empty `hunks: {}` payload despite a real computed surface)."""
     d = str(tmp_path)
     captured = {"payload": None}
@@ -1322,7 +1352,8 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
             return {"grouping": None}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -1339,41 +1370,9 @@ def test_scoped_finder_payload_carries_computed_new_surface(tmp_path):
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
     hunks = captured["payload"]["hunks"]
-    # exactly the split's computed new surface — a non-empty, multi-file map.
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert expected and set(expected) == {"f.py", "g.py"}, expected
-    assert hunks == expected
-    assert sum(len(v) for v in hunks.values()) == 2
-
-
-def test_empty_new_surface_skips_scoped_finder_with_note(tmp_path):
-    """A genuinely empty computed new surface (split `unknown: False`, no new hunks — the fix only
-    touched the audited lines) SKIPS the scoped-finder dispatch with a receipt-visible
-    `scopedFinder: skipped-empty-surface` note, never a vacuous scan over nothing (#507 WO-R2b)."""
-    d = str(tmp_path)
-    seen = {"scoped": False}
-
-    base = _responder(round1_findings=[
-        {"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}])
-
-    def respond(phase, payload, rnd):
-        if phase == RD.P_SCOPED:
-            seen["scoped"] = True
-        return base(phase, payload, rnd)
-
-    payload = _drive_cli(d, _cfg(), respond)
-    assert payload["verdict"] == "converged"
-    assert seen["scoped"] is False, "the scoped finder was dispatched over an empty surface"
-    with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
-        receipt = json.load(fh)
-    ok, reason = RD.validate_receipt(receipt)
-    assert ok, reason
-    # the skip is journaled receipt-visibly: as a decision AND on the delta round record.
-    kinds = [dc["kind"] for dc in receipt["decisions"]]
-    assert "scoped-finder-skipped" in kinds, kinds
-    delta_round = [r for r in receipt["rounds"] if r.get("scopedFinder")]
-    assert delta_round and delta_round[0]["scopedFinder"] == "skipped-empty-surface", receipt["rounds"]
+    # the fixes' own surface — a non-empty, multi-file map, the fixed line of the audited hunk included.
+    assert set(hunks) == {"f.py", "g.py"}, hunks
+    assert _line_ranges(hunks) == _R2B_FIX_LINES
 
 
 # =============================================================================
@@ -1399,7 +1398,8 @@ def _multifile_delta_respond(captured, fixer_artifact):
             return {"grouping": None}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
-                                 "evidence": "e", "auditorVendor": t.get("auditorVendor")}
+                                 "evidence": "e", "auditorVendor": t.get("auditorVendor"),
+                                 "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -1427,9 +1427,7 @@ def test_fixer_head_diff_path_form_end_to_end(tmp_path):
     payload = _drive_cli(d, _cfg(diff=_R2B_REVIEWED), respond)
     assert payload["verdict"] == "converged"
     assert captured["payload"] is not None, "the scoped finder was never dispatched"
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    assert _line_ranges(captured["payload"]["hunks"]) == _R2B_FIX_LINES
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "path" for r in receipt["rounds"]), receipt["rounds"]
@@ -1471,7 +1469,7 @@ def test_fixer_unreadable_head_diff_path_with_repository_derives_git(tmp_path):
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                                 "auditorVendor": t.get("auditorVendor")}
+                                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
                                 for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
@@ -1503,9 +1501,7 @@ def test_fixer_inline_head_diff_wins_over_path(tmp_path):
     assert payload["verdict"] == "converged"
     # inline won → the scoped finder fired over the inline diff's two-file surface.
     assert captured["payload"] is not None
-    expected = RD.delta_surface.split_fix_surface(
-        _R2B_REVIEWED, _R2B_HEAD_MF, [{"file": "f.py", "line": 1}])["newSurface"]
-    assert captured["payload"]["hunks"] == expected and set(expected) == {"f.py", "g.py"}
+    assert _line_ranges(captured["payload"]["hunks"]) == _R2B_FIX_LINES
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
     assert any(r.get("headDiffSource") == "inline" for r in receipt["rounds"]), receipt["rounds"]
@@ -1519,7 +1515,8 @@ def test_run_loop_code_leg_end_to_end(tmp_path):
     receipt = RD.run_loop(_seams(reviewer=lambda dim, tier, rnd, ctx:
                                  ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE,
                                                  "file": "f.py", "line": 1}]}
-                                  if rnd == 1 and dim == "code-reviewer" else [])),
+                                  if rnd == 1 and dim == "code-reviewer" else []),
+                                 vendors=["claude", "codex"]),
                           _cfg_cert())
     assert receipt["verdict"] == "converged"
     assert receipt["certificationShape"] is not None
@@ -1626,7 +1623,7 @@ def test_run_loop_verifier_reasonless_verdict_keeps_findings_plausible():
                 for c in (clusters or []) for i in (c.get("ids") or [])]
 
     result, state = _run_loop_capturing_state(
-        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier),
+        _seams(reviewer=_panel_finding_reviewer(), verifier=bad_verifier, vendors=["claude", "codex"]),
         _cfg_cert(),
     )
     assert result["verdict"] != "cannot-certify"
@@ -1691,9 +1688,10 @@ def _persistent_not_discharged_seams(io=None):
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         verifier=plaus_verifier,
-        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
+        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken",
+                                       "checks": audit_checks(right="no")}
                                       for t in (targets or [])],
-        fix_step=fix_step, io=io)
+        fix_step=fix_step, io=io, vendors=["claude", "codex"])
 
 
 def test_not_discharged_twice_self_recovers_once_then_is_handed_back(tmp_path):
@@ -1730,7 +1728,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         return [{"id": t["id"], "ruling": ruling,
                  "reason": "broken" if ruling == "not-discharged" else "fixed",
                  "evidence": "tests pass" if ruling == "discharged" else None,
-                 "auditorVendor": t.get("auditorVendor")}
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
                 for t in (targets or [])]
 
     def fix_step(batch, rnd, payload):
@@ -1748,7 +1746,7 @@ def _stall_then_clean_auditor_seams(io=None, clean_after=2):
         verifier=plaus_verifier,
         auditor=auditor,
         fix_step=fix_step,
-        io=io or {})
+        io=io or {}, vendors=["claude", "codex"])
     seams["_audit_calls"] = audit_calls
     seams["_fix_calls"] = counter
     return seams
@@ -1771,14 +1769,12 @@ def test_audit_stall_clears_on_clean_round_then_certifies_converged():
 
 
 # =============================================================================
-# confirmation economics: cap-parks-on-Critical, budget 2, re-arm
+# a delta round ends on its audit and scoped finder, never on a further panel
 # =============================================================================
 
-def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=None):
+def _delta_state_ready(findings=None, not_discharged=None):
     state = RD.new_state(_cfg(maxRounds=20))
-    state["confirmations"] = confirmations
-    state["surfacedSinceLastPanel"] = list(surfaced)
-    state["round"] = confirmations + 3
+    state["round"] = 3
     state["findings"] = list(findings or [])
     state["fullPanelRan"] = False
     nd = not_discharged or []
@@ -1790,35 +1786,30 @@ def _delta_state_ready(confirmations, surfaced, findings=None, not_discharged=No
     return state
 
 
-def test_critical_owed_at_the_confirmation_cap_hands_back_round_cap(tmp_path):
-    """A Critical still owed at the 2-panel confirmation cap hands the PR back (certification withheld)."""
-    state = _delta_state_ready(confirmations=RD.MAX_CONFIRMATIONS, surfaced=["Critical"])
-    RD._settle_delta(state, state["config"])
-    assert state["terminal"] == "handed-back"
-    assert any(d["kind"] == "round-cap" for d in state["decisions"])
-    assert state["certification"]["shape"] is None
-
-
-def test_non_critical_at_cap_certifies(tmp_path):
-    """A non-Critical at the cap resolves by scoped verify → certifies (audited-chain)."""
-    state = _delta_state_ready(confirmations=RD.MAX_CONFIRMATIONS, surfaced=["Important"])
+def test_a_delta_settle_with_every_audit_discharged_certifies_audited_chain(tmp_path):
+    """Re-pinned from the confirmation-cap tests: a delta round whose audits discharged and whose scoped
+    finder raised nothing certifies `audited-chain`, with no panel step and no confirmation follow-up."""
+    state = _delta_state_ready()
     RD._settle_delta(state, state["config"])
     assert state["terminal"] == "converged"
     assert state["certification"]["shape"] == "audited-chain"
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_critical_rearms_one_more_confirmation_under_budget(tmp_path):
-    """A Critical surfaced with confirmations under the cap re-arms one more FULL panel."""
-    state = _delta_state_ready(confirmations=0, surfaced=["Critical"])
+def test_a_critical_the_audit_did_not_discharge_never_schedules_a_panel(tmp_path):
+    """Re-pinned from the Critical re-arm test: an audit that discharged nothing for a Critical target
+    no longer owes a confirmation panel; the settle never steps to the panel."""
+    state = _delta_state_ready(not_discharged=["x"])
+    state["fixBatch"] = [{"file": "f.py", "line": 1, "title": "x", "severity": "Critical"}]
     RD._settle_delta(state, state["config"])
-    assert state["terminal"] is None  # not certified — a confirmation is owed
-    assert state["step"] == RD.P_PANEL
-    assert any(dd["kind"] == "confirmation-rearm" for dd in state["decisions"])
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_confirmation_budget_two_respected_end_to_end(tmp_path):
-    """A Critical surfaced by a delta scoped-finder re-arms a full panel; a subsequent clean panel
-    certifies as full-panel-confirmed (one re-arm, budget not exceeded)."""
+def test_a_scoped_critical_is_fixed_and_audited_in_the_next_round_not_confirmed_by_a_panel(tmp_path):
+    """Re-pinned from the confirmation-budget test: a Critical the scoped finder raises in round 2 is
+    fixed and audited in a later round, and the review ends `audited-chain` with no panel after round 1."""
     scoped_state = {"fired": False}
 
     def reviewer(dim, tier, rnd, ctx):
@@ -1830,16 +1821,29 @@ def test_confirmation_budget_two_respected_end_to_end(tmp_path):
         return []
 
     counter = {"n": 0}
+    fixed, audited = {}, {}
 
     def fix_step(batch, rnd, payload):
         counter["n"] += 1
+        fixed[rnd] = [b.get("title") for b in batch]
         return {"fixes": [], "headDiff": _headf_ns(counter["n"]), "changedSubjects": ["Code"]}
 
-    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step),
+    def auditor(targets, rnd):
+        audited[rnd] = [t.get("title") for t in (targets or [])]
+        return [dict({"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": audit_checks()}, **audit_test_match(t))
+                for t in (targets or [])]
+
+    receipt = RD.run_loop(_seams(reviewer=reviewer, fix_step=fix_step, auditor=auditor),
                           _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
-    assert receipt["certificationShape"] == "full-panel-confirmed-degraded"
-    assert any(x["kind"] == "confirmation" for x in receipt["rounds"])
+    assert counter["n"] == 2
+    assert "bug" in fixed[1] and "hole" in fixed[2]
+    assert "hole" in audited[3]
+    assert receipt["certificationShape"] == "audited-chain-degraded"
+    assert not any(x["kind"] in ("confirmation", "full-panel-unknown-surface")
+                   for x in receipt["rounds"])
 
 
 # =============================================================================
@@ -1878,7 +1882,8 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
     def auditor(targets, rnd):
         seen.extend(dict(t) for t in (targets or []))
         return [{"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                 "evidence": "tests pass", "auditorVendor": "claude"} for t in (targets or [])]
+                 "evidence": "tests pass", "auditorVendor": "claude", "checks": audit_checks()}
+                for t in (targets or [])]
 
     refusal, state = _run_loop_capturing_state(
         _seams(reviewer=lambda dim, tier, rnd, ctx:
@@ -1887,7 +1892,9 @@ def test_single_vendor_fix_is_never_audited_and_the_lost_independence_is_named(t
                 if rnd == 1 and dim == "code-reviewer" else []), auditor=auditor),
         _cfg_cert(vendors=["claude"], fixerVendor="claude"))
     loop_receipt = RD.build_receipt(state)
-    assert refusal["verdict"] == "handed-back" and refusal["certificationShape"] is None
+    # The scoped finder, like the auditor, cannot be seated outside the fixer's family: the fixes' own
+    # diff has no reviewer, so the review is not certified (re-pinned: it used to hand back before it).
+    assert refusal["verdict"] == "cannot-certify" and refusal["certificationShape"] is None
     assert seen and all(t.get("auditorVendor") is None and t["independence"] == "unseatable"
                         for t in seen)
     assert state["independenceDegraded"] is True
@@ -1904,13 +1911,15 @@ def test_independent_auditor_selection_two_vendor(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude"))
+        auditor=auditor), _cfg_cert(vendors=["claude", "codex"], fixerVendor="claude",
+                                    seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
     assert captured["targets"], "the auditor must have received the fix's audit targets"
     t = captured["targets"][0]
@@ -1928,7 +1937,8 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
            "baseGuard": RD.BASE_GUARD_CHECKED}
@@ -1937,7 +1947,8 @@ def test_unknown_fixer_vendor_audit_does_not_run_end_to_end_two_vendor(tmp_path)
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
         auditor=auditor), cfg)
-    assert result["verdict"] == "handed-back" and result["certificationShape"] is None
+    # re-pinned: the scoped finder over the fixes' own diff cannot be seated either, so the review parks
+    assert result["verdict"] == "cannot-certify" and result["certificationShape"] is None
     t = captured["targets"][0]
     assert t["independence"] == "unseatable" and "auditorVendor" not in t
 
@@ -1949,14 +1960,19 @@ def test_explicit_cross_family_fixer_still_independent_two_vendor(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
-    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF, "fixerVendor": "codex",
-           "baseGuard": RD.BASE_GUARD_CHECKED}
+    # the build session (claude) and the codex fixer are both makers, so the scoped finder, which sits
+    # outside every maker's family, is seated on a third vendor and reports that one
+    cfg = {"leg": "code", "vendors": ["claude", "codex", "cursor"], "diff": DIFF, "fixerVendor": "codex",
+           "baseGuard": RD.BASE_GUARD_CHECKED,
+           "seatMap": _nonpanel_cell_proof(["claude", "codex", "cursor"])}
     receipt = RD.run_loop(_seams(
             reviewer=lambda dim, tier, rnd, ctx:
                 ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
-                 if rnd == 1 and dim == "code-reviewer" else []),
+                 if rnd == 1 and dim == "code-reviewer"
+                 else {"findings": [], "vendor": "cursor"} if dim == "scoped-finder" else []),
             auditor=auditor, fixer_vendor="codex"), cfg)
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
@@ -1974,14 +1990,14 @@ def test_audit_result_from_wrong_vendor_is_not_discharged(tmp_path):
     # the fixer vendor tries to self-clear — echoing "claude" proves nothing (no manifest either)
     out = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "trust me",
-                    "auditorVendor": "claude"}])
+                    "auditorVendor": "claude", "checks": audit_checks()}])
     assert out["discharged"] == []
     assert out["notDischarged"] == ["v0"]
     assert out["unauthenticated"] == ["v0"]
     # the orchestrator's manifest authenticates the codex dispatch → discharged, trusted vendor recorded
     ok = audits.apply_audit_results(
         [target], [{"id": "v0", "ruling": "discharged", "reason": "fix verified",
-                    "auditorVendor": "codex"}],
+                    "auditorVendor": "codex", "checks": audit_checks()}],
         collection_manifest={"v0": "codex"})
     assert ok["discharged"] == ["v0"]
     assert ok["unauthenticated"] == []
@@ -2001,7 +2017,8 @@ def test_audit_round_outcomes_carry_class_keys_for_alias_stall(tmp_path):
     tgt = state["_auditTargets"][0]
     assert tgt["classKey"] == "Security::CWE-401::orig"
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+         "checks": audit_checks(right="no")}]})
     round1 = state["auditRounds"][-1]
     assert round1["outcomes"][0]["classKey"] == "Security::CWE-401::orig"
     # a SECOND round: the finding is retitled (a different identity) but keeps its classKey.
@@ -2025,7 +2042,8 @@ def test_audit_outcome_carries_title_so_distinct_classkeys_dont_false_stall(tmp_
         state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
         tgt = state["_auditTargets"][0]
         RD._fold_audits(state, state["config"], {"results": [
-            {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+            {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+             "checks": audit_checks(right="no")}]})
         return state["auditRounds"][-1]
 
     r1 = fold("secret a", "Security::CWE-401::secret a")
@@ -2075,7 +2093,8 @@ def test_verify_skip_with_no_command_still_advances(tmp_path):
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        verify_runner=lambda cmd, rnd: "none"), _cfg_cert(verifyCommand="none"))
+        verify_runner=lambda cmd, rnd: "none"),
+        _cfg_cert(verifyCommand="none", seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert receipt["verdict"] == "converged"
 
 
@@ -2348,11 +2367,11 @@ def test_receipt_carries_audit_provenance_per_round(tmp_path):
     that ran fix audits records `auditProvenance: collection-manifest`, and validate_receipt accepts
     the field (build_receipt must project it, not leave it recorded in state only)."""
     d = str(tmp_path)
-    _drive_cli(d, _cfg(), _responder(
+    _drive_cli(d, _cfg(seatMap=_nonpanel_cell_proof(["claude", "codex"])), _responder(
         round1_findings=[{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]))
     with open(os.path.join(d, RD.RECEIPT_FILE), encoding="utf-8") as fh:
         receipt = json.load(fh)
-    provs = [r.get("auditProvenance") for r in receipt["rounds"]]
+    provs =[r.get("auditProvenance") for r in receipt["rounds"]]
     assert "collection-manifest" in provs, provs
     ok, reason = RD.validate_receipt(receipt)
     assert ok, reason
@@ -2475,42 +2494,6 @@ def test_duplicate_terminating_submit_fault_carries_foldLanded(tmp_path):
     assert dup.get("foldLanded") is True
 
 
-def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
-    """#507 R2 residual-5: cross-cutting rework accumulates across MULTIPLE post-panel delta fixes.
-    Three delta fixes of one subject each cumulate to 3 distinct subjects → cross-cutting, even
-    though no single fix is broad (the latest-only read under-fired)."""
-    import review_round_policy as RRP
-    state = RD.new_state(_cfg())
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    assert state["_changedSubjectsSincePanel"] == []
-    for subj in (["Security"], ["Code"], ["Test"]):
-        state["round"] = 2
-        RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                       lambda r, h, a, _s=subj: _s)
-    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
-    assert RRP.is_cross_cutting(state["_changedSubjectsSincePanel"]) is True
-
-
-def test_panel_resets_accumulator_and_baseline_fix_excluded():
-    """A full panel resets the cross-cutting accumulator (a broad fix BEFORE it does not count as the
-    panel's rework), and a round-1 BASELINE fix never accumulates (it is not confirmation rework)."""
-    # a broad ROUND-1 baseline fix is excluded
-    state = RD.new_state(_cfg())
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    state["round"] = 1
-    RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                   lambda r, h, a: ["Code", "Security", "Test"])
-    assert state["_changedSubjectsSincePanel"] == []
-    # a broad delta fix accumulates, then a later panel resets it
-    state["round"] = 2
-    RD._fold_apply_fixes(state, state["config"], {"fixes": [], "headDiff": HEAD},
-                   lambda r, h, a: ["Code", "Security", "Test"])
-    assert sorted(state["_changedSubjectsSincePanel"]) == ["Code", "Security", "Test"]
-    state["round"] = 3
-    RD._fold_panel(state, state["config"], {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}})
-    assert state["_changedSubjectsSincePanel"] == []
-
-
 def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
     """#507 R2 residual-6: _fold_audits passes the DRIVER-recorded auditor map, so a clearing result
     echoing the FIXER vendor (a self-audit) is rejected not-discharged — the claimant echo never
@@ -2523,7 +2506,7 @@ def test_fold_audits_authenticates_against_recorded_auditor(tmp_path):
     assert tgt["auditorVendor"] == "codex"
     RD._fold_audits(state, state["config"], {"results": [
         {"id": tgt["id"], "ruling": "discharged", "reason": "self-clear",
-         "auditorVendor": "claude"}]})  # echoes the FIXER, not the recorded codex
+         "auditorVendor": "claude", "checks": audit_checks()}]})  # echoes the FIXER, not the recorded codex
     assert state["_auditOutcome"]["unauthenticated"] == [tgt["id"]]
     assert state["_auditOutcome"]["discharged"] == []
 
@@ -2735,7 +2718,7 @@ def test_settle_delta_list_dimension_via_mechanical_compile(tmp_path):
     raw = [{"title": "hole", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 2,
             "dimension": ["security", "perf"]}]
     compiled, _ = RD.mechanical_compile(raw, DIFF)
-    state = _delta_state_ready(confirmations=0, surfaced=[], findings=compiled)
+    state = _delta_state_ready(findings=compiled)
     RD._settle_delta(state, state["config"])
     record = (state.get("_records") or [])[-1]
     dim_map = record.get("dimensions") or {}
@@ -3449,8 +3432,8 @@ def test_fold_fixer_derives_subjects_from_git_not_self_report():
 
 def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
     """run_loop routes the derivation through the injected `changed_subjects` seam (the eval-harness
-    pattern). A seam that returns a cross-cutting set re-arms a confirmation even though the fixer's
-    self-report and the synthetic diff are narrow — proving the self-report is never consulted."""
+    pattern). The seam is consulted although the fixer's self-report is narrow, and a cross-cutting
+    set no longer re-arms a confirmation panel — none runs after round 1."""
     calls = []
 
     def changed_subjects(reviewed, head, accumulated):
@@ -3465,9 +3448,10 @@ def test_run_loop_uses_injected_changed_subjects_seam(tmp_path):
 
     seams = _seams(reviewer=reviewer)
     seams["changed_subjects"] = changed_subjects
-    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20))
+    receipt = RD.run_loop(seams, _cfg_cert(maxRounds=20, seatMap=_nonpanel_cell_proof(["claude", "codex"])))
     assert calls  # the seam was invoked (the self-report was never consulted)
-    assert any(r.get("kind") == "confirmation" for r in receipt["rounds"])
+    assert not any(r.get("kind") == "confirmation" for r in receipt["rounds"])
+    assert receipt["verdict"] == "converged"
 
 
 # =============================================================================
@@ -4278,13 +4262,15 @@ def test_fixer_outside_pool_audits_independent_end_to_end(tmp_path):
     def auditor(targets, rnd):
         captured["targets"] = [dict(t) for t in (targets or [])]
         return [{"id": t["id"], "ruling": "discharged", "reason": "ok", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in (targets or [])]
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in (targets or [])]
 
     receipt = RD.run_loop(_seams(
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "consequence": _CONSEQUENCE, "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
-        auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude"))
+        auditor=auditor), _cfg_cert(vendors=["codex", "cursor"], fixerVendor="claude",
+                                    seatMap=_nonpanel_cell_proof(["codex", "cursor"])))
     assert receipt["verdict"] == "converged"
     t = captured["targets"][0]
     assert t["fixerVendor"] == "claude"
@@ -6104,21 +6090,21 @@ def test_clean_rearm_forever_hands_back_at_a_cap_below_the_default(tmp_path):
     assert max(seams["_legRnds"]["verify"]) == 3
 
 
-def test_delta_at_cap_records_ledger_then_hands_back_on_advance():
-    """A verified delta round at the cap appends its ledger record, then the advance hands back."""
-    # axis: the cap round completes (delta ledger append) before the boundary refuses the next round
+def test_delta_at_cap_records_ledger_then_converges_with_no_round_past_the_cap():
+    """Re-pinned: a delta round at the cap whose audits discharged appends its ledger record and ends the
+    review on that round (no confirmation panel is owed, so no round past the cap is asked for)."""
+    # axis: the cap round completes (delta ledger append) and nothing asks for the round after it
     state = RD.new_state(_cfg(maxRounds=4))
     state["round"] = 4
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = ["Critical"]
     state["findings"] = []
     state["fullPanelRan"] = False
     state["auditRounds"] = [{"round": 3, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
     RD._settle_delta(state, state["config"])
     assert any(r.get("kind") == "delta" and r.get("round") == 4 for r in state["_records"])
-    assert state["terminal"] == "handed-back"
-    assert any(d["kind"] == "round-cap" for d in state["decisions"])
+    assert state["terminal"] == "converged"
+    assert state["certification"]["shape"].startswith("audited-chain")
+    assert not any(d["kind"] == "round-cap" for d in state["decisions"])
     assert state["round"] == 4
 
 
@@ -6198,7 +6184,7 @@ def test_loaded_state_above_cap_hands_back_on_cmd_next(tmp_path):
     state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
+    state["step"] = RD.P_VERIFY
     RD.save_state(d, state)
     n = RD.cmd_next(d)
     assert n["ok"]
@@ -6223,12 +6209,12 @@ def test_loaded_state_above_cap_hands_back_on_cmd_submit(tmp_path):
     state["round"] = 5
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
-    state["pending"] = {"action": RD.P_PANEL, "round": 5, "phase": RD.P_PANEL, "attempt": 0,
+    state["step"] = RD.P_VERIFY
+    state["pending"] = {"action": RD.P_VERIFY, "round": 5, "phase": RD.P_VERIFY, "attempt": 0,
                         "payload": {}}
     RD.save_state(d, state)
     h = RD.state_hash(state)
-    out = RD.cmd_submit(d, RD.P_PANEL, 0, h, {"seats": {}})
+    out = RD.cmd_submit(d, RD.P_VERIFY, 0, h, {"result": "pass"})
     assert out["ok"] is True
     assert out["nextStep"] == RD.P_TERMINAL
     ok, reloaded = RD.load_state(d)
@@ -6251,7 +6237,7 @@ def test_loaded_state_at_cap_runs_on_cmd_next(tmp_path):
     state["round"] = 4
     state["findings"] = []
     state["fullPanelRan"] = True
-    state["step"] = RD.P_PANEL
+    state["step"] = RD.P_VERIFY
     RD.save_state(d, state)
     n = RD.cmd_next(d)
     assert n["ok"]
@@ -6396,7 +6382,7 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
         assert reason not in audit_emitted, reason
 
     # max-iterations — the audit breaker no longer emits it: the round cap is the driver's boundary.
-    # audit-stall — discharged targets leave no open work; self-recovery settles via confirmation.
+    # audit-stall — discharged targets leave no open work; self-recovery settles on this round's audit.
     state = _delta_settle_state_for_breaker(monkeypatch, {
         "halt": True, "reason": "audit-stall", "detail": "stalled",
         "stalledIdentities": ["x"],
@@ -6404,8 +6390,10 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
     state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
                                "file": "f.py", "line": 1}]
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_PANEL
+    # re-pinned: it used to step to a confirmation panel; no later round runs a panel now
+    assert state["step"] == RD.P_TERMINAL
     assert any(d["kind"] == "self-recovery" for d in state["decisions"])
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
     # round-ceiling — unreachable at _settle_delta; enforced on the round-advance boundary only.
     assert CB.ROUND_CEILING_REASON not in audit_emitted
@@ -6530,6 +6518,7 @@ def test_verify_fold_unresolved_head_post_audits_advances():
     state = _verify_fold_state()
     state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
     state["_newSurface"] = {"f.py": [1]}
+    state["_fixDeltaDiff"] = "diff --git a/f.py b/f.py\n"
     RD._fold_verify(state, state["config"], {"result": "pass"},
                     resolution=(None, "fix-fold head: repo root unresolvable"))
     assert not state.get("terminal")
@@ -6537,14 +6526,242 @@ def test_verify_fold_unresolved_head_post_audits_advances():
     assert "_verifyThen" not in state
 
 
-def test_verify_fold_unresolved_head_panel_parks_underivable():
-    state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
-    state["_verifyThen"] = RD.VERIFY_THEN_PANEL
-    RD._fold_verify(state, state["config"], {"result": "pass"},
-                    resolution=(None, "fix-fold head: repo root unresolvable"))
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "head unresolved" in state["certification"]["reason"]
+def test_after_audits_with_no_fix_delta_hands_back_and_never_rebuilds():
+    # axis: a delta round with no string `_fixDeltaDiff` hands back even when a baseline and head diff could rebuild one
+    state = _verify_fold_state()
+    state["_newSurface"] = {"f.py": [1]}
+    state["deltaBaseline"] = {"round": 1, "diff": _R2B_REVIEWED}
+    state["headDiff"] = _R2B_HEAD_MF
+    RD._after_audits(state, state["config"])
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_SCOPED
+    assert "_fixDeltaDiff" not in state
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def _saved_delta_session(tmp_path, *, step, pending, surface, baseline=True, **over):
+    """A real session directory holding a delta round's state saved by the previous release (session
+    generation 6): round 2 at ``step``, a scoped surface, no `_fixDeltaDiff`."""
+    over.setdefault("sessionGeneration", 6)
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    checkout = str(tmp_path / "checkout")
+    enter_checkout(checkout)
+    _seed_repo_root_if_missing(d, checkout)
+    first = RD.cmd_next(d, _cfg(maxRounds=4))
+    assert first["ok"] and first["action"] == RD.P_PANEL, first
+    ok, state = RD.load_state(d)
+    assert ok and isinstance(state, dict), state
+    state.update(round=2, step=step, _newSurface=surface, **over)
+    state["rounds"].setdefault("2", {})
+    state.pop("_fixDeltaDiff", None)
+    if baseline:
+        state["deltaBaseline"] = {"round": 2, "diff": _R2B_REVIEWED}
+        state["headDiff"] = _R2B_HEAD_MF
+    else:
+        state["deltaBaseline"] = None
+    state["pending"] = ({"action": step, "round": 2, "phase": step, "attempt": 1,
+                         "payload": {"hunks": surface, "tier": RD.DEEP}} if pending else None)
+    RD.save_state(d, state)
+    return d
+
+
+_STRETCH_STEPS = [
+    pytest.param({"step": RD.P_AUDITS}, id="audits"),
+    pytest.param({"step": RD.P_VERIFY, "_verifyThen": RD.VERIFY_THEN_POST_AUDITS}, id="post-audits-verify"),
+    pytest.param({"step": RD.P_SCOPED}, id="scoped"),
+]
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["step-only", "pending"])
+@pytest.mark.parametrize("held", _STRETCH_STEPS)
+def test_a_generation_6_session_saved_in_the_delta_stretch_is_handed_back_before_any_order(tmp_path, held, pending):
+    # axis: each step of the audit / post-audits verify / scoped stretch of a generation-6 session hands back on the next command
+    held = dict(held)
+    d = _saved_delta_session(tmp_path, step=held.pop("step"), pending=pending,
+                             surface={"f.py": [{"start": 50, "end": 51, "text": "x"}]}, **held)
+    answer = RD.cmd_next(d)
+    assert answer["ok"] and answer["action"] == RD.P_TERMINAL, answer
+    ok, state = RD.load_state(d)
+    assert state["terminal"] == "handed-back" and state["pending"]["action"] == RD.P_TERMINAL
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+    assert "_fixDeltaDiff" not in state
+    assert [row["outcome"] for row in RD.read_journal(d)
+            if row.get("outcome") == "previous-release-hand-back"] == ["previous-release-hand-back"]
+
+
+def _changed_test_finding(*, kept):
+    finding = {"title": "Retry charges twice", "file": "tests/test_charge.py", "line": 1,
+               "severity": "Important", "taxonomy": "break-it-test",
+               "suggestion": RD._break_it_block_text({"path": "tests/test_charge.py", "run": "pytest"},
+                                                     "def test_x():\n    assert True\n"),
+               RD.break_it.RUNS_FIELD: [{"test": "tests/test_charge.py",
+                                         "changedWhy": "the draft missed an import"}]}
+    if kept:
+        finding[RD.REVIEWER_TEST_FIELD] = "def test_x():\n    assert False\n"
+    return finding
+
+
+def test_a_generation_6_session_holding_a_changed_test_with_no_kept_original_is_handed_back():
+    # axis: a recorded change with no kept REVIEWER_TEST_FIELD hands back at any step, outside the delta stretch too
+    state = _verify_fold_state()
+    state.update(sessionGeneration=6, round=1, step=RD.P_APPLY_FIXES, pending=None,
+                 findings=[_changed_test_finding(kept=False)])
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["terminal"] == "handed-back" and state["pending"] is None
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def test_a_generation_6_session_whose_changed_test_keeps_its_original_is_left_alone():
+    # axis: a generation-6 session outside the stretch with every changed test's original kept is not handed back
+    state = _verify_fold_state()
+    state.update(sessionGeneration=6, round=1, step=RD.P_APPLY_FIXES, pending=None,
+                 findings=[_changed_test_finding(kept=True)])
+    before = json.dumps(state, sort_keys=True)
+    assert RD._finish_saved_previous_release(state) is False
+    assert json.dumps(state, sort_keys=True) == before
+
+
+def test_a_generation_6_session_whose_only_changed_test_sits_in_to_verify_is_handed_back():
+    # axis: the guard reads the staged `_toVerify` copies and the ledger, the copies break-it-change rewrites
+    for fields in ({"_toVerify": [_changed_test_finding(kept=False)]},
+                   {"dispositionLedger": [_changed_test_finding(kept=False)]}):
+        state = _verify_fold_state()
+        state.update(sessionGeneration=6, round=1, step=RD.P_VERIFIERS, pending=None,
+                     findings=[], fixBatch=[], _auditTargets=[], **fields)
+        assert RD._finish_saved_previous_release(state) is True, fields
+        assert state["terminal"] == "handed-back"
+        assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def test_a_generation_6_stretch_session_that_holds_its_fix_delta_and_test_facts_is_left_alone():
+    # axis: a stretch step is handed back only for missing evidence, never for the generation alone
+    target = dict(_changed_test_finding(kept=True), breakIt={"original": "x"})
+    state = _verify_fold_state()
+    state.update(sessionGeneration=6, round=2, step=RD.P_SCOPED, pending=None,
+                 _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
+                 _fixDeltaDiff="diff --git a/f.py b/f.py\n", _auditTargets=[target])
+    before = json.dumps(state, sort_keys=True)
+    assert RD._finish_saved_previous_release(state) is False
+    assert json.dumps(state, sort_keys=True) == before
+    state["_auditTargets"] = [_changed_test_finding(kept=True)]
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def test_a_generation_6_hand_back_tells_the_reader_to_start_a_fresh_review():
+    # axis: the previous-release hand-back message names the way out — a fresh review
+    state = _verify_fold_state()
+    state.update(sessionGeneration=6, round=1, step=RD.P_APPLY_FIXES, pending=None,
+                 findings=[_changed_test_finding(kept=False)])
+    assert RD._finish_saved_previous_release(state) is True
+    assert "start a fresh review" in state["decisions"][-1]["detail"]
+
+
+def test_a_generation_6_session_outside_both_hand_back_cases_still_finishes():
+    # axis: a round-1 step, and a round-2 step outside audit / post-audits verify / scoped, are never handed back
+    for fields in ({"round": 1, "step": RD.P_AUDITS},
+                   {"round": 2, "step": RD.P_VERIFIERS},
+                   {"round": 2, "step": RD.P_VERIFY, "_verifyThen": None}):
+        state = _verify_fold_state()
+        state.update(sessionGeneration=6, pending=None, findings=[], fixBatch=[], _auditTargets=[], **fields)
+        before = json.dumps(state, sort_keys=True)
+        assert RD._finish_saved_previous_release(state) is False, fields
+        assert json.dumps(state, sort_keys=True) == before
+
+
+def test_a_current_generation_session_with_the_fields_is_untouched_by_the_hand_back():
+    # axis: a current-generation stretch whose fields are all present is never touched
+    for fields in ({"step": RD.P_SCOPED, "_fixDeltaDiff": "diff --git a/f.py b/f.py\n",
+                    "findings": [_changed_test_finding(kept=True)]},
+                   {"step": RD.P_AUDITS, "_fixDeltaDiff": "diff --git a/f.py b/f.py\n",
+                    "findings": [_changed_test_finding(kept=True)]}):
+        state = _verify_fold_state()
+        state.update(round=2, pending=None, _newSurface={"f.py": [{"start": 3, "end": 3, "text": "x"}]},
+                     **fields)
+        assert state["sessionGeneration"] == RD.SESSION_GENERATION
+        before = json.dumps(state, sort_keys=True)
+        assert RD._finish_saved_previous_release(state) is False
+        assert json.dumps(state, sort_keys=True) == before
+
+
+def test_a_generation_7_session_saved_without_the_kept_original_is_handed_back():
+    # axis: a pre-change generation-7 session holding a changed test with no kept original is handed back, never certified
+    state = _verify_fold_state()
+    state.update(round=2, step=RD.P_AUDITS, pending=None, findings=[_changed_test_finding(kept=False)])
+    assert state["sessionGeneration"] == RD.SESSION_GENERATION
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["terminal"] == "handed-back"
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+
+
+def test_a_generation_7_extra_audit_whose_target_lacks_break_it_facts_is_handed_back():
+    # axis: an extra audit round's target that carries a test but no breakIt facts is handed back, not settled
+    target = _changed_test_finding(kept=True)
+    state = _verify_fold_state()
+    state.update(round=3, step=RD.P_AUDITS, pending=None, extraAudit={"round": 3}, _auditTargets=[target])
+    assert RD._finish_saved_previous_release(state) is True
+    assert state["terminal"] == "handed-back"
+    state = _verify_fold_state()
+    state.update(round=3, step=RD.P_AUDITS, pending=None, extraAudit={"round": 3},
+                 _auditTargets=[dict(target, breakIt={"match": "same"})])
+    assert RD._finish_saved_previous_release(state) is False
+
+
+# A PR hunk whose `+b` the fix deleted: the deletion anchors on the `+a` of its own hunk, not on the second hunk.
+_DELETION_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                      "@@ -10,0 +10,2 @@\n+a\n+b\n"
+                      "@@ -100,1 +102,1 @@\n-x\n+y\n")
+_DELETION_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+                  "@@ -10,0 +10,1 @@\n+a\n"
+                  "@@ -100,1 +101,1 @@\n-x\n+y\n")
+# A hunk at the end of the file: the fix deleted `+guard`, so the surviving file ends at line 9.
+_EOF_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                 "@@ -7,4 +7,4 @@\n c7\n c8\n c9\n-x\n+guard\n")
+_EOF_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+             "@@ -7,4 +7,3 @@\n c7\n c8\n c9\n-x\n")
+# A hunk with nothing left but removals once the fix deleted its additions; a second hunk has citable lines.
+_REMOVALS_ONLY_REVIEWED = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
+                           "@@ -10,2 +10,2 @@\n-x\n-y\n+a\n+b\n"
+                           "@@ -100,1 +98,1 @@\n-p\n+q\n")
+_REMOVALS_ONLY_HEAD = ("diff --git a/f.py b/f.py\nindex 1..3 100644\n--- a/f.py\n+++ b/f.py\n"
+                       "@@ -10,2 +10,0 @@\n-x\n-y\n"
+                       "@@ -100,1 +98,1 @@\n-p\n+q\n")
+_DELETION_CASES = [(_DELETION_REVIEWED, _DELETION_HEAD), (_EOF_REVIEWED, _EOF_HEAD),
+                   (_REMOVALS_ONLY_REVIEWED, _REMOVALS_ONLY_HEAD)]
+
+
+def _deletion_surface(reviewed, head):
+    surface, _text = RD._fix_delta_surface(RD.new_state(_cfg()), reviewed, head)
+    return surface
+
+
+def test_a_fix_that_only_removes_a_pr_addition_keeps_a_head_anchor_for_the_deletion():
+    surface = _deletion_surface(_DELETION_REVIEWED, _DELETION_HEAD)
+    assert _line_ranges(surface) == {"f.py": [(10, 10)]}, surface
+    assert 10 in RD.diff_scope.parse_diff_lines(_DELETION_HEAD)["f.py"]
+
+
+def test_a_deletion_at_the_end_of_the_file_anchors_on_a_line_the_head_diff_registers():
+    surface = _deletion_surface(_EOF_REVIEWED, _EOF_HEAD)
+    registered = RD.diff_scope.parse_diff_lines(_EOF_HEAD)["f.py"]
+    assert registered == {7, 8, 9}
+    anchors = {n for h in surface["f.py"] for n in (h["start"], h["end"])}
+    assert anchors and anchors <= registered, surface
+
+
+def test_a_deletion_in_a_hunk_with_no_citable_line_is_marked_not_numbered():
+    surface = _deletion_surface(_REMOVALS_ONLY_REVIEWED, _REMOVALS_ONLY_HEAD)
+    assert [(h["start"], h["end"], h.get("removedOnly")) for h in surface["f.py"]] == [(0, 0, True)], surface
+    assert "-+a" in surface["f.py"][0]["text"] and "-+b" in surface["f.py"][0]["text"]
+
+
+def test_every_line_number_a_fix_delta_surface_carries_is_one_the_head_diff_registers():
+    for reviewed, head in _DELETION_CASES:
+        registered = RD.diff_scope.parse_diff_lines(head)
+        for file, entries in _deletion_surface(reviewed, head).items():
+            for h in entries:
+                assert h["start"] == h["end"] == 0 or {h["start"], h["end"]} <= registered[file], (file, h)
 
 
 def test_verify_fold_at_cap_hands_back_round_cap():
@@ -6559,16 +6776,16 @@ def test_verify_fold_at_cap_hands_back_round_cap():
         assert any(dec["kind"] == "round-cap" for dec in state["decisions"])
 
 
-def test_verify_fold_legacy_position_unresolved_head_unknown_surface_parks_underivable():
-    """No continuation flag and no head: the delta round has no baseline, so it needs a full panel
-    over the head diff; with no head the derivation refuses and the session parks."""
+def test_verify_fold_legacy_position_unresolved_head_unknown_surface_hands_back():
+    """Re-pinned: no continuation flag and no head: the delta round has no baseline, so its fix surface
+    is unknown; the PR is handed back (`fix-surface-unknown`), never a panel over the head diff."""
     state = _verify_fold_state(repoRoot="/nonexistent-repo", baseRef="main")
     assert "_verifyThen" not in state
     RD._fold_verify(state, state["config"], {"result": "pass"},
                     resolution=(None, "fix-fold head: repo root unresolvable"))
-    assert state["terminal"] == "cannot-certify"
-    assert state["certification"]["reason"].startswith(RD.PANEL_DIFF_UNDERIVABLE_CAUSE)
-    assert "head unresolved" in state["certification"]["reason"]
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_PANEL
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
 
 
 def test_verify_head_lookup_persists_the_session_head(tmp_path):
@@ -6859,7 +7076,8 @@ def test_a_result_submitted_for_a_target_with_no_auditor_is_ignored_and_the_targ
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tid = state["_auditTargets"][0]["id"]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude"}]})
+        {"id": tid, "ruling": "not-discharged", "reason": "looks fine to me", "auditorVendor": "claude",
+         "checks": audit_checks()}]})
     outcome = state["_auditOutcome"]
     assert outcome["unaudited"] == [tid] and outcome["discharged"] == []
     assert outcome["notDischarged"] == [tid]

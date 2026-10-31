@@ -398,11 +398,15 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > # A session begun before the leave-out sidecar existed (a pending panel resumed after an upgrade) has no
 > # reviewer-leave-out.json; pass the flag only when the file is there, since a missing file refuses the launch.
 > LEAVE_OUT_ARGS=(); [ -f "$SESSION_DIR/reviewer-leave-out.json" ] && LEAVE_OUT_ARGS=(--leave-out-file "$SESSION_DIR/reviewer-leave-out.json")
+> # The scoped finder reviews only the fix delta its order names (FIX_DIFF_PATH). `--diff-base "$BASE_REF"`
+> # would stage the full PR patch and tell the seat to read it first, contradicting that scope — so that
+> # seat launches without `--diff-base` (nothing staged); every other seat keeps the full-PR patch.
+> DIFF_BASE_ARGS=(--diff-base "$BASE_REF"); [ "$SEAT_KEY" = "scoped-finder" ] && DIFF_BASE_ARGS=()
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
->   --diff-base "$BASE_REF" \
+>   ${DIFF_BASE_ARGS[@]+"${DIFF_BASE_ARGS[@]}"} \
 >   ${LEAVE_OUT_ARGS[@]+"${LEAVE_OUT_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
@@ -411,7 +415,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
->   --diff-base "$BASE_REF" \
+>   ${DIFF_BASE_ARGS[@]+"${DIFF_BASE_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
@@ -663,7 +667,7 @@ These are the base rubric's binding verification rules, restated in every subage
 | Using diff.txt line numbers as file line numbers        | Diff line numbers and file line numbers are different. A finding must cite the FILE line; `lib/diff_scope.py` parses `@@` hunk headers to derive which file lines the round diff makes anchorable, and the compile step drops a finding that misses them. |
 | Re-flagging issues the author already justified         | PR mode: raise the finding and note the prior justification; the post-verification filter drops only non-CONFIRMED findings (see `round-driver.md`). |
 | Dropping resolved Important findings silently           | If reachability or the post-verification author-justification filter drops an Important, mention it — the justification is quoted in the record.                      |
-| Tiering or skipping specialists based on "what changed" | Round 1 is always the full panel; later rounds follow `round_driver.py` `next` (delta audits + scoped finder, or a full panel on cross-cutting rework or an unknown surface). Never skip by eye. |
+| Tiering or skipping specialists based on "what changed" | Round 1 is always the full panel; later rounds follow `round_driver.py` `next` (delta audits + scoped finder only; an unknown fix surface hands the PR back). Never skip by eye. |
 | **Continuing when `$BASE_REF` is not a commit**         | An empty `$BASE_REF` makes `git diff "$BASE_REF"...HEAD` argv `...HEAD` — git reads it as `HEAD...HEAD` and emits a **zero-line diff at exit 0**, so the panel reviews nothing and the loop certifies clean. The literal string `null` (what `jq -r` prints for an absent key) is non-empty, so a `[ -n … ]` test passes it while `git diff null...HEAD` exits 128 and still leaves an empty artifact. Setup validates with `git rev-parse --verify --quiet "$BASE_REF^{commit}"` — which rejects empty, `null`, a deleted branch, and a non-commit tag — and every consumer uses the guarded diff command that halts on a failed OR empty diff. Never substitute a branch name to "recover". |
 | **Diffing against the worktree's local base branch**    | A long-lived worktree's local `main` goes stale as a matter of course; three-dot diff then walks back to a stale merge-base and drags already-merged work into the review, burying the real change. The bootstrap fetches the base and pins it to a commit; never re-resolve the base from a branch name mid-run. |
 | Using `gh pr diff` inside the loop                      | Rounds 2+ have local fix commits not on the remote. Always recompute the diff locally each round **with the guarded per-round command from the SKILL's Setup** — `git diff "$BASE_REF"...HEAD` against the **pinned remote base commit**, including its failed-diff and empty-diff halts — never a branch name and never a bare copy.                                               |

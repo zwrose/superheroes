@@ -18,6 +18,7 @@ _PROBE_RND = 1
 _PROBE_STATE = {
     "reviewedDiff": "diff --git a/f b/f\n",
     "headDiff": "diff --git a/f b/f\n",
+    "_fixDeltaDiff": "diff --git a/f b/f\n",
     "_fixBatch": [],
 }
 

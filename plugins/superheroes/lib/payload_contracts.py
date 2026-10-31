@@ -330,6 +330,10 @@ def _apply_predicate(pred, payload, seat_key, *, record_boundary=False):
             if "newIssue" in payload:
                 detail += "; the payload carries `newIssue` (singular) — the driver consumes a LIST"
             return detail
+    elif name == "audit-checks":
+        fault = audits.audit_checks_fault(payload)
+        if fault:
+            return "audit result refused: %s" % fault
     else:
         raise ValueError("unknown predicate %r" % name)
     return None
@@ -597,9 +601,10 @@ _PAYLOAD_FIELD_BINDINGS = {
         }],
     },
     P_AUDITS: {
-        "required": ["id", "ruling", "reason"],
+        "required": ["id", "ruling", "reason", "checks"],
         "optional": ["newIssues", "evidence", "auditorVendor", "unnamedChange",
-                     "unnamedChangeAllowedBySeq", "unnamedChangeFixes", "unnamedChangeReverts"],
+                     "unnamedChangeAllowedBySeq", "unnamedChangeFixes", "unnamedChangeReverts",
+                     "testMatch"],
         "conditional": {
             "newIssues": "required when ruling is %s" % RULING_NEW_ISSUE,
         },
@@ -608,6 +613,7 @@ _PAYLOAD_FIELD_BINDINGS = {
             "id": "non-empty-string",
             "ruling": "non-empty-string",
             "reason": "any",
+            "checks": "any",
             "newIssues": "list-of-objects",
             "evidence": "string",
             "auditorVendor": "string",
@@ -615,6 +621,7 @@ _PAYLOAD_FIELD_BINDINGS = {
             "unnamedChangeAllowedBySeq": "integer",
             "unnamedChangeFixes": "list",
             "unnamedChangeReverts": "list",
+            "testMatch": "any",
         },
         "elements": {
             "newIssues": {"required": [], "optional": [], "types": {}, "enums": {}},
@@ -635,6 +642,11 @@ _PAYLOAD_FIELD_BINDINGS = {
                 "fields": ["newIssues", "ruling"],
                 "rule": ("newIssues must pass audits.has_usable_new_issues when ruling is "
                          "discharged-but-new-issue"),
+            },
+            {
+                "name": "audit-checks",
+                "fields": ["checks", "testMatch"],
+                "rule": "checks must pass audits.audit_checks_fault",
             },
         ],
     },

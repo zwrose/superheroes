@@ -94,7 +94,7 @@ def test_new_state_takes_nothing_from_a_records_file(tmp_path):
     assert state["_records"] == []
     assert state["_coverage"] == []
     assert state["rounds"] == {}
-    assert state["confirmations"] == 0
+    assert "confirmations" not in state
     assert _reads_of(reads, records) == []
     assert records.read_bytes() == before
 

@@ -207,13 +207,11 @@ def test_l3_a1_backfill_strips_record_sequence_stamps():
     assert entry.get("raisedSeq") != 888
 
 
-def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
-    """axis: delta empty-batch exclusion must re-arm when Critical is still owed."""
+def test_l3_a1_surfaced_critical_after_exclusion_never_rearms_a_panel():
+    """axis: delta empty-batch exclusion settles on the round's own audit, even when a Critical is held."""
     state = RD.new_state(_cfg())
     state["round"] = 2
     state["rounds"] = {"2": {"roundKind": "delta"}}
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = ["Critical"]
     discharged, discharged_key = _compile_one(
         {"file": "f.py", "line": 1, "title": "mechanical", "severity": "Important",
          "consequence": _CONSEQUENCE})
@@ -230,9 +228,9 @@ def test_l3_a1_surfaced_critical_after_exclusion_rearms_confirmation():
     assert [RD._fix_batch_row_key(r) for r in remainder] == [discharged_key]
     assert state["ownerChoiceHeld"] == [tradeoff_key]
     assert RD._queue_fix_batch(state, config, remainder) == "excluded"
-    assert state["step"] == RD.P_PANEL
-    assert state.get("terminal") is None
-    assert state["rounds"]["2"]["confirmationFollowup"]["rearm"] is True
+    assert state["step"] == RD.P_TERMINAL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
+    assert "confirmationFollowup" not in state["rounds"]["2"]
 
 
 def test_l3_a1_edge_ledger_absent_no_exclusion():
@@ -345,13 +343,12 @@ def test_l3_a2_empty_batch_converges_on_the_paths_own_resolver():
     state = RD.new_state(_cfg())
     state["round"] = 2
     state["rounds"] = {"2": {"roundKind": "delta"}}
-    state["surfacedSinceLastPanel"] = []
-    state["confirmations"] = 0
     compiled, _ = _stage_and_discharge(state, round_no=2)
     config = _cfg()
     RD._queue_fix_batch(state, config, [_fix_row(compiled)])
     assert state["step"] != RD.P_APPLY_FIXES
-    assert state["rounds"]["2"].get("confirmationFollowup") is not None
+    assert state["step"] == RD.P_TERMINAL
+    assert state["rounds"]["2"].get("confirmationFollowup") is None
     assert any(d["kind"] == "fix-batch-excluded" for d in state["decisions"])
 
 
@@ -501,11 +498,13 @@ def _fix_batch():
 
 
 def _assert_delta_baseline_refusal(state):
-    assert state["rounds"]["2"]["roundKind"] == "full-panel-unknown-surface"
-    assert state["step"] == RD.P_PANEL
-    unknown = [d for d in state["decisions"] if d["kind"] == "unknown-surface"]
+    # re-pinned: the unknown surface hands the PR back; it no longer schedules a full panel
+    assert state["terminal"] == "handed-back"
+    assert state["step"] != RD.P_PANEL
+    unknown = [d for d in state["decisions"] if d["kind"] == "fix-surface-unknown"]
     assert len(unknown) == 1
-    assert unknown[0]["detail"].startswith(RD.DELTA_BASELINE_ABSENT)
+    assert RD.DELTA_BASELINE_ABSENT in unknown[0]["detail"]
+    assert not any(d["kind"] == "unknown-surface" for d in state["decisions"])
 
 
 _THIRD_DIFF = _mk_diff([("h.py", "@@ -1 +1 @@\n-third\n+third-edited\n")])
@@ -615,7 +614,7 @@ def test_l3_a3_non_text_baseline_refuses(tmp_path, monkeypatch):
     _assert_delta_baseline_refusal(state)
 
 
-def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(tmp_path, monkeypatch):
+def test_l3_a3_post_fix_absent_baseline_hands_back(tmp_path, monkeypatch):
     def _split_must_not_run(*_args, **_kwargs):
         raise AssertionError("split_fix_surface must not run when baseline is absent")
 
@@ -628,8 +627,10 @@ def test_l3_a3_post_fix_absent_baseline_runs_verify_then_panel(tmp_path, monkeyp
     state["fixBatch"] = _fix_batch()
     state["_postFixEntry"] = True
     RD._enter_delta_round(state, config, panel_head=_panel_head(config))
-    assert state["step"] == RD.P_VERIFY
-    assert state["_verifyThen"] == RD.VERIFY_THEN_PANEL
+    assert state["terminal"] == "handed-back"
+    assert state["step"] not in (RD.P_VERIFY, RD.P_PANEL)
+    assert "_verifyThen" not in state
+    assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
 
 
 def test_l3_a3_advance_round_writes_the_baseline_before_the_head_overwrite(monkeypatch):
@@ -685,6 +686,8 @@ def test_l3_a3_second_fix_scoped_surface_excludes_first_fix_unchanged_hunk():
     RD._enter_delta_round(state, _cfg(diff=base))
     new_surface = state.get("_newSurface") or {}
     audit_targets = state.get("_auditTargets") or []
+    # re-pinned: the scoped finder's surface is the second fix's own delta, so a fix that changed only its
+    # finding's hunk still gives it that file, while the first fix's untouched file stays off it
     assert "a.py" not in new_surface
-    assert not new_surface
+    assert list(new_surface) == ["b.py"]
     assert any(t.get("file") == "b.py" for t in audit_targets if isinstance(t, dict))

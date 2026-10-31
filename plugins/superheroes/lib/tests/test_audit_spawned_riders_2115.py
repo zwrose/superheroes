@@ -77,7 +77,8 @@ def _spawn_loop(x_ruling="discharged", reraise_parent=True):
         out = []
         for t in targets or []:
             result = {"id": t["id"], "ruling": "discharged", "reason": "fix resolves it",
-                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor")}
+                      "evidence": "tests pass", "auditorVendor": t.get("auditorVendor"),
+                      "checks": TRD.audit_checks()}
             if rnd == 2:
                 result.update(ruling="discharged-but-new-issue", newIssues=[_child()])
             elif t["id"] == X_KEY:
@@ -173,7 +174,7 @@ def _fold_round_three(state, results, manifest="targets", monkeypatch=None):
 
 
 def _ruling(key, ruling="discharged"):
-    return {"id": key, "ruling": ruling, "reason": "judged by the auditor"}
+    return {"id": key, "ruling": ruling, "reason": "judged by the auditor", "checks": TRD.audit_checks()}
 
 
 @pytest.fixture

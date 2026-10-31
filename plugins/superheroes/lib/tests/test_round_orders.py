@@ -143,7 +143,7 @@ def _audits_placeholders(channel="file"):
 def _scoped_placeholders(channel="file"):
     return {
         "HUNKS_PATH": os.path.join(_SESSION, "round-2", "scoped-hunks.json"),
-        "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
+        "FIX_DIFF_PATH": os.path.join(_SESSION, "round-2", "fix-delta.diff"),
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
@@ -1173,7 +1173,7 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
         "order_path": os.path.join(session_dir, "order.md"),
     }
     state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n",
-             "headDiff": "diff --git a/f b/f\n"}
+             "headDiff": "diff --git a/f b/f\n", "_fixDeltaDiff": "diff --git a/f b/f\n"}
     ph = RD._order_placeholders(
         RP.P_VERIFIERS, "verifier:f.py:0", 0, state, state["config"],
         {"clusters": payload["clusters"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
@@ -1194,6 +1194,8 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
         RP.P_SCOPED, "scoped-finder", 0, state, state["config"],
         {"hunks": payload["hunks"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
     assert ph_scoped["HUNKS_PATH"] == scoped_path
+    assert ph_scoped["FIX_DIFF_PATH"] == os.path.join(rdir, "fix-delta.diff")
+    assert "HEAD_DIFF_PATH" not in ph_scoped
 
 
 def test_order_templates_shell_census_flags_injected_placeholder(tmp_path):

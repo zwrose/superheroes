@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from test_round_driver import _guard_argv
+from test_round_driver import _guard_argv, audit_checks
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
@@ -158,7 +158,8 @@ def _responder(round1_findings=None):
         if phase == RD.P_AUDITS:
             return {"results": [
                 {"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in payload.get("targets", [])],
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:

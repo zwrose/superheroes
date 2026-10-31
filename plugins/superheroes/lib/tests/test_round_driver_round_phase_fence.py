@@ -47,7 +47,9 @@ P_AUDITS = round_driver.P_AUDITS
 
 def _audit_payload(seat, ruling="not-discharged"):
     return {"id": seat, "ruling": ruling, "auditorVendor": "claude",
-            "reason": "re-read the fixed hunk; defect persists"}
+            "reason": "re-read the fixed hunk; defect persists",
+            "checks": {name: {"answer": "yes", "why": "checked"}
+                       for name in ("right", "brokeNothing", "testWouldFail")}}
 
 
 def _store_bytes_snapshot(session_dir):
