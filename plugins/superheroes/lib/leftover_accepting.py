@@ -51,14 +51,58 @@ def _leftovers(record):
     return out
 
 
-_COMMENT = re.compile(r"<!--.*?(?:-->|$)", re.DOTALL)
+_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_MARKER_LINE = re.compile(r"^<!-- superheroes:[^>]*-->\s*$")
+_TICKS = re.compile(r"`+")
+
+
+def _visible(body):
+    """The body as it renders, for matching: every HTML comment (one that spans lines included) is cut out, while a
+    comment delimiter inside a fenced block or an inline code span is shown text and stays. A whole-line
+    ``superheroes:`` marker is kept, so the section reader still finds the build-record boundary."""
+    out, fence, inside = [], None, False
+    for line in body.splitlines(keepends=True):
+        opening = None if inside else _FENCE.match(line)
+        if fence is not None:
+            fence = None if opening and opening.group(1)[0] == fence[0] and len(opening.group(1)) >= len(fence) else fence
+            out.append(line)
+            continue
+        if opening:
+            fence = opening.group(1)
+            out.append(line)
+            continue
+        if not inside and _MARKER_LINE.match(line):
+            out.append(line)
+            continue
+        kept, i = [], 0
+        while i < len(line):
+            if inside:
+                # axis: text inside a comment, up to its closer on any later line, never counts
+                end = line.find("-->", i)
+                if end < 0:
+                    i = len(line)
+                    break
+                inside, i = False, end + 3
+                continue
+            ticks = _TICKS.match(line, i)
+            if ticks:
+                # axis: a comment delimiter inside an inline code span is shown text and stays
+                close = line.find(ticks.group(0), ticks.end())
+                end = close + len(ticks.group(0)) if close >= 0 else ticks.end()
+                kept.append(line[i:end])
+                i = end
+            elif line.startswith("<!--", i):
+                inside, i = True, i + 4
+            else:
+                kept.append(line[i])
+                i += 1
+        text = "".join(kept)
+        out.append(text if text.endswith("\n") or not line.endswith("\n") else text + "\n")
+    return "".join(out)
 
 
 def _names(item, ident, title):
-    """Whether one acceptance names the id as a whole token and carries the title, both byte for byte, in its visible
-    text: an HTML comment inside the line does not render, so nothing in it counts."""
-    # axis: an id or title only inside an inline HTML comment is not named
-    item = _COMMENT.sub(" ", item)
+    """Whether one acceptance names the id as a whole token and carries the title, both byte for byte."""
     token = re.search("(?<![%s])%s(?![%s])" % (_ID_CHAR, re.escape(ident), _ID_CHAR), item)
     return token is not None and (title is None or title in item)
 
@@ -66,8 +110,9 @@ def _names(item, ident, title):
 def missing(record, body):
     """The leftovers ``body``'s What we're accepting does not name, as [{"id", "title"}] in record order ([] when every
     one is named, or the record leaves none). ``record`` is ``review_record.read``'s result; Unreadable when it cannot be
-    read. A leftover whose finding carries no title is checked by its id alone."""
-    items = pr_sheet.accepting_listed(body if isinstance(body, str) else "")
+    read. Only text that renders counts (``_visible``). A leftover whose finding carries no title is checked by its id
+    alone."""
+    items = pr_sheet.accepting_listed(_visible(body if isinstance(body, str) else ""))
     return [{"id": ident, "title": title} for ident, title in _leftovers(record)
             if not any(_names(item, ident, title) for item in items)]
 

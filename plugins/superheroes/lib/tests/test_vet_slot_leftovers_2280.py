@@ -284,3 +284,30 @@ def test_ready_detection_reads_the_canonical_verdict_form(monkeypatch):
 def test_an_unreadable_verdict_form_runs_the_check(monkeypatch):
     monkeypatch.setattr(vs.stack_check, "_load_vet_verdict_form", lambda: (None, "missing"))
     assert vs.reads_ready("**Verdict: NOT-READY** · x") is True
+
+
+# --- review round 2 fixes ---------------------------------------------------------------------------
+
+def test_a_comment_spanning_lines_hides_the_id_and_title(tmp_path):
+    """code-004: the opener sits on the line before; GitHub renders only `None`."""
+    hidden = body("<!--\nf-1 the retry loop never backs off --> None\n")
+    assert [g["id"] for g in la.missing(read_ok(F1), hidden)] == ["f-1"]
+    assert handback(hidden, [record_comment([F1])])["reason"] == "leftover-not-accepted"
+    result, fake = write(hidden, [RECEIPT, record_comment([F1])], tmp_path)
+    assert result["reason"] == "leftover-not-accepted" and fake.edited == []
+
+
+def test_a_comment_opener_inside_a_code_span_is_shown_text(tmp_path):
+    """code-005: a title that quotes the comment opener in a code span can still be named."""
+    literal = dict(F1, title="Handle `<!--` literally")
+    shown = body("- f-1 Handle `<!--` literally: merging accepts it.\n")
+    assert la.missing(read_ok(literal), shown) == []
+    assert handback(shown, [record_comment([literal])])["ok"] is True
+    result, _fake = write(shown, [RECEIPT, record_comment([literal])], tmp_path)
+    assert result["ok"] is True
+
+
+def test_visible_keeps_fenced_text_and_marker_lines_and_drops_an_unclosed_comment():
+    assert la._visible("```\n<!-- shown -->\n```\n") == "```\n<!-- shown -->\n```\n"
+    assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
+    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "a \n\n e\nf "
