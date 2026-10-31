@@ -214,7 +214,7 @@ reviewable, or stop needing the owner to read it? The owner's worry: a walk writ
 spec is a translation, and things get lost in translation.
 
 **New input the owner asked to be studied: two discoveries in a consuming project** run in parallel,
-09-25 to 09-28 (#1798 "Need beyond Plans"; #1419 legal terms, Specs A and C), plus the
+09-25 to 09-28 (a consuming project's two discoveries, Specs A and C), plus the
 advisor seats that vetted their spec PRs. Both converged, independently, on the same practice:
 
 1. Rulings one at a time in chat, then **design before spec**: most product rulings made by
@@ -245,7 +245,7 @@ advisor seats that vetted their spec PRs. Both converged, independently, on the 
 **Private records (quote owner sessions; never commit):**
 `~/.claude/wave-logs/spec-alignment-discovery/sessions-study-SYNTHESIS.md` (the synthesis and
 open questions) and `sessions-study-NOTES.md` beside it; the two discoveries' own records at
-`~/.claude/wave-logs/discovery-1798/` and `~/.claude/wave-logs/discovery-1419-record/`.
+`~/.claude/wave-logs/discovery-core-story/` and `~/.claude/wave-logs/discovery-account-terms-record/`.
 
 ## Next steps (updated 2026-09-28)
 
@@ -385,7 +385,7 @@ Owner: "really happy with this iteration ... converging." Directions taken from 
     back to discovery, and discovery sends the owner's final sheet.
 30. **Category 2 is written as user stories** ("As a X, I want to Y, so I can Z"), evocative of
     the core need, not comprehensive; the requirements carry the detail. Examples lead with a
-    core story (#1798), not an edge case (#1419 account deletion was a poor example).
+    core story, not an edge case (account deletion was a poor example).
 31. **Tap sheets are a reusable review template.** Spec review uses it, built in. Any plugin
     session can use it for another review (a PR walk, a merge review) when the owner asks; no
     other standing use is built in. Standing rule: when a decision has relevant images, the card
@@ -415,7 +415,7 @@ Board round 3 under way (owner: "go").
 37. **Board round 3 published** (2026-10-03, same link): everything restyled in theme C; the theme
     artboard is now the theme spec (colours with one job each, type, parts, readability rules);
     new artboards: one review template (card anatomy, who uses it, a PR-walk example) and image
-    zoom on a phone; discovery sends the final sheet; category 2 told as #1798 user stories;
+    zoom on a phone; discovery sends the final sheet; category 2 told as user stories;
     Canon replaces the ledger (standing vs this-piece entries, exact words, session pointer;
     threat model stays in configure); split trigger on the flow. Craft call recorded for veto:
     hand-backs live in Canon and configure item 13 points there. Durable source copy:

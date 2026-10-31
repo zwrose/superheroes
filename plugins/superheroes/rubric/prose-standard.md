@@ -234,9 +234,9 @@ reader of the shipped surface, so an issue or PR number in a comment or docstrin
 provenance and nothing sweeps the existing ones.
 
 One project's identity is barred more widely than its history. Nothing committed under the
-plugin's folder — shipped prose, code, code comments and docstrings, tests, fixtures and bite-proof
-records — names a project that uses the plugin, or that project's paths, commands, data or stack.
-A neutral stand-in carries the example instead: "a consuming project", `/path/to/project`.
+plugin's folder, whether shipped prose, code, code comments and docstrings, tests, fixtures or
+bite-proof records, names a project that uses the plugin, or that project's paths, commands, data
+or stack. A neutral stand-in carries the example instead: "a consuming project", `/path/to/project`.
 
 ## Rationale, prohibitions, and claims
 
