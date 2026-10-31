@@ -243,6 +243,14 @@ def carried_block(finding):
     return block, (KIND_PER_AREA if is_break_it(finding) else KIND_ATTACHED)
 
 
+def scope_exempt(finding):
+    """True when the finding earns the diff-scope exemption, the one home of that rule: a per-area (``break-it-test``)
+    finding whose suggestion parses as a block, whose block path is its cited ``file``, and whose citation coerces to
+    line 1. A malformed block, another path, another line or an attached test keeps ordinary scope checking."""
+    block, kind = carried_block(finding)
+    return kind == KIND_PER_AREA and block["path"] == finding.get("file") and _coerce_line(finding.get("line")) == (True, 1)
+
+
 def carries_test(finding):
     """True for a per-area finding (even one whose block is malformed) or a finding whose suggestion parses as a block."""
     return is_break_it(finding) or carried_block(finding)[0] is not None
@@ -1651,7 +1659,7 @@ def intercept(findings, repo_root, head, *, runner=run_one, interpreter=_UNSET, 
         kept.append(copy)
         stamped_ids.add(id(copy))
         # axis: only a well-formed per-area block on its own file at line 1 buys the scope exemption; a malformed or attached one keeps ordinary scope checking
-        if per_area and block and block["path"] == copy.get("file") and _coerce_line(copy.get("line")) == (True, 1):
+        if scope_exempt(copy):
             exempt_ids.add(id(copy))
     return kept, runs, exempt_ids, stamped_ids
 
