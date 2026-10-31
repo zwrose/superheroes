@@ -1266,6 +1266,18 @@ def test_claude_md_rule_is_appended_once_and_left_uncommitted(proj, canon_root):
     assert _apply(proj, canon_root, _text_proposal("claude-md-rule", CLAUDE_RULE), APPROVAL)["set"]["action"] == "noop"
 
 
+# axis: the guarding test for a symlinked home — the rule is written through to the target and the link survives
+def test_claude_md_rule_writes_through_a_symlinked_claude_md(proj, canon_root):
+    shared = os.path.join(proj[0], "AGENTS.md")
+    with open(shared, "w", encoding="utf-8") as fh:
+        fh.write("# shared\n")
+    os.symlink("AGENTS.md", _claude_md(proj))
+    got = _apply(proj, canon_root, _text_proposal("claude-md-rule", CLAUDE_RULE), APPROVAL)
+    assert (got["ok"], got["outcome"]) == (True, "applied")
+    assert os.path.islink(_claude_md(proj)) and os.readlink(_claude_md(proj)) == "AGENTS.md"
+    assert open(shared, encoding="utf-8").read() == "# shared\n\n%s\n" % CLAUDE_RULE
+
+
 # axis: the guarding test for a missing home — a text kind with no file to join writes nothing, Canon included
 @pytest.mark.parametrize("kind, text", [("focus-hint", HINT), ("claude-md-rule", CLAUDE_RULE)])
 def test_text_kind_with_no_home_file_writes_nothing(proj, canon_root, kind, text):

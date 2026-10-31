@@ -305,7 +305,8 @@ def _write_text_kind(cwd, proposal, root):
     with mode_registry.config_lock(cwd, root) as got:
         if not got:
             raise RuntimeError("the project's config lock is held by another writer")
-        path = _text_target(cwd, kind, root)
+        # a symlinked CLAUDE.md or layer is written through to its target, so the link and what it shares survive
+        path = os.path.realpath(_text_target(cwd, kind, root))
         with open(path, encoding="utf-8") as fh:
             before = fh.read()
         after = (_with_focus_hint if kind == "focus-hint" else _with_claude_md_rule)(before, line)
