@@ -19,7 +19,7 @@ the item-2 change itself). Nothing was redacted.
 | E4 | `seat_lens` in `_seat_map_configured_vendor` | red, then green |
 | E5 | storage-key findings path | red, then green |
 | E6 | scope line | red, then green |
-| E7 | the fix in item 1 | NOT PRODUCED (see below) |
+| E7 | `_bootstrap` plans the slices before the first emission (WO-4a3) | red, then green |
 | E8 | `seat_lens` in `review_record_session._unfolded` | red, then green |
 
 ## E1: `panel_roster`'s slicing branch (axis: a sliced round 1 seats `<lens>:<id>` seats)
@@ -223,13 +223,63 @@ FAILED plugins/superheroes/lib/tests/test_sliced_panel_c2.py::test_a_rendered_sl
 - Restore: `"SLICE_SCOPE_LINE": scope_line,` put back. `git diff --stat -- plugins/superheroes/lib/round_driver.py` printed nothing.
 - Raw green: `.  [100%]` / `1 passed, 140 deselected in 2.01s`.
 
-## E7: the fix in item 1 (axis: a slice seat's emission and its anchor check agree): NOT PRODUCED
+## E7: `_bootstrap` plans the slices before the first emission (WO-4a3; axis: a slice seat's emission and its anchor check agree)
 
-No library fix was made, so there is nothing to neutralize. The diagnosis (below) shows the `manifest-anchor-mismatch` is not a library defect:
-`test_round_driver_integration._bootstrap` calls `cmd_next` (which plans no slices and emits the plain-roster orders), and only then writes a
-`slicePlan` into the saved state. `roster_for` then reads the sliced roster, but the anchor holds orders for the plain roster.
-`round_driver.new_state` plans slices before the first emission (`round_driver.py:1391`), so a real session never sees this.
-The detector that would carry E7 is the real-driven test `test_a_real_driven_session_with_a_fix_round_writes_one_record`, which is still red.
+No library fix was made: the `manifest-anchor-mismatch` was a test-helper defect, and the fix is in `test_round_driver_integration._bootstrap`.
+`new_state` plans slices before the first emission (`round_driver.py:1391`), so a real session never sees it. The helper's old order ran
+`cmd_next` (which planned no slices and emitted plain-roster orders) and only then wrote a `slicePlan` into saved state. The fix runs the one
+real `cmd_next` with `round_driver._plan_slices` swapped for `_fixture_slice_plan` (`mock.patch.object`), so emission, anchor and roster read
+the same plan. `sliced` now defaults to `False`; a test opts in with `sliced=True`.
+
+- Guarded element: the `sliced=True` branch of `_bootstrap` in `test_round_driver_integration.py`. Axis: the plan is in state before the first panel emission.
+- Neutralization: the `if sliced:` / `with mock.patch.object(...)` / `else:` block was replaced by the old order, each line tagged `# NEUTRALIZED-E7`:
+  `out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))`, then `assert out["ok"], out`, then
+  `if sliced: state = _state(session_dir); state["slicePlan"] = copy.deepcopy(SLICE_PLAN); round_driver.save_state(session_dir, state)`.
+- Test: `test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt` (the one test that passes `sliced=True` and drives the real
+  adapter), run alone with `-k`, output through `| tail -30`. The tail began at the `_drive_one_phase` frame, so the head of the failure
+  report (the test body frame) is not quoted; the decisive assertion line is.
+- Raw red (the `tail -30` window only; the lines of the report above it, including the test-body frame, are cut):
+
+```
+session_dir = '/tmp/claude-0/pytest-of-root/pytest-58/test_every_adapter_phase_folds0/s'
+gitdir = '/tmp/claude-0/pytest-of-root/pytest-58/test_every_adapter_phase_folds0/s-gitdir'
+panel_findings = [{'file': 'src/f00.py', 'line': 2, 'title': 'missing bounds guard', 'severity': 'Important', ...}, {'_seat': 'test-role', 'file': 'src/f01.py', 'line': 2, 'title': 'a retried write is applied twice', ...}]
+head_diff_path = '/tmp/claude-0/pytest-of-root/pytest-58/test_every_adapter_phase_folds0/s-head.diff'
+
+    def _drive_one_phase(session_dir, gitdir, panel_findings, head_diff_path):
+        """Land + record every roster slot of the pending phase, then `advance`. -> (phase, out)."""
+        _assert_adapters_are_real()
+        state = _state(session_dir)
+        pend = state["pending"]
+        phase = pend["phase"]
+        assert phase in round_adapters.ADAPTER_PHASES, (
+            "phase %r is not an adapter phase — this harness drives dispatch phases only" % phase)
+        roster, reason = round_adapters.roster_for(phase, state, state.get("config") or {})
+        assert reason is None, (phase, reason)
+        slots = _slots_of(roster)
+        _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+        for seat, occurrence in slots:
+            payload = _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+            out = _record(session_dir, seat, occurrence=occurrence)
+>           assert out["ok"], (phase, seat, occurrence, out)
+E           AssertionError: ('dispatch-panel', 'code-reviewer:s1', 0, {'ok': False, 'reason': 'manifest-anchor-mismatch', 'seat': 'code-reviewer:s1', 'detail': None})
+E           assert False
+
+/home/user/wt-2218-wo4/plugins/superheroes/lib/tests/test_round_driver_integration.py:483: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_integration.py::test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt
+1 failed, 18 deselected in 1.75s
+```
+
+(The `...` inside the `panel_findings` repr is pytest's own elision. Nothing was redacted.)
+
+- Restore: the `with mock.patch.object(round_driver, "_plan_slices", _fixture_slice_plan):` form put back by the inverse edit. Restore receipt:
+  `grep -c NEUTRALIZED` over the file printed `0`, and `grep -n "if sliced:" -B1 -A5` printed
+  `549:    if sliced:` / `550:        with mock.patch.object(round_driver, "_plan_slices", _fixture_slice_plan):` /
+  `551:            out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))` / `552:    else:` / `553:        out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))` /
+  `554:    assert out["ok"], out`.
+- Raw green: `.  [100%]` / `1 passed, 18 deselected in 4.62s`.
 
 Observed before any change (a scratch reproduction of the harness; `_anchor_check` compares `envelope["orderSha256"]` with `anchor["orders"][storage_key(seat, occurrence)]`):
 roster `['architecture-reviewer', 'premortem-reviewer', 'code-reviewer:s1', 'test-role:s1', 'code-reviewer:s2', 'test-role:s2']`;

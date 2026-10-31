@@ -188,8 +188,11 @@ def test_a_three_thousand_line_diff_has_no_shards_in_the_panel_payload():
     state = RD.new_state(dict(CFG, diff=big))
     state["reviewedDiff"] = big
     payload = RD._advance(state, state["config"])["payload"]
+    assert "shards" not in payload
     assert set(payload) == {"dimensions", "tier", "slices"}
-    assert payload["dimensions"] == list(RD._panel_dimensions(state["config"]))
+    assert payload["dimensions"] == RP.panel_roster(state, state["config"])
+    assert isinstance(payload["slices"], list) and payload["slices"]
+    assert [s["id"] for s in payload["slices"]] == [s["id"] for s in state["slicePlan"]["slices"]]
     assert payload["tier"] == RD.DEEP
     for gone in ("shard_plan", "_shard_payload", "CROSS_CUTTING_LENSES", "DEFAULT_SHARD_MAX_LINES"):
         assert not hasattr(RD, gone) and not hasattr(RD.delta_surface, gone), gone
