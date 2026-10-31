@@ -7625,7 +7625,7 @@ def _break_it_target_facts(state, config, finding, head):
     path = block["path"] if block is not None else None
     current = block["content"] if block is not None else None
     command = block["run"] if block is not None else None
-    kept =finding.get(REVIEWER_TEST_FIELD)
+    kept = finding.get(REVIEWER_TEST_FIELD)
     reviewer = kept if isinstance(kept, str) else current
     committed = None
     repo_root = config.get("repoRoot")
