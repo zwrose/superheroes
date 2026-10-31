@@ -567,3 +567,21 @@ def test_malformed_inputs_never_raise():
     assert slicing.unread_share(None, None, None) == {"unreadLines": 0, "countableLines": 0, "parts": []}
     assert slicing.slice_parts_for(None, None, None) == []
     assert slicing.slice_parts_for([{"file": "a.py", "lines": [[1, 5]]}], {"slices": [None, {"diff": 4}]}, None) == []
+
+
+def test_unread_selection_keeps_each_cut_runs_original_deletion_anchor():
+    fx = _fx_deletion_heavy()
+    pl = _plan_of(fx)
+    got = slicing.slice_parts_for([{"file": "del.py", "lines": [[4, 4]]}], pl, fx["cr"])
+    # the removals of both runs sit at anchor 4, so an unread line 4 owes every run that holds some
+    assert sum(s["diff"].count("\n-old ") for s in got) == 1800
+
+
+def test_unread_replacement_is_cut_by_changed_lines_not_unique_head_lines():
+    fx = _fx_replacement()
+    pl = _plan_of(fx)
+    got = slicing.slice_parts_for([{"file": "rep.py", "lines": [[1, 700]]}], pl, fx["cr"])
+    assert len(got) == 2
+    for s in got:
+        assert s["weight"] <= BAR
+        assert sum(sec["added"] + sec["removed"] for sec in cl.parse_sections(s["diff"])) <= BAR

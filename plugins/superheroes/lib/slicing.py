@@ -265,6 +265,12 @@ def _assemble(packed, prefix):
                     per = heads.setdefault(unit["file"], {})
                     per[n] = per.get(n, 0) + 1
             sl["heads"] = heads
+            # each cut run's own head lines (the shortened header cannot give back a run's original anchors)
+            recorded = {}
+            for unit in units:
+                for _order, text in unit["hunks"]:
+                    recorded.setdefault(unit["file"], []).append([text, list(unit["heads"])])
+            sl["hunkHeads"] = recorded
         out.append(sl)
     return out
 
@@ -381,10 +387,23 @@ def _file_views(plan_obj):
             if view["header"] is None:
                 view["header"] = header
             view["copied"] = view["copied"] or section["copied"]
+            recorded = _recorded_heads(entry, section["file"])
             for hunk in hunks:
                 if hunk not in view["hunks"]:
-                    view["hunks"][hunk] = set(_hunk_heads(hunk))
+                    # the plan's own record of a run's heads wins over a reparse of its rewritten header
+                    view["hunks"][hunk] = recorded.get(hunk, _hunk_heads(hunk))
     return views
+
+
+def _recorded_heads(entry, file):
+    """``{hunk text: [head line, ...]}`` a planned slice recorded for ``file``; empty when it recorded none or the record is malformed."""
+    # axis: a malformed record is ignored, so the hunk's heads are reparsed from its text.
+    out = {}
+    items = entry.get("hunkHeads", {}).get(file) if isinstance(entry.get("hunkHeads"), dict) else None
+    for item in items if isinstance(items, list) else []:
+        if isinstance(item, (list, tuple)) and len(item) == 2 and isinstance(item[0], str) and isinstance(item[1], list) and all(_is_int(n) for n in item[1]):
+            out[item[0]] = list(item[1])
+    return out
 
 
 def _heavy(view):
@@ -453,6 +472,18 @@ def slice_parts_for(unread_parts, plan_obj, count_result):
             units.append(_unit(0, file, [], file, view["header"], everything))
             continue
         chunks = [part["lines"]] if file in zero else _chunk_ranges(part["lines"], bar, _heavy(view))
+        if file not in zero and not view["copied"]:
+            # Each run keeps its own weight: the changed lines it holds whose head line is unread, so a follow-up
+            # slice never packs more changed lines than its weight says.
+            wanted = part["lines"]
+            per_run = []
+            for i, (text, heads) in enumerate(view["hunks"].items()):
+                mine = [n for n in heads if any(s <= n <= e for s, e in wanted)]
+                if mine:
+                    per_run.append(_unit(len(mine), file, countable_lines._merge_numbers(mine), file, view["header"], [((i, 0), text)], mine))
+            if per_run:
+                units.extend(per_run)
+                continue
         for chunk in chunks:
             picked = [
                 (i, text)
