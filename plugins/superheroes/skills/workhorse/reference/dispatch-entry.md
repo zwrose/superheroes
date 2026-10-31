@@ -181,6 +181,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--max-wait` | no | `integer` | runtime (see Variance envelope) |  |
 | `--order-id` | no | `free-text` | none |  |
 | `--diff-base` | no | `free-text` | none | pinned commit object id (40 hex, or 64 in a SHA-256 repository) to stage the merge-base->head review patch against; a revision expression, branch name or tag is refused |
+| `--leave-out-file` | no | `free-text` | none | JSON file {"schema": "leave-out/1", "files": [<repo-relative path>, ...]} naming changed files to leave out of the review patch (proven copies); a malformed file refuses sanitized-view-leave-out-invalid; ignored on a continuation |
 | `--mode` | no | `choices:review,brief-check` | none |  |
 | `--claude-mode` | no | `choices:print,background` | none | print only; background is retired and refuses claude-mode-retired before spawn |
 | `--expected-result-kind` | no | `choices:findings,verdicts,grouping,ruling` | none | mechanical pin: refuse attempts whose parsed resultKind differs |

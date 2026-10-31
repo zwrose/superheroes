@@ -148,6 +148,19 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `--mode brief-check` explicitly, which refuses `mode-brief-check-with-diff-base` before the
 > journal is read.
 >
+> **`--leave-out-file <path>` (optional).** The review loop's driver writes
+> `<session dir>/reviewer-leave-out.json`, `{"schema": "leave-out/1", "files": [<repo-relative path>, ...]}`,
+> naming the changed files the change proves byte-for-byte copies of a named source. With `--diff-base`,
+> the patch staged in the view leaves out every listed path that is in the change (matched on its head-side
+> path); the seat's notice says how many changed files were left out and that they are not part of what it
+> reviews. A listed path that is not in the change is ignored. A file that is missing, unreadable, not
+> JSON, or of the wrong shape (extra or missing key, a non-list `files`, a duplicate, blank, absolute,
+> `..`-segment or backslash entry) refuses `sanitized-view-leave-out-invalid` on a launch, with or without
+> `--diff-base`, before anything is spawned. A change whose every file is left out refuses `sanitized-view-diff-empty`; a
+> change whose only non-config file is left out beside a withheld config file is reviewed as config only, with
+> the left-out file in neither the patch nor the configuration-changes file. On a
+> continuation it is accepted and ignored, as `--diff-base` is. It adds no `sanitizedView` receipt key.
+>
 > The staged review patch, the review-only configuration-changes file, and the staged PR body are
 > **rejected from the investigation floor**: a seat whose `investigated` array cites only these
 > artifacts fails the floor and forfeits vacuously, exactly as if it had cited nothing.
@@ -189,7 +202,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-base-abbreviated` | the base is an abbreviated hex commit id; pass the full 40- or 64-character id |
 > | `sanitized-view-diff-base-unresolved` | the base is empty, begins with `-`, is not a full 40-/64-hex commit object id (non-hex, fewer than four hex digits, or hex lengths of 41–63 or 65 or more), does not resolve to a commit, shares no merge base with head, the repository's shallow state cannot be determined from its git, or the merge-base cannot be established |
 > | `sanitized-view-diff-base-shallow` | the reviewed repository is a shallow clone, so the genuine merge-base cannot be established from its object store; fetch full history (for example `fetch-depth: 0` or `git fetch --unshallow`) and dispatch again |
-> | `sanitized-view-diff-empty` | a base was requested and the change has no paths, or the resulting patch is empty with nothing withheld, or every changed path was withheld and their hunks render nothing |
+> | `sanitized-view-diff-empty` | a base was requested and the change has no paths, or the resulting patch is empty with nothing withheld, or every changed path was withheld and their hunks render nothing, or every file in the change is left out by `--leave-out-file` |
 > | `sanitized-view-diff-too-large` | the patch exceeds the 8 MiB ceiling, or census `ls-tree` stdout exceeds the export byte ceiling |
 > | `sanitized-view-diff-path-collision` | the repository already tracks a file named `SUPERHEROES_REVIEW_DIFF.patch` |
 > | `sanitized-view-diff-config-path-collision` | the review-only configuration-changes file could not be created at its name in the view, or did not read back as written |
@@ -382,11 +395,15 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
+> # A session begun before the leave-out sidecar existed (a pending panel resumed after an upgrade) has no
+> # reviewer-leave-out.json; pass the flag only when the file is there, since a missing file refuses the launch.
+> LEAVE_OUT_ARGS=(); [ -f "$SESSION_DIR/reviewer-leave-out.json" ] && LEAVE_OUT_ARGS=(--leave-out-file "$SESSION_DIR/reviewer-leave-out.json")
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
+>   ${LEAVE_OUT_ARGS[@]+"${LEAVE_OUT_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900

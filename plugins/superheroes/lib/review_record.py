@@ -41,6 +41,7 @@ if _LIB_DIR not in sys.path:
 
 import build_lane  # noqa: E402
 import cloud_pass  # noqa: E402
+import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
@@ -100,7 +101,7 @@ GRADE_VERDICTS = ("confirmed", "plausible", "wrong")
 RUN_STATUSES = ("ran", "timed-out", "not-started")
 SOURCE_KINDS = ("reviewer", "sweep")
 # The optional account keys the record carries whole, when the account has them.
-_ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare")
+_ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare", "provenCopies")
 
 
 class Refusal(Exception):
@@ -512,6 +513,13 @@ def _unread_fault(u):
     return None if fault is None else f".parts{fault}"
 
 
+def _proven_copies_fault(v):
+    """Where the proven-copies list is malformed, as a path suffix, else None: a non-empty list of entries with
+    exactly a file, a source and a 64-hex sha256, no file twice."""
+    # the copy-list contract has one home, countable_lines.copies_fault, which proof ingestion consumes too
+    return countable_lines.copies_fault(v)
+
+
 def _grade_fault(g):
     if not isinstance(g, dict):
         return ""
@@ -683,6 +691,10 @@ def _validate(a):
         fault = _unread_fault(a["unreadShare"])
         # axis: the unread lines are part of the countable lines, and every range is a real span — see bite-proof record c1l1_wo_a_record_seam
         chk(fault is None, f"unreadShare{fault}")
+    if "provenCopies" in a:
+        fault = _proven_copies_fault(a["provenCopies"])
+        # axis: a proven copy names its file, its source and a 64-hex checksum the vet can check, each file once — see bite-proof record c1l5b_wo_d_proven_copies
+        chk(fault is None, f"provenCopies{fault}")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -1847,6 +1859,16 @@ def _outside_lines(outside, compact):
     return [*lines, "For the advisor to sort at the vet."]
 
 
+def _proven_copies_lines(copies, compact):
+    if not copies:
+        return []
+    count = _plural(len(copies), "file", "files")
+    lead = "Proven copies, given to no reviewer: " + count
+    if compact:
+        return [f"{lead} {LISTED}."]
+    return [lead + " — " + ", ".join(f"{c['file']} (copy of {c['source']})" for c in copies) + "."]
+
+
 def _unread_line(share):
     if not isinstance(share, dict):
         return None
@@ -1941,9 +1963,10 @@ def _summary(r, level):
     rerun_line = _rerun_line(r.get("rerunChecks"), compact)
     findings_lines = _findings_lines(r.get("findings"), compact)
     outside_lines = _outside_lines(r.get("outsideThisPR"), compact)
+    proven_lines = _proven_copies_lines(r.get("provenCopies"), compact)
     unread_line = _unread_line(r.get("unreadShare"))
     # the lines that carry reviewer or session text, left out of the claim check by the line objects built here
-    quoted_lines = [*findings_lines, *outside_lines, *([roles_line] if roles_line else [])]
+    quoted_lines = [*findings_lines, *outside_lines, *proven_lines, *([roles_line] if roles_line else [])]
     refused = r.get("refused") or []
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     transit_line = _transit_line(r.get("transitDamage"), level)
@@ -1972,6 +1995,7 @@ def _summary(r, level):
         *wider_lines,
         *findings_lines,
         *outside_lines,
+        *proven_lines,
         *([unread_line] if unread_line else [])]
     # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON

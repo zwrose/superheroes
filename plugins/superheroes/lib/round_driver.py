@@ -62,6 +62,7 @@ import audits  # noqa: E402
 import break_it  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
+import countable_lines  # noqa: E402
 import circuit_breaker  # noqa: E402
 import command_refusals  # noqa: E402
 import observed_refusals  # noqa: E402
@@ -1312,6 +1313,9 @@ def _default_config(overrides=None):
         # was populated ONLY by `_fold_panel` off the panel artifact; receipt list (#681) stores
         # each round's submission in `seatMapReceipts` instead.
         "seatMap": None,
+        # `next --copy-proof`: the checksum proof naming files the change copies byte for byte. Checked once
+        # at new_state; the copies it proves are left out of every seat's diff. None → nothing is left out.
+        "copyProof": None,
         "fixBatchCap": None,
     }
     if isinstance(overrides, dict):
@@ -1406,9 +1410,43 @@ def new_state(config=None):
         "_records": [],
         "_coverage": [],
     }
+    _check_copy_proof(state, cfg)
     # axis: a reduced roster is re-checked against the round-1 diff before the first panel — see bite-proof record wo_a_1797_roster
     _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
     return state
+
+
+COPY_PROOF_HEAD_TIMEOUT = 60
+
+
+def _resolve_head_commit(repo_root):
+    """The commit sha ``HEAD`` names in ``repo_root``, or None when Git cannot say."""
+    try:
+        proc = subprocess.run(
+            ["git", "-C", os.fspath(repo_root), "rev-parse", "--verify", "HEAD^{commit}"],
+            capture_output=True, timeout=COPY_PROOF_HEAD_TIMEOUT)
+    except (OSError, subprocess.SubprocessError, ValueError, TypeError):
+        return None
+    sha = proc.stdout.decode("utf-8", "replace").strip() if proc.returncode == 0 else ""
+    return sha or None
+
+
+def _check_copy_proof(state, cfg):
+    """Check the configured copy proof once against the round-1 diff and the head commit, and store what it
+    proved (each copy with its diff section's digest), what it rejected, and the head it was checked at. Writes
+    nothing when there is no well-formed proof or no diff."""
+    proof = cfg.get("copyProof")
+    diff_text = cfg.get("diff")
+    if not isinstance(diff_text, str) or countable_lines.proof_fault(proof) is not None:
+        return
+    repo_root = cfg.get("repoRoot") or os.getcwd()
+    # A head that cannot be resolved is passed on as None, which the counter reads as unreadable for every copy.
+    head = _resolve_head_commit(repo_root)
+    proven, rejected = countable_lines.proven_copies(diff_text, repo_root, proof, head=head)
+    state["provenCopies"] = [dict(copy, section=countable_lines.section_digest(diff_text, copy["file"]))
+                             for copy in proven]
+    state["copyProofRejected"] = rejected
+    state["provenCopiesHead"] = head
 
 
 def _finding_identity_key(finding):
@@ -2767,7 +2805,11 @@ def _advance(state, config):
     payload = {}
     dims = _panel_dimensions(config)
     if step == P_PANEL:
-        payload = _shard_payload(state.get("reviewedDiff"), dims)
+        diff_text = state.get("reviewedDiff")
+        if isinstance(diff_text, str):
+            # axis: the shard lists name the reviewer's files, which leave out the copies still proven — see bite-proof record c1l5b_wo_d_proven_copies
+            diff_text = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text))
+        payload = _shard_payload(diff_text, dims)
     elif step == P_VERIFIERS:
         staged = verification.stage_ids(state.get("_toVerify") or [])
         payload = {"clusters": verification.cluster_findings(staged)}
@@ -9996,9 +10038,10 @@ def _risk_areas_changed_paths(repo_root, base, head):
     return [name for name in names if name], None
 
 
-def _risk_areas_text(seat_key, repo_root, base, head):
+def _risk_areas_text(seat_key, repo_root, base, head, leave_out=()):
     """The test role's risk-areas clause: which of the project's risk areas the reviewed change
-    touches, as read by `risk_areas.touched` over every changed path. Empty for any other seat.
+    touches, as read by `risk_areas.touched` over every changed path less the `leave_out` paths (the
+    proven copies no seat is given). Empty for any other seat.
     Never raises; a change that cannot be read says so rather than claiming it touches none."""
     if seat_key != "test-role":
         return ""
@@ -10006,6 +10049,9 @@ def _risk_areas_text(seat_key, repo_root, base, head):
         paths, unreadable = _risk_areas_changed_paths(repo_root, base, head)
         if unreadable is not None:
             return unreadable
+        # axis: a proven copy no seat is given is not named as touching a risk area — see bite-proof record c1l5b_wo_d_proven_copies
+        left_out = set(leave_out)
+        paths = [path for path in paths if path not in left_out]
         r = risk_areas.touched(repo_root, paths)
         if r["riskAreas"] == "not-set":
             detail = r.get("detail")
@@ -10633,24 +10679,67 @@ def _ensure_bytes_at_path(session_dir, path, expected):
 
 
 def _ensure_round_diff(session_dir, rnd, state):
-    """Write `round-<N>/diff.txt` when absent or untrusted so order templates have a real path to cite."""
+    """Write `round-<N>/diff.txt` (the whole diff) when absent or untrusted so order templates have a real path to
+    cite, and return the path a seat is given: `reviewer-diff.txt` beside it when a copy is left out, else `diff.txt`."""
     rdir = round_records.round_dir(session_dir, rnd)
     diff_path = os.path.join(rdir, "diff.txt")
     diff_text = state.get("reviewedDiff")
     if not isinstance(diff_text, str):
         raise ValueError("reviewed-diff-unavailable")
-    expected = diff_text.encode("utf-8")
-    return _ensure_bytes_at_path(session_dir, diff_path, expected)
+    _ensure_bytes_at_path(session_dir, diff_path, diff_text.encode("utf-8"))
+    # axis: the seat-facing diff is its own file and never overwrites the round's diff.txt — see bite-proof record c1l5b_wo_d_proven_copies
+    view = countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text))
+    _ensure_leave_out_file(session_dir, state)
+    if view == diff_text:
+        return diff_path
+    return _ensure_bytes_at_path(session_dir, os.path.join(rdir, "reviewer-diff.txt"), view.encode("utf-8"))
 
 
 def _ensure_round_head_diff(session_dir, rnd, state):
-    """Write `round-<N>/head.diff` from state when absent or untrusted."""
+    """Write `round-<N>/head.diff` (the whole head diff) from state when absent or untrusted, and return the path a
+    seat is given: `reviewer-head.diff` beside it when a copy is left out, else `head.diff`."""
     head_text = state.get("headDiff")
     if not isinstance(head_text, str):
         raise ValueError("order-render-refused:head-diff-unavailable")
     rdir = round_records.round_dir(session_dir, rnd)
     head_path = os.path.join(rdir, "head.diff")
-    return _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
+    _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
+    view = countable_lines.reviewer_diff(head_text, _left_out(state, head_text))
+    _ensure_leave_out_file(session_dir, state)
+    if view == head_text:
+        return head_path
+    return _ensure_bytes_at_path(session_dir, os.path.join(rdir, "reviewer-head.diff"), view.encode("utf-8"))
+
+
+LEAVE_OUT_FILE = "reviewer-leave-out.json"
+
+
+def _left_out(state, diff_text):
+    """The stored proven copies still proven in ``diff_text`` — the one place a diff's left-out copies are
+    decided. Entries that are malformed or whose diff section has changed since the check are not among them."""
+    return countable_lines.still_proven(state.get("provenCopies") or [], diff_text)
+
+
+def _left_out_files(state):
+    """The files left out of the round's diff: the copies still proven in the head diff, else in the reviewed one."""
+    diff_text = state.get("headDiff") or state.get("reviewedDiff")
+    return [copy["file"] for copy in _left_out(state, diff_text)]
+
+
+def _ensure_leave_out_file(session_dir, state):
+    """Write ``reviewer-leave-out.json``, which names the files an engine reviewer's patch leaves out, so the
+    recipe's ``--leave-out-file`` always names a file (an empty list when nothing is left out)."""
+    import sanitized_view  # the loader's module owns the schema identifier; the writer reads it from there
+    content = round_records.canonical({"schema": sanitized_view.LEAVE_OUT_SCHEMA, "files": _left_out_files(state)})
+    return _ensure_bytes_at_path(session_dir, os.path.join(session_dir, LEAVE_OUT_FILE),
+                                 content.encode("utf-8"))
+
+
+def unread_surface(state, diff_text, read_lists):
+    """The unread surface of a round, proven copies left out (FR-8): the changed parts of ``diff_text`` that no
+    read list covers, with the sections of the copies still proven in it removed first."""
+    return countable_lines.unread_surface(
+        countable_lines.reviewer_diff(diff_text, _left_out(state, diff_text)), read_lists)
 
 
 FIX_BATCH_HISTORY_FIELDS = ("priorAudit", "gateRuling")
@@ -10896,7 +10985,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "ROLE_BRIEF_PATH": _role_brief_path(seat_key),
             "RISK_AREAS_TEXT": _risk_areas_text(
                 seat_key, repo_root, cfg.get("baseRef") or meta.get("baseRef"),
-                _session_certified_head(session_dir, state)),
+                _session_certified_head(session_dir, state), leave_out=_left_out_files(state)),
             "BREAK_IT_GRAMMAR_TEXT": _break_it_grammar_text(seat_key),
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
@@ -14243,6 +14332,12 @@ def build_parser():
                                    "config/state so round 1 has a vendor source. Unparseable / "
                                    "non-object / on non-fresh state → fails loud (nonzero), never "
                                    "a silent default")
+    cli_contract.add_argument(pn, "--copy-proof", contract="free-text", default=None,
+                              help="the copy-proof JSON (fresh state only): files the change copies byte "
+                                   "for byte from a named source, each with the sha256 of its bytes at the "
+                                   "head. A proven copy is left out of every seat's diff. Unreadable / "
+                                   "malformed / on non-fresh state → fails loud (nonzero), never a silent "
+                                   "'no proof'")
     cli_contract.add_argument(pn, "--records-path", contract="free-text", default=None,
                               help="durable round-records file path (fresh state only)")
 
@@ -14439,6 +14534,20 @@ def _dispatch(args):
                                              "value": args.seat_map}) + "\n")
                 return 1
             overrides["seatMap"] = seat_map_obj
+        if args.copy_proof is not None:
+            # Same fresh-state-only discipline as `--seat-map`: the proof is checked ONCE at new_state,
+            # so accepting it on existing state would silently ignore it.
+            proof, fault = countable_lines.load_proof(args.copy_proof)
+            if fault is not None:
+                sys.stdout.write(json.dumps({"ok": False, "reason": "copy-proof-invalid",
+                                             "detail": fault, "value": args.copy_proof}) + "\n")
+                return 1
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False, "reason": "copy-proof-not-fresh-state",
+                                             "value": args.copy_proof}) + "\n")
+                return 1
+            overrides["copyProof"] = proof
         if args.break_it_interpreter is not None:
             # Same fresh-state-only discipline as `--seat-map`: the calibration is read ONCE at
             # new_state, so accepting it on existing state would silently ignore it (#1961).
