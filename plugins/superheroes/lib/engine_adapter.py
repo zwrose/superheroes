@@ -1702,10 +1702,17 @@ def _scrub_findings(findings, *, echo_nonce=None):
                 continue
             g[key] = _scrub_finding_value(val)
         original = review_findings_schema.normalize_member(f0).get("suggestion")
-        if ((break_it.is_break_it(g) or break_it.parse_block(original)[0] is not None)
-                and g.get("suggestion") != original):
-            # the suggestion carries executable test bytes (a per-area finding's, or a block attached to any
-            # other finding); flag that the scrub altered them
+        if break_it.parse_block(original)[0] is not None:
+            # axis: the plugin's own scrub leaves a block's test content alone (the grammar has no fence; the content section is the code), so only the four header lines are scrubbed and the content stays byte-for-byte — see bite-proof record wo_a_2284_transit_redacted
+            lines = original.split("\n", 4)
+            g["suggestion"] = "\n".join([_scrub(line) for line in lines[:4]] + lines[4:])
+            if g["suggestion"] != original:
+                g[break_it.REDACTED_FIELD] = True
+            # axis: the placeholder is read off the original text, header and content, so a block a transit redactor altered is never run — see bite-proof record wo_a_2284_transit_redacted
+            if break_it.transit_redacted(original):
+                g[break_it.TRANSIT_FIELD] = True
+        elif break_it.is_break_it(g) and g.get("suggestion") != original:
+            # a per-area finding's suggestion carries executable test bytes; flag that the scrub altered them
             g[break_it.REDACTED_FIELD] = True
         accepted.append(g)
     return accepted, rejected

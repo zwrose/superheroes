@@ -844,6 +844,16 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   stops at the time budget `CC_WRITES_SWEEP_BUDGET_SECONDS` in
   `lib/engine_dispatch.py`. The folded result reports it as `ccWritesSweep`
   (`removed`, `incomplete`, `error`). An abandoned run is not swept.
+- **Sandbox placeholders are swept at fold.** On Linux the sandbox can leave empty, read-only
+  placeholders of the paths it protects in the worktree. Those paths are one list,
+  `SANDBOX_PLACEHOLDERS` in `lib/engine_dispatch.py` (`.bashrc`, `.gitconfig`, `.mcp.json`, `.idea`,
+  `.vscode`, the `.claude` settings files and others, at the worktree root). A claude write run
+  records, in its run dir when it opens, which of them exist; its fold removes a listed path only
+  when it was absent then and is now empty and read-only, never through a symlink, and removes
+  nothing else. The folded result reports it as `placeholderSweep` (`removed`, `incomplete`,
+  `error`). A snapshot that could not be read, or a worktree root that is no longer the one
+  snapshotted (`root-changed`), removes nothing. Name its `removed` list in the build record. A
+  placeholder seen left that is not on the list is added to it. An abandoned run is not swept.
 
 ### The native implementer engine
 

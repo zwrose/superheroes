@@ -30,7 +30,10 @@ The owner half is the close line, then three fixed headings in this order, then 
 - **`## What we're accepting`.** The risks and trades merging commits the owner to: parked residual
   risks, costly disclosed degradations (§ Disclosed degradations sorts them), deferred DoD rows, and
   any direct question the builder has for the owner. The omission floor's three rows are keyed on
-  severity, not on the disposition label. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
+  severity, not on the disposition label. Each finding the review record leaves for the owner (its
+  `leftForOwner` list) gets one line here that carries its record id, byte for byte, and its title, with
+  its consequence around them: a paraphrase that drops the id does not name it. Every break-it test the review record shows as
+  `not run: transit-redacted` is named here as a missing proof. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
 - **`## How to see it`.** On a show-it PR, read the project's `## Show-it surface` declaration in
   `core.md` for the level and shape, then carry the concrete instance here. An absent declaration
   means level `none`, disclosed. The section carries the entry point (the URL or the command) and
@@ -156,7 +159,11 @@ too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs
 re-run until it prints `"ok": true`; once your lane ends, nobody can.
 
 Before the ready marking, also run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/vet_slot.py" handback --pr <n>
---repo <owner/name>` on the pushed PR. On a stacked layer it refuses `stack-not-caught-up`, naming the
+--repo <owner/name>` on the pushed PR, after its review record is written. It reads the latest review
+record and refuses `leftover-not-accepted`, naming each missing id with its title, while *What we're
+accepting* does not name every `leftForOwner` finding by its record id and title in one line, and
+`review-record-unreadable` when no record can be read; the advisor's READY slot write runs the same
+check (`lib/leftover_accepting.py`, its one home). On a stacked layer it refuses `stack-not-caught-up`, naming the
 catch-up step (`rubric/native-stacks.md` § How a stack stays current), while the PR's pushed head is
 behind its lower layer's current head, or `stack-lower-unreadable` when that head cannot be read.
 
