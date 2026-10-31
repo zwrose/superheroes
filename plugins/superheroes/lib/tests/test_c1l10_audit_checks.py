@@ -333,6 +333,15 @@ def test_k4_changed_unexplained_when_the_commit_is_not_the_change_the_session_ex
     assert facts["match"] == "changed-unexplained" and facts["committedTest"] == WEAKER_TEST
 
 
+def test_k4_a_recorded_change_with_no_kept_original_never_reads_same(tmp_path):
+    # axis: a recorded change with no kept original reads changed-unexplained, never same, even when the commit equals the rewritten text
+    finding = _finding(content=WEAKER_TEST, changed_why=WHY)
+    root, sha = _repo_with(tmp_path, WEAKER_TEST)
+    facts = RD._break_it_target_facts({}, {"repoRoot": str(root)}, finding, sha)
+    assert facts["reviewerTest"] is None
+    assert facts["match"] == "changed-unexplained"
+
+
 def test_k4_changed_unexplained_when_a_fixer_edits_a_test_nobody_changed(tmp_path):
     facts = _facts(tmp_path, WEAKER_TEST, _finding())
     assert facts["match"] == "changed-unexplained"
@@ -356,14 +365,21 @@ def test_k4_missing_when_git_cannot_be_read(tmp_path):
 
 
 def test_k4_the_target_row_carries_breakIt_read_at_the_fix_fold_head(tmp_path):
-    root, sha = _repo_with(tmp_path, ROLE_TEST)
+    # the recorded fix commit holds the weakened test; HEAD then moves on to a commit restoring the role's test
+    root, sha = _repo_with(tmp_path, WEAKER_TEST)
+    (root / TEST_PATH).write_text(ROLE_TEST)
+    _git(root, "add", "-A")
+    _git(root, *_ID, "commit", "-q", "-m", "restore")
+    assert _git(root, "rev-parse", "HEAD") != sha
     cfg = {"repoRoot": str(root), "fixerVendor": "claude", "vendors": ["claude", "codex"]}
     state = RD.new_state(cfg)
     state["round"] = 2
     state["rounds"] = {"1": {"fixFoldHead": sha}}
     state["fixBatch"] = [_finding()]
     (target,) = RD._audit_targets(state, cfg, {})
-    assert target["breakIt"]["match"] == "same" and target["breakIt"]["path"] == TEST_PATH
+    assert target["breakIt"]["path"] == TEST_PATH
+    assert target["breakIt"]["committedTest"] == WEAKER_TEST
+    assert target["breakIt"]["match"] == "changed-unexplained"
     assert RD._audit_head(state, cfg) == sha
     # a finding that carries no test has no `breakIt`
     state["fixBatch"] = [{"title": "plain", "file": "f.py", "line": 1, "severity": "Important"}]
@@ -485,3 +501,47 @@ def test_k6_a_copy_that_already_holds_the_version_keeps_it():
     copy_ = _finding(reviewer_test="the test role's original")
     RD._rewrite_break_it_copy(copy_, _block_text(FIXED_TEST), _record(), WHY)
     assert copy_[RD.REVIEWER_TEST_FIELD] == "the test role's original"
+
+
+# --- K4b: formatting and relocation read as the same test (finding v0, round 8) ---------------------------------
+
+def _repo_with_base(tmp_path, files):
+    """A scratch repository with a base commit and a head commit adding `files` ({path: text}); returns (root, base, head)."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    _git(root, "init", "-q")
+    (root / "README.md").write_text("fixture\n")
+    _git(root, "add", "-A")
+    _git(root, *_ID, "commit", "-q", "-m", "base")
+    base = _git(root, "rev-parse", "HEAD")
+    for rel, text in files.items():
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text(text)
+    _git(root, "add", "-A")
+    _git(root, *_ID, "commit", "-q", "-m", "fix")
+    return root, base, _git(root, "rev-parse", "HEAD")
+
+
+def _facts_with_base(root, base, head, finding):
+    return RD._break_it_target_facts({}, {"repoRoot": str(root), "baseRef": base}, finding, head)
+
+
+def test_k4b_a_formatter_only_change_reads_same(tmp_path):
+    # axis: a formatter-only change to the reviewer's test is the same test, never changed-unexplained
+    formatted = "def test_charge():\n    assert charge( 2 )==2\n"
+    root, base, head = _repo_with_base(tmp_path, {TEST_PATH: formatted})
+    facts = _facts_with_base(root, base, head, _finding())
+    assert facts["match"] == "same"
+
+
+def test_k4b_an_unchanged_test_moved_to_another_path_reads_same(tmp_path):
+    # axis: a supported relocation of the unchanged test is the same test, never missing
+    root, base, head = _repo_with_base(tmp_path, {"tests/test_moved.py": ROLE_TEST})
+    facts = _facts_with_base(root, base, head, _finding())
+    assert facts["match"] == "same"
+
+
+def test_k4b_a_weakened_test_still_reads_changed_unexplained(tmp_path):
+    root, base, head = _repo_with_base(tmp_path, {TEST_PATH: WEAKER_TEST})
+    facts = _facts_with_base(root, base, head, _finding())
+    assert facts["match"] == "changed-unexplained"
