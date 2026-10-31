@@ -66,7 +66,7 @@ import { weeklyTotal } from './weekly'
 const eats = [{ day: 'mon', kcal: 500 }, { day: 'tue', kcal: 700 }]
 const kcal = eats.map(e => e.kcal)
 
-describe('weekly eats', () => {
+describe('meal plan', () => {
   it('sums a week of eats', () => {
     expect(weeklyTotal(kcal)).toBe(1200);
   });
@@ -82,7 +82,7 @@ const eats = [
 ];
 const kcal = eats.map((e) => e.kcal);
 
-describe("weekly eats", () => {
+describe("meal plan", () => {
   it("sums a week of eats", () => {
     expect(
       weeklyTotal(kcal),
@@ -95,7 +95,7 @@ describe("weekly eats", () => {
 HOST_IMPORTS = 'import { describe, expect, it } from "vitest";\nimport { planWeek, weeklyTotal } from "./weekly";\n'
 HOST_OWN = '\nit("plans seven days", () => {\n  expect(planWeek()).toHaveLength(7);\n});\n\n'
 HOST_BODY = FORMATTED.split('import { weeklyTotal } from "./weekly";\n\n', 1)[1].replace(
-    '"weekly eats"', '"weekly eats (folded)"').replace('"sums a week of eats"', '"sums a week of eats (folded)"')
+    '"meal plan"', '"meal plan (folded)"').replace('"sums a week of eats"', '"sums a week of eats (folded)"')
 
 
 def _host(imports=HOST_IMPORTS, before=""):
@@ -136,7 +136,7 @@ def _check(repo, base, head, record, runner=None):
     return break_it.check_kept(str(repo), base, head, record, **kwargs)
 
 
-# ---- (a) the weekly-eats shape: folded into a host that already has vitest imports and its own it() ----
+# ---- (a) the consuming project's shape: folded into a host that already has vitest imports and its own it() ----
 
 def test_a_ts_test_folded_into_a_host_with_merged_vitest_imports_is_kept_and_runs_the_host(repo):
     base, head = _stage(repo, {HOST: _host()})
@@ -148,7 +148,7 @@ def test_a_ts_test_folded_into_a_host_with_merged_vitest_imports_is_kept_and_run
     assert [c["run"] for c in calls] == ["npx vitest run %s" % HOST]
     assert calls[0]["path"] == HOST
     assert break_it_body.locate(ORIG, OWN, [(HOST, _host())])["titles"] == [
-        ("weekly eats", "weekly eats (folded)"), ("sums a week of eats", "sums a week of eats (folded)")]
+        ("meal plan", "meal plan (folded)"), ("sums a week of eats", "sums a week of eats (folded)")]
 
 
 # ---- (a2) the pytest rename rules are the Python front's alone ---------------------------------------------
@@ -239,7 +239,7 @@ def test_a_prefilter_passing_unparseable_candidate_without_a_match_is_unresolved
 
 
 def test_two_matching_copies_are_ambiguous(repo):
-    base, head = _stage(repo, {"web/a.test.ts": ORIG.replace("weekly eats", "copy a"), "web/b.test.ts": FORMATTED})
+    base, head = _stage(repo, {"web/a.test.ts": ORIG.replace("meal plan", "copy a"), "web/b.test.ts": FORMATTED})
     calls = []
     assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "match-ambiguous")
     assert calls == []
@@ -483,7 +483,7 @@ def test_a_ts_rename_whose_command_carries_only_env_pairs_and_runner_words_is_ke
 
 
 MOVED = "web/eats-moved.test.ts"
-RETITLED = FORMATTED.replace('"weekly eats"', '"weekly eats renamed"')
+RETITLED = FORMATTED.replace('"meal plan"', '"meal plan renamed"')
 _SHAPES = {
     "move-same-title": lambda: {MOVED: FORMATTED},
     "retitle-same-path": lambda: {OWN: RETITLED},

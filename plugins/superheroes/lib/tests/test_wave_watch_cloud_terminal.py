@@ -473,7 +473,7 @@ def _only_park(comments):
 
 
 _RECORDED_PARKS = [
-    pytest.param(5, "parked on a second owner gate", "Expected: 240 minutes", 600, id="weekly-eats-1996"),
+    pytest.param(5, "parked on a second owner gate", "Expected: 240 minutes", 600, id="consumer-1996"),
     pytest.param(
         3, "stopped on the advisor's order (see the park comment below)", "Expected: 60 minutes", 1490,
         id="superheroes-2071",
