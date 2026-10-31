@@ -823,7 +823,7 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             # axis: a finding the round's compile dropped stays under refused and is not listed a second time — see bite-proof record c1l1_wo_b_session_seam
             # axis: a break-it proposal whose test passed was dropped before compile and is no defect; kept for a session that began under the earlier rules, since the current intercept drops nothing — see bite-proof record c1l1_wo_b_session_seam
             # axis: that rule covers only the test role's own panel proposal (panel phase, test-role seat, break-it taxonomy) — see bite-proof record c1l1_wo_b_session_seam
-            settled = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f) \
+            settled = phase == round_phases.P_PANEL and round_phases.seat_lens(seat) == break_it.ROLE and break_it.is_break_it(f) \
                 and (rnd, f["title"], _file_key(f.get("file"))) in passed
             if _drop_key(rnd, f["title"], f.get("file"), f.get("line")) in dropped or settled:
                 continue

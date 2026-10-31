@@ -365,3 +365,19 @@ def test_a_proven_copy_in_a_sliced_change_is_named_in_no_slice_seats_order_or_sc
             ph = _placeholders(state, sdir, "%s:%s" % (lens, sl["id"]))
             assert copy_path not in ph["SLICE_SCOPE_LINE"]
             assert copy_path not in _read(ph["DIFF_PATH"])
+
+
+# --- the session record reads a slice seat by its lens ------------------------------------------------------------
+
+@pytest.mark.parametrize("seat, listed", [("test-role", False), ("test-role:s1", False), ("code-reviewer:s1", True)],
+                         ids=["whole-change-test-role", "slice-test-role", "slice-code-reviewer"])
+def test_a_passed_break_it_proposal_from_a_test_role_slice_seat_is_settled_like_the_whole_change_seats(monkeypatch, seat,
+                                                                                                    listed):
+    import review_record_session as rs
+    proposal = {"title": "boundary breaks", "file": "src/a.py", "line": 1, "taxonomy": "break-it-test",
+                "severity": "Important", "consequence": "a bad input gets through"}
+    monkeypatch.setattr(rs, "_raised_reports", lambda *a, **k: [(RP.P_PANEL, 1, seat, [proposal])])
+    rounds = {"1": {"breakItRuns": [{"outcome": "passed", "title": "boundary breaks", "file": "src/a.py"}]}}
+    rows = rs._unfolded("unused", [], rounds, [])
+    assert [r["reviewer"] for r in rows] == ([seat] if listed else [])
+
