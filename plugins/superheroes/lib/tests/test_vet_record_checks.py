@@ -33,9 +33,10 @@ _RECORD_FIELDS = ("finalCommit.sha", "finalCommit.source", "ci.state", "ci.sha",
 _ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling", "transitDamage"})
 _TOKEN = re.compile(r"^[a-z][A-Za-z]*(\.[A-Za-z]+)*$")
 _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findings", "consequence": "findings",
-               "outcome": "findings", "reason": "findings"}
+               "outcome": "findings", "reason": "findings", "source": "provenCopies"}
 _RETIRED = ("certified-loop", "certified loop", "seat-provenance parity")
-_ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review")
+_ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review",
+              "The proven copies match their source")
 _ROW_NON_OUTCOMES = frozenset({"review-record-missing", "review-record-unreadable", "digest-unavailable"})
 _HYPHENATED = re.compile(r"^[a-z]+(-[a-z]+)+$")
 
@@ -105,6 +106,14 @@ def _rebuild(name):
     acct, rd, _ = _scenarios()[name]
     if acct is None:
         return None
+    return {**rr.build_record(acct, rd), "writtenAt": _FIXED_WRITTEN_AT}
+
+
+def _rebuild_with_proven_copies():
+    """pr-d's record with the optional `provenCopies` the writer builds only when the account carries it."""
+    acct, rd, _ = _scenarios()["pr-d"]
+    acct = {**acct, "provenCopies": [{"file": "plugins/example/copy.md", "source": "plugins/example/source.md",
+                                      "sha256": "a" * 64}]}
     return {**rr.build_record(acct, rd), "writtenAt": _FIXED_WRITTEN_AT}
 
 
@@ -212,7 +221,7 @@ def test_fixtures_carry_the_facts_they_stand_for():
 def test_record_checks_section_names_real_record_fields():
     # axis: a row of the section naming a field the record does not have
     section = _section()
-    record = _rebuild("pr-d")
+    record = _rebuild_with_proven_copies()
     for path in _RECORD_FIELDS:
         assert f"`{path}`" in section, f"the section does not name `{path}` in backticks"
         assert _resolves(record, path), f"`{path}` is not a field of a record the writer builds"
@@ -230,7 +239,7 @@ def test_record_checks_section_outcomes_are_the_schema_spellings():
         assert f"`{outcome}`" in section, f"the section does not name `{outcome}`"
 
 
-def test_record_checks_rows_are_the_three_named_checks():
+def test_record_checks_rows_are_the_four_named_checks():
     # axis: a check row renamed, removed or added
     names = tuple(re.match(r"\| \*\*(.+?)\*\*", row).group(1) for row in _section_rows())
     assert names == _ROW_NAMES

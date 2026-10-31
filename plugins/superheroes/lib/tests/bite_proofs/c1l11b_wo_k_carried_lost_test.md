@@ -323,3 +323,111 @@ FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_d_exempt_and_new_issues.py::
 - The two earlier legs of `_break_it_kept_step` (dropped at compile, working-copy restore failed) are not covered here.
 - `_carried_findings`' marker assignment (`round_driver.py:1569`) and the `_carried_test_lost_unresolved` selector (`round_driver.py:1670`) were not neutralized; c7 passes against them, but no neutralization of either was run.
 - K1's first (mapping) capture is incomplete as stated; its decisive node c7 is shown complete from a second run.
+
+---
+
+# C1-L12 addendum (build #2216, entries for C1-L11f's review-loop axis lines)
+
+**Provenance:** implementer WO-4, order id `c1l12-wo4`, worktree `/home/user/wo4`, branch `c1l12-wo4`, head at dispatch `86e05768`. Each entry is **re-derived at `86e05768`** by this order: the fixers' own red/green lived in their review sessions' folders on a container that has been reclaimed, and PR #2283's review records and round comments carry no break-it red/green for these lines, so none is quoted. A13 was added by fixer commit `35644832`, A14 by `26b2256f`. Each guarded element was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`); after each restore `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`. Every run is `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/shpyc-wo4 -m pytest "<node id>" -q -p no:cacheprovider`. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. Nothing is redacted: no credential-like text appears (the `rr1:...` strings are finding keys; `/tmp/claude-0/...` paths are pytest temp directories). Every capture is under 32 KiB. Both nodes live in `test_c1l11f_wo_d_exempt_and_new_issues.py`.
+
+| ID | Guarded element | Axis (verbatim) | Proving node |
+|---|---|---|---|
+| A13 | `_break_it_kept_step`, `exempt_rows.append({"findingKey": key, ... "outcome": "ruled-out-of-scope", ...})` (`round_driver.py:9021`) | an exempt carried lost-test finding gets its ruled-out-of-scope row, so the record reports the owner's ruling and never "fixed and audited" — see bite-proof record c1l11b_wo_k_carried_lost_test | `test_a_an_exempt_carried_lost_test_finding_gets_its_ruled_out_of_scope_row_and_the_record_reports_the_ruling` |
+| A14 | `_break_it_kept_step`, `if exempt_rows:` before `_record_round(state, "breakItKept", exempt_rows)` in the `if lost:` branch (`round_driver.py:9026`) | the exempt rows are persisted before a mixed-case park, so the record reports the owner's ruling for the waived finding whatever happens next — see bite-proof record c1l11b_wo_k_carried_lost_test | `test_c_two_lost_test_findings_one_exempt_and_one_not_park_naming_the_one_that_is_not` |
+
+## A13
+
+**Neutralization:** `        exempt_rows.append({"findingKey": key, "path": None, "outcome": "ruled-out-of-scope",` became `        [].append({"findingKey": key, "path": None, "outcome": "ruled-out-of-scope",` (the row is built and thrown away; `exempt_rows` stays empty).
+
+**Raw red** (`test_a_an_exempt_carried_lost_test_finding_gets_its_ruled_out_of_scope_row_and_the_record_reports_the_ruling`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_an_exempt_carried_lost_test_finding_gets_its_ruled_out_of_scope_row_and_the_record_reports_the_ruling _
+
+parked = []
+
+    def test_a_an_exempt_carried_lost_test_finding_gets_its_ruled_out_of_scope_row_and_the_record_reports_the_ruling(parked):
+        row = _lost_row()
+        state = _state(row)
+        key = RD._finding_identity_key(row)
+        _rule(state, row)
+        _audit(state, row)
+        assert RD._break_it_kept_step(state, {}) is False
+        kept = [r for rec in state["rounds"].values() for r in rec.get("breakItKept") or []]
+>       assert [(r["findingKey"], r["outcome"], r["ruledBy"], r["ruledAt"]) for r in kept] == [
+            (key, "ruled-out-of-scope", PROV["ruledBy"], PROV["ruledAt"])]
+E       AssertionError: assert [] == [('rr1:683019...0T12:00:00Z')]
+E         
+E         Right contains one more item: ('rr1:6830197dfc65d27498e74a816d12b05c', 'ruled-out-of-scope', 'zach', '2026-10-20T12:00:00Z')
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_d_exempt_and_new_issues.py:89: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_d_exempt_and_new_issues.py::test_a_an_exempt_carried_lost_test_finding_gets_its_ruled_out_of_scope_row_and_the_record_reports_the_ruling
+1 failed in 1.68s
+```
+
+The red is on the claimed axis: the exempt finding is not parked (`is False` passes) but the record carries no `ruled-out-of-scope` row naming the owner's ruling.
+
+**Restore** (the inverse Edit): `        [].append({"findingKey": key, ...` back to `        exempt_rows.append({"findingKey": key, "path": None, "outcome": "ruled-out-of-scope",`. **Restore receipt:** the line is back as `        exempt_rows.append({"findingKey": key, "path": None, "outcome": "ruled-out-of-scope",`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 1.64s
+```
+
+## A14
+
+**Neutralization:** `        if exempt_rows:` (the one above `_record_round(state, "breakItKept", exempt_rows)` and `_park_cannot_certify(`) became `        if exempt_rows and False:`.
+
+**Raw red** (`test_c_two_lost_test_findings_one_exempt_and_one_not_park_naming_the_one_that_is_not`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_c_two_lost_test_findings_one_exempt_and_one_not_park_naming_the_one_that_is_not _
+
+parked = ["break-it test not kept: the earlier session's test for rr1:6463314fe6aec00a3b6acd67c21837e3 was lost and no reviewer attached it again"]
+
+    def test_c_two_lost_test_findings_one_exempt_and_one_not_park_naming_the_one_that_is_not(parked):
+        exempt = _lost_row(27, title="the edited value is wrong")
+        owed = _lost_row(3, title="the first value is wrong")
+        assert RD._finding_identity_key(exempt) != RD._finding_identity_key(owed)
+        for rows in ((exempt, owed), (owed, exempt)):
+            del parked[:]
+            state = _state(*rows)
+            _rule(state, exempt)
+            _audit(state, exempt)
+            assert RD._break_it_kept_step(state, {}) is True
+            assert len(parked) == 1 and RD._finding_identity_key(owed) in parked[0], parked
+            assert RD._finding_identity_key(exempt) not in parked[0], parked
+            # the waived finding's ruling is recorded even though the other one parked
+            key = RD._finding_identity_key(exempt)
+            kept = [r for rec in state["rounds"].values() for r in rec.get("breakItKept") or []]
+>           assert [(r["findingKey"], r["outcome"]) for r in kept] == [(key, "ruled-out-of-scope")], kept
+E           AssertionError: []
+E           assert [] == [('rr1:683019...ut-of-scope')]
+E             
+E             Right contains one more item: ('rr1:6830197dfc65d27498e74a816d12b05c', 'ruled-out-of-scope')
+E             Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_d_exempt_and_new_issues.py:145: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_d_exempt_and_new_issues.py::test_c_two_lost_test_findings_one_exempt_and_one_not_park_naming_the_one_that_is_not
+1 failed in 1.79s
+```
+
+The red is on the claimed axis: the park still happens and names only the owed finding (the earlier assertions pass), but the exempt finding's ruling row was not persisted before the park.
+
+**Restore** (the inverse Edit): `        if exempt_rows and False:` back to `        if exempt_rows:`. **Restore receipt:** the line is back as `        if exempt_rows:` above `            _record_round(state, "breakItKept", exempt_rows)` and `        _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 1.66s
+```

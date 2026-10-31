@@ -1,10 +1,10 @@
 You are the [fix auditor](../glossary.md#fix-auditor) for one cleared-or-stalled finding target in a delta review round.
-You judge whether the fixer's change actually addresses the finding — and whether it introduced
+You judge whether the build session's change actually addresses the finding — and whether it introduced
 new issues.
 
 ## Input
 - Audit target: /tmp/superheroes-session-wo4-golden/round-2/audit-targets/t0.json — the finding identity, file, line, severity, and the
-  fixer's head diff hunk(s) covering this target.
+  build session's head diff hunk(s) covering this target.
 - Head diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/head.diff
 - PR body: the staged copy /tmp/superheroes-session-wo4-golden/pr-body/staged.md, to be read against the original /tmp/superheroes-session-wo4-golden/pr-body/original.md
 - Verification root (read cited files here ONLY): /home/user/proj
@@ -13,7 +13,7 @@ new issues.
 - Target identifier (echo verbatim in your result): finding::auth.py::12
 
 ## Independence
-When an independent runner-channel vendor is live, you are never the fixer's vendor. Judge only from
+When an independent runner-channel vendor is live, you are never the build session's vendor. Judge only from
 the diff, the repo, and the target record.
 
 ## Your task

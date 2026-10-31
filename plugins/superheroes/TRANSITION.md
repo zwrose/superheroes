@@ -211,6 +211,17 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 
 - **After switching.** **Nothing is owed: a new spec now goes where the project's confirmed doc policy says, and an empty work-item folder an earlier run left in the project store can be ignored.** See [Specs: a new spec follows the doc policy](#specs-a-new-spec-follows-the-doc-policy).
 
+- **After switching.** **Nothing is owed at once: the gardening pass reads two revisit checks from its next run, and a false PR claim is logged from the next time an act finds one.** See [Gardening: two revisit checks and a false PR claim count](#gardening-two-revisit-checks-and-a-false-pr-claim-count).
+
+### Gardening: two revisit checks and a false PR claim count
+
+- **A fifth misses-log class.** The misses log gains a fifth class, the [false PR claim](rubric/glossary.md#false-pr-claim). The act that finds one logs it once per claim, in a review escape's entry shape plus two lines: the marker line ``false PR claim: <the claim> — shown false by <what showed it false>`` and a line naming what would have caught it.
+- **The tally counts it apart.** `review_learning.py tally` reads an escape input item with `"marker": "false-pr-claim"` as a false PR claim and returns the count as `falsePrClaims`, never in `escapes`. It is `0` when there are none and `null` wherever `escapes` reads `null`. A `marker` with any other value reads as malformed, so the tally is incomplete.
+- **A new `seating` verb.** `review_learning.py seating --row <file>` shows the security and premortem seats' finding outcomes, tokens, and minutes. A number the row does not give, or gives as null, a boolean, a negative, or a non-number, reads `"unmeasured"` and is listed under `unmeasured`, never `0`.
+- **Two checks at each pass.** Each gardening pass records, for the false-claim check and the seating check, whether it was met and, when it was, that it went to the owner as a calibration proposal. A met check reopens a decision for the owner to rule on. It changes nothing by itself, and no target or gate on rounds, tokens, or minutes is set.
+- **The vet.** The vet now settles findings left open at the round cap, records each cap choice in the receipt, and checks a PR description's claims one by one.
+- **Nothing is owed at once.** A tally caller that does not read `falsePrClaims` is unaffected, and a misses log with no false PR claim counts zero.
+
 - **After switching.** **Nothing is owed: a launch whose ledger append reports failure is now read back, so a line that did land is no longer treated as lost and a worktree is removed only when no live reservation can name it.** See [Launcher: a reservation whose append reports failure is read back](#launcher-a-reservation-whose-append-reports-failure-is-read-back).
 
 - **After switching.** **Nothing is owed: the review setup's verify-command doctor no longer calls a profile stale over a path its verify command may not run.** See [Verify-command doctor: check 6 fails safe](#verify-command-doctor-check-6-fails-safe).

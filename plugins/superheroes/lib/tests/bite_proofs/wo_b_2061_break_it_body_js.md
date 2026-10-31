@@ -1292,3 +1292,264 @@ pytest exit: 1
 1 passed in 0.24s
 pytest exit: 0
 ```
+
+---
+
+# C1-L12 addendum (build #2216, entries for C1-L11f's review-loop axis lines)
+
+**Provenance:** implementer WO-4, order id `c1l12-wo4`, worktree `/home/user/wo4`, branch `c1l12-wo4`, head at dispatch `86e05768`. Each entry is **re-derived at `86e05768`** by this order: the fixers' own red/green lived in their review sessions' folders on a container that has been reclaimed, and PR #2283's review records and round comments carry no break-it red/green for these lines, so none is quoted. A2, A3, A4 and A5 were all added by fixer commit `dd84d915`, as `# axis:` comments in `break_it.retention_command`. A2 also cites `wo_a_2053_break_it_body`, which carries a one-line pointer to the A2 entry here. Each guarded element was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`); after each restore `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`. Every run is `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/shpyc-wo4 -m pytest "<node id>" -q -p no:cacheprovider`. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. Nothing is redacted: no secrets, tokens or URLs appear (the `/tmp/claude-0/...` paths are pytest temp directories). Every capture is under 32 KiB.
+
+| ID | Guarded element | Axis (verbatim) | Proving node |
+|---|---|---|---|
+| A2 | `retention_command`, `and _collection_overrides(repo_root, head)` (`break_it.py:1818`) | a renamed pytest test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes; pytest configuration says nothing about a vitest or jest run, so only a test read by a pytest-collected front is gated — see bite-proof records wo_a_2053_break_it_body and wo_b_2061_break_it_body_js | `test_break_it_body_2053.py::test_a_rename_is_unresolved_when_pytest_ini_sets_python_functions` |
+| A3 | `retention_command`, `and _js_collection_overrides(repo_root, head)` (`break_it.py:1821`) | a renamed JS/TS test is accepted only when the repository at the reviewed head has no root vitest/vite/jest config file and no package.json jest or vitest key (an unreadable package.json fails closed), because a configured testNamePattern could skip the new title while another test passes; the gate is the JS front's own (``JS_COLLECTION``) — see bite-proof record wo_b_2061_break_it_body_js | `test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved` (all 8 parameters) |
+| A4 | `retention_command`, `and _carries_option_token(record_command)` (`break_it.py:1824`) | a renamed JS/TS test's run command may carry no option token at all (nothing starting with `-`, after the leading VAR=value pairs), because --config, -c, --root, --dir, --project or --workspace can select a configuration the root listing above never reads, which could filter the new title out; an unrenamed moved test is unaffected — see bite-proof record wo_b_2061_break_it_body_js | `test_break_it_body_js_e2e_2061.py::test_a_ts_rename_whose_command_carries_an_option_reads_unresolved[config]` |
+| A5 | `retention_command`, `and not _calls_runner_directly(record_command)` (`break_it.py:1827`) | a moved or retitled JS/TS test is accepted only when its command calls vitest or jest directly (`vitest`, `jest`, or `npx`/`bunx`/`pnpm exec`/`yarn exec` then one of them), because a package script (`pnpm test`, `npm test`, `node --test`) can carry a name filter that skips the test while another test passes and package.json is never read; a test found at its own path runs its original command unchanged (owner ruling 109 d (a)) — see bite-proof record wo_b_2061_break_it_body_js | `test_break_it_body_js_e2e_2061.py::test_a_moved_or_retitled_ts_test_whose_command_is_not_a_direct_runner_reads_unresolved[pnpm-test-move-same-title]` |
+
+## A2
+
+**Neutralization:** `        if found["titles"] and pytest_collected(record_path) and _collection_overrides(repo_root, head):` became `        if found["titles"] and pytest_collected(record_path) and False and _collection_overrides(repo_root, head):`.
+
+**Raw red** (`test_break_it_body_2053.py::test_a_rename_is_unresolved_when_pytest_ini_sets_python_functions`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_a_rename_is_unresolved_when_pytest_ini_sets_python_functions _______
+
+repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-22/test_a_rename_is_unresolved_wh0/repo')
+
+    def test_a_rename_is_unresolved_when_pytest_ini_sets_python_functions(repo):
+        base, head = _stage(repo, {"pytest.ini": "[pytest]\npython_functions = check_*\n", OWN: FORMATTED.replace("test_x", "test_y")})
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved'...ing-conflict')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_break_it_body_2053.py:585: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_a_rename_is_unresolved_when_pytest_ini_sets_python_functions
+1 failed in 1.00s
+```
+
+The red is on the claimed axis: a renamed pytest test in a repository whose `pytest.ini` sets `python_functions` reads `kept`/`body-match` instead of `unresolved`/`binding-conflict`.
+
+**Restore** (the inverse Edit): `and pytest_collected(record_path) and False and _collection_overrides(repo_root, head):` back to `and pytest_collected(record_path) and _collection_overrides(repo_root, head):`. **Restore receipt:** the line is back as `        if found["titles"] and pytest_collected(record_path) and _collection_overrides(repo_root, head):`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 1.40s
+```
+
+Not separately neutralized (unproven): the `pytest_collected(record_path)` clause (that only a test read by a pytest-collected front is gated; the negative case, a JS test in a repository with a `pytest.ini`, is pinned by the `test_a_ts_rename_in_a_repository_whose_pytest_ini_sets_addopts_is_still_kept` node passing, not run under a neutralization here).
+
+## A3
+
+**Neutralization:** `        if found["titles"] and js_collected(record_path) and _js_collection_overrides(repo_root, head):` became `        if found["titles"] and js_collected(record_path) and False and _js_collection_overrides(repo_root, head):`.
+
+**Raw red** (`test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved`, all 8 parameters). **This capture is incomplete:** the tool that ran the command truncated the middle of its output (`... [4990 characters truncated] ...` in the tool's own words), so the failure blocks for `vite-config` (partly), `vitest-workspace`, `package-jest`, `package-vitest` (and the start of `package-unparseable`) are missing here and are not reconstructed. What follows is the head and the tail exactly as received; the first failure block, the last two and the summary (which lists all 8 failing) are present:
+
+```
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+_ test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[vitest-config] _
+
+repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-25/test_a_ts_rename_in_a_reposito0/repo')
+files = {'vitest.config.ts': 'export default { test: { testNamePattern: /^regression/ } };\n'}
+
+    @pytest.mark.parametrize("files", [
+        pytest.param({"vitest.config.ts": "export default { test: { testNamePattern: /^regression/ } };\n"}, id="vitest-config"),
+        pytest.param({"jest.config.js": "module.exports = {};\n"}, id="jest-config"),
+        pytest.param({"vite.config.mts": "export default {};\n"}, id="vite-config"),
+        pytest.param({"vitest.workspace.json": "[]\n"}, id="vitest-workspace"),
+        pytest.param({"package.json": '{"name": "x", "jest": {"testNamePattern": "regression"}}\n'}, id="package-jest"),
+        pytest.param({"package.json": '{"name": "x", "vitest": {}}\n'}, id="package-vitest"),
+        pytest.param({"package.json": '{"name": "x",\n'}, id="package-unparseable"),
+        pytest.param({"package.json": '["not", "an", "object"]\n'}, id="package-not-an-object"),
+    ])
+    def test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved(repo, files):
+        base, head = _stage(repo, dict(files, **{HOST: _host()}))
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved'...ing-conflict')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:452: AssertionError
+[... the tool's output is truncated here: 4990 characters lost, not reconstructed ...]
+_ test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[package-unparseable] _
+
+repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-25/test_a_ts_rename_in_a_reposito6/repo')
+files = {'package.json': '{"name": "x",\n'}
+
+    @pytest.mark.parametrize("files", [
+        pytest.param({"vitest.config.ts": "export default { test: { testNamePattern: /^regression/ } };\n"}, id="vitest-config"),
+        pytest.param({"jest.config.js": "module.exports = {};\n"}, id="jest-config"),
+        pytest.param({"vite.config.mts": "export default {};\n"}, id="vite-config"),
+        pytest.param({"vitest.workspace.json": "[]\n"}, id="vitest-workspace"),
+        pytest.param({"package.json": '{"name": "x", "jest": {"testNamePattern": "regression"}}\n'}, id="package-jest"),
+        pytest.param({"package.json": '{"name": "x", "vitest": {}}\n'}, id="package-vitest"),
+        pytest.param({"package.json": '{"name": "x",\n'}, id="package-unparseable"),
+        pytest.param({"package.json": '["not", "an", "object"]\n'}, id="package-not-an-object"),
+    ])
+    def test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved(repo, files):
+        base, head = _stage(repo, dict(files, **{HOST: _host()}))
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved'...ing-conflict')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:452: AssertionError
+_ test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[package-not-an-object] _
+
+repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-25/test_a_ts_rename_in_a_reposito7/repo')
+files = {'package.json': '["not", "an", "object"]\n'}
+
+    @pytest.mark.parametrize("files", [
+        pytest.param({"vitest.config.ts": "export default { test: { testNamePattern: /^regression/ } };\n"}, id="vitest-config"),
+        pytest.param({"jest.config.js": "module.exports = {};\n"}, id="jest-config"),
+        pytest.param({"vite.config.mts": "export default {};\n"}, id="vite-config"),
+        pytest.param({"vitest.workspace.json": "[]\n"}, id="vitest-workspace"),
+        pytest.param({"package.json": '{"name": "x", "jest": {"testNamePattern": "regression"}}\n'}, id="package-jest"),
+        pytest.param({"package.json": '{"name": "x", "vitest": {}}\n'}, id="package-vitest"),
+        pytest.param({"package.json": '{"name": "x",\n'}, id="package-unparseable"),
+        pytest.param({"package.json": '["not", "an", "object"]\n'}, id="package-not-an-object"),
+    ])
+    def test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved(repo, files):
+        base, head = _stage(repo, dict(files, **{HOST: _host()}))
+        calls = []
+>       assert _got(_check(repo, base, head, _record(), _stub(calls))) == ("unresolved", "binding-conflict")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved'...ing-conflict')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:452: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[vitest-config]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[jest-config]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[vite-config]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[vitest-workspace]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[package-jest]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[package-vitest]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[package-unparseable]
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_in_a_repository_with_js_test_configuration_reads_unresolved[package-not-an-object]
+8 failed in 1.06s
+```
+
+The red is on the claimed axis: each of the 8 configurations (a root vitest, jest or vite config file, a vitest workspace file, a package.json `jest` or `vitest` key, an unparseable package.json, a package.json that is not an object) reads `kept`/`body-match` instead of `unresolved`/`binding-conflict`; the same assertion fails in every block that is visible.
+
+**Restore** (the inverse Edit): `and js_collected(record_path) and False and _js_collection_overrides(repo_root, head):` back to `and js_collected(record_path) and _js_collection_overrides(repo_root, head):`. **Restore receipt:** the line is back as `        if found["titles"] and js_collected(record_path) and _js_collection_overrides(repo_root, head):`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+........                                                                 [100%]
+8 passed in 0.85s
+```
+
+Not separately neutralized (unproven): the `js_collected(record_path)` clause, and each of the 8 configurations on its own (the neutralization defeats the whole gate, so the 8 reds share one failure mode: the gate does not refuse).
+
+## A4
+
+**Neutralization:** `        if found["titles"] and js_collected(record_path) and _carries_option_token(record_command):` became `        if found["titles"] and js_collected(record_path) and False and _carries_option_token(record_command):`.
+
+**Raw red** (one parameter of the order's node, `test_a_ts_rename_whose_command_carries_an_option_reads_unresolved[config]`, chosen so that the capture is complete; the other four parameters, `short-config`, `root`, `project` and `config-equals`, were not run):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_a_ts_rename_whose_command_carries_an_option_reads_unresolved[config] ___
+
+repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-27/test_a_ts_rename_whose_command0/repo')
+command = 'npx vitest run --config web/vitest.config.ts web/eats.test.ts'
+
+    @pytest.mark.parametrize("command", [
+        "npx vitest run --config web/vitest.config.ts %s" % OWN,
+        "npx vitest run -c web/vitest.config.ts %s" % OWN,
+        "npx vitest run --root web %s" % OWN,
+        "npx vitest run --project unit %s" % OWN,
+        "npx vitest run --config=web/vitest.config.ts %s" % OWN,
+    ], ids=["config", "short-config", "root", "project", "config-equals"])
+    def test_a_ts_rename_whose_command_carries_an_option_reads_unresolved(repo, command):
+        base, head = _stage(repo, {"web/vitest.config.ts": "export default { test: { testNamePattern: /^regression/ } };\n", HOST: _host()})
+        calls = []
+>       assert _got(_check(repo, base, head, _record(command=command), _stub(calls))) == ("unresolved", "binding-conflict")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved'...ing-conflict')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:473: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_ts_rename_whose_command_carries_an_option_reads_unresolved[config]
+1 failed in 1.01s
+```
+
+The red is on the claimed axis: the configuration sits in `web/`, which the root listing the A3 gate reads never sees, so only the option-token guard can refuse it; with the guard gone the rename reads `kept`/`body-match`.
+
+**Restore** (the inverse Edit): `and js_collected(record_path) and False and _carries_option_token(record_command):` back to `and js_collected(record_path) and _carries_option_token(record_command):`. **Restore receipt:** the line is back as `        if found["titles"] and js_collected(record_path) and _carries_option_token(record_command):`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```
+
+Not separately neutralized (unproven): the other four parameters (`short-config`, `root`, `project`, `config-equals`) under the neutralization; the claim that "an unrenamed moved test is unaffected" (the `found["titles"]` clause).
+
+## A5
+
+**Neutralization:** `        if (found["titles"] or found["path"] != record_path) and js_collected(record_path) and not _calls_runner_directly(record_command):` became `        if (found["titles"] or found["path"] != record_path) and js_collected(record_path) and False and not _calls_runner_directly(record_command):`.
+
+**Raw red** (`test_a_moved_or_retitled_ts_test_whose_command_is_not_a_direct_runner_reads_unresolved[pnpm-test-move-same-title]`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_moved_or_retitled_ts_test_whose_command_is_not_a_direct_runner_reads_unresolved[pnpm-test-move-same-title] _
+
+repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-29/test_a_moved_or_retitled_ts_te0/repo')
+runner = 'pnpm test', shape = 'move-same-title'
+
+    @pytest.mark.parametrize("shape", sorted(_SHAPES))
+    @pytest.mark.parametrize("runner", [
+        "pnpm vitest run", "pnpm test", "npm run test", "yarn test", "npm test", "yarn vitest run", "bun test",
+        "node --test", "pnpm run vitest", "pnpm exec echo", "npx cowsay", "pnpm exec",
+    ], ids=lambda r: r.replace(" ", "-"))
+    def test_a_moved_or_retitled_ts_test_whose_command_is_not_a_direct_runner_reads_unresolved(repo, runner, shape):
+        base, head = _stage(repo, _SHAPES[shape]())
+        calls = []
+        record = _record(command="%s %s" % (runner, OWN))
+>       assert _got(_check(repo, base, head, record, _stub(calls))) == ("unresolved", "binding-conflict")
+E       AssertionError: assert ('kept', 'body-match') == ('unresolved'...ing-conflict')
+E         
+E         At index 0 diff: 'kept' != 'unresolved'
+E         Use -v to get more diff
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py:502: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_break_it_body_js_e2e_2061.py::test_a_moved_or_retitled_ts_test_whose_command_is_not_a_direct_runner_reads_unresolved[pnpm-test-move-same-title]
+1 failed in 0.42s
+```
+
+The red is on the claimed axis: a moved test (same title) whose command is the package script `pnpm test` reads `kept`/`body-match` instead of `unresolved`/`binding-conflict`.
+
+**Restore** (the inverse Edit): `and js_collected(record_path) and False and not _calls_runner_directly(record_command):` back to `and js_collected(record_path) and not _calls_runner_directly(record_command):`. **Restore receipt:** the line is back as `        if (found["titles"] or found["path"] != record_path) and js_collected(record_path) and not _calls_runner_directly(record_command):`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 0.33s
+```
+
+Not separately neutralized (unproven): the other 23 parameters of the node (only `pnpm-test-move-same-title` was run under the neutralization), the `retitle-same-path` shape, the `found["titles"] or found["path"] != record_path` condition, and the "a test found at its own path runs its original command unchanged" half (pinned by `test_a_ts_test_at_its_own_path_keeps_a_package_script_command_unchanged` passing, not run under a neutralization).

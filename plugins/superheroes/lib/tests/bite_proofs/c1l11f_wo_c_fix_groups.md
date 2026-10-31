@@ -144,3 +144,96 @@ FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_c_fix_groups.py::test_the_re
 All four restored: the whole of `test_c1l11f_wo_c_fix_groups.py` (14 tests) printed `14 passed in 4.12s`, and the final run over it and `test_fix_groups_c1l11c.py`, `test_break_it_loop.py`, `test_c1l10b_test_restore.py` printed `145 passed in 40.00s`.
 
 Not separately neutralized (unproven here): `_fix_bindings_by_round`'s unreadable-round returns (the four `test_unreadable_rounds_read_shared_never_alone` cases pin them passing, none was run under a neutralization); the key mapping through `review_record._key`; and the bullet's `repairedAlone is True` test (the validator test reads it, no neutralization was run).
+
+---
+
+# C1-L12 addendum (build #2216, entries for C1-L11f's review-loop axis lines)
+
+**Provenance:** implementer WO-4, order id `c1l12-wo4`, worktree `/home/user/wo4`, branch `c1l12-wo4`, head at dispatch `86e05768`. Each entry is **re-derived at `86e05768`** by this order: the fixers' own red/green lived in their review sessions' folders on a container that has been reclaimed, and PR #2283's review records and round comments carry no break-it red/green for these lines, so none is quoted. A11 and A12 were added by fixer commit `35644832`. Each guarded element was neutralized with one targeted Edit and restored with the inverse Edit (no `git checkout`, `restore`, `reset` or `stash`); after each restore `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`. Every run is `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/shpyc-wo4 -m pytest "<node id>" -q -p no:cacheprovider`. Each capture is the runner's whole output apart from the `UV_NATIVE_TLS` deprecation warning line, which is left out. Nothing is redacted: no secrets, tokens or URLs appear. Every capture is under 32 KiB. The partial A12 quote earlier in this record (the line's first clause only) is left as it is; the A12 entry below quotes the whole line.
+
+| ID | Guarded element | Axis (verbatim) | Proving node |
+|---|---|---|---|
+| A11 | the sharing test in `review_record_session.py`, `if any(c in with_others for c in own) or reported_with:` (`review_record_session.py:559`) | a plain sibling is bound only through the carrier, so the group's membership in the round's fix report counts as sharing too — see bite-proof record c1l11f_wo_c_fix_groups | `test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone` (first assertion) |
+| A12 | the same function's return, `return later and commit not in with_others and not reported_with` (`review_record_session.py:568`) | and only when that latest binding's commit binds no other member of the group in its round, and the round's fix report names none of them — see bite-proof record c1l11f_wo_c_fix_groups | the same node (second assertion) |
+
+## A11
+
+**Neutralization:** `        if any(c in with_others for c in own) or reported_with:` became `        if any(c in with_others for c in own):` (`or reported_with` dropped).
+
+**Raw red** (`test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone _
+
+    def test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone():
+        # the fold stores a binding for the test carrier `a` only; the plain sibling `b` rides in the round's fix report
+        state = _synthetic({1: [("a", "c1")], 2: [("a", "c2")]}, ["a", "b"])
+        state["rounds"]["1"]["fixReportedKeys"] = ["a", "b"]
+        state["rounds"]["2"]["fixReportedKeys"] = ["a"]
+        bullets = _synthetic_bullets(state)
+>       assert ALONE in bullets["a"] and SHARED not in bullets["a"]
+E       assert (" · repaired alone after the group's shared fix" in '- a Important · open · one fix shared with 1 other finding(s) (group fg-x)')
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_c_fix_groups.py:159: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_c_fix_groups.py::test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone
+1 failed in 2.09s
+```
+
+The red is on the claimed axis: round 1 (the carrier bound alone, the sibling only in the fix report) no longer counts as a shared round, so the later solo repair is not read as `repaired alone`.
+
+**Restore** (the inverse Edit): `        if any(c in with_others for c in own):` back to `        if any(c in with_others for c in own) or reported_with:`. **Restore receipt:** the line is back as `        if any(c in with_others for c in own) or reported_with:`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 2.21s
+```
+
+## A12
+
+**Neutralization:** `    return later and commit not in with_others and not reported_with` became `    return later and commit not in with_others` (`and not reported_with` dropped).
+
+**Raw red** (the same node; the first assertion passes, the second fails):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone _
+
+    def test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone():
+        # the fold stores a binding for the test carrier `a` only; the plain sibling `b` rides in the round's fix report
+        state = _synthetic({1: [("a", "c1")], 2: [("a", "c2")]}, ["a", "b"])
+        state["rounds"]["1"]["fixReportedKeys"] = ["a", "b"]
+        state["rounds"]["2"]["fixReportedKeys"] = ["a"]
+        bullets = _synthetic_bullets(state)
+        assert ALONE in bullets["a"] and SHARED not in bullets["a"]
+        # a later round whose fix report still names the sibling is no solo repair
+        state["rounds"]["2"]["fixReportedKeys"] = ["a", "b"]
+>       assert ALONE not in _synthetic_bullets(state)["a"]
+E       assert " · repaired...s shared fix" not in '- a Importa...(group fg-x)'
+E         
+E         " · repaired alone ... group's shared fix" is contained here:
+E           - a Important · open · repaired alone after the group's shared fix (group fg-x)
+
+/home/user/wo4/plugins/superheroes/lib/tests/test_c1l11f_wo_c_fix_groups.py:162: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c1l11f_wo_c_fix_groups.py::test_a_carrier_bound_with_a_plain_sibling_only_through_the_carrier_reads_a_later_solo_repair_as_alone
+1 failed in 2.03s
+```
+
+The red is on the claimed axis: the latest round's fix report names the sibling, yet the member still reads `repaired alone`.
+
+**Restore** (the inverse Edit): `    return later and commit not in with_others` back to `    return later and commit not in with_others and not reported_with`. **Restore receipt:** the line is back as `    return later and commit not in with_others and not reported_with`, and `git status --porcelain` listed no `.py` file outside `plugins/superheroes/lib/tests/`.
+
+**Raw green** (the same node):
+
+```
+.                                                                        [100%]
+1 passed in 2.05s
+```
+
+Not separately neutralized (unproven): the `commit not in with_others` leg of the same return (pinned by the other `repaired alone` nodes in this module passing; not run under a neutralization here).
