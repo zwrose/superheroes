@@ -169,6 +169,11 @@ def _unit(weight, file, ranges, key, header, hunks, heads=(), origin=None):
 def _weigh(section, row, unsettled, readable):
     """``(weight, copy_lines)`` of one section: ``copy_lines`` is the whole-file line count of an unproven copy."""
     raw = section["added"] + section["removed"]
+    # An unsettled unproven copy whose whole head file was measured keeps that size (a measured size above the raw diff lines).
+    if readable and unsettled and row is not None and section["copied"]:
+        measured = row.get("lines")
+        if _is_int(measured) and measured > raw:
+            return measured, measured
     # axis: a file the counter did not settle, or that has no usable row, counts at its raw changed lines.
     if not readable or unsettled or row is None:
         return raw, None

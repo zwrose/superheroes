@@ -1421,7 +1421,8 @@ def _slice_security(dims, repo_root, parts, sources=None):
         named = {p["file"] for p in parts if isinstance(p, dict) and isinstance(p.get("file"), str)}
         files = sorted(named | {sources[f] for f in named if f in (sources or {})})
         found = risk_areas.touched(repo_root, files)
-        return found.get("riskAreas") == "not-set" or bool(found.get("touched"))
+        return (found.get("riskAreas") == "not-set" or bool(found.get("touched"))
+                or bool(found.get("unmatchable")))
     except Exception:  # fail toward seating the lens
         return True
 
