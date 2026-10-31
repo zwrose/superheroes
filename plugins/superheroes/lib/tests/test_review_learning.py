@@ -1278,6 +1278,21 @@ def test_claude_md_rule_writes_through_a_symlinked_claude_md(proj, canon_root):
     assert open(shared, encoding="utf-8").read() == "# shared\n\n%s\n" % CLAUDE_RULE
 
 
+# axis: the guarding test for the cloud guard — a symlinked layer in a cloud session is refused before anything is written
+def test_focus_hint_through_a_symlinked_layer_is_refused_in_a_cloud_session(proj, canon_root, tmp_path, monkeypatch):
+    _with_layer(proj)
+    outside = str(tmp_path / "shared-hints.md")
+    with open(outside, "w", encoding="utf-8") as fh:
+        fh.write(open(_layer(proj), encoding="utf-8").read())
+    os.remove(_layer(proj))
+    os.symlink(outside, _layer(proj))
+    monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
+    before = (_state(proj, canon_root), _bytes(outside))
+    got = _apply(proj, canon_root, _text_proposal("focus-hint", HINT), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "refused", RL.store_core.CLOUD_REFUSAL_REASON)
+    assert (_state(proj, canon_root), _bytes(outside)) == before and os.path.islink(_layer(proj))
+
+
 # axis: the guarding test for a missing home — a text kind with no file to join writes nothing, Canon included
 @pytest.mark.parametrize("kind, text", [("focus-hint", HINT), ("claude-md-rule", CLAUDE_RULE)])
 def test_text_kind_with_no_home_file_writes_nothing(proj, canon_root, kind, text):

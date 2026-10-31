@@ -269,6 +269,11 @@ def _text_target(cwd, kind, root):
         path = os.path.join(top.stdout.strip(), CLAUDE_MD)
     if not os.path.isfile(path):
         raise OSError("%s does not exist" % path)
+    # the cloud calibration guard reads the path as given (a link standing where a calibration file belongs),
+    # so it runs here, before the writer resolves the link to its target
+    # axis: a cloud session never writes a calibration file through a symlinked layer — see bite-proof record wo_2190_cloud-guard
+    if store_core.in_cloud_session() and store_core.is_calibration_path(path):
+        raise store_core.CalibrationWriteRefused("%s: %s" % (store_core.CLOUD_REFUSAL_REASON, path))
     return path
 
 
@@ -361,6 +366,8 @@ def _apply_bound(cwd, proposal, approval, canon_root, session_id, root):
     if proposal["kind"] in _LINE_FIELD:
         try:
             _text_target(cwd, proposal["kind"], root)
+        except store_core.CalibrationWriteRefused as exc:
+            return _noted(_result(False, "refused", store_core.CLOUD_REFUSAL_REASON, "%s; nothing was written" % exc), note)
         except (OSError, subprocess.TimeoutExpired) as exc:
             # axis: a text kind whose home file is missing writes nothing, Canon included — see bite-proof record wo_2190_target-missing
             return _noted(_result(False, "refused", "target-missing", "%s; nothing was written" % exc), note)
