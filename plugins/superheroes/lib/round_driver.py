@@ -1963,6 +1963,14 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
             and break_it.carried_block(existing)[0] != fresh_block):
         # axis: a finding raised again with a fresh test block holds no reviewer original of the old test; the fresh test's own run marks the baseline, so a change reason recorded against the old version does not carry onto it — see bite-proof record c1l11f_wo_b_break_it_baseline
         entry.pop(REVIEWER_TEST_FIELD, None)
+        if _changed_why(entry) is not None:
+            # axis: with no run of the fresh test yet, the old reason would still read as current — the fresh block becomes the baseline and the old reasons are dropped
+            entry[REVIEWER_TEST_FIELD] = fresh_block["content"]
+            runs = entry.get(break_it.RUNS_FIELD)
+            if isinstance(runs, list):
+                entry[break_it.RUNS_FIELD] = [
+                    {k: v for k, v in run.items() if k != "changedWhy"} if isinstance(run, dict) else run
+                    for run in runs]
     elif (isinstance(existing, dict) and break_it.carries_test(existing) and fresh_block is not None
             and existing.get(REVIEWER_TEST_FIELD) is not None
             and entry.get(REVIEWER_TEST_FIELD) is None):
