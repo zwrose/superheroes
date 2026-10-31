@@ -268,10 +268,11 @@ def _text_target(cwd, kind, root):
         except store_core.RepoRootUnavailable as exc:
             raise OSError("the review settings' layer could not be located: %s" % exc) from exc
     else:
-        top = _run_git(cwd, "rev-parse", "--show-toplevel")
-        if top.returncode != 0:
-            raise OSError("the project's git root could not be read: %s" % (top.stderr or top.stdout).strip())
-        path = os.path.join(top.stdout.strip(), CLAUDE_MD)
+        try:  # the one sanctioned repo-root resolution (store_core), on the same scrubbed git env as _run_git
+            top = store_core.repo_root(cwd, env=definition_doc._scrubbed_git_env())
+        except store_core.RepoRootUnavailable as exc:
+            raise OSError("the project's git root could not be read: %s" % exc) from exc
+        path = os.path.join(top, CLAUDE_MD)
     if not os.path.isfile(path):
         raise OSError("%s does not exist" % path)
     try:
