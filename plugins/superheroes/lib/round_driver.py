@@ -7012,8 +7012,8 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
                   "certification withheld" % restored)
         state["step"] = P_TERMINAL
         return
-    # axis: after a restore a first pass whose head moved during the run halts, never advances — see bite-proof record c1l11f_wo_e_verify_after_restore
-    if restored is not None and first is None and moved and result == "pass":
+    # axis: after a restore a first result other than a fail whose head moved during the run halts, never advances — a pass or a skip alike (a fail keeps the fail path) — see bite-proof record c1l11f_wo_e_verify_after_restore
+    if restored is not None and first is None and moved and result != "fail":
         _set_terminal(state, "halted")
         ran, ended = artifact.get("headSha"), artifact.get("headShaAfter")
         state["certification"] = {

@@ -17,6 +17,8 @@ Bite-proof record: c1l11f_wo_e_verify_after_restore
 import os
 import sys
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
@@ -168,6 +170,17 @@ def test_e2_a_skip_with_no_verify_command_and_no_known_head_after_a_restore_keep
     _fold(state, {"result": "skipped"})
 
     assert not state.get("terminal") and "_restoredHead" not in state
+
+
+@pytest.mark.parametrize("result", ["skipped", "none", "unverified"])
+def test_e2_a_skip_after_a_restore_whose_head_moved_during_the_run_halts(result):
+    # axis: a skip at the restored head that moved during the run halts like a pass, never advances (integration review reviewer-001 on the C1 stack)
+    state = _restored_state(verifyCommand=None)
+    _fold(state, {"result": result, "headSha": H1, "headShaAfter": H2})
+
+    assert state["terminal"] == "halted" and state["step"] == RD.P_TERMINAL
+    assert _kinds(state)[-1] == "verify-unresolved"
+    assert "_restoredHead" in state
 
 
 # =============================================================================================
