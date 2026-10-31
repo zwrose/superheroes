@@ -310,7 +310,7 @@ def test_dispatch_write_undelivered_items_forfeit_carries_admitted_refusals(tmp_
     assert res["refusals"] == refusals
 
 
-# axis: a native write result carrying the 3356 sandbox-route entry is admitted, not forfeited (#2167)
+# axis: a native write result carrying the field sandbox-route entry is admitted, not forfeited (#2167)
 def test_native_write_admits_a_sandbox_named_route(tmp_path):
     run_dir, state = _native_write_grade_state(tmp_path, _write_obj(refusals=[_SANDBOX_ROUTE_ENTRY]))
     grade = ED._grade_write_attempt(run_dir, state, 1)
@@ -370,7 +370,7 @@ def test_read_result_accepts_a_valid_refusals_list(tmp_path, refusals):
     assert NE._read_result(_result_file(tmp_path, body)) == body
 
 
-# axis: the native implementer result built from the 3356 shape reads valid, not native-result-invalid (#2167)
+# axis: the native implementer result built from the field shape reads valid, not native-result-invalid (#2167)
 def test_read_result_accepts_the_sandbox_named_route(tmp_path):
     body = {"status": "done", "summary": "s", "refusals": [_SANDBOX_ROUTE_ENTRY]}
     assert NE._read_result(_result_file(tmp_path, body)) == body

@@ -91,7 +91,7 @@ def _merge_repo(tmp_path, monkeypatch, conflict_style=None, linked=False):
     merged = _git(work, "merge", "--no-edit", "main", check=False)
     assert merged.returncode == 1, merged.stdout + merged.stderr
     staged = _git(work, "status", "--porcelain", "--untracked-files=no").stdout.splitlines()
-    # The fixture must create the #3186 condition: merge-staged changes on unnamed paths.
+    # The fixture must create the field merge-side checkout shape: merge-staged changes on unnamed paths.
     assert len([ln for ln in staged if not ln.startswith("UU")]) >= len(MAIN_CHANGED)
     assert any(ln.startswith("UU") and ln.endswith("f.txt") for ln in staged)
     return work
@@ -135,7 +135,7 @@ def test_merge_tree_reproduces_conflicted_file_after_label_normalization(
     assert _normalize(blob) == _normalize(worktree)
 
 
-# --- the #3186 shape ----------------------------------------------------------
+# --- the field merge-side checkout shape --------------------------------------
 
 @pytest.mark.parametrize("style", [None, "zdiff3"])
 @pytest.mark.parametrize("command", [
@@ -144,14 +144,14 @@ def test_merge_tree_reproduces_conflicted_file_after_label_normalization(
     "git checkout --theirs -- f.txt",
     "git restore --theirs f.txt",
 ])
-def test_3186_merge_side_checkout_of_untouched_conflicted_file_allows(
+def test_merge_side_checkout_of_untouched_conflicted_file_allows(
     tmp_path, monkeypatch, command, style,
 ):
     work = _merge_repo(tmp_path, monkeypatch, conflict_style=style)
     assert wg.classify(command, work) == ("allow", "")
 
 
-def test_3186_shape_is_indeterminate_when_repo_root_resolution_raises(tmp_path, monkeypatch):
+def test_merge_side_shape_is_indeterminate_when_repo_root_resolution_raises(tmp_path, monkeypatch):
     import store_core
 
     work = _merge_repo(tmp_path, monkeypatch)
@@ -178,7 +178,7 @@ def test_conflicted_file_in_a_subdirectory_cwd_allows_then_denies_after_edit(
     assert wg.classify("git checkout --theirs ../f.txt", sub) == _refusal("checkout-path", 1)
 
 
-def test_linked_worktree_merge_allows_3186_shape(tmp_path, monkeypatch):
+def test_linked_worktree_merge_allows_merge_side_shape(tmp_path, monkeypatch):
     work = _merge_repo(tmp_path, monkeypatch, linked=True)
     assert os.sep.join(["worktrees", ""]) in _merge_head_file(work)
     assert wg.classify("git checkout --theirs f.txt", work) == ("allow", "")

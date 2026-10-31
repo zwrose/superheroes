@@ -57,7 +57,7 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_cloud_terminal.py::test_p11
 3 failed in 0.41s
 ```
 
-- **Field-shape tests with E1 live** (the order-defect measurement; the same neutralization was still in the tree): `T::test_p9_the_recorded_park_then_a_seconds_later_parked_progress_edit_stays_terminal[consumer-1996]`, `[superheroes-2071]`, `[superheroes-1948]` and `T::test_p9_a_recorded_park_shape_is_lane_terminal_through_the_arm`:
+- **Field-shape tests with E1 live** (the order-defect measurement; the same neutralization was still in the tree): `T::test_p9_the_recorded_park_then_a_seconds_later_parked_progress_edit_stays_terminal[second-owner-gate]`, `[superheroes-2071]`, `[superheroes-1948]` and `T::test_p9_a_recorded_park_shape_is_lane_terminal_through_the_arm`:
 
 ```
 ....                                                                     [100%]
@@ -134,7 +134,7 @@ FAILED …::test_p12_a_progress_edit_past_the_window_with_no_phase_or_an_empty_p
 
 ## E3 — the `resum` exception (`wave_watch.py:1478-1480`; axis: a phase that names the park but says it resumed still reads resumed)
 
-- **Detector:** `T::test_p10_the_real_resume_two_hours_forty_three_minutes_later_supersedes_the_park` (the #3293 shape: +9780 s, phase `resumed after the park; building`).
+- **Detector:** `T::test_p10_the_real_resume_two_hours_forty_three_minutes_later_supersedes_the_park` (the field resume shape: +9780 s, phase `resumed after the park; building`).
 - **Neutralization:** the clause `or any(word.startswith("resum") for word in words)` (three lines) replaced by `or False`.
 - **Raw red:**
 
@@ -144,7 +144,7 @@ F                                                                        [100%]
 _ test_p10_the_real_resume_two_hours_forty_three_minutes_later_supersedes_the_park _
 
     def test_p10_the_real_resume_two_hours_forty_three_minutes_later_supersedes_the_park():
-        # axis: resum exception — the #3293 shape: a phase that names the park but says it resumed supersedes it
+        # axis: resum exception — the field resume shape: a phase that names the park but says it resumed supersedes it
         park, progress = _park_then_progress(9780, phase="resumed after the park; building")
 >       assert _terminals([park, progress], lane_age=_WIDE) == []
 E       AssertionError: assert [{'launchId':...e': 101, ...}] == []

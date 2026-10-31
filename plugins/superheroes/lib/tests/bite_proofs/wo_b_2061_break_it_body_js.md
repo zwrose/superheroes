@@ -1471,7 +1471,7 @@ F                                                                        [100%]
 __ test_a_ts_rename_whose_command_carries_an_option_reads_unresolved[config] ___
 
 repo = PosixPath('/tmp/claude-0/pytest-of-root/pytest-27/test_a_ts_rename_whose_command0/repo')
-command = 'npx vitest run --config web/vitest.config.ts web/eats.test.ts'
+command = 'npx vitest run --config web/vitest.config.ts web/loans.test.ts'
 
     @pytest.mark.parametrize("command", [
         "npx vitest run --config web/vitest.config.ts %s" % OWN,

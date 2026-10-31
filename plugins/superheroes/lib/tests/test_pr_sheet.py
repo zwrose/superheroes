@@ -2436,11 +2436,11 @@ BODIES_2075 = {2075: BODY_2075.read_text(encoding="utf-8")}
 BULLETS_2075 = [bullet for bullet, _ in pr_sheet.listed_bullets(2075, BODIES_2075[2075])]
 ACCEPTING = "## What we're accepting\n"
 BUILD_RECORD = "<!-- superheroes:build-record -->\n"
-BODY_3303 = FIXTURES / "body-3303-shaped.md"
-BODY_3303_NO_HEADING = FIXTURES / "body-3303-no-heading.md"
-BODY_3303_HARMLESS_ONLY = FIXTURES / "body-3303-harmless-only.md"
-COSTLY_3303 = "The verify gate did not run on the final head, so the last commit's tests are unverified until CI runs."
-HARMLESS_3303 = "The order rode a prompt file, not inline"
+BODY_COSTLY = FIXTURES / "body-costly-shaped.md"
+BODY_COSTLY_NO_HEADING = FIXTURES / "body-costly-no-heading.md"
+BODY_COSTLY_HARMLESS_ONLY = FIXTURES / "body-costly-harmless-only.md"
+COSTLY_LINE = "The verify gate did not run on the final head, so the last commit's tests are unverified until CI runs."
+HARMLESS_LINE = "The order rode a prompt file, not inline"
 CANON_ID = "2026-10-22-abcdefgh-1"
 NOT_ONE_OF = "must be an object with exactly one of item, fold with line, leftover or canon"
 
@@ -2842,28 +2842,28 @@ def test_a_fold_naming_an_item_with_no_ifleft_is_refused_not_a_key_error():
     assert any("ifLeft" in p for p in problems)
 
 
-@pytest.mark.parametrize("path", [BODY_3303, BODY_3303_NO_HEADING], ids=["shaped", "no-heading"])
+@pytest.mark.parametrize("path", [BODY_COSTLY, BODY_COSTLY_NO_HEADING], ids=["shaped", "no-heading"])
 def test_the_build_record_below_the_accepting_section_is_never_read_as_an_acceptance(path):
     # Bites on: the reader running on past the build-record marker, so the build record's [harmless] and [costly] degradation bullets read as acceptances (the no-heading body has no later heading to stop it).
     # Axis: nothing at or below the build-record marker is an acceptance: only the costly bullet under What we're accepting is listed.
-    assert pr_sheet.accepting_listed(path.read_text(encoding="utf-8")) == [COSTLY_3303]
+    assert pr_sheet.accepting_listed(path.read_text(encoding="utf-8")) == [COSTLY_LINE]
 
 
 def test_a_body_whose_only_degradation_is_harmless_lists_nothing_and_makes_no_card():
     # Bites on: a [harmless] build-record bullet becoming an acceptance, a card, or a body that lists none being left without nothingListed.
     # Axis: a harmless degradation under the build-record marker stays off the sheet: no acceptance, no a- card, no card naming it, nothingListed set.
-    text = BODY_3303_HARMLESS_ONLY.read_text(encoding="utf-8")
+    text = BODY_COSTLY_HARMLESS_ONLY.read_text(encoding="utf-8")
     assert pr_sheet.accepting_listed(text) == []
     sheet = with_bodies(SMALL, {211: text})
     assert a_cards(sheet) == [] and sheet["prSheet"]["nothingListed"] is True
-    assert not any(HARMLESS_3303 in json.dumps(card) for card in sheet["cards"])
+    assert not any(HARMLESS_LINE in json.dumps(card) for card in sheet["cards"])
     assert list(Draft202012Validator(SCHEMA).iter_errors(sheet)) == [] and check_sheet_problems(sheet) == []
 
 
 def test_a_costly_acceptance_left_out_of_the_accounting_is_refused_naming_it():
     # Bites on: a costly acceptance listed under What we're accepting being left off the sheet without a word.
     # Axis: a costly acceptance must be accounted for: with an empty accounting there is exactly one problem, it names the bullet and says it is not accounted for.
-    text = BODY_3303.read_text(encoding="utf-8")
+    text = BODY_COSTLY.read_text(encoding="utf-8")
     ((bullet, _),) = pr_sheet.listed_bullets(211, text)
     (problem,) = refused_with_bodies(SMALL, {211: text}, lambda advisor: advisor.update(accounting={}))
     assert bullet in problem and "is not accounted for" in problem
@@ -2872,7 +2872,7 @@ def test_a_costly_acceptance_left_out_of_the_accounting_is_refused_naming_it():
 def test_a_costly_acceptance_accounted_to_an_item_gets_its_card_and_the_harmless_one_gets_none():
     # Bites on: a costly acceptance that the accounting names producing no card, a harmless build-record bullet reaching the sheet, or nothingListed set on a body that lists one.
     # Axis: the costly bullet is accounted to its own item and shows as that one i- card; the harmless bullet is on no card; no a- card; no nothingListed.
-    text = BODY_3303.read_text(encoding="utf-8")
+    text = BODY_COSTLY.read_text(encoding="utf-8")
     ((bullet, _),) = pr_sheet.listed_bullets(211, text)
 
     def edit(advisor):
@@ -2882,7 +2882,7 @@ def test_a_costly_acceptance_accounted_to_an_item_gets_its_card_and_the_harmless
         advisor["accounting"] = {bullet: {"item": "verify-gate"}}
     sheet = with_bodies(SMALL, {211: text}, edit)
     assert [c["id"][:2] for c in sheet["cards"]] == ["i-"] and sheet["cards"][0]["question"] == "The verify gate did not run on the final head"
-    assert not any(HARMLESS_3303 in json.dumps(card) for card in sheet["cards"])
+    assert not any(HARMLESS_LINE in json.dumps(card) for card in sheet["cards"])
     assert a_cards(sheet) == [] and "nothingListed" not in sheet["prSheet"]
 
 
@@ -2919,7 +2919,7 @@ def test_a_harmless_deviation_needs_no_line_under_what_we_are_accepting():
 def test_a_nested_bullet_under_a_harmless_deviation_is_part_of_it_and_needs_no_line():
     # Bites on: a two-space nested bullet under a [harmless] bullet being read as its own unlabelled (costly) deviation, so the build refuses a valid body.
     # Axis: a nested bullet stays with its degradation: the build succeeds, lists nothing and makes no card.
-    text = BODY_3303_HARMLESS_ONLY.read_text(encoding="utf-8")
+    text = BODY_COSTLY_HARMLESS_ONLY.read_text(encoding="utf-8")
     harmless_line = next(line for line in text.splitlines(keepends=True) if line.startswith("- [harmless]"))
     nested = text.replace(harmless_line, harmless_line + "  - The builder read the file before starting.\n")
     assert nested != text
@@ -3009,9 +3009,9 @@ def test_the_real_2075_body_with_unlabelled_deviations_is_refused_for_each_of_it
 
 
 DEGRADATIONS_CASES = [
-    pytest.param(BODY_3303.read_text(encoding="utf-8"), [
+    pytest.param(BODY_COSTLY.read_text(encoding="utf-8"), [
         ("harmless", "The order rode a prompt file, not inline: the builder was pointed at the file and read it there."),
-        ("costly", COSTLY_3303)], id="shaped-fixture"),
+        ("costly", COSTLY_LINE)], id="shaped-fixture"),
     pytest.param(ACCEPTING + "- One.\n", [], id="no-marker"),
     pytest.param(None, [], id="not-a-string"),
     pytest.param(DEGRADATIONS + "- [Costly]  One,\n  and two.\n</details>\n- Three.\n", [("costly", "One, and two.")], id="stops-at-details"),
