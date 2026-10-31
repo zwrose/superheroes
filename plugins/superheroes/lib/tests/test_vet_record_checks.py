@@ -27,15 +27,16 @@ _HEADING = "## The review record checks"
 _FIXED_WRITTEN_AT = "2026-01-01T00:00:00Z"
 
 _RECORD_FIELDS = ("finalCommit.sha", "finalCommit.source", "ci.state", "ci.sha", "ci.source", "missingReviews",
-                  "seatsNotRun", "goAhead", "parked", "findings", "title", "body", "consequence", "outcome", "reason",
+                  "goAhead", "parked", "findings", "title", "body", "consequence", "outcome", "reason",
                   "leftForOwner", "status", "whatIsMissing")
 # transitDamage is added by `read` for parts damage and by the writer for redacted fields
 _ROW_NON_FIELDS = frozenset({"read", "green", "craft", "ruling", "transitDamage"})
 _TOKEN = re.compile(r"^[a-z][A-Za-z]*(\.[A-Za-z]+)*$")
 _ENTRY_KEYS = {"goAhead": "missingReviews", "title": "findings", "body": "findings", "consequence": "findings",
-               "outcome": "findings", "reason": "findings"}
+               "outcome": "findings", "reason": "findings", "source": "provenCopies"}
 _RETIRED = ("certified-loop", "certified loop", "seat-provenance parity")
-_ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review")
+_ROW_NAMES = ("The record exists", "The checks ran on the final commit", "No leftover skipped the owner's review",
+              "The proven copies match their source")
 _ROW_NON_OUTCOMES = frozenset({"review-record-missing", "review-record-unreadable", "digest-unavailable"})
 _HYPHENATED = re.compile(r"^[a-z]+(-[a-z]+)+$")
 
@@ -78,8 +79,7 @@ def _scenarios():
     acct, rd = _one(_HEAD, [craft])
     out["pr-c"] = (acct, rd, _pr(_HEAD))
     security = reviewer("security-reviewer", ran=False, runDir="")
-    grounding = reviewer("grounding-seat", ran=False, runDir="", notRunReason="no-loop-phase", commit=None)
-    acct, rd = _one(_HEAD, [fixed], extra_reviewers=[security, grounding])
+    acct, rd = _one(_HEAD, [fixed], extra_reviewers=[security])
     acct["goAheads"] = []
     out["pr-d"] = (acct, rd, _pr(_HEAD))
     left = finding("code-retry-window", title="The retry window is too long",
@@ -106,6 +106,14 @@ def _rebuild(name):
     acct, rd, _ = _scenarios()[name]
     if acct is None:
         return None
+    return {**rr.build_record(acct, rd), "writtenAt": _FIXED_WRITTEN_AT}
+
+
+def _rebuild_with_proven_copies():
+    """pr-d's record with the optional `provenCopies` the writer builds only when the account carries it."""
+    acct, rd, _ = _scenarios()["pr-d"]
+    acct = {**acct, "provenCopies": [{"file": "plugins/example/copy.md", "source": "plugins/example/source.md",
+                                      "sha256": "a" * 64}]}
     return {**rr.build_record(acct, rd), "writtenAt": _FIXED_WRITTEN_AT}
 
 
@@ -189,8 +197,7 @@ def test_fixtures_carry_the_facts_they_stand_for():
     assert c["status"] == "reviewed"
     d = f["pr-d"]["record"]
     assert any(m["goAhead"] is None for m in d["missingReviews"]) and d["parked"] is True
-    assert isinstance(d["seatsNotRun"], list) and len(d["seatsNotRun"]) == 1
-    assert d["seatsNotRun"][0]["name"] == "grounding-seat" and d["seatsNotRun"][0]["reason"] == "no-loop-phase"
+    assert "seatsNotRun" not in d
     assert not any(m["name"] == "grounding-seat" for m in d["missingReviews"])
     e = f["pr-e"]
     assert e["record"]["finalCommit"]["sha"] == e["pr"]["head"] and e["record"]["ci"]["state"] == "green"
@@ -214,7 +221,7 @@ def test_fixtures_carry_the_facts_they_stand_for():
 def test_record_checks_section_names_real_record_fields():
     # axis: a row of the section naming a field the record does not have
     section = _section()
-    record = _rebuild("pr-d")
+    record = _rebuild_with_proven_copies()
     for path in _RECORD_FIELDS:
         assert f"`{path}`" in section, f"the section does not name `{path}` in backticks"
         assert _resolves(record, path), f"`{path}` is not a field of a record the writer builds"
@@ -232,7 +239,7 @@ def test_record_checks_section_outcomes_are_the_schema_spellings():
         assert f"`{outcome}`" in section, f"the section does not name `{outcome}`"
 
 
-def test_record_checks_rows_are_the_three_named_checks():
+def test_record_checks_rows_are_the_four_named_checks():
     # axis: a check row renamed, removed or added
     names = tuple(re.match(r"\| \*\*(.+?)\*\*", row).group(1) for row in _section_rows())
     assert names == _ROW_NAMES

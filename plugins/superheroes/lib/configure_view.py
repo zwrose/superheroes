@@ -28,7 +28,6 @@ import guardian_vitals  # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
 import model_tier_overrides  # noqa: E402
-import review_gate_policy  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
@@ -203,21 +202,6 @@ def _guardian_lines(guardian):
     return lines
 
 
-def _collect_review_gate_policy(cwd, root):
-    """Resolved review-gate-policy layers for the configure view. Never raises."""
-    gate = core_md.review_gate_policy_for_gate(cwd=cwd, root=root)
-    overlay_raw = gate.overlay
-    layers = review_gate_policy.calibration_layer_resolution(
-        overlay_raw if core_md.review_gate_config_is_ok(gate) else None)
-    return {
-        "gateStatus": gate.status,
-        "gateDetail": gate.detail,
-        "overlayRaw": overlay_raw,
-        "overlayParse": layers["overlayParse"],
-        "shipped": layers["shipped"],
-    }
-
-
 def _json_display(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -338,53 +322,6 @@ def _project_config_lines(cwd, root):
             lines.append("%s: absent — fallback: %s" % (key, fallback))
         else:
             lines.append("%s: %s" % (key, status))
-    return lines
-
-
-def _review_gate_policy_lines(data):
-    """Plain-text review-gate-policy rows for the one-screen view."""
-    gate_status = data.get("gateStatus")
-    if gate_status == core_md.CONFIG_ABSENT:
-        return ["core.md: absent (no calibration overlay possible)"]
-    if gate_status == core_md.CONFIG_ROOT_UNAVAILABLE:
-        return ["core.md: repo root unavailable"]
-    if gate_status == core_md.CONFIG_UNREADABLE:
-        return ["core.md: unreadable"]
-    if gate_status == core_md.CONFIG_STRUCTURAL_AMBIGUITY:
-        detail = data.get("gateDetail") or "structurally ambiguous"
-        classifier = detail.split(":", 1)[0] if detail else "structurally ambiguous"
-        return ["core.md: structurally ambiguous (%s)" % classifier]
-    lines = []
-    shipped = data.get("shipped") or {}
-    if shipped.get("ok"):
-        rules = shipped.get("layer", {}).get("rules") or []
-        lines.append(
-            "shipped default: %s (%d rules; pre-authorizes nothing)"
-            % (review_gate_policy.GATE_POLICY_SCHEMA, len(rules))
-        )
-    else:
-        reason = shipped.get("reason") or "unknown"
-        lines.append("shipped default: unreadable (%s)" % reason)
-
-    overlay_raw = data.get("overlayRaw")
-    overlay_parse = data.get("overlayParse")
-    if gate_status == core_md.CONFIG_POLICY_AMBIGUITY:
-        detail = data.get("gateDetail") or "policy-ambiguous"
-        lines.append("project overlay: refused (%s)" % detail)
-    elif overlay_raw is None:
-        lines.append("project overlay: none configured (driver parks unmatched gates)")
-    elif overlay_parse and overlay_parse.get("ok"):
-        rules = overlay_parse.get("layer", {}).get("rules") or []
-        ident = overlay_parse.get("layer", {}).get("identity") or {}
-        sha = ident.get("sha256") or ""
-        short_sha = sha[:12] + "…" if len(sha) == 64 else sha
-        lines.append(
-            "project overlay: %s (%d rules; sha256=%s)"
-            % (review_gate_policy.GATE_POLICY_SCHEMA, len(rules), short_sha)
-        )
-    else:
-        reason = (overlay_parse or {}).get("reason") or "overlay-malformed"
-        lines.append("project overlay: refused (%s)" % reason)
     return lines
 
 
@@ -610,16 +547,6 @@ def collect(cwd, root=None):
     except Exception:
         guardian = None
     try:
-        review_gate = _collect_review_gate_policy(cwd, root)
-    except Exception:
-        review_gate = {
-            "gateStatus": core_md.CONFIG_UNREADABLE,
-            "gateDetail": "review-gate-policy-view-failed",
-            "overlayRaw": None,
-            "overlayParse": None,
-            "shipped": review_gate_policy.load_shipped_layer(),
-        }
-    try:
         vet_checks = core_md.read_vet_checks(cwd, root)
     except Exception:
         vet_checks = {"reason": "vet-checks-read-failed", "declared": False, "checks": []}
@@ -646,7 +573,7 @@ def collect(cwd, root=None):
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
             "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
-            "reviewGatePolicy": review_gate, "vetChecks": vet_checks,
+            "vetChecks": vet_checks,
             "sandboxAccess": sandbox_access, "sizeExclude": size_exclude,
             "breakItInterpreter": break_it_interpreter, "riskAreas": risk_areas}
 
@@ -735,10 +662,6 @@ def render(cwd, *, root=None):
             out.append(line)
         out.append("")
         for line in _spec_reviewer_lines(data.get("enginePrefs")):
-            out.append(line)
-        out.append("")
-        out.append("## Review gate policy")
-        for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
             out.append(line)
     else:
         out.append(f"status: {core.get('status')}")
@@ -837,10 +760,6 @@ def render(cwd, *, root=None):
                 out.append(f"  {seat}: {reason} ⚠")
         out.append("")
         for line in _spec_reviewer_lines(eng):
-            out.append(line)
-        out.append("")
-        out.append("## Review gate policy")
-        for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
             out.append(line)
     out.append("")
     out.append("## Project configuration")

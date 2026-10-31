@@ -117,5 +117,5 @@ def test_complete_panel_certifies_with_or_without_legacy_canary_result():
         state = _complete_round_two_panel(**extra)
         assert state["fullPanelRan"] is True, extra
         assert state["_incompletePanel"] is False, extra
-        assert state["confirmations"] == 1, extra
+        assert "confirmations" not in state, extra
         assert state["rounds"]["2"]["lensCoverage"]["floor"] is False, extra

@@ -25,6 +25,10 @@ def _load(path, name):
 RD = _load(os.path.join(_HERE, "..", "round_driver.py"), "round_driver")
 LPC = _load(os.path.join(_HERE, "..", "loop_plan_common.py"), "loop_plan_common")
 
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                 for name in ("right", "brokeNothing", "testWouldFail")}
+
 
 def test_expected_redispatches_matches_budget_home():
     # The pin (EXPECTED_REDISPATCHES) and the single-home constant must not drift: the whole
@@ -69,7 +73,7 @@ def _rd_dispatch_count_for_missing_seat(missing_dim, missing_round):
                                          for c in (cl or []) for i in c.get("ids", [])],
             "synthesis": lambda f, rnd: None,
             "auditor": lambda t, rnd: [{"id": x["id"], "ruling": "discharged", "reason": "r",
-                                        "evidence": "e"} for x in (t or [])],
+                                        "evidence": "e", "checks": _AUDIT_CHECKS} for x in (t or [])],
             "fix_step": lambda b, rnd, p: {"fixes": [], "headDiff": _RD_DIFF, "changedSubjects": []},
             "verify_runner": lambda c, rnd: "pass",
             "io": {},

@@ -51,7 +51,7 @@ _REEXPORT_NAMES = (
     "SEAT_GAPSWEEP",
     "SEAT_SCOPED",
     "SEAT_VERIFY",
-    "SEAT_FIXER",
+    "SEAT_APPLY_FIXES",
     "RULING_NEW_ISSUE",
     "VACUOUS_FIELD",
     "TYPE_TOKENS",
@@ -64,7 +64,6 @@ _REEXPORT_NAMES = (
 # finding_identity and review_memory arrive transitively through audits — not a layering slip.
 _PAYLOAD_CONTRACTS_LIB_CLOSURE = frozenset({
     "audits",
-    "command_refusals",  # stdlib-only leaf: the refused-command rule's one home
     "dispatch_outcome",
     "finding_identity",
     "payload_contracts",

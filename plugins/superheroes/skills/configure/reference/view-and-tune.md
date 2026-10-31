@@ -357,7 +357,7 @@ action that owns it, leaving the rest of the calibration untouched:
   `pilot`). Set a role back to `claude` (or clear it) to fall fully open — **except `briefCheck`**,
   which falls open to **codex** (the cross-vendor default; a brief-check on the host model is a disclosed
   degradation running at opus, one tier up from the implementer).
-- **Change the per-role model tier** (reviewer/reviewer-deep/verifier/mechanical/synthesis/code-fixer/doc-reviser/
+- **Change the per-role model tier** (reviewer/reviewer-deep/verifier/mechanical/synthesis/doc-reviser/
   implementer/pilot) → show the effective map first, then write only the `## Model tiers` block in
   the resolved review-crew profile. This is an optional tune action: if the owner declines, change
   nothing.
@@ -580,7 +580,7 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Pin a concrete Codex model for one role** → keep the provider-neutral `## Model tiers` block
   unchanged and write the pin under `core.md`'s `enginePreferences.codexModels`. Valid role keys are
-  `reviewer`, `reviewer-deep`, `code-fixer`, `implementer`, and `pilot`; valid
+  `reviewer`, `reviewer-deep`, `implementer`, and `pilot`; valid
   model IDs are `gpt-6.1-sol`, `gpt-6-sol`, `gpt-5.6-sol`, and `gpt-6-astra` (eligible only for
   `reviewer-deep` at effort `high`; pinning it on any other role is refused
   `pin-role-not-eligible`). A pin to the retired `gpt-5.6-terra` is refused at write time
@@ -590,7 +590,7 @@ action that owns it, leaving the rest of the calibration untouched:
   but admits no codex model).
   Codex tier map: each Claude tier that has a codex peer runs the codex model that `model_registry.codex_peer_for_claude_tier` names (`lib/model_registry.py` is its one source; the configure readout shows the effective model per role), and `fable` has none; an unpinned project never
   dispatches Astra and gpt-6.1-sol is the default deep cell. A pinned model runs at the effort its role's
-  registry allowlist resolves for it — gpt-6.1-sol, gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`, `code-fixer`
+  registry allowlist resolves for it — gpt-6.1-sol, gpt-6-sol and gpt-5.6-sol at `high` on `reviewer`
   and `implementer` and `xhigh` on `reviewer-deep`, and Astra at `high` — the
   role's `enginePreferences.effort` setting is not
   consulted for a pinned model. Show the current engine preferences and effective model first, merge
@@ -664,12 +664,11 @@ action that owns it, leaving the rest of the calibration untouched:
   codex or cursor; the same command also **refuses** with `core-md-unreadable` when the project's
   `core.md` exists but cannot be read — the tier is not saved and the refusal names the file, so it
   is a broken-config signal, not a rejected tier) or clear overrides back to `DEFAULT_TIERS`, run the helper; it creates the
-  block if absent, replaces it if present, and preserves every other profile section. `fixer` is
-  accepted as a legacy alias for `code-fixer` (read, write, and clear):
+  block if absent, replaces it if present, and preserves every other profile section:
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear code-fixer
+  python3 -B "$ROOT_DIR/lib/model_tier_overrides.py" write --set reviewer=sonnet --clear implementer
   ```
 
   Role names are validated against `KNOWN_ROLES`; unknown roles are dropped with a warning. Unknown
@@ -678,15 +677,16 @@ action that owns it, leaving the rest of the calibration untouched:
 
 - **Pin a review-panel seat to a vendor/model** → write the pin under `core.md`'s
   `enginePreferences.seatPins`. Valid seat keys are `architecture-reviewer`, `code-reviewer`,
-  `security-reviewer`, `test-role`, `premortem-reviewer`, and `grounding-seat` (a pin written under
+  `security-reviewer`, `test-role`, and `premortem-reviewer` (a pin written under
   the old `test-reviewer` key is read as the test role's pin); each pin is
   `{vendor, model?, effort?}` — a present `model` or `effort` must be a non-empty string or the whole
   pin is rejected into `invalidSeatPins` (an absent optional field is fine; a vendor-only pin uses the
   seat's default model). It feeds the review-code panel's `seat_map compose --pins`; a pin the
   account/registry **cannot honor** (unknown seat, offline vendor, disallowed model, or a
-  grounding/strong-seat independence break) **stays loud** — the shipped seat-map machinery
+  strong-seat independence break) **stays loud** — the shipped seat-map machinery
   emits a `pin` / `pin-not-honorable` / `pin-breaks-constraint` degradation into the
-  review receipt and the seat falls back to rotation. The loader does structural validation only; a
+  review receipt and the seat falls back to rotation. A saved pin under a seat key the panel does
+  not have reads as a pin for an unknown seat and is reported, so remove it. The loader does structural validation only; a
   structurally-broken entry is surfaced as `invalidSeatPins` in `configure view`. Show the current
   engine preferences and effective seat map context first, merge only the requested seat into the
   existing `seatPins` object, and preserve every sibling key.
@@ -726,47 +726,6 @@ action that owns it, leaving the rest of the calibration untouched:
     }
   }
   ```
-
-- **Pre-authorize owner-judgment review gates** → write a narrow `gate-policy/1` overlay under
-  `core.md`'s `reviewGatePolicy` key (a sibling of `enginePreferences`, not inside it). The
-  shipped default pre-authorizes nothing — every rule added here is a narrow pre-authorization of
-  a gate the driver would otherwise park on. A `skip` (or stall `accept-the-disclosed-risk`) rule
-  may carry a `followUp` `{item, revisitTrigger, classClosure}`; a new follow-up must include a
-  nonblank `item`. A present but malformed `followUp` (missing or blank `item`, missing
-  `revisitTrigger`, missing `classClosure`, wrong shape) is refused at overlay load and at
-  calibration write and never reaches resolution; only an absent `followUp` lets the rule
-  resolve and record the disposition, after which certification refuses it for the missing
-  follow-up. A `followUp` may ride only a judgment `skip` or a stall
-  `accept-the-disclosed-risk` rule; on any other disposition it is `layer-follow-up-not-allowed`.
-  Show the resolved policy layers and rule counts first, then merge only the requested overlay
-  document. Pass `null` (or empty stdin) to remove the overlay and return to shipped-defaults-only.
-
-<!-- decision-point: id=configure-tune-gate-policy mode=proceed kind=owner-gate default="retain shipped-defaults-only gate policy overlay" carrier=run-output -->
-
-  PROCEED: retain the shipped-defaults-only overlay unless the owner selects this tune action in
-  this turn, record in the run output that the shipped-defaults-only gate-policy overlay was
-  retained and that `/superheroes:configure` changes it, and continue. Follow-up:
-  `/superheroes:configure`.
-
-  ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf '%s\n' '{"schema":"gate-policy/1","default":"park","rules":[{"gate":"present-judgment","findingClass":"judgment:important","disposition":"skip"}]}' | \
-    python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
-  ```
-
-  To clear the overlay:
-
-  ```bash
-  ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-  printf 'null\n' | python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
-  ```
-
-  **Read the result, don't assume success.** `write-review-gate-policy` returns
-  `{action, reason?}`. Only `written` or `noop` means the overlay was saved — surface any other
-  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command exits 0
-  either way, so check `action`, not exit status.
-
-<!-- /decision-point: id=configure-tune-gate-policy -->
 
 ### Auto-checkpoint (the compaction mod)
 

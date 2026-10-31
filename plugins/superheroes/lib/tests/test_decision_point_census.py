@@ -48,8 +48,6 @@ _VALID_KINDS = frozenset({
 _FORBIDDEN_PRIMITIVES = (
     "AskUserQuestion",
     "decide-location)",
-    "present-judgment",
-    "present-stall-menu",
     "one question at a time",
     "one-question-at-a-time",
     "Ask, one at a time",
@@ -79,45 +77,6 @@ _CARRIER_REGISTRY = frozenset({
 # Byte-pinned stripped lines — literals only; no rationale (#1144).
 _BYTE_PIN_LINES = frozenset({
     "Open no `AskUserQuestion` on any review-code path, for any purpose.",
-    "which posted to GitHub and kept its own `AskUserQuestion` review-event gate, was removed (#1121).",
-    "**Write the presentation artifact — the only path.** Follow "
-    "`${CLAUDE_PLUGIN_ROOT}/skills/review-code/reference/headless-presentation.md`. "
-    "Presence is an event, not a state a run can detect — the run never branches on whether a "
-    "human is present and never opens a question that could block waiting for an answer. Never "
-    "open `AskUserQuestion` on this path or any review-code path.",
-    "past it, and **never** treat it like `present-judgment` (an intervention gate that folds back into",
-    "**Owner gates on the durable-record path.** When `advance` parks at `present-judgment` or",
-    "`present-stall-menu` because gate policy has not pre-authorized the resolution",
-    "`present-judgment`, `{\"choice\": \"<stall choice>\"}` for `present-stall-menu`. Whenever an owner",
-    "Example `present-judgment` gate artifact (gate shape plus a filled-in `_provenance` block):",
-    "durable records are present, hand `submit` when they are not. Owner gates (`present-judgment`,",
-    "`present-stall-menu`) still park with `advance-judgment-park` / `advance-stall-park` when",
-    "### Owner gates and gate policy (`present-judgment`, `present-stall-menu`)",
-    "| `present-judgment` | A tradeoff/product-choice blocker is an **owner-judgment** call routed here "
-    "— an **intervention gate, not a terminal**. Present each `payload.findings[]` (id, file, line, "
-    "title, severity) with `payload.findings[].dispositions` (`fix-as-suggested`, `fix-with-guidance`, "
-    "`skip`). Submit `{dispositions: [{id, disposition, guidance?, reason?, followUp?}, ...]}` — "
-    "`skip` needs a citable `reason` and may carry an optional `followUp`. Fixes fold into the "
-    "round's fix batch and the loop proceeds into the fix leg; skips ride the exit disclosure. "
-    "Fail-closed: a missing/unknown disposition (or a reasonless skip) folds as `fix-as-suggested` "
-    "— a judgment blocker is never silently skipped. Never judge the dispute yourself. |",
-    "| `present-stall-menu` | The **audit-stall owner gate** — reached only after one invisible "
-    "self-recovery (never for a judgment blocker; those go to `present-judgment`). Present "
-    "`payload.choices` (three-choice menu: `one-more-round`, `accept-the-disclosed-risk`, `hold`; "
-    "`accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a stalled audit "
-    "target that is CONFIRMED with evidence; `one-more-round` only when offered — once per session). "
-    "Submit `{choice, followUp?}` — **`accept-the-disclosed-risk`** may carry an optional `followUp`. "
-    "**`hold`** → terminal `held`, certification withheld (absorbs the retired scope-reduction choice). "
-    "**`accept-the-disclosed-risk`** → certifies when eligible. "
-    "**`one-more-round`** → not a terminal: clears the stall once, re-enters `dispatch-fixer` → "
-    "`dispatch-audits` with the stalled targets as the batch (journaled; recorded on the round); "
-    "an empty/unresolvable stall-target snapshot parks `cannot-certify` instead of re-entering. |",
-    "- **Judgment gate is an intervention, not a terminal** — a tradeoff blocker routes to "
-    "`present-judgment` (fix-as-suggested / fix-with-guidance / skip-with-reason) and folds back "
-    "into the fix leg; a skipped blocker rides the exit disclosure. It never dead-ends in the stall "
-    "menu.",
-    "printf '%s\\n' '{\"schema\":\"gate-policy/1\",\"default\":\"park\",\"rules\":[{\"gate\":\"present-judgment\","
-    "\"findingClass\":\"judgment:important\",\"disposition\":\"skip\"}]}' | \\",
 })
 
 _OPEN_TAG_RE = re.compile(

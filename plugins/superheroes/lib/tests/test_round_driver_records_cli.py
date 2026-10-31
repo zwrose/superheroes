@@ -9,7 +9,7 @@ import sys
 
 import pytest
 
-from test_round_driver import _guard_argv
+from test_round_driver import _guard_argv, audit_checks
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
@@ -158,12 +158,13 @@ def _responder(round1_findings=None):
         if phase == RD.P_AUDITS:
             return {"results": [
                 {"id": t["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
-                 "auditorVendor": t.get("auditorVendor")} for t in payload.get("targets", [])],
+                 "auditorVendor": t.get("auditorVendor"), "checks": audit_checks()}
+                for t in payload.get("targets", [])],
                     "collectionManifest": {t["id"]: t.get("auditorVendor")
                                            for t in payload.get("targets", [])}}
         if phase == RD.P_SCOPED:
             return {"findings": []}
-        if phase == RD.P_FIXER:
+        if phase == RD.P_APPLY_FIXES:
             return {"fixes": [], "headDiff": HEAD, "changedSubjects": ["Code"]}
         if phase == RD.P_VERIFY:
             return {"result": "pass"}
@@ -587,13 +588,13 @@ def test_records_path_relative_persisted_absolute_and_submit_from_other_cwd(tmp_
 
 class _FakeAdapters(object):
     ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
-                      RD.P_SCOPED, RD.P_VERIFY, RD.P_FIXER)
+                      RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def __init__(self):
         self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
                         RD.P_VERIFIERS: [],
                         RD.P_SYNTHESIS: ["synthesis"],
-                        RD.P_FIXER: ["dispatch-fixer"]}
+                        RD.P_APPLY_FIXES: ["apply-fixes"]}
         self.roster_reasons = {}
         self.faults = {}
         self.assemble_reason = None
@@ -612,11 +613,13 @@ class _FakeAdapters(object):
         return self.policies.get(phase, "seat-status")
 
     def is_orchestrator_fulfilled(self, phase):
-        return phase in (RD.P_VERIFY,)
+        return phase in (RD.P_VERIFY, RD.P_APPLY_FIXES)
 
     def orchestrator_payload_fault(self, phase, payload):
         if phase == RD.P_VERIFY:
             return RD.verify_result_fault(payload)
+        if phase == RD.P_APPLY_FIXES:
+            return RD.payload_contracts.payload_fault(phase, payload, "apply-fixes")
         return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,

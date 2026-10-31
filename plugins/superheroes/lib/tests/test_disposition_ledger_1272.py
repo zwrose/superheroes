@@ -22,6 +22,10 @@ RD = _load("round_driver")
 SC = _load("session_contract")
 V = _load("verification")
 
+# The three checks every audit result owes (`audits.audit_checks_fault`), each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
+                 for name in ("right", "brokeNothing", "testWouldFail")}
+
 
 def _cfg():
     # A native `claude` seat takes the seat map's hostFamily; without one the host is unknown and
@@ -213,12 +217,14 @@ def test_L3_fold_audits_stamps_fixed_on_discharged_only():
     open_id = RD._finding_key_of(open_f)
     RD._set_findings(state, [discharged_f, open_f])
     state["_newSurface"] = True
+    state["_fixDeltaDiff"] = "diff --git a/f.py b/f.py\n"
     auditor = state["_auditTargets"][0]["auditorVendor"]
     manifest = {discharged_id: auditor, open_id: auditor}
     RD._fold_audits(state, state["config"], {
         "results": [
-            {"id": discharged_id, "ruling": "discharged", "reason": "gone"},
-            {"id": open_id, "ruling": "not-discharged", "reason": "still there"},
+            {"id": discharged_id, "ruling": "discharged", "reason": "gone", "checks": _AUDIT_CHECKS},
+            {"id": open_id, "ruling": "not-discharged", "reason": "still there",
+             "checks": _AUDIT_CHECKS},
         ],
         "collectionManifest": manifest,
     })
@@ -236,78 +242,6 @@ def test_L3_fold_audits_stamps_fixed_on_discharged_only():
         assert open_live.get("disposition") is None
     elif open_id in ledger:
         assert ledger[open_id].get("disposition") is None
-
-
-# --- L4 ------------------------------------------------------------------------------
-
-def test_L4_judgment_skip_records_out_of_scope_with_follow_up():
-    finding = {"title": "tradeoff", "severity": "Important", "file": "j.py", "line": 5,
-               "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(finding)])
-    fid = RD._judgment_row_ids(state["_judgmentFindings"])[0]
-    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
-                 "classClosure": "tracked separately"}
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": fid, "disposition": "skip", "reason": "product choice",
-         "followUp": follow_up}]})
-    entry = _ledger_by_key(state)[fid]
-    assert entry["disposition"] == "left-for-owner"
-    assert entry["followUp"] == follow_up
-
-
-def test_L4_judgment_skip_without_follow_up_records_no_follow_up(tmp_path):
-    finding = {"title": "tradeoff", "severity": "Important", "file": "j.py", "line": 6,
-               "tradeoff": True}
-    state = RD.new_state(_cfg())
-    RD._route_judgment_blockers(state, [dict(finding)])
-    fid = RD._judgment_row_ids(state["_judgmentFindings"])[0]
-    RD._fold_judgment(state, state["config"], {"dispositions": [
-        {"id": fid, "disposition": "skip", "reason": "product choice"}]})
-    entry = _ledger_by_key(state)[fid]
-    assert entry["disposition"] == "left-for-owner"
-    assert "followUp" not in entry
-
-
-# --- L5 ------------------------------------------------------------------------------
-
-def test_L5_stall_accept_risk_records_out_of_scope_on_targets():
-    state, ident, tgt = _stall_target_state()
-    key = RD._finding_key_of(tgt)
-    RD._fold_stall(state, state["config"], {"choice": RD.ACCEPT_RISK_CHOICE})
-    entry = _ledger_by_key(state)[key]
-    assert entry["disposition"] == "left-for-owner"
-    assert entry["outOfScopeReason"] == "owner accepted the disclosed risk (stall gate)"
-
-
-def test_L5_stall_accept_risk_carries_follow_up():
-    state, ident, tgt = _stall_target_state()
-    key = RD._finding_key_of(tgt)
-    follow_up = {"item": "defer auth redesign", "revisitTrigger": "when #1300 lands",
-                 "classClosure": "tracked separately"}
-    RD._fold_stall(state, state["config"], {
-        "choice": RD.ACCEPT_RISK_CHOICE,
-        "followUp": follow_up,
-    })
-    entry = _ledger_by_key(state)[key]
-    assert entry["disposition"] == "left-for-owner"
-    assert entry["followUp"] == follow_up
-
-
-def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
-    state = RD.new_state(_cfg())
-    state["findings"] = []
-    f = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
-         "verdict": verdict, "evidence": evidence}
-    state["fixBatch"] = [f]
-    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
-    tgt = state["_auditTargets"][0]
-    ident = identity or tgt["identity"]
-    state["_auditOutcome"] = {"notDischarged": [tgt["id"]]}
-    state["selfRecovered"] = True
-    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": [ident]})
-    return state, ident, tgt
 
 
 # --- L6 ------------------------------------------------------------------------------
@@ -335,7 +269,7 @@ def test_C13_fix_fold_records_fix_fold_head(tmp_path, monkeypatch):
     head = "f" * 40
     monkeypatch.setattr(RD, "_resolve_fix_fold_head_sha", lambda _sd, _st: (head, None))
     state["_fixBatch"] = []
-    RD._fold_fixer(state, state["config"], {"fixes": []}, session_dir=str(tmp_path))
+    RD._fold_apply_fixes(state, state["config"], {"fixes": []}, session_dir=str(tmp_path))
     assert state["rounds"]["2"]["fixFoldHead"] == head
 
 

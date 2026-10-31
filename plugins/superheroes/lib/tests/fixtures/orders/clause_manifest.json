@@ -8,8 +8,7 @@
     "Base rubric (binding) > CLAUDE.md (conventions)",
     "Never one whole-file read",
     "Set `dimension` to",
-    "at most 5 code-quality-only Nits reported per review round across all seats",
-    "This is the ONLY source of truth for verifying code"
+    "at most 5 code-quality-only Nits reported per review round across all seats"
   ],
   "dispatch-verifiers": [
     "You are the per-finding verifier for one cluster",
@@ -30,17 +29,6 @@
     "Echo staged ids verbatim",
     "every survivor id appears exactly once"
   ],
-  "dispatch-fixer": [
-    "You are the fixer for one round of an auto-fix code-review loop",
-    "Fix ONLY what the findings call for. No unrelated refactors (YAGNI)",
-    "retry ONCE. If it still fails, STOP and report CHECK_FAILED",
-    "autofix-probe-",
-    "Commit ALL changes in ONE commit",
-    "Create and edit files only with the host's file-write and file-edit tools",
-    "Never run a formatter, a linter's autofix, or anything else that rewrites a committed break-it test file",
-    "do NOT guess. Report it for owner escalation via the runner's native write-result contract",
-    "Leave `headDiff` and `headDiffPath` out of your result, on every ending"
-  ],
   "dispatch-gap-sweep": [
     "You are the gap-sweep finder for a big-diff review round",
     "only flag code in `+` or `-` lines",
@@ -50,16 +38,39 @@
     "Do NOT decide the run's outcome or re-run panel seats",
     "Never one whole-file read"
   ],
+  "dispatch-second-test": [
+    "You are a fresh run of the test reviewer",
+    "Write one more test for each finding",
+    "This is the finding's last test: no further test is written after it",
+    "return the finding with no block in",
+    "Return only the items you were given, each once, by its staged `id`",
+    "Never change the repository, and never claim a run you did not make",
+    "runs your test, exactly as you wrote it, in its own working copy"
+  ],
+  "dispatch-second-test-correction": [
+    "You are a fresh run of the test reviewer",
+    "so your test has been put back and committed again as you wrote it",
+    "You have one chance to\ncorrect it",
+    "It is a replacement for your test, not a weaker one",
+    "return the item with no block in `suggestion`",
+    "The correction is final: no further correction is offered for this finding",
+    "Return only the items you were given, each once, by its staged `id`",
+    "Never change the repository, and never claim a run you did not make",
+    "commits your corrected test, exactly as you wrote it, in its own working copy"
+  ],
   "dispatch-audits": [
-    "You are the fix auditor for one cleared-or-stalled finding target",
-    "When an independent runner-channel vendor is live, you are never the fixer's vendor",
+    "You are the [fix auditor](../glossary.md#fix-auditor) for one cleared-or-stalled finding target",
+    "When an independent runner-channel vendor is live, you are never the build session's vendor",
     "Return exactly one audit result for this target",
     "Judge only this one target",
+    "answer three questions about the fix in the result's field for them",
+    "stands only when all three answers are `yes`",
+    "compare `committedTest` with `reviewerTest` in light of `changedWhy`",
     "Never change the repository, and never claim a run you did not make",
     "Transport keys use the per-location target identifier"
   ],
   "dispatch-scoped-finder": [
-    "You are the scoped finder for a delta review round",
+    "You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round",
     "only flag code in `+` or `-` lines within those\nhunks",
     "You are reviewing CHANGES MADE BY THIS FIX",
     "`file:line` citation required",

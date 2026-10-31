@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import review_diff_bytes  # noqa: E402
 import session_mode  # noqa: E402
 import store_core  # noqa: E402
 
@@ -38,7 +39,7 @@ REASON_DIFF_BASE_UNVERIFIABLE = "round-diff-base-unverifiable"
 REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
-# Closed session modes — authoritative set for check_base and grounding_stage.
+# Closed session modes — authoritative set for check_base.
 SESSION_MODES = session_mode.MODES
 
 _PIN_SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -370,11 +371,13 @@ def _numstat_z_output(pin, repo_root, run):
     on non-UTF-8 paths. If an explicit ``run`` returns ``bytes``, they are decoded the same way.
     """
     if run is None:
-        raw = _run_git_bytes(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+        raw = _run_git_bytes(
+            repo_root, "diff", *review_diff_bytes.REVIEW_NUMSTAT_ARGS, "--numstat", "-z", "%s...HEAD" % pin
+        )
         if raw is None:
             return None
         return raw.decode("utf-8", errors="surrogateescape")
-    out = run(repo_root, "diff", "--numstat", "-z", "%s...HEAD" % pin)
+    out = run(repo_root, "diff", *review_diff_bytes.REVIEW_NUMSTAT_ARGS, "--numstat", "-z", "%s...HEAD" % pin)
     if isinstance(out, bytes):
         return out.decode("utf-8", errors="surrogateescape")
     return out
@@ -559,7 +562,9 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
             return {
                 "ok": False,
                 "reason": REASON_REPO_MISMATCH,
-                "detail": "PR base repo %r does not match origin %r" % (pr_repo, base_repo),
+                "detail": ("reviewing this PR is not supported: code review reviews only PRs "
+                           "built in the project it serves, and this PR's base repository %r is "
+                           "not this project's (%r)" % (pr_repo, base_repo)),
             }
         base_repo_check = "matched"
 

@@ -203,7 +203,7 @@ def test_standing_rulings_for_orders_reads_only_the_latest_out_of_scope_rows():
 
 
 def test_ruled_finding_reaches_every_phase_and_is_not_reraised_as_new(tmp_path):
-    session_dir, _g, _h, row_a, row_b = RUL._pending_fixer_two_findings(tmp_path)
+    session_dir, _g, _h, row_a, row_b = RUL._pending_apply_fixes_two_findings(tmp_path)
     id_b = row_b.get("id") or RD._fix_batch_row_key(row_b)
     key_b = RD._fix_batch_row_key(row_b)
     path = RUL._write_ruling_file(tmp_path / "r.json", [
@@ -220,10 +220,8 @@ def test_ruled_finding_reaches_every_phase_and_is_not_reraised_as_new(tmp_path):
         for host_seat in (True, False):
             text = _render(phase, host_seat, standing_rulings=rows)
             assert "- %s: out of scope — belongs to the next milestone" % key_b in text, phase
-    # ... and through the driver's own context builder on the real pending fixer order
-    fixer_text = RUL._fixer_order_text(session_dir)
-    assert "- %s: out of scope — belongs to the next milestone" % key_b in fixer_text
-    assert "## Project threat model (project calibration, quoted data)" in fixer_text
+    # ... and the pending `apply-fixes` step makes no order: its batch file leaves the ruled-out row out
+    assert key_b not in RUL._apply_fixes_text(session_dir)
 
     # (b) a later round's finding with the same identity is dispositioned out of scope and stays
     # out of the fix batch
@@ -252,24 +250,12 @@ def test_ruled_finding_reaches_every_phase_and_is_not_reraised_as_new(tmp_path):
     assert len(filtered2) == 1
 
 
-def test_lint_elision_covers_both_quoted_blocks_and_nothing_else():
-    ctx = {"threat_model": "Attackers read /etc/shadow-ish paths: src/ghost/never.py",
-           "standing_rulings": [{"findingKey": "src/ghost/other.py:x", "reason": "see docs/none.md"}]}
-    context = _context(RO.ORDER_PHASES[0], True, **ctx)
-    text, reason = RO.render_order(RO.ORDER_PHASES[0], "seat", context)
-    assert reason is None, reason
-    lint_text = RD._order_lint_text(text, context)
-    assert "src/ghost/never.py" not in lint_text
-    assert "docs/none.md" not in lint_text
-    assert RD.QUOTED_DATA_LINT_ELISION in lint_text
-    assert "## Return your result" in lint_text
-
-
 # --- B1: the panel follows the seeded seat map's roster -----------------------------------------
 
 def test_panel_dimensions_follow_the_seeded_seat_map_roster_in_dimensions_order():
     # axis: the roster-derived default dimensions (neutralize back to all five) — see bite-proof
     # record wo_b_1797_seat_orders
+    # "grounding-seat" is a stale name an older persisted map may still carry: read as an unknown seat
     seat_map = {"roster": ["test-role", "grounding-seat", "code-reviewer", "unknown-seat"],
                 "laneBasis": {"floor": None}}
     cfg = RD._default_config({"seatMap": seat_map})
@@ -318,14 +304,6 @@ def _reduced_state(tmp_path):
     return state
 
 
-def _unknown_surface_dimensions(state, diff):
-    state["round"] = 2
-    state["_headDiffUnknown"] = True
-    RD._enter_delta_round(state, state["config"], panel_diff_seam=lambda *_: (diff, None),
-                          panel_head="a" * 40)
-    return state["rounds"]["2"]["roundKind"], RD._advance(state, state["config"])["payload"]["dimensions"]
-
-
 def _assert_halted_lane_expanded(state):
     assert state["terminal"] == "halted"
     assert state["step"] == RD.P_TERMINAL
@@ -343,9 +321,8 @@ def test_a_head_the_lane_call_cannot_clear_halts_lane_expanded_recompose(tmp_pat
     state = _reduced_state(tmp_path)
     assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
     state["round"] = 2
-    state["_headDiffUnknown"] = True
-    RD._enter_delta_round(state, state["config"], panel_diff_seam=lambda *_: (diff, None),
-                          panel_head="a" * 40)
+    state["headDiff"] = diff
+    RD._enter_delta_round(state, state["config"])
     _assert_halted_lane_expanded(state)
     assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
     assert "roundKind" not in state["rounds"].get("2", {})
@@ -361,15 +338,20 @@ def test_an_unreadable_head_diff_halts_lane_expanded_recompose(tmp_path):
 
 def test_a_halted_session_dispatches_no_further_phase(tmp_path):
     state = _reduced_state(tmp_path)
-    assert not RD._refresh_panel_diff_at_verified_head(
-        state, state["config"], "a" * 40, panel_diff_seam=lambda *_: (_RISKY_DIFF, None))
+    state["round"] = 2
+    state["headDiff"] = _RISKY_DIFF
+    RD._enter_delta_round(state, state["config"])
     _assert_halted_lane_expanded(state)
+    assert state.get("step") != RD.P_AUDITS and state.get("step") != RD.P_SCOPED
 
 
 _PAYMENTS_AREA = {"name": "Payments", "covers": ["src/payments/*"],
                   "why": "Charges customers.", "undo": "Hard: a charge needs a refund."}
 _DOCS_DIFF = ("diff --git a/docs/readme.md b/docs/readme.md\n"
               "--- a/docs/readme.md\n+++ b/docs/readme.md\n@@ -1 +1 @@\n-old\n+new\n")
+# The round's fix batch: a fix surface is only known from a batch that names the fixed findings.
+_DOCS_FIXED_FINDING = {"file": "docs/readme.md", "line": 1, "title": "stale wording",
+                       "severity": "Important"}
 
 
 def _calibrated_reduced_state(tmp_path, monkeypatch):
@@ -403,7 +385,7 @@ def _delta_state_after_round_one(tmp_path, monkeypatch, head_diff):
     state["round"] = 2
     state["deltaBaseline"] = {"round": 2, "diff": _DOCS_DIFF}
     state["headDiff"] = head_diff
-    state["fixBatch"] = []
+    state["fixBatch"] = [dict(_DOCS_FIXED_FINDING)]
     return state
 
 
@@ -438,30 +420,42 @@ def test_the_head_change_decision_depends_on_the_paths_the_head_changed(tmp_path
     _assert_halted_lane_expanded(state)
 
 
-def test_the_verified_head_refresh_depends_on_the_paths_the_head_changed(tmp_path, monkeypatch):
+def test_the_delta_round_entry_depends_on_the_paths_the_head_changed(tmp_path, monkeypatch):
+    # the head the delta round is entered on is the one the lane call is asked about: a clean head
+    # continues the reduced session, a risky one halts it
     clean = _calibrated_reduced_state(tmp_path, monkeypatch)
-    assert RD._refresh_panel_diff_at_verified_head(
-        clean, clean["config"], "a" * 40, panel_diff_seam=lambda *_: (_DOCS_DIFF, None))
+    clean.update({"round": 2, "deltaBaseline": {"round": 2, "diff": _DOCS_DIFF},
+                  "headDiff": _DOCS_DIFF + _DOCS_DIFF.replace("readme", "guide"),
+                  "fixBatch": [dict(_DOCS_FIXED_FINDING)]})
+    RD._enter_delta_round(clean, clean["config"])
     assert not clean.get("terminal")
     assert clean["config"]["dimensions"] == ["code-reviewer", "test-role"]
     risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "diff": _DOCS_DIFF,
                          "seatMap": clean["config"]["seatMap"]})
-    assert not RD._refresh_panel_diff_at_verified_head(
-        risky, risky["config"], "a" * 40, panel_diff_seam=lambda *_: (_RISKY_DIFF, None))
+    risky.update({"round": 2, "deltaBaseline": {"round": 2, "diff": _DOCS_DIFF},
+                  "headDiff": _RISKY_DIFF, "fixBatch": [dict(_DOCS_FIXED_FINDING)]})
+    RD._enter_delta_round(risky, risky["config"])
     _assert_halted_lane_expanded(risky)
 
 
-def test_the_unknown_surface_entry_depends_on_the_paths_the_head_changed(tmp_path, monkeypatch):
+def test_the_unknown_surface_entry_hands_back_whatever_the_head_would_have_changed(tmp_path, monkeypatch):
+    # an unknown fix surface is never re-derived and never put to the lane call: the PR is handed back
+    # with its findings open, clean head or risky, and no panel or scoped round is entered
     clean = _calibrated_reduced_state(tmp_path, monkeypatch)
-    _kind, dims = _unknown_surface_dimensions(clean, _DOCS_DIFF)
-    assert dims == ["code-reviewer", "test-role"]
     risky = RD.new_state({"repoRoot": clean["config"]["repoRoot"], "diff": _DOCS_DIFF,
                          "seatMap": clean["config"]["seatMap"]})
-    risky["round"] = 2
-    risky["_headDiffUnknown"] = True
-    RD._enter_delta_round(risky, risky["config"], panel_diff_seam=lambda *_: (_RISKY_DIFF, None),
-                          panel_head="a" * 40)
-    _assert_halted_lane_expanded(risky)
+    for state, head in ((clean, _DOCS_DIFF), (risky, _RISKY_DIFF)):
+        state["round"] = 2
+        state["_headDiffUnknown"] = True
+        state["headDiff"] = head
+        RD._enter_delta_round(state, state["config"], panel_diff_seam=lambda *_: (head, None),
+                              panel_head="a" * 40)
+        assert state["terminal"] == "handed-back" and state["step"] == RD.P_TERMINAL
+        assert state["decisions"][-1]["kind"] == "fix-surface-unknown"
+        assert state["certification"]["shape"] is None
+        assert all(d["kind"] != RD.LANE_EXPANDED_RECOMPOSE for d in state["decisions"])
+        assert "roundKind" not in state["rounds"].get("2", {})
+        assert state["config"]["dimensions"] == ["code-reviewer", "test-role"]
 
 
 # --- the first panel is dispatched only after the lane basis is re-asked over the round-1 diff ----

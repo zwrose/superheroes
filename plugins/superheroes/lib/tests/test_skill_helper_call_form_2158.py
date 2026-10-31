@@ -9,7 +9,7 @@ and the plugin root `<plugin root>`.
 
 The oracle is the hook's own `decide` (`hooks/plugin_scripts_allow.py`): each call form found in the
 skill text is rendered with real paths and handed to `decide`. It must be approved, except the
-round driver's `run-verify` and `rule` verbs and any `round_driver.py` call carrying
+round driver's `run-verify`, `rule` and `extra-audit` verbs and any `round_driver.py` call carrying
 `--verify-command`, `--break-it-interpreter` or `--records-path`, which the hook leaves to the normal
 permission check on purpose and which this module asserts are NOT approved.
 
@@ -41,7 +41,7 @@ _ROOTS = (
 )
 
 # Measured at the 2158 fix: 35 call forms across the three trees (fenced lines plus inline spans).
-POPULATION_FLOOR = 33
+POPULATION_FLOOR = 31  # the grounding stage's call forms left with it (C1-L2); the owner-gate advance form left with the gates
 
 _SCRIPT_IN_FORM = re.compile(r"(?<![A-Za-z0-9_])lib/(%s)\.py(?![A-Za-z0-9_])" % _NINE_ALT)
 _FORM_HEAD = re.compile(r"^python3 -B <plugin root>/lib/(%s)\.py(?: (.*))?$" % _NINE_ALT)
@@ -52,7 +52,7 @@ _PLACEHOLDER_NAMES = frozenset((
     "phase", "N", "phase from next", "verify command, or none", "engine or native",
     "attempt from next", "expectedStateHash from next", "vendor", "id",
     "in-repo or global, the LOC value", "vendors JSON list", "implementation engine", "attempt",
-    "expectedStateHash", "build base", "path from table above", "tripwire, park or held", "seat",
+    "expectedStateHash", "build base", "path from table above", "tripwire or park", "seat",
     "round from next", "rulings file", "who", "effort or null", "sha",
     "the brief-check seat JSON, written out", "claude or codex", "the order file",
     "the build worktree", "the build worktree's plugin root, in this repository",
@@ -69,7 +69,10 @@ _FORBIDDEN_ROOT_DIR = re.compile(
 )
 _NAMES_NINE = re.compile(r"(?<![A-Za-z0-9_])(?:%s)\.py" % _NINE_ALT)
 _SESSION_DIR_VAR = re.compile(r"--session-dir[ =]\"?\$\{?SESSION_DIR\}?\"?")
-_UNAPPROVED_DRIVER_VERBS = ("run-verify", "rule")
+_UNAPPROVED_DRIVER_VERBS = ("run-verify", "rule", "extra-audit", "break-it-change")
+# the unapproved verbs the population must show a form of; `extra-audit` is asserted not approved when
+# a form is found, but no form of it is required
+_REQUIRED_DRIVER_FORMS = ("run-verify", "rule")
 _UNAPPROVED_DRIVER_FLAGS = ("--verify-command", "--break-it-interpreter", "--records-path")
 
 Form = namedtuple("Form", "rel line nth text")
@@ -192,7 +195,7 @@ def _population_problems(forms):
     if len(forms) < POPULATION_FLOOR:
         problems.append("population %d is below the floor %d" % (len(forms), POPULATION_FLOOR))
     verbs = {_driver_verb(f.text) for f in forms}
-    for verb in _UNAPPROVED_DRIVER_VERBS:
+    for verb in _REQUIRED_DRIVER_FORMS:
         if verb not in verbs:
             problems.append("no round_driver.py %s form in the population" % verb)
     return problems
@@ -321,20 +324,20 @@ def test_census_collects_and_flags_a_command_split_before_the_script_path():
     split = (
         "```bash\n"
         "python3 -B \\\n"
-        "  <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n"
+        "  <plugin root>/lib/review_store.py stage --session-dir <session dir>\n"
         "```\n"
     )
     forms = _call_forms_in_text("fake.md", split)
     assert len(forms) == 1, forms
     assert "spans more than one physical line" in _shape_problems(forms[0].text)
-    single = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>\n```\n"
+    single = "```bash\npython3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir>\n```\n"
     one = _call_forms_in_text("fake.md", single)
     assert len(one) == 1 and _shape_problems(one[0].text) == []
 
 
 def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
     session, repo = scene
-    base = "python3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir>"
+    base = "python3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir>"
     assert _judge(base, _PLUGIN, session, repo) is None
     for redirect in (" < /tmp/input > /tmp/output", " </tmp/input>/tmp/output", " </tmp/in >/tmp/out",
                      " <input.txt>output.txt", " <input.txt> output.txt", " <in>out"):
@@ -344,7 +347,7 @@ def test_a_shell_redirect_is_not_erased_as_a_placeholder(scene):
 
 @pytest.mark.parametrize("boundary", ["\\\n```\n", "\\\n"])
 def test_a_trailing_backslash_at_a_fence_or_eof_boundary_is_collected_and_flagged(boundary):
-    text = "```bash\npython3 -B <plugin root>/lib/grounding_stage.py stage --session-dir <session dir> " + boundary
+    text = "```bash\npython3 -B <plugin root>/lib/review_store.py stage --session-dir <session dir> " + boundary
     forms = _call_forms_in_text("fake.md", text)
     assert len(forms) == 1, forms
     assert "ends in a backslash continuation" in _shape_problems(forms[0].text)

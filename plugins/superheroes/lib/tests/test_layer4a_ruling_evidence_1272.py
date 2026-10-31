@@ -15,6 +15,7 @@ import engine_dispatch  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_records as RR  # noqa: E402
 import session_contract  # noqa: E402
+import test_round_driver as TRD  # noqa: E402
 import test_round_driver_integration as TRI  # noqa: E402
 
 from test_seat_provenance_1272 import (  # noqa: E402
@@ -90,6 +91,7 @@ def _scrubbed_ruling_payload(seat):
         "ruling": "discharged",
         "reason": "re-read the fixed hunk; the defect is gone",
         "auditorVendor": "codex",
+        "checks": TRD.audit_checks(),
     }
 
 

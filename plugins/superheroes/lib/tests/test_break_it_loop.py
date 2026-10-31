@@ -157,13 +157,15 @@ def test_l1_a_failing_break_it_test_survives_compile_stamped(world):
     assert cluster[break_it.RUN_FIELD]["outcome"] == "failed"
 
 
-def test_l2_a_passing_break_it_test_is_dropped_and_recorded(world):
+def test_l2_a_passing_break_it_test_keeps_its_finding_stamped_and_is_recorded(world):
+    # the run judges nothing: a passing run no longer drops the finding
     state = world.fold_panel(_break_it_finding(_TEST_PASSING))
-    assert state["_toVerify"] == []
+    (staged,) = state["_toVerify"]
+    assert staged[break_it.RUN_FIELD]["outcome"] == "passed"
     (entry,) = world.round_record["breakItRuns"]
-    assert entry["outcome"] == "passed" and entry["findingKey"] is None
+    assert entry["outcome"] == "passed" and entry["findingKey"] == staged[SC.FINDING_KEY_FIELD]
     decisions = [d for d in state["decisions"] if d["kind"] == "break-it-run"]
-    assert len(decisions) == 1 and "1 passed (dropped)" in decisions[0]["detail"]
+    assert len(decisions) == 1 and "1 run: 1 exited 0, 0 exited non-zero, 0 not run" in decisions[0]["detail"]
 
 
 def test_l12_no_repo_root_keeps_the_finding_as_a_not_run(world):
@@ -324,7 +326,7 @@ def test_a_failing_final_run_is_kept_in_the_row_and_the_park_reason(world):
     assert "charged 2 times" in world.state["certification"]["reason"]
 
 
-def test_l4_merge_and_rank_never_merges_a_break_it_finding():
+def test_l4_merge_and_rank_keeps_each_break_it_member_in_one_fix_group():
     def finding(fid, **extra):
         out = {"id": fid, "file": "f%s.py" % fid, "line": 1, "title": "t%s" % fid,
                "severity": "Important", "suggestion": "s-%s" % fid}
@@ -344,14 +346,40 @@ def test_l4_merge_and_rank_never_merges_a_break_it_finding():
         assert by_id[fid]["suggestion"] == "s-%s" % fid
         assert by_id[fid][break_it.RUN_FIELD] == {"outcome": "failed"}
     assert out["merges"] == []
+    # the group's resulting findings are tied into one fix group
+    assert out["fixGroups"] == [{"group_id": "g0", "member_ids": ["v0", "v1", "v2"]}]
     assert verification.grouping_coverage_fault(survivors, grouping) is None
-    # the rest of a group still merges, listing only the merged ids
+    # the rest of a group still merges, listing only the merged ids; the fix group names the kept id
     out = verification.merge_and_rank([a, c, d], [{"group_id": "g0", "member_ids": ["v0", "v2", "v3"]}])
     assert sorted(f["id"] for f in out["findings"]) == ["v0", "v3"]
     assert len(out["merges"]) == 1 and out["merges"][0]["member_ids"] == ["v2", "v3"]
-    # a group made only of break-it members is all unmerged
+    assert out["fixGroups"] == [{"group_id": "g0", "member_ids": ["v0", "v3"]}]
+    # a group made only of break-it members is all unmerged, and still one fix group
     out = verification.merge_and_rank([a, b], [{"group_id": "g0", "member_ids": ["v0", "v1"]}])
     assert sorted(f["id"] for f in out["findings"]) == ["v0", "v1"] and out["merges"] == []
+    assert out["fixGroups"] == [{"group_id": "g0", "member_ids": ["v0", "v1"]}]
+    # no group id on a native-shaped group: the id is "g<index>"; a lone test carrier or no carrier ties nothing
+    out = verification.merge_and_rank([c, d, a], [{"member_ids": ["v2", "v3"]}, {"member_ids": ["v0"]}])
+    assert out["fixGroups"] == [] and ["v2", "v3"] in [m["member_ids"] for m in out["merges"]]
+    out = verification.merge_and_rank([c, a, b], [{"member_ids": ["v2"]}, {"member_ids": ["v0", "v1"]}])
+    assert out["fixGroups"] == [{"group_id": "g1", "member_ids": ["v0", "v1"]}]
+    # an invalid grouping ties nothing
+    assert verification.merge_and_rank([a, b], [{"member_ids": ["v0"]}])["fixGroups"] == []
+
+
+def test_l4b_merge_and_rank_never_merges_a_carried_test_lost_finding():
+    def finding(fid, **extra):
+        out = {"id": fid, "file": "f%s.py" % fid, "line": 1, "title": "t%s" % fid,
+               "severity": "Minor", "suggestion": "s-%s" % fid}
+        out.update(extra)
+        return out
+
+    lost = finding("v0", carriedTestLost=True)
+    other = finding("v1", severity="Important")
+    out = verification.merge_and_rank([lost, other], [{"group_id": "g0", "member_ids": ["v0", "v1"]}])
+    by_id = {f["id"]: f for f in out["findings"]}
+    assert sorted(by_id) == ["v0", "v1"] and out["merges"] == []
+    assert by_id["v0"]["carriedTestLost"] is True
 
 
 def test_l5_a_fixed_break_it_test_that_is_kept_certifies(world):
@@ -436,11 +464,7 @@ def test_l9_runs_and_kept_checks_reach_the_round_records_and_the_receipt(world, 
 
 def test_l10_the_order_goldens_carry_the_break_it_clauses():
     golden = os.path.join(_HERE, "fixtures", "orders", "golden")
-    with open(os.path.join(golden, "dispatch-fixer.txt"), encoding="utf-8") as fh:
-        fixer = " ".join(fh.read().split())
     with open(os.path.join(golden, "dispatch-verifiers.txt"), encoding="utf-8") as fh:
         verifiers = " ".join(fh.read().split())
-    assert "It is not a probe: keep it and commit it with the fix." in fixer
-    assert "Never edit or weaken the test to make it pass" in fixer
     assert "whose `taxonomy` is `break-it-test` cites a new test file" in verifiers
     assert "`breakItRun` record" in verifiers

@@ -47,24 +47,22 @@ def test_seed_from_stable():
 
 def test_determinism_same_seed():
     seed = SM.seed_from(510, None)
-    m1 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
-    m2 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
+    m1 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", seed)
+    m2 = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", seed)
     assert m1["seats"] == m2["seats"]
 
 
 def test_rotation_different_seeds():
     maps = []
     for seed in (0, 1, 2, 3, 4, 5):
-        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
+        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", seed)
         maps.append(tuple(m["seats"][s]["vendor"] for s in SM.PANEL_ROSTER))
     assert len(set(maps)) > 1
 
 
 def test_three_vendor_happy_path():
     seed = SM.seed_from(510, None)
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed)
-    grounding = m["seats"][SM.GROUNDING_SEAT]
-    assert grounding["family"] not in {"xai", "anthropic"}
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", seed)
     critical_families = {
         m["seats"][s]["family"] for s in SM.CRITICAL_SEATS if s in m["seats"]
     }
@@ -74,15 +72,14 @@ def test_three_vendor_happy_path():
 
 def test_claude_implemented_build():
     seed = SM.seed_from(99, None)
-    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "anthropic", seed)
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", seed)
     for seat in SM.STRONG_TIER_SEATS:
         assert m["seats"][seat]["family"] != "anthropic"
-    assert m["seats"][SM.GROUNDING_SEAT]["family"] != "anthropic"
     assert SM.verify(m, "anthropic") == []
 
 
 def test_single_vendor_floor():
-    m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0)
     assert len(m["seats"]) == len(SM.PANEL_ROSTER)
     constraints = {d["constraint"] for d in m["degradations"]}
     assert "critical-diversity" in constraints
@@ -96,7 +93,7 @@ def test_pin_honored():
         },
     }
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", seed, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", seed, pins=pins
     )
     assert m["seats"]["code-reviewer"]["source"] == "pinned"
     assert m["seats"]["code-reviewer"]["vendor"] == "claude"
@@ -111,7 +108,7 @@ def test_pin_unhonorable_model():
         },
     }
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins=pins
     )
     pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
     assert any("not honorable" in d["reason"] for d in pin_degs)
@@ -121,26 +118,21 @@ def test_pin_unhonorable_model():
 def test_pin_unknown_seat():
     pins = {"nonexistent-seat": {"vendor": "claude"}}
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins=pins
     )
     pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
     assert any("unknown seat" in d["reason"] for d in pin_degs)
 
 
 def test_fail_closed_empty_live_vendors():
-    m = SM.build(SM.PANEL_ROSTER, [], "xai", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, [], "xai", 0)
     assert m["liveVendors"] == ["claude"]
     assert any(d["constraint"] == "live-vendors" for d in m["degradations"])
 
 
-def test_fail_closed_grounding_provenance():
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, None, "anthropic", 0)
-    assert any(d["constraint"] == "grounding-provenance" for d in m["degradations"])
-
-
 def test_fail_closed_missing_tier():
     custom_roster = ("custom-seat",)
-    m = SM.build(custom_roster, THREE_VENDORS, "xai", "anthropic", 0)
+    m = SM.build(custom_roster, THREE_VENDORS, "xai", 0)
     assert any(d["constraint"] == "tier" for d in m["degradations"])
     assert m["seats"]["custom-seat"]["tier"] == "reviewer"
 
@@ -175,7 +167,6 @@ def test_to_receipt_json_roundtrip():
         SM.PANEL_ROSTER,
         THREE_VENDORS,
         "xai",
-        "anthropic",
         SM.seed_from(510, None),
     )
     receipt = SM.to_receipt(m)
@@ -190,7 +181,7 @@ def test_to_receipt_json_roundtrip():
 
 def test_biting_maker_family_openai_author():
     seed = SM.seed_from(510, None)
-    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "openai", "anthropic", seed)
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "openai", seed)
     strong_critical = SM.STRONG_TIER_SEATS | SM.CRITICAL_SEATS
     for seat in strong_critical:
         assert m["seats"][seat]["family"] != "openai"
@@ -204,7 +195,7 @@ def test_isolate_strong_seat_exclusion_with_pins():
         "premortem-reviewer": {"vendor": "claude"},
     }
     m = SM.build(
-        SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+        SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", 0, pins=pins
     )
     for seat in SM.STRONG_TIER_SEATS:
         assert m["seats"][seat]["family"] != "anthropic"
@@ -219,17 +210,15 @@ def test_pinned_maker_seats_report_pin_breaks_constraint_not_author_minority():
         "code-reviewer": {"vendor": "claude"},
         "test-role": {"vendor": "claude"},
         "premortem-reviewer": {"vendor": "claude"},
-        "grounding-seat": {"vendor": "claude"},
     }
     m = SM.build(
-        SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+        SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", 0, pins=pins
     )
     assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
     for seat in (
         "code-reviewer",
         "test-role",
         "premortem-reviewer",
-        "grounding-seat",
     ):
         assert m["seats"][seat]["source"] == "unfilled", seat
         assert m["seats"][seat]["family"] is None, seat
@@ -289,14 +278,6 @@ def _full_seats_template(**overrides):
             "family": "xai",
             "source": "rotated",
         },
-        "grounding-seat": {
-            "vendor": "cursor",
-            "model": "cursor-grok-4.6",
-            "effort": "xhigh",
-            "tier": "reviewer",
-            "family": "xai",
-            "source": "rotated",
-        },
     }
     base.update(overrides)
     return base
@@ -333,14 +314,9 @@ def _seats_without_maker_collision(maker_family):
     if maker_family == "anthropic":
         overrides["security-reviewer"] = dict(openai_cfg)
     elif maker_family == "xai":
-        for seat in ("code-reviewer", "test-role", "premortem-reviewer", "grounding-seat"):
+        for seat in ("code-reviewer", "test-role", "premortem-reviewer"):
             if SM._seat_family(seat, seats[seat]) == maker_family:
-                cfg = dict(anthropic_cfg)
-                if seat == "grounding-seat":
-                    cfg["tier"] = "reviewer"
-                    cfg["model"] = "sonnet-5.5"
-                    cfg["effort"] = "high"
-                overrides[seat] = cfg
+                overrides[seat] = dict(anthropic_cfg)
     elif maker_family == "openai":
         overrides["architecture-reviewer"] = dict(anthropic_cfg)
     return _full_seats_template(**overrides)
@@ -359,23 +335,6 @@ def test_verify_critical_maker_family_violation():
     violations = SM.verify({"seats": seats}, "openai")
     assert any(
         v.get("constraint") == "maker-family" and v.get("seat") == "premortem-reviewer"
-        for v in violations
-    )
-
-
-def test_verify_grounding_maker_family_violation():
-    seats = _full_seats_template()
-    seats["grounding-seat"] = {
-        "vendor": "claude",
-        "model": "sonnet-5.5",
-        "effort": "high",
-        "tier": "reviewer",
-        "family": "anthropic",
-        "source": "rotated",
-    }
-    violations = SM.verify({"seats": seats}, "anthropic")
-    assert any(
-        v.get("constraint") == "maker-family" and v.get("seat") == "grounding-seat"
         for v in violations
     )
 
@@ -437,44 +396,12 @@ def test_verify_missing_seat():
     )
 
 
-# --- grounding-independence degradation -------------------------------------------------------
-
-
-def test_grounding_independence_degradation_two_vendor():
-    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "openai", 0)
-    assert any(
-        d["constraint"] == "grounding-independence" for d in m["degradations"]
-    )
-
-
-def test_grounding_independence_degradation_single_vendor():
-    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
-    assert any(
-        d["constraint"] == "grounding-independence" for d in m["degradations"]
-    )
-    # the full pool goes to the maker filter, which leaves the grounding seat unfilled
-    assert m["seats"][SM.GROUNDING_SEAT]["source"] == "unfilled"
-
-
-# --- LOGIC-2 pin-breaks-constraint -------------------------------------------------------------
-
-
-def test_pin_breaks_grounding_constraint_still_honored():
-    pins = {"grounding-seat": {"vendor": "codex"}}
-    m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
-    )
-    assert any(d["constraint"] == "pin-breaks-constraint" for d in m["degradations"])
-    assert m["seats"]["grounding-seat"]["source"] == "pinned"
-    assert m["seats"]["grounding-seat"]["vendor"] == "codex"
-
-
 # --- LOGIC-3 backfill non-empty family ---------------------------------------------------------
 
 
 def test_backfill_never_empty_family():
     for live in (THREE_VENDORS, ["claude"], ["claude", "codex"], []):
-        m = SM.build(SM.PANEL_ROSTER, live, "anthropic", "openai", 0)
+        m = SM.build(SM.PANEL_ROSTER, live, "anthropic", 0)
         for seat, cfg in m["seats"].items():
             assert cfg["family"] != "", f"seat {seat} has empty family with live={live}"
             # a seat carries a non-maker family, or is recorded unfilled with no family at all
@@ -524,8 +451,6 @@ def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch,
             "codex,cursor",
             "--author-family",
             "xai",
-            "--narrative-family",
-            "anthropic",
             "--pr-number",
             "795",
         ]
@@ -555,8 +480,6 @@ def test_cli_compose_with_live_vendors_override(capsys):
             "claude,codex,cursor",
             "--author-family",
             "xai",
-            "--narrative-family",
-            "anthropic",
             "--pr-number",
             "510",
         ]
@@ -577,8 +500,6 @@ def test_cli_compose_deterministic(capsys):
         "claude,codex,cursor",
         "--author-family",
         "xai",
-        "--narrative-family",
-        "anthropic",
         "--pr-number",
         "510",
     ]
@@ -599,8 +520,6 @@ def test_cli_compose_with_pins(capsys):
             "claude,codex,cursor",
             "--author-family",
             "openai",
-            "--narrative-family",
-            "anthropic",
             "--pins",
             '{"security-reviewer":{"vendor":"claude"}}',
             "--pr-number",
@@ -724,19 +643,18 @@ def test_reachable_configs_pin_not_allowed_rotates(monkeypatch):
     assert default_cell in rc["codex"]
 
 
-def test_composer_authored_diff_excludes_cursor_from_strong_critical_and_grounding():
+def test_composer_authored_diff_excludes_cursor_from_strong_and_critical():
     """#651: a composer-made diff derives authorFamily 'xai' straight from the registry, so grok —
-    now the same family — is excluded from every strong-tier and critical seat and from grounding.
+    now the same family — is excluded from every strong-tier and critical seat.
     Before the family merge this exclusion was vacuous: composer's family ('cursor') was one no
     reviewer cell ever produced, so grok could seat anywhere on a composer-made diff."""
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     assert author == "xai"
-    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, author, "anthropic", SM.seed_from(651, None))
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, author, SM.seed_from(651, None))
     for seat in sorted(SM.STRONG_TIER_SEATS | SM.CRITICAL_SEATS):
         assert m["seats"][seat]["family"] != "xai", seat
-    assert m["seats"][SM.GROUNDING_SEAT]["family"] != "xai"
     assert SM.verify(m, author) == []
 
 
@@ -751,9 +669,8 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
     catch."""
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
-    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", SM.seed_from(651, None))
-    assert "grounding-independence" in {d["constraint"] for d in m["degradations"]}
+    author = MRG.family_for("implementer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, SM.seed_from(651, None))
     unfilled = {
         d.get("seat") for d in m["degradations"] if d.get("constraint") == "seat-unfilled"
     }
@@ -769,7 +686,7 @@ def test_cursor_only_panel_on_composer_diff_is_visibly_degraded():
 
 def test_maker_family_barred_from_test_seat():
     for seed in range(40):
-        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "openai", "anthropic", seed)
+        m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "openai", seed)
         assert m["seats"]["test-role"]["family"] != "openai", seed
         assert SM.verify(m, "openai") == [], seed
 
@@ -778,13 +695,13 @@ def test_maker_family_barred_from_every_roster_seat():
     import model_registry as MRG
 
     families = (
-        MRG.family_for("code-fixer", "claude"),
-        MRG.family_for("code-fixer", "codex"),
-        MRG.family_for("code-fixer", "cursor"),
+        MRG.family_for("implementer", "claude"),
+        MRG.family_for("implementer", "codex"),
+        MRG.family_for("implementer", "cursor"),
     )
     for author in families:
         for seed in range(40):
-            m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", seed)
+            m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, seed)
             for seat in SM.PANEL_ROSTER:
                 assert m["seats"][seat]["family"] != author, (seed, author, seat)
 
@@ -794,8 +711,8 @@ def test_single_vendor_collapse_is_same_family_degradation_not_violation():
     # same-family seat and never a maker-family violation
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
-    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", SM.seed_from(670, None))
+    author = MRG.family_for("implementer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, SM.seed_from(670, None))
     for seat in SM.PANEL_ROSTER:
         assert any(
             d.get("constraint") == "seat-unfilled" and d.get("seat") == seat
@@ -811,16 +728,10 @@ def test_single_vendor_collapse_is_same_family_degradation_not_violation():
 def test_single_vendor_collapse_does_not_claim_author_minority():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
-    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", 0)
+    author = MRG.family_for("implementer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, 0)
     assert all(m["seats"][s]["source"] == "unfilled" for s in SM.PANEL_ROSTER)
     assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
-
-
-def test_grounding_prefers_narrative_family_over_maker():
-    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "openai", 0)
-    assert m["seats"][SM.GROUNDING_SEAT]["family"] == "openai"
-    assert any(d["constraint"] == "grounding-independence" for d in m["degradations"])
 
 
 def test_verify_unknown_liveness_is_a_violation():
@@ -862,7 +773,7 @@ def test_verify_unknown_liveness_is_a_violation():
 def test_verify_pin_scoped_liveness_is_a_violation():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -912,7 +823,7 @@ def test_verify_malformed_liveness_is_a_violation():
 def test_to_receipt_carries_liveness_pin_scoped_provenance():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -950,8 +861,8 @@ def test_to_receipt_carries_liveness_pin_scoped_provenance():
 def test_to_receipt_same_family_derivation_is_idempotent():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
-    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, "anthropic", 0)
+    author = MRG.family_for("implementer", "cursor")
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], author, 0)
     m["authorFamily"] = author
     for _ in range(2):
         receipt = SM.to_receipt(m, author)
@@ -970,7 +881,7 @@ def test_pinned_maker_seat_is_still_a_violation():
     # maker-family seat for verify to flag, and the pin is disclosed as breaking the constraint
     pins = {"test-role": {"vendor": "claude"}}
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0, pins=pins
     )
     assert m["seats"]["test-role"]["source"] == "unfilled"
     assert m["seats"]["test-role"]["family"] is None
@@ -1023,7 +934,6 @@ def test_build_empty_live_cells_source_fail_closed():
         SM.PANEL_ROSTER,
         THREE_VENDORS,
         "xai",
-        "anthropic",
         0,
         live_cells=None,
         live_cells_source="",
@@ -1044,7 +954,6 @@ def test_to_receipt_empty_live_cells_source_not_laundered():
         SM.PANEL_ROSTER,
         THREE_VENDORS,
         "xai",
-        "anthropic",
         0,
         live_cells=None,
         live_cells_source="",
@@ -1129,8 +1038,6 @@ def test_compose_merges_probe_notes_before_deriving_the_receipt(monkeypatch, tmp
             "codex,cursor",
             "--author-family",
             "anthropic",
-            "--narrative-family",
-            "openai",
             "--pr-number",
             "670",
         ]
@@ -1163,7 +1070,6 @@ def test_receipt_never_asserts_same_family_and_maker_family_for_one_seat():
         SM.PANEL_ROSTER,
         ["claude"],
         author,
-        "anthropic",
         seed,
         liveness_pin_scoped=False,
     )
@@ -1198,12 +1104,11 @@ def test_receipt_never_asserts_same_family_and_maker_family_for_one_seat():
         d.get("constraint") == "preflight-cache-only" for d in receipt["degradations"]
     )
 
-    cursor_author = MRG.family_for("code-fixer", "cursor")
+    cursor_author = MRG.family_for("implementer", "cursor")
     collapse = SM.build(
         SM.PANEL_ROSTER,
         ["cursor"],
         cursor_author,
-        "anthropic",
         seed,
         liveness_pin_scoped=False,
     )
@@ -1227,7 +1132,6 @@ def test_build_and_verify_agree_on_the_same_seat():
         SM.PANEL_ROSTER,
         THREE_VENDORS,
         "anthropic",
-        "openai",
         0,
         pins=pins,
         liveness_pin_scoped=True,
@@ -1237,7 +1141,7 @@ def test_build_and_verify_agree_on_the_same_seat():
     assert receipt_pin["seats"]["test-role"]["source"] == "unfilled"
     assert not any(v.get("seat") == "test-role" for v in receipt_pin["violations"])
 
-    synthesized = SM.build(SM.PANEL_ROSTER, [], "xai", "anthropic", 0)
+    synthesized = SM.build(SM.PANEL_ROSTER, [], "xai", 0)
     receipt_syn = SM.to_receipt(synthesized, "xai")
     assert not _seat_in_both_same_family_and_maker_family(receipt_syn)
     assert not any(v.get("constraint") == "maker-family" for v in receipt_syn["violations"])
@@ -1246,7 +1150,7 @@ def test_build_and_verify_agree_on_the_same_seat():
 def test_pinned_maker_seat_does_not_claim_author_minority():
     pins = {"test-role": {"vendor": "claude"}}
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0, pins=pins
     )
     assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
     assert any(
@@ -1261,17 +1165,17 @@ def test_pinned_maker_seat_does_not_claim_author_minority():
 def test_build_carries_liveness_pin_scoped():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     maker_vendor = next(
         v for v in MRG.vendors()
         if MRG.family_for("reviewer-deep", v) == author
     )
     model, effort = SM.matrix_config("reviewer-deep", maker_vendor)
-    m_default = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", 0)
+    m_default = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, author, 0)
     assert m_default.get("livenessPinScoped") is False
 
     m_scoped = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, author, "anthropic", 0, liveness_pin_scoped=True
+        SM.PANEL_ROSTER, THREE_VENDORS, author, 0, liveness_pin_scoped=True
     )
     assert m_scoped.get("livenessPinScoped") is True
     seat_cfg = {
@@ -1293,7 +1197,7 @@ def test_build_carries_liveness_pin_scoped():
 def test_absent_liveness_pin_scoped_is_unknown_and_fails_closed():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -1323,7 +1227,7 @@ def test_absent_liveness_pin_scoped_is_unknown_and_fails_closed():
 def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -1355,7 +1259,7 @@ def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
 def test_to_receipt_records_the_author_family_it_verified():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -1389,7 +1293,7 @@ def test_to_receipt_tolerates_null_degradations():
 def test_verify_unresolvable_tier_is_a_violation():
     import model_registry as MRG
 
-    author = MRG.family_for("code-fixer", "cursor")
+    author = MRG.family_for("implementer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
         "model": "cursor-grok-4.6",
@@ -1428,7 +1332,7 @@ def test_unexcused_maker_family_violation_is_unexcused():
 
 
 def test_unexcused_critical_diversity_claude_codex_is_excused():
-    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex"], "anthropic", 0)
     receipt = SM.to_receipt(m, "anthropic")
     assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
     assert SM.unexcused_violations(receipt) == []
@@ -1440,7 +1344,7 @@ def test_unexcused_critical_diversity_pinned_critical_seats_excused_by_pin():
         "security-reviewer": {"vendor": "claude"},
         "premortem-reviewer": {"vendor": "claude"},
     }
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins=pins)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins=pins)
     receipt = SM.to_receipt(m, "xai")
     assert any(v.get("constraint") == "critical-diversity" for v in receipt["violations"])
     classified = SM.classify_violations(receipt)
@@ -1519,12 +1423,7 @@ def test_unexcused_e5_pinned_seat_excuses_strong_tier_via_pin():
         "family": "anthropic",
         "source": "rotated",
     }
-    for seat in ("test-role", "grounding-seat"):
-        seats[seat] = dict(seats["premortem-reviewer"])
-        if seat == "grounding-seat":
-            seats[seat]["tier"] = "reviewer"
-            seats[seat]["model"] = "sonnet-5.5"
-            seats[seat]["effort"] = "high"
+    seats["test-role"] = dict(seats["premortem-reviewer"])
     receipt = {
         "seats": seats,
         "liveVendors": list(THREE_VENDORS),
@@ -1706,12 +1605,7 @@ def test_unexcused_critical_diversity_pin_not_causal_f3a():
     }
     seats = _seats_without_maker_collision("xai")
     for s in SM.PANEL_ROSTER:
-        cfg = dict(anthropic_cfg)
-        if s == "grounding-seat":
-            cfg["tier"] = "reviewer"
-            cfg["model"] = "sonnet-5.5"
-            cfg["effort"] = "high"
-        seats[s] = cfg
+        seats[s] = dict(anthropic_cfg)
     seats["security-reviewer"]["source"] = "pinned"
     receipt = {
         "seats": seats,
@@ -1738,7 +1632,7 @@ def test_unexcused_strong_tier_build_degradation_seat_field_load_bearing(monkeyp
         return _real_matrix(tier, vendor)
 
     monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
-    m = SM.build(SM.PANEL_ROSTER, ["cursor"], "xai", "anthropic", 0, liveness_pin_scoped=False)
+    m = SM.build(SM.PANEL_ROSTER, ["cursor"], "xai", 0, liveness_pin_scoped=False)
     receipt = SM.to_receipt(m, "xai")
     strong_violations = [v for v in receipt["violations"] if v.get("constraint") == "strong-tier"]
     assert strong_violations
@@ -2031,7 +1925,6 @@ def test_build_records_codex_role_pins_only_when_present():
         roster=SM.PANEL_ROSTER,
         live_vendors=THREE_VENDORS,
         author_family="xai",
-        narrative_family="anthropic",
         seed=0,
         live_cells=live_cells,
         live_cells_source="probed",
@@ -2190,31 +2083,31 @@ def test_normalize_pins_preserves_legacy_claude_label():
 
 
 def test_build_string_pin_resolves_as_vendor():
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins={"code-reviewer": "claude"})
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins={"code-reviewer": "claude"})
     assert m["seats"]["code-reviewer"]["source"] == "pinned"
     assert m["seats"]["code-reviewer"]["vendor"] == "claude"
 
 
 def test_build_string_pin_is_identical_to_the_object_pin():
     shorthand = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 7, pins={"code-reviewer": "claude"}
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", 7, pins={"code-reviewer": "claude"}
     )
     longhand = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 7, pins={"code-reviewer": {"vendor": "claude"}}
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", 7, pins={"code-reviewer": {"vendor": "claude"}}
     )
     assert shorthand == longhand
 
 
 def test_build_unusable_pin_shape_degrades_instead_of_raising():
     # axis: loudness — the old behaviour was AttributeError; the new one is a named degradation
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins={"code-reviewer": 5})
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins={"code-reviewer": 5})
     pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
     assert any(d["reason"] == "pins-invalid:code-reviewer" for d in pin_degs)
     assert m["seats"]["code-reviewer"]["source"] != "pinned"
 
 
 def test_build_pin_map_that_is_not_an_object_degrades_instead_of_raising():
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins="claude")
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0, pins="claude")
     pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
     assert any(d["reason"] == "pins-invalid" for d in pin_degs)
     assert set(m["seats"]) == set(SM.PANEL_ROSTER)
@@ -2246,7 +2139,6 @@ def test_cli_compose_string_pin_shorthand(capsys):
             "x", "compose",
             "--live-vendors", "claude,codex,cursor",
             "--author-family", "openai",
-            "--narrative-family", "anthropic",
             "--pins", '{"security-reviewer":"claude"}',
             "--pr-number", "1039",
         ]
@@ -2327,7 +2219,6 @@ def test_dod_aug15_partial_codex_cell_live():
         SM.KNOWN_SEATS,
         live_vendors,
         "xai",
-        "anthropic",
         SM.seed_from(795, None),
         live_cells=live_cells,
         live_cells_source="probed",
@@ -2345,7 +2236,6 @@ def test_dod_aug15_partial_codex_cell_live():
             SM.KNOWN_SEATS,
             live_vendors,
             "xai",
-            "anthropic",
             0,
             pins={seat: {"vendor": "codex"}},
             live_cells=live_cells,
@@ -2357,9 +2247,6 @@ def test_dod_aug15_partial_codex_cell_live():
         assert cfg["model"] == reviewer_deep_model, seat
         assert cfg["effort"] == reviewer_deep_effort, seat
         assert cfg["tier"] == "reviewer-deep", seat
-    grounding = m["seats"][SM.GROUNDING_SEAT]
-    assert grounding["vendor"] != "codex"
-    assert grounding["model"] != _SECOND_CODEX_MODEL
 
 
 def test_dod_ab3_arm_g_pinned_codex_sol_honored():
@@ -2377,7 +2264,6 @@ def test_dod_ab3_arm_g_pinned_codex_sol_honored():
         SM.PANEL_ROSTER,
         live_vendors,
         "xai",
-        "anthropic",
         0,
         pins=pins,
         live_cells=live_cells,
@@ -2403,7 +2289,6 @@ def test_census_seated_cells_appear_in_live_cells():
         SM.PANEL_ROSTER,
         THREE_VENDORS,
         "xai",
-        "anthropic",
         SM.seed_from(795, None),
         live_cells=live_cells,
         live_cells_source="probed",
@@ -2420,7 +2305,7 @@ def test_census_seated_cells_appear_in_live_cells():
 def test_to_receipt_always_emits_live_cells_fields():
     # bite-axis: provenance — liveCells and liveCellsSource must appear together on every receipt
     receipts = []
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0)
     assert "liveCells" in m
     assert m["liveCells"]
     receipts.append(SM.to_receipt(m))
@@ -2429,7 +2314,6 @@ def test_to_receipt_always_emits_live_cells_fields():
         SM.PANEL_ROSTER,
         THREE_VENDORS,
         "xai",
-        "anthropic",
         0,
         live_cells=[
             ["codex", "gpt-5.6-sol", "xhigh"],
@@ -2445,7 +2329,6 @@ def test_to_receipt_always_emits_live_cells_fields():
         SM.PANEL_ROSTER,
         THREE_VENDORS,
         "xai",
-        "anthropic",
         0,
         live_cells=None,
         live_cells_source="synthesized",
@@ -2556,8 +2439,8 @@ def test_inv3_canonical_families():
         ("code-reviewer", "claude", "reviewer-deep", "anthropic"),
         ("code-reviewer", "codex", "reviewer-deep", "openai"),
         ("code-reviewer", "cursor", "reviewer-deep", "xai"),
-        ("grounding-seat", "claude", None, "anthropic"),
-        ("grounding-seat", "nosuchvendor", "reviewer", None),
+        ("code-reviewer", "claude", None, "anthropic"),
+        ("code-reviewer", "nosuchvendor", "reviewer", None),
         ("code-reviewer", 42, "reviewer-deep", None),
     ],
 )
@@ -2634,7 +2517,7 @@ def test_inv5_derived_undeclared_is_unexcusable():
 @pytest.mark.parametrize("live_vendors", [THREE_VENDORS, ["claude"], ["claude", "codex"]])
 def test_build_roundtrip_honest_maps_do_not_move(seed, live_vendors):
     author = "xai"
-    m = SM.build(SM.PANEL_ROSTER, live_vendors, author, "anthropic", seed)
+    m = SM.build(SM.PANEL_ROSTER, live_vendors, author, seed)
     for seat, cfg in m["seats"].items():
         assert cfg.get("family") == SM._seat_family(seat, cfg)
     receipt = SM.to_receipt(m, author)
@@ -2716,12 +2599,7 @@ def _all_claude_roster_seats():
     }
     seats = {}
     for seat in SM.PANEL_ROSTER:
-        cfg = dict(anthropic_cfg)
-        if seat == "grounding-seat":
-            cfg["tier"] = "reviewer"
-            cfg["model"] = "sonnet-5.5"
-            cfg["effort"] = "high"
-        seats[seat] = cfg
+        seats[seat] = dict(anthropic_cfg)
     return seats
 
 
@@ -2780,17 +2658,14 @@ def test_inv16_a_no_author_family_basis():
     assert SM.violation_basis(seat_map, None) == SM.VIOLATION_BASIS_NO_AUTHOR_FAMILY
 
 
-@pytest.mark.parametrize("seat", ["test-role", "grounding-seat"])
+@pytest.mark.parametrize("seat", ["test-role"])
 def test_inv16_c_unresolvable_vendor_violation_unexcused(seat):
-    tier = "reviewer" if seat == "grounding-seat" else "reviewer-deep"
-    model = "sonnet-5.5" if seat == "grounding-seat" else "opus-5.5"
-    effort = "high" if seat == "grounding-seat" else "xhigh"
     seats = _full_seats_template()
     seats[seat] = {
         "vendor": "nosuchvendor",
-        "model": model,
-        "effort": effort,
-        "tier": tier,
+        "model": "opus-5.5",
+        "effort": "xhigh",
+        "tier": "reviewer-deep",
         "family": "anthropic",
         "source": "rotated",
     }
@@ -2820,7 +2695,7 @@ def test_inv16_d_same_family_when_canonical_matches_maker_but_declared_differs()
             "vendor": "cursor",
             "model": "cursor-grok-4.6",
             "effort": "xhigh",
-            "tier": "reviewer-deep" if seat != "grounding-seat" else "reviewer",
+            "tier": "reviewer-deep",
             "family": "openai",
             "source": "rotated",
         }
@@ -2846,7 +2721,7 @@ def test_inv16_d_no_same_family_when_canonical_not_maker():
             "vendor": "codex",
             "model": "gpt-5.6-sol",
             "effort": "xhigh",
-            "tier": "reviewer-deep" if seat != "grounding-seat" else "reviewer",
+            "tier": "reviewer-deep",
             "family": "anthropic",
             "source": "rotated",
         }
@@ -3127,7 +3002,7 @@ def test_sm6_1269_backfill_tier_census_rejects_planted_shapes():
         planted_rotation,
     )
     assert "reviewer-lite" in rotation_tiers
-    assert SM.accepted_tiers_for_seat("grounding-seat") != frozenset(rotation_tiers)
+    assert SM.accepted_tiers_for_seat("code-reviewer") != frozenset(rotation_tiers)
 
     planted_assign = (
         "def build():\n"
@@ -3141,7 +3016,7 @@ def test_sm6_1269_backfill_tier_census_rejects_planted_shapes():
     )
     assert "reviewer-lite" in assign_tiers
     assert not assign_undecidable
-    assert SM.accepted_tiers_for_seat("grounding-seat") != frozenset(assign_tiers)
+    assert SM.accepted_tiers_for_seat("code-reviewer") != frozenset(assign_tiers)
 
 
 def test_sm4_1269_backfill_tier_census_matches_accepted_tiers():
@@ -3166,7 +3041,7 @@ def test_accepted_tiers_for_seat_matches_default_override_and_backfill():
     assert SM.accepted_tiers_for_seat("security-reviewer") == frozenset(
         {"reviewer-deep", "reviewer"},
     )
-    assert SM.accepted_tiers_for_seat("grounding-seat") == frozenset(
+    assert SM.accepted_tiers_for_seat("not-a-panel-seat") == frozenset(
         {"reviewer-deep", "reviewer"},
     )
     assert SM.accepted_tiers_for_seat(
@@ -3205,7 +3080,6 @@ def test_codex_role_pin_sol_seats_deep_at_xhigh():
         SM.KNOWN_SEATS,
         ["claude", "cursor"],
         "xai",
-        "anthropic",
         0,
         codex_role_pins={"reviewer-deep": "gpt-5.6-sol"},
         live_cells=live_cells,
@@ -3233,7 +3107,6 @@ def test_codex_role_pin_astra_registered_seats_at_high():
         SM.KNOWN_SEATS,
         ["claude", "cursor"],
         "xai",
-        "anthropic",
         0,
         codex_role_pins={"reviewer-deep": "gpt-6-astra"},
         live_cells=live_cells,
@@ -3258,7 +3131,6 @@ def test_verify_maker_family_with_unavailable_role_pin_and_live_matrix_cell():
         roster=SM.PANEL_ROSTER,
         live_vendors=["claude", "codex"],
         author_family="anthropic",
-        narrative_family="openai",
         seed=0,
         pins={
             "code-reviewer": {"vendor": "claude"},
@@ -3289,7 +3161,6 @@ def test_codex_role_pin_astra_not_live_falls_back_to_matrix():
         SM.KNOWN_SEATS,
         ["claude", "cursor"],
         "xai",
-        "anthropic",
         0,
         codex_role_pins={"reviewer-deep": "gpt-6-astra"},
         live_cells=live_cells,
@@ -3323,7 +3194,6 @@ def test_one_run_model_pin_takes_own_effort_in_build(monkeypatch):
         SM.KNOWN_SEATS,
         ["claude", "codex", "cursor"],
         "xai",
-        "anthropic",
         0,
         codex_role_pins={"reviewer-deep": "gpt-6-astra"},
         pins={"architecture-reviewer": {"vendor": "codex", "model": "gpt-5.6-sol"}},
@@ -3377,7 +3247,6 @@ def test_one_run_pin_explicit_effort_still_wins(monkeypatch):
         SM.KNOWN_SEATS,
         ["claude", "codex", "cursor"],
         "xai",
-        "anthropic",
         0,
         codex_role_pins={"reviewer-deep": "gpt-6-astra"},
         pins={
@@ -3400,7 +3269,6 @@ def test_no_codex_role_pins_byte_identical_to_default_kwarg():
         roster=SM.PANEL_ROSTER,
         live_vendors=THREE_VENDORS,
         author_family="xai",
-        narrative_family="anthropic",
         seed=SM.seed_from(510, None),
         live_cells=_aug15_live_cells(),
         live_cells_source="probed",
@@ -3416,7 +3284,9 @@ def test_reachable_configs_vendor_pinned_seat_includes_matrix_cell():
     reviewer_model, reviewer_effort = MRG.matrix_config("reviewer", "codex")
     rc = SM.reachable_configs(
         ["codex"],
-        {"grounding-seat": "codex"},
+        {"test-role": "codex"},
+        roster=("test-role",),
+        tier_by_seat={"test-role": "reviewer"},
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
     )
     assert [reviewer_model, reviewer_effort] in rc["codex"]
@@ -3441,10 +3311,11 @@ def test_codex_role_pin_vendor_pinned_seat_probes_matrix_fallback():
     import model_registry as MRG
 
     reviewer_model, reviewer_effort = MRG.matrix_config("reviewer", "codex")
-    pins = {"grounding-seat": {"vendor": "codex"}}
+    pins = {"test-role": {"vendor": "codex"}}
     needed = SM.reachable_configs(
         ["codex", "cursor"],
         pins,
+        tier_by_seat={"test-role": "reviewer"},
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
     )
     live_cells = [
@@ -3453,24 +3324,26 @@ def test_codex_role_pin_vendor_pinned_seat_probes_matrix_fallback():
         for model, effort in cells
         if not (vendor == "codex" and model == "gpt-5.6-sol" and effort == "high")
     ]
+    # anthropic is made a maker too, so codex is the one family left to seat the reviewer-tier test seat
     m = SM.build(
-        SM.PANEL_ROSTER,
+        ("test-role",),
         ["claude", "codex", "cursor"],
         "xai",
-        "anthropic",
         0,
         pins=pins,
+        tier_by_seat={"test-role": "reviewer"},
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
         live_cells=live_cells,
         live_cells_source="probed",
+        extra_maker_families=frozenset({"anthropic"}),
     )
-    cfg = m["seats"]["grounding-seat"]
+    cfg = m["seats"]["test-role"]
     assert cfg["vendor"] == "codex"
     assert cfg["model"] == reviewer_model
     assert cfg["effort"] == reviewer_effort
     not_live = [d for d in m["degradations"] if d["constraint"] == "role-pin-not-live"]
     assert len(not_live) == 1
-    assert not_live[0]["seat"] == "grounding-seat"
+    assert not_live[0]["seat"] == "test-role"
 
 
 def test_reachable_configs_includes_role_pinned_cell():
@@ -3480,6 +3353,7 @@ def test_reachable_configs_includes_role_pinned_cell():
     rc = SM.reachable_configs(
         ["codex", "cursor"],
         None,
+        tier_by_seat={"test-role": "reviewer"},
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
     )
     assert [reviewer_model, reviewer_effort] in rc["codex"]
@@ -3499,24 +3373,25 @@ def test_codex_role_pin_reviewer_not_live_seats_matrix_with_one_degradation():
         ["codex", reviewer_model, reviewer_effort],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
+    # anthropic is made a maker too, so codex is the one family left to seat the reviewer-tier test seat
     m = SM.build(
-        SM.PANEL_ROSTER,
+        ("test-role",),
         ["claude", "codex", "cursor"],
         "xai",
-        "anthropic",
         0,
-        tier_by_seat={"grounding-seat": "reviewer"},
+        tier_by_seat={"test-role": "reviewer"},
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
         live_cells=live_cells,
         live_cells_source="probed",
+        extra_maker_families=frozenset({"anthropic"}),
     )
-    cfg = m["seats"]["grounding-seat"]
+    cfg = m["seats"]["test-role"]
     assert cfg["vendor"] == "codex"
     assert cfg["model"] == reviewer_model
     assert cfg["effort"] == reviewer_effort
     not_live = [d for d in m["degradations"] if d["constraint"] == "role-pin-not-live"]
     assert len(not_live) == 1
-    assert not_live[0]["seat"] == "grounding-seat"
+    assert not_live[0]["seat"] == "test-role"
 
 
 def test_codex_role_pin_no_degradation_when_seat_not_on_codex():
@@ -3524,23 +3399,24 @@ def test_codex_role_pin_no_degradation_when_seat_not_on_codex():
         ["codex", _SECOND_CODEX_MODEL, "high"],
         ["cursor", "cursor-grok-4.6", "xhigh"],
     ]
+    # openai is made a maker too, so the reviewer-tier test seat cannot land on codex
     m = SM.build(
-        SM.PANEL_ROSTER,
+        ("test-role",),
         ["claude", "codex", "cursor"],
         "xai",
-        "openai",
         0,
-        tier_by_seat={"grounding-seat": "reviewer"},
+        tier_by_seat={"test-role": "reviewer"},
         codex_role_pins={"reviewer": "gpt-5.6-sol"},
         live_cells=live_cells,
         live_cells_source="probed",
+        extra_maker_families=frozenset({"openai"}),
     )
-    cfg = m["seats"]["grounding-seat"]
+    cfg = m["seats"]["test-role"]
     assert cfg["vendor"] != "codex"
     pin_degs = [
         d for d in m["degradations"]
         if d.get("constraint") in ("role-pin-not-live", "role-pin-not-honorable")
-        and d.get("seat") == "grounding-seat"
+        and d.get("seat") == "test-role"
     ]
     assert pin_degs == []
 
@@ -3604,7 +3480,6 @@ def test_cli_compose_host_model_known(capsys):
     )
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["narrativeFamily"] == "anthropic"
     assert receipt["authorFamily"] == "xai"
 
 
@@ -3626,7 +3501,6 @@ def test_cli_compose_host_model_unknown_degrades(capsys):
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["authorFamily"] == "anthropic"
-    assert receipt["narrativeFamily"] == "anthropic"
     host_unknown = [
         d for d in receipt["degradations"] if d["constraint"] == "host-model-unknown"
     ]
@@ -3656,15 +3530,13 @@ def test_cli_compose_host_model_unknown_cursor_impl_degrades(capsys):
     )
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
-    assert receipt["narrativeFamily"] == "anthropic"
     assert receipt["authorFamily"] == "xai"
     host_unknown = [
         d for d in receipt["degradations"] if d["constraint"] == "host-model-unknown"
     ]
     assert len(host_unknown) == 1
     assert "cursor" in host_unknown[0]["reason"]
-    grounding = receipt["seats"][SM.GROUNDING_SEAT]
-    assert grounding.get("family") not in ("anthropic", "xai")
+    assert all(cfg.get("family") != "xai" for cfg in receipt["seats"].values())
 
 
 def test_host_family_bracket_suffix():
@@ -3674,7 +3546,10 @@ def test_host_family_bracket_suffix():
 
 def test_panel_pin_tiers_derived_from_registry():
     import model_registry as MR
-    derived = frozenset(MR.codex_pin_roles()) & frozenset(SM.DEFAULT_TIER_BY_SEAT.values())
+    # `reviewer` joins through the backfill downgrade tier: no seat defaults to it any more
+    derived = frozenset(MR.codex_pin_roles()) & (
+        frozenset(SM.DEFAULT_TIER_BY_SEAT.values()) | {SM._BACKFILL_DOWNGRADE_TO}
+    )
     assert derived == {"reviewer", "reviewer-deep"}
     assert SM._PANEL_PIN_TIERS == derived
     assert SM.panel_pin_tiers() == derived
@@ -3843,7 +3718,6 @@ def test_cli_compose_claude_impl_openai_host_author_is_anthropic(capsys):
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["authorFamily"] == "anthropic"
-    assert receipt["narrativeFamily"] == "openai"
     assert not any(
         d["constraint"] == "host-model-unknown" for d in receipt["degradations"]
     )
@@ -3864,7 +3738,6 @@ def test_build_extra_maker_family_falls_back_and_discloses():
         SM.PANEL_ROSTER,
         ["claude", "codex"],
         "anthropic",
-        "openai",
         1,
         extra_maker_families=frozenset({"openai"}),
     )
@@ -3883,13 +3756,12 @@ def test_build_extra_maker_family_falls_back_and_discloses():
 def test_build_extra_maker_families_default_unchanged():
     for seed in range(21):
         base = SM.build(
-            SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", seed
+            SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", seed
         )
         with_extra = SM.build(
             SM.PANEL_ROSTER,
             THREE_VENDORS,
             "anthropic",
-            "openai",
             seed,
             extra_maker_families=None,
         )
@@ -3937,7 +3809,6 @@ def test_cli_compose_cursor_impl_openai_host_author_is_xai(capsys):
     assert rc == 0
     receipt = json.loads(capsys.readouterr().out)
     assert receipt["authorFamily"] == "xai"
-    assert receipt["narrativeFamily"] == "openai"
 
 
 def test_cli_compose_family_flags_conflict(capsys):
@@ -4016,7 +3887,7 @@ def _assert_all_unfilled(m, roster=None):
 
 
 def test_e1_only_author_family_live_leaves_every_seat_unfilled():
-    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", 0)
     _assert_all_unfilled(m)
     assert not any(cfg["family"] == "anthropic" for cfg in m["seats"].values())
     assert not any(d.get("constraint") == "same-family" for d in m["degradations"])
@@ -4029,7 +3900,6 @@ def test_e2_author_plus_extra_maker_live_leaves_every_seat_unfilled():
         SM.PANEL_ROSTER,
         ["claude", "codex"],
         "anthropic",
-        "openai",
         3,
         extra_maker_families=frozenset({"openai"}),
     )
@@ -4043,7 +3913,7 @@ def test_e2_author_plus_extra_maker_live_leaves_every_seat_unfilled():
 
 def test_e3_maker_family_pin_leaves_its_seat_unfilled_and_others_compose():
     pins = {"code-reviewer": {"vendor": "claude"}}
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0, pins=pins)
     assert m["seats"]["code-reviewer"]["source"] == "unfilled"
     pin_records = [
         d for d in m["degradations"]
@@ -4065,7 +3935,7 @@ def test_e3_maker_family_pin_leaves_its_seat_unfilled_and_others_compose():
 def test_e3_pin_to_extra_maker_family_leaves_its_seat_unfilled():
     pins = {"test-role": {"vendor": "codex"}}
     m = SM.build(
-        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins,
+        SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0, pins=pins,
         extra_maker_families=frozenset({"openai"}),
     )
     assert m["seats"]["test-role"]["source"] == "unfilled"
@@ -4078,20 +3948,20 @@ def test_e3_pin_to_extra_maker_family_leaves_its_seat_unfilled():
 
 def test_e3_pin_to_non_maker_family_is_unchanged():
     pins = {"code-reviewer": {"vendor": "codex"}}
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "anthropic", 0, pins=pins)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0, pins=pins)
     assert m["seats"]["code-reviewer"]["source"] == "pinned"
     assert m["seats"]["code-reviewer"]["vendor"] == "codex"
 
 
 def test_e4_no_live_vendor_leaves_every_seat_unfilled_with_no_synthetic_cfg():
-    m = SM.build(SM.PANEL_ROSTER, [], "anthropic", "openai", 0)
+    m = SM.build(SM.PANEL_ROSTER, [], "anthropic", 0)
     _assert_all_unfilled(m)
     assert not any(cfg["vendor"] is not None for cfg in m["seats"].values())
     assert any(d.get("constraint") == "live-vendors" for d in m["degradations"])
 
 
 def test_e5_verify_and_receipt_tolerate_unfilled_seats():
-    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", "openai", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "anthropic", 0)
     violations = SM.verify(m, "anthropic")
     blocked = {"missing-seat", "malformed", "unresolvable-seat-vendor", "maker-family"}
     assert not [v for v in violations if v.get("constraint") in blocked], violations
@@ -4102,7 +3972,7 @@ def test_e5_verify_and_receipt_tolerate_unfilled_seats():
 
 
 def test_e5_a_forged_unfilled_record_that_names_a_vendor_is_still_checked():
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0)
     m["seats"]["test-role"] = {
         "vendor": "claude", "model": "opus-5.5", "effort": "xhigh",
         "tier": "reviewer-deep", "family": "anthropic", "source": "unfilled",
@@ -4118,7 +3988,6 @@ def test_e6_compose_maker_family_flag_excludes_that_family(capsys):
         "x", "compose",
         "--live-vendors", "claude,codex",
         "--author-family", "anthropic",
-        "--narrative-family", "anthropic",
         "--pr-number", "1796",
     ]
     assert SM.main(argv) == 0
@@ -4138,7 +4007,6 @@ def test_e6_maker_family_flag_is_repeatable_and_accepts_unknown_families(capsys)
         "x", "compose",
         "--live-vendors", "claude,codex,cursor",
         "--author-family", "anthropic",
-        "--narrative-family", "anthropic",
         "--pr-number", "1796",
         "--maker-family", "openai",
         "--maker-family", "xai",
@@ -4170,30 +4038,30 @@ def test_e6_maker_family_flag_joins_the_host_family_extra(capsys):
 
 
 def test_build_and_receipt_name_the_maker_families_and_the_roster():
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0,
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0,
                  extra_maker_families=frozenset({"xai"}))
     assert m["makerFamilies"] == ["anthropic", "xai"]
     assert m["roster"] == list(SM.PANEL_ROSTER)
     receipt = SM.to_receipt(m, "anthropic")
     assert receipt["makerFamilies"] == ["anthropic", "xai"]
     assert receipt["roster"] == list(SM.PANEL_ROSTER)
-    custom = SM.build(["code-reviewer", "test-role"], THREE_VENDORS, "anthropic", None, 0)
+    custom = SM.build(["code-reviewer", "test-role"], THREE_VENDORS, "anthropic", 0)
     assert custom["roster"] == ["code-reviewer", "test-role"]
-    assert SM.build(SM.PANEL_ROSTER, THREE_VENDORS, None, None, 0)["makerFamilies"] == []
+    assert SM.build(SM.PANEL_ROSTER, THREE_VENDORS, None, 0)["makerFamilies"] == []
 
 
 def test_unfilled_seats_never_count_toward_the_author_minority_or_critical_checks():
     # one critical seat unfilled by a pin, the rest seated: nothing raises, an unfilled seat is
     # never counted as the author's, and the seated families still decide critical diversity
     pins = {"premortem-reviewer": {"vendor": "claude"}}
-    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", "openai", 0, pins=pins)
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "anthropic", 0, pins=pins)
     assert m["seats"]["premortem-reviewer"]["source"] == "unfilled"
     assert not any(d.get("constraint") == "author-minority" for d in m["degradations"])
     assert not any(d.get("constraint") == "critical-diversity" for d in m["degradations"])
     # an unknown author family leaves nothing to count against and never raises either
-    unknown_author = SM.build(SM.PANEL_ROSTER, ["claude"], None, "openai", 0)
+    unknown_author = SM.build(SM.PANEL_ROSTER, ["claude"], None, 0)
     assert all(cfg["family"] == "anthropic" for cfg in unknown_author["seats"].values())
-    assert SM.build(SM.PANEL_ROSTER, [], None, None, 0)["seats"]
+    assert SM.build(SM.PANEL_ROSTER, [], None, 0)["seats"]
 
 
 def test_unfilled_seat_invariant_no_seat_carries_a_maker_family():
@@ -4203,7 +4071,7 @@ def test_unfilled_seat_invariant_no_seat_carries_a_maker_family():
             for extra in (frozenset(), frozenset({"openai"})):
                 for seed in (0, 1, 2):
                     m = SM.build(
-                        SM.PANEL_ROSTER, live, author, "anthropic", seed,
+                        SM.PANEL_ROSTER, live, author, seed,
                         extra_maker_families=extra,
                     )
                     makers = {author} | set(extra)
@@ -4236,8 +4104,8 @@ def test_backfill_for_a_non_maker_reason_never_returns_a_maker_family(monkeypatc
         return real_matrix(tier, vendor)
 
     monkeypatch.setattr(SM, "matrix_config", _no_reviewer_deep)
-    only_maker = SM.build(SM.KNOWN_SEATS, ["claude"], "anthropic", "openai", 0)
-    with_other = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0)
+    only_maker = SM.build(SM.KNOWN_SEATS, ["claude"], "anthropic", 0)
+    with_other = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", 0)
     for seat in SM.STRONG_TIER_SEATS:
         assert only_maker["seats"][seat]["source"] == "unfilled", seat
         assert with_other["seats"][seat]["source"] == "backfill", seat
@@ -4247,15 +4115,6 @@ def test_backfill_for_a_non_maker_reason_never_returns_a_maker_family(monkeypatc
             and "backfilled to" in d["reason"]
             for d in with_other["degradations"]
         ), seat
-
-
-def test_build_grounding_maker_exclusion_precedes_the_narrative_fallback():
-    # axis: author anthropic, narrative openai, extra maker xai: codex stays outside every maker's family, so grounding is filled by it
-    m = SM.build(SM.PANEL_ROSTER, ["claude", "codex", "cursor"], "anthropic", "openai", 0,
-                 extra_maker_families=frozenset({"xai"}))
-    seat = m["seats"][SM.GROUNDING_SEAT]
-    assert seat["vendor"] == "codex" and seat["family"] == "openai"
-    assert any(d.get("constraint") == "grounding-independence" for d in m["degradations"])
 
 
 # --- the full-lane roster follows the lane call (axis comments: bite-proof record wo_a_1797_roster) ---
@@ -4327,8 +4186,8 @@ def _docs_commit(repo):
 
 
 def _compose(capsys, repo, *extra, base=None, head=None, live="claude,codex,cursor"):
-    argv = ["x", "compose", "--live-vendors", live, "--author-family", "xai", "--narrative-family",
-            "anthropic", "--pr-number", "1", "--repo-root", repo, *extra]
+    argv = ["x", "compose", "--live-vendors", live, "--author-family", "xai",
+            "--pr-number", "1", "--repo-root", repo, *extra]
     if base is not None:
         argv += ["--base-ref", base]
     if head is not None:
@@ -4359,11 +4218,11 @@ def test_roster_for_full_floor_adds_the_specialists(tmp_path, monkeypatch):
         assert SM.roster_for(basis) == RISKY_ROSTER, name
 
 
-def test_roster_for_no_floor_is_the_generalist_the_test_seat_and_the_grounding_seat(tmp_path, monkeypatch):
+def test_roster_for_no_floor_is_the_generalist_and_the_test_seat(tmp_path, monkeypatch):
     repo, _base, _head = _project(tmp_path, monkeypatch, areas=[_PAYMENTS])
     basis = LC.call(repo, ["docs/notes.md"], proposed="full")
     assert basis["floor"] is None
-    assert SM.roster_for(basis) == NO_FLOOR_ROSTER
+    assert SM.roster_for(basis) == NO_FLOOR_ROSTER == ("code-reviewer", "test-role")
 
 
 def test_roster_for_fails_closed_on_a_basis_it_cannot_read():
@@ -4378,7 +4237,7 @@ def test_architecture_is_never_in_a_composed_roster(tmp_path, monkeypatch):
     assert "architecture-reviewer" not in SM.PANEL_ROSTER
     assert set(SM.LENS_SEATS) == {"architecture-reviewer", "code-reviewer", "security-reviewer",
                                   "test-role", "premortem-reviewer"}
-    assert SM.KNOWN_SEATS == SM.LENS_SEATS + (SM.GROUNDING_SEAT,)
+    assert SM.KNOWN_SEATS == SM.LENS_SEATS
 
 
 def test_roster_for_keeps_the_panel_roster_order():
@@ -4567,7 +4426,7 @@ def test_required_critical_families_scales_with_the_critical_seats_the_roster_se
 def test_a_valid_no_floor_panel_has_no_critical_diversity_degradation_or_violation():
     # axis: a one-critical-seat roster is not held to two families — see bite-proof record wo_a_1797_roster
     for live in (["claude"], ["claude", "codex"], THREE_VENDORS):
-        m = dict(SM.build(NO_FLOOR_ROSTER, live, "xai", "anthropic", 0), laneBasis={"floor": None})
+        m = dict(SM.build(NO_FLOOR_ROSTER, live, "xai", 0), laneBasis={"floor": None})
         assert not any(d["constraint"] == "critical-diversity" for d in m["degradations"]), live
         assert SM.verify(m, "xai") == [], live
         classified = SM.classify_violations(m)
@@ -4576,7 +4435,7 @@ def test_a_valid_no_floor_panel_has_no_critical_diversity_degradation_or_violati
 
 
 def test_the_risky_roster_still_needs_two_critical_families():
-    m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", "anthropic", 0)
+    m = SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0)
     assert any(d["constraint"] == "critical-diversity" for d in m["degradations"])
     assert {"constraint": "critical-diversity"} in SM.verify(m, "xai")
     broken = dict(m, roster=[])
@@ -4588,16 +4447,16 @@ def test_classify_violations_holds_the_critical_family_bar_of_the_roster():
     viol = [{"constraint": "critical-diversity"}]
     stands = {"constraint": "critical-diversity", "evidence": "alternative-live"}
     # requirement 1: one reachable family meets the bar, so the violation stands (a fixed two would excuse it)
-    reduced = dict(SM.build(NO_FLOOR_ROSTER, ["claude"], "xai", "anthropic", 0),
+    reduced = dict(SM.build(NO_FLOOR_ROSTER, ["claude"], "xai", 0),
                    laneBasis={"floor": None}, violations=list(viol))
     assert SM.required_critical_families(NO_FLOOR_ROSTER) == 1
     got = SM.classify_violations(reduced)
     assert got["unexcused"] == [stands] and got["excusedByLiveness"] == []
     # requirement 2: one reachable family cannot meet the bar (excused); two can (stands)
-    one = dict(SM.build(SM.PANEL_ROSTER, ["claude"], "xai", "anthropic", 0), violations=list(viol))
+    one = dict(SM.build(SM.PANEL_ROSTER, ["claude"], "xai", 0), violations=list(viol))
     got = SM.classify_violations(one)
     assert stands not in got["unexcused"] and got["excusedByLiveness"]
-    two = dict(SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0), violations=list(viol))
+    two = dict(SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", 0), violations=list(viol))
     assert stands in SM.classify_violations(two)["unexcused"]
 
 
@@ -4607,7 +4466,7 @@ def test_classify_violations_holds_the_critical_family_bar_of_the_roster():
 def test_an_architecture_seat_composed_through_an_explicit_roster_cannot_be_pinned_to_a_maker():
     # axis: MAKER_EXCLUDED_SEATS covers every known seat, architecture included — see bite-proof record wo_a_1797_roster
     pins = {"architecture-reviewer": {"vendor": "claude"}}
-    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", "openai", 0, pins=pins)
+    m = SM.build(SM.KNOWN_SEATS, THREE_VENDORS, "anthropic", 0, pins=pins)
     assert m["seats"]["architecture-reviewer"]["source"] == "unfilled"
     assert m["seats"]["architecture-reviewer"]["family"] is None
     assert any(d.get("constraint") == "pin-breaks-constraint" and d.get("seat") == "architecture-reviewer"
@@ -4619,7 +4478,7 @@ def test_an_architecture_seat_composed_through_an_explicit_roster_cannot_be_pinn
 
 
 def test_verify_a_three_seat_map_has_no_missing_seat():
-    m = dict(SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0), laneBasis={"floor": None})
+    m = dict(SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", 0), laneBasis={"floor": None})
     assert SM.verify(m, "xai") == []
     assert not any(v["constraint"] == "missing-seat" for v in SM.to_receipt(m, "xai")["violations"])
     assert SM.to_receipt(m, "xai")["roster"] == list(NO_FLOOR_ROSTER)
@@ -4628,7 +4487,7 @@ def test_verify_a_three_seat_map_has_no_missing_seat():
 @pytest.mark.parametrize("basis", [{"floor": "full"}, None, "unreadable", {}])
 def test_verify_holds_a_reduced_roster_to_its_lane_basis(basis):
     # axis: the roster must cover roster_for(laneBasis); a full, absent or unreadable basis needs the risky roster — see bite-proof record wo_a_1797_roster
-    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", 0)
     got = SM.verify(dict(m, laneBasis=basis), "xai")
     for gone in ("security-reviewer", "premortem-reviewer"):
         assert {"constraint": "roster-missing-required", "seat": gone} in got
@@ -4637,14 +4496,14 @@ def test_verify_holds_a_reduced_roster_to_its_lane_basis(basis):
 
 
 def test_verify_a_roster_that_omits_the_generalist_or_the_test_seat_is_a_violation():
-    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", 0)
     for gone in ("test-role", "code-reviewer"):
         trimmed = dict(m, roster=[s for s in NO_FLOOR_ROSTER if s != gone])
         assert {"constraint": "roster-missing-required", "seat": gone} in SM.verify(trimmed, "xai")
 
 
 def test_verify_holds_an_unreadable_roster_to_the_full_risky_panel():
-    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    m = SM.build(NO_FLOOR_ROSTER, THREE_VENDORS, "xai", 0)
     for bad in ([], "code-reviewer", None, ["code-reviewer", 3]):
         v = SM.verify(dict(m, roster=bad), "xai")
         missing = {x["seat"] for x in v if x["constraint"] == "missing-seat"}
@@ -4652,7 +4511,7 @@ def test_verify_holds_an_unreadable_roster_to_the_full_risky_panel():
 
 
 def test_same_family_scan_covers_every_known_seat_when_the_map_names_no_roster():
-    m = SM.build(SM.KNOWN_SEATS, ["claude"], "anthropic", "openai", 0)
+    m = SM.build(SM.KNOWN_SEATS, ["claude"], "anthropic", 0)
     m.pop("roster")
     m["seats"] = {s: dict(cfg) for s, cfg in m["seats"].items()}
     seat = "architecture-reviewer"

@@ -83,29 +83,24 @@ def test_edge1_a_delta_rounds_focus_fixes_equal_the_previous_fix_batch_keys():
     assert len(focus["fixes"]) == 2
 
 
-def test_edge2_an_unknown_surface_round_is_wider_with_the_unknown_surface_detail():
+def test_edge2_an_unknown_surface_round_hands_back_and_records_no_wider_focus():
+    # re-pinned: an unknown surface used to open a wider (full-panel) round; it hands the PR back now
     state = _unknown_surface_state()
-    rec = state["rounds"]["2"]
-    detail = [d["detail"] for d in state["decisions"] if d["kind"] == "unknown-surface"]
-    assert len(detail) == 1
-    assert rec["roundKind"] == "full-panel-unknown-surface"
-    # axis: the unknown-surface round records wider with the decision's own detail — see bite-proof record wo3_c7_round_focus
-    assert rec["focus"] == {"on": "wider", "why": detail[0]}
+    rec = state["rounds"].get("2", {})
+    assert state["terminal"] == "handed-back"
+    assert [d["kind"] for d in state["decisions"]] == ["fix-surface-unknown"]
+    assert "focus" not in rec and rec.get("roundKind") != "full-panel-unknown-surface"
 
 
-def test_edge2_a_confirmation_round_is_wider_with_the_rearm_reason():
+def test_edge2_a_converged_delta_settle_opens_no_confirmation_round():
+    # re-pinned: the settle ends on the round's audit and scoped finder; no wider confirmation round
     state = RD.new_state(_cfg())
     state["round"] = 1
     state["rounds"] = {"1": {}}
     state["decisions"] = []
-    state["surfacedSinceLastPanel"] = ["Critical"]
-    state["confirmations"] = 0
     RD._settle_delta_converged(state, _cfg())
-    rec = state["rounds"]["2"]
-    reason = [d["detail"] for d in state["decisions"] if d["kind"] == "confirmation-rearm"]
-    assert len(reason) == 1 and reason[0]
-    assert rec["roundKind"] == "confirmation"
-    assert rec["focus"] == {"on": "wider", "why": reason[0]}
+    assert state["round"] == 1 and "2" not in state["rounds"]
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
     assert "focus" not in state["rounds"]["1"]
 
 

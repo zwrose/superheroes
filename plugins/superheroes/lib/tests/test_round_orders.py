@@ -2,12 +2,10 @@
 import json
 import os
 import re
-import shlex
 import subprocess
 
 import pytest
 
-import command_refusals
 import core_md as CM
 import round_adapters as RA
 import round_orders as RO
@@ -55,7 +53,7 @@ def _base_context(**over):
     return ctx
 
 
-def _panel_placeholders(channel="file", pr_checkout=False):
+def _panel_placeholders(channel="file"):
     prior_path = os.path.join(_SESSION, "prior-comments.json")
     ph = {
         "MODE": "branch",
@@ -67,7 +65,6 @@ def _panel_placeholders(channel="file", pr_checkout=False):
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "CLAUDE_MD_PATH": _CLAUDE_MD,
-        "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo") if pr_checkout else "",
         "PRIOR_COMMENTS_PATH": prior_path,
         "FOCUS_NOTES": "touch auth paths carefully",
         "DIMENSION": "Code",
@@ -100,27 +97,6 @@ def _synthesis_placeholders(channel="file"):
     }
 
 
-def _fixer_placeholders():
-    return {
-        "FIX_BATCH_PATH": os.path.join(_SESSION, "round-2", "fix-batch.json"),
-        "FIX_BATCH_SHA256": "0" * 64,
-        "PROFILE_PATH": "(Project profile not resolved for this project)",
-        "RUBRIC_PATH": _PLUGIN_RUBRIC,
-        "CWD": _REPO,
-        "REPO_ROOT": shlex.quote(_REPO),
-        "VERIFY_BUDGET": (
-            "Scoped verify budget for this batch — target files: auth.py. "
-            "Run the tests that reference those files (select by reading the test files' own text "
-            "for the target path, never by test-file name) plus the project's static validators, "
-            "at most once each. The project's full verify command is NOT yours to run inside this "
-            "attempt — the orchestrator runs it once after the round's fixes land: pytest -q"
-        ),
-        "ROUND": "2",
-        "GATE_GUIDANCE": "No owner-gate guidance is attached to this batch.",
-        "PR_BODY_LINE": os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer", "_pr-body.md"),
-    }
-
-
 def _gapsweep_placeholders(channel="file"):
     return {
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
@@ -130,6 +106,20 @@ def _gapsweep_placeholders(channel="file"):
         "VERIFICATION_ROOT": _REPO,
         "CLAUDE_MD_PATH": _CLAUDE_MD,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "gap-sweep-findings.json"),
+        "CHANNEL": channel,
+    }
+
+
+def _second_test_placeholders(channel="file"):
+    import round_driver as RD
+    return {
+        "HELD_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "second-test-held.json"),
+        "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "VERIFICATION_ROOT": _REPO,
+        "CLAUDE_MD_PATH": _CLAUDE_MD,
+        "ROLE_BRIEF_PATH": os.path.join(_PLUGIN_ROOT, "agents", "test-role.md"),
+        "BREAK_IT_GRAMMAR_TEXT": RD._break_it_grammar_text("test-role"),
         "CHANNEL": channel,
     }
 
@@ -153,7 +143,7 @@ def _audits_placeholders(channel="file"):
 def _scoped_placeholders(channel="file"):
     return {
         "HUNKS_PATH": os.path.join(_SESSION, "round-2", "scoped-hunks.json"),
-        "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
+        "FIX_DIFF_PATH": os.path.join(_SESSION, "round-2", "fix-delta.diff"),
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
@@ -183,17 +173,17 @@ _GOLDEN_CONTEXTS = {
                                   "synthesis.a0.payload.json"),
         placeholders=_synthesis_placeholders(),
     ),
-    RP.P_FIXER: lambda: _base_context(
-        host_seat=True,
-        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer",
-                                  "fixer.a0.payload.json"),
-        placeholders=_fixer_placeholders(),
-    ),
     RP.P_GAPSWEEP: lambda: _base_context(
         host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-gap-sweep",
                                   "gap-sweep.a0.payload.json"),
         placeholders=_gapsweep_placeholders(),
+    ),
+    RP.P_SECOND_TEST: lambda: _base_context(
+        host_seat=True,
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-second-test",
+                                  "second-test.a0.payload.json"),
+        placeholders=_second_test_placeholders(),
     ),
     RP.P_AUDITS: lambda: _base_context(
         host_seat=True,
@@ -231,7 +221,7 @@ def _normalize_golden_machine_paths(text):
 # --- fail-closed edges ---------------------------------------------------------
 
 
-@pytest.mark.parametrize("phase", [RP.P_VERIFY, RP.P_JUDGMENT, RP.P_STALL])
+@pytest.mark.parametrize("phase", [RP.P_VERIFY, RP.P_APPLY_FIXES])
 def test_render_refuses_phases_without_templates(phase):
     text, reason = RO.render_order(phase, "seat", _base_context())
     assert text is None
@@ -378,10 +368,9 @@ def test_clause_manifest_covers_every_order_template():
 def test_clause_manifest_survives_in_rendered_orders():
     manifest = json.load(open(_CLAUSE_MANIFEST, encoding="utf-8"))
     phase_map = {
-        "dispatch-panel": (RP.P_PANEL, lambda: _panel_placeholders(pr_checkout=True)),
+        "dispatch-panel": (RP.P_PANEL, _panel_placeholders),
         "dispatch-verifiers": (RP.P_VERIFIERS, _verifier_placeholders),
         "dispatch-synthesis": (RP.P_SYNTHESIS, _synthesis_placeholders),
-        "dispatch-fixer": (RP.P_FIXER, _fixer_placeholders),
         "dispatch-gap-sweep": (RP.P_GAPSWEEP, _gapsweep_placeholders),
         "dispatch-audits": (RP.P_AUDITS, _audits_placeholders),
         "dispatch-scoped-finder": (RP.P_SCOPED, _scoped_placeholders),
@@ -697,7 +686,6 @@ def test_seat_transport_classifies_vendors_from_compose_output():
         live_vendors=["codex", "cursor", "claude"],
         # transport classification, not maker exclusion: with a maker named, a pin to its family leaves the seat unfilled (test_seat_map.py)
         author_family=None,
-        narrative_family="openai",
         seed=723,
         pins={
             "code-reviewer": {"vendor": "codex"},
@@ -737,130 +725,19 @@ def test_seat_transport_unknown_vendor_refuses_order_render():
 
     session_dir = os.path.join(_SESSION, "probe-unknown-vendor")
     state = {
-        "config": {"repoRoot": _REPO, "fixerVendor": "gemini"},
+        "config": {"repoRoot": _REPO},
         "reviewedDiff": "diff --git a/f b/f\n",
         "seatMap": {"seats": {}},
     }
-    row = RD._seat_transport_row(state, RP.P_FIXER, "fixer", 0, state["config"], {}, _REPO)
+    payload = {"targets": [{"id": "t0", "auditorVendor": "gemini"}]}
+    row = RD._seat_transport_row(state, RP.P_AUDITS, "t0", 0, state["config"], payload, _REPO)
     try:
-        RD._build_order_render_context(session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {}, row)
+        RD._build_order_render_context(session_dir, state, 2, RP.P_AUDITS, 0, "t0", 0, payload, row)
     except ValueError as exc:
         assert "order-render-refused" in str(exc)
-        assert "unknown-vendor:fixer:gemini" in str(exc)
+        assert "unknown-vendor:t0:gemini" in str(exc)
     else:
-        raise AssertionError("expected order-render-refused for unknown fixer vendor")
-
-
-def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
-    import round_driver as RD
-
-    repo = str(tmp_path / "proj$(echo pwned)")
-    os.makedirs(repo)
-    session_dir = os.path.join(str(tmp_path), "session")
-    os.makedirs(session_dir)
-    state = {
-        "config": {"repoRoot": repo, "fixerVendor": "claude"},
-        "reviewedDiff": "diff --git a/f b/f\n",
-        "fixBatch": [],  # fixer-order render path requires a known batch
-    }
-    paths = {
-        "storage_key": "fixer.a0",
-        "landing_path": os.path.join(session_dir, "landing.json"),
-        "envelope_landing_path": os.path.join(session_dir, "env.json"),
-        "bare_payload_path": os.path.join(session_dir, "bare.json"),
-        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
-        "order_path": os.path.join(session_dir, "order.md"),
-    }
-    ph = RD._order_placeholders(
-        RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 2, paths, RD.CHANNEL_FILE,)
-    ctx = _base_context(
-        host_seat=True,
-        landing_path=paths["bare_payload_path"],
-        repo_root=repo,
-        placeholders=ph,
-    )
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None
-    assert "$(echo pwned)" in text  # repo root appears quoted in ## Input
-    assert shlex.quote(repo) in text
-
-
-def test_dispatch_fixer_render_has_no_file_scope_guard():
-    """#1299: fixer order must render without the retired wrapper or guard step."""
-    ctx = _GOLDEN_CONTEXTS[RP.P_FIXER]()
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None
-    assert "ESCALATION_WRAPPER_PATH" not in text
-    assert "Escalation guard" not in text
-    assert "file-scope guard" not in text
-    assert "--stdin-path" not in text
-
-
-_FIXER_WRITE_EDIT_ONLY = "Create and edit files only with the host's file-write and file-edit tools"
-_FIXER_NO_REWRITE_BREAK_IT = (
-    "Never run a formatter, a linter's autofix, or anything else that rewrites a committed "
-    "break-it test file"
-)
-
-
-def _fixer_render(host_seat):
-    if host_seat:
-        ctx = _GOLDEN_CONTEXTS[RP.P_FIXER]()
-    else:
-        ctx = _base_context(host_seat=False, placeholders=_fixer_placeholders())
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None, reason
-    return " ".join(text.split())
-
-
-def test_fixer_order_host_seat_carries_write_edit_break_it_and_land_last():
-    text = _fixer_render(host_seat=True)
-    assert _FIXER_WRITE_EDIT_ONLY in text
-    assert "never through a shell command that writes a file" in text
-    assert _FIXER_NO_REWRITE_BREAK_IT in text
-    assert "if a commit hook rewrites it, report that (it is not a pass)" in text
-    assert "keep the break-it test at the path its block names" in text
-    assert "write your payload landing" in text
-    assert "Land last, every time" in text
-    assert "after the step-4 commit when you made one" in text
-    assert "had nothing to commit" in text
-    assert "never commit broken code" in text
-    assert "A committed fix with no landing is read as an unlanded fix" in text
-
-
-@pytest.mark.parametrize("host_seat", [True, False])
-def test_fixer_order_says_to_leave_the_head_diff_keys_out(host_seat):
-    # #2109: a fixer that reported its own commit's diff ended a session head-diff-mismatch; both
-    # renders say to leave both keys out, and the keys named are the contract's own.
-    text = _fixer_render(host_seat=host_seat)
-    assert ("Leave `headDiff` and `headDiffPath` out of your result, on every ending." in text)
-    assert "not your commit alone" in text
-    assert "your own commit's diff included, stops the round as head-diff-mismatch" in text
-    contract, reason = RA.payload_contract(RP.P_FIXER)
-    assert reason is None, reason
-    assert {"headDiff", "headDiffPath"} <= set(contract["optional"])
-
-
-def test_fixer_order_engine_seat_lands_last_without_a_landing_file():
-    text = _fixer_render(host_seat=False)
-    assert _FIXER_WRITE_EDIT_ONLY in text
-    assert _FIXER_NO_REWRITE_BREAK_IT in text
-    assert "Land last, every time" in text
-    assert ("your result on the runner's declared result channel is the last thing you deliver"
-            in text)
-    assert "after the step-4 commit when you made one, and anyway when you stopped without one" in text
-    assert "never commit broken code" in text
-    assert "Never write a landing file" in text
-    # the host-only wording must not reach the engine render
-    assert "write your payload landing" not in text
-    assert "A committed fix with no landing" not in text
-
-
-@pytest.mark.parametrize("host_seat", [True, False])
-def test_fixer_order_carries_the_refused_command_stop_rule_exactly_once(host_seat):
-    text = _fixer_render(host_seat=host_seat)
-    assert text.count(" ".join(command_refusals.ORDER_TEXT.split())) == 1
+        raise AssertionError("expected order-render-refused for unknown auditor vendor")
 
 
 def test_engine_panel_landing_block_uses_phase_stdout_contract():
@@ -987,39 +864,13 @@ def test_panel_order_dimension_uses_rubric_label(tmp_path):
     assert ph_sec["DIMENSION"] == "Failure-Mode"
 
 
-# --- FX-4A: PR checkout two-arm clause coverage --------------------------------
-
-
-def test_panel_order_without_pr_checkout_omits_checkout_clause():
+def test_panel_order_names_no_pr_checkout_clause():
+    # The PR-checkout slots are retired: no producer is left, so the panel order never carries one.
     text, reason = RO.render_order(
         RP.P_PANEL, "code-reviewer", _base_context(placeholders=_panel_placeholders()))
     assert reason is None
     assert "PR branch checkout" not in text
     assert "ONLY source of truth for verifying code" not in text
-
-
-def test_panel_order_with_pr_checkout_includes_checkout_clause():
-    text, reason = RO.render_order(
-        RP.P_PANEL, "code-reviewer",
-        _base_context(placeholders=_panel_placeholders(pr_checkout=True)))
-    assert reason is None
-    assert "PR branch checkout:" in text
-    assert "ONLY source of truth for verifying code" in text
-
-
-def test_golden_render_with_pr_checkout_matches_fixture():
-    golden_path = os.path.join(_GOLDEN_DIR, "dispatch-panel-with-checkout.txt")
-    ctx = _base_context(
-        host_seat=True,
-        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
-                                  "code-reviewer.a0.payload.json"),
-        placeholders=_panel_placeholders(pr_checkout=True),
-    )
-    text, reason = RO.render_order(RP.P_PANEL, "golden-seat", ctx)
-    assert reason is None
-    with open(golden_path, encoding="utf-8") as fh:
-        expected = fh.read()
-    assert _normalize_golden_machine_paths(text) == _normalize_golden_machine_paths(expected)
 
 
 # --- #1151: mode-less session defaults to PR via session_mode SSOT --------------
@@ -1272,60 +1123,6 @@ def test_order_templates_shell_census_allows_ratified_angle_substitutions(tmp_pa
     assert violations == [], violations
 
 
-def test_fixer_profile_unresolvable_root_differs_from_resolved_absent(tmp_path, monkeypatch):
-    import calibration_resolve as cr
-    import model_tier_overrides as mto
-    import round_driver as RD
-
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo)
-
-    def resolve_absent(_cwd, **kwargs):
-        return None
-
-    monkeypatch.setattr(mto, "resolve_profile_path", resolve_absent)
-    absent = RD._profile_path_for_orders(repo)
-    assert absent == "(Project profile not resolved for this project)"
-    assert "refused" not in absent
-
-    def resolve_unresolvable(_cwd, **kwargs):
-        raise cr.UnresolvableRootError(str(tmp_path / "bad"), repo, "review-crew", "global", "/p")
-
-    monkeypatch.setattr(mto, "resolve_profile_path", resolve_unresolvable)
-    refused = RD._profile_path_for_orders(repo)
-    assert cr.REASON_UNRESOLVABLE_ROOT in refused
-    assert refused != absent
-
-
-def test_profile_path_for_orders_failopen_when_profile_unreadable(tmp_path, monkeypatch):
-    import model_tier_overrides as mto
-    import round_driver as RD
-
-    if os.geteuid() == 0:
-        pytest.skip("root can read mode 0o000 files")
-
-    repo = str(tmp_path / "repo")
-    cal = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(cal)
-    profile = os.path.join(cal, "review-crew.md")
-    with open(profile, "w", encoding="utf-8") as fh:
-        fh.write("## Model tiers\n")
-    os.chmod(profile, 0o000)
-    real_resolve = mto.resolve_profile_path
-
-    def resolve_unreadable_path(cwd, **kwargs):
-        path = real_resolve(cwd, **kwargs)
-        return path if path else profile
-
-    monkeypatch.setattr(mto, "resolve_profile_path", resolve_unreadable_path)
-    try:
-        got = RD._profile_path_for_orders(repo)
-        assert got == profile
-        assert "refused" not in got
-    finally:
-        os.chmod(profile, 0o644)
-
-
 def test_host_order_delivery_names_landing_not_phase_result_file():
     landing = os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
                            "code-reviewer.a0.payload.json")
@@ -1347,34 +1144,6 @@ def test_engine_verifiers_order_uses_verdict_stdout_contract():
     assert reason is None
     assert '{"verdicts":' in text
     assert "Emit findings" not in text
-
-
-def test_engine_fixer_order_landing_block_names_no_graded_shape(tmp_path, monkeypatch):
-    # R28 re-pin (WO-D #1272): engine fixer orders carry channel-neutral delivery only — the
-    # runner appends the graded contract; the order must not name `{"fixes"`.
-    import engine_pref as EP
-    import round_driver as RD
-
-    repo = str(tmp_path / "repo")
-    os.makedirs(repo)
-    monkeypatch.setattr(EP, "load_engine_prefs", lambda _root: {"fixer": "codex"})
-    session_dir = os.path.join(str(tmp_path), "session")
-    os.makedirs(session_dir)
-    state = {
-        "config": {"repoRoot": repo, "fixerVendor": "codex"},
-        "reviewedDiff": "diff --git a/f b/f\n",
-        "fixBatch": [],  # fixer-order render path requires a known batch
-    }
-    row = RD._seat_transport_row(state, RP.P_FIXER, "fixer", 0, state["config"], {"fixes": []}, repo)
-    ctx, _paths = RD._build_order_render_context(
-        session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {"fixes": []}, row,
-    )
-    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
-    assert reason is None
-    landing = text.split("## Return your result")[-1]
-    assert '{"fixes":' not in landing
-    assert "runner appends the authoritative result contract" in landing
-    assert "Payload landing path:" not in landing
 
 
 def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
@@ -1404,7 +1173,7 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
         "order_path": os.path.join(session_dir, "order.md"),
     }
     state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n",
-             "headDiff": "diff --git a/f b/f\n"}
+             "headDiff": "diff --git a/f b/f\n", "_fixDeltaDiff": "diff --git a/f b/f\n"}
     ph = RD._order_placeholders(
         RP.P_VERIFIERS, "verifier:f.py:0", 0, state, state["config"],
         {"clusters": payload["clusters"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
@@ -1425,6 +1194,8 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
         RP.P_SCOPED, "scoped-finder", 0, state, state["config"],
         {"hunks": payload["hunks"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
     assert ph_scoped["HUNKS_PATH"] == scoped_path
+    assert ph_scoped["FIX_DIFF_PATH"] == os.path.join(rdir, "fix-delta.diff")
+    assert "HEAD_DIFF_PATH" not in ph_scoped
 
 
 def test_order_templates_shell_census_flags_injected_placeholder(tmp_path):
@@ -1546,7 +1317,7 @@ def _submit_shape_prose(cell):
 
 
 def test_round_driver_payload_contract_doc_truth_guard():
-    """round-driver.md submit shapes ↔ payload_contract() for run-verify and dispatch-fixer."""
+    """round-driver.md submit shapes ↔ payload_contract() for run-verify and apply-fixes."""
     verify_contract, reason = RA.payload_contract(RP.P_VERIFY)
     assert reason is None, reason
     verify_row = _round_driver_table_cell("run-verify")
@@ -1554,11 +1325,11 @@ def test_round_driver_payload_contract_doc_truth_guard():
         assert token in verify_row, (
             "run-verify row missing verify result enum %r (contract drifted from docs)" % token)
 
-    fixer_contract, reason = RA.payload_contract(RP.P_FIXER)
+    fixes_contract, reason = RA.payload_contract(RP.P_APPLY_FIXES)
     assert reason is None, reason
-    fixer_row = _round_driver_table_cell("dispatch-fixer")
-    submit_shape = _submit_shape_prose(fixer_row)
-    for key in fixer_contract.get("optional") or []:
+    fixes_row = _round_driver_table_cell("apply-fixes")
+    submit_shape = _submit_shape_prose(fixes_row)
+    for key in fixes_contract.get("optional") or []:
         assert key in submit_shape, (
-            "dispatch-fixer submit shape missing optional key %r (contract drifted from docs)"
+            "apply-fixes submit shape missing optional key %r (contract drifted from docs)"
             % key)

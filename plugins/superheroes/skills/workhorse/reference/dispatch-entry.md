@@ -24,7 +24,7 @@ To refresh after any of the above changes, run:
 
 ## Accepted seat shapes
 
-pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, code-fixer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot, registration-probe, scoped-finder, auditor
+pass --seat as JSON object {"vendor": "<vendor>", "model": "<id>|null", "effort": <str|null>, "role": "<role>"} (the effort key is required; its value may be null; role is required and must not be null). role must be a member of the seat JSON "role" key; valid roles: implementer, doc-reviser, reviewer, reviewer-deep, verifier, brief-check, synthesis, mechanical, pilot, registration-probe, scoped-finder, auditor
 
 ## Declared vocabularies
 
@@ -106,9 +106,6 @@ The engine-config refusal tokens name a refused argv build. The `build-argv` CLI
 - `sandbox-access-malformed`
 - `sandbox-access-unreadable`
 - `sandbox-access-unsupported-platform`
-- `sandbox-landing-dir-denied`
-- `sandbox-landing-dir-invalid`
-- `sandbox-landing-dir-mismatch`
 - `sandbox-process-listing-unavailable`
 - `sandbox-roots-missing`
 - `sandbox-roots-unresolvable`
@@ -165,7 +162,6 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--size-base-ref` | no | `free-text` | none | the base branch; the fold counts from its merge base with HEAD when that is newer than --size-base |
 | `--claude-mode` | no | `choices:print,background` | none | print only; background is retired and refuses claude-mode-retired before spawn |
 | `--requires-process-listing` | no | `boolean-flag` | False | declare the order needs process listing (ps); a claude write refuses sandbox-process-listing-unavailable before any run opens |
-| `--landing-dir` | no | `free-text` | none | a claude write also grants its file tools this one review landing directory (<session>/round-<N>/landing/<phase>) |
 
 #### `engine_dispatch.py dispatch-review`
 
@@ -181,6 +177,7 @@ Each table is derived from the parser tree at generation time. Regenerate this f
 | `--max-wait` | no | `integer` | runtime (see Variance envelope) |  |
 | `--order-id` | no | `free-text` | none |  |
 | `--diff-base` | no | `free-text` | none | pinned commit object id (40 hex, or 64 in a SHA-256 repository) to stage the merge-base->head review patch against; a revision expression, branch name or tag is refused |
+| `--leave-out-file` | no | `free-text` | none | JSON file {"schema": "leave-out/1", "files": [<repo-relative path>, ...]} naming changed files to leave out of the review patch (proven copies); a malformed file refuses sanitized-view-leave-out-invalid; ignored on a continuation |
 | `--mode` | no | `choices:review,brief-check` | none |  |
 | `--claude-mode` | no | `choices:print,background` | none | print only; background is retired and refuses claude-mode-retired before spawn |
 | `--expected-result-kind` | no | `choices:findings,verdicts,grouping,ruling` | none | mechanical pin: refuse attempts whose parsed resultKind differs |

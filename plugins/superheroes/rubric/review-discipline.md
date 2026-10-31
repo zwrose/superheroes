@@ -21,7 +21,7 @@ not listed in the table below is the same as the **full** lane.
 | Review before handback | full panel, fix loop | one independent reviewer outside every maker's family | one independent reviewer outside every maker's family, in-session |
 | Test-pilot | where there is an app | where there is an app | no — *if you think you need it, it isn't micro* |
 | Preflight | yes | yes | no |
-| Order lint before dispatch | every implementer and review-fix order: the deterministic half always, the semantic half (the read-only `order-linter` seat) where the host vendor has a mechanical cell (else dispatched with semantic-lint-unavailable:<vendor> disclosed); the driver lints each fixer order | — (no orders) | — |
+| Order lint before dispatch | every implementer order: the deterministic half always, the semantic half (the read-only `order-linter` seat) where the host vendor has a mechanical cell (else dispatched with semantic-lint-unavailable:<vendor> disclosed) | — (no orders) | — |
 | Definition-of-done table | yes | yes | no — nothing to disposition against |
 | Authorized by | the route | the route | the owner, per change |
 | Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |
@@ -119,6 +119,7 @@ and the failure then surfaces *after all the work is done*.
 - **A real independent review before handback** — the *shape* of review scales; its
   existence does not.
 - **Receipts before claims**, **disclosed degradations**, **CI**, **owner-only merges**.
+- **The round cap and the only-what-changed rule.** A review session runs at most 4 rounds in every lane, bar the one extra audit round the advisor may order. A PR that comes back is reviewed for what changed since the last reviewed commit, and gets a full review only when the returning-review decider answers `full`. The record writer refuses a light or micro record over the cap with `review-record-round-cap-exceeded`.
 
 **Single-reviewer lanes (light and micro).** The one reviewer comes from a different model family than every [maker](glossary.md#maker) of the change. Once the orchestrator (light) or the advisor (micro) types the change, that session is a maker, so a reviewer from its family is not independent. A review record that names no maker cannot show independence, so it reads not reviewed.
 
@@ -170,7 +171,7 @@ alignment with practice is **in-sample** — fitted to the same changes it valid
 
 In micro the advisor is the maker, so the advisor's independent vet-from-artifacts does
 not exist for that PR; the whole independent check is the one reviewer **outside every [maker's](glossary.md#maker)
-family** plus the owner's per-change authorization.
+family** plus the owner's per-change authorization. That reviewer runs under the same 4-round cap and the same only-what-changed rule as every lane (see *What never changes in any lane*).
 
 **Durable home.** Micro is already recorded in the PR, not an issue — the **micro PR
 itself** is the one named home for both halves of the independent check. The **reviewer
@@ -201,7 +202,7 @@ The advisor must say what could go wrong before the owner decides.
 
 **Re-review to convergence.** After the advisor resolves reviewer findings, the
 **reviewer outside the maker's family re-reviews the final head**, with the review record showing its
-reading on each re-review, until no blocking findings remain — or the change **parks**. When the
+reading on each re-review, until no blocking findings remain — or the loop hits its 4-round cap and hands back what is open. When the
 contract under review is **prose**, the bounded acceptance bar in
 `### Bounded acceptance — prose-contract DoDs` below is the scoped exception to this paragraph.
 
@@ -220,12 +221,13 @@ fast-follow):
   free. The driver mandate below names this citation class. **The light and micro lanes**
   run **one** independent reviewer outside every [maker's](glossary.md#maker) family instead, whose reading the review record
   shows (see above). The loop is cheap on small diffs —
-  scoped rounds, capped confirmations — so "too small to review" is never a reason to
+  scoped rounds, at most 4 of them — so "too small to review" is never a reason to
   skip. The evidence behind this rule: the worst defects in the plugin's own history
   shipped in exactly the handful of PRs that skipped review, not in the large reviewed
   ones.
-- **A review that halts with an open blocker** (circuit breaker, park) is resolved
-  or explicitly owner-accepted in the PR body — never quietly merged.
+- **The loop stops at 4 rounds, with no ceiling above them, and hands back what is open.** It has
+  no stall menu and puts nothing to the owner mid-review. A PR handed back with an open blocker is
+  resolved at the vet — a leftover or a send-back — never quietly merged.
 
 **And one independent read *after* handback: the advisor's vet.** Review-before-handback checks the
 **code**; the vet checks the **PR** — the last independent read before the owner's one irreversible
@@ -442,8 +444,7 @@ This section holds the standing rules about what machinery this band builds, whe
 lives, and what a review may ask a build to add. Read it before you propose new standing
 machinery or answer a finding that does. Order lint's homes: the deterministic half
 `lib/order_lint.py`, the semantic half's seat `agents/order-linter.md` and its prompt `rubric/orders/order-lint-semantic.md`, the
-dispatch step in the workhorse charter §7, the fixer emission in
-`skills/review-code/reference/auto-fix-loop.md`.
+dispatch step in the workhorse charter §7.
 
 ### Guards do not get guards
 
@@ -614,27 +615,6 @@ project names its keep list as a [project configuration](rubric/glossary.md#proj
 
 This rule activates only once the owner has stamped the project's keep list. Before that, nothing
 is deleted under this rule, and an obsolete expectation is rewritten as before, with the classification and its reason in the pull request body.
-
-## Prose-driven review (`--review-only`)
-
-A **prose-driven review** is a sanctioned lane on the read-only path — not a shortcut, not a
-degradation, and **not** something the auto-fix loop may do. The orchestrator compiles findings in
-main context (`SKILL.md` § Compile + Dedupe) instead of obeying the driver's fold, but it still owes
-a **named substitute receipt** standing in for `round-receipt.json` and the driver journal:
-
-1. **Dispositions table** — how each finding was handled (the workhorse charter's table in the PR
-   body on PR paths).
-2. **Durable linked receipt** — review results posted on the PR as a comment or similar, not
-   something that only lives in session context (`skills/workhorse/SKILL.md` §10).
-
-**Branch mode has no PR.** The durable home is `$SESSION_DIR/dispositions.md` — write the
-dispositions table and receipt link there; when the branch later becomes a PR, that file's content
-is what the PR body carries. (The workhorse charter names the same substitute-receipt shape for
-light-lane handback.)
-
-The auto-fix loop's "never plan continuation by eye" rule
-(`skills/review-code/reference/round-driver.md` § The one
-entrypoint) applies only inside `next`/`submit`; it does not forbid this lane.
 
 ## Presentation standard (show it / say it / nothing to see)
 

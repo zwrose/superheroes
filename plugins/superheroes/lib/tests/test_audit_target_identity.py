@@ -23,6 +23,9 @@ FI = _load("finding_identity")
 RR = _load("round_records")
 SC = _load("session_contract")
 
+# The three checks every audit result owes, each answered `yes`.
+_AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"} for name in AU.CHECK_NAMES}
+
 
 def _cfg(**over):
     base = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "codex"}
@@ -39,12 +42,12 @@ def _finding(file="f.py", line=1, title="bug", severity="Important", **extra):
 # --- D1: judgment ids byte-identical ------------------------------------------
 
 def test_judgment_row_ids_same_finding_same_id():
-    # axis: byte-identical judgment rows share one minted finding key
+    # axis: byte-identical rows share one minted finding key (the key an owner-choice hold records)
     f = _finding(line=5, title="dup")
     findings = [f, dict(f), dict(f)]
     RD._mint_finding_keys(findings)
     key = SC.finding_identity_key(findings[0])
-    assert RD._judgment_row_ids(findings) == [key, key, key]
+    assert [RD._finding_key_of(row) for row in findings] == [key, key, key]
 
 
 # --- D2: unique ids + identity ------------------------------------------------
@@ -90,7 +93,8 @@ def test_fold_audits_outcomes_identity_is_line_less():
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tgt = state["_auditTargets"][0]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken"}]})
+        {"id": tgt["id"], "ruling": "not-discharged", "reason": "still broken",
+         "checks": _AUDIT_CHECKS}]})
     outcome = state["auditRounds"][-1]["outcomes"][0]
     assert outcome["identity"] == tgt["identity"]
     assert outcome["identity"] == FI.finding_identity(tgt)
@@ -106,7 +110,7 @@ def test_fold_audits_outcome_identity_classkey_free():
     state["_auditTargets"] = [{"id": loc_id, "identity": ident, "file": "f.py", "line": 9,
                                "title": "plain", "severity": "Important", "independence": "n/a"}]
     RD._fold_audits(state, state["config"], {"results": [
-        {"id": loc_id, "ruling": "not-discharged", "reason": "nope"}]})
+        {"id": loc_id, "ruling": "not-discharged", "reason": "nope", "checks": _AUDIT_CHECKS}]})
     outcome = state["auditRounds"][-1]["outcomes"][0]
     assert outcome["identity"] == ident
     assert "classKey" not in outcome or outcome.get("classKey") is None
@@ -119,7 +123,7 @@ def test_apply_audit_results_duplicate_target_ids_fail_closed():
     collided = "f.py::bug@L1"
     targets = [{"id": collided, "file": "f.py", "line": 1, "title": "bug"},
                {"id": collided, "file": "f.py", "line": 2, "title": "bug"}]
-    results = [{"id": collided, "ruling": "discharged", "reason": "ok"}]
+    results = [{"id": collided, "ruling": "discharged", "reason": "ok", "checks": _AUDIT_CHECKS}]
     out = AU.apply_audit_results(targets, results)
     assert out["ambiguous"] == [collided]
     assert out["discharged"] == []
@@ -156,8 +160,9 @@ def test_apply_audit_results_line_none_when_absent():
 
 # --- D5.1: critical severity lookup via target id ------------------------------
 
-def test_not_discharged_critical_reaches_surfaced_since_last_panel():
-    # axis: Critical severity lookup must key on per-location target id, not line-less identity
+def test_not_discharged_critical_keeps_no_surfaced_severity_tracker():
+    # re-pinned: the Critical lookup fed the confirmation re-arm, which is gone; a not-discharged
+    # Critical target is settled by the audit breaker and the settle keeps no such tracker
     state = RD.new_state(_cfg(maxRounds=20))
     f = _finding(severity="Critical", line=1)
     state["fixBatch"] = [f]
@@ -166,10 +171,9 @@ def test_not_discharged_critical_reaches_surfaced_since_last_panel():
     state["_auditOutcome"] = {"notDischarged": [tid], "discharged": []}
     state["auditRounds"] = [{"round": 2, "outcomes": []}]
     state["findings"] = []
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = []
     RD._settle_delta(state, state["config"])
-    assert "Critical" in state.get("surfacedSinceLastPanel", [])
+    assert "surfacedSinceLastPanel" not in state
+    assert state["step"] != RD.P_PANEL
 
 
 def test_not_discharged_important_does_not_surface_critical():
@@ -200,15 +204,13 @@ def test_not_discharged_important_does_not_surface_critical():
     assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
-def test_critical_not_discharged_rearms_confirmation():
-    # axis: discharged-then-not-discharged Critical must re-arm confirmation via per-location id
+def test_critical_not_discharged_never_rearms_a_confirmation_panel():
+    # re-pinned: a discharged-then-not-discharged Critical no longer re-arms a confirmation panel
     state = RD.new_state(_cfg(maxRounds=20))
     f = _finding(severity="Critical", line=1)
     state["fixBatch"] = [f]
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tid = state["_auditTargets"][0]["id"]
-    state["confirmations"] = 0
-    state["surfacedSinceLastPanel"] = []
     state["round"] = 3
     state["findings"] = []
     state["fullPanelRan"] = False
@@ -216,15 +218,15 @@ def test_critical_not_discharged_rearms_confirmation():
         {"identity": FI.finding_identity(f), "ruling": "discharged"}]}]
     state["_auditOutcome"] = {"notDischarged": [tid], "discharged": []}
     RD._settle_delta(state, state["config"])
-    assert "Critical" in state["surfacedSinceLastPanel"]
+    assert "surfacedSinceLastPanel" not in state
     state["_auditOutcome"] = {"notDischarged": [], "discharged": [tid]}
     state["findings"] = []
     state.pop("_fixBatch", None)
     state["step"] = None
     state["terminal"] = None
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_PANEL
-    assert any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
+    assert state["step"] != RD.P_PANEL
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
 # --- D5.2/D5.3: alias-based stall selection -----------------------------------
@@ -311,7 +313,7 @@ def test_stall_batch_never_drops_a_second_open_target_regression_1165():
     breaker = {"reason": "audit-stall", "detail": "x",
                "stalledIdentities": [target_a["classKey"]]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     batch = state.get("_fixBatch") or []
     assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
 
@@ -410,13 +412,14 @@ def test_handle_stall_retains_occurrence_suffixed_open_targets():
     breaker = {"reason": "audit-stall", "detail": "x",
                "stalledIdentities": [ident]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     batch = state.get("_fixBatch") or []
     assert {b["id"] for b in batch} == {target_a["id"], target_b["id"]}
 
 
-def test_stalled_critical_uses_alias_not_line_less_identity():
-    # axis: stalled Critical cap lookup must match classKey alias, not retitled line-less identity
+def test_stalled_open_targets_use_alias_not_line_less_identity():
+    # axis: stalled-target lookup must match classKey alias, not retitled line-less identity
+    # (was a test of the removed _stalled_critical; the selection helper it called is what remains)
     class_key = "Security::CWE-401::crit"
     target = {
         "id": "f.py::retitled@L1", "identity": "f.py::retitled",
@@ -428,7 +431,7 @@ def test_stalled_critical_uses_alias_not_line_less_identity():
     state["fixBatch"] = [dict(target)]
     state["_auditOutcome"] = {"notDischarged": [target["id"]], "discharged": []}
     breaker = {"stalledIdentities": [class_key]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [target]
 
 
@@ -453,8 +456,8 @@ def test_handle_stall_excludes_discharged_sibling_same_identity():
     assert batch[0]["id"] == open_tgt["id"]
 
 
-def test_stalled_critical_excludes_discharged_sibling_same_identity():
-    # axis: stalled Critical cap must not count a discharged Critical sibling at another line
+def test_stalled_open_targets_exclude_discharged_critical_sibling_same_identity():
+    # axis: stalled-target lookup must not count a discharged Critical sibling at another line
     ident = FI.finding_identity(_finding(file="lib/a.py", title="unchecked input", line=10,
                                          severity="Critical"))
     open_tgt = {"id": "lib/a.py::unchecked input@L10", "identity": ident,
@@ -469,12 +472,12 @@ def test_stalled_critical_excludes_discharged_sibling_same_identity():
     state["_auditOutcome"] = {"notDischarged": [open_tgt["id"]],
                               "discharged": [closed_tgt["id"]]}
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [open_tgt]
 
 
-def test_stalled_critical_important_open_critical_discharged_returns_empty():
-    # axis: discharged Critical sibling must not be reported as open Critical at the cap
+def test_stalled_open_targets_return_only_the_open_important_when_the_critical_is_discharged():
+    # axis: a discharged Critical sibling must not be reported as an open stalled target
     ident = FI.finding_identity(_finding(file="lib/a.py", title="unchecked input", line=10))
     open_tgt = {"id": "lib/a.py::unchecked input@L10", "identity": ident,
                 "file": "lib/a.py", "line": 10, "title": "unchecked input",
@@ -488,8 +491,8 @@ def test_stalled_critical_important_open_critical_discharged_returns_empty():
     state["_auditOutcome"] = {"notDischarged": [open_tgt["id"]],
                               "discharged": [closed_tgt["id"]]}
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
-    assert crit == []
+    crit = RD._stalled_open_targets(state, breaker)
+    assert crit == [open_tgt]
 
 
 def test_stalled_callers_share_helper_no_duplicate_alias_loops():
@@ -517,12 +520,10 @@ def test_stalled_callers_share_helper_no_duplicate_alias_loops():
         "audit_target_aliases must appear only in _stalled_open_targets, found: %s" % alias_fns)
     compose_src = inspect.getsource(RD._compose_stall_fix_batch)
     assert "_stalled_open_targets" in compose_src
-    stall_src = inspect.getsource(RD._handle_stall)
-    # the stall-MENU half still selects through the shared helper; the RECOVERY half's
-    # delegation is pinned separately in test_stall_decomposition.py.
-    assert "_stalled_open_targets" in stall_src
-    crit_src = inspect.getsource(RD._stalled_critical)
-    assert "_stalled_open_targets" in crit_src
+    # `_handle_stall` no longer selects targets (its stall-menu half is gone and the recovery half's
+    # delegation is pinned in test_stall_decomposition.py).
+    assert "_stalled_open_targets" not in inspect.getsource(RD._handle_stall)
+    assert not hasattr(RD, "_stalled_critical")
 
 
 def test_handle_stall_legacy_no_audit_outcome_uses_alias_only():
@@ -658,18 +659,18 @@ def test_audit_target_aliases_diverges_for_id_only_record():
     assert CB._audit_outcome_aliases(record) == set()
 
 
-def test_stalled_critical_legacy_raw_finding_matches_line_less_identity():
+def test_stalled_open_targets_legacy_raw_finding_matches_line_less_identity():
     # axis: legacy leg, plain raw finding → selected by line-less identity
     raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical"}
     ident = FI.finding_identity(raw)
     state = RD.new_state(_cfg())
     state["fixBatch"] = [dict(raw)]
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [raw]
 
 
-def test_stalled_critical_legacy_classed_finding_matches_line_less_identity():
+def test_stalled_open_targets_legacy_classed_finding_matches_line_less_identity():
     # axis: legacy leg, classed raw finding → selected by line-less identity
     raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical",
            "classKey": "code::bug"}
@@ -677,7 +678,7 @@ def test_stalled_critical_legacy_classed_finding_matches_line_less_identity():
     state = RD.new_state(_cfg())
     state["fixBatch"] = [dict(raw)]
     breaker = {"stalledIdentities": [ident]}
-    crit = RD._stalled_critical(state, state["config"], breaker)
+    crit = RD._stalled_open_targets(state, breaker)
     assert crit == [raw]
 
 
@@ -751,7 +752,7 @@ def test_settle_delta_empty_not_discharged_with_new_blocker_composes_batch():
     )
     RD._settle_delta(state, state["config"])
     assert state.get("terminal") is None
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_APPLY_FIXES
     batch = state.get("_fixBatch") or []
     assert len(batch) == 1
 

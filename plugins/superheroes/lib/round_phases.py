@@ -13,42 +13,26 @@ P_SYNTHESIS = "dispatch-synthesis"
 P_AUDITS = "dispatch-audits"
 P_SCOPED = round_panel_contract.P_SCOPED_FINDER_PHASE
 P_GAPSWEEP = "dispatch-gap-sweep"
+P_SECOND_TEST = "dispatch-second-test"
 P_VERIFY = "run-verify"
-P_FIXER = "dispatch-fixer"
-P_JUDGMENT = "present-judgment"
-P_STALL = "present-stall-menu"
+P_APPLY_FIXES = "apply-fixes"
 P_TERMINAL = "terminal"
 
-# Default cap on findings per dispatch-fixer order (#1272 round economy).
+# Default cap on findings one apply-fixes step carries.
 FIX_BATCH_CAP_DEFAULT = 4
 
+# The round cap: a review session never begins a round after it, and no session this driver mints
+# carries a larger one. The only home of the number.
+ROUND_CAP = 4
+
 ALL_PHASES = (
-    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_FIXER,
-    P_JUDGMENT, P_STALL, P_TERMINAL,
+    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_APPLY_FIXES,
+    P_TERMINAL, P_SECOND_TEST,
 )
 
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.
 DIMENSIONS = list(round_panel_contract.DEFAULT_PANEL_DIMENSIONS)
-
-# The three stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
-# ONLY for a CONFIRMED-with-receipt stalled audit target; the menu payload gates it per-run.
-# one-more-round is offerable once per session and is NOT a terminal — it re-enters the fix leg.
-ONE_MORE_ROUND_CHOICE = "one-more-round"
-ACCEPT_RISK_CHOICE = "accept-the-disclosed-risk"
-HOLD_CHOICE = "hold"
-STALL_CHOICES = (ONE_MORE_ROUND_CHOICE, ACCEPT_RISK_CHOICE, HOLD_CHOICE)
-RETIRED_STALL_CHOICES = ("ship-smaller", "spend-more")
-RETIRED_STALL_CHOICE_PREFIX = "stall-choice-retired:"
-
-# The three per-finding judgment dispositions the judgment gate offers (never "judge the dispute
-# yourself"): fix the finding as the reviewer suggested, fix it with owner free-text guidance, or
-# skip it with a citable reason (a skipped blocker rides the exit disclosure — the skipped-blocking
-# channel). The judgment gate is an INTERVENTION that folds back into the fix leg and never
-# terminates (#507 R2a). The stall menu is the only gate that can terminate — reachable solely
-# from the audit-stall path — via hold → held or an ineligible/unknown choice → stalled; even
-# there one-more-round re-enters the fix leg rather than terminating.
-JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
 
 # Per-finding verification verdicts — lives here so the payload-contract layer can cite it
 # without importing `verification`; `verification.VERDICTS` re-exports this tuple.

@@ -90,7 +90,7 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
 
 ## Output Format
 
-Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Failure-Mode"` on every entry. Do not restate the schema — follow the base rubric's.
+Emit findings per the base rubric's "Findings output format" section (schema and delivery channel), with `"dimension": "Failure-Mode"` on every entry. Do not restate the schema — follow the base rubric's. Return your read list (`readParts`) as that section defines it, covering only what you actually read.
 
 - `taxonomy` carries the failure class exactly as named above.
 - `evidence` carries the three-leg chain (trigger → propagation → impact) on every Critical/Important finding; a **Low**-confidence finding names which leg is uncertain.

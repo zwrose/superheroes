@@ -97,8 +97,8 @@ def _drive_full_lane_review(base, leave_old_probe_file):
     seen = []
 
     def respond(phase, payload, rnd):
-        if phase == RD.P_FIXER and rnd == 1:
-            _commit_file(repo, "f.py", "fixed head\n", "fixer commit")
+        if phase == RD.P_APPLY_FIXES and rnd == 1:
+            _commit_file(repo, "f.py", "fixed head\n", "fix commit")
             return {"fixes": [{"file": "f.py"}], "changedSubjects": ["Code"]}
         return _responder(round1_findings=_A_FINDING)(phase, payload, rnd)
 
@@ -172,14 +172,14 @@ _DURABLE_FINDING = {"file": "f.py", "line": 1, "title": "bug", "severity": "Impo
 
 
 def _durable_payload(session, repo, base_sha, head_diff_path, state, pend, seat):
-    """What one seat lands. The fixer commits its change to the fixture repo first."""
+    """What one seat lands. The build session commits its fix to the fixture repo first."""
     phase = pend["phase"]
-    if phase == RD.P_FIXER:
-        _commit_file(repo, "f.py", "fixed head\n", "fixer commit")
+    if phase == RD.P_APPLY_FIXES:
+        _commit_file(repo, "f.py", "fixed head\n", "fix commit")
         with open(head_diff_path, "w", encoding="utf-8") as fh:
             fh.write(_git_diff(repo, base_sha))
     payload = _payload_for(session, state, pend, seat, [dict(_DURABLE_FINDING)], head_diff_path)
-    if phase == RD.P_FIXER:
+    if phase == RD.P_APPLY_FIXES:
         payload["fixes"] = [{"file": "f.py", "summary": "guard restored"}]
     if phase == RD.P_VERIFY:
         payload["command"] = "pytest -q"

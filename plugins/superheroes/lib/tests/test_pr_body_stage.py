@@ -1,11 +1,6 @@
 """#2083: a review finding about the PR body is fixed in a staged copy inside the review session,
 audited there, and copied onto the PR only by `pr_body_stage.publish`, which publishes only bytes an
-audit discharged and never overwrites a live body that moved. Fixers never write to GitHub.
-
-The fixer-refusal path (a `gh pr edit` the sandbox refused, reported in the fixer's round record) reaches
-the review account's `commandRefusals` through the existing end-to-end tests
-`test_review_record_refusals.py::test_the_account_carries_each_refusal_tagged_with_its_round` and
-`::test_the_written_record_carries_the_refusal_in_json_and_summary`; they are cited, not duplicated.
+audit discharged and never overwrites a live body that moved. The build session never writes to GitHub.
 
 Bite-proof record: wo_pr_body_stage_2083
 """
@@ -23,7 +18,6 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import pr_body_stage as PBS  # noqa: E402
-import record_paths  # noqa: E402
 import review_record_session as rs  # noqa: E402
 import round_orders as RO  # noqa: E402
 import round_phases as RP  # noqa: E402
@@ -103,9 +97,17 @@ class _Done:
         self.returncode, self.stdout = returncode, stdout
 
 
+def read_argv(pr=7):
+    return ["gh", "api", "repos/{owner}/{repo}/pulls/%s" % pr]
+
+
+def edit_argv(staged, pr=7):
+    return ["gh", "api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/%s" % pr, "-F", "body=@%s" % staged]
+
+
 class FakeGh:
-    """A `gh` runner double: `views` are the bodies successive `pr view` calls return (the last
-    repeats), `edit_rc` is the `pr edit` exit code."""
+    """A `gh` runner double over the REST API: `views` are the bodies successive pull reads return
+    (the last repeats), `edit_rc` is the PATCH exit code. Any `gh` call that is not `gh api` fails."""
 
     def __init__(self, views=(), edit_rc=0, view_rc=0, view_raw=None, boom=False):
         self.calls, self.views = [], list(views)
@@ -115,19 +117,21 @@ class FakeGh:
         self.calls.append(list(argv))
         if self.boom:
             raise OSError("gh is not installed")
-        if argv[:3] == ["gh", "pr", "view"]:
+        if argv[:2] != ["gh", "api"]:
+            raise AssertionError("unexpected gh call: %r" % (argv,))
+        if argv[2:4] == ["-X", "PATCH"]:
+            return _Done(self.edit_rc)
+        if len(argv) == 3 and argv[2].startswith("repos/{owner}/{repo}/pulls/"):
             if self.view_rc:
                 return _Done(self.view_rc)
             if self.view_raw is not None:
                 return _Done(0, self.view_raw)
             body = self.views.pop(0) if len(self.views) > 1 else self.views[0]
-            return _Done(0, json.dumps({"body": body}))
-        if argv[:3] == ["gh", "pr", "edit"]:
-            return _Done(self.edit_rc)
+            return _Done(0, json.dumps({"body": body, "number": 7}))
         raise AssertionError("unexpected gh call: %r" % (argv,))
 
     def edits(self):
-        return [c for c in self.calls if c[:3] == ["gh", "pr", "edit"]]
+        return [c for c in self.calls if c[2:4] == ["-X", "PATCH"]]
 
 
 def _receipt(sd):
@@ -138,13 +142,6 @@ def _receipt(sd):
 
 def test_the_citation_is_the_name_the_sanitized_view_gives_the_pr_body():
     assert PBS.CITATION == sanitized_view.PR_BODY_FILE_NAME == "SUPERHEROES_PR_BODY.md"
-
-
-def test_the_fixer_copy_lives_in_the_fixer_landing_dir_under_the_reserved_prefix(tmp_path):
-    sd = _session(tmp_path)
-    path = PBS.fixer_copy_path(sd, 2)
-    assert path == os.path.join(record_paths.landing_dir(sd, 2, "dispatch-fixer"), "_pr-body.md")
-    assert os.path.basename(path).startswith(record_paths.RESERVED_PREFIX)
 
 
 # ---- compile -----------------------------------------------------------------------------------
@@ -216,58 +213,67 @@ def test_E3_a_second_stage_overwrites_neither_file(tmp_path):
     assert _read(p["staged"]) == FIXED and _read(p["original"]) == BODY
 
 
-# ---- the fixer's copy (E4, E5) -----------------------------------------------------------------
-
-def test_seed_copies_staged_once_and_reports_the_before_sha(tmp_path):
-    sd = _session(tmp_path)
-    PBS.stage(sd)
-    assert PBS.seed_fixer_copy(sd, 1) == sha(BODY)
-    copy = PBS.fixer_copy_path(sd, 1)
-    assert _read(copy) == BODY
-    _write(copy, FIXED)  # the fixer's edit survives a second seeding
-    assert PBS.seed_fixer_copy(sd, 1) == sha(BODY)
-    assert _read(copy) == FIXED
-
-
-def test_seed_with_nothing_staged_creates_no_copy(tmp_path):
-    sd = _session(tmp_path)
-    assert PBS.seed_fixer_copy(sd, 1) is None
-    assert not os.path.exists(PBS.fixer_copy_path(sd, 1))
-
-
-def test_collect_replaces_staged_with_the_fixer_copy_and_returns_its_sha(tmp_path):
-    sd = _session(tmp_path)
-    PBS.stage(sd)
-    PBS.seed_fixer_copy(sd, 1)
-    _write(PBS.fixer_copy_path(sd, 1), FIXED)
-    assert PBS.collect_fixer_copy(sd, 1) == sha(FIXED)
-    assert _read(PBS.paths(sd)["staged"]) == FIXED and _read(PBS.paths(sd)["original"]) == BODY
-
-
-def test_E4_an_absent_fixer_copy_changes_nothing(tmp_path):
-    sd = _session(tmp_path)
-    PBS.stage(sd)
-    assert PBS.collect_fixer_copy(sd, 1) is None
-    assert _read(PBS.paths(sd)["staged"]) == BODY
-    assert PBS.collect_fixer_copy(_session(tmp_path / "other"), 1) is None  # nothing staged either
-
-
 # ---- publish (E6-E15) --------------------------------------------------------------------------
 
-def test_publish_copies_the_audited_staged_body_with_exactly_two_views_and_one_edit(tmp_path):
+def test_publish_copies_the_audited_staged_body_with_exactly_two_reads_and_one_patch(tmp_path):
+    # axis: every GitHub call goes through the REST API, never `gh pr view` or `gh pr edit` — see
+    # bite-proof record c1l9a_wo2_pr_body_rest
     sd = _staged_fixed(tmp_path)
     gh = FakeGh(views=[BODY, FIXED])
     out = PBS.publish(sd, 7, runner=gh)
     staged = PBS.paths(sd)["staged"]
     assert (out["ok"], out["outcome"], out["reason"]) == (True, "published", None)
-    assert gh.calls == [["gh", "pr", "view", "7", "--json", "body"],
-                        ["gh", "pr", "edit", "7", "--body-file", staged],
-                        ["gh", "pr", "view", "7", "--json", "body"]]
+    assert gh.calls == [["gh", "api", "repos/{owner}/{repo}/pulls/7"],
+                        ["gh", "api", "-X", "PATCH", "repos/{owner}/{repo}/pulls/7",
+                         "-F", "body=@%s" % staged],
+                        ["gh", "api", "repos/{owner}/{repo}/pulls/7"]]
+    assert gh.calls[0] == read_argv() and gh.calls[1] == edit_argv(staged)
+    assert not [c for c in gh.calls if c[:2] == ["gh", "pr"]]
     assert os.path.isabs(staged)
     assert _receipt(sd) == out
     assert out["schema"] == "pr-body-publish/1" and out["pr"] == 7
     assert (out["originalSha256"], out["stagedSha256"], out["liveSha256"]) == (sha(BODY), sha(FIXED), sha(BODY))
     assert out["at"].endswith("Z")
+
+
+class _StatefulCloudGh:
+    """A cloud-shaped `gh` double that holds the live PR body: a pulls read returns it, a PATCH must carry
+    `-F body=@<path>` and makes that file's text the live body. Anything that is not `gh api` (the GraphQL
+    commands `gh pr view` / `gh pr edit`) is an assertion error."""
+
+    def __init__(self, body):
+        self.live, self.calls = body, []
+
+    def __call__(self, argv):
+        self.calls.append(list(argv))
+        if argv[:2] != ["gh", "api"]:
+            raise AssertionError("unexpected gh call: %r" % (argv,))
+        if argv[2:4] == ["-X", "PATCH"]:
+            assert argv[5] == "-F" and argv[6].startswith("body=@") and len(argv) == 7, argv
+            self.live = _read(argv[6][len("body=@"):])
+            return _Done(0)
+        if len(argv) == 3 and argv[2].startswith("repos/{owner}/{repo}/pulls/"):
+            return _Done(0, json.dumps({"body": self.live, "number": 7}))
+        raise AssertionError("unexpected gh call: %r" % (argv,))
+
+
+def test_a_staged_fix_publishes_through_rest_against_a_stateful_cloud_shaped_gh(tmp_path):
+    sd = _staged_fixed(tmp_path)
+    gh = _StatefulCloudGh(BODY)
+    out = PBS.publish(sd, 7, runner=gh)
+    assert (out["ok"], out["outcome"], out["reason"]) == (True, "published", None)
+    assert gh.live == FIXED
+    assert gh.calls[0] == read_argv() and gh.calls[1] == edit_argv(PBS.paths(sd)["staged"])
+    assert not [c for c in gh.calls if c[:2] == ["gh", "pr"]]
+    assert "did not copy" not in (PBS.record_line(sd) or "")
+
+
+def test_a_null_rest_body_reads_as_empty_and_publishes_an_audited_fix(tmp_path):
+    sd = _staged_fixed(tmp_path, body="")
+    gh = _StatefulCloudGh(None)
+    out = PBS.publish(sd, 7, runner=gh)
+    assert (out["ok"], out["outcome"], out["reason"]) == (True, "published", None)
+    assert gh.live == FIXED
 
 
 @pytest.mark.parametrize("verdict", [None, "halted", "held", "stalled", "cannot-certify"])
@@ -351,7 +357,7 @@ def test_the_highest_numbered_audited_round_is_the_one_that_counts(tmp_path):
 def test_E11_a_live_body_that_moved_since_the_original_is_never_overwritten(tmp_path):
     # axis: a live body that moved is never overwritten — see bite-proof record wo_pr_body_stage_2083
     sd = _staged_fixed(tmp_path)
-    gh = FakeGh(views=["a fixer ran gh pr edit and wrote this"])
+    gh = FakeGh(views=["someone ran gh pr edit and wrote this"])
     out = PBS.publish(sd, 7, runner=gh)
     assert (out["ok"], out["reason"]) == (False, "pr-body-moved")
     assert gh.edits() == []
@@ -377,7 +383,7 @@ def test_E13_a_readback_that_fails_is_refused(tmp_path):
     views = iter([_Done(0, json.dumps({"body": BODY})), _Done(1)])
 
     def runner(argv):
-        return next(views) if argv[:3] == ["gh", "pr", "view"] else _Done(0)
+        return next(views) if argv[2:4] != ["-X", "PATCH"] else _Done(0)
     out = PBS.publish(sd, 7, runner=runner)
     assert (out["ok"], out["reason"]) == (False, "pr-body-publish-unverified")
 
@@ -433,7 +439,7 @@ def test_the_default_runner_calls_gh_with_an_argv_list(tmp_path, monkeypatch):
     sd = _staged_fixed(tmp_path)
     assert PBS.publish(sd, 7)["reason"] == "pr-body-live-unreadable"
     argv, kwargs = seen[0]
-    assert argv == ["gh", "pr", "view", "7", "--json", "body"] and not kwargs.get("shell")
+    assert argv == read_argv() and not kwargs.get("shell")
 
 
 # ---- the review account's line -----------------------------------------------------------------
@@ -452,7 +458,7 @@ def test_the_default_runner_calls_gh_with_an_argv_list(tmp_path, monkeypatch):
      "The review did not copy its PR-body fix onto the PR: the staged PR-body text is not the text an audit cleared."),
 ])
 def test_record_line_reads_the_receipt_in_plain_words(tmp_path, receipt, expected):
-    sd = _session(tmp_path)
+    sd = _staged_fixed(tmp_path)  # a staged copy that differs from the original: there is a fix to copy
     _write(PBS.paths(sd)["published"], json.dumps(receipt))
     assert PBS.record_line(sd) == expected
 
@@ -464,8 +470,58 @@ def test_record_line_is_none_without_a_readable_receipt(tmp_path):
     assert PBS.record_line(sd) is None
 
 
-def test_every_refusal_token_has_its_own_plain_phrase(tmp_path):
+def _no_fix_session(tmp_path, how):
+    """A session with no PR-body fix to copy: nothing staged, one file missing, or staged == original."""
+    if how == "nothing-staged":
+        return _session(tmp_path)
+    sd = _staged_fixed(tmp_path, fixed=BODY, audited=False)
+    if how == "staged-missing":
+        os.remove(PBS.paths(sd)["staged"])
+    elif how == "original-missing":
+        os.remove(PBS.paths(sd)["original"])
+    elif how == "trailing-newline-only":
+        _write(PBS.paths(sd)["staged"], BODY.rstrip("\n"))
+    return sd
+
+
+@pytest.mark.parametrize("how", ["nothing-staged", "staged-missing", "original-missing",
+                                 "staged-equals-original", "trailing-newline-only"])
+@pytest.mark.parametrize("reason", sorted(PBS._REFUSAL_PHRASES))
+def test_a_review_with_no_pr_body_fix_never_says_it_did_not_copy_one(tmp_path, how, reason):
+    # axis: the no-fix guard in record_line, whatever the refusal reason — see bite-proof record
+    # c1l9a_wo2_pr_body_rest
+    sd = _no_fix_session(tmp_path, how)
+    _write(PBS.paths(sd)["published"], json.dumps({"outcome": "refused", "reason": reason}))
+    assert PBS.record_line(sd) is None
+
+
+def test_publish_with_nothing_staged_before_convergence_leaves_no_did_not_copy_line(tmp_path):
     sd = _session(tmp_path)
+    _write(os.path.join(sd, "round-receipt.json"), json.dumps({"verdict": "halted"}))
+    out = PBS.publish(sd, 7, runner=FakeGh(views=[BODY]))
+    assert out["reason"] == "review-not-converged"
+    assert PBS.record_line(sd) is None
+
+
+def test_an_unchanged_body_that_moved_on_github_keeps_its_own_sentence_with_no_fix(tmp_path):
+    sd = _no_fix_session(tmp_path, "staged-equals-original")
+    _write(PBS.paths(sd)["published"], json.dumps({"outcome": "unchanged", "reason": "live-moved"}))
+    line = PBS.record_line(sd)
+    assert line == ("The PR body changed on GitHub during the review, outside the review; the review "
+                    "had no PR-body fix to copy.")
+    assert not line.startswith("The review did not copy its PR-body fix")
+
+
+@pytest.mark.parametrize("reason", ["review-not-converged", "pr-body-moved", "pr-body-publish-failed"])
+def test_a_refused_fix_that_differs_from_the_original_still_says_it_did_not_copy_it(tmp_path, reason):
+    sd = _staged_fixed(tmp_path)
+    _write(PBS.paths(sd)["published"], json.dumps({"outcome": "refused", "reason": reason}))
+    assert PBS.record_line(sd) == ("The review did not copy its PR-body fix onto the PR: %s."
+                                   % PBS._REFUSAL_PHRASES[reason])
+
+
+def test_every_refusal_token_has_its_own_plain_phrase(tmp_path):
+    sd = _staged_fixed(tmp_path)
     for reason in PBS._REFUSAL_PHRASES:
         _write(PBS.paths(sd)["published"], json.dumps({"outcome": "refused", "reason": reason}))
         line = PBS.record_line(sd)
@@ -498,7 +554,7 @@ def _driver_state(tmp_path, **cfg):
     return state
 
 
-def _placeholders(phase, sd, state, seat="fixer", payload=None, materialize=True):
+def _placeholders(phase, sd, state, seat="t1", payload=None, materialize=True):
     paths = RD._order_paths(sd, 1, phase, 0, seat, 0, True)
     return RD._order_placeholders(phase, seat, 0, state, state["config"], payload or {}, sd, 1, paths,
                                   RD.CHANNEL_FILE, materialize_shared_inputs=materialize), paths
@@ -512,90 +568,88 @@ def _render(phase, seat, ph, paths, host_seat=True):
     return text
 
 
-@pytest.mark.parametrize("host_seat", [True, False], ids=["host-seat", "engine-seat"])
-def test_the_fixer_order_names_the_staged_copy_and_forbids_writing_to_github(tmp_path, host_seat):
-    # axis: the fixer template carries the staged-copy line and the prohibition — see bite-proof record wo_pr_body_stage_2083
-    sd = _session(tmp_path)
-    state = _driver_state(tmp_path)
-    ph, paths = _placeholders(RP.P_FIXER, sd, state)
-    text = _render(RP.P_FIXER, "fixer", ph, paths, host_seat=host_seat)
-    assert "- PR body (staged copy): %s" % PBS.fixer_copy_path(sd, 1) in text
-    assert "Never write to GitHub: no `gh pr edit`, no `gh api` write" in text
-    assert "no `gh pr comment`" in text and "`gh issue comment`" in text
-    assert "is fixed only in the staged copy named in Input" in text
-
-
-@pytest.mark.parametrize("mode,pr_json,reason", [
-    ("branch", False, "branch mode"), ("branch", True, "branch mode"), ("pr", False, "no-pr"),
-    ("pr", None, "pr-json-unparseable"),
+@pytest.mark.parametrize("mode,pr_json", [
+    ("branch", False), ("branch", True), ("pr", False), ("pr", None),
 ], ids=["branch", "branch-with-pr-json", "pr-without-pr-json", "pr-with-bad-pr-json"])
-def test_E1_a_session_without_a_staged_body_says_so_and_escalates(tmp_path, mode, pr_json, reason):
+def test_E1_a_session_without_a_staged_body_hands_the_step_no_pr_body_path(tmp_path, mode, pr_json):
     sd = _session(tmp_path, mode=mode, pr_json=bool(pr_json))
     if pr_json is None:
         _write(os.path.join(sd, "pr.json"), "{broken")
     state = _driver_state(tmp_path)
-    ph, paths = _placeholders(RP.P_FIXER, sd, state)
-    text = _render(RP.P_FIXER, "fixer", ph, paths)
-    assert "- PR body (staged copy): no staged PR body (%s); a finding about a PR body is escalated, " \
-           "never fixed anywhere else" % reason in text
-    assert not os.path.exists(PBS.fixer_copy_path(sd, 1)) and "prBodyFix" not in state["rounds"].get("1", {})
+    state["_fixBatch"] = []
+    fields = RD._apply_fixes_payload_fields(sd, state, 1, 0)
+    assert "prBodyPath" not in fields and "prBodyFix" not in state["rounds"].get("1", {})
 
 
-def test_E5_several_batch_attempts_in_one_round_seed_once_and_record_before_once(tmp_path):
+def test_E1_a_staged_body_is_the_step_s_pr_body_path_and_is_the_file_itself(tmp_path):
+    sd = _session(tmp_path)
+    PBS.stage(sd)
+    state = _driver_state(tmp_path)
+    state["_fixBatch"] = []
+    fields = RD._apply_fixes_payload_fields(sd, state, 1, 0)
+    assert fields["prBodyPath"] == PBS.paths(sd)["staged"]
+
+
+def test_E16_a_render_only_audit_order_names_paths_and_creates_nothing(tmp_path):
     sd = _session(tmp_path)
     state = _driver_state(tmp_path)
-    first, _ = _placeholders(RP.P_FIXER, sd, state)
-    assert first["PR_BODY_LINE"] == PBS.fixer_copy_path(sd, 1)
-    assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": None}
-    _write(PBS.fixer_copy_path(sd, 1), FIXED)
-    assert PBS.collect_fixer_copy(sd, 1) == sha(FIXED)  # batch 1 folded
-    second, _ = _placeholders(RP.P_FIXER, sd, state)  # batch 2's order
-    assert second["PR_BODY_LINE"] == PBS.fixer_copy_path(sd, 1)
-    assert _read(PBS.fixer_copy_path(sd, 1)) == FIXED
-    assert state["rounds"]["1"]["prBodyFix"]["before"] == sha(BODY)
-
-
-@pytest.mark.parametrize("phase,seat,payload", [
-    (RP.P_FIXER, "fixer", None),
-    (RP.P_AUDITS, "t1", {"targets": [{"id": "t1"}]}),
-], ids=["fixer", "audits"])
-def test_E16_a_render_only_order_names_paths_and_creates_nothing(tmp_path, phase, seat, payload):
-    sd = _session(tmp_path)
-    state = _driver_state(tmp_path)
-    ph, _ = _placeholders(phase, sd, state, seat=seat, payload=payload, materialize=False)
+    ph, _ = _placeholders(RP.P_AUDITS, sd, state, seat="t1", payload={"targets": [{"id": "t1"}]},
+                          materialize=False)
     p = PBS.paths(sd)
-    if phase == RP.P_FIXER:
-        assert ph["PR_BODY_LINE"] == PBS.fixer_copy_path(sd, 1)
-    else:
-        assert p["staged"] in ph["PR_BODY_LINE"] and p["original"] in ph["PR_BODY_LINE"]
+    assert p["staged"] in ph["PR_BODY_LINE"] and p["original"] in ph["PR_BODY_LINE"]
     assert not os.path.exists(os.path.join(sd, "pr-body"))
-    assert not os.path.exists(PBS.fixer_copy_path(sd, 1))
     assert "prBodyFix" not in state["rounds"].get("1", {})
 
 
 # ---- the folds ---------------------------------------------------------------------------------
 
-def _fold_fixer(state, sd):
+def _fold_apply_fixes(state, sd):
     state["_fixBatchIndex"] = 0
-    RD._fold_fixer(state, state["config"], {"fixes": []}, changed_subjects_seam=lambda *args: [],
-                   session_dir=sd, panel_diff_seam=lambda config, head: ("", None))
+    RD._fold_apply_fixes(state, state["config"], {"fixes": []}, changed_subjects_seam=lambda *args: [],
+                         session_dir=sd, panel_diff_seam=lambda config, head: ("", None))
 
 
-def test_the_fixer_fold_collects_the_fixer_copy_and_records_the_after_sha(tmp_path):
-    # axis: the fold calls collect_fixer_copy — see bite-proof record wo_pr_body_stage_2083
+def test_the_fold_records_the_staged_body_before_and_after_the_session_s_edit(tmp_path):
+    # axis: the fold compares the staged body with the sha the step snapshotted — see bite-proof record wo_pr_body_stage_2083
     sd = _session(tmp_path)
+    PBS.stage(sd)
     state = _driver_state(tmp_path)
-    _placeholders(RP.P_FIXER, sd, state)
-    _write(PBS.fixer_copy_path(sd, 1), FIXED)
-    _fold_fixer(state, sd)
+    state["_prBodyAtStep"] = sha(BODY)  # what `next` snapshots when it sets the step
+    _write(PBS.paths(sd)["staged"], FIXED)
+    _fold_apply_fixes(state, sd)
     assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": sha(FIXED)}
     assert _read(PBS.paths(sd)["staged"]) == FIXED
+    assert "_prBodyAtStep" not in state
 
 
-def test_E4_the_fixer_fold_with_no_fixer_copy_records_and_changes_nothing(tmp_path):
+def test_E5_several_batches_in_one_round_keep_the_first_before_sha(tmp_path):
+    sd = _session(tmp_path)
+    PBS.stage(sd)
+    state = _driver_state(tmp_path)
+    state["_prBodyAtStep"] = sha(BODY)
+    _write(PBS.paths(sd)["staged"], FIXED)
+    _fold_apply_fixes(state, sd)  # batch 1 folded
+    further = FIXED + "\nA further line.\n"
+    state["round"] = 1  # batch 2 folds into the round that held batch 1; the fold of batch 1 moved the loop on
+    state["_prBodyAtStep"] = sha(FIXED)  # batch 2's step snapshots the body batch 1 left
+    _write(PBS.paths(sd)["staged"], further)
+    _fold_apply_fixes(state, sd)
+    assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": sha(further)}
+
+
+def test_E4_a_fold_with_the_body_unedited_records_nothing(tmp_path):
+    sd = _session(tmp_path)
+    PBS.stage(sd)
+    state = _driver_state(tmp_path)
+    state["_prBodyAtStep"] = sha(BODY)
+    _fold_apply_fixes(state, sd)
+    assert "prBodyFix" not in state["rounds"]["1"]
+
+
+def test_E4_a_fold_with_no_staged_body_records_and_changes_nothing(tmp_path):
     sd = _session(tmp_path, mode="branch", pr_json=False)
     state = _driver_state(tmp_path)
-    _fold_fixer(state, sd)
+    _fold_apply_fixes(state, sd)
     assert "prBodyFix" not in state["rounds"]["1"] and not os.path.exists(os.path.join(sd, "pr-body"))
 
 
@@ -615,6 +669,7 @@ def _fold_audits(state, rulings=None, manifest_vendor=None):
         ruling = (rulings or {}).get(i, "discharged")
         results.append({"id": t["id"], "ruling": ruling, "reason": "the answers are now stated",
                         "evidence": "read the staged copy", "auditorVendor": t.get("auditorVendor"),
+                        "checks": TRD.audit_checks(),
                         **({"newIssues": [{"title": "n", "severity": "Nit", "file": PBS.CITATION,
                                            "line": 1, "consequence": CONSEQUENCE}]}
                            if ruling == "discharged-but-new-issue" else {})})
@@ -640,7 +695,8 @@ def test_E10_the_audit_fold_records_nothing_unless_every_target_cleared(tmp_path
         state["rounds"].setdefault("1", {})["prBodyFix"] = {"before": sha(BODY), "after": None}
     if why == "silence":
         results = [{"id": state["_auditTargets"][0]["id"], "ruling": "discharged", "reason": "ok",
-                    "evidence": "e", "auditorVendor": state["_auditTargets"][0].get("auditorVendor")}]
+                    "evidence": "e", "auditorVendor": state["_auditTargets"][0].get("auditorVendor"),
+                    "checks": TRD.audit_checks()}]
         manifest = {state["_auditTargets"][0]["id"]: state["_auditTargets"][0].get("auditorVendor")}
         RD._fold_audits(state, state["config"], {"results": results, "collectionManifest": manifest})
     else:
@@ -664,24 +720,23 @@ def test_the_audit_order_names_the_staged_copy_and_the_original(tmp_path, host_s
 # ---- end to end --------------------------------------------------------------------------------
 
 def test_a_pr_body_finding_is_fixed_audited_and_published_through_the_chokepoint(tmp_path):
-    """Drives the real compile, the real fixer and audit orders, the real `_fold_fixer` and
-    `_fold_audits`, then `publish` with a fake `gh`."""
+    """Drives the real compile, the real `apply-fixes` step's files, the real audit order, the real
+    `_fold_apply_fixes` and `_fold_audits`, then `publish` with a fake `gh`."""
     sd = _session(tmp_path)
+    PBS.stage(sd)
     state = _driver_state(tmp_path)
 
     compiled, drops = RD.mechanical_compile([_pr_body_finding()], TRD.DIFF)
     assert len(compiled) == 1 and drops == []
     state["fixBatch"] = state["_fixBatch"] = compiled
 
-    ph, paths = _placeholders(RP.P_FIXER, sd, state)
-    fixer_order = _render(RP.P_FIXER, "fixer", ph, paths)
-    copy = PBS.fixer_copy_path(sd, 1)
-    assert copy in fixer_order and "Never write to GitHub" in fixer_order
-    assert state["rounds"]["1"]["prBodyFix"]["before"] == sha(BODY)
+    fields = RD._apply_fixes_payload_fields(sd, state, 1, 0)
+    assert fields["prBodyPath"] == PBS.paths(sd)["staged"]
+    state["_prBodyAtStep"] = sha(BODY)  # what `next` snapshots when it sets the step
 
-    _write(copy, FIXED)  # the fixer edits only its copy
-    _fold_fixer(state, sd)
-    assert state["rounds"]["1"]["prBodyFix"]["after"] == sha(FIXED)
+    _write(fields["prBodyPath"], FIXED)  # the build session edits the staged file itself
+    _fold_apply_fixes(state, sd)
+    assert state["rounds"]["1"]["prBodyFix"] == {"before": sha(BODY), "after": sha(FIXED)}
     assert _read(PBS.paths(sd)["staged"]) == FIXED
 
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
@@ -700,6 +755,6 @@ def test_a_pr_body_finding_is_fixed_audited_and_published_through_the_chokepoint
     gh = FakeGh(views=[BODY, FIXED])
     out = PBS.publish(sd, 7, runner=gh)
     assert (out["ok"], out["outcome"]) == (True, "published")
-    assert [c[:3] for c in gh.calls] == [["gh", "pr", "view"], ["gh", "pr", "edit"], ["gh", "pr", "view"]]
-    assert gh.edits() == [["gh", "pr", "edit", "7", "--body-file", PBS.paths(sd)["staged"]]]
+    assert gh.calls == [read_argv(), edit_argv(PBS.paths(sd)["staged"]), read_argv()]
+    assert gh.edits() == [edit_argv(PBS.paths(sd)["staged"])]
     assert PBS.record_line(sd) == "The review copied its audited PR-body fix onto the PR."

@@ -46,7 +46,7 @@ def test_stall_self_recovery_does_not_reemit_discharged_fix_batch():
     state["selfRecovered"] = False
     breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [ident]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state.get("step") != RD.P_FIXER
+    assert state.get("step") != RD.P_APPLY_FIXES
     assert state.get("_fixBatch") != state["fixBatch"]
 
 
@@ -76,7 +76,7 @@ def test_stall_self_recovery_routes_open_important_not_converged():
     other_ident = FI.finding_identity(_finding(title="stalled-other"))
     breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [other_ident]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state.get("step") == RD.P_FIXER
+    assert state.get("step") == RD.P_APPLY_FIXES
     assert state.get("terminal") != "converged"
     assert state.get("_fixBatch")
 

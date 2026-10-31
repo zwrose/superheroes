@@ -3,7 +3,6 @@
 The entry shape and its validator live in `command_refusals`; each test reaches the shape through
 that module's constants and `refusals_fault`, never a pasted copy. The channels:
 
-- the host-seat fixer payload (`payload_contracts.payload_fault`),
 - the native write schema (`engine_result_channel`) and the report grader (`_grade_build_report_obj`),
 - native write admission and the terminal `dispatch-write` result (`engine_dispatch`),
 - the foreground `parse_result(<engine>, "fix", ...)` path,
@@ -18,7 +17,6 @@ import command_refusals as CR
 import engine_adapter as EA
 import engine_result_channel as ERC
 import native_engine as NE
-import payload_contracts as PC
 from test_engine_dispatch_write import (  # noqa: F401  (the autouse pin is a fixture)
     ED, _dispatch_write, _linked_worktree, _native_write_grade_state, _pin_temp_base_to_tmp_path,
     _valid_native_write_obj, _write_native_obj_at_argv,
@@ -131,56 +129,6 @@ def test_the_case_tables_agree_with_refusals_fault():
 
 def _write_obj(**over):
     return _valid_native_write_obj(**over)
-
-
-# --- the host-seat fixer payload ------------------------------------------------------------
-
-
-@pytest.mark.parametrize("refusals", VALID_LISTS)
-def test_fixer_payload_accepts_a_valid_refusals_list(refusals):
-    payload = {"fixes": [], "refusals": refusals}
-    assert PC.payload_fault(PC.P_FIXER, payload, PC.SEAT_FIXER) is None
-
-
-def test_fixer_payload_without_refusals_is_valid():
-    assert PC.payload_fault(PC.P_FIXER, {"fixes": []}, PC.SEAT_FIXER) is None
-
-
-# axis: a fixer payload whose refusals list is malformed (unknown key, blank hook, bad enum) is refused — see bite-proof record wo2_2011_refusals
-@pytest.mark.parametrize("refusals", MALFORMED_LISTS)
-def test_fixer_payload_refuses_a_malformed_refusals_list(refusals):
-    fault = PC.payload_fault(PC.P_FIXER, {"fixes": [], "refusals": refusals}, PC.SEAT_FIXER)
-    assert fault is not None
-    assert "refusals" in fault
-
-
-def test_fixer_refusals_contract_is_built_from_the_one_home():
-    contract, err = PC.payload_contract(PC.P_FIXER)
-    assert err is None
-    assert contract["types"]["refusals"] == "list-of-objects"
-    elem = contract["elements"]["refusals"]
-    assert elem["required"] == list(CR.ENTRY_REQUIRED)
-    assert elem["optional"] == list(CR.ENTRY_OPTIONAL)
-    assert elem["enums"]["refusedBy"] == list(CR.REFUSED_BY)
-    assert "route" in elem["optional"] and "route" in elem["types"]
-
-
-def test_fixer_payload_accepts_a_taken_route():
-    payload = {"fixes": [], "refusals": [_ROUTE_ENTRY]}
-    assert PC.payload_fault(PC.P_FIXER, payload, PC.SEAT_FIXER) is None
-
-
-def test_fixer_payload_accepts_a_sandbox_named_route():
-    payload = {"fixes": [], "refusals": [_SANDBOX_ROUTE_ENTRY]}
-    assert PC.payload_fault(PC.P_FIXER, payload, PC.SEAT_FIXER) is None
-
-
-# axis: a route on a permission refusal is refused at the fixer payload contract — see bite-proof record wo_a_2054_route (#2167 narrowed it from every non-hook refusal)
-def test_fixer_payload_refuses_a_route_on_a_permission_refusal():
-    entry = dict(_ROUTE_ENTRY, refusedBy="permission", hook=None)
-    fault = PC.payload_fault(PC.P_FIXER, {"fixes": [], "refusals": [entry]}, PC.SEAT_FIXER)
-    assert fault is not None
-    assert "route needs refusedBy hook or sandbox" in fault
 
 
 # --- the native write schema and the report grader -----------------------------------------
