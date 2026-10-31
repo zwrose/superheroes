@@ -3,7 +3,7 @@
     "only flag code in `+` or\n`-` lines",
     "`file:line` citation required. No citation",
     "You are reviewing CHANGES MADE BY THIS PR/BRANCH",
-    "That's the #1 source of false\npositives",
+    "Context lines (no prefix) and unchanged code in modified files are\nuntouched",
     "raise the finding AND note the prior justification",
     "Base rubric (binding) > CLAUDE.md (conventions)",
     "Never one whole-file read",

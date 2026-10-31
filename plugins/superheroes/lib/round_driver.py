@@ -798,9 +798,10 @@ _NIT_CAP = 5
 
 
 def _diff_scope_ok(finding, valid):
-    """A finding is in diff scope iff its (file, line) is an anchorable RIGHT-side line of the
-    round diff — the same hunk-walking `diff_scope.parse_diff_lines` uses. `valid` is None
-    when no diff was supplied (scope check skipped)."""
+    """A finding is in diff scope iff its (file, line) is a line the PR touched — an added line or a
+    line next to a deleted run (`diff_scope.parse_touched_lines`); a context line is outside. `valid` is
+    None when no diff was supplied (scope check skipped). The one scope test: compile and the extra
+    audit's new-issue partition both read it."""
     if valid is None:
         return True
     if finding.get("file") == pr_body_stage.CITATION:
@@ -812,11 +813,86 @@ def _diff_scope_ok(finding, valid):
 
 
 COMPILE_DROP_LINE_NOT_INTEGER = "line is not an integer"
+COMPILE_DROP_OUTSIDE = "outside the round diff scope"
+OUTSIDE_SOURCE_DEFAULT = "reviewer"  # the source name of an outside drop no caller named
+OUTSIDE_FIX_AUDITOR = "fix auditor"
+OUTSIDE_GAP_SWEEP = "gap sweep"
+OUTSIDE_SCOPED_FINDER = "scoped finder"
 COMPILE_DROP_NO_CONSEQUENCE = "no stated consequence"
 
 
 def _coerce_line(value):
     return session_contract.coerce_line(value)
+
+
+def _touched_scope(diff_text):
+    """The scope map the scope test reads: head file -> the lines the PR touched, or None when no diff
+    was supplied (nothing is outside then)."""
+    # axis: scope is the PR's touched lines, so a finding on an untouched context line is outside the PR — see bite-proof record c3_wo_a_outside
+    return diff_scope.parse_touched_lines(diff_text) if diff_text is not None else None
+
+
+def _note_outside_round(state, title, file, line, rnd):
+    """Remember that the round `rnd` sent the hit (title, file, line) to the "Outside this PR" list: one
+    `{"title", "file", "line", "round"}` row in `state["_outsideRounds"]`, never doubled. A non-list value is
+    replaced, as `_record_outside` does for its own list."""
+    rows = state.get("_outsideRounds")
+    if not isinstance(rows, list):
+        rows = state["_outsideRounds"] = []
+    row = {"title": title, "file": file, "line": line, "round": rnd}
+    if row not in rows:
+        rows.append(row)
+
+
+def _record_outside(state, drops):
+    """Route every outside-scope drop to `state["outsideThisPR"]`, the review record's "Outside this PR"
+    list, and return the other drops: an outside finding is never a compile drop, a refusal or a finding.
+    One entry per reviewer source name (a new name opens a new entry at the end); a sweep entry is never
+    a target and its hits are never counted to a reviewer, but they number the new ids (`O-<n>` is 1 +
+    every hit already on the list). A hit already under that reviewer's entry (same file, line, title)
+    adds nothing, so a re-fold never doubles it. No cap: every distinct hit is kept. The list is created
+    when the first hit is added, so a session with no outside finding has no key."""
+    rest = []
+    for drop in drops or []:
+        if not (isinstance(drop, dict) and drop.get("reason") == COMPILE_DROP_OUTSIDE):
+            rest.append(drop)
+            continue
+        entries = state.get("outsideThisPR")
+        if not isinstance(entries, list):
+            # a value that is not a list cannot hold a hit: replace it with a fresh list, never lose the hit
+            entries = state["outsideThisPR"] = []
+        name = drop.get("source")
+        if not (isinstance(name, str) and name.strip()):
+            name = OUTSIDE_SOURCE_DEFAULT
+        title = drop.get("title")
+        if not (isinstance(title, str) and title.strip()):
+            title = "untitled finding"
+        target, total = None, 0
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            hits = entry.get("hits") if isinstance(entry.get("hits"), list) else []
+            total += len(hits)
+            src = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+            # axis: a sweep entry is never the target of a reviewer's hit and never counted to one, even when it shares the name — see bite-proof record c3_wo_a_outside
+            if src.get("kind") == "sweep":
+                continue
+            if src.get("name") == name and target is None:
+                target = entry
+        hit = {"id": "O-%d" % (total + 1), "file": drop.get("file"), "line": drop.get("line"), "title": title}
+        # axis: the round that produced a hit is kept beside the list (never on the hit, which the record writer holds to its own fields), so an abandoned session excludes a stored report only for the round that sent it out — see bite-proof record c3_wo_a_outside
+        _note_outside_round(state, title, drop.get("file"), drop.get("line"), state.get("round"))
+        if target is not None:
+            if not isinstance(target.get("hits"), list):
+                target["hits"] = []  # a reviewer entry with no hit list: start one, as for a non-list top-level value
+            # axis: a drop already on that reviewer's entry adds nothing, so a re-fold or a resumed round never doubles a hit — see bite-proof record c3_wo_a_outside
+            if any(isinstance(h, dict) and (h.get("file"), h.get("line"), h.get("title"))
+                   == (hit["file"], hit["line"], title) for h in target.get("hits") or []):
+                continue
+            target["hits"].append(hit)
+        else:
+            entries.append({"source": {"kind": "reviewer", "name": name, "sweepId": None}, "hits": [hit]})
+    return rest
 
 
 def _nit_cap(findings):
@@ -924,10 +1000,12 @@ def _compile_by_anchor(findings):
     return out
 
 
-def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None):
+def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None, sources=None, source=None):
     """Port of SKILL §4 steps 1-4 + 6, deterministic and fail-closed:
       1. citation check — drop file/line-less findings;
-      2. diff-scope check — drop findings whose (file,line) is not an anchor of the round diff;
+      2. diff-scope check — drop findings whose (file,line) is not a line the PR touched
+         (`diff_scope.parse_touched_lines`: added lines and the lines next to a deleted run, never a
+         context line); the PR-body citation stays in scope;
          `scope_exempt` is a set of `id()`s of input dicts the break-it intercept marked per-area
          scope-exempt — only those skip this check; `stamped` is a set of `id()`s of input dicts the
          intercept stamped itself — only those keep their `breakItRun` and `breakItRuns`, and every
@@ -939,19 +1017,26 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
     A finding that states no consequence (`finding_outcomes.has_stated_consequence`) is dropped
     after the citation, line and diff-scope checks; a break-it-stamped finding is held to the same
     rule — `scope_exempt` exempts diff scope only.
+    An outside-scope drop row also carries `source`, the name of whoever raised it: `sources[id(finding)]`
+    when `sources` (a dict of `id()` of an input dict -> name) has it, else `source`, else "reviewer";
+    `_record_outside` routes those rows to the record's "Outside this PR" list.
     Returns (compiled, drops) where each drop names WHY (never silently dropped)."""
     if not isinstance(findings, list):
         findings = []
-    valid = diff_scope.parse_diff_lines(diff_text) if diff_text is not None else None
+    valid = _touched_scope(diff_text)
+    sources = sources if isinstance(sources, dict) else {}
     exempt = scope_exempt if isinstance(scope_exempt, (set, frozenset)) else frozenset()
     stamped_ids = stamped if isinstance(stamped, (set, frozenset)) else frozenset()
     kept, drops = [], []
     for f in findings:
         if not isinstance(f, dict):
             continue
-        if not isinstance(f.get("file"), str) or f.get("line") is None:
-            drops.append({"file": f.get("file"), "title": f.get("title"),
-                          "reason": "uncited — no file:line"})
+        # axis: a blank or whitespace-only file is no citation: it stays an ordinary uncited drop and never reaches the "Outside this PR" list, whose hits the record writer requires to name a file; a drop for a blank string file keeps the finding's line as given (None included) so the session record's drop key matches the stored report, while a non-string file or a non-blank file with no line keeps the row without a line
+        if not isinstance(f.get("file"), str) or not f["file"].strip() or f.get("line") is None:
+            row = {"file": f.get("file"), "title": f.get("title"), "reason": "uncited — no file:line"}
+            if isinstance(f.get("file"), str) and not f["file"].strip():
+                row["line"] = f.get("line")
+            drops.append(row)
             continue
         ok, line = _coerce_line(f.get("line"))
         if not ok:
@@ -968,7 +1053,8 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
         fc.pop(SECOND_TEST_FIELD, None)
         if id(f) not in exempt and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
-                          "title": fc.get("title"), "reason": "outside the round diff scope"})
+                          "title": fc.get("title"), "reason": COMPILE_DROP_OUTSIDE,
+                          "source": sources.get(id(f)) or source or OUTSIDE_SOURCE_DEFAULT})
             continue
         if not finding_outcomes.has_stated_consequence(f):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
@@ -2723,7 +2809,7 @@ def _seed_pending_new_issues(state):
     pending = [ni for ni in pending if isinstance(ni, dict)] if isinstance(pending, list) else []
     if not pending:
         return
-    compiled, drops = mechanical_compile(pending, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(pending, state.get("reviewedDiff"), source=OUTSIDE_FIX_AUDITOR)
     _record_compile_drops(state, [d for d in drops if not _compile_drop_recorded(state, d)])
     ledger = _ensure_disposition_ledger_for_write(state)
     seen = _ledger_index_by_key(ledger)
@@ -3384,9 +3470,7 @@ def _record_round_append(state, key, value):
 
 def _record_compile_drops(state, drops):
     """Extend the round's `compileDrops` list — never overwrite an existing panel write."""
-    if not drops:
-        return
-    for drop in drops:
+    for drop in _record_outside(state, drops):
         _record_round_append(state, "compileDrops", drop)
 
 
@@ -3675,6 +3759,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     if unfilled and isinstance(seats, dict):
         seats = {dim: seat for dim, seat in seats.items() if dim not in unfilled}
     raw = []
+    seat_sources = {}
     break_it_raw = []
     seat_status = {}
     unverified = []
@@ -3712,6 +3797,8 @@ def _fold_panel(state, config, artifact, session_dir=None):
                 unverified.append({"dimension": dim, "title": g.get("title"),
                                    "file": g.get("file"), "line": g.get("line")})
             raw.append(g)
+            # axis: an outside finding is attributed to the seat that returned it (the roster key), never to a dimension the finding names itself — see bite-proof record c3_wo_a_outside
+            seat_sources[id(g)] = dim
             # axis: only the test role's own seat can trigger a run; the trust is the roster seat key, never the finding's own dimension or taxonomy
             if dim == break_it.ROLE:
                 break_it_raw.append(g)
@@ -3745,7 +3832,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
         elif not placed:
             kept.extend(intercepted)
             placed = True
-    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped)
+    for g in intercepted:
+        seat_sources[id(g)] = break_it.ROLE  # the intercept's copies are new dicts: they came from the test role's seat
+    compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped,
+                                         sources=seat_sources)
     if runs:
         runs = _break_it_run_keys(runs, compiled)
         _record_round(state, "breakItRuns", runs)
@@ -3798,7 +3888,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
             _parts.append("%s@%s" % (c, s) if s else c)
         _decision(state, "seat-map-constraint-violated",
                   "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
-    _record_round(state, "compileDrops", drops)
+    _record_round(state, "compileDrops", _record_outside(state, drops))
     if unverified:
         _record_round(state, "unverified", unverified)
         _decision(state, "receipt-missing-seat",
@@ -4685,7 +4775,7 @@ def _fold_gapsweep(state, config, artifact):
     """Big-diff gap sweep: candidate findings from the full-diff pass fold through the same
     stage/cluster/verify path, then re-settle."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
-    compiled, drops = mechanical_compile(candidates, state.get("reviewedDiff"))
+    compiled, drops = mechanical_compile(candidates, state.get("reviewedDiff"), source=OUTSIDE_GAP_SWEEP)
     _record_compile_drops(state, drops)
     if compiled:
         # route candidates through verification like any other findings.
@@ -8415,7 +8505,7 @@ def _after_audits(state, config):
         # follows. What the audits raised is compiled as a scoped finder's candidates are and waits with the carried findings
         # sent back, to join the panel's candidates at the verifier.
         new_issues = [ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)]
-        raised, drops = mechanical_compile(new_issues, state.get("reviewedDiff"))
+        raised, drops = mechanical_compile(new_issues, state.get("reviewedDiff"), source=OUTSIDE_FIX_AUDITOR)
         # axis: a child an audit raised on the full returning path is linked to its parent here, as `_fold_scoped` links it, so a later audit of the parent carries it — see bite-proof record c1_followups_2288
         _bind_audit_spawned(state, new_issues, raised)
         _record_compile_drops(state, drops)
@@ -8589,7 +8679,9 @@ def _fold_scoped(state, config, artifact):
     # axis: a scoped-finder seat never supplies a parent link — only an audit's new issue carries one
     scoped = [{k: v for k, v in c.items() if k != AUDIT_ORIGIN_FIELD} if isinstance(c, dict) else c
               for c in candidates]
-    compiled, drops = mechanical_compile(scoped + new_issues, state.get("reviewedDiff"))
+    new_issue_sources = {id(ni): OUTSIDE_FIX_AUDITOR for ni in new_issues}
+    compiled, drops = mechanical_compile(scoped + new_issues, state.get("reviewedDiff"),
+                                         sources=new_issue_sources, source=OUTSIDE_SCOPED_FINDER)
     _bind_audit_spawned(state, new_issues, compiled)
     _record_compile_drops(state, drops)
     compiled = _with_carried(state, compiled)  # the carried findings sent back go to the verifier with the round's candidates
@@ -8780,6 +8872,30 @@ def _begin_extra_audit_round(state, config):
                    "nothing to audit", cap=True)
 
 
+def _route_outside_new_issues(state, new_issues):
+    """Partition the audits' pending new issues for the extra-audit decision: one whose file is a string,
+    whose line coerces, that is not the PR-body citation and whose (file, line) the PR did not touch goes
+    to the "Outside this PR" list under `fix auditor` and leaves `state["_newIssues"]`; the rest are
+    returned and decide. Same scope test as compile (`_diff_scope_ok`); no diff means nothing is outside,
+    and an issue with an unreadable file or line stays in, as compile keeps its drop reason."""
+    valid = _touched_scope(state.get("reviewedDiff"))
+    if valid is None:
+        return new_issues
+    inside, outside = [], []
+    for ni in new_issues:
+        ok, line = _coerce_line(ni.get("line")) if ni.get("line") is not None else (False, None)
+        if isinstance(ni.get("file"), str) and ni["file"].strip() and ok and not _diff_scope_ok({"file": ni["file"], "line": line}, valid):
+            outside.append({"file": ni["file"], "line": line, "title": ni.get("title"),
+                            "reason": COMPILE_DROP_OUTSIDE, "source": OUTSIDE_FIX_AUDITOR})
+        else:
+            inside.append(ni)
+    if outside:
+        _record_outside(state, outside)
+        state["_newIssues"] = [ni for ni in (state.get("_newIssues") or [])
+                               if not (isinstance(ni, dict) and not any(ni is k for k in inside))]
+    return inside
+
+
 def _settle_extra_audit(state, config):
     """The extra audit round's end: its audits folded, and nothing else runs after them.
 
@@ -8790,6 +8906,8 @@ def _settle_extra_audit(state, config):
     outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
     open_ids = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
     new_issues = [ni for ni in (state.get("_newIssues") or []) if isinstance(ni, dict)]
+    # axis: a new issue cited outside the PR goes to the "Outside this PR" list and never holds the extra round open — see bite-proof record c3_wo_a_outside
+    new_issues = _route_outside_new_issues(state, new_issues)
     if open_ids is None or open_ids or new_issues:
         parts = []
         if open_ids is None:
