@@ -153,8 +153,9 @@ def _proposal_problem(p):
     if field:
         text = p[field]
         # axis: a hint or rule is one plain line, so it can never add a heading or a second line — see bite-proof record wo_2190_one-line
+        # one line by splitlines(), the same split the writer's read-back uses, so a Unicode line separator is refused too
         if (not isinstance(text, str) or not text.strip() or text != text.strip()
-                or "\n" in text or "\r" in text or text.startswith("#")):
+                or len(text.splitlines()) != 1 or text.startswith("#")):
             return "%s must be one non-empty line with no surrounding space, not a heading" % field
     return None
 
@@ -253,6 +254,10 @@ def _commit_canon(res, line):
 
 # --- the two text kinds: a project focus hint and a CLAUDE.md rule ---
 
+class TargetUnreadable(OSError):
+    """A text kind's home file exists but cannot be read as UTF-8 text."""
+
+
 def _text_target(cwd, kind, root):
     """The file a text kind writes, or raises OSError naming why there is none. A focus hint joins the
     review settings' layer; a CLAUDE.md rule joins the CLAUDE.md at the project's git root. Neither file
@@ -269,6 +274,12 @@ def _text_target(cwd, kind, root):
         path = os.path.join(top.stdout.strip(), CLAUDE_MD)
     if not os.path.isfile(path):
         raise OSError("%s does not exist" % path)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            fh.read()
+    except UnicodeError as exc:
+        # axis: a home file that is not UTF-8 text is refused before Canon is written — see bite-proof record wo_2190_target-unreadable
+        raise TargetUnreadable("%s is not UTF-8 text: %s" % (path, exc)) from exc
     # the cloud calibration guard reads the path as given (a link standing where a calibration file belongs),
     # so it runs here, before the writer resolves the link to its target
     # axis: a cloud session never writes a calibration file through a symlinked layer — see bite-proof record wo_2190_cloud-guard
@@ -336,7 +347,9 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
 
     A focus hint joins the Focus hints section of the review settings' layer; a CLAUDE.md rule joins the
     project's CLAUDE.md, left uncommitted for the advisor to land with the Canon entry. Neither file is
-    created: with no such file the proposal is refused (`target-missing`) before anything is written.
+    created: with no such file the proposal is refused (`target-missing`), a file that is not UTF-8 text is refused
+    (`target-unreadable`), and a cloud session's calibration write is refused (`calibration-write-in-cloud-session`), each
+    before anything is written.
 
     Every apply appends a fresh Canon entry; a failed apply (canon-not-committed or partial) is retried by hand after reading Canon."""
     # axis: a calibration change is written only on the owner's exact yes, with their words, place and date — see bite-proof record wo_a_1718_no-owner-yes
@@ -370,6 +383,8 @@ def _apply_bound(cwd, proposal, approval, canon_root, session_id, root):
             _text_target(cwd, proposal["kind"], root)
         except store_core.CalibrationWriteRefused as exc:
             return _noted(_result(False, "refused", store_core.CLOUD_REFUSAL_REASON, "%s; nothing was written" % exc), note)
+        except TargetUnreadable as exc:
+            return _noted(_result(False, "refused", "target-unreadable", "%s; nothing was written" % exc), note)
         except (OSError, subprocess.TimeoutExpired) as exc:
             # axis: a text kind whose home file is missing writes nothing, Canon included — see bite-proof record wo_2190_target-missing
             return _noted(_result(False, "refused", "target-missing", "%s; nothing was written" % exc), note)
@@ -389,7 +404,7 @@ def _apply_bound(cwd, proposal, approval, canon_root, session_id, root):
     if proposal["kind"] in _LINE_FIELD:
         try:
             action, path = _write_text_kind(cwd, proposal, root)
-        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        except (OSError, RuntimeError, UnicodeError, subprocess.TimeoutExpired) as exc:
             return _noted(_result(False, "partial", "calibration-not-written",
                                   "Canon holds %s (commit %s); the %s write failed: %s" % (line, commit, proposal["kind"], exc),
                                   canonEntry=line, canonCommit=commit), note)

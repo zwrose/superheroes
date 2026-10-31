@@ -1178,6 +1178,7 @@ def _kind_escapes():
             {"pr": 4, "reviewedAt": D, "call": "missed", "kind": None}]
 
 
+# axis: each escape counts once under its own kind, the by-kind total equals the escape total, and the per-seat tally is unchanged
 def test_tally_counts_escapes_by_kind_beside_the_seat_tally():
     got = RL.tally(_truth_table_records(), _kind_escapes(), D, until="2026-10-11")
     assert got["measured"] is True
@@ -1196,6 +1197,7 @@ def test_tally_an_escape_with_no_kind_reads_unmeasured_never_nothing_reachable()
     assert got["escapesByKind"][RL.UNMEASURED] == 1
 
 
+# axis: an unsupported escape kind makes the tally incomplete and leaves the escape counts unknown, rather than silently counting it
 @pytest.mark.parametrize("kind", ["unmeasured", "", "CLAUDE.md rule", 3, ["focus-hint"]])
 def test_tally_an_unknown_kind_reads_malformed_and_unmeasured(kind):
     got = RL.tally([], [{"pr": 1, "reviewedAt": D, "call": "missed", "kind": kind}], D, until=D)
@@ -1204,6 +1206,7 @@ def test_tally_an_unknown_kind_reads_malformed_and_unmeasured(kind):
     assert got["leftOut"]["malformed"] == 1
 
 
+# axis: a false PR claim carrying a kind is counted as a claim and never adds to the escapes by kind
 def test_tally_a_false_pr_claim_with_a_kind_is_not_an_escape_by_kind():
     claim = {"pr": 1, "reviewedAt": D, "call": "missed", "kind": "permanent-check", "marker": RL.FALSE_CLAIM_MARKER}
     got = RL.tally([], [claim], D, until=D)
@@ -1240,6 +1243,7 @@ def _canon_lines(canon_):
     return [l for l in _git(canon_, "show", "HEAD:" + CANON_REL).splitlines() if l.startswith("- **")]
 
 
+# axis: an applied focus hint lands as the last bullet of Focus hints, leaves the other sections alone, and a repeat is a noop
 def test_focus_hint_joins_the_focus_hints_section_and_canon(proj, canon_root):
     _with_layer(proj)
     got = _apply(proj, canon_root, _text_proposal("focus-hint", HINT), APPROVAL)
@@ -1254,6 +1258,7 @@ def test_focus_hint_joins_the_focus_hints_section_and_canon(proj, canon_root):
     assert again["set"]["action"] == "noop" and open(_layer(proj), encoding="utf-8").read() == text
 
 
+# axis: an applied CLAUDE.md rule is appended once, left uncommitted, and a repeat is a noop
 def test_claude_md_rule_is_appended_once_and_left_uncommitted(proj, canon_root):
     with open(_claude_md(proj), "w", encoding="utf-8") as fh:
         fh.write("# CLAUDE.md\n\n- an existing rule\n")
@@ -1304,6 +1309,7 @@ def test_text_kind_with_no_home_file_writes_nothing(proj, canon_root, kind, text
     assert not os.path.exists(_layer(proj)) and not os.path.exists(_claude_md(proj))
 
 
+# axis: without the owner's yes a text kind writes nothing: Canon, the layer and CLAUDE.md are unchanged
 @pytest.mark.parametrize("kind", ["focus-hint", "claude-md-rule"])
 def test_text_kind_needs_the_owners_yes(proj, canon_root, kind):
     _with_layer(proj)
@@ -1317,7 +1323,7 @@ def test_text_kind_needs_the_owners_yes(proj, canon_root, kind):
 
 # axis: the guarding test for the one-line shape — a hint or rule never adds a heading or a second line
 @pytest.mark.parametrize("kind", ["focus-hint", "claude-md-rule"])
-@pytest.mark.parametrize("text", ["", " ", "two\nlines", "cr\rline", " padded", "## A heading", None, 7])
+@pytest.mark.parametrize("text", ["", " ", "two\nlines", "cr\rline", "ls\u2028line", "nel\x85line", " padded", "## A heading", None, 7])
 def test_text_kind_line_must_be_one_plain_line(proj, canon_root, kind, text):
     _with_layer(proj)
     before = (_state(proj, canon_root), _bytes(_layer(proj)))
@@ -1326,6 +1332,7 @@ def test_text_kind_line_must_be_one_plain_line(proj, canon_root, kind, text):
     assert (_state(proj, canon_root), _bytes(_layer(proj))) == before
 
 
+# axis: a text proposal carrying any key outside its kind's exact set is refused proposal-invalid
 @pytest.mark.parametrize("proposal", [
     _text_proposal("focus-hint", HINT, rule=CLAUDE_RULE),
     _text_proposal("claude-md-rule", CLAUDE_RULE, half="riskAreas"),
@@ -1336,6 +1343,7 @@ def test_text_kind_carries_exactly_its_keys(proj, canon_root, proposal):
     assert (got["ok"], got["reason"]) == (False, "proposal-invalid")
 
 
+# axis: a write that raises after Canon is committed reads partial and names the committed Canon entry, never applied
 def test_text_kind_write_failure_after_canon_reads_partial(proj, canon_root, monkeypatch):
     _with_layer(proj)
     def boom(path, text):
@@ -1346,6 +1354,7 @@ def test_text_kind_write_failure_after_canon_reads_partial(proj, canon_root, mon
     assert got["canonEntry"] in _canon_lines(canon_root) and "disk full" in got["detail"]
 
 
+# axis: a focus hint is placed inside Focus hints whether the section is empty, absent or already holds bullets
 @pytest.mark.parametrize("layer, expected", [
     ("<!-- p -->\n\n## Focus hints\n## Conventions\n", "<!-- p -->\n\n## Focus hints\n\n- h\n\n## Conventions\n"),
     ("<!-- p -->\n", "<!-- p -->\n\n## Focus hints\n\n- h\n"),
@@ -1355,12 +1364,47 @@ def test_focus_hint_placement(layer, expected):
     assert RL._with_focus_hint(layer, "- h") == expected
 
 
+# axis: the eight-kinds list in owner-decisions.md names exactly ESCAPE_KINDS, in order, and the six questions appear once, in order
 def test_owner_decisions_states_the_kinds_and_six_questions_once():
     text = _doctrine("owner-decisions")
-    for kind in RL.ESCAPE_KINDS:
-        assert "`%s`" % kind in text, kind
+    section = text.split("**The eight kinds.**", 1)[1].split("**How the kind is decided.**", 1)[0]
+    import re as _re
+    assert tuple(_re.findall(r"\d\. `([a-z-]+)`", section)) == RL.ESCAPE_KINDS
     assert text.count("Could reading code see it, or only running it?") == 1
     q = [text.index(s) for s in ("Could reading code see it", "Was the line in the diff?", "Did a reviewer flag it and leave it?",
                                  "a rule a builder could follow up front", "about this project's domain", "Has the class escaped before?")]
     assert q == sorted(q)
     assert "escapesByKind" in text and "may produce a proposal without waiting" in text
+
+
+# axis: a held project config lock stops the text write after Canon: partial, the layer unchanged, Canon named
+def test_text_kind_with_the_config_lock_held_reads_partial(proj, canon_root):
+    _with_layer(proj)
+    repo, store = proj
+    before = _bytes(_layer(proj))
+    with mode_registry.config_lock(repo, store) as held:
+        assert held
+        got = _apply(proj, canon_root, _text_proposal("focus-hint", HINT), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "partial", "calibration-not-written")
+    assert _bytes(_layer(proj)) == before and got["canonEntry"] in _canon_lines(canon_root)
+
+
+# axis: a write that returns without persisting the line is caught by the read-back: partial, never applied
+def test_text_kind_read_back_rejects_a_write_that_did_not_land(proj, canon_root, monkeypatch):
+    _with_layer(proj)
+    before = _bytes(_layer(proj))
+    monkeypatch.setattr(RL.store_core, "atomic_write", lambda path, text: None)
+    got = _apply(proj, canon_root, _text_proposal("focus-hint", HINT), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "partial", "calibration-not-written")
+    assert "does not hold the added line" in got["detail"]
+    assert _bytes(_layer(proj)) == before and got["canonEntry"] in _canon_lines(canon_root)
+
+
+# axis: a home file that is not UTF-8 text is refused target-unreadable before Canon, never a traceback
+def test_text_kind_with_a_non_utf8_home_is_refused_before_canon(proj, canon_root):
+    with open(_claude_md(proj), "wb") as fh:
+        fh.write(b"# CLAUDE.md\n\xff\xfe broken\n")
+    before = (_state(proj, canon_root), _bytes(_claude_md(proj)))
+    got = _apply(proj, canon_root, _text_proposal("claude-md-rule", CLAUDE_RULE), APPROVAL)
+    assert (got["ok"], got["outcome"], got["reason"]) == (False, "refused", "target-unreadable")
+    assert (_state(proj, canon_root), _bytes(_claude_md(proj))) == before

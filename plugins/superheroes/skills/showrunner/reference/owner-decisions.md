@@ -809,7 +809,7 @@ say how it changes and what the advisor says when the owner finds a review slow.
   `hint`) joins the Focus hints section of the review settings' layer. A **CLAUDE.md rule**
   (`kind: claude-md-rule`, its one line in `rule`) joins the project's CLAUDE.md, which the command
   leaves uncommitted; the advisor lands it on the same branch as the Canon entry. Neither file is
-  created: with no such file the proposal is refused `target-missing` before anything is written. A proposal that replaces an earlier Canon ruling names it in an
+  created: with no such file the proposal is refused `target-missing`, a file that is not UTF-8 text is refused `target-unreadable`, and in a cloud session a focus hint is refused `calibration-write-in-cloud-session`, each before anything is written. A proposal that replaces an earlier Canon ruling names it in an
   optional `supersedes` entry id, which the command carries into the new entry. A standing ruling
   about leftovers is the Canon entry alone. The Canon
   entry goes on the branch Canon's rule names for a ruling taken outside a PR the advisor is working on,
