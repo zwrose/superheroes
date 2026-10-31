@@ -159,6 +159,19 @@ def test_root_replaced_by_symlink_is_not_swept(tmp_path):
     assert os.path.isfile(victim)
 
 
+# axis: a worktree root replaced by another real directory after the snapshot is never swept.
+def test_root_replaced_by_another_directory_is_not_swept(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    baseline = _snapshot(wt)
+    other = _init_repo(str(tmp_path / "other"))
+    _placeholder_file(other, ".bashrc")
+    os.rename(wt, str(tmp_path / "moved"))
+    os.rename(other, wt)
+    out = _sweep(wt, baseline)
+    assert out["removed"] == [] and out["error"] == "root-changed"
+    assert os.path.isfile(os.path.join(wt, ".bashrc"))
+
+
 # axis: a new read-only listed dir that stays keeps its own mode after the sweep.
 def test_new_read_only_dir_that_stays_keeps_its_mode(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
