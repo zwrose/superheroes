@@ -35,8 +35,6 @@ import store_core  # noqa: E402
 KNOWN_ROLES = model_registry.known_roles()
 KNOWN_MODELS = model_registry.known_claude_models()
 
-_LEGACY_ROLE_ALIAS = {"fixer": "code-fixer"}
-
 TIERS_OK = "ok"
 TIERS_ABSENT = "absent"
 TIERS_UNREADABLE = "unreadable"
@@ -99,10 +97,8 @@ def load_overrides(profile_path):
             break
         if in_block:
             m = _ENTRY.match(line)
-            if m:
-                role = _LEGACY_ROLE_ALIAS.get(m.group(1), m.group(1))
-                if role in KNOWN_ROLES:
-                    out[role] = m.group(2)
+            if m and m.group(1) in KNOWN_ROLES:
+                out[m.group(1)] = m.group(2)
     return out
 
 
@@ -125,11 +121,6 @@ def _normalize_updates(updates):
     out = {}
     warnings = []
     for role, model in (updates or {}).items():
-        if role in _LEGACY_ROLE_ALIAS:
-            warnings.append(
-                f"'{role}' is a legacy alias for '{_LEGACY_ROLE_ALIAS[role]}' (remapped)"
-            )
-            role = _LEGACY_ROLE_ALIAS[role]
         if role not in KNOWN_ROLES:
             warnings.append(f"unknown role: {role} (dropped)")
             continue
@@ -188,7 +179,6 @@ def _candidate_effective_tiers(profile_path, set_overrides=None, clear_roles=Non
         raise _TierGateRefusal(gate)
     current = dict(gate.overrides)
     for role in clear_roles or []:
-        role = _LEGACY_ROLE_ALIAS.get(role, role)
         if role in KNOWN_ROLES:
             current.pop(role, None)
     normalized, _warnings = _normalize_updates(set_overrides or {})
@@ -245,7 +235,6 @@ def update_overrides(profile_path, set_overrides=None, clear_roles=None):
     current = load_overrides(profile_path)
     warnings = []
     for role in clear_roles or []:
-        role = _LEGACY_ROLE_ALIAS.get(role, role)
         if role not in KNOWN_ROLES:
             warnings.append(f"unknown role: {role} (dropped)")
             continue
@@ -277,10 +266,8 @@ def _parse_overrides_from_text(text):
             break
         if in_block:
             m = _ENTRY.match(line)
-            if m:
-                role = _LEGACY_ROLE_ALIAS.get(m.group(1), m.group(1))
-                if role in KNOWN_ROLES:
-                    out[role] = m.group(2)
+            if m and m.group(1) in KNOWN_ROLES:
+                out[m.group(1)] = m.group(2)
     return out
 
 

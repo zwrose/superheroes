@@ -80,7 +80,7 @@ PLUGIN_VERSION=$(python3 -B -c "import json,sys;print(json.load(open(sys.argv[1]
 RUBRIC_VERSION=$(sed -n 's/.*rubric-version: *\([0-9][0-9]*\).*/\1/p' "$RUBRIC" | head -1)
 ```
 
-**Resolve model tiers.** Specialists at `reviewer` (`reviewer-deep` for security/architecture); triage + fixer at `mechanical`:
+**Resolve model tiers.** Specialists at `reviewer` (`reviewer-deep` for security/architecture); triage at `mechanical`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -91,7 +91,6 @@ DEEP_MODEL=$(python3 -B "$MT" --role reviewer-deep --overrides "$OV" | jq -r '.m
 MECH_MODEL=$(python3 -B "$MT" --role mechanical --overrides "$OV" | jq -r '.model // empty')
 SYNTH_MODEL=$(python3 -B "$MT" --role synthesis --overrides "$OV" | jq -r '.model // empty')  # fail-closed synthesis judge
 VERIFIER_MODEL=$(python3 -B "$MT" --role verifier --overrides "$OV" | jq -r '.model // empty')  # per-finding verification tier
-FIXER_MODEL=$(python3 -B "$MT" --role code-fixer --overrides "$OV" | jq -r '.model // empty')  # auto-fix loop fixer tier (#510)
 ```
 
 **Resolve per-role engine (FR-15).** Default `claude` when unset.
@@ -122,7 +121,7 @@ other seats does not do that.
 CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.review_cross_vendor_engines(p)))" "$ROOT_DIR") || { echo "review engine set failed (exit $?) — see its error above" >&2; exit 1; }
 ```
 
-When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
+When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`. An empty value means "inherit the session model" — omit the `model` arg in that case.
 
 **Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. Read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 

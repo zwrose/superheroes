@@ -177,11 +177,11 @@ def live_vendors(config):
 
 def independent_auditor(config, fixer_vendor, runner_only=False, maker_families=frozenset(),
                         pinned_vendors=None):
-    """The first live vendor whose auditor family is neither the fixer's nor any maker's.
+    """The first live vendor whose auditor family is neither the build session's nor any maker's.
 
     ``maker_families`` are the families the seat map lists as makers; ``pinned_vendors``, when a
     non-empty set, narrows the pool to those vendors (a pinned roster names who may audit)."""
-    fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+    fixer_fam = model_registry.family_for("implementer", fixer_vendor)
     if fixer_fam is None:
         return None, None
     barred = set(maker_families or ())
@@ -230,7 +230,7 @@ def reviewer_ineligible(maker_families=frozenset(), fixer_vendor=None,
     its family and is ineligible when that is None or not a non-empty string (host model unknown)."""
     barred = set(maker_families or ())
     if fixer_vendor:
-        fixer_fam = model_registry.family_for("code-fixer", fixer_vendor)
+        fixer_fam = model_registry.family_for("implementer", fixer_vendor)
         if fixer_fam is not None:
             barred.add(fixer_fam)
 
@@ -422,7 +422,7 @@ def base_degraded(state):
 
 def author_family(state):
     cfg = state.get("config") or {}
-    return model_registry.family_for("code-fixer", cfg.get("fixerVendor"))
+    return model_registry.family_for("implementer", cfg.get("fixerVendor"))
 
 
 def maker_author_family(state):
