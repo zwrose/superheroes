@@ -13,10 +13,16 @@ import pytest
 
 import charter_detect
 import heartbeat as hb
+import launch_doctrine as LD
 import launch_ledger as ll
 import wave_watch as ww
 from test_cloud_builder import ENV_ID, SHA
-from test_launcher_cloud import _cloud_repo, _fake_spawn as _fake_cloud_spawn, _launch as _cloud_launch
+from test_launcher_cloud import (
+    _cloud_repo,
+    _fake_spawn as _fake_cloud_spawn,
+    _launch as _cloud_launch,
+    _local_remote_has,
+)
 from test_launcher import (  # noqa: F401  (the two autouse fixtures apply to this module too)
     L,
     _all_checks,
@@ -148,12 +154,74 @@ def test_local_detective_prompt_starts_with_the_command_and_names_the_budget(tmp
     assert detective["prompt"] in detective["argv"]
 
 
-def test_compose_refuses_a_cloud_detective_and_composes_nothing():
-    # axis: the detective charter carries no cloud intake step, so a cloud detective is refused
-    result = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET})
-    assert result["ok"] is False
-    assert result["reason"] == "compose-detective-cloud-unsupported"
-    assert "prompt" not in result
+def _swap_cloud_sentence(prompt):
+    return _without_command_and_budget(prompt).replace(
+        LD.load()["detectiveCloudLine"], LD.load()["cloudLaunchLine"], 1)
+
+
+def test_compose_composes_a_cloud_detective_with_the_detective_sentence():
+    # axis: a cloud detective composes the builder's cloud prompt with its own launch sentence in the builder's place
+    detective = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET})
+    workhorse = _cloud({"baseCommit": SHA})
+    assert detective["ok"] is True, detective
+    assert detective["charter"] == "detective"
+    prompt = detective["prompt"]
+    assert prompt.startswith(DETECTIVE_HEAD % (1747, BUDGET))
+    lines = (
+        "Place: cloud session\nAdvisor plugin version: %s\nCloud environment: %s\nBase commit: %s\n\n"
+        % (L.plugin_version(), ENV_ID, SHA)
+    )
+    assert lines in prompt
+    assert lines in workhorse["prompt"]
+    doctrine = LD.load()
+    assert prompt.count(doctrine["detectiveCloudLine"]) == 1
+    assert doctrine["cloudLaunchLine"] not in prompt
+    assert _swap_cloud_sentence(prompt) == workhorse["prompt"]
+    assert prompt in detective["argv"]
+
+
+def test_a_workhorse_cloud_prompt_carries_the_builder_sentence_and_not_the_detective_one():
+    # axis: the workhorse branch keeps the builder's push permission and never takes the detective sentence
+    workhorse = _cloud({"baseCommit": SHA})
+    assert workhorse["ok"] is True, workhorse
+    doctrine = LD.load()
+    assert workhorse["prompt"].count(doctrine["cloudLaunchLine"]) == 1
+    assert doctrine["detectiveCloudLine"] not in workhorse["prompt"]
+
+
+def test_compose_refuses_a_cloud_detective_when_the_doctrine_has_no_detective_cloud_line():
+    # axis: a cloud detective composes nothing without the doctrine's detective sentence; a builder does not need it
+    def without_detective_line():
+        return {k: v for k, v in LD.load().items() if k != "detectiveCloudLine"}
+
+    def blank_detective_line():
+        return dict(LD.load(), detectiveCloudLine=" ")
+
+    def without_builder_line():
+        return {k: v for k, v in LD.load().items() if k != "cloudLaunchLine"}
+
+    premise = {"baseCommit": SHA, "charter": "detective", "budget": BUDGET}
+    for loader in (without_detective_line, blank_detective_line):
+        refused = L.compose_launch(
+            ".", 1747, premise, model="opus", place="cloud", cloud_environment=ENV_ID,
+            session_name="issue-1747-probe", doctrine_loader=loader)
+        assert refused["ok"] is False
+        assert refused["reason"] == "compose-detective-cloud-line-absent"
+        assert "prompt" not in refused and "argv" not in refused
+    # a builder never reads the detective line, a detective never reads the builder's
+    built = L.compose_launch(
+        ".", 1747, {"baseCommit": SHA}, model="opus", place="cloud", cloud_environment=ENV_ID,
+        session_name="issue-1747-probe", doctrine_loader=without_detective_line)
+    assert built["ok"] is True, built
+    detective = L.compose_launch(
+        ".", 1747, premise, model="opus", place="cloud", cloud_environment=ENV_ID,
+        session_name="issue-1747-probe", doctrine_loader=without_builder_line)
+    assert detective["ok"] is True, detective
+    refused_builder = L.compose_launch(
+        ".", 1747, {"baseCommit": SHA}, model="opus", place="cloud", cloud_environment=ENV_ID,
+        session_name="issue-1747-probe", doctrine_loader=without_builder_line)
+    assert refused_builder["ok"] is False
+    assert refused_builder["reason"] == "compose-cloud-launch-line-absent"
 
 
 def test_local_adopt_detective_prompt_starts_with_the_command_and_names_the_budget(tmp_path):
@@ -165,37 +233,52 @@ def test_local_adopt_detective_prompt_starts_with_the_command_and_names_the_budg
     assert detective["ok"] is True, detective
     assert detective["prompt"].startswith(DETECTIVE_HEAD % (656, BUDGET) + "Adopts branch: ")
     assert _without_command_and_budget(detective["prompt"]) == workhorse["prompt"]
+    for sentence in (LD.load()["detectiveCloudLine"], LD.load()["cloudLaunchLine"]):
+        assert sentence not in detective["prompt"]
+        assert sentence not in workhorse["prompt"]
 
 
-def test_compose_refuses_a_cloud_adopt_detective_and_composes_nothing():
-    # axis: the cloud refusal holds for an adopting detective too — no intake step selects the handed-over head
+def test_compose_composes_a_cloud_adopt_detective_with_the_adopt_line_after_the_base_line():
+    # axis: the adopt line sits right after the base commit on an adopting detective's cloud prompt too
     adopt = {"adoptsBranch": BRANCH, "adoptsHead": HEAD}
-    result = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET, **adopt})
-    assert result["ok"] is False
-    assert result["reason"] == "compose-detective-cloud-unsupported"
-    assert "prompt" not in result
+    detective = _cloud({"baseCommit": SHA, "charter": "detective", "budget": BUDGET, **adopt})
+    workhorse = _cloud({"baseCommit": SHA, **adopt})
+    assert detective["ok"] is True, detective
+    prompt = detective["prompt"]
+    assert prompt.startswith(DETECTIVE_HEAD % (1747, BUDGET))
+    assert "Base commit: %s\nAdopts branch: " % SHA in prompt
+    sentence = LD.load()["detectiveCloudLine"]
+    assert prompt.index("Adopts branch: ") < prompt.index(sentence)
+    assert LD.load()["cloudLaunchLine"] not in prompt
+    assert _swap_cloud_sentence(prompt) == workhorse["prompt"]
 
 
-def test_a_detective_lane_routed_to_the_cloud_leaves_an_accounted_refusal(tmp_path):
-    # axis: launch_build refuses a cloud detective lane and the refusal is accounted in the ledger
+def test_a_detective_lane_routed_to_the_cloud_reaches_the_spawn_and_is_accounted(tmp_path, monkeypatch):
+    # axis: launch_build launches a cloud detective lane with the detective cloud prompt and the ledger folds
+    # the same isolation test_launcher_cloud.py's autouse fixture gives its cloud launches
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
+    monkeypatch.setattr(L, "_pause_between_appends", lambda: None)
+    monkeypatch.setattr(L, "_base_on_remote_fn", _local_remote_has)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     repo = _cloud_repo(tmp_path)
     calls = []
     result = _cloud_launch(
         repo, tmp_path, _fake_cloud_spawn(calls=calls),
         premise=_valid_premise(repo, charter="detective", budget=BUDGET))
-    assert result["ok"] is False
-    assert result["reason"] == "compose-detective-cloud-unsupported"
-    assert calls == []
+    assert result["ok"] is True, result
+    assert result["place"] == "cloud"
+    assert len(calls) == 1
+    prompt = calls[0]["argv"][2]
+    assert calls[0]["argv"][:2] == ["claude", "--cloud"]
+    assert prompt.startswith(DETECTIVE_HEAD % (656, BUDGET))
+    assert LD.load()["detectiveCloudLine"] in prompt
+    assert LD.load()["cloudLaunchLine"] not in prompt
     records = ll.read(repo)["records"]
     reserved = [r for r in records if r.get("event") == "reserved"]
     assert len(reserved) == 1
     assert reserved[0]["charter"] == "detective"
-    refused = [
-        r for r in records
-        if r.get("event") == "refused" and r.get("launchId") == reserved[0]["launchId"]
-    ]
-    assert len(refused) == 1
-    assert refused[0]["reason"] == "compose-detective-cloud-unsupported"
+    assert reserved[0]["launchId"] == result["launchId"]
     assert ll.fold(records)["ok"] is True
 
 

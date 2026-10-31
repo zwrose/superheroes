@@ -106,13 +106,14 @@ Intake runs through one door for machinery work and product work alike. The door
 proposed item before it reaches the board.
 
 **Two branches, one test at entry.** The door classifies every item at entry as machinery or product,
-by the same test the [dial](../../../rubric/glossary.md#dial) uses. **Machinery** work takes the
+by the classification test, as the advisor's judgment at that moment. **Machinery** work takes the
 evidence bar below. **Product** work does not. Product work enters by the owner's ratification of a
 milestone or an epic, and its discovery needs no reproduced defect. A product item not yet under a
 ratified milestone waits on the [collector](../../../rubric/glossary.md#collector) for the owner's
 word. The bar bites where maintenance work grows, and a door that made product ideas impersonate
 defects would be a funnel for exactly that. The machinery-or-product classification test lives in
-[issue-contract.md](issue-contract.md).
+[issue-contract.md](issue-contract.md#machinery-and-product); the call picks the branch and is not
+recorded.
 
 **The evidence bar.** The door admits a proposed machinery item to the board only on **executed
 evidence**. The failure or the need was **made to happen**, in the field or in the lab, on a
@@ -296,44 +297,19 @@ declined with a trigger by default.
 
 ## The launch door
 
-1. **Filing waits on the owner's word; launching spends the capacity.** The budget is [N](../../../rubric/glossary.md#n)
-   machinery lanes in flight at once, counted by the advisor at the launch go-ahead. A lane is in flight
-   until its outcome is recorded, which the launch doctrine already requires. **That is the whole of
-   the slot accounting.**
-2. **The dial.** The [dial](../../../rubric/glossary.md#dial) is a ceiling on the machinery share
-   of wave capacity over a [gardening window](../../../rubric/glossary.md#gardening-window). The
-   counting rule counts lanes launched in the window. Each lane is classified machinery or
-   product-forward at routing by its [kind label](../../../rubric/glossary.md#kind-label), so a
-   lane routed outside any wave carries the classification too. **The plugin's default ceiling is 20
-   to 30 percent, and each project stamps its own value in its configuration.**
-3. **N.** N is the dial's per-wave expression. The project's stamped dial value applies to the
-   wave's lane count, rounded down. **The dial is a ceiling, so a fraction never rounds into an
-   extra machinery lane.** When a non-zero dial against a non-empty wave would round to zero, **N
-   floors at one**. A project may pin N explicitly, and an explicit N wins over the derivation.
-4. **Which instrument binds.** The dial governs and N is its per-wave planning expression. The
-   accounting unit is the **authorized wave**. A wave whose planning sentence passes the dial
-   launches its lanes in any order. A lane launched outside any wave gets the same sentence at its
-   own word, against the window so far. **N caps concurrency within a wave, the dial caps the
-   window's share, and the tighter one binds.** No finer accounting is done. A P0 override changes
-   priority, never the launch budget. A larger budget is a change to the dial.
-5. **A convention at the launch go-ahead, never a check.** At wave planning the advisor writes the share
-   as **one sentence beside the owner's word**, in whatever thread carries the word. The sentence
-   states machinery lanes over total lanes, across every lane launched in the current window so far
-   plus the wave being planned. A lane launched outside a planned wave gets the same sentence
-   beside its own word. **There is no separate compliance measure and no breach state**. The pass
-   reports the window's forward share and reads it against the dial in one sentence. A wave planned
-   without the sentence is a slip the record names, and the advisor writes the missing sentence at
-   the pass from the launch ledger. **The dial is never a launcher check, a preflight item, or a
-   script**, and a filing to make it one is declined at the door. A checked dial is the grid
-   instrumenting itself.
-6. **Tiers order entry through the door. Filing waits on the owner's word; the launch go-ahead**
-   spends the capacity where it is actually spent.
-7. **No exemption for correctness.** Every epic and milestone is product-forward and is labeled so
-   by the owner at ratification. **The advisor never makes that call.** Machinery then arrives only
-   as a standalone lane through the door under the dial, or as a backlog item folded into a product
-   epic and visible on the folded-in list. **A fix to machinery is machinery.** If the ceiling proves
-   too slow, the lever is the stamped dial value, never a carve-out. An exemption for "correctness"
-   is how a ceiling leaks.
+1. **Filing waits on the owner's word; the launch go-ahead spends the capacity.** A lane is in flight
+   until its outcome is recorded, which the launch doctrine already requires. **The go-ahead is the
+   owner's word**, and the advisor writes nothing beside it about the mix of the wave.
+2. **The mix is weighed by judgment, at routing.** Work toward new goals comes before maintaining the
+   machine. The advisor weighs a wave's mix of machinery and product work when routing it, by
+   judgment. **No number, ceiling, or measured share governs the mix**, and no launcher check,
+   preflight item, or script reads it. A filing to make it one is declined at the door.
+3. **Tiers order entry through the door.** A P0 override changes priority; it never adds capacity.
+4. **No exemption for correctness.** Every epic and milestone is product work, by the owner's
+   ratification. **The advisor never makes that call.** Machinery then arrives only as a standalone
+   lane through the door, or as a backlog item folded into a product epic. **A fix to machinery is
+   machinery**, and it takes the door's evidence bar like any other machinery item. An exemption for
+   "correctness" is how machinery leaks past the door.
 
 ## Folding backlog items in
 
@@ -354,12 +330,8 @@ declined with a trigger by default.
 5. The fold is routing-time scope shaping **before** authorization. It is never a widening after the
    word and never a new authority. That reconciles with the venue ladder's rule that scope changes
    are the owner's.
-6. **An issue adopted into an epic counts as product-forward**. It rides the package as ratified
-   scope, not against the dial. **Folded-in items are a bonus drain on top of the budget, never a
-   substitute for it.** Each gardening record lists the window's
-   [folded-in items](../../../rubric/glossary.md#folded-in-items), **one line each**, never a count
-   alone, so the owner can see exactly which machinery entered waves through adoption rather than
-   through the dial.
+6. **An issue adopted into an epic rides the package as ratified scope.** The fold is how the
+   backlog drains through live work, never a way around the door.
 7. **Mid-build improvisation stays forbidden**, exactly as it is today.
 8. **Fold, stack, or file — the three dispositions for a follow-up on live work.** The conditions
    overlap, so they are read **in this order, and the first one that holds decides**.
@@ -388,7 +360,7 @@ declined with a trigger by default.
    digest's shape is a project configuration item. The
    [configure profile](../../configure/SKILL.md) is its home.
 3. **The door's own instruments carry their reader clauses here.** The misses log, the declined
-   registry, the scoring records, and the forward-share trend all have the same three. The consumer
+   registry, and the scoring records all have the same three. The consumer
    is the **owner and the advisor at the gardening pass**. The trigger is **the gardening pass
    itself**. Absence means **no pass has run**, which the owner can see directly because the pass
    rides their own decision walk.
@@ -599,10 +571,8 @@ advisor run together to keep calibration honest.
      credited to every seat whose lens the finding names (a fixed finding in the security lens
      counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
      in that seat's lens.
-4. **Re-measure the forward share for the window and read it against the [dial](../../../rubric/glossary.md#dial)
-   in one sentence**. Record the **decisions-asked count** for the same window. List the
-   [folded-in items](../../../rubric/glossary.md#folded-in-items), one line each. List the window's
-   declines with their triggers, one per line.
+4. **Record the decisions-asked count** for the window. List the window's declines with their
+   triggers, one per line.
 5. **Report the [workaround markers](../../../rubric/glossary.md#workaround-marker)**, whose inventory
    is a section of the same keep-or-retire record, proposing promote-or-retire for any marker whose
    [delete-when condition](../../../rubric/glossary.md#delete-when-condition) has come true.
@@ -663,9 +633,8 @@ standing rule of the pass, not a ninth duty.
   untouched — so it is the advisor's to fix on the spot, and it is recorded like any other craft call.
 
 - **The pass's output is batched words for the owner, delivered in the walk itself.**
-- **The decisions-asked count, and the baseline the forward share is read against, come from the
-  project's own record**, its configuration profile and its gardening records, **never from a founding
-  document**.
+- **The decisions-asked count comes from the project's own record**, its configuration profile and
+  its gardening records, **never from a founding document**.
 - **If the full pass proves overwhelming, the named fallback is a bounded pass**: urgent exceptions
   plus one or two retirement proposals per pass, the rest carried forward on the queue, the guardian
   sweep produced before the sitting. **Moving to the bounded pass is the owner's word at a walk.**
@@ -676,13 +645,12 @@ standing rule of the pass, not a ninth duty.
 
 - the batched words, each with its full per-item spine;
 - the [pending-words line](../../../rubric/glossary.md#pending-words-line);
-- **the figures block**: the forward share read against the dial, the **decisions-asked count**, and
-  the escape rate;
+- **the figures block**: the **decisions-asked count** and the escape rate;
 - **the CI classification**: own broken test, real catch, infrastructure, flake, and escape, with
   each real catch credited to the test file that caught it;
 - **the latest mutation results**: survivors and kills per test file the run covered (unmeasured
   where no run covered the file);
-- **the lists**: the folded-in items, and the declines with their triggers;
+- **the lists**: the declines with their triggers;
 - **the two fold counts**: **lanes per child**, the number the fold, stack, or file rule's
   past-three-lanes condition is read against, and **follow-ups per merged pull request**, which
   carries no threshold of its own and is recorded so accumulation on one surface is visible here;

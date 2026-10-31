@@ -209,34 +209,6 @@ project configuration.
 The line in a [gardening record](#gardening-record) that lists the items still waiting on the
 owner's word.
 
-## The forward-share dial
-
-### Dial
-
-A project's ceiling on the share of launched lanes that carry machinery work over a [gardening
-window](#gardening-window). Each project configures its number, and the plugin ships a default.
-
-### Machinery lane
-
-A launched lane whose issue carries the machinery [kind label](#kind-label): work on the plugin's
-own mechanisms.
-
-### Product-forward lane
-
-A launched lane whose issue carries the product [kind label](#kind-label): work that moves the
-product toward its users, under the classification convention PHILOSOPHY's forward-share bet
-states.
-
-### N
-
-The [dial](#dial) expressed for one wave: the dial times the wave's lane count, rounded down, with
-a floor of one when a non-zero dial would round to zero. A project may pin N directly.
-
-### Kind label
-
-`kind:machinery` or `kind:product` on an issue: the advisor's judgment at routing, the owner's at
-an epic's ratification, and never set or checked by a tool.
-
 ## Cloud builds
 
 ### Cloud build
@@ -269,12 +241,8 @@ overrides the project's cloud builds setting for that build.
 
 ### Fold-in rules
 
-The rules for draining the backlog without launch slots: a backlog item rides an epic or a routed
+The rules for draining the backlog through live work: a backlog item rides an epic or a routed
 issue as ratified scope instead of taking a lane of its own.
-
-### Folded-in items
-
-Backlog items absorbed into an epic or a routed issue under the [fold-in rules](#fold-in-rules).
 
 ## Workaround markers
 
