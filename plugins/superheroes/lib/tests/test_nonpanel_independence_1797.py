@@ -1,4 +1,4 @@
-"""#1797 WO-B — verifiers, gap sweep and scoped finder sit outside every maker family.
+"""#1797 WO-B — verifiers, seams check and scoped finder sit outside every maker family.
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_b_1797_seat_orders.md
 """
@@ -21,7 +21,7 @@ import round_driver as RD  # noqa: E402
 import round_records as RR  # noqa: E402
 import test_round_driver_integration as TRI  # noqa: E402
 
-NONPANEL = (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED)
+NONPANEL = (RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED)
 
 
 # --- the selection helper -----------------------------------------------------------------------
@@ -167,7 +167,7 @@ def test_every_live_vendor_in_a_maker_family_leaves_the_seat_unseatable(monkeypa
 
 # --- emission: the unseatable seat gets no order, a seat-missing record instead -----------------
 
-@pytest.mark.parametrize("phase", ["P_VERIFIERS", "P_GAPSWEEP", "P_SCOPED"])
+@pytest.mark.parametrize("phase", ["P_VERIFIERS", "P_SEAMS", "P_SCOPED"])
 def test_unseatable_nonpanel_seat_gets_no_order_and_a_missing_record(tmp_path, phase):
     phase = getattr(RD, phase)
     # axis: the unseatable non-panel seat getting NO order — see bite-proof record
@@ -238,7 +238,7 @@ def test_hand_submitted_verdicts_for_an_unseatable_verifier_do_not_clear_a_findi
     assert after["rounds"][str(state["round"])]["verify"]["unverified"]
 
 
-@pytest.mark.parametrize("phase", [RD.P_GAPSWEEP, RD.P_SCOPED])
+@pytest.mark.parametrize("phase", [RD.P_SEAMS, RD.P_SCOPED])
 def test_hand_submit_of_an_unseatable_single_seat_review_phase_is_refused(tmp_path, phase):
     session_dir, state = _hand_unseatable_session(tmp_path, "b5-hand-" + phase)
     state["pending"] = dict(state["pending"], phase=phase)
@@ -251,10 +251,10 @@ def test_hand_submit_of_an_unseatable_single_seat_review_phase_is_refused(tmp_pa
 
 def test_hand_submit_guard_reads_the_shared_missing_policy(tmp_path, monkeypatch):
     session_dir, state = _hand_unseatable_session(tmp_path, "b5-policy")
-    state["pending"] = dict(state["pending"], phase=RD.P_GAPSWEEP)
+    state["pending"] = dict(state["pending"], phase=RD.P_SEAMS)
     RD.save_state(session_dir, state)
     monkeypatch.setattr(RA, "missing_policy", lambda phase: RA.MISSING_FOLD_FAIL_CLOSED)
-    out = RD.cmd_submit(session_dir, RD.P_GAPSWEEP, state["pending"]["attempt"],
+    out = RD.cmd_submit(session_dir, RD.P_SEAMS, state["pending"]["attempt"],
                         RD.state_hash(state), {"findings": []})
     assert out.get("reason") != "nonpanel-reviewer-unseatable"
 

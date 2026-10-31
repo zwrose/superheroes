@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hunk-level changed-surface + big-diff shard planning for the code leg's delta rounds (#507).
+"""Hunk-level changed-surface for the code leg's delta rounds.
 
 Extends the #157/#158 principle — derive the review surface from git, NEVER the fixer's
 self-report — down to the hunk level. A delta round needs two things the file-level derivation
@@ -9,21 +9,16 @@ self-report — down to the hunk level. A delta round needs two things the file-
     and the post-fix tree, some hunks sit on top of the fixed findings (audit targets) and some
     are brand-new surface the fix added (scoped new-finding scan). `split_fix_surface`
     partitions them.
-  - **Whether the diff is too big for one panel.** `shard_plan` groups an oversized diff by
-    top-level path prefix so the driver can fan out.
 
 stdlib only; fail-closed. ANY unparseable / ambiguous input yields the reinforced path — an
-`unknown` surface (the caller escalates to a full panel) or a `big` shard verdict (the caller
-fans out) — never a silently-small or silently-scoped result.
+`unknown` surface (the caller escalates to a full panel) — never a silently-small or
+silently-scoped result.
 """
 import re
 
 _DIFF_GIT = re.compile(r"^diff --git a/(.*) b/(.*)$")
 # New-side (RIGHT) line range from a unified-diff hunk header: `@@ -a,b +c,d @@`.
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-
-DEFAULT_SHARD_MAX_LINES = 1500
-DEFAULT_SHARD_MAX_FILES = 20
 
 
 def parse_hunks(diff_text):
@@ -186,70 +181,3 @@ def split_fix_surface(reviewed_diff_text, head_diff_text, fix_batch):
                 new_surface.setdefault(file, []).append(hunk)
     return {"auditTargets": audit_targets, "newSurface": new_surface, "unknown": False}
 
-
-def _top_segment(path):
-    """Top-level path prefix used to group shards. A root file (no slash) shards under '.'."""
-    head = path.split("/", 1)[0]
-    return "." if head == path else head
-
-
-def _scan_diff(diff_text):
-    """(ordered files, changed-line count) for a unified diff, or None if the diff is
-    unparseable / ambiguous. Mirrors `parse_hunks` strictness EXACTLY so `shard_plan` fails
-    closed on the same inputs `parse_hunks` refuses: a `diff --git` header it can't parse (a
-    quoted path form), a rename/copy where the two paths differ, or a binary marker. Without this
-    parity an oversized rename/binary diff would scan as a small, parseable surface and skip the
-    fan-out — the exact silently-small verdict the module exists to prevent. Changed lines =
-    added + removed content lines (the +++/--- file headers do not count)."""
-    files = []
-    seen = set()
-    changed = 0
-    for line in (diff_text or "").splitlines():
-        if line.startswith("diff --git "):
-            m = _DIFF_GIT.match(line)
-            if not m:
-                return None
-            a, b = m.group(1), m.group(2)
-            if a != b:
-                # rename/copy (or a form we can't be sure about) — fail closed, don't guess
-                return None
-            path = b
-            if path not in seen:
-                seen.add(path)
-                files.append(path)
-        elif (line.startswith("rename from ") or line.startswith("rename to ")
-                or line.startswith("copy from ") or line.startswith("copy to ")):
-            return None
-        elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):
-            return None
-        elif line.startswith("+++") or line.startswith("---"):
-            continue
-        elif line.startswith("+") or line.startswith("-"):
-            changed += 1
-    return files, changed
-
-
-def shard_plan(diff_text, max_lines=None, max_files=None):
-    """Big-diff shard plan. `big` iff the changed (+/-) line count exceeds max_lines OR the
-    changed file count exceeds max_files. Shards group the changed files by top-level path
-    segment in deterministic (sorted) order. An unparseable diff → {"big": True, "shards": [],
-    "unknown": True} — fail toward the reinforced (fan-out) path, never silently small."""
-    max_lines = DEFAULT_SHARD_MAX_LINES if max_lines is None else max_lines
-    max_files = DEFAULT_SHARD_MAX_FILES if max_files is None else max_files
-    scanned = _scan_diff(diff_text)
-    if scanned is None:
-        return {"big": True, "shards": [], "unknown": True}
-    files, changed_lines = scanned
-    groups = {}
-    for f in files:
-        groups.setdefault(_top_segment(f), []).append(f)
-    shards = [{"key": key, "files": sorted(groups[key])} for key in sorted(groups)]
-    changed_files = len(files)
-    big = changed_lines > max_lines or changed_files > max_files
-    return {
-        "big": big,
-        "changedLines": changed_lines,
-        "changedFiles": changed_files,
-        "shards": shards,
-        "thresholds": {"maxLines": max_lines, "maxFiles": max_files},
-    }

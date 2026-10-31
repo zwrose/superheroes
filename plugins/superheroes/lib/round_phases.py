@@ -12,7 +12,7 @@ P_VERIFIERS = "dispatch-verifiers"
 P_SYNTHESIS = "dispatch-synthesis"
 P_AUDITS = "dispatch-audits"
 P_SCOPED = round_panel_contract.P_SCOPED_FINDER_PHASE
-P_GAPSWEEP = "dispatch-gap-sweep"
+P_SEAMS = "dispatch-seams-check"
 P_SECOND_TEST = "dispatch-second-test"
 P_VERIFY = "run-verify"
 P_APPLY_FIXES = "apply-fixes"
@@ -26,7 +26,7 @@ FIX_BATCH_CAP_DEFAULT = 4
 ROUND_CAP = 4
 
 ALL_PHASES = (
-    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_GAPSWEEP, P_VERIFY, P_APPLY_FIXES,
+    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_SEAMS, P_VERIFY, P_APPLY_FIXES,
     P_TERMINAL, P_SECOND_TEST,
 )
 

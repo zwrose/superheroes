@@ -8,7 +8,7 @@ _PLUGIN_ROOT = os.path.dirname(os.path.dirname(_TESTS))
 
 _FINDING_TEMPLATES = [
     "rubric/orders/dispatch-panel.md",
-    "rubric/orders/dispatch-gap-sweep.md",
+    "rubric/orders/dispatch-seams-check.md",
     "rubric/orders/dispatch-scoped-finder.md",
     "rubric/orders/dispatch-audits.md",
 ]

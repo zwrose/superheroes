@@ -75,7 +75,7 @@ def _cfg(**over):
 
 
 def _cfg_proven(**over):
-    """`_cfg` plus a seat map proving the live vendors' non-panel cells: the gap sweep, scoped finder
+    """`_cfg` plus a seat map proving the live vendors' non-panel cells: the seams check, scoped finder
     and verifiers are seated on `codex` only when its cell is proven."""
     cfg = _cfg(**over)
     cfg.setdefault("seatMap", _nonpanel_cell_proof(cfg["vendors"]))
@@ -95,7 +95,7 @@ def _responder(round1_findings=None, head=HEAD, grouping=None, verify="pass"):
                                  for c in payload.get("clusters", []) for i in c.get("ids", [])]}
         if phase == RD.P_SYNTHESIS:
             return {"grouping": grouping}
-        if phase == RD.P_GAPSWEEP:
+        if phase == RD.P_SEAMS:
             return {"findings": []}
         if phase == RD.P_AUDITS:
             return {"results": [{"id": t["id"], "ruling": "discharged", "reason": "r",
@@ -224,11 +224,11 @@ def _assert_fold_equivalent(tmp_path, phase, build, cfg=None, respond_factory=No
                              n_hand["expectedStateHash"],
                              dict(hand_artifact, **(
                                  {"reviewerVendor": RD._nonpanel_selection(state_asm, d_hand, phase)[0]}
-                                 if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})))
+                                 if phase in (RD.P_SEAMS, RD.P_SCOPED) else {})))
     assert out_hand["ok"] is True, out_hand
     # a hand submit of a single-seat reviewer phase names the vendor it was dispatched on
     claim = ({"reviewerVendor": RD._nonpanel_selection(state_asm, d_asm, phase)[0]}
-             if phase in (RD.P_GAPSWEEP, RD.P_SCOPED) else {})
+             if phase in (RD.P_SEAMS, RD.P_SCOPED) else {})
     out_asm = RD.cmd_submit(d_asm, n_asm["phase"], n_asm["attempt"],
                             n_asm["expectedStateHash"], dict(artifact, **claim))
     assert out_asm["ok"] is True, out_asm
@@ -350,15 +350,16 @@ def test_synthesis_passes_the_grouping_through(tmp_path):
     assert artifact["grouping"] == grouping
 
 
-def test_gap_sweep_assembles_its_candidate_findings(tmp_path):
+def test_seams_check_assembles_its_candidate_findings(tmp_path, monkeypatch):
     big = _big_diff()
+    monkeypatch.setattr(RD, "_round_is_sliced", lambda state: True)
 
     def build(n, state):
         hand = {"findings": []}
-        return hand, [_result_env(RA.SEAT_GAPSWEEP, {"findings": []})], {}
+        return hand, [_result_env(RA.SEAT_SEAMS, {"findings": []})], {}
 
     artifact, _hand = _assert_fold_equivalent(
-        tmp_path, RD.P_GAPSWEEP, build, cfg=_cfg_proven(diff=big),
+        tmp_path, RD.P_SEAMS, build, cfg=_cfg_proven(diff=big),
         respond_factory=lambda: _responder(round1_findings=_A_FINDING))
     assert artifact == {"findings": []}
 
@@ -469,7 +470,7 @@ def test_roster_audits_keeps_two_targets_that_share_one_id(tmp_path):
 
 @pytest.mark.parametrize("phase,seat", [
     (RD.P_SYNTHESIS, RA.SEAT_SYNTHESIS),
-    (RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP),
+    (RD.P_SEAMS, RA.SEAT_SEAMS),
     (RD.P_SCOPED, RA.SEAT_SCOPED),
     (RD.P_VERIFY, RA.SEAT_VERIFY),
     (RD.P_APPLY_FIXES, RA.SEAT_APPLY_FIXES),
@@ -491,7 +492,7 @@ def test_missing_policy_per_phase():
     assert RA.missing_policy(RD.P_PANEL) == RA.MISSING_SEAT_STATUS
     assert RA.missing_policy(RD.P_VERIFIERS) == RA.MISSING_FOLD_FAIL_CLOSED
     assert RA.missing_policy(RD.P_AUDITS) == RA.MISSING_FOLD_FAIL_CLOSED
-    for phase in (RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES):
+    for phase in (RD.P_SYNTHESIS, RD.P_SEAMS, RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES):
         assert RA.missing_policy(phase) == RA.MISSING_REFUSE_FOLD
 
 
@@ -574,7 +575,7 @@ def test_fold_fail_closed_policy_a_silent_auditor_leaves_its_target_not_discharg
 
 @pytest.mark.parametrize("phase,seat,payload", [
     (RD.P_SYNTHESIS, RA.SEAT_SYNTHESIS, {"grouping": None}),
-    (RD.P_GAPSWEEP, RA.SEAT_GAPSWEEP, {"findings": []}),
+    (RD.P_SEAMS, RA.SEAT_SEAMS, {"findings": []}),
     (RD.P_SECOND_TEST, RA.SEAT_SECOND_TEST, {"findings": []}),
     (RD.P_SCOPED, RA.SEAT_SCOPED, {"findings": []}),
     (RD.P_VERIFY, RA.SEAT_VERIFY, {"result": "pass"}),
@@ -950,7 +951,7 @@ _SEAT_KEYS = {
     RD.P_PANEL: "code-reviewer",
     RD.P_VERIFIERS: "verifier:f.py:0",
     RD.P_SYNTHESIS: RA.SEAT_SYNTHESIS,
-    RD.P_GAPSWEEP: RA.SEAT_GAPSWEEP,
+    RD.P_SEAMS: RA.SEAT_SEAMS,
     RD.P_SECOND_TEST: RA.SEAT_SECOND_TEST,
     RD.P_SCOPED: RA.SEAT_SCOPED,
     RD.P_VERIFY: RA.SEAT_VERIFY,

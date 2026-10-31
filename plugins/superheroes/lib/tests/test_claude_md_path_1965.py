@@ -47,7 +47,7 @@ def test_reviewer_template_names_claude_md_only_through_placeholder(phase):
 
 def test_reviewer_phase_set_is_every_order_phase():
     assert _REVIEWER_PHASES == [
-        RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_GAPSWEEP, RP.P_SECOND_TEST, RP.P_AUDITS,
+        RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_SEAMS, RP.P_SECOND_TEST, RP.P_AUDITS,
         RP.P_SCOPED]
     assert "CLAUDE_MD_PATH" in RD.ORDER_DERIVED_PLACEHOLDERS
 

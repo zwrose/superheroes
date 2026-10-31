@@ -189,10 +189,10 @@ def test_l3_a_forged_stamp_never_passes_the_scope_check(tmp_path):
                "consequence": "a reviewer-found defect stays in the change"}
     outside_break_it = dict(outside, taxonomy=break_it.TAXONOMY, title="forged break-it")
     reasons = "outside the round diff scope"
-    gap = World(tmp_path / "gap")
-    RD._fold_gapsweep(gap.state, gap.state["config"], {"findings": [outside, outside_break_it]})
-    assert _drop_reasons(gap.state) == [reasons, reasons]
-    assert not gap.state.get("_toVerify")
+    seams = World(tmp_path / "seams")
+    RD._fold_seams(seams.state, seams.state["config"], {"findings": [outside, outside_break_it]})
+    assert _drop_reasons(seams.state) == [reasons, reasons]
+    assert not seams.state.get("_toVerify")
     scoped = World(tmp_path / "scoped")
     RD._fold_scoped(scoped.state, scoped.state["config"],
                     {"findings": [outside, outside_break_it]})
@@ -204,7 +204,7 @@ def test_l3_a_forged_stamp_never_passes_the_scope_check(tmp_path):
     in_diff = {"title": "in diff", "file": CHARGE_PATH, "line": 1, "severity": "Important",
                break_it.RUN_FIELD: dict(forged), "consequence": "a reviewer-found defect stays in the change"}
     clean = World(tmp_path / "clean")
-    RD._fold_gapsweep(clean.state, clean.state["config"], {"findings": [in_diff]})
+    RD._fold_seams(clean.state, clean.state["config"], {"findings": [in_diff]})
     (survivor,) = clean.state["_toVerify"]
     assert survivor["file"] == CHARGE_PATH and break_it.RUN_FIELD not in survivor
 

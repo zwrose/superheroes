@@ -64,7 +64,7 @@ ORDER_PHASES = (
     round_phases.P_PANEL,
     round_phases.P_VERIFIERS,
     round_phases.P_SYNTHESIS,
-    round_phases.P_GAPSWEEP,
+    round_phases.P_SEAMS,
     round_phases.P_SECOND_TEST,
     round_phases.P_AUDITS,
     round_phases.P_SCOPED,
@@ -535,7 +535,7 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             "Write your grouping payload to %s.\n"
             "every survivor id appears exactly once across all groups." % landing
         )
-    elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
+    elif phase in (round_phases.P_SEAMS, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Deliver per the base rubric's panel output-format section. Write your findings "
             "payload to %s — write an empty findings list rather than skipping the file when "
@@ -551,7 +551,7 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     if phase == round_phases.P_PANEL:
         ph = _panel_derived_placeholders(context)
     elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
-                   round_phases.P_GAPSWEEP, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
+                   round_phases.P_SEAMS, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
         ph = _channel_derived_placeholders(phase, context)
         if phase == round_phases.P_SECOND_TEST:
             ph = _test_role_derived_placeholders(ph)

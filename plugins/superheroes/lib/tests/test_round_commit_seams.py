@@ -43,7 +43,7 @@ SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine":
 
 
 class FakeAdapters(object):
-  ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_GAPSWEEP, RD.P_AUDITS,
+  ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_SEAMS, RD.P_AUDITS,
                     RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
 
   def __init__(self):

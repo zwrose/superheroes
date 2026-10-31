@@ -1,6 +1,5 @@
 from delta_surface import (
-    parse_hunks, fixed_locations, split_fix_surface, shard_plan, _overlaps,
-    DEFAULT_SHARD_MAX_LINES, DEFAULT_SHARD_MAX_FILES,
+    parse_hunks, fixed_locations, split_fix_surface, _overlaps,
 )
 
 
@@ -223,88 +222,6 @@ def test_split_unknown_on_garbage():
     # file is changed; unknown stays False (a genuinely empty pair is not the fail-closed case)
     assert out["unknown"] is False
     assert out["auditTargets"] == {} and out["newSurface"] == {}
-
-
-# --- shard_plan ---------------------------------------------------------------
-
-def _n_line_diff(path, n_added):
-    body = "@@ -1 +1,%d @@\n" % n_added + "\n".join("+l%d" % i for i in range(n_added))
-    return _file_diff(path, body)
-
-
-def test_shard_not_big_under_thresholds():
-    diff = _n_line_diff("plugins/x.py", 10) + "\n"
-    plan = shard_plan(diff)
-    assert plan["big"] is False
-    assert plan["changedLines"] == 10
-    assert plan["changedFiles"] == 1
-    assert plan["thresholds"] == {"maxLines": DEFAULT_SHARD_MAX_LINES,
-                                  "maxFiles": DEFAULT_SHARD_MAX_FILES}
-
-
-def test_shard_lines_at_boundary_not_big():
-    diff = _n_line_diff("plugins/x.py", 100) + "\n"
-    assert shard_plan(diff, max_lines=100)["big"] is False
-
-
-def test_shard_lines_over_boundary_big():
-    diff = _n_line_diff("plugins/x.py", 101) + "\n"
-    plan = shard_plan(diff, max_lines=100)
-    assert plan["big"] is True
-    assert plan["changedLines"] == 101
-
-
-def test_shard_files_at_and_over_boundary():
-    at = mk_diff([("plugins/f%d.py" % i, "@@ -1 +1 @@\n+x") for i in range(3)])
-    assert shard_plan(at, max_files=3)["big"] is False
-    over = mk_diff([("plugins/f%d.py" % i, "@@ -1 +1 @@\n+x") for i in range(4)])
-    assert shard_plan(over, max_files=3)["big"] is True
-
-
-def test_shard_groups_by_top_segment_deterministic():
-    diff = mk_diff([
-        ("plugins/superheroes/lib/a.py", "@@ -1 +1 @@\n+x"),
-        ("eval/lib/b.py", "@@ -1 +1 @@\n+x"),
-        (".github/workflows/ci.yml", "@@ -1 +1 @@\n+x"),
-        ("README.md", "@@ -1 +1 @@\n+x"),
-        ("plugins/superheroes/lib/c.py", "@@ -1 +1 @@\n+x"),
-    ])
-    plan = shard_plan(diff)
-    keys = [s["key"] for s in plan["shards"]]
-    assert keys == sorted(keys)
-    assert keys == [".", ".github", "eval", "plugins"]
-    plugins_shard = next(s for s in plan["shards"] if s["key"] == "plugins")
-    assert plugins_shard["files"] == ["plugins/superheroes/lib/a.py",
-                                      "plugins/superheroes/lib/c.py"]
-    root_shard = next(s for s in plan["shards"] if s["key"] == ".")
-    assert root_shard["files"] == ["README.md"]
-
-
-def test_shard_unparseable_diff_is_big_and_unknown():
-    plan = shard_plan('diff --git "a/x y" "b/x y"\n@@ -1 +1 @@\n+z\n')
-    assert plan == {"big": True, "shards": [], "unknown": True}
-
-
-def test_shard_rename_form_is_big_and_unknown():
-    """#507 R3: `_scan_diff` must fail closed on a rename form (differing a/ b/ paths or a
-    `rename from`/`rename to` marker) exactly as `parse_hunks` does — otherwise an oversized
-    rename diff scans as a small parseable surface and skips the fan-out."""
-    rename = "\n".join([
-        "diff --git a/old.py b/new.py",
-        "rename from old.py",
-        "rename to new.py",
-        "@@ -1 +1 @@",
-        "+x",
-    ]) + "\n"
-    assert shard_plan(rename) == {"big": True, "shards": [], "unknown": True}
-
-
-def test_shard_binary_marker_is_big_and_unknown():
-    """#507 R3: a binary marker fails closed to the fan-out verdict, mirroring `parse_hunks`."""
-    binary = "diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ\n"
-    assert shard_plan(binary) == {"big": True, "shards": [], "unknown": True}
-    git_binary = "diff --git a/i.bin b/i.bin\nGIT binary patch\nliteral 4\n"
-    assert shard_plan(git_binary) == {"big": True, "shards": [], "unknown": True}
 
 
 def test_split_unknown_on_rename_head_diff():

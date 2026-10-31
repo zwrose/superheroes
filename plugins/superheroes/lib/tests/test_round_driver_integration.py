@@ -15,6 +15,7 @@ Everything here drives the session the way the orchestrator does: land a seat en
 LANDING area, `record-result` it into the durable store, then `advance` — lock, reconcile, sweep,
 completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 """
+import copy
 import importlib.util
 import json
 import os
@@ -58,14 +59,18 @@ AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
                 for name in ("right", "brokeNothing", "testWouldFail")}
 
 # =============================================================================================
-# the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
+# the diffs — a round-1 diff cut into two slices (so the seams-check phase is on the path) and its
+# post-fix head
 # =============================================================================================
 
-# >20 changed files ⇒ `delta_surface.shard_plan` says big ⇒ `_fold_synthesis` routes through
-# `dispatch-gap-sweep`, which is otherwise unreachable and would leave that adapter unexercised.
+# The session's slice plan says the change was sliced, so round 1 routes its panel findings through
+# `dispatch-seams-check`, which is otherwise unreachable and would leave that adapter unexercised.
 FILES = ["src/f%02d.py" % i for i in range(21)]
 FIXED_FILE = FILES[0]
 NEW_SURFACE_FILE = "src/new_surface.py"
+SLICE_PLAN = {"sliced": True, "slices": [
+    {"id": "s1", "parts": [{"file": p, "lines": []} for p in FILES[:11]]},
+    {"id": "s2", "parts": [{"file": p, "lines": []} for p in FILES[11:]]}]}
 
 
 def _section(path, third):
@@ -382,7 +387,7 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
                              for f in (pend.get("payload") or {}).get("findings") or []]}
     if phase == round_driver.P_SYNTHESIS:
         return {"grouping": None}
-    if phase in (round_driver.P_GAPSWEEP, round_driver.P_SCOPED):
+    if phase in (round_driver.P_SEAMS, round_driver.P_SCOPED):
         return {"findings": []}
     if phase == round_driver.P_APPLY_FIXES:
         return {"fixes": [{"file": FIXED_FILE, "summary": "guard restored"}],
@@ -398,7 +403,7 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
 def _auditor_vendor_for(state):
     targets = state.get("_auditTargets") or []
     by_id = {t.get("id"): t.get("auditorVendor") for t in targets if isinstance(t, dict)}
-    # A verifier / gap-sweep / scoped / grouping seat runs on the driver's selected non-maker vendor;
+    # A verifier / seams-check / scoped / grouping seat runs on the driver's selected non-maker vendor;
     # its result counts only when the runner's execution evidence names that vendor. The grouping
     # pass is seated the same way but is not a `_NONPANEL_REVIEWER_PHASES` member, so it is added here.
     selected = {phase: round_driver._nonpanel_selection(state, None, phase)[0] or "claude"
@@ -407,8 +412,8 @@ def _auditor_vendor_for(state):
     def vendor_for(seat):
         if seat.startswith(round_adapters.VERIFIER_SEAT_PREFIX):
             return selected[round_driver.P_VERIFIERS]
-        if seat == round_adapters.SEAT_GAPSWEEP:
-            return selected[round_driver.P_GAPSWEEP]
+        if seat == round_adapters.SEAT_SEAMS:
+            return selected[round_driver.P_SEAMS]
         if seat == round_adapters.SEAT_SCOPED:
             return selected[round_driver.P_SCOPED]
         if seat == round_adapters.SEAT_SECOND_TEST:
@@ -511,6 +516,9 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     enter_checkout(repo_root)
     out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
+    state = _state(session_dir)
+    state["slicePlan"] = copy.deepcopy(SLICE_PLAN)
+    round_driver.save_state(session_dir, state)
     return session_dir, gitdir, head_diff_path
 
 

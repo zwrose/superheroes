@@ -1,7 +1,7 @@
 """#1858 (review C5 L5) WO-A — the three L4 folds.
 
 v0: a session saved by the generation before the per-seat verdict binding is never continued.
-v4: `run_loop` authenticates a gap-sweep / scoped result against the selection captured before the
+v4: `run_loop` authenticates a seams-check / scoped result against the selection captured before the
     callback ran, not the preference as it stands afterwards.
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_a_1858_l4_folds.md
@@ -69,15 +69,16 @@ def _flip_engine(monkeypatch, to_vendor):
 VENDORS = ["claude", "codex", "cursor"]  # cursor is live, so the edit below really moves the selection
 
 
-def _gap_run(monkeypatch, reported_vendor, edit_to="cursor"):
-    """run_loop over a big diff so a gap sweep runs; the callback edits the preference, then reports."""
-    seen = {"gap": 0}
+def _seams_run(monkeypatch, reported_vendor, edit_to="cursor"):
+    """run_loop over a sliced change so a seams check runs; the callback edits the preference, then reports."""
+    seen = {"seams": 0}
     _flip_engine(monkeypatch, "codex")  # the engine as it stands before the callback: selection is codex
+    monkeypatch.setattr(TRD.RD, "_round_is_sliced", lambda state: True)
 
     def reviewer(dim, tier, rnd, ctx):
-        if dim == "gap-sweep":
-            seen["gap"] += 1
-            if seen["gap"] == 1:
+        if dim == "seams-check":
+            seen["seams"] += 1
+            if seen["seams"] == 1:
                 _flip_engine(monkeypatch, edit_to)
             return dict(findings=[], vendor=reported_vendor)
         return []
@@ -117,7 +118,7 @@ def _parked_unauthenticated(state, phase):
             and reason.startswith("nonpanel-finder-unauthenticated:%s" % phase)), reason
 
 
-RUNS = [pytest.param(_gap_run, RD.P_GAPSWEEP, "gap", id="gap-sweep"),
+RUNS = [pytest.param(_seams_run, RD.P_SEAMS, "seams", id="seams-check"),
         pytest.param(_scoped_run, RD.P_SCOPED, "scoped", id="scoped")]
 
 
@@ -155,21 +156,21 @@ def _state(makers=()):
 
 def test_v4_e4_a_captured_selection_of_none_is_unauthenticated():
     state = _state()
-    assert RD._nonpanel_selection(state, None, RD.P_GAPSWEEP)[0] == "codex"  # the live read would authenticate
-    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP, selected=None, replaced=False) is True
+    assert RD._nonpanel_selection(state, None, RD.P_SEAMS)[0] == "codex"  # the live read would authenticate
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_SEAMS, selected=None, replaced=False) is True
 
 
 def test_v4_e5_no_report_with_the_captured_selection_replaced_is_unauthenticated():
     state = _state()
-    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP, selected="claude", replaced=True) is True
+    assert RD._library_finder_unauthenticated(state, None, RD.P_SEAMS, selected="claude", replaced=True) is True
 
 
 def test_v4_e6_no_report_with_the_captured_selection_being_the_engine_is_authenticated():
     state = _state()
     assert RD._nonpanel_replaced(state, "codex")  # the live read would say replaced
-    assert RD._library_finder_unauthenticated(state, None, RD.P_GAPSWEEP, selected="codex", replaced=False) is False
+    assert RD._library_finder_unauthenticated(state, None, RD.P_SEAMS, selected="codex", replaced=False) is False
 
 
 def test_v4_e7_a_reported_vendor_equal_to_the_captured_selection_but_barred_is_unauthenticated():
     state = _state(makers=["openai"])
-    assert RD._library_finder_unauthenticated(state, "codex", RD.P_GAPSWEEP, selected="codex", replaced=True) is True
+    assert RD._library_finder_unauthenticated(state, "codex", RD.P_SEAMS, selected="codex", replaced=True) is True

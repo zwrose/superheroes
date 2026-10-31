@@ -378,20 +378,20 @@ def test_gate_skip_after_rule_guidance_renders_nothing():
     assert _entries(state) == []
 
 
-def test_gap_sweep_in_the_same_round_never_aliases_to_a_reraised_decided_finding():
-    """axis: the ambiguity guards span the whole round — a gap sweep staged after the panel sees the
+def test_a_later_staging_in_the_same_round_never_aliases_to_a_reraised_decided_finding():
+    """axis: the ambiguity guards span the whole round — a staging after the panel's sees the
     panel's findings (the decided original re-raised, or another finding at the location)."""
     state = _mem_state()
     key_f = _key("original")
     _add_rule(state, key_f, "guidance", guidance="G1", rnd=1)
-    key_g = _key("independent gap issue")
-    # control: the gap finding alone in the round carries
+    key_g = _key("independent later issue")
+    # control: the later finding alone in the round carries
     control = copy.deepcopy(state)
-    RD._stage_findings(control, [_finding("independent gap issue")])
+    RD._stage_findings(control, [_finding("independent later issue")])
     assert control["findingLineage"] == {key_g: key_f}
-    # the panel re-raises the decided original; the gap sweep then stages an independent finding
+    # the panel re-raises the decided original; a later staging then stages an independent finding
     RD._stage_findings(state, [_finding("original")])
-    RD._stage_findings(state, [_finding("independent gap issue")])
+    RD._stage_findings(state, [_finding("independent later issue")])
     _no_carry(state)
     assert key_g not in RD._live_ruling_by_key(state)
     # another finding already raised at the location this round blocks the carry the same way
@@ -400,7 +400,7 @@ def test_gap_sweep_in_the_same_round_never_aliases_to_a_reraised_decided_finding
     RD._stage_findings(state, [_finding("unrelated panel issue")])
     state.pop("findingLineage", None)
     state["decisions"] = [d for d in state["decisions"] if d["kind"] != "ruling-carried"]
-    RD._stage_findings(state, [_finding("independent gap issue")])
+    RD._stage_findings(state, [_finding("independent later issue")])
     assert key_g not in (state.get("findingLineage") or {})
 
 
@@ -423,7 +423,7 @@ def test_fix_as_suggested_supersedes_an_earlier_skip_and_guidance():
 
 @pytest.mark.parametrize("later", ["original", "second independent issue"])
 def test_a_same_round_carry_is_undone_when_a_later_staging_makes_it_ambiguous(later):
-    """axis: a carry is provisional until the round's last staging — a gap sweep that raises the
+    """axis: a carry is provisional until the round's last staging — a later staging that raises the
     decided original (or another finding at the place) after the panel's carry undoes it; a carry
     from an earlier round stands."""
     state = _mem_state()

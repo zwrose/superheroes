@@ -412,8 +412,8 @@ def test_a_stem_less_seat_outside_the_table_names_no_role_and_a_lens_names_itsel
     # axis: any other stem-less seat is left out; a lens appearing in two rounds is listed once
     rows = [reviewer("code-reviewer (round 1)"), reviewer("code-reviewer (round 2)"),
             reviewer("architecture-reviewer (round 1)"), reviewer("grounding-reviewer (round 1)"),
-            reviewer("gap-sweep g1 (round 2)"), reviewer("second-test s1 (round 2)")]
-    assert "Reviewers: code, architecture · gap sweep · second test" in lines_of(summary_of(account(reviewers=rows)))
+            reviewer("seams-check g1 (round 2)"), reviewer("second-test s1 (round 2)")]
+    assert "Reviewers: code, architecture · seams check · second test" in lines_of(summary_of(account(reviewers=rows)))
 
 
 def test_the_unread_line_with_no_countable_lines_has_no_percent():

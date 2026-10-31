@@ -65,7 +65,7 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
 UNFILLED_SOURCE = "unfilled"
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 # The registry roles whose per-vendor matrix cells the non-panel phases dispatch (the verifier, the
-# gap-sweep / scoped reviewers and the synthesis grouper): compose probes and records these beside
+# seams-check / scoped reviewers and the synthesis grouper): compose probes and records these beside
 # the panel's own cells.
 NONPANEL_CELL_ROLES = ("verifier", "reviewer-deep", "synthesis")
 

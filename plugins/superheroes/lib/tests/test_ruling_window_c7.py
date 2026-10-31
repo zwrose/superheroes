@@ -171,10 +171,10 @@ def test_vet_442_ruling_on_a_pending_step_is_accepted_and_reaches_its_files_and_
     assert sent == [], "A went out under the ruling with the pending step; B carries none: %s" % sent
 
 
-@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_AUDITS, RD.P_APPLY_FIXES])
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_SEAMS, RD.P_AUDITS, RD.P_APPLY_FIXES])
 def test_rule_is_accepted_at_every_step_it_can_arrive(tmp_path, keep_severity, phase):
     """axis: REFUSAL — `rule` records `guidance` whichever step is pending (the verifiers, the
-    gap-sweep, the audits, an emitted fixer attempt); none of them refuses on timing."""
+    seams-check, the audits, an emitted fixer attempt); none of them refuses on timing."""
     if phase == RD.P_AUDITS:
         session_dir, gitdir, head_path, key_a, _b = _two_important(tmp_path, "c7-step")
         _drive_one_phase(session_dir, gitdir, [], head_path)
@@ -419,11 +419,11 @@ def test_a_ruling_on_a_reworded_finding_reaches_the_one_live_row():
 def _merged_into_session(tmp_path):
     """F1 and F2 reported together; the synthesis seat cannot be seated in this harness, so the merge
     it would record is made through the driver's own writers (`_record_merged_into`, `_set_findings`)
-    at the gap-sweep step, before the fix batch is built. Returns
+    at the seams-check step, before the fix batch is built. Returns
     (session_dir, gitdir, head_path, member_key, kept_key)."""
     session_dir, gitdir, head_path = _session(
         tmp_path, [_finding("bounds F1", 1), _finding("bounds F2", 2)],
-        to_phase=RD.P_GAPSWEEP, name="c7-merge")
+        to_phase=RD.P_SEAMS, name="c7-merge")
     state = _state(session_dir)
     kept = _finding_key_by_title(state, "bounds F1")
     member = _finding_key_by_title(state, "bounds F2")
