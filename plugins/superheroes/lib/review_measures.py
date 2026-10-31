@@ -1,0 +1,398 @@
+#!/usr/bin/env python3
+"""The review-loop measures: one fixed-shape row per gardening window, appended to a JSON-lines table in the
+project store, mirrored as a table in the gardening record and charted across windows. It gates nothing: the
+owner and the advisor read it by hand at the gardening pass, and nothing reads it between passes.
+
+CLI (`python3 -B lib/review_measures.py <verb>`; one JSON object on stdout; exit 0 on ok, 1 on a refusal):
+  row --input F --from YYYY-MM-DD --until YYYY-MM-DD --cwd D [--root R] [--dry-run]
+      # compute the window's row and write it; a second run for the same window replaces that window's row
+  render --cwd D [--root R]   # the latest row as a markdown table, and a text chart across every window
+
+The input file is one JSON object the advisor assembles at the pass; a key it leaves out makes the measures that
+read it unmeasured, with that reason, never zero:
+  records       every review record written for the window's PRs, all sessions (`review_record.py read`)
+  ciRuns        one item per CI run on a window PR: {"pr", "minutes", "suiteMinutes" (the suite job, or null)}
+  escapes       the misses log as `review_learning.py tally` reads it; an item may also name its "pr" and "key"
+  vetReceipts   one item per vet receipt: {"pr", "at" (the receipt's time), "sentBack" (bool), "body" (its text)}
+  capChoicesSince  the day the project adopted the release whose vet receipt records cap choices
+  costly        {"lateFindsOnUnchangedCode" | "repeatFindingLocations": {"basis": "monthly"|"sample", "value": n}}
+
+Counting rules (written fresh: the post-0.43 assessment's counting scripts did not reach this build):
+  - A PR is in the window when one of its review records is dated (`writtenAt`) inside it; only in-window records count.
+  - A session's figures come from its latest record. Rounds per PR sum the sessions' `rounds.count`.
+  - Reviewer cost sums `reviewers[].cost` over every record of the PR, each row once per (`name`, `commit`), rows
+    that did not run left out; any null among them makes that PR's (or that seat's) figure unmeasured.
+  - Finding outcomes by lens read each PR's latest record, one per finding key, merged members left out; an
+    undecided finding is `open`. Seats are named through `review_learning._seats`.
+  - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
+    no finding open or left for the owner.
+"""
+import argparse
+import collections
+import datetime
+import json
+import math
+import os
+import re
+import statistics
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import control_plane  # noqa: E402
+import mode_registry  # noqa: E402
+import review_findings_schema  # noqa: E402
+import review_learning  # noqa: E402
+import review_record  # noqa: E402
+import review_seats  # noqa: E402
+import session_contract  # noqa: E402
+
+SCHEMA = "review-loop-measures/1"
+TABLE = "review-loop-measures.jsonl"
+UNMEASURED = review_learning.UNMEASURED
+MEASURES = ("roundsPerPr", "sessionsPerPr", "reviewerCostPerPr", "seats", "ci", "panels",
+            "vetSendBacksOnCleanLoops", "escapes", "capChoices", "lateFindsOnUnchangedCode", "repeatFindingLocations")
+ROW_KEYS = ("schema", "window", "writtenAt", "prs", "measures", "seatingRow", "leftOut", "unmeasured")
+CAP_CHOICES = ("extra-audit-round", "leftover", "rethink")
+COSTLY = ("lateFindsOnUnchangedCode", "repeatFindingLocations")
+COSTLY_BASES = ("monthly", "sample")
+_CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
+_OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
+_day = review_learning._day
+
+
+def _num(v):
+    """A finite number of zero or more, else None (a bool is not a number)."""
+    ok = isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) and v >= 0
+    return v if ok else None
+
+
+def _pr_ok(pr):
+    return isinstance(pr, (str, int)) and not isinstance(pr, bool) and str(pr) != ""
+
+
+def _rec_ok(r):
+    """A review record whole enough to count: identity, date, rounds, and every reviewer row and finding sound."""
+    return (isinstance(r, dict) and _pr_ok(r.get("pr")) and isinstance(r.get("sessionId"), str) and r["sessionId"].strip()
+            and _day(r.get("writtenAt"), whole=False) is not None and isinstance(r.get("rounds"), dict)
+            and _num(r["rounds"].get("count")) is not None and isinstance(r["rounds"]["count"], int)
+            and isinstance(r.get("reviewers"), list) and isinstance(r.get("findings"), list)
+            and all(isinstance(x, dict) and x.get("ran") in review_record.RAN_STATES and isinstance(x.get("name"), str)
+                    for x in r["reviewers"])
+            and all(review_learning._finding_ok(f) for f in r["findings"]))
+
+
+def _spread(xs):
+    s = sorted(xs)
+    return {"median": statistics.median(s), "p90": s[max(0, math.ceil(0.9 * len(s)) - 1)]}
+
+
+def _latest(recs):
+    return max(recs, key=lambda r: r["writtenAt"])
+
+
+def _clean(rec):
+    return rec.get("status") == review_record.REVIEWED and not any(f.get("outcome") in _OPEN for f in rec["findings"])
+
+
+def _rows(recs):
+    """Every reviewer row that ran, once per (name, commit), across the given records."""
+    out = {}
+    for r in recs:
+        for row in r["reviewers"]:
+            if row["ran"] != review_record.RAN_NOT_RUN:
+                out.setdefault((row["name"], row.get("commit")), row)
+    return list(out.values())
+
+
+def _cost(row, k):
+    c = row.get("cost")
+    return _num(c.get(k)) if isinstance(c, dict) else None
+
+
+def _sum(vals, k):
+    """The sum, or None when any value is unmeasured (or there is none to sum)."""
+    if not vals or any(v is None for v in vals):
+        return None
+    return round(sum(vals), 1) if k == "minutes" else sum(vals)
+
+
+def _cap_outcome(choice, key, pr, later, escapes):
+    if choice == "leftover":
+        hit = any(isinstance(e, dict) and _pr_ok(e.get("pr")) and str(e["pr"]) == pr and e.get("key") in (None, key)
+                  for e in escapes if isinstance(escapes, list))
+        return "escaped" if hit else "not-escaped"
+    if not later:
+        return "pending"
+    last = _latest(later)
+    if choice == "rethink":
+        return "converged" if _clean(last) else "not-converged"
+    found = [f for f in last["findings"] if (f.get(session_contract.FINDING_KEY_FIELD) or f.get("id")) == key]
+    return "settled" if found and all(f.get("outcome") not in _OPEN for f in found) else "not-settled"
+
+
+def compute(inp, start, end, written_at=None):
+    """The window's row from the input object. Every measure is a value or "unmeasured", and each unmeasured one is
+    listed in `unmeasured` with its reason."""
+    m, why, left = {}, {}, {"outsideWindow": 0, "malformed": 0}
+
+    def miss(name, reason):
+        why[name] = reason
+        return UNMEASURED
+
+    recs, prs, sessions = inp.get("records"), collections.defaultdict(list), collections.defaultdict(dict)
+    whole = isinstance(recs, list)
+    for r in recs if whole else []:
+        if not _rec_ok(r):
+            left["malformed"] += 1
+            whole = False
+            continue
+        if not start <= _day(r["writtenAt"], whole=False) <= end:
+            left["outsideWindow"] += 1
+            continue
+        pr = str(r["pr"])
+        prs[pr].append(r)
+        held = sessions[pr].get(r["sessionId"])
+        if held is None or r["writtenAt"] >= held["writtenAt"]:
+            sessions[pr][r["sessionId"]] = r
+    reason = ("no-records-input" if not isinstance(recs, list) else "incomplete-evidence" if not whole
+              else "no-prs-in-window" if not prs else None)
+    if reason:
+        for k in ("roundsPerPr", "sessionsPerPr", "reviewerCostPerPr", "seats", "panels"):
+            m[k] = miss(k, reason)
+    else:
+        per = [list(s.values()) for s in sessions.values()]
+        m["roundsPerPr"] = _spread([sum(r["rounds"]["count"] for r in ss) for ss in per])
+        n = [len(ss) for ss in per]
+        m["sessionsPerPr"] = dict(_spread(n), shareOverOne=round(sum(x > 1 for x in n) / len(n), 3))
+        m["reviewerCostPerPr"] = {}
+        for k in ("tokens", "minutes"):
+            totals = [_sum([_cost(row, k) for row in _rows(rs)], k) for rs in prs.values()]
+            if any(t is None for t in totals):
+                m["reviewerCostPerPr"][k] = miss("reviewerCostPerPr." + k, "cost-not-recorded")
+                continue
+            top, total = sorted(totals, reverse=True)[:math.ceil(len(totals) / 10)], sum(totals)
+            m["reviewerCostPerPr"][k] = dict(_spread(totals), total=total,
+                                             topTenthShare=round(sum(top) / total, 3) if total else 0)
+        outcomes, costs = collections.defaultdict(collections.Counter), collections.defaultdict(lambda: ([], []))
+        for rs in prs.values():
+            keyed = {}
+            for f in _latest(rs)["findings"]:
+                if not review_learning._merged_member(f):
+                    got = keyed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"),
+                                           (f.get("outcome") or "open", set()))
+                    got[1].update(review_learning._seats(f.get("reviewer")))
+            for outcome, seats in keyed.values():
+                for s in seats or ("unattributed",):
+                    outcomes[s][outcome] += 1
+            for row in _rows(rs):
+                for s in review_learning._seats(row["name"]):
+                    costs[s][0].append(_cost(row, "tokens"))
+                    costs[s][1].append(_cost(row, "minutes"))
+        m["seats"] = {}
+        for s in sorted(set(outcomes) | set(costs)):
+            shown = {"outcomes": dict(outcomes[s])}
+            for k, vals in zip(("tokens", "minutes"), costs[s] if s in costs else ([], [])):
+                total = _sum(vals, k)
+                shown[k] = total if total is not None else miss("seats.%s.%s" % (s, k), "cost-not-recorded")
+            m["seats"][s] = shown
+        sizes, no_grounding = collections.Counter(), 0
+        for ss in per:
+            for r in ss:
+                ran = [x for x in r["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN]
+                sizes[str(len({s for x in ran for s in review_learning._seats(x["name"])}))] += 1
+                no_grounding += not any("grounding" in x["name"].lower() for x in ran)
+        m["panels"] = {"sizes": dict(sizes), "withoutGrounding": no_grounding, "sessions": sum(n)}
+
+    ci = inp.get("ciRuns")
+    if not isinstance(ci, list) or reason:
+        m["ci"] = miss("ci", reason or "no-ci-input")
+    else:
+        runs, suite, bad = {pr: [] for pr in prs}, [], False
+        for c in ci:
+            if not (isinstance(c, dict) and _pr_ok(c.get("pr")) and _num(c.get("minutes")) is not None
+                    and (c.get("suiteMinutes") is None or _num(c["suiteMinutes"]) is not None)):
+                bad = True
+            elif str(c["pr"]) in runs:
+                runs[str(c["pr"])].append(c["minutes"])
+                suite += [c["suiteMinutes"]] if c.get("suiteMinutes") is not None else []
+        if bad or not all(runs.values()):
+            m["ci"] = miss("ci", "incomplete-evidence" if bad else "pr-without-ci-receipt")
+        else:
+            m["ci"] = {"runsPerPr": _spread([len(v) for v in runs.values()]),
+                       "minutesPerPr": _spread([round(sum(v), 1) for v in runs.values()]),
+                       "suiteMedianMinutes": (statistics.median(suite) if suite
+                                              else miss("ci.suiteMedianMinutes", "no-suite-time"))}
+
+    esc = inp.get("escapes")
+    t = review_learning.tally([], esc, start.isoformat(), until=end.isoformat()) if isinstance(esc, list) else None
+    if t is None or t["falsePrClaims"] is None:
+        m["escapes"] = miss("escapes", "no-misses-log-input" if t is None else "incomplete-evidence")
+    else:
+        m["escapes"] = dict(t["escapes"], falsePrClaims=t["falsePrClaims"])
+
+    vets, in_window, bad_vet = inp.get("vetReceipts"), [], False
+    for v in vets if isinstance(vets, list) else []:
+        if not (isinstance(v, dict) and _pr_ok(v.get("pr")) and isinstance(v.get("sentBack"), bool)
+                and isinstance(v.get("at"), str) and _day(v["at"], whole=False) is not None
+                and isinstance(v.get("body", ""), str)):
+            bad_vet = True
+        elif start <= _day(v["at"], whole=False) <= end:
+            in_window.append(v)
+    vet_reason = reason or ("no-vet-input" if not isinstance(vets, list) else "incomplete-evidence" if bad_vet else None)
+    if vet_reason:
+        m["vetSendBacksOnCleanLoops"] = miss("vetSendBacksOnCleanLoops", vet_reason)
+    else:
+        clean = sent = 0
+        for v in in_window:
+            read = [r for r in prs.get(str(v["pr"]), []) if r["writtenAt"] <= v["at"]]
+            if read and _clean(_latest(read)):
+                clean, sent = clean + 1, sent + v["sentBack"]
+        m["vetSendBacksOnCleanLoops"] = {"sentBack": sent, "cleanLoopsVetted": clean}
+
+    since = _day(inp.get("capChoicesSince"))
+    cap_reason = ("no-cap-choices-since" if since is None else "before-cap-choice-recording" if start < since
+                  else vet_reason)
+    found = [(v, mt.group(1), mt.group(2)) for v in in_window for mt in _CAP_RE.finditer(v.get("body", ""))]
+    if not cap_reason and any(choice not in CAP_CHOICES for _, choice, _ in found):
+        cap_reason = "incomplete-evidence"
+    if cap_reason:
+        m["capChoices"] = miss("capChoices", cap_reason)
+    else:
+        m["capChoices"] = {c: {"count": 0, "outcomes": {}} for c in CAP_CHOICES}
+        for v, choice, key in found:
+            pr = str(v["pr"])
+            got = _cap_outcome(choice, key, pr, [r for r in prs.get(pr, []) if r["writtenAt"] > v["at"]], esc)
+            m["capChoices"][choice]["count"] += 1
+            m["capChoices"][choice]["outcomes"][got] = m["capChoices"][choice]["outcomes"].get(got, 0) + 1
+
+    costly = inp.get("costly") if isinstance(inp.get("costly"), dict) else {}
+    for name in COSTLY:
+        c = costly.get(name)
+        if isinstance(c, dict) and c.get("basis") in COSTLY_BASES and _num(c.get("value")) is not None:
+            m[name] = {"basis": c["basis"], "value": c["value"]}
+        else:
+            m[name] = miss(name, "not-run-this-pass")
+
+    seats = m["seats"] if isinstance(m["seats"], dict) else {}
+    seating_row = {short: seats[full] for full, short in review_seats.AGENT_SUFFIX.items()
+                   if short in review_learning.SEATING_SEATS and full in seats}
+    return {"schema": SCHEMA, "window": {"from": start.isoformat(), "until": end.isoformat()},
+            "writtenAt": written_at or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "prs": len(prs) if whole and isinstance(recs, list) else UNMEASURED,
+            "measures": {k: m[k] for k in MEASURES}, "seatingRow": seating_row, "leftOut": left,
+            "unmeasured": [{"measure": k, "reason": why[k]} for k in sorted(why)]}
+
+
+def problems(row):
+    """What makes a row not the fixed shape; empty when it is."""
+    if (not isinstance(row, dict) or tuple(row) != ROW_KEYS or row.get("schema") != SCHEMA
+            or not isinstance(row["measures"], dict) or not isinstance(row["unmeasured"], list)):
+        return ["the row's keys are not %s" % (ROW_KEYS,)]
+    out = [] if tuple(row["measures"]) == MEASURES else ["the measures are not %s" % (MEASURES,)]
+    named = {u.get("measure") for u in row["unmeasured"] if isinstance(u, dict) and u.get("reason")}
+    out += ["%s reads unmeasured with no reason" % k for k, v in row["measures"].items()
+            if v == UNMEASURED and k not in named]
+    if not all(isinstance(v, dict) or v == UNMEASURED for v in row["measures"].values()):
+        out.append("a measure is neither a value nor unmeasured")
+    return out
+
+
+def table_path(cwd, root=None):
+    return os.path.join(mode_registry.project_store_dir(cwd, root), "state", TABLE)
+
+
+def _read(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return [line.rstrip("\n") for line in fh if line.strip()]
+    except FileNotFoundError:
+        return []
+
+
+def _window_of(line):
+    try:
+        got = json.loads(line)
+    except ValueError:
+        return None
+    return got.get("window") if isinstance(got, dict) else None
+
+
+def write(row, cwd, root=None):
+    """Append the row, or replace the row already there for the same window; other lines are kept as they are."""
+    path = table_path(cwd, root)
+    lines = _read(path)
+    kept = [line for line in lines if _window_of(line) != row["window"]]
+    control_plane.atomic_write(path, "".join(x + "\n" for x in kept + [json.dumps(row, ensure_ascii=False)]))
+    return {"ok": True, "outcome": "replaced" if len(kept) < len(lines) else "appended", "table": path, "row": row}
+
+
+def _flat(value, prefix=""):
+    if isinstance(value, dict) and value:
+        return [kv for k, v in value.items() for kv in _flat(v, "%s.%s" % (prefix, k) if prefix else k)]
+    return [(prefix, value)]
+
+
+def render(rows):
+    """The latest row as a two-column markdown table, then a text chart of two headline measures across windows."""
+    rows = [r for r in rows if not problems(r)]
+    if not rows:
+        return "No review-loop measures row yet."
+    rows.sort(key=lambda r: r["window"]["from"])
+    last = rows[-1]
+    out = ["**Review-loop measures, %s to %s** (%s PRs)" % (last["window"]["from"], last["window"]["until"], last["prs"]),
+           "", "| Measure | Value |", "|---|---|"]
+    out += ["| %s | %s |" % (k, json.dumps(v)) for k, v in _flat(last["measures"])]
+    out += ["", "Unmeasured: " + ("; ".join("%(measure)s (%(reason)s)" % u for u in last["unmeasured"]) or "none"), ""]
+    for label, get in (("median rounds per PR", lambda m: m["roundsPerPr"]),
+                       ("median reviewer minutes per PR", lambda m: m["reviewerCostPerPr"])):
+        vals = []
+        for r in rows:
+            v = get(r["measures"])
+            v = v.get("minutes") if isinstance(v, dict) and "minutes" in v else v
+            vals.append(v.get("median") if isinstance(v, dict) else None)
+        top = max([v for v in vals if v is not None] or [0]) or 1
+        out += ["```", label]
+        out += ["%s  %-20s %s" % (r["window"]["from"], "#" * round(20 * v / top) if v is not None else "",
+                                  v if v is not None else UNMEASURED) for r, v in zip(rows, vals)]
+        out += ["```"]
+    return "\n".join(out)
+
+
+def _parser():
+    p = argparse.ArgumentParser(prog="review_measures.py")
+    sub = p.add_subparsers(dest="verb", required=True)
+    r = sub.add_parser("row")
+    for f in ("--input", "--from", "--until", "--cwd"):
+        r.add_argument(f, required=True)
+    r.add_argument("--root")
+    r.add_argument("--dry-run", action="store_true")
+    s = sub.add_parser("render")
+    s.add_argument("--cwd", required=True)
+    s.add_argument("--root")
+    return p
+
+
+def main(argv=None):
+    a = _parser().parse_args(sys.argv[1:] if argv is None else list(argv))
+    if a.verb == "render":
+        rows = [json.loads(x) for x in _read(table_path(a.cwd, a.root)) if _window_of(x) is not None]
+        out = {"ok": True, "markdown": render(rows)}
+    else:
+        start, end, inp = _day(getattr(a, "from")), _day(a.until), review_learning._load(a.input)
+        if start is None or end is None or end < start or not isinstance(inp, dict):
+            out = {"ok": False, "outcome": "refused", "reason": "bad-input",
+                   "detail": "--from and --until are ISO dates in order; --input is a JSON object"}
+        else:
+            row = compute(inp, start, end)
+            bad = problems(row)
+            out = ({"ok": False, "outcome": "refused", "reason": "row-shape", "detail": bad} if bad
+                   else {"ok": True, "outcome": "dry-run", "row": row} if a.dry_run else write(row, a.cwd, a.root))
+    sys.stdout.write(json.dumps(out, ensure_ascii=False) + "\n")
+    return 0 if out.get("ok") else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
