@@ -528,7 +528,7 @@ def test_e11_without_a_repository_the_seam_supplies_the_commit_facts():
 
     def facts(commits, test_paths):
         assert commits == ["abc1234"] and test_paths == [TEST_PATH]
-        return {"abc1234": {"reachable": True, "inStep": False, "paths": [CHARGE_PATH, TEST_PATH],
+        return {"abc1234": {"reachable": True, "predatesStep": False, "paths": [CHARGE_PATH, TEST_PATH],
                             "files": {TEST_PATH: _TEST_FAILING.encode("utf-8")}}}
 
     seams = _loop_seams(box, lambda key: {"fixes": [{"finding": key, "commit": "abc1234"}]}, fix_commits=facts)
@@ -541,7 +541,7 @@ def test_e11_a_seam_entry_that_carries_a_sha_records_it_in_place_of_the_supplied
     full = "c" * 40
 
     def facts(commits, test_paths):
-        return {"abc1234": {"sha": full, "reachable": True, "inStep": False, "paths": [CHARGE_PATH, TEST_PATH],
+        return {"abc1234": {"sha": full, "reachable": True, "predatesStep": False, "paths": [CHARGE_PATH, TEST_PATH],
                             "files": {TEST_PATH: _TEST_FAILING.encode("utf-8")}}}
 
     seams = _loop_seams(box, lambda key: {"fixes": [{"finding": key, "commit": "abc1234"}]}, fix_commits=facts)
@@ -553,7 +553,7 @@ def test_e11_without_a_repository_the_seam_can_refuse_the_commit():
     box = {}
     seams = _loop_seams(
         box, lambda key: {"fixes": [{"finding": key, "commit": "abc1234"}]},
-        fix_commits=lambda commits, paths: {"abc1234": {"reachable": True, "inStep": False,
+        fix_commits=lambda commits, paths: {"abc1234": {"reachable": True, "predatesStep": False,
                                                        "paths": [TEST_PATH], "files": {TEST_PATH: _TEST_FAILING.encode()}}})
     _receipt, state = TRD._run_loop_capturing_state(seams, TRD._cfg())
     assert state["terminal"] == "cannot-certify"

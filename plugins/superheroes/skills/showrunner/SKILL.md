@@ -314,6 +314,8 @@ above).
    - **Currency spot-check** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § Currency defines it. **A stale What or DoD fails the spot-check even when the anchor link resolves.**
    - **The standing anchor-coverage row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing anchor-coverage vet row defines it.
    - **The review record checks** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § The review record checks defines them.
+   - **A handback with open findings** — settled as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § A handback with open findings defines: each code-quality finding decided and listed for the owner's veto, and one next step chosen and recorded for each finding with a real owner consequence.
+   - **The claims check** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/vet-receipt.md` § The claims check defines it: every claim the PR body makes that tests ran, every definition-of-done row, and every claim that the verify command passed, each listed with its result and evidence.
    - **The standing NFR row** — graded as `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/issue-contract.md` § The standing NFR vet row defines it, at **every** child PR vet in a spec package.
    - **The standing register row** — the row `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/decomposition.md` defines. It is graded at
      **every** child PR vet in a package that has a register (and is simply **not applicable** where

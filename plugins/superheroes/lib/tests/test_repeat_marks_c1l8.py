@@ -866,7 +866,7 @@ def test_i8_the_round_record_discloses_why_there_is_no_record_sourced_pool():
 
 # ---- end to end: a record-sourced exact repeat through the CLI path -------------------------------
 
-def test_e2e_a_new_finding_that_is_a_record_finding_exactly_is_kept_and_reaches_no_fixer(tmp_path):
+def test_e2e_a_new_finding_that_is_a_record_finding_exactly_is_kept_and_reaches_no_apply_fixes_step(tmp_path):
     raw = _raw("known craft")
     entries, _ = RM.read_earlier_findings(_record_payload([_record_finding(raw, "craft", id="R-3")]))
     session_dir = str(tmp_path)

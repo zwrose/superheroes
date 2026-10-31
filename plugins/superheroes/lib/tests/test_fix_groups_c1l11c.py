@@ -299,7 +299,7 @@ def _unit(severities=("Important", "Important"), tests=(True, True), titles=(Non
 
 
 def _facts(paths, a=A_TEST, b=B_TEST, **over):
-    return dict({"reachable": True, "inStep": False, "paths": list(paths),
+    return dict({"reachable": True, "predatesStep": False, "paths": list(paths),
                  "files": {A_PATH: a.encode() if a is not None else None,
                            B_PATH: b.encode() if b is not None else None}}, **over)
 

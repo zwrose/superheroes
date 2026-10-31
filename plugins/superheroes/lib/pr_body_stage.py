@@ -8,10 +8,6 @@ Session layout (all under ``<session>/pr-body/``):
   staged.md       the current staged copy; created from original.md once
   published.json  the publish receipt (``schema: "pr-body-publish/1"``), written for every outcome
 
-The staged copy for a fix lives in its round's landing directory (``fixer_copy_path``), not under
-``pr-body/``. The ``_`` prefix of the copy's name is ``record_paths.RESERVED_PREFIX``, which the landing
-sweep skips, so the copy is never read as a stray seat file.
-
 Stdlib plus the record layer; every public function returns a value instead of raising."""
 import argparse
 import datetime
@@ -22,7 +18,6 @@ import subprocess
 import sys
 
 import cloud_builder
-import record_paths
 import round_commit
 import round_records
 
@@ -32,8 +27,6 @@ PR_BODY_DIR = "pr-body"
 ORIGINAL_FILE = "original.md"
 STAGED_FILE = "staged.md"
 PUBLISHED_FILE = "published.json"
-FIXER_COPY_NAME = record_paths.RESERVED_PREFIX + "pr-body.md"
-FIXER_PHASE = "dispatch-fixer"
 _GH_TIMEOUT_SECONDS = 60
 
 REASON_NO_PR = "no-pr"
@@ -157,44 +150,6 @@ def _stage(session_dir):
     return {"ok": True, "staged": True, "reason": None,
             "originalPath": p["original"], "stagedPath": p["staged"],
             "originalSha256": _sha(original), "stagedSha256": _sha(staged)}
-
-
-# ---- the fixer's copy ------------------------------------------------------------------------
-
-def fixer_copy_path(session_dir, rnd):
-    return os.path.join(record_paths.landing_dir(session_dir, rnd, FIXER_PHASE), FIXER_COPY_NAME)
-
-
-def seed_fixer_copy(session_dir, rnd):
-    """Copy ``staged.md`` to the round's fixer copy when that copy is absent (several fix-batch
-    attempts in one round share it). Returns the sha256 of ``staged.md`` (the round's "before"), or
-    None when nothing is staged."""
-    try:
-        staged = _read_bytes(paths(session_dir)["staged"])
-        if staged is None:
-            return None
-        copy = fixer_copy_path(session_dir, rnd)
-        if not os.path.lexists(copy):
-            round_commit.atomic_write_bytes(copy, staged)
-        return _sha(staged)
-    except Exception:  # noqa: BLE001
-        return None
-
-
-def collect_fixer_copy(session_dir, rnd):
-    """Atomically replace ``staged.md`` with the round's fixer copy when it exists. Returns the new
-    sha256 (the round's "after"), or None, changing nothing, when there is no copy or no staged one."""
-    try:
-        p = paths(session_dir)
-        if not os.path.lexists(p["staged"]):
-            return None
-        data = _read_bytes(fixer_copy_path(session_dir, rnd))
-        if data is None:
-            return None
-        round_commit.atomic_write_bytes(p["staged"], data)
-        return _sha(data)
-    except Exception:  # noqa: BLE001
-        return None
 
 
 # ---- publish ---------------------------------------------------------------------------------

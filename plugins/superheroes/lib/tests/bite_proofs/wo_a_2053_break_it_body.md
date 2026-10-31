@@ -2394,3 +2394,9 @@ FAILED plugins/superheroes/lib/tests/test_break_it_body_2053.py::test_core_a_hos
 ...                                                                      [100%]
 3 passed in 1.27s
 ```
+
+---
+
+# C1-L12 addendum (build #2216, entries for C1-L11f's review-loop axis lines)
+
+A2 (added by fixer commit `dd84d915`, `break_it.py:1818`; axis: "a renamed pytest test is accepted only when the repository at the reviewed head declares no pytest collection override, because a custom python_functions could leave the new name uncollected (or an addopts -k selector deselect it) while the host still passes; pytest configuration says nothing about a vitest or jest run, so only a test read by a pytest-collected front is gated — see bite-proof records wo_a_2053_break_it_body and wo_b_2061_break_it_body_js") has its entry, with the neutralization, raw red and raw green on `test_break_it_body_2053.py::test_a_rename_is_unresolved_when_pytest_ini_sets_python_functions`, in `wo_b_2061_break_it_body_js.md` under the same heading, section `## A2`.

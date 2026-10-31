@@ -100,6 +100,13 @@ Five parts, in this order, on every item that passes the filter:
 `skills/showrunner/reference/vet-receipt.md` insists on for an explicit `None` applies here. An
 omitted section is exactly what a reader cannot interpret.
 
+**A leftover from a review is framed in owner terms.** When a review finding reaches the owner as a
+leftover, its spine says what accepting it means, what it costs and what it risks, in terms of what
+a user or the project would see, lose or pay. Its options are the owner's choices, such as accepting
+it and merging, holding the merge, or sending the PR back, and never a pick between code fixes. A
+choice between two ways to fix the code is a craft call: the advisor makes it, or sends the PR back
+for a rethink (`skills/showrunner/reference/vet-receipt.md` § A handback with open findings).
+
 ## The front door
 
 Intake runs through one door for machinery work and product work alike. The door grades every
