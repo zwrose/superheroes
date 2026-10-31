@@ -144,6 +144,15 @@ def _closed_by_a_handback(repo_root):
     return [_later(5, _ending("handback"), secs=10), _progress(9, 101, updated_age=-3000, created_age=3000)]
 
 
+def test_row2_a_closed_lane_on_a_limited_account_is_not_reported_account_limited(repo, monkeypatch):
+    # axis: a reopened lane its comments show closed is no longer watched, so no limited account reports it — see bite-proof record i2272_account_limit.md
+    monkeypatch.setattr(cr, "account_limit", lambda *a, **k: {
+        "ok": True, "limited": True, "limitType": "seven_day", "resetsAt": time.time() + 3600,
+    })
+    gh = _ProgressGh(_closed_by_a_handback(repo))
+    assert ww.run(repo, _BATCH, gh_run=gh)["event"] == ww.EVENT_TIMER
+
+
 def test_row2_a_closed_lane_stays_closed_on_a_tick_that_makes_no_comments_read(repo):
     # The arm reads on its ticks at 0, 1 and 2 seconds; the tick at its 3-second deadline has no budget.
     result = _arm(repo, _ProgressGh(_closed_by_a_handback(repo)))

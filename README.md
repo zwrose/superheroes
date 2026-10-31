@@ -125,7 +125,7 @@ cross-cutting, or a first fix already failed — an ordinary bug stays build-rea
 demonstrates a cause by **reproduction or A/B comparison on a disposable copy**, never by
 inference from error text alone. It delivers a **diagnosis receipt** on the incident issue
 for the **advisor to vet**. It **never edits the surface under diagnosis and never produces
-a fix**.
+a fix**. A detective lane runs on the owner's machine or, like a build, in a cloud session.
 
 | Command | Use it to… |
 | --- | --- |
