@@ -27,7 +27,9 @@
           "confidence",
           "tradeoff",
           "consequence",
-          "consequenceKind"
+          "consequenceKind",
+          "kindOfMistake",
+          "searchDescription"
         ],
         "properties": {
           "id": {
@@ -100,6 +102,50 @@
             "type": ["string", "null"],
             "enum": ["code-quality", "real", null],
             "description": "code-quality when the consequence is code quality only; real for any other consequence; null only when no consequence was stated."
+          },
+          "kindOfMistake": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["kind", "places"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "The kind of mistake this finding is, in a few plain words."
+              },
+              "places": {
+                "type": "array",
+                "description": "The other places in the change, on touched lines, with the same mistake; never this finding's own file and line. Empty when the mistake does not generalise.",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["file", "line"],
+                  "properties": {
+                    "file": {"type": "string"},
+                    "line": {"type": ["integer", "null"]}
+                  }
+                }
+              }
+            }
+          },
+          "searchDescription": {
+            "type": ["object", "null"],
+            "additionalProperties": false,
+            "required": ["kind", "looksLike", "examples"],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "description": "The kind of mistake, written for someone searching the whole repository for copies."
+              },
+              "looksLike": {
+                "type": "string",
+                "description": "What the mistake looks like in code."
+              },
+              "examples": {
+                "type": "array",
+                "description": "Short examples of the mistake.",
+                "items": {"type": "string"}
+              }
+            }
           }
         }
       }

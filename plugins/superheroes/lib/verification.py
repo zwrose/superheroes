@@ -332,12 +332,86 @@ def _eff_sev(severity):
     return circuit_breaker.effective_severity(severity)
 
 
+KIND_OF_MISTAKE_FIELD = "kindOfMistake"
+SEARCH_DESCRIPTION_FIELD = "searchDescription"
+
+
+def _place_pair(place):
+    """`(file, line)` of a place or a citation, or None when the file is blank or not a string or the line is
+    neither an integer nor null."""
+    if not isinstance(place, dict):
+        return None
+    file, line = place.get("file"), place.get("line")
+    if not isinstance(file, str) or not file.strip():
+        return None
+    if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
+        return None
+    return (file, line)
+
+
+def _usable_kind(member):
+    kind = member.get(KIND_OF_MISTAKE_FIELD) if isinstance(member, dict) else None
+    ok = isinstance(kind, dict) and isinstance(kind.get("kind"), str) and kind["kind"].strip()
+    return kind if ok else None
+
+
+def merged_kind_of_mistake(kept, members):
+    """The kind of mistake of a merged finding, or None when no member carries a usable one. The kind is the
+    kept finding's own, else the first member's non-blank one. The places are the deduplicated union of the
+    places of the kept finding and every member, and of every member's own `(file, line)` citation, less the
+    kept finding's own citation. A place's `fixed` result, when a row has one, is kept. The one home for every
+    merge point (this module's `_merge_group` and the driver's same-finding merge)."""
+    pool = [kept] + [m for m in members if m is not kept]
+    kind_text = None
+    for member in pool:
+        kind = _usable_kind(member)
+        if kind is not None:
+            kind_text = kind["kind"]
+            break
+    if kind_text is None:
+        return None
+    own = _place_pair(kept)
+    rows = {}
+    order = []
+    for member in pool:
+        kind = _usable_kind(member)
+        candidates = [dict(p) for p in (kind.get("places") if kind else None) or [] if isinstance(p, dict)]
+        # axis: a merged-away member's own citation joins the kept finding's places, so a fix that covers only the representative leaves it open — see bite-proof record c4_wo1_kind
+        candidates.append({"file": member.get("file"), "line": member.get("line")})
+        for place in candidates:
+            pair = _place_pair(place)
+            if pair is None or pair == own:
+                continue
+            if pair not in rows:
+                rows[pair] = {"file": pair[0], "line": pair[1]}
+                order.append(pair)
+            if isinstance(place.get("fixed"), bool) and not isinstance(rows[pair].get("fixed"), bool):
+                rows[pair]["fixed"] = place["fixed"]
+    return {"kind": kind_text, "places": [rows[pair] for pair in order]}
+
+
+def apply_kind_members(merged, members):
+    """Set the merged finding's `kindOfMistake` from `merged_kind_of_mistake` (or remove it when none carries
+    one), and give it the first member's `searchDescription` when the kept finding has none."""
+    kind = merged_kind_of_mistake(merged, members)
+    if kind is None:
+        merged.pop(KIND_OF_MISTAKE_FIELD, None)
+    else:
+        merged[KIND_OF_MISTAKE_FIELD] = kind
+    if not isinstance(merged.get(SEARCH_DESCRIPTION_FIELD), dict):
+        for member in members:
+            if isinstance(member, dict) and isinstance(member.get(SEARCH_DESCRIPTION_FIELD), dict):
+                merged[SEARCH_DESCRIPTION_FIELD] = member[SEARCH_DESCRIPTION_FIELD]
+                break
+
+
 def _merge_group(members):
     if not members:
         return {}
     rep = max(members, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
     merged = dict(rep)
     merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(members)
+    apply_kind_members(merged, members)
     bodies = []
     for m in members:
         body = m.get("body")

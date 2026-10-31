@@ -119,6 +119,84 @@ def audit_checks_fault(result, target=None):
     return None
 
 
+def _place_key(place):
+    """`(file, line)` of a place row, or None when the row is no place (not an object, a blank or
+    non-string file, a line that is neither an integer nor null)."""
+    if not isinstance(place, dict):
+        return None
+    file, line = place.get("file"), place.get("line")
+    if not isinstance(file, str) or not file.strip():
+        return None
+    if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
+        return None
+    return (file, line)
+
+
+def target_places(target):
+    """The `(file, line)` of each place the target finding's kind of mistake names, in order, none twice;
+    empty when it names none."""
+    kind = target.get("kindOfMistake") if isinstance(target, dict) else None
+    places = kind.get("places") if isinstance(kind, dict) else None
+    out = []
+    for place in places if isinstance(places, list) else ():
+        key = _place_key(place)
+        if key is not None and key not in out:
+            out.append(key)
+    return out
+
+
+def place_answers_fault(result):
+    """None when the result's optional `places` is absent, null, or a list of `{file, line, fixed}` rows
+    (`fixed` a boolean); otherwise a short reason. The submit-shape guard and the fold both read this."""
+    places = result.get("places") if isinstance(result, dict) else None
+    if places is None:
+        return None
+    if not isinstance(places, list):
+        return "`places` is %s, not a list of {file, line, fixed}" % type(places).__name__
+    for i, row in enumerate(places):
+        if _place_key(row) is None:
+            return "`places[%d]` has no usable file and line" % i
+        if not isinstance(row.get("fixed"), bool):
+            return "`places[%d].fixed` is not true or false" % i
+    return None
+
+
+def judge_places(target, result):
+    """How the result answers the places the target names: `None` when the target names none, else
+    `{"rows": [{file, line, fixed}], "unfixed": [(file, line)], "unanswered": [(file, line)], "ignored": [(file, line)]}`.
+    A place counts fixed only when a result row with the same `(file, line)` says `fixed: true`; an unanswered
+    place reads `fixed: false`. A result row for a place the target does not list is ignored."""
+    named = target_places(target)
+    if not named:
+        return None
+    answers = {}
+    ignored = []
+    rows_in = result.get("places") if isinstance(result, dict) and isinstance(result.get("places"), list) else []
+    for row in rows_in:
+        key = _place_key(row)
+        if key is None or not isinstance(row.get("fixed"), bool):
+            continue
+        if key not in named:
+            if key not in ignored:
+                ignored.append(key)
+            continue
+        # a place answered twice is fixed only when every answer says so
+        answers[key] = answers.get(key, True) and row["fixed"]
+    rows, unfixed, unanswered = [], [], []
+    for key in named:
+        fixed = answers.get(key) is True
+        rows.append({"file": key[0], "line": key[1], "fixed": fixed})
+        if key not in answers:
+            unanswered.append(key)
+        elif not fixed:
+            unfixed.append(key)
+    return {"rows": rows, "unfixed": unfixed, "unanswered": unanswered, "ignored": ignored}
+
+
+def _places_text(keys):
+    return ", ".join(file if line is None else "%s:%s" % (file, line) for file, line in keys)
+
+
 def failed_check(result):
     """`(name, why)` of the first of the three checks answered `no` in a result that passes
     `audit_checks_fault`, else None."""
@@ -310,6 +388,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     unnamed_change = []
     attributed_change = []
     test_mismatch = []
+    places_unfixed = []
+    places_ignored = []
     allowed_ids = set(i for i in (change_allowed_ids or ()) if isinstance(i, str))
     matched_ids = set()
 
@@ -495,6 +575,35 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             base.update(ruling="not-discharged", reason="audit refused: %s" % checks_fault)
             audits.append(base)
             continue
+        # A target whose kind of mistake names other places owes an answer for every one of them. A place
+        # answered `fixed: false`, or not answered, leaves the fix incomplete: the ruling is not discharged. The
+        # per-place results ride the audit entry (`places`) whatever the ruling, for the driver to write onto
+        # the finding. A target naming no place is judged exactly as before.
+        # axis: every place the kind of mistake names must be answered fixed or the clearing ruling is refused — see bite-proof record c4_wo1_kind
+        placed = judge_places(f, r)
+        if placed is not None:
+            base["places"] = placed["rows"]
+            if placed["ignored"] and fid is not None:
+                places_ignored.append(fid)
+                base["placesIgnored"] = [{"file": k[0], "line": k[1]} for k in placed["ignored"]]
+            incomplete = placed["unfixed"] + placed["unanswered"]
+            if incomplete and ruling in _CLEARS:
+                if fid is not None:
+                    places_unfixed.append(fid)
+                    not_discharged.append(fid)
+                parts = []
+                if placed["unfixed"]:
+                    parts.append("left unfixed: %s" % _places_text(placed["unfixed"]))
+                if placed["unanswered"]:
+                    parts.append("not answered: %s" % _places_text(placed["unanswered"]))
+                candidates = (_valid_new_issues(r.get("newIssues"), fid)
+                              if ruling == "discharged-but-new-issue" else [])
+                new_issues.extend(candidates)
+                base.update(ruling="not-discharged",
+                            reason="the fix leaves a place of the same kind of mistake open (%s)"
+                            % "; ".join(parts))
+                audits.append(base)
+                continue
         if match == MATCH_CHANGED_EXPLAINED:
             base["testMatch"]["answer"] = reported
             if reported == "weakened":
@@ -666,4 +775,6 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         "unnamedChange": unnamed_change,
         "attributedChange": attributed_change,
         "testMismatch": test_mismatch,
+        "placesUnfixed": places_unfixed,
+        "placesIgnored": places_ignored,
     }

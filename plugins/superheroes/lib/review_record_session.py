@@ -591,7 +591,8 @@ def _finding_parts(row, older):
     out = {}
     for k in _FINDING_PARTS:
         for src in (row, older):
-            if isinstance(src, dict) and k in src:
+            # axis: a null or non-object kind of mistake is no part of the finding: it is never carried to the record, which refuses one — see bite-proof record c4_wo1_kind
+            if isinstance(src, dict) and k in src and (k != "kindOfMistake" or isinstance(src[k], dict)):
                 out[k] = (_stored_repeat(src[k]) if k == "repeatOf"
                           else _stored_fix_group(src[k]) if k == "fixGroup" else src[k])
                 break
@@ -603,6 +604,16 @@ def _finding_parts(row, older):
             if run not in merged:
                 merged.append(run)
         out["breakItRuns"] = merged
+    held_kind, older_kind = (src.get("kindOfMistake") if isinstance(src, dict) else None for src in (row, older))
+    if isinstance(held_kind, dict) and isinstance(held_kind.get("places"), list) and isinstance(older_kind, dict):
+        # axis: a live row's kind of mistake never hides the per-place fix results the ledger row holds — see bite-proof record c4_wo1_kind
+        earlier = {(p.get("file"), p.get("line")): p["fixed"] for p in older_kind.get("places") or []
+                   if isinstance(p, dict) and isinstance(p.get("fixed"), bool)}
+        places = [dict(p, fixed=earlier[(p.get("file"), p.get("line"))])
+                  if isinstance(p, dict) and not isinstance(p.get("fixed"), bool)
+                  and (p.get("file"), p.get("line")) in earlier else p
+                  for p in held_kind["places"]]
+        out["kindOfMistake"] = dict(held_kind, places=places)
     return out
 
 

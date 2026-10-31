@@ -31,6 +31,8 @@ _FALLBACK_CANONICAL_MEMBER_KEYS = (
     "tradeoff",
     "consequence",
     "consequenceKind",
+    "kindOfMistake",
+    "searchDescription",
 )
 _FALLBACK_SEVERITY_ENUM = ("Critical", "Important", "Minor", "Nit")
 _FALLBACK_SEVERITY_TIERS = frozenset(_FALLBACK_SEVERITY_ENUM)
@@ -61,6 +63,31 @@ _FALLBACK_FINDING_PROPERTY_SCHEMAS["consequenceKind"] = {
     "type": ["string", "null"],
     "enum": list(_FALLBACK_CONSEQUENCE_KIND_ENUM),
 }
+_FALLBACK_PLACE_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["file", "line"],
+    "properties": {"file": {"type": "string"}, "line": {"type": ["integer", "null"]}},
+}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["kindOfMistake"] = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "required": ["kind", "places"],
+    "properties": {
+        "kind": {"type": "string"},
+        "places": {"type": "array", "items": _FALLBACK_PLACE_SCHEMA},
+    },
+}
+_FALLBACK_FINDING_PROPERTY_SCHEMAS["searchDescription"] = {
+    "type": ["object", "null"],
+    "additionalProperties": False,
+    "required": ["kind", "looksLike", "examples"],
+    "properties": {
+        "kind": {"type": "string"},
+        "looksLike": {"type": "string"},
+        "examples": {"type": "array", "items": {"type": "string"}},
+    },
+}
 
 SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
 
@@ -72,6 +99,12 @@ CONSEQUENCE_KIND_KEY = "consequenceKind"
 CODE_QUALITY = "code-quality"
 REAL = "real"
 CONSEQUENCE_KINDS = (CODE_QUALITY, REAL)
+
+# The findings members that name the kind of mistake (with the other places that share it) and that describe
+# it for a repository-wide search. `author` is driver-only: stamped at the panel and seams folds, never on the wire.
+KIND_OF_MISTAKE_KEY = "kindOfMistake"
+SEARCH_DESCRIPTION_KEY = "searchDescription"
+SEARCH_AUTHOR_KEY = "author"
 
 # The five outcomes a finding can reach; the only spelling of them in lib/.
 OUTCOMES = ("fixed", "shown-wrong", "craft", "left-for-owner", "ruling")
@@ -327,11 +360,49 @@ def _placeholder_string(field_name, nonce=None):
     return "%s placeholder %s-%s" % (field_name, EXAMPLE_SENTINEL, nonce)
 
 
+def _example_nested(path, field_schema, nonce=None):
+    """A schema-valid placeholder for an object- or array-typed member, every string a placeholder of its path."""
+    types = field_schema.get("type")
+    names = types if isinstance(types, list) else [types]
+    if "object" in names:
+        return {name: _example_nested(path + "." + name, sub, nonce)
+                for name, sub in field_schema.get("properties", {}).items()}
+    if "array" in names:
+        return [_example_nested(path, field_schema.get("items") or {}, nonce)]
+    if "enum" in field_schema:
+        return _first_schema_enum_member(field_schema)
+    if "string" in names:
+        return _placeholder_string(path, nonce)
+    return None  # an integer|null leaf — null placeholder
+
+
+def _is_nested_schema(field_schema):
+    types = field_schema.get("type") if isinstance(field_schema, dict) else None
+    names = types if isinstance(types, list) else [types]
+    return "object" in names or "array" in names
+
+
+def _collect_strings(value, out):
+    if isinstance(value, str):
+        out.add(value)
+    elif isinstance(value, dict):
+        for item in value.values():
+            _collect_strings(item, out)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_strings(item, out)
+
+
 def example_member_values(nonce=None):
     """Placeholder strings emitted by the example renderer (for verbatim-echo detection)."""
     values = set()
     for key in CANONICAL_MEMBER_KEYS:
         if key in ("line", "tradeoff"):
+            continue
+        field_schema = FINDING_PROPERTY_SCHEMAS.get(key) if isinstance(FINDING_PROPERTY_SCHEMAS, dict) else None
+        if _is_nested_schema(field_schema):
+            # an object- or array-typed member renders nested placeholders, one per string leaf
+            _collect_strings(_example_nested(key, field_schema, nonce), values)
             continue
         values.add(_placeholder_string(key, nonce))
     values.add(_placeholder_string("investigated-path", nonce))
@@ -354,6 +425,8 @@ def _example_value_for_field(key, field_schema, nonce=None):
         return None  # integer|null schema field — null placeholder
     if key == "tradeoff":
         return None  # boolean|null schema field — null placeholder
+    if _is_nested_schema(field_schema):
+        return _example_nested(key, field_schema, nonce)
     if "enum" in field_schema:
         return _first_schema_enum_member(field_schema)
     return _placeholder_string(key, nonce)
