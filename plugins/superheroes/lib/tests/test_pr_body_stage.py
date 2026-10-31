@@ -18,7 +18,6 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import pr_body_stage as PBS  # noqa: E402
-import record_paths  # noqa: E402
 import review_record_session as rs  # noqa: E402
 import round_orders as RO  # noqa: E402
 import round_phases as RP  # noqa: E402
@@ -145,13 +144,6 @@ def test_the_citation_is_the_name_the_sanitized_view_gives_the_pr_body():
     assert PBS.CITATION == sanitized_view.PR_BODY_FILE_NAME == "SUPERHEROES_PR_BODY.md"
 
 
-def test_the_fixer_copy_lives_in_the_fixer_landing_dir_under_the_reserved_prefix(tmp_path):
-    sd = _session(tmp_path)
-    path = PBS.fixer_copy_path(sd, 2)
-    assert path == os.path.join(record_paths.landing_dir(sd, 2, PBS.FIXER_PHASE), "_pr-body.md")
-    assert os.path.basename(path).startswith(record_paths.RESERVED_PREFIX)
-
-
 # ---- compile -----------------------------------------------------------------------------------
 
 def _pr_body_finding(**over):
@@ -219,42 +211,6 @@ def test_E3_a_second_stage_overwrites_neither_file(tmp_path):
     out = PBS.stage(sd)
     assert out["ok"] and out["stagedSha256"] == sha(FIXED) and out["originalSha256"] == sha(BODY)
     assert _read(p["staged"]) == FIXED and _read(p["original"]) == BODY
-
-
-# ---- the fixer's copy (E4, E5) -----------------------------------------------------------------
-
-def test_seed_copies_staged_once_and_reports_the_before_sha(tmp_path):
-    sd = _session(tmp_path)
-    PBS.stage(sd)
-    assert PBS.seed_fixer_copy(sd, 1) == sha(BODY)
-    copy = PBS.fixer_copy_path(sd, 1)
-    assert _read(copy) == BODY
-    _write(copy, FIXED)  # the fixer's edit survives a second seeding
-    assert PBS.seed_fixer_copy(sd, 1) == sha(BODY)
-    assert _read(copy) == FIXED
-
-
-def test_seed_with_nothing_staged_creates_no_copy(tmp_path):
-    sd = _session(tmp_path)
-    assert PBS.seed_fixer_copy(sd, 1) is None
-    assert not os.path.exists(PBS.fixer_copy_path(sd, 1))
-
-
-def test_collect_replaces_staged_with_the_fixer_copy_and_returns_its_sha(tmp_path):
-    sd = _session(tmp_path)
-    PBS.stage(sd)
-    PBS.seed_fixer_copy(sd, 1)
-    _write(PBS.fixer_copy_path(sd, 1), FIXED)
-    assert PBS.collect_fixer_copy(sd, 1) == sha(FIXED)
-    assert _read(PBS.paths(sd)["staged"]) == FIXED and _read(PBS.paths(sd)["original"]) == BODY
-
-
-def test_E4_an_absent_fixer_copy_changes_nothing(tmp_path):
-    sd = _session(tmp_path)
-    PBS.stage(sd)
-    assert PBS.collect_fixer_copy(sd, 1) is None
-    assert _read(PBS.paths(sd)["staged"]) == BODY
-    assert PBS.collect_fixer_copy(_session(tmp_path / "other"), 1) is None  # nothing staged either
 
 
 # ---- publish (E6-E15) --------------------------------------------------------------------------
@@ -632,7 +588,6 @@ def test_E1_a_staged_body_is_the_step_s_pr_body_path_and_is_the_file_itself(tmp_
     state["_fixBatch"] = []
     fields = RD._apply_fixes_payload_fields(sd, state, 1, 0)
     assert fields["prBodyPath"] == PBS.paths(sd)["staged"]
-    assert not os.path.exists(PBS.fixer_copy_path(sd, 1))
 
 
 def test_E16_a_render_only_audit_order_names_paths_and_creates_nothing(tmp_path):

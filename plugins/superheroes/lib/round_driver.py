@@ -134,7 +134,6 @@ GATE_GUIDANCE_AGGREGATE_BYTE_CAP = 8000
 # matches by prefix, while a truncated shared title prefix would not match at all.
 GATE_GUIDANCE_HEADER_FIELD_BYTE_CAP = 200
 _GATE_GUIDANCE_NO_GUIDANCE = "No owner-gate guidance is attached to this batch."
-_GATE_GUIDANCE_ROW_CARRIED_CHANNEL = "gateGuidanceRowCarried"
 GATE_GUIDANCE_UNUSABLE_REFUSAL = "gate-guidance-unusable"
 GATE_GUIDANCE_OVERSIZE = "gate-guidance-oversize"
 GATE_GUIDANCE_AGGREGATE_OVERSIZE = "gate-guidance-aggregate-oversize"
@@ -5789,7 +5788,7 @@ def _git_bytes(repo_root, *args):
 
 
 def _git_fix_commit_facts(config, step_head, commits, test_paths):
-    """``{commit: {"sha", "reachable", "inStep", "paths", "files", "startFiles"}}`` read from git at
+    """``{commit: {"sha", "reachable", "predatesStep", "paths", "files", "startFiles"}}`` read from git at
     the session's repository for each commit it names. A commit git does not know has no entry."""
     repo_root = config.get("repoRoot")
     facts = {}
@@ -5803,7 +5802,7 @@ def _git_fix_commit_facts(config, step_head, commits, test_paths):
         facts[commit] = {
             "sha": sha,
             "reachable": _git_bytes(repo_root, "merge-base", "--is-ancestor", sha, "HEAD") is not None,
-            "inStep": _git_bytes(repo_root, "merge-base", "--is-ancestor", sha, step_head) is not None,
+            "predatesStep": _git_bytes(repo_root, "merge-base", "--is-ancestor", sha, step_head) is not None,
             "paths": ([p for p in names.decode("utf-8", errors="replace").split("\0") if p]
                       if names is not None else []),
             "files": {p: _git_bytes(repo_root, "cat-file", "blob", "%s:%s" % (sha, p))
@@ -5822,7 +5821,7 @@ def _fix_commit_test_fault(facts, block, exempt_paths=()):
     test and ``exempt_paths`` (the other tests of a fix group, which are no fix change)."""
     if not isinstance(facts, dict) or facts.get("reachable") is not True:
         return FIX_COMMIT_UNKNOWN
-    if facts.get("inStep") is not False:
+    if facts.get("predatesStep") is not False:
         return FIX_COMMIT_NOT_IN_STEP
     path = block["path"]
     wanted = block["content"].encode("utf-8")
@@ -6003,7 +6002,7 @@ def _restore_commit_fault(state, config, artifact, commit_seam=None):
     if entry.get("reachable") is not True:
         return FIX_COMMIT_UNKNOWN, None
     # axis: a restore that adds no commit since the step started restored nothing
-    if entry.get("inStep") is not False:
+    if entry.get("predatesStep") is not False:
         return FIX_COMMIT_NOT_IN_STEP, None
     files = entry.get("files") if isinstance(entry.get("files"), dict) else {}
     for item in items:
