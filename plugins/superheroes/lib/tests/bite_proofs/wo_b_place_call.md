@@ -1,5 +1,7 @@
 # Place call WO-B bite-proof: the routing step in the launch path and the local fallback
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/launcher.py` (`_cli_launch` and `validate_premise`, B1 to B9), detectors in `plugins/superheroes/lib/tests/test_launcher_place.py` (`TP`).
 
 **Status.** The implementer ran every proof (B1 to B9): each neutralization is a targeted Edit in `launcher.py`, the red is the single named test function run alone, the restore is the inverse Edit, and the green is the same function. Reds and greens below are the pytest output of each run; the absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -49,7 +51,7 @@ machine = <test_launcher_place._Machine object at 0x10946dd90>
 E       assert (0 == 3)
 E        +  where 0 = len([])
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:234: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:234: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_five_launches_put_the_three_that_need_nothing_in_the_cloud
 1 failed in 9.71s
@@ -91,7 +93,7 @@ machine = <test_launcher_place._Machine object at 0x108d7c530>
 >       assert code == 1
 E       assert 0 == 1
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:631: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:631: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_premise_file_that_already_carries_a_place_call_is_refused
 1 failed in 5.18s
@@ -126,7 +128,7 @@ needs = 'a signed-in browser'
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 _________ test_a_needs_field_that_is_not_a_list_of_names_is_refused[7] _________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1153/test_a_needs_field_that_is_not1')
@@ -139,7 +141,7 @@ needs = 7
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 _______ test_a_needs_field_that_is_not_a_list_of_names_is_refused[None] ________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1153/test_a_needs_field_that_is_not2')
@@ -152,7 +154,7 @@ needs = None
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 ______ test_a_needs_field_that_is_not_a_list_of_names_is_refused[needs3] _______
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1153/test_a_needs_field_that_is_not3')
@@ -165,7 +167,7 @@ needs = {'a': 1}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 ______ test_a_needs_field_that_is_not_a_list_of_names_is_refused[needs4] _______
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1153/test_a_needs_field_that_is_not4')
@@ -178,7 +180,7 @@ needs = [1]
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 ______ test_a_needs_field_that_is_not_a_list_of_names_is_refused[needs5] _______
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1153/test_a_needs_field_that_is_not5')
@@ -191,7 +193,7 @@ needs = ['']
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 ______ test_a_needs_field_that_is_not_a_list_of_names_is_refused[needs6] _______
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1153/test_a_needs_field_that_is_not6')
@@ -204,7 +206,7 @@ needs = ['  ']
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 ______ test_a_needs_field_that_is_not_a_list_of_names_is_refused[needs7] _______
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1153/test_a_needs_field_that_is_not7')
@@ -217,7 +219,7 @@ needs = ['ok', None]
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:644: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_needs_field_that_is_not_a_list_of_names_is_refused[a signed-in browser]
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_needs_field_that_is_not_a_list_of_names_is_refused[7]
@@ -259,7 +261,7 @@ reported = []
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 ___________ test_a_reported_cloud_in_an_unknown_shape_is_refused[x] ____________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un1')
@@ -272,7 +274,7 @@ reported = 'x'
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 ___________ test_a_reported_cloud_in_an_unknown_shape_is_refused[1] ____________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un2')
@@ -285,7 +287,7 @@ reported = 1
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 __________ test_a_reported_cloud_in_an_unknown_shape_is_refused[True] __________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un3')
@@ -298,7 +300,7 @@ reported = True
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 _______ test_a_reported_cloud_in_an_unknown_shape_is_refused[reported4] ________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un4')
@@ -311,7 +313,7 @@ reported = {'other': True}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 _______ test_a_reported_cloud_in_an_unknown_shape_is_refused[reported5] ________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un5')
@@ -324,7 +326,7 @@ reported = {'noPass': False}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 _______ test_a_reported_cloud_in_an_unknown_shape_is_refused[reported6] ________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un6')
@@ -337,7 +339,7 @@ reported = {'unreachable': 1}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 _______ test_a_reported_cloud_in_an_unknown_shape_is_refused[reported7] ________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un7')
@@ -350,7 +352,7 @@ reported = {'pluginVersion': 41}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 _______ test_a_reported_cloud_in_an_unknown_shape_is_refused[reported8] ________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un8')
@@ -363,7 +365,7 @@ reported = {'pluginVersion': '0.41'}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 _______ test_a_reported_cloud_in_an_unknown_shape_is_refused[reported9] ________
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un9')
@@ -376,7 +378,7 @@ reported = {'pluginVersion': 'v0.41.0'}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 _______ test_a_reported_cloud_in_an_unknown_shape_is_refused[reported10] _______
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1155/test_a_reported_cloud_in_an_un10')
@@ -389,7 +391,7 @@ reported = {'noPass': True, 'extra': 1}
 >       assert result["ok"] is False
 E       assert True is False
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:667: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_reported_cloud_in_an_unknown_shape_is_refused[reported0]
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_reported_cloud_in_an_unknown_shape_is_refused[x]
@@ -439,7 +441,7 @@ machine = <test_launcher_place._Machine object at 0x10959c5c0>
 >       assert "fellBack" not in result and "cloudAttempt" not in result
 E       AssertionError: assert ('fellBack' not in {'ok': False, 'reason': 'surface-overlap:launch-7f67302c5d4a1bf2', 'launchId': 'launch-2af9c2d68a8702e5', 'placeCall': {'place': 'local', 'pointedAtCloud': True, 'by': 'setting', 'reason': 'unreachable', ...}, ...})
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:423: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:423: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_cloud_session_unconfirmed_makes_no_local_launch
 1 failed in 9.64s
@@ -482,7 +484,7 @@ machine = <test_launcher_place._Machine object at 0x10adf6570>
 E       AssertionError: {'ok': False, 'reason': 'launch-cloud-with-slot', 'launchId': 'launch-8337d7c91dbdb7d5', 'placeCall': {'place': 'cloud', 'pointedAtCloud': True, 'by': 'setting', 'reason': None, ...}, ...}
 E       assert 1 == 0
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:559: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:559: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_cloud_launch_gets_no_slot_and_the_unused_resources_are_handed_back
 1 failed in 3.72s
@@ -524,7 +526,7 @@ machine = <test_launcher_place._Machine object at 0x10746f140>
 E       AssertionError: {'ok': False, 'reason': 'launch-cloud-environment-invalid', 'launchId': 'launch-ff5e35a1f829f326', 'placeCall': {'place': 'cloud', 'pointedAtCloud': True, 'by': 'setting', 'reason': None, ...}}
 E       assert 1 == 0
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:600: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:600: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_the_cloud_environment_comes_from_the_setup_record
 1 failed in 2.10s
@@ -564,7 +566,7 @@ machine = <test_launcher_place._Machine object at 0x106902c60>
 >       assert code == 1
 E       assert 0 == 1
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:613: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:613: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_cloud_environment_flag_on_launch_is_refused_before_anything_is_decided
 1 failed in 6.44s
@@ -612,7 +614,7 @@ E
 E         At index 1 diff: None != 'unreachable'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:322: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:322: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_cloud_spawn_failure_runs_the_build_locally_and_says_unreachable
 1 failed in 12.29s

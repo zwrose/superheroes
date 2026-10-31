@@ -1,5 +1,7 @@
 # #1795 bite-proof — the lane floor (WO-A: `lane_call.py` and the review record's `laneBasis`)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Per-element bite-proof for the detectors in `plugins/superheroes/lib/lane_call.py` and `plugins/superheroes/lib/review_record.py`, following `plugins/superheroes/rubric/bite-proof.md`. Each element was neutralized with one targeted edit, its single test node ran alone and went red, the edit was undone by the inverse edit, the restored line was quoted back, and the same node ran green. No test file was edited between a red and its green.
 
 Command for every run (never `-k`, never filtered):
@@ -52,7 +54,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1493/test_
 >       assert got["floor"] == "full" and got["lane"] == "full"
 E       AssertionError: assert (None == 'full')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:103: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:103: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_lane_call.py::test_a_two_line_change_to_a_payments_file_gets_the_full_lane
 1 failed in 2.26s
@@ -101,7 +103,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1495/test_
 >           assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
 E           AssertionError: assert (None == 'full')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:151: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:151: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_lane_call.py::test_e1_risk_areas_not_set_for_any_reason_get_the_floor_full
 1 failed in 4.00s
@@ -138,7 +140,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1497/test_
 >       assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
 E       AssertionError: assert (None == 'full')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:162: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:162: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_lane_call.py::test_e2_an_all_unmatchable_change_with_set_areas_gets_the_floor_full_never_light
 1 failed in 2.44s
@@ -173,7 +175,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1499/test_
 >       assert got["floor"] == "full" and got["lane"] == "full" and got["proposalTaken"] is False
 E       AssertionError: assert (None == 'full')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:178: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:178: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_lane_call.py::test_e4_an_empty_paths_list_gets_the_floor_full_even_with_set_areas
 1 failed in 2.41s
@@ -214,7 +216,7 @@ E
 E         - full
 E         + light)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:195: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_lane_call.py:195: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_lane_call.py::test_e6_a_proposal_below_the_floor_gets_full_and_is_not_taken[light]
 1 failed in 3.38s
@@ -257,7 +259,7 @@ E         - not-reviewed
 E         ? ----
 E         + reviewed)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1454: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1454: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_e9_a_lane_below_the_floor_is_not_reviewed_with_that_line
 1 failed in 3.34s
@@ -296,7 +298,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1505/test_
 >       assert basis["floor"] == "full" and basis["why"][0] == UNREAD
 E       AssertionError: assert (None == 'full')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1495: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1495: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_e8_changed_files_that_cannot_be_read_give_the_full_floor_marked_unavailable
 1 failed in 5.29s
@@ -340,7 +342,7 @@ E       AssertionError: assert ['docs/f0.md', 'docs/f1.md', 'docs/f2.md', 'docs/
 E        +  where ['docs/f0.md', 'docs/f1.md', 'docs/f2.md', 'docs/f3.md', 'docs/f4.md', 'docs/f5.md', ...] = <function changed_paths at 0x10bdf3ba0>(7, 'o/r')
 E        +    where <function changed_paths at 0x10bdf3ba0> = rr.changed_paths
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1526: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1526: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_e10_3000_entries_is_the_ceiling_and_makes_the_files_unavailable
 1 failed in 5.07s
@@ -380,7 +382,7 @@ E
 E         Right contains one more item: 'src/payments/charge.py'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1550: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1550: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_e11_a_rename_out_of_a_risk_area_touches_it_through_the_previous_name
 1 failed in 4.90s

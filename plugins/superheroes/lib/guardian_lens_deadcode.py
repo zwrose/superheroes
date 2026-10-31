@@ -57,7 +57,7 @@ Collector notes, grounded in real command-line runs (2026-07-21, not estimated):
   absence is checked BEFORE any invocation (a pure `os.path.isdir` on the absolute path,
   never a spawn) and reported `not-collected` with that exact reason — knip's own
   dependency-less behavior is not something this lens ever reports as a finding. Run
-  read-only (no `--fix`, no write flag) against `/Users/zwrose/weekly-eats` (installed
+  read-only (no `--fix`, no write flag) against `/path/to/project` (installed
   `node_modules`): exit 1 (knip's own "issues found" exit, matching `--max-issues` default
   0), ~1.6s wall, 55 file-groups scanned, 14 unused files, 33 unused exports. Empty stdout
   is treated as a broken run (not-collected), never a clean scan — a knip run always emits
@@ -787,12 +787,12 @@ class DeadCodeLens(object):
     # Measured 2026-07-21 at the command line, not estimated:
     #   this repo: vulture full-tree scan (excludes above) ~0.78s, 37 raw hits / 30
     #     aggregated candidates, confirming the known repo_doctor.py:243 seed.
-    #   /Users/zwrose/weekly-eats (installed node_modules): knip --reporter json ~1.6s,
+    #   /path/to/project (installed node_modules): knip --reporter json ~1.6s,
     #     exit 1 (issues found), 55 file-groups / 14 unused files / 33 unused exports.
     cost = {
         "collectorSeconds": 2.4,
-        "note": "vulture ~0.78s full-repo scan (this repo); knip ~1.6s (weekly-eats, real "
-                "installed node_modules). Both tools resolve from PATH through the "
+        "note": "vulture ~0.78s full-repo scan (this repo); knip ~1.6s (a consuming project, "
+                "real installed node_modules). Both tools resolve from PATH through the "
                 "guardian seam — no repo-local binary, no npx network fetch (an absent "
                 "tool degrades to not-collected, never a silent clean). Python runs when a "
                 "root manifest OR `.py` files are present; knip runs only when package.json "

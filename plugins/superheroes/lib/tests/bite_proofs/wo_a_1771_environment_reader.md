@@ -1,5 +1,7 @@
 # #1771 WO-A bite-proof: the reader for the environment the owner picked
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/cloud_environment.py` (`pick`, `_is_id`), detectors in `plugins/superheroes/lib/tests/test_cloud_environment.py` (`T`).
 
 **Status.** The implementer ran every proof (R1 to R3): each neutralization is a targeted Edit in `cloud_environment.py`, the red is the single named test function run alone, the restore is the inverse Edit, and the green is the same function. Reds and greens below are the pytest output of each run unless a line says otherwise; absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -42,7 +44,7 @@ E         - not-picked
 E         ? ----
 E         + picked
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:47: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:47: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_environment.py::test_pick_unchanged_setting_asks_again_with_no_id
 1 failed in 2.62s
@@ -84,7 +86,7 @@ E         - not-picked
 E         ? ----
 E         + picked
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:73: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:73: AssertionError
 [... seventeen more failure blocks, same assertion, elided ...]
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_environment.py::test_pick_missing_setting_asks_again_with_no_id[no-file-None]
@@ -146,7 +148,7 @@ E         - not-picked
 E         ? ----
 E         + picked
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:73: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:73: AssertionError
 [... five more failure blocks, same assertion, elided ...]
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_environment.py::test_pick_missing_setting_asks_again_with_no_id[malformed-value-None]
@@ -198,7 +200,7 @@ E
 E         - Claude Code already had an environment picked, and it's still the same one. If the environment shown as picked in /remote-env is the one you made for this project, say it's that one and I'll use it. Otherwise pick this project's environment and tell me.
 E         + I can't see a new pick yet. In Claude Code on this account, run /remote-env, choose the environment you made for this project by its name, and tell me when it's done.
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:50: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_environment.py:50: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_environment.py::test_first_pick_unchanged_asks_to_confirm_by_name
 1 failed in 9.72s
@@ -233,7 +235,7 @@ _________ test_first_pick_unchanged_is_confirmed_by_name_in_step_three _________
 E       AssertionError: section 6 has no line containing 'cloud_environment.py" pick --cwd . --before <the value step 1 kept> --confirmed <the value step 1 kept>'
 E       assert None is not None
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:120: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1771-9596bd8e72803b62/plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py:120: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_sitting_text.py::test_first_pick_unchanged_is_confirmed_by_name_in_step_three
 1 failed in 0.28s
