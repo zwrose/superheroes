@@ -263,7 +263,6 @@ def _config_item_display(item_def, entry, canon_args=None):
     source = entry.get("source")
     if source == "canon-pointer":
         return _canon_pointer_display(*(canon_args or (None, None, None)))
-    slug = item_def["slug"]
     shape = item_def.get("shape")
     effective = entry.get("effective")
     if source == "unset":
@@ -276,10 +275,6 @@ def _config_item_display(item_def, entry, canon_args=None):
         else:
             shown = str(effective)
         return "%s (plugin default)" % shown
-    if source == "derived":
-        if slug == "budgetN":
-            return "derived from dial (%s)" % project_config.BUDGET_DERIVATION_PROSE
-        return "derived"
     if source == "stamped":
         if shape in _PROSE_CONFIG_SHAPES and isinstance(effective, str):
             return _one_line_prose(effective)

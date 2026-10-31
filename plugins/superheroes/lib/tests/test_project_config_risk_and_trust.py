@@ -112,7 +112,7 @@ def test_item_ten_is_risk_and_trust_and_the_old_slug_is_gone():
     assert item["slug"] == "riskAndTrust" and item["name"] == "Risk and trust"
     assert item["home"] == PC.HOME_RISK_AND_TRUST == "riskAndTrust"
     assert not hasattr(PC, "HOME_THREAT_MODEL")
-    assert len(PC.ITEMS) == 19
+    assert len(PC.ITEMS) == 17
     assert "threatModel" not in [entry["slug"] for entry in PC.ITEMS]
 
 
