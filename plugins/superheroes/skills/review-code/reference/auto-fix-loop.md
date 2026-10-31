@@ -619,6 +619,7 @@ Fold it on the path the session already uses, as for every other phase: a hand `
 | `fix-binding-malformed:<index>` | The `fixes` entry at that position (from 0) has a `finding` or a `commit` key without both being non-empty strings. Give both as non-empty strings, or drop the key to make it a note. |
 | `fix-finding-unknown:<value>` | A `fixes` binding names a finding outside the batch. Remove or correct it. |
 | `unfixed-finding-unknown:<value>` | An `unfixed` entry names a finding outside the batch. Remove or correct it. |
+| `finding-id-ambiguous:<value>` | A `fixes` or `unfixed` entry names a staged id that two findings of the batch share (staged ids restart in each verifier wave). Give the full finding key instead. |
 
 A step with no commit at all is not a refusal, and a PR-body-only fix makes none.
 

@@ -24,6 +24,7 @@ DECISION_KINDS = (
     "extra-audit-open",
     "extra-audit-ordered",
     "fix-batch-excluded",
+    "fix-batch-held",
     "fix-batch-ruled",
     "fix-batch-split",
     "fix-keeps-failing",
