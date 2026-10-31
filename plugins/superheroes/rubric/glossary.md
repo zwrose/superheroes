@@ -192,12 +192,17 @@ item at the front door.
 
 ### Misses log
 
-The section of the pinned registry comment where the advisor records four kinds of miss:
-declined-then-escaped, launched-then-regretted, mis-tiered, and [review escapes](#review-escape).
+The section of the pinned registry comment where the advisor records five kinds of miss:
+declined-then-escaped, launched-then-regretted, mis-tiered, [review escapes](#review-escape), and
+[false PR claims](#false-pr-claim).
 
 ### Review escape
 
 A bug traced after merge to a PR that had a review. The act that traces it logs it in the [misses log](#misses-log): a vet of a fix, a detective diagnosis, a field report, or the owner's own report. The entry links that PR's [review record](#review-record) and makes one call, missed or seen and left. It counts only from the project's adoption day. The rule for logging it is in [the owner-decisions reference](../skills/showrunner/reference/owner-decisions.md#every-grading-keeps-its-scoring-and-the-misses-log).
+
+### False PR claim
+
+A claim in a merged PR's description that did not hold, found after merge: that tests ran, a row of its definition-of-done table, or that the verify command passed. The act that finds it logs it in the [misses log](#misses-log), in a [review escape](#review-escape)'s entry shape plus a marker line. It is counted apart from review escapes, and only from the project's adoption day. The rule for logging it is in [the owner-decisions reference](../skills/showrunner/reference/owner-decisions.md#every-grading-keeps-its-scoring-and-the-misses-log).
 
 ### Collector
 
