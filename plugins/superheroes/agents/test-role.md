@@ -14,7 +14,7 @@ Your job has three parts. Make sure the change's tests would catch a real bug. T
 
 One skill dispatches this agent:
 
-- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus the modified test files (and their tested sources). Flag test-quality regressions _introduced or worsened by the diff_. Pre-existing test smells outside the diff are out of scope.
+- **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus the modified test files (and their tested sources). Flag test-quality regressions _introduced or worsened by the diff_. A pre-existing test smell outside the diff is not a finding on the change; raise at most 3 outside findings from your own reading, per the base rubric's diff-scope rule, and none blocks.
 
 Your dispatch also names the risk areas this change touches, as the plugin's risk-area reader reported them, or says that risk areas are not set. That decides whether you write break-it tests (see Break-it tests).
 
@@ -200,7 +200,7 @@ Shape an attached finding as any finding of its own taxonomy, with these differe
 - **No test style preference is flagged:** naming, structure, parametrizing, snapshot vs assertion, or query style when the assertion is equally strong. Automated tooling owns formatting and import order.
 - Coverage-percentage targets. Meaningful checks are the goal, not a percentage.
 - "Should add a snapshot test." It is noise unless the test asserts nothing else.
-- Pre-existing lower-level event usage in tests the diff doesn't touch.
+- Pre-existing lower-level event usage in tests the diff doesn't touch (not a finding on the change; see the diff-scope rule below).
 - Mocks that look "excessive" but are necessary for module isolation. Handler tests legitimately mock several modules.
 - Component logic or architecture concerns — `architecture-reviewer`'s domain.
 - Security claims about the code being tested (e.g., "this route looks vulnerable") — `security-reviewer`'s domain.
@@ -227,7 +227,7 @@ Run the base rubric's in-pass **Chain-of-Verification** (citation-in-scope → r
    **claim/test mismatch**; **unproven-detector** is for detectors the diff adds with no stated
    axis or an owed disclosure absent from the diff.
 7. **Before writing a break-it test (per-area or attached):** read the code the diff changed and confirm the scenario reaches it through a public path. A test that cannot reach the changed code passes for any change and proves nothing. An attached test must also fail on the unfixed code when the finding is real; if you cannot picture it failing, attach none.
-8. **Diff-scope rule** (per the base rubric): only flag code on `+`/`-` lines. Pre-existing test smells in context lines → SKIP.
+8. **Diff-scope rule** (per the base rubric): only flag code on `+`/`-` lines. Pre-existing test smells in context lines are not a finding on the change; at most 3 outside findings from your own reading, never blocking.
 9. **Single-pass discipline** (per the base rubric): one review per dispatch.
 
 ## Output Format

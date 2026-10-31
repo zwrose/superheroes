@@ -437,6 +437,10 @@ The reviewer that, in every round after the first, looks for new problems only i
 
 The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
 
+### Outside finding
+
+A finding a reviewer raises on lines the change did not touch. It goes to the [review record](#review-record)'s "Outside this PR" list, never into the review's findings. A reviewer may raise at most 3 from its own reading, and every one raised is kept. A sweep's hits are not counted against any reviewer and stay together under the sweep's entry. It is never fixed, never blocks the merge, and never becomes an owner card. At the vet the advisor sorts each into a proposed follow-up filing, which waits on the owner's word, or a dismissal with its reason. The rule is in [the base rubric](review-base.md) (Verification rule 2); the sort is in [the vet receipt reference](../skills/showrunner/reference/vet-receipt.md#the-outside-list).
+
 ## Cloud builds
 
 ### Cloud environment
