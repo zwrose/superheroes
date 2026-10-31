@@ -1030,10 +1030,12 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
     for f in findings:
         if not isinstance(f, dict):
             continue
-        # axis: a blank or whitespace-only file is no citation: it stays an ordinary uncited drop and never reaches the "Outside this PR" list, whose hits the record writer requires to name a file
+        # axis: a blank or whitespace-only file is no citation: it stays an ordinary uncited drop and never reaches the "Outside this PR" list, whose hits the record writer requires to name a file; a drop for a blank string file keeps the finding's line as given (None included) so the session record's drop key matches the stored report, while a non-string file or a non-blank file with no line keeps the row without a line
         if not isinstance(f.get("file"), str) or not f["file"].strip() or f.get("line") is None:
-            drops.append({"file": f.get("file"), "title": f.get("title"),
-                          "reason": "uncited — no file:line"})
+            row = {"file": f.get("file"), "title": f.get("title"), "reason": "uncited — no file:line"}
+            if isinstance(f.get("file"), str) and not f["file"].strip():
+                row["line"] = f.get("line")
+            drops.append(row)
             continue
         ok, line = _coerce_line(f.get("line"))
         if not ok:

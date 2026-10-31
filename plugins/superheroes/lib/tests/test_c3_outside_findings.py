@@ -316,6 +316,32 @@ def test_t9_an_abandoned_session_does_not_list_a_finding_on_the_outside_list_as_
     assert [f["title"] for f in kept["findings"]] == ["Unfolded defect"]  # a hit at another line covers nothing
 
 
+# ---- T10 -----------------------------------------------------------------------------------------------------
+
+
+def test_t10_an_abandoned_session_does_not_list_a_blank_file_finding_the_compile_already_refused(world, tmp_path):
+    # axis: a blank-file uncited drop keeps the finding's line, so the session record's drop key matches the stored report and the finding is not listed open again — see bite-proof record c3_wo_a_outside
+    blank = _finding("Blank file defect", file=" ", line=1)
+    state = _panel(world, code_reviewer=[blank])
+    rows = [d for d in _compile_drops(state) if d.get("title") == "Blank file defect"]
+    assert len(rows) == 1 and rows[0]["line"] == 1 and rows[0]["file"] == " "
+    assert rows[0]["reason"] == "uncited — no file:line" and "outsideThisPR" not in state
+    session = Session(tmp_path / "stored", terminal=None, rounds=state["rounds"]).seat("code-reviewer").save()
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": "m", "payload": {"findings": [blank]}})
+    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
+    assert account["findings"] == []  # not listed open: it is already refused
+    assert [r["title"] for r in account["refused"]] == ["Blank file defect"]
+    # control: a drop row without the line (the shape before this rule) does not match the stored report
+    stripped = {k: dict(v) for k, v in state["rounds"].items()}
+    for rec in stripped.values():
+        for d in rec.get("compileDrops") or []:
+            d.pop("line", None)
+    control = Session(tmp_path / "control", terminal=None, rounds=stripped).seat("code-reviewer").save()
+    put_envelope(control, "code-reviewer", {"vendor": "codex", "model": "m", "payload": {"findings": [blank]}})
+    again = rs.account_from_session(control, extras(), Fake().readers(), abandoned="stopped")
+    assert [f["title"] for f in again["findings"]] == ["Blank file defect"]
+
+
 # ---- fail-closed edges ----------------------------------------------------------------------------------------
 
 
@@ -388,10 +414,12 @@ def test_p2_a_deletion_at_a_hunk_start_has_no_line_before_and_one_that_ends_the_
 
 
 def test_p3_crlf_diffs_and_no_newline_markers_and_several_files():
-    text = ("diff --git a/x.py b/x.py\r\n--- a/x.py\r\n+++ b/x.py\r\n@@ -1,2 +1,2 @@\r\n keep\r\n-old\r\n"
-            "\\ No newline at end of file\r\n+new\r\n"
+    # x.py: " keep"(1) " keep2"(2) "-old" -> the line before the run is 2; the marker ends nothing, so "+new" (3) and
+    # "+new2" (4) are still added lines; if the marker ended the hunk, 3 would still be marked (the line after the run) but 4 would not
+    text = ("diff --git a/x.py b/x.py\r\n--- a/x.py\r\n+++ b/x.py\r\n@@ -1,3 +1,4 @@\r\n keep\r\n keep2\r\n-old\r\n"
+            "\\ No newline at end of file\r\n+new\r\n+new2\r\n"
             "diff --git a/y.py b/y.py\r\n--- a/y.py\r\n+++ b/y.py\r\n@@ -1,2 +1,3 @@\r\n a\r\n+b\r\n c\r\n")
-    assert diff_scope.parse_touched_lines(text) == {"x.py": {1, 2}, "y.py": {2}}
+    assert diff_scope.parse_touched_lines(text) == {"x.py": {2, 3, 4}, "y.py": {2}}
 
 
 def test_p4_a_deleted_file_and_a_no_prefix_diff_have_no_anchorable_line():

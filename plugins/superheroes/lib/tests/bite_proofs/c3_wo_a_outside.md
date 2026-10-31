@@ -20,6 +20,8 @@ The pytest `UV_NATIVE_TLS` deprecation warning line that opens every run is drop
 | BP7 | `mechanical_compile` source choice | attribution comes from the driver's seat map, never the finding's own `dimension` | `test_t7_a_panel_finding_…` |
 | BP8 | `_settle_extra_audit` partition | an outside new issue never holds the extra round open | `test_t8_…outside…` |
 | BP9 | `review_record_session._unfolded` skip | an abandoned session does not re-list an outside hit as open | `test_t9_…` |
+| BP10 | `round_driver.mechanical_compile` blank-file uncited drop row's `line` | a blank-file drop keeps the finding's line, so `_drop_key` matches the stored report and `_unfolded` does not re-list it | `test_t10_…` |
+| BP11 | `diff_scope.parse_touched_lines` newline-marker arm (`elif line.startswith("\\"):`) | a `\ No newline at end of file` marker ends nothing: added lines after it are still touched | `test_p3_…` |
 
 Supplementary (not in the declared set): BP3b, the head line just BEFORE a deletion run (`if have_prev:`), proven too.
 
@@ -302,6 +304,75 @@ FAILED plugins/superheroes/lib/tests/test_c3_outside_findings.py::test_t9_an_aba
 ```
 .                                                                        [100%]
 1 passed in 0.47s
+```
+
+## BP10 (rework C3-D, Finding 1)
+
+Run in the worktree `/home/user/wt-2219`; the UV_NATIVE_TLS warning line is dropped from the captures; nothing redacted.
+
+**neutralization** (`round_driver.py`, `mechanical_compile`, the blank-file branch): replaced `row["line"] = f.get("line")` with `pass  # BP10 NEUTRALIZED`.
+
+**raw red** (`test_t10_an_abandoned_session_does_not_list_a_blank_file_finding_the_compile_already_refused`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t10_an_abandoned_session_does_not_list_a_blank_file_finding_the_compile_already_refused _
+/home/user/wt-2219/plugins/superheroes/lib/tests/test_c3_outside_findings.py:327: in test_t10_an_abandoned_session_does_not_list_a_blank_file_finding_the_compile_already_refused
+    assert len(rows) == 1 and rows[0]["line"] == 1 and rows[0]["file"] == " "
+                              ^^^^^^^^^^^^^^^
+E   KeyError: 'line'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c3_outside_findings.py::test_t10_an_abandoned_session_does_not_list_a_blank_file_finding_the_compile_already_refused
+1 failed in 19.16s
+```
+**restore:** replaced `pass  # BP10 NEUTRALIZED` with `row["line"] = f.get("line")`. **restore receipt:** quoted back —
+```
+1035-            row = {"file": f.get("file"), "title": f.get("title"), "reason": "uncited — no file:line"}
+1036-            if isinstance(f.get("file"), str) and not f["file"].strip():
+1037:                row["line"] = f.get("line")
+1038-            drops.append(row)
+```
+and `grep -n "NEUTRALIZED" plugins/superheroes/lib/*.py` printed nothing (exit 1).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.71s
+```
+
+## BP11 (rework C3-D, Finding 2)
+
+**neutralization** (`diff_scope.py`, `parse_touched_lines`): deleted the two lines `elif line.startswith("\\"):` / `pass  # "\ No newline at end of file" belongs to the line above; it ends nothing`, so the marker falls to the hunk-ending `else`.
+
+**raw red** (`test_p3_crlf_diffs_and_no_newline_markers_and_several_files`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_________ test_p3_crlf_diffs_and_no_newline_markers_and_several_files __________
+/home/user/wt-2219/plugins/superheroes/lib/tests/test_c3_outside_findings.py:422: in test_p3_crlf_diffs_and_no_newline_markers_and_several_files
+    assert diff_scope.parse_touched_lines(text) == {"x.py": {2, 3, 4}, "y.py": {2}}
+E   AssertionError: assert {'x.py': {2, 3}, 'y.py': {2}} == {'x.py': {2, ..., 'y.py': {2}}
+E     
+E     Omitting 1 identical items, use -vv to show
+E     Differing items:
+E     {'x.py': {2, 3}} != {'x.py': {2, 3, 4}}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c3_outside_findings.py::test_p3_crlf_diffs_and_no_newline_markers_and_several_files
+1 failed in 0.79s
+```
+**restore:** re-inserted the two lines before `elif line.startswith(" "):`. **restore receipt:** quoted back —
+```
+125:            elif line.startswith("\\"):
+126-                pass  # "\ No newline at end of file" belongs to the line above; it ends nothing
+127-            elif line.startswith(" "):
+```
+`grep -n "NEUTRALIZED" plugins/superheroes/lib/*.py` printed nothing (exit 1), and `git diff --stat -- plugins/superheroes/lib/diff_scope.py` printed nothing (the file equals its committed state).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.66s
 ```
 
 ## Not guarded by a neutralization of its own
