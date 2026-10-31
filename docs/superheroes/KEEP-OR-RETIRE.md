@@ -1909,14 +1909,15 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 - **Condition.** Usage-based, 60 days: calibrations on repositories that lacked a label, read from
   the configure receipts. On firing, a proposal to the owner at a gardening pass. Once every
   calibrated repository carries both labels, a zero count is expected and reads as done, not as
-  retire.
+  retire. **Retired — condition moot.**
 - **Last demonstrated benefit.** Both labels created on this repository through the helper's own
   argv, with an existing label's colour and description never reconciled away (the
   configuration-items child's build record).
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
-- **Notes.** capability-gap — a person could create two labels by hand; the helper exists so the
-  routing vocabulary is present before the first issue is routed.
+- **Decision.** retired — issue #2245 (owner ruling 2026-10-29: the kind labels are retired, so
+  configure creates none and `kind_labels.py` is removed).
+- **Notes.** capability-gap — a person could create two labels by hand; the helper existed so the
+  routing vocabulary was present before the first issue was routed.
 
 #### S7 — Bite-proof pointer census
 
