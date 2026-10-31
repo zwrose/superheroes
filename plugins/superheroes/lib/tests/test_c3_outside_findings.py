@@ -305,7 +305,7 @@ def test_t9_an_abandoned_session_does_not_list_a_finding_on_the_outside_list_as_
     assert [f["title"] for f in control["findings"]] == ["Unfolded defect"]  # without the list the finding is open
     hit = {"id": "O-1", "file": "u.py", "line": "8", "title": "Unfolded defect"}  # a string line is read as its int
     for kind in ({"kind": "reviewer", "name": "code-reviewer", "sweepId": None},
-                 {"kind": "sweep", "name": "sweeper", "sweepId": "sw-1"}):
+                 {"kind": "sweep", "name": "code-reviewer", "sweepId": "sw-1"}):
         session = _abandoned(tmp_path / kind["kind"], outsideThisPR=[{"source": kind, "hits": [dict(hit, line=8)]}])
         account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
         assert account["findings"] == [] and account["refused"] == []
@@ -379,13 +379,59 @@ def test_t9_an_unfolded_report_on_an_untouched_line_is_outside_not_open_work(tmp
     assert listed["hits"] == [{"id": "O-1", "file": "z.py", "line": 1, "title": "Other"}]  # the state's list is not edited
 
 
-def test_t9_an_unfolded_break_it_proposal_stays_open_whatever_its_line(tmp_path):
-    # axis: the test role's own break-it proposal is scope-exempt at compile (its test file does not exist in the diff), so it is never classified outside here — see bite-proof record c3_wo_a_outside
-    proposal = dict(UNFOLDED, title="Break it", taxonomy="break-it-test")
+def _test_role_account(tmp_path, proposal):
     session = Session(tmp_path, terminal=None, reviewedDiff=DIFF).seat("test-role").save()
     put_envelope(session, "test-role", {"vendor": "codex", "model": "m", "payload": {"findings": [proposal]}})
-    account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
-    assert [f["title"] for f in account["findings"]] == ["Break it"] and "outsideThisPR" not in account
+    return rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
+
+
+def test_t9_an_unfolded_break_it_proposal_stays_open_only_when_the_intercept_would_exempt_it(tmp_path):
+    # axis: the test role's own break-it proposal is scope-exempt at compile only when its block parses, names the cited file and cites line 1 (break_it.intercept's rule), so only such a proposal is never classified outside here — see bite-proof record c3_wo_a_outside
+    valid = BL._break_it_finding(file=BL.TEST_PATH, line=1)
+    account = _test_role_account(tmp_path / "valid", valid)
+    assert [f["title"] for f in account["findings"]] == [valid["title"]] and "outsideThisPR" not in account
+    line_text = _test_role_account(tmp_path / "text", dict(valid, line="1"))  # a citation that coerces to line 1 is exempt
+    assert [f["title"] for f in line_text["findings"]] == [valid["title"]]
+    # not exempt at compile, so outside here too: another line, a block for another path, a malformed or missing block
+    for name, proposal in (("line", dict(valid, line=8)),
+                           ("path", dict(valid, file="u.py")),
+                           ("malformed", dict(valid, suggestion="break-it-test v1\nnot a block")),
+                           ("none", dict(valid, suggestion=None))):
+        account = _test_role_account(tmp_path / name, proposal)
+        assert account["findings"] == [], name
+        assert [h["title"] for e in account["outsideThisPR"] for h in e["hits"]] == [valid["title"]], name
+        assert account["outsideThisPR"][0]["source"]["name"] == "test-role", name
+
+
+def test_t9_a_hit_held_by_one_source_does_not_hide_the_same_place_reported_by_another(tmp_path):
+    # axis: the exclusion holds only for a hit under the report's own source name (seat, or stage name), so a hit held by one source never hides the same place reported by another — see bite-proof record c3_wo_a_outside
+    hit = {"id": "O-1", "file": "u.py", "line": 8, "title": "Unfolded defect"}
+
+    def held_by(name):
+        return [{"source": {"kind": "reviewer", "name": name, "sweepId": None}, "hits": [dict(hit)]}]
+
+    # held under another source: the code-reviewer's report is recovered under its own entry, after the existing hit
+    other = rs.account_from_session(_abandoned(tmp_path / "other", reviewedDiff=DIFF, outsideThisPR=held_by("gap sweep")),
+                                    extras(), Fake().readers(), abandoned="stopped")
+    assert other["findings"] == []
+    assert [(e["source"]["name"], [h["id"] for h in e["hits"]]) for e in other["outsideThisPR"]] == [
+        ("gap sweep", ["O-1"]), ("code-reviewer", ["O-2"])]
+    # held under its own source: nothing is added
+    own = rs.account_from_session(_abandoned(tmp_path / "own", reviewedDiff=DIFF, outsideThisPR=held_by("code-reviewer")),
+                                  extras(), Fake().readers(), abandoned="stopped")
+    assert [(e["source"]["name"], [h["id"] for h in e["hits"]]) for e in own["outsideThisPR"]] == [
+        ("code-reviewer", ["O-1"])]
+    # a stage's report is named by the stage: a gap-sweep report is not hidden by the panel seat's hit, and is by its own
+    for held, expected in (("code-reviewer", [("code-reviewer", ["O-1"]), ("gap sweep", ["O-2"])]),
+                           ("gap sweep", [("gap sweep", ["O-1"])])):
+        s = Session(tmp_path / ("stage-" + held), terminal=None, reviewedDiff=DIFF, outsideThisPR=held_by(held))
+        s.seat("code-reviewer", phase="dispatch-gap-sweep")
+        session = s.save()
+        put_envelope(session, "code-reviewer", {"vendor": "codex", "model": "m", "payload": {"findings": [UNFOLDED]}},
+                     phase="dispatch-gap-sweep")
+        account = rs.account_from_session(session, extras(), Fake().readers(), abandoned="stopped")
+        assert account["findings"] == []
+        assert [(e["source"]["name"], [h["id"] for h in e["hits"]]) for e in account["outsideThisPR"]] == expected
 
 
 # ---- T10 -----------------------------------------------------------------------------------------------------

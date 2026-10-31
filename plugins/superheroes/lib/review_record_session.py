@@ -805,9 +805,10 @@ def _raised_reports(session_dir, rows, pending, pending_round):
 
 
 def _outside_keys(outside, provenance=None):
-    """The `(title, file key, line key, round)` of every hit on the state's "Outside this PR" list, whatever the
-    entry's kind. `round` is each round the state's `_outsideRounds` says sent the hit out; a hit with no such row
-    (a session begun before the rows were kept) gets round None, which excludes a report of any round."""
+    """The `(source name, title, file key, line key, round)` of every hit on the state's "Outside this PR" list,
+    whatever the entry's kind; the source name is the entry's own (None when it has none). `round` is each round the
+    state's `_outsideRounds` says sent the hit out; a hit with no such row (a session begun before the rows were
+    kept) gets round None, which excludes a report of any round."""
     rows = {}
     for row in provenance if isinstance(provenance, list) else []:
         if isinstance(row, dict):
@@ -816,12 +817,22 @@ def _outside_keys(outside, provenance=None):
     keys = set()
     for entry in outside if isinstance(outside, list) else []:
         hits = entry.get("hits") if isinstance(entry, dict) else None
+        src = entry.get("source") if isinstance(entry, dict) else None
+        name = src.get("name") if isinstance(src, dict) else None
         for hit in hits if isinstance(hits, list) else []:
             if isinstance(hit, dict):
                 base = (hit.get("title"), _file_key(hit.get("file")), _line_key(hit.get("line")))
                 for rnd in rows.get(base) or {None}:
-                    keys.add((*base, rnd))
+                    keys.add((name, *base, rnd))
     return keys
+
+
+def _scope_exempt(f):
+    """True when compile would skip the diff-scope check for the test role's finding `f`: the same eligibility as
+    `break_it.intercept`, a per-area (`break-it-test`) finding whose suggestion parses as a block, whose block path is
+    its cited file, and whose citation coerces to line 1. A malformed block, another path or another line is not."""
+    block, kind = break_it.carried_block(f)
+    return kind == break_it.KIND_PER_AREA and block["path"] == f.get("file") and sc.coerce_line(f.get("line")) == (True, 1)
 
 
 def _round_scope(session_dir, rnd, current_round, reviewed_diff):
@@ -879,10 +890,10 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
     (it stays under `refused`; matched by round, title, file and line, so a same-titled finding at another line
     stays; a drop whose file is not a string lost its line, so it is matched by round, title and file), and a break-it proposal whose test passed (the intercept dropped it before compile; only the test role's
     own panel proposal is settled that way) add nothing; nor does one that is a hit on the state's `outsideThisPR`
-    list (matched by title, file and line, and by the round that sent it outside when the state kept that; it stays there, not here). A report the loop never folded that cites a line its
+    list under the report's own source name (matched by title, file and line, and by the round that sent it outside when the state kept that; it stays there, not here; the same place held by another source does not hide the report). A report the loop never folded that cites a line its
     round's diff did not touch is an outside finding, not open work: compile would have sent it to that list, so it is
     appended to `recovered` as `(source name, title, file, line)` for the caller to add to the account's outside list
-    (the test role's own break-it proposal is exempt from scope, as at compile, and stays open). A listed finding already settled in a round before the
+    (the test role's own break-it proposal is exempt from scope, as at compile, and stays open only when the intercept would exempt it: a block that parses, names the cited file and cites line 1). A listed finding already settled in a round before the
     report's own round is reopened (`settled_rounds` maps a finding key to the round that settled it)."""
     settled_rounds = settled_rounds or {}
     settled_kinds = settled_kinds or {}  # a finding key to the kind of its recorded settlement
@@ -908,17 +919,19 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
             # axis: a finding on the state's "Outside this PR" list stays there and is not listed open a second time — see bite-proof record c3_wo_a_outside
             # axis: only the report of the round that sent the hit outside is excluded; a later round's report of the same title, file and line (a fix may have moved the line into the PR) is not — see bite-proof record c3_wo_a_outside
             base = (f["title"], _file_key(f.get("file")), _line_key(f.get("line")))
-            if (*base, rnd) in outside_keys or (*base, None) in outside_keys:
+            # axis: the exclusion holds only for a hit under the report's own source name (seat, or stage name), so a hit held by one source never hides the same place reported by another — see bite-proof record c3_wo_a_outside
+            source = _OUTSIDE_STAGE_SOURCES.get(phase, seat)
+            if (source, *base, rnd) in outside_keys or (source, *base, None) in outside_keys:
                 continue
             # axis: a report the loop never folded that cites a line its round's diff did not touch is an outside finding, listed on the account's outside list and never as open work, so abandoning before the fold does not change how it is treated — see bite-proof record c3_wo_a_outside
-            # axis: the test role's own break-it proposal is scope-exempt at compile (its test file does not exist in the diff), so it is never classified outside here — see bite-proof record c3_wo_a_outside
-            exempt = phase == round_phases.P_PANEL and seat == break_it.ROLE and break_it.is_break_it(f)
+            # axis: the test role's own break-it proposal is scope-exempt at compile only when its block parses, names the cited file and cites line 1 (break_it.intercept's rule), so only such a proposal is never classified outside here — see bite-proof record c3_wo_a_outside
+            exempt = phase == round_phases.P_PANEL and seat == break_it.ROLE and _scope_exempt(f)
             if fkey not in listed and not exempt and recovered is not None:
                 if rnd not in scopes:
                     scopes[rnd] = _round_scope(session_dir, rnd, pending_round, reviewed_diff)
                 line = _outside_the_round(f, scopes[rnd])
                 if line is not None:
-                    recovered.append((_OUTSIDE_STAGE_SOURCES.get(phase, seat), f["title"], f["file"], line))
+                    recovered.append((source, f["title"], f["file"], line))
                     continue
             if fkey in listed:
                 held = by_listed.get(fkey)
