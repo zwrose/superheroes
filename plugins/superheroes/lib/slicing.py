@@ -47,12 +47,11 @@ def _merge_ranges(ranges):
 
 
 def _clean_ranges(lines):
-    """``(merged valid ranges, all_valid)`` of one ``lines`` value; a non-list gives ``([], False)``."""
+    """The merged valid ranges of one ``lines`` value; a non-list gives ``[]``."""
     # axis: only a list of well-formed [start, end] ranges is read; anything else yields no range.
     if not isinstance(lines, (list, tuple)):
-        return [], False
-    good = [[r[0], r[1]] for r in lines if countable_lines._valid_range(r)]
-    return _merge_ranges(good), len(good) == len(lines)
+        return []
+    return _merge_ranges(r for r in lines if countable_lines._valid_range(r))
 
 
 def _count_lines(ranges):
@@ -63,46 +62,30 @@ def _named(file):
     return isinstance(file, str) and bool(file.strip())
 
 
-def _readable(count_result):
-    """True when ``count_result`` is a dict with an int ``countable`` >= 0, a ``files`` list and a sane ``unsettled``."""
+def _count_view(count_result):
+    """``({file: [row, ...]}, {unsettled file, ...})`` of a readable count (int ``countable`` >= 0, ``files`` and ``unsettled`` lists), else None."""
     # axis: an unreadable count never excuses a change from slicing; the caller falls back to raw changed lines.
     if not isinstance(count_result, dict):
-        return False
+        return None
     countable = count_result.get("countable")
-    if not (_is_int(countable) and countable >= 0):
-        return False
-    if not isinstance(count_result.get("files"), list):
-        return False
-    return isinstance(count_result.get("unsettled", []), list)
-
-
-def _rows_by_file(count_result):
-    """``{file: [row, ...]}`` in row order, from the well-formed rows of a readable count."""
-    by_file = {}
+    unsettled = count_result.get("unsettled", [])
+    if not (_is_int(countable) and countable >= 0 and isinstance(count_result.get("files"), list) and isinstance(unsettled, list)):
+        return None
+    rows = {}
     for row in count_result["files"]:
         if isinstance(row, dict) and isinstance(row.get("file"), str):
-            by_file.setdefault(row["file"], []).append(row)
-    return by_file
-
-
-def _unsettled_files(count_result):
-    found = set()
-    for entry in count_result.get("unsettled", []):
-        if isinstance(entry, dict) and isinstance(entry.get("file"), str):
-            found.add(entry["file"])
-    return found
+            rows.setdefault(row["file"], []).append(row)
+    return rows, {e["file"] for e in unsettled if isinstance(e, dict) and isinstance(e.get("file"), str)}
 
 
 def _zero_files(count_result):
-    """The files the counter left out of the count (all their rows excluded, none unsettled); empty when the count is unreadable."""
+    """The files the counter left out of the count (all rows excluded, none unsettled); empty when the count is unreadable."""
     # axis: with no readable count no file is known to weigh nothing, so every file is weighted.
-    if not _readable(count_result):
-        return set()
-    unsettled = _unsettled_files(count_result)
+    rows, unsettled = _count_view(count_result) or ({}, set())
     return {
         file
-        for file, rows in _rows_by_file(count_result).items()
-        if file not in unsettled and all(r.get("counted") is False and r.get("why") in _ZERO_WHY for r in rows)
+        for file, file_rows in rows.items()
+        if file not in unsettled and all(r.get("counted") is False and r.get("why") in _ZERO_WHY for r in file_rows)
     }
 
 
@@ -132,8 +115,7 @@ def _hunk_heads(hunk_text):
 
 
 def _cut_runs(hunk_text, bar):
-    """``[(run text, head lines of its +/- lines), ...]``: the hunk cut into runs of at most ``bar`` +/- lines, each
-    a valid hunk with its own header."""
+    """``[(run text, head lines of its +/- lines), ...]``: the hunk cut into runs of at most ``bar`` +/- lines."""
     lines = countable_lines._lines_keepends(hunk_text)
     found = _HUNK_HEAD_RE.match(lines[0])
     old_start, old_len = int(found.group(1)), 1 if found.group(2) is None else int(found.group(2))
@@ -177,8 +159,7 @@ def _cut_runs(hunk_text, bar):
 # --------------------------------------------------------------------------------------------
 
 def _unit(weight, file, ranges, key, header, hunks):
-    """One packable piece: ``ranges`` are its coverage obligation (``[]`` for a file-level one), ``hunks`` its
-    ``(order, text)`` pieces under the section ``header``."""
+    """One packable piece: ``ranges`` its coverage obligation (``[]`` if file-level), ``hunks`` its ``(order, text)`` pieces."""
     return {"weight": weight, "file": file, "ranges": ranges, "key": key, "header": header, "hunks": hunks}
 
 
@@ -213,7 +194,7 @@ def _section_units(idx, section, weight, copy_lines, bar):
     file_level = section["unreadable"] or section["binary"] or section["status"] == "deleted" or not section["headLines"]
     header, hunks = _split_hunks(text)
     if weight == 0 or not hunks or (file_level and weight <= bar):
-        ranges = [] if file_level else _merge_numbers(section["headLines"])
+        ranges = [] if file_level else countable_lines._merge_numbers(section["headLines"])
         return [_unit(weight, file, ranges, idx, text, [])]
     units = []
     for h, hunk in enumerate(hunks):
@@ -223,13 +204,9 @@ def _section_units(idx, section, weight, copy_lines, bar):
         else:
             pieces = _cut_runs(hunk, bar)
         for r, (piece, heads) in enumerate(pieces):
-            ranges = [] if file_level else _merge_numbers(heads)
+            ranges = [] if file_level else countable_lines._merge_numbers(heads)
             units.append(_unit(_changed_count(piece), file, ranges, idx, header, [((h, r), piece)]))
     return units
-
-
-def _merge_numbers(numbers):
-    return countable_lines._merge_numbers(numbers)
 
 
 def _pack(units, bar):
@@ -249,8 +226,7 @@ def _pack(units, bar):
 
 
 def _assemble(packed, prefix):
-    """The slice dicts for packed unit lists: ids, weights, merged parts and the slice's own diff. A head line
-    is owed to the first slice that reaches it, so no line is in two slices' parts."""
+    """The slice dicts for packed unit lists; a head line is owed to the first slice that reaches it."""
     claimed = {}
     out = []
     for k, units in enumerate(packed, 1):
@@ -289,21 +265,19 @@ def plan(diff_text, count_result, proven=()):
     """Cut ``diff_text`` into slices of at most the bar when its weight is above the bar: ``{"sliced", "weight", "countable", "bar", "slices"}``."""
     bar = _bar()
     sections = countable_lines.parse_sections(countable_lines.reviewer_diff(diff_text, proven))
-    readable = _readable(count_result)
-    rows = _rows_by_file(count_result) if readable else {}
-    unsettled = _unsettled_files(count_result) if readable else set()
+    view = _count_view(count_result)
+    readable = view is not None
+    rows, unsettled = view or ({}, set())
     used = {}
     infos = []
     extra = 0
     raw_total = 0
     for section in sections:
         file = section["file"]
-        row = None
-        if readable:
-            pos = used.get(file, 0)
-            used[file] = pos + 1
-            file_rows = rows.get(file, [])
-            row = file_rows[pos] if pos < len(file_rows) else None
+        pos = used.get(file, 0)
+        used[file] = pos + 1
+        file_rows = rows.get(file, [])  # ``rows`` is empty for an unreadable count, so ``row`` is None then
+        row = file_rows[pos] if pos < len(file_rows) else None
         in_unsettled = file in unsettled
         weight, copy_lines = _weigh(section, row, in_unsettled, readable)
         if in_unsettled:
@@ -330,8 +304,7 @@ def merge_parts(obligations):
     for obligation in obligations:
         if not isinstance(obligation, dict) or not _named(obligation.get("file")):
             continue
-        ranges, _ = _clean_ranges(obligation.get("lines"))
-        files.setdefault(obligation["file"], []).extend(ranges)
+        files.setdefault(obligation["file"], []).extend(_clean_ranges(obligation.get("lines")))
     return [{"file": file, "lines": _merge_ranges(ranges)} for file, ranges in files.items()]
 
 
@@ -351,7 +324,7 @@ def unread_obligations(assigned, read_lists):
             if not isinstance(part, dict) or not _named(part.get("file")):
                 continue
             file = part["file"]
-            ranges, _ = _clean_ranges(part.get("lines"))
+            ranges = _clean_ranges(part.get("lines"))
             if ranges:
                 left = countable_lines._subtract(ranges, taken.get(file, []))
                 if left:
@@ -375,7 +348,7 @@ def unread_share(unread_parts, plan_obj, count_result):
 
 
 def _file_views(plan_obj):
-    """``{file: {"header", "hunks": [{"text", "heads"}], "copied"}}`` rebuilt from the slice diffs of ``plan_obj``."""
+    """``{file: {"header", "hunks": {hunk text: head-line set}, "copied"}}`` rebuilt from the slice diffs of ``plan_obj``."""
     views = {}
     slices = plan_obj.get("slices") if isinstance(plan_obj, dict) else None
     # axis: a plan without a slice list shows no file, so no unread part can be re-sliced from it.
@@ -384,15 +357,14 @@ def _file_views(plan_obj):
     for entry in slices:
         diff = entry.get("diff") if isinstance(entry, dict) else None
         for section in countable_lines.parse_sections(diff):
-            view = views.setdefault(section["file"], {"header": None, "hunks": [], "seen": set(), "copied": False})
+            view = views.setdefault(section["file"], {"header": None, "hunks": {}, "copied": False})
             header, hunks = _split_hunks(section["text"])
             if view["header"] is None:
                 view["header"] = header
             view["copied"] = view["copied"] or section["copied"]
             for hunk in hunks:
-                if hunk not in view["seen"]:
-                    view["seen"].add(hunk)
-                    view["hunks"].append({"text": hunk, "heads": set(_hunk_heads(hunk))})
+                if hunk not in view["hunks"]:
+                    view["hunks"][hunk] = set(_hunk_heads(hunk))
     return views
 
 
@@ -427,16 +399,16 @@ def slice_parts_for(unread_parts, plan_obj, count_result):
         # axis: a file no slice ever showed (a proven copy) has no diff to re-slice and gets no slice.
         if view is None:
             continue
-        everything = [(i, h["text"]) for i, h in enumerate(view["hunks"])]
+        everything = list(enumerate(view["hunks"]))
         if not part["lines"]:
             units.append(_unit(0, file, [], file, view["header"], everything))
             continue
         chunks = [part["lines"]] if file in zero else _chunk_ranges(part["lines"], bar)
         for chunk in chunks:
             picked = [
-                (i, h["text"])
-                for i, h in enumerate(view["hunks"])
-                if view["copied"] or any(s <= n <= e for n in h["heads"] for s, e in chunk)
+                (i, text)
+                for i, (text, heads) in enumerate(view["hunks"].items())
+                if view["copied"] or any(s <= n <= e for n in heads for s, e in chunk)
             ]
             weight = 0 if file in zero else _count_lines(chunk)
             units.append(_unit(weight, file, chunk, file, view["header"], picked or everything))
