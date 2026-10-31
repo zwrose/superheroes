@@ -189,30 +189,38 @@ FAILED plugins/superheroes/lib/tests/test_c3_outside_doctrine.py::test_d2_surfac
 
 ## BP7 — dispatch-panel order states the number
 
-- **guarded element / axis:** `rubric/orders/dispatch-panel.md` § Diff-scope rule (one sentence, wrapped across lines 36–37); same axis as BP2.
-- **neutralization:** `at most 3 outside` → `at most N outside` (1 occurrence).
-- **raw red (rc 1):**
+- **guarded element / axis:** `rubric/orders/dispatch-panel.md` § Diff-scope rule (one sentence, wrapped across lines 36–37, now reading `at most 3 outside` / `finding entries`); same axis as BP2. Re-run against the reworded section (the section no longer says `findings` as a whole word; the number stays beside `outside finding`).
+- **neutralization:** `at most 3 outside\nfinding entries` → `at most N outside\nfinding entries` (1 occurrence, one targeted `Edit`).
+- **raw red (rc 1; the `UV_NATIVE_TLS` warning line dropped):**
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____ test_d2_surface_states_the_homes_cap[rubric/orders/dispatch-panel.md] _____
-...
+
+surface = 'rubric/orders/dispatch-panel.md'
+
+    @pytest.mark.parametrize("surface", PANEL_SURFACES)
+    def test_d2_surface_states_the_homes_cap(surface):
+        home = _home_cap()
+        numbers = cap_numbers(_read(PLUGIN / surface))
 >       assert numbers, f"{surface} states no cap beside the words 'outside finding'"
 E       AssertionError: rubric/orders/dispatch-panel.md states no cap beside the words 'outside finding'
 E       assert []
-...
+
+/home/user/wt-2219/plugins/superheroes/lib/tests/test_c3_outside_doctrine.py:74: AssertionError
+=========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_c3_outside_doctrine.py::test_d2_surface_states_the_homes_cap[rubric/orders/dispatch-panel.md]
-1 failed in 0.28s
+1 failed in 1.01s
 ```
 
-- **restore:** inverse edit.
+- **restore:** inverse edit `at most N outside\nfinding entries` → `at most 3 outside\nfinding entries`.
 - **restore receipt:** `grep -n "at most [3N] outside" plugins/superheroes/rubric/orders/dispatch-panel.md` → `36:defect there while reading, you may add it as an outside finding: at most 3 outside`.
-- **raw green:**
+- **raw green (the `UV_NATIVE_TLS` warning line dropped):**
 
 ```
 .                                                                        [100%]
-1 passed in 0.18s
+1 passed in 0.28s
 ```
 
 ## BP8 — an old skip phrase reintroduced in one agent
