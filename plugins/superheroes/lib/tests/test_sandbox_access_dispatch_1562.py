@@ -64,7 +64,14 @@ _TODAYS_SETTINGS = (
     '{"env":{"UV_CACHE_DIR":"/cache/uv","UV_OFFLINE":"1"},'
     '"permissions":{"allow":["Bash(python:*)","Bash(python3:*)","Bash(pytest:*)",'
     '"Bash(scripts/pinned-python:*)","Bash(echo:*)","Bash(npm:*)","Bash(npx:*)","Bash(node:*)",'
-    '"Bash(pnpm:*)","Bash(yarn:*)","Bash(ps:*)"],"deny":["WebFetch","WebSearch"]},'
+    '"Bash(pnpm:*)","Bash(yarn:*)","Bash(ps:*)",'
+    '"Bash(*=* python *)","Bash(*=* python3 *)","Bash(*=* pytest *)",'
+    '"Bash(*=* scripts/pinned-python *)","Bash(*=* echo *)","Bash(*=* npm *)","Bash(*=* npx *)",'
+    '"Bash(*=* node *)","Bash(*=* pnpm *)","Bash(*=* yarn *)","Bash(*=* ps *)",'
+    '"Bash(*=* python)","Bash(*=* python3)","Bash(*=* pytest)",'
+    '"Bash(*=* scripts/pinned-python)","Bash(*=* echo)","Bash(*=* npm)","Bash(*=* npx)",'
+    '"Bash(*=* node)","Bash(*=* pnpm)","Bash(*=* yarn)","Bash(*=* ps)"],'
+    '"deny":["WebFetch","WebSearch"]},'
     '"sandbox":{"allowUnsandboxedCommands":false,"autoAllowBashIfSandboxed":true,'
     '"enabled":true,"failIfUnavailable":true,'
     '"filesystem":{"allowWrite":["/work/wt","/work/main/.git/worktrees/wt","/work/main/.git",'
@@ -200,6 +207,14 @@ def test_all_off_differs_from_0_38_0_only_by_allow_rules():
         "Bash(scripts/pinned-python:*)", "Bash(echo:*)",
         "Bash(npm:*)", "Bash(npx:*)", "Bash(node:*)", "Bash(pnpm:*)",
         "Bash(yarn:*)", "Bash(ps:*)",
+        "Bash(*=* python *)", "Bash(*=* python3 *)", "Bash(*=* pytest *)",
+        "Bash(*=* scripts/pinned-python *)", "Bash(*=* echo *)",
+        "Bash(*=* npm *)", "Bash(*=* npx *)", "Bash(*=* node *)",
+        "Bash(*=* pnpm *)", "Bash(*=* yarn *)", "Bash(*=* ps *)",
+        "Bash(*=* python)", "Bash(*=* python3)", "Bash(*=* pytest)",
+        "Bash(*=* scripts/pinned-python)", "Bash(*=* echo)",
+        "Bash(*=* npm)", "Bash(*=* npx)", "Bash(*=* node)",
+        "Bash(*=* pnpm)", "Bash(*=* yarn)", "Bash(*=* ps)",
     ]
     assert new == json.loads(_SETTINGS_0_38_0)
 

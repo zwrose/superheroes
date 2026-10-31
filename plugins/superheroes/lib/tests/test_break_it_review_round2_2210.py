@@ -245,6 +245,7 @@ def _assert_refused_over(record, pid):
 
 
 @needs_sleep
+@pytest.mark.process_listing
 def test_g3a_a_detached_worker_no_sample_saw_is_not_killed_and_the_run_is_refused(repo, tmp_path, monkeypatch):
     # axis: an orphan in the working copy that nothing shows is the run's is never signalled (it may be the owner's work), and the run is refused rather than certified over a possibly live worker
     pidfile = tmp_path / "worker.pid"
