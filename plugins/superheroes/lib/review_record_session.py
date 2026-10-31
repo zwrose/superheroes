@@ -856,21 +856,14 @@ def _outside_the_round(f, scope):
 
 
 def _with_recovered_outside(outside, recovered):
-    """The state's outside list with each recovered hit `(source name, title, file, line)` added the way
-    `round_driver._record_outside` adds one: under the entry of its source name (a new name opens an entry at the end;
-    a sweep entry is never a target), numbered `O-<n>` with n = 1 + every hit already listed, and never twice."""
+    """The state's outside list with each recovered hit `(source name, title, file, line)` added by
+    `session_contract.add_outside_hit`, the insertion policy `round_driver._record_outside` shares: under the entry of
+    its source name (a new name opens an entry at the end; a sweep entry is never a target), numbered `O-<n>` with
+    n = 1 + every hit already listed, and never twice."""
     entries = [{**e, "hits": list(e["hits"]) if isinstance(e.get("hits"), list) else []} if isinstance(e, dict) else e
                for e in (outside if isinstance(outside, list) else [])]
     for name, title, file, line in recovered:
-        total = sum(len(e["hits"]) for e in entries if isinstance(e, dict))
-        target = next((e for e in entries if isinstance(e, dict) and isinstance(e.get("source"), dict)
-                       and e["source"].get("kind") != "sweep" and e["source"].get("name") == name), None)
-        hit = {"id": "O-%d" % (total + 1), "file": file, "line": line, "title": title}
-        if target is None:
-            entries.append({"source": {"kind": "reviewer", "name": name, "sweepId": None}, "hits": [hit]})
-        elif not any(isinstance(h, dict) and (h.get("file"), h.get("line"), h.get("title")) == (file, line, title)
-                     for h in target["hits"]):
-            target["hits"].append(hit)
+        sc.add_outside_hit(entries, name, file, line, title)
     return entries
 
 

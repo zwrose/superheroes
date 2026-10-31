@@ -867,31 +867,10 @@ def _record_outside(state, drops):
         title = drop.get("title")
         if not (isinstance(title, str) and title.strip()):
             title = "untitled finding"
-        target, total = None, 0
-        for entry in entries:
-            if not isinstance(entry, dict):
-                continue
-            hits = entry.get("hits") if isinstance(entry.get("hits"), list) else []
-            total += len(hits)
-            src = entry.get("source") if isinstance(entry.get("source"), dict) else {}
-            # axis: a sweep entry is never the target of a reviewer's hit and never counted to one, even when it shares the name — see bite-proof record c3_wo_a_outside
-            if src.get("kind") == "sweep":
-                continue
-            if src.get("name") == name and target is None:
-                target = entry
-        hit = {"id": "O-%d" % (total + 1), "file": drop.get("file"), "line": drop.get("line"), "title": title}
         # axis: the round that produced a hit is kept beside the list (never on the hit, which the record writer holds to its own fields), so an abandoned session excludes a stored report only for the round that sent it out — see bite-proof record c3_wo_a_outside
         _note_outside_round(state, title, drop.get("file"), drop.get("line"), state.get("round"))
-        if target is not None:
-            if not isinstance(target.get("hits"), list):
-                target["hits"] = []  # a reviewer entry with no hit list: start one, as for a non-list top-level value
-            # axis: a drop already on that reviewer's entry adds nothing, so a re-fold or a resumed round never doubles a hit — see bite-proof record c3_wo_a_outside
-            if any(isinstance(h, dict) and (h.get("file"), h.get("line"), h.get("title"))
-                   == (hit["file"], hit["line"], title) for h in target.get("hits") or []):
-                continue
-            target["hits"].append(hit)
-        else:
-            entries.append({"source": {"kind": "reviewer", "name": name, "sweepId": None}, "hits": [hit]})
+        # axis: a sweep entry is never the target of a reviewer's hit and never counted to one, even when it shares the name; a drop already on that reviewer's entry adds nothing, so a re-fold or a resumed round never doubles a hit — the insertion policy lives in session_contract.add_outside_hit, shared with the abandoned-session writer — see bite-proof record c3_wo_a_outside
+        session_contract.add_outside_hit(entries, name, drop.get("file"), drop.get("line"), title)
     return rest
 
 
