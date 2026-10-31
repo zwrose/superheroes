@@ -18,6 +18,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **A build that runs code review in PR mode passes `--earlier-findings` on the first `next`; a session that does not gets repeat matching against its own earlier rounds only.** See [Review: a finding that repeats an earlier one keeps its outcome](#review-a-finding-that-repeats-an-earlier-one-keeps-its-outcome).
+
 - **After switching.** **A caller that reads a break-it run's `copy-failed`, `dependency-link-failed` or `dependency-link-unsafe` reason reads the new run reasons instead; a passing break-it run no longer drops its finding; `round_driver.py break-it-change` is the one edit the build session makes to a reviewer's break-it test.** See [Review: break-it tests run in the session's working copy](#review-break-it-tests-run-in-the-sessions-working-copy).
 
 - **After switching.** **A light-lane review record no longer writes `shown-wrong` for a finding argued wrong; write `left-for-owner` with the argument. A caller that reads a verify record or verdict sees the new `held` list and the optional verdict field `pathReached`.** See [Review: only the verifier closes a finding as wrong](#review-only-the-verifier-closes-a-finding-as-wrong).
@@ -37,6 +39,11 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A custom panel reviewer that writes its own findings file writes the object `{"findings": [...], "readParts": [...]}`, and a reviewer on a schema-delivered engine emits `readParts` on every result.** See [Review: round-1 reviewers return what they read](#review-round-1-reviewers-return-what-they-read).
 
 - **After switching.** **Re-run configure once when the "rubric-version advanced" notice appears.** See [Review: the rubric version is 14](#review-the-rubric-version-is-14).
+
+### Review: a finding that repeats an earlier one keeps its outcome
+
+- **Repeat marks.** Code review marks a finding that repeats one of the PR's earlier findings and keeps the earlier outcome, unless the verifier finds it no longer holds. The rule is in [Repeats](skills/review-code/reference/synthesis-pass.md#repeats).
+- **`next --earlier-findings <path>`.** The build passes the PR's earlier findings on the first `next`, beside `--prior-comments`: the JSON that `review_record.py read --pr <N>` prints, saved as `<session dir>/earlier-findings.json`. A session that does not pass it gets exact-identity matching against its own earlier rounds only, and the round record discloses `earlierFindingsUnavailable` with reason `not-supplied`. See [next / submit protocol](skills/review-code/reference/round-driver.md#next--submit-protocol).
 
 ### Review: break-it tests run in the session's working copy
 

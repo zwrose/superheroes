@@ -135,7 +135,7 @@ def _valid_review_branch(kind):
             "resultKind": "grouping",
             "findings": None,
             "verdicts": None,
-            "grouping": [{"member_ids": ["a-001", "b-002"]}],
+            "grouping": [{"member_ids": ["a-001", "b-002"], "repeatOf": None}],
             "id": None,
             "ruling": None,
             "reason": None,

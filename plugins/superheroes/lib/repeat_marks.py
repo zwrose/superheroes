@@ -34,22 +34,6 @@ def _text(value):
     return value if isinstance(value, str) and value.strip() else None
 
 
-def outcome_of(disposition, row=None):
-    """The outcome an earlier ledger disposition stands for, or None when it is no decision.
-
-    A ``refuted`` row reads as the record writer reads it: shown-wrong with the verifier's `wrong` grade,
-    left-for-owner when its refutedReason starts ``author-justified``, else undecided (also with no ``row``)."""
-    if disposition not in session_contract.DISPOSITIONS:
-        return None
-    if disposition == "refuted":
-        row = row if isinstance(row, dict) else {}
-        grade, why = row.get("grade"), row.get("refutedReason")
-        if isinstance(grade, dict) and grade.get("verdict") == "wrong":
-            return SHOWN_WRONG
-        return review_findings_schema.LEFT_FOR_OWNER if isinstance(why, str) and why.startswith("author-justified") else None
-    return RULING if disposition == "out-of-scope" else disposition
-
-
 def disposition_of(outcome):
     """The ledger disposition a kept outcome is written as, so the driver never reads it as open."""
     return "refuted" if outcome == SHOWN_WRONG else outcome
@@ -100,31 +84,58 @@ def _entry(source, key, finding, outcome, **extra):
     row = {"source": source, "key": key, "outcome": outcome,
            "id": finding.get("id") if isinstance(finding.get("id"), str) else None,
            "file": finding.get("file"), "line": finding.get("line"), "title": finding.get("title")}
+    # the finding's own earlier link, so a re-match of the finding to itself can keep it
+    link = finding.get("repeatOf")
+    if isinstance(link, dict):
+        row["repeatOf"] = copy.deepcopy(link)
     row.update(extra)
     return row
 
 
-def session_entry(row, round_no):
-    """The pool entry for a ledger row decided (current disposition) before ``round_no``, else None."""
+def read_inputs(state):
+    """``(by_key, rulings, exempt)`` the record writer's `_decide` reads, from a driver ``state``; a ledger the
+    writer could not read, or a state that is not an object, gives the empty inputs (nothing is pooled)."""
+    import review_record_session  # lazy: the closure of this module stays small
+    try:
+        return review_record_session.decision_inputs(state if isinstance(state, dict) else {})
+    except review_record_session.Refusal:
+        return {}, {}, {}
+
+
+def session_entry(row, round_no, inputs):
+    """The pool entry for a ledger row decided before ``round_no``, else None.
+
+    The outcome is the record writer's own (`review_record_session.row_decision` over ``inputs``, from
+    `read_inputs`): a row is read through its `mergedInto` chain to the representative (an unresolvable chain
+    is undecided), and the representative's `dispositionRound` is the round it was decided in. The entry
+    carries the row's own identity fields."""
     if not isinstance(row, dict):
         return None
-    outcome = outcome_of(row.get("disposition"), row)
+    import review_record_session  # lazy: the closure of this module stays small
+    # axis: a ledger row pools with the outcome the record writer's decision gives it, never a reading of its own — see bite-proof record c1l8_wo_a_repeat_marks
+    outcome, rep = review_record_session.row_decision(row, inputs)
     key = session_contract.finding_identity_key(row)
-    decided = row.get("dispositionRound")
-    disp_seq = row.get(session_contract.DISPOSITION_SEQ_FIELD)
-    raised_seq = row.get(session_contract.RAISED_SEQ_FIELD)
-    if (outcome is None or not key or not _plain_int(decided) or decided >= round_no
-            or not (_plain_int(disp_seq) and _plain_int(raised_seq) and disp_seq > raised_seq)):
+    decided = rep.get("dispositionRound") if isinstance(rep, dict) else None
+    if outcome is None or not key or not _plain_int(decided) or decided >= round_no:
         return None
     grade = row.get("grade")
+    rep_grade = rep.get("grade") if isinstance(rep, dict) and rep is not row else None
+    # axis: a member merged into a representative the verifier closed wrong carries that representative's wrong grade, so its repeat restores a closure the record can publish — see bite-proof record c1l8_wo_a_repeat_marks
+    if isinstance(rep_grade, dict) and rep_grade.get("verdict") == "wrong" \
+            and not (isinstance(grade, dict) and grade.get("verdict") == "wrong"):
+        grade = rep_grade
     return _entry("session", key, row, outcome, round=decided,
                   family=copy.deepcopy(session_contract.disposition_family_snapshot(row)),
                   grade=dict(grade) if isinstance(grade, dict) else None)
 
 
-def record_entry(finding, head):
+def record_entry(finding):
     """The pool entry for one finding of the earlier review record, else None (malformed); an undecided
-    finding (no outcome) is pooled with outcome None, which ``decide`` reads as new."""
+    finding (no outcome) is pooled with outcome None, which ``decide`` reads as new.
+
+    The entry's ``head`` (the commit the finding was judged on) is None: a record finding names no such
+    commit, and the record's final commit is only where its review ended, so the judged head is unknown and
+    `code_changed` reads the change as a change."""
     if not isinstance(finding, dict):
         return None
     outcome = finding.get("outcome")
@@ -134,7 +145,8 @@ def record_entry(finding, head):
         if not (_text(finding.get("file")) and _text(finding.get("title"))):
             return None
         key = opaque_key(finding)
-    return _entry("record", key, finding, outcome, head=head) if _text(key) else None
+    # axis: a record finding's judged head is unknown, so a repeat of one closed as wrong reads as changed code — see bite-proof record c1l8_wo_a_repeat_marks
+    return _entry("record", key, finding, outcome, head=None) if _text(key) else None
 
 
 def read_earlier_findings(payload):
@@ -147,11 +159,10 @@ def read_earlier_findings(payload):
     if payload.get("ok") is False:
         reason = payload.get("reason")
         return [], (None if reason == "review-record-missing" else _text(reason) or "refused")
-    findings, final = payload.get("findings"), payload.get("finalCommit")
+    findings = payload.get("findings")
     if payload.get("ok") is not True or not isinstance(findings, list):
         return [], "malformed"
-    head = final.get("sha") if isinstance(final, dict) else None
-    entries = [e for e in (record_entry(f, head) for f in findings) if e is not None]
+    entries = [e for e in (record_entry(f) for f in findings) if e is not None]
     return entries, None
 
 
@@ -170,10 +181,13 @@ def read_file(path):
     return (payload if isinstance(payload, dict) else None), entries, reason
 
 
-def build_pool(ledger, round_no, record_entries):
+def build_pool(state, round_no, record_entries):
     """The earlier-findings pool in order — session rows (ledger order), then record findings — each with
-    its ``eN`` ref. A record finding the session already holds (same stored key) is not listed twice."""
-    pool = [e for e in (session_entry(row, round_no) for row in ledger or ()) if e is not None]
+    its ``eN`` ref. A record finding the session already holds (same stored key) is not listed twice.
+
+    The session rows are read from the driver ``state`` as the record writer reads them (`read_inputs`)."""
+    inputs = read_inputs(state)
+    pool = [e for e in (session_entry(row, round_no, inputs) for row in inputs[0].values()) if e is not None]
     held = {e["key"] for e in pool}
     held |= {opaque_key({session_contract.FINDING_KEY_FIELD: e["key"]}) for e in pool}
     for entry in record_entries or ():
