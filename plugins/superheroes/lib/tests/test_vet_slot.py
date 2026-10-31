@@ -51,7 +51,9 @@ RECEIPT = """<!-- superheroes:vet-receipt -->
 **Pending.** `None`.
 """
 
-SLOT = "**Verdict: READY** · abc\n\nNew owner half.\n"
+# NOT-READY: these tests are about the slot span and markers; a READY slot also runs the leftover check (#2280),
+# which test_vet_slot_leftovers_2280.py covers.
+SLOT = "**Verdict: NOT-READY** · abc\n\nNew owner half.\n"
 
 DOD_BLOCK = """<!-- superheroes:dod-table -->
 | DoD bullet | Disposition |
@@ -206,19 +208,20 @@ def test_ok_check_reports_receipt_present():
 
 # --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
 
-ELEVEN_TOKENS = {
+THIRTEEN_TOKENS = {
     "bad-argument", "read-failed", "markers-invalid", "slot-span-foreign-content",
     "receipt-missing", "followup-undispositioned", "disposition-unknown", "none-over-list",
     "write-failed", "write-unconfirmed", "owner-command-in-body",
+    "leftover-not-accepted", "review-record-unreadable",
 }
 
 
-def test_module_emits_exactly_eleven_tokens():
+def test_module_emits_exactly_thirteen_tokens():
     source = inspect.getsource(vs)
     emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'reason="([a-z-]+)"', source))
-    assert emitted == ELEVEN_TOKENS
+    assert emitted == THIRTEEN_TOKENS
     for retired in ("followups-malformed", "dispositions-malformed"):
         assert retired not in source, retired
 
@@ -1043,12 +1046,18 @@ def test_handback_reads_with_analyze_body(monkeypatch):
     assert seen == [BODY]
 
 
+RECORD_NO_LEFTOVERS = ("<!-- superheroes:review-record -->\n\n<details><summary>Record</summary>\n\n```json\n"
+                       + json.dumps({"schema": "review-record/1", "leftForOwner": [], "findings": []})
+                       + "\n```\n</details>\n")
+
+
 @pytest.mark.parametrize("body,ok", [(BODY, True), (HYPHEN_BODIES[0], False)])
-def test_handback_from_pr_reads_only_the_body(body, ok):
-    fake = _ok_fake(body=body)
+def test_handback_from_pr_reads_the_body_then_the_comments(body, ok):
+    fake = FakeGh([body], _pages([_comment(RECORD_NO_LEFTOVERS, login="builder")]))
     result = vs.run_verb("handback", PR, REPO, run=fake)
     assert result["ok"] is ok
-    assert fake.calls == [list(VIEW)]  # no login, no comments, no edit: no receipt is needed
+    # no login and no edit: no receipt is needed; the comments are read only for a body that passed (#2280)
+    assert fake.calls == ([list(VIEW), list(COMMENTS)] if ok else [list(VIEW)])
 
 
 def test_handback_unreadable_body_file_is_read_failed(tmp_path):

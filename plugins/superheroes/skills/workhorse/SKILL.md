@@ -643,7 +643,9 @@ blocker, and the dispositions table and the durable review receipt are posted.
 **A full-lane PR, opened as a draft before review, is marked ready at handback. A light-lane PR
 opens ready, except that a stacked light-lane layer opens as a draft and is marked ready only after
 the PR-mode handback check passes on its pushed head: no stacked layer, on any lane, is marked or
-opened ready before that check passes.** Its body has two addressees and one home per fact. The **owner
+opened ready before that check passes. A light-lane PR whose review left a finding for the owner
+opens as a draft too, and is marked ready only after that check passes on its written review
+record.** Its body has two addressees and one home per fact. The **owner
 half** answers *what is different, and do I accept it?* in consequences. The **build record**
 answers *did the process hold, and what must I route?* with mechanism. The owner half is not a
 summary of the build record.
@@ -703,6 +705,13 @@ filled, and the bite-proof records. The PR body carries a DoD disposition table 
 
 **Never auto-close an issue that must stay open.** GitHub's closing-keyword parser is negation-blind,
 so use a non-closing verb ("addresses", "part of", "relates to") for an issue this PR must not close. **A full-lane build hands back only with its review record written.** Without one, park and name the review that is missing (`rubric/review-discipline.md` § The driver mandate — the review record).
+**Every finding left for the owner is named before the ready mark.** The PR-mode handback check
+(`vet_slot.py handback --pr <n> --repo <owner/name>`) reads the latest review record and refuses
+`leftover-not-accepted`, naming each missing id and title, while `## What we're accepting` does not
+name every `leftForOwner` finding by its record id, byte for byte, with its title in the same line;
+it refuses `review-record-unreadable` when no record can be read. Never mark the PR ready on either
+refusal. The advisor's READY slot write refuses the same way (`lib/leftover_accepting.py` is the
+rule's one home).
 **Verify the remote head before you declare ready.** A commit that lives only in your local worktree
 is not a receipt the advisor can see. **Keep the PR body current**, edited in place. **You never
 merge.** Hand back to the owner.
