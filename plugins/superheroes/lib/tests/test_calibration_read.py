@@ -217,6 +217,15 @@ def test_codex_absolute_path_elsewhere_with_the_basename_is_not_a_read(calib):
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
 
 
+@pytest.mark.parametrize("command", [
+    "rg --files-with-matches . {core}", "grep --files-without-match x {core}", "grep --count x {core}",
+    "rg --quiet x {core}", "grep --files-with x {core}",
+])
+def test_codex_long_name_or_count_options_are_not_a_read(calib, command):
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
+
+
 def test_vocabulary_has_one_home():
     import calibration_vocab
     import review_record

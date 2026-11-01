@@ -325,6 +325,22 @@ _SHELL_PROGRAMS = frozenset(("sh", "bash", "zsh", "dash", "ksh"))
 _WRAPPER_PROGRAMS = frozenset(("sudo", "env", "command", "time", "nice", "nohup", "exec"))
 # grep/rg options that report a match count or file name, never the content.
 _NONCONTENT_FLAG_RE = re.compile(r"^-[A-Za-z]*[lLcq][A-Za-z]*$")
+_NONCONTENT_LONG_FLAGS = (
+    "--files-with-matches", "--files-without-match", "--files", "--count", "--count-matches",
+    "--quiet", "--silent",
+)
+
+
+def _noncontent_flag(arg):
+    """True for a grep/rg option that reports names or counts only, short or long (or an unambiguous prefix)."""
+    if _NONCONTENT_FLAG_RE.match(arg):
+        return True
+    if not arg.startswith("--"):
+        return False
+    name = arg.split("=", 1)[0]
+    return any(name == flag or (len(name) >= 7 and flag.startswith(name)) for flag in _NONCONTENT_LONG_FLAGS)
+
+
 _PATH_CHARS = r"[\w.\-/]"
 _MAX_SHELL_DEPTH = 3
 # A path-like word of a command text: split at whitespace, quotes, redirections, operators and `=`.
@@ -395,7 +411,7 @@ def _command_hit(command, targets, depth=0):
             continue
         if program in _READER_PROGRAMS:
             if program in ("grep", "egrep", "fgrep", "rg") and any(
-                    _NONCONTENT_FLAG_RE.match(arg) for arg in args if arg.startswith("-")):
+                    _noncontent_flag(arg) for arg in args if arg.startswith("-")):
                 verdict = verdict or _HIT_NONREAD
                 continue
             return _HIT_READ
