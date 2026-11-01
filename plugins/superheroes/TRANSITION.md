@@ -18,6 +18,8 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **Every review finding now names its kind of mistake and every other place in the change with the same mistake, and the fix auditor fails a fix that leaves a named place unfixed. Reviewers are asked to write a search description on every finding; a finding whose reviewer wrote none (the member is `null`) is still kept, never refused. A caller sees the two new finding members `kindOfMistake` and `searchDescription`, which a codex seat's strict output schema now requires as nullable keys; the audit result's `places` answer, `[{file, line, fixed}]`, optional in the schema, but for a finding that names places an absent answer leaves every named place unanswered, so the finding stays open; and the review record's "kind of mistake" and "also in this PR … (n of m fixed)" parts on a finding. Nothing is owed by a project at once: a custom reviewer that writes its own findings JSON emits both members, as an object or as `null`, and a `null` is never a refusal.** See [Review: a finding names its kind of mistake, and every place with it is fixed](#review-a-finding-names-its-kind-of-mistake-and-every-place-with-it-is-fixed).
+
 - **After switching.** **A big change that cannot be split is reviewed in slices by size, with every unread part reviewed and one seams check, in place of the split by top-level folder and the gap sweep. A caller that reads the panel payload's `shards` or `big` keys, or the `dispatch-gap-sweep` phase, reads `slices` and `dispatch-seams-check` instead; a session saved at the gap-sweep step continues past it; a hand-landed panel `readParts` that differs from an engine run's is refused `evidence-read-parts-mismatch`.** See [Review: a big change is reviewed in slices](#review-a-big-change-is-reviewed-in-slices).
 
 - **After switching.** **A PR whose review left findings for the owner names each one, by record id and title, under What we're accepting before it is marked ready or vetted READY.** `vet_slot.py handback --pr` and a READY `vet_slot.py write` now refuse `leftover-not-accepted` or `review-record-unreadable`. See [Vet slot: findings left for the owner are named before ready](#vet-slot-findings-left-for-the-owner-are-named-before-ready).
@@ -57,6 +59,13 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A caller that passes `dispatch-write --landing-dir`, reads a `sandbox-landing-dir-*` refusal, imports `observed_refusals` or `record_paths.is_landing_dir`, or reads `$FIXER_MODEL` drops it; a saved `code-fixer` or `fixer` tier override is dropped and a saved codex pin under either key takes no effect and is listed as invalid; both are safe to remove.** See [Review: the fixer-only machinery is removed](#review-the-fixer-only-machinery-is-removed).
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
+
+### Review: a finding names its kind of mistake, and every place with it is fixed
+
+- **Named everywhere.** A finding names its [kind of mistake](rubric/glossary.md#kind-of-mistake) and every other place in the change that has it, on lines the change touched. A place on an untouched line goes on the outside list, under the raising reviewer.
+- **Every place fixed.** The fix auditor answers each named place, and a place left unfixed or unanswered keeps the finding open.
+- **The search description.** Reviewers are asked to write a [search description](rubric/glossary.md#search-description) on every finding (a `null` is kept, not refused). The reviewer that raised the finding writes it, and it is what the search for copies of a confirmed Important or Critical finding uses; the glossary entry is the one home of that rule. The review stamps its author from the vendor that actually ran the seat, and a description from a maker's family is never stamped.
+- **On the record.** The finding shows "kind of mistake: …" and "also in this PR: … (n of m fixed)".
 
 ### Review: a big change is reviewed in slices
 
