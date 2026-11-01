@@ -148,6 +148,21 @@ def test_t6b_a_hand_submit_session_counts_each_seat_its_rounds_say_ran_without_a
                                       "bySeat": {"code-reviewer": {"tokens": 0, "minutes": 0.0, "runs": 1}}}
 
 
+def test_t6c_a_hand_submitted_synthesis_counts_as_a_run_without_a_figure(tmp_path):
+    # axis: a hand-accepted synthesis step is a run without a figure under `synthesis synthesis`, once per (round, attempt)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2307_session_cost.md
+    s = Session(tmp_path, rounds={"1": {"seatStatus": {"code-reviewer": "run", "security-reviewer": "missing"}}})
+    synthesis = {"outcome": "accepted", "cmd": "submit", "phase": "dispatch-synthesis", "round": 1, "attempt": 0}
+    s.rows.append(dict(synthesis))
+    cost = rs.account_from_session(s.save(), extras(), Fake().readers())["sessionCost"]
+    assert (cost["runs"], cost["runsWithoutFigure"], cost["complete"]) == (2, 2, False)
+    assert cost["bySeat"]["synthesis synthesis"] == {"tokens": 0, "minutes": 0.0, "runs": 1}
+    s.rows.append(dict(synthesis))  # the same (round, attempt) again: still one run
+    cost = rs.account_from_session(s.save(), extras(), Fake().readers())["sessionCost"]
+    assert (cost["runs"], cost["runsWithoutFigure"]) == (2, 2)
+    assert cost["bySeat"]["synthesis synthesis"] == {"tokens": 0, "minutes": 0.0, "runs": 1}
+
+
 def test_t7_the_size_trim_leaves_the_session_cost_alone(tmp_path, monkeypatch):
     session, _, _ = fix_session(tmp_path)
     runs = {"n1": run("n1", 100, 60), "n2": run("n2", 200, 120), "n3": run("n3", 300, 30)}
@@ -231,6 +246,7 @@ def test_t12_a_secret_shaped_seat_key_is_shown_redacted_with_its_figures(tmp_pat
 
 
 def test_t12b_redacted_seat_keys_stay_distinct():
+    # axis: redacting several seat keys keeps every cost bucket under its own distinct neutral key
     cost = {"tokens": 3, "minutes": 0.0, "runs": 3, "runsWithoutFigure": 3, "complete": False,
             "bySeat": {"to" + "ken.py::a": {"tokens": 1, "minutes": 0.0, "runs": 1}, "to" + "ken.py::b": {"tokens": 2, "minutes": 0.0, "runs": 1},
                        "[REDACTED SEAT]": {"tokens": 0, "minutes": 0.0, "runs": 1}}}
@@ -269,6 +285,7 @@ def test_t13_the_validator_refuses_a_malformed_session_cost_and_posts_nothing(tm
 
 
 def test_t13b_a_well_formed_session_cost_and_an_absent_one_are_both_accepted(tmp_path):
+    # axis: a valid sessionCost is written as given, and an account with none is accepted and gains no cost field
     fake = trr.Fake()
     assert rr.write(trr.put(tmp_path, trr.account(sessionCost=GOOD)), str(tmp_path), fake.readers())["ok"]
     assert rr.read(7, readers=fake.readers())["sessionCost"] == GOOD

@@ -341,6 +341,50 @@ FAILED plugins/superheroes/lib/tests/test_review_record_session_cost_2307.py::te
 1 passed in 3.48s
 ```
 
+## 8. Hand-submit synthesis (`lib/review_record_session.py`, `account_from_session`'s `hand`)
+
+- **Axis:** in a hand-submit session, every synthesis step the journal shows accepted is one run without a figure under `synthesis synthesis`, once per distinct `(round, attempt)`.
+- **Detector:** `test_review_record_session_cost_2307.py::test_t6c_a_hand_submitted_synthesis_counts_as_a_run_without_a_figure`.
+- **Neutralization:** the synthesis entries were removed from `hand`: `hand += ["synthesis synthesis"] * len({...})` became `hand += ["synthesis synthesis"] * 0 * len({...})`, which adds none.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_t6c_a_hand_submitted_synthesis_counts_as_a_run_without_a_figure _____
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-19/test_t6c_a_hand_submitted_synt0')
+
+    def test_t6c_a_hand_submitted_synthesis_counts_as_a_run_without_a_figure(tmp_path):
+        # axis: a hand-accepted synthesis step is a run without a figure under `synthesis synthesis`, once per (round, attempt)
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2307_session_cost.md
+        s = Session(tmp_path, rounds={"1": {"seatStatus": {"code-reviewer": "run", "security-reviewer": "missing"}}})
+        synthesis = {"outcome": "accepted", "cmd": "submit", "phase": "dispatch-synthesis", "round": 1, "attempt": 0}
+        s.rows.append(dict(synthesis))
+        cost = rs.account_from_session(s.save(), extras(), Fake().readers())["sessionCost"]
+>       assert (cost["runs"], cost["runsWithoutFigure"], cost["complete"]) == (2, 2, False)
+E       assert (1, 1, False) == (2, 2, False)
+E         
+E         At index 0 diff: 1 != 2
+E         Use -v to get more diff
+
+/home/user/wt-2307/plugins/superheroes/lib/tests/test_review_record_session_cost_2307.py:158: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_session_cost_2307.py::test_t6c_a_hand_submitted_synthesis_counts_as_a_run_without_a_figure
+1 failed in 3.19s
+```
+
+**Restore:** the inverse edit removed the `* 0`.
+**Restore receipt** (the restored line, quoted from `review_record_session.py:1090`): `        hand += ["synthesis synthesis"] * len({(r["round"], r["attempt"] if _int(r.get("attempt")) else 0) for r in rows`
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 4.28s
+```
+
 ## Not proven (outside the declared set)
 
 These tests carry no neutralization of their own; they are listed so nobody reads them as covered by this record: T2 (a carried row never counts), T4's other six parametrized cases (bool, negative and non-dict observations), T4b (a raising engine record, a non-dict one, a nonce claimed by two dirs), T5 (per-seat sums), T6 and T6b (no reviewer; the hand-submit rule), T7 (the size trim leaves `sessionCost` alone), T8 (a rewrite keeps earlier heads' runs), T11 (a nonce-less missing or advanced slot is not a run), T12b (distinct redacted keys) and the other twelve T13 cases.

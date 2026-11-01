@@ -1086,6 +1086,10 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     hand = [REVIEWER_ROUND_SUFFIX.sub("", v["name"]) for v in reviewers if v.get("ran")] + [
         seat for rnd, seats in _panel_rounds_with_status(state).items() for seat, value in seats.items()
         if value == "run" and _panel_head(state, rnd, meta.get("headSha")) is None] if by_hand else []
+    if by_hand:  # axis: a hand-accepted synthesis step is a run without a figure, once per (round, attempt) — see bite-proof record i2307_session_cost
+        hand += ["synthesis synthesis"] * len({(r["round"], r["attempt"] if _int(r.get("attempt")) else 0) for r in rows
+                                               if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
+                                               and r.get("phase") == round_phases.P_SYNTHESIS and _int(r.get("round"))})
     session_cost = _session_cost(rows, extras.get("runDirs", []), review_record._readers(readers)["engine_run"], hand)
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
     pr_body_line = pr_body_stage.record_line(session_dir)
