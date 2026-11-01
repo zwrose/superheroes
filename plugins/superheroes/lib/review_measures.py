@@ -25,9 +25,9 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
   - A session's figures come from its latest record. Rounds per PR sum the sessions' `rounds.count`.
   - Reviewer cost comes only from each session's latest record's `sessionCost`, and only when it is complete;
     `runs: 0` adds zero; a record without a well-formed one reads unmeasured, never zero.
-    Per-seat cost comes from complete sessions' `bySeat`; a seat no complete session costed, or that a session we cannot read ran, costed or found under, reads unmeasured.
+    A seat's tokens and minutes are a number only when every in-window session that ran it has a complete `sessionCost` whose `bySeat` names it (an incomplete one's `bySeat` also counts as a run); a finding's lens never blanks a cost, and any other seat reads unmeasured.
     The window figures are over the measured PRs, and `prsLeftOut` counts the rest.
-  - Finding outcomes by lens read each PR's latest record, one per finding key, merged members left out; an
+  - Finding outcomes read each PR's latest record, one per finding key, merged members left out, and count for the seats the finding's `raisedBy` names, never its lens; one that names no lens seat counts under `unattributed`, and a PR with a counted finding that has no `raisedBy` leaves the outcomes of every seat that ran on it unmeasured (`raising-seat-not-recorded`). An
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
     no finding open or left for the owner.
@@ -72,6 +72,7 @@ LEFT_OUT_WHY = "a review session has no complete sessionCost"
 _CAP_RE = re.compile(r"<!-- superheroes:cap-choice choice=(\S+) vet=\S+ record=\S+ key=(.+?) -->")
 _OPEN = (None, review_findings_schema.LEFT_FOR_OWNER)
 _day = review_learning._day
+RAISED_BY = "raisedBy"  # the finding field `session_contract.RAISED_BY_FIELD` names
 
 
 def _num(v):
@@ -130,6 +131,18 @@ def _session_cost(rec):
           and all(isinstance(v, dict) and _nat(v.get("tokens")) and _num(v.get("minutes")) is not None and _nat(v.get("runs"))
                   for v in sc["bySeat"].values()))
     return sc if ok else None
+
+
+def _raiser(f):
+    """The finding's `raisedBy` when it is a non-blank string, else None: the raising run is then not recorded."""
+    v = f.get(RAISED_BY)
+    return v if isinstance(v, str) and v.strip() else None
+
+
+def _ran_seats(rows):
+    """The lens seats the reviewer rows show ran: not `not-run`, and not carried from an earlier head."""
+    return {s for x in rows if x["ran"] != review_record.RAN_NOT_RUN and "carried" not in x
+            for s in review_learning._seats(x["name"])}
 
 
 def _sum(vals, k, exact=False):
@@ -230,35 +243,44 @@ def compute(inp, start, end, written_at=None):
             m["reviewerCostPerPr"][k] = _r1(shown) if k == "minutes" else shown
         m["reviewerCostPerPr"]["prsLeftOut"] = out
         outcomes, costs = collections.defaultdict(collections.Counter), collections.defaultdict(collections.Counter)
-        blanked, ran, costed = set(), set(), set()  # blanked: the seats a session with no complete sessionCost could have run; ran: every seat that ran; costed: the seats a complete session's bySeat names
-        for rs in prs.values():
-            keyed = {}
+        blanked, ran, costed = set(), set(), set()  # blanked: the seats a session could have run without a complete sessionCost that names them; ran: every seat that ran; costed: the seats a complete session's bySeat names
+        unread = set()  # the seats that ran on a PR whose counted finding names no raiser: their outcomes are unmeasured
+        for pr, rs in prs.items():
+            keyed, lacking = {}, False
             for f in _latest(rs)["findings"]:
                 if not review_learning._merged_member(f):
                     got = keyed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"),
-                                           (f.get("outcome") or "open", set()))
-                    got[1].update(review_learning._seats(f.get("reviewer")))
-            for outcome, seats in keyed.values():
+                                           [f.get("outcome") or "open", set(), True])
+                    raiser = _raiser(f)
+                    got[1].update(review_learning._seats(raiser))
+                    got[2] = got[2] and raiser is not None
+            for outcome, seats, named in keyed.values():
+                if not named:
+                    lacking = True  # the raiser is not recorded: the finding counts for no seat, never for its lens
+                    continue
                 for s in seats or ("unattributed",):
                     outcomes[s][outcome] += 1
+            if lacking:
+                unread |= _ran_seats(x for r in every[pr] for x in r["reviewers"])
             for recs in _by_session(rs):
                 last = _latest(recs)
                 sc = _session_cost(last)
-                ran_seats = {s for x in last["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN and "carried" not in x
-                             for s in review_learning._seats(x["name"])}
+                ran_seats = _ran_seats(last["reviewers"])
                 ran |= ran_seats
+                named_seats = {s for name in (sc["bySeat"] if sc else ()) for s in review_learning._seats(name)}
                 if sc is None or not sc["complete"]:
-                    blanked |= ran_seats | {s for name in (sc["bySeat"] if sc else ()) for s in review_learning._seats(name)}
-                    blanked |= {s for f in last["findings"] for s in review_learning._seats(f.get("reviewer"))}
+                    blanked |= ran_seats | named_seats
                 else:
-                    costed |= {s for name in sc["bySeat"] for s in review_learning._seats(name)}
+                    costed |= named_seats
+                    blanked |= ran_seats - named_seats  # a complete cost that leaves out a seat that ran does not cost it
                 for name, by in sc["bySeat"].items() if sc else ():
                     for s in review_learning._seats(name):
                         for k in ("tokens", "minutes"):
                             costs[s][k] += by[k] if sc["complete"] else 0  # an incomplete session still names its seats
         m["seats"] = {}
-        for s in sorted(set(outcomes) | set(costs) | ran):
-            shown = {"outcomes": {o: outcomes[s][o] for o in (*review_findings_schema.OUTCOMES, "open")}}
+        for s in sorted(set(outcomes) | set(costs) | ran | unread):
+            shown = {"outcomes": (miss("seats.%s.outcomes" % s, "raising-seat-not-recorded") if s in unread
+                                  else {o: outcomes[s][o] for o in (*review_findings_schema.OUTCOMES, "open")})}
             for k in ("tokens", "minutes"):
                 known = s in costed and s not in blanked and s != "unattributed"  # no seat to record a cost against
                 shown[k] = ((round(costs[s][k], 1) if k == "minutes" else costs[s][k]) if known
