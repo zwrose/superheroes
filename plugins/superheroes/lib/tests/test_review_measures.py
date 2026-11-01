@@ -119,6 +119,13 @@ def test_a_malformed_record_makes_the_record_measures_unmeasured_not_zero():
     assert row["leftOut"]["malformed"] == 1 and row["prs"] == U
 
 
+def test_records_on_both_window_end_days_count_and_the_days_outside_do_not():
+    recs = [_rec(1, at="2026-10-01T00:00:00Z"), _rec(2, at="2026-10-07T23:59:59Z"),
+            _rec(3, at="2026-09-30T23:59:59Z"), _rec(4, at="2026-10-08T00:00:00Z")]
+    row = RM.compute(_full(records=recs, ciRuns=[{"pr": n, "minutes": 1} for n in (1, 2)]), FROM, UNTIL)
+    assert row["prs"] == 2 and row["leftOut"]["outsideWindow"] == 2
+
+
 def test_records_outside_the_window_are_left_out():
     recs = [_rec(1), _rec(2, at="2026-09-30T23:00:00Z"), _rec(3, at="2026-10-08T00:00:00Z")]
     row = RM.compute(_full(records=recs), FROM, UNTIL)
@@ -184,11 +191,11 @@ def test_a_malformed_session_cost_reads_unmeasured_and_leaves_the_record_whole(b
 def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     named = [_f("k1"), _f("k2", "craft", "Failure-Mode")]  # the findings name two seats
     ci = [{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]
-    # every session has a complete sessionCost: a seat named by the findings that no session ran reads 0
+    # every session has a complete sessionCost: a seat named only by the findings reads unmeasured
     seats = RM.compute(_full(records=[_rec(1, findings=named)]), FROM, UNTIL)["measures"]["seats"]
-    assert seats["security-reviewer"]["tokens"] == 100 and seats["premortem-reviewer"]["tokens"] == 0
+    assert seats["security-reviewer"]["tokens"] == 100 and seats["premortem-reviewer"]["tokens"] == U
     # one session with no sessionCost blanks the seats it ran, not only its PR's
-    unread = _rec(2, rows=[_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)")], sc=None)
+    unread = _rec(2, sc=None)
     row = RM.compute(_full(records=[_rec(1, findings=named), unread], ciRuns=ci), FROM, UNTIL)
     seats, why = row["measures"]["seats"], _why(row)
     assert seats["security-reviewer"]["tokens"] == U and seats["security-reviewer"]["minutes"] == U
@@ -221,6 +228,44 @@ def test_a_session_without_a_readable_cost_blanks_only_the_seats_it_ran():
     assert seats["code-reviewer"]["tokens"] == U and seats["code-reviewer"]["minutes"] == U
     assert _why(row)["seats.code-reviewer.tokens"] == "cost-not-recorded"
     assert seats["security-reviewer"]["tokens"] == 100 and seats["security-reviewer"]["minutes"] == 1.5
+
+
+def test_a_seat_found_under_by_an_unreadable_session_reads_unmeasured():
+    # (a) a full-lane session with no sessionCost raised a Failure-Mode finding; a complete session costs the premortem seat
+    unread = _rec(1, "a", rows=[_row("code-reviewer (round 1)")], findings=[_f("k1", reviewer="Failure-Mode")], sc=None)
+    costed = _rec(1, "b", sc=_sc(7, 0.2, by_seat={"premortem-reviewer": _by(7, 0.2)}))
+    row = RM.compute(_full(records=[unread, costed]), FROM, UNTIL)
+    assert row["measures"]["seats"]["premortem-reviewer"]["tokens"] == U
+    assert row["seatingRow"]["premortem"]["tokens"] == U
+    assert review_learning.seating(row["seatingRow"])["seats"]["premortem"]["tokens"] == U
+    # (b) a light-lane account: its only row is `codex-light` and it found one Code finding
+    light = _rec(1, "a", rows=[{"name": "codex-light", "ran": "reported-by-session", "commit": "c1"}],
+                 findings=[_f("k1", reviewer="Code")], sc=None)
+    seats = RM.compute(_full(records=[light, _rec(1, "b")]), FROM, UNTIL)["measures"]["seats"]
+    assert seats["code-reviewer"]["tokens"] == U
+    assert seats["security-reviewer"]["tokens"] == 100
+
+
+def test_an_incomplete_session_blanks_a_seat_only_its_by_seat_names():
+    # the incomplete session's rows name only the code seat; its bySeat names the security seat
+    hand = _rec(1, "a", rows=[_row("code-reviewer (round 1)")],
+                sc=_sc(5, 0.1, runs=1, without=1, by_seat={"security-reviewer": _by(5, 0.1)}))
+    seats = RM.compute(_full(records=[hand, _rec(1, "b")]), FROM, UNTIL)["measures"]["seats"]
+    assert seats["security-reviewer"]["tokens"] == U and seats["security-reviewer"]["minutes"] == U
+
+
+def test_the_seat_list_leaves_out_carried_and_not_run_rows():
+    rows = [_row("security-reviewer (round 1)"), dict(_row("architecture-reviewer (round 1)"), carried={"commit": "c0"}),
+            {"name": "test-role", "ran": "not-run", "commit": "c1"}]
+    seats = RM.compute(_full(records=[_rec(1, rows=rows)]), FROM, UNTIL)["measures"]["seats"]
+    assert "architecture-reviewer" not in seats and "test-role" not in seats
+    assert set(seats) == {"security-reviewer"}
+
+
+def test_a_session_whose_only_ran_rows_are_carried_counts_a_panel_of_zero():
+    rows = [dict(_row("security-reviewer (round 1)"), carried={"commit": "c0"})]
+    panels = RM.compute(_full(records=[_rec(1, rows=rows)]), FROM, UNTIL)["measures"]["panels"]
+    assert panels["sizes"] == {"0": 1}
 
 
 def test_a_session_where_no_reviewer_ran_adds_zero():
@@ -264,6 +309,13 @@ def test_the_top_tenth_share_is_the_costliest_tenth_of_prs():
     ci = [{"pr": n, "minutes": 1} for n in range(1, 11)]
     cost = RM.compute(_full(records=recs, ciRuns=ci), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"]
     assert cost["total"] == 1000 and cost["topTenthShare"] == 0.91
+
+
+def test_the_top_tenth_share_rounds_the_slice_up():
+    recs = [_rec(n, sc=_sc(900 if n == 11 else 10, 1.5)) for n in range(1, 12)]
+    ci = [{"pr": n, "minutes": 1} for n in range(1, 12)]
+    cost = RM.compute(_full(records=recs, ciRuns=ci), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"]
+    assert cost["total"] == 1000 and cost["topTenthShare"] == round(910 / 1000, 3)  # 2 of 11 PRs; a slice of 1 gives 0.9
 
 
 def test_finding_outcomes_by_lens_key_an_undecided_finding_open_and_feed_the_seating_check():

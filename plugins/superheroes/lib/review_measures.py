@@ -25,7 +25,7 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
   - A session's figures come from its latest record. Rounds per PR sum the sessions' `rounds.count`.
   - Reviewer cost comes only from each session's latest record's `sessionCost`, and only when it is complete;
     `runs: 0` adds zero; a record without a well-formed one reads unmeasured, never zero.
-    Per-seat cost comes from its `bySeat`; a session we cannot read blanks the seats it ran.
+    Per-seat cost comes from complete sessions' `bySeat`; a seat no complete session costed, or that a session we cannot read ran, costed or found under, reads unmeasured.
     The window figures are over the measured PRs, and `prsLeftOut` counts the rest.
   - Finding outcomes by lens read each PR's latest record, one per finding key, merged members left out; an
     undecided finding is `open`. Seats are named through `review_learning._seats`.
@@ -230,7 +230,7 @@ def compute(inp, start, end, written_at=None):
             m["reviewerCostPerPr"][k] = _r1(shown) if k == "minutes" else shown
         m["reviewerCostPerPr"]["prsLeftOut"] = out
         outcomes, costs = collections.defaultdict(collections.Counter), collections.defaultdict(collections.Counter)
-        blanked, ran = set(), set()  # blanked: the seats a session with no complete sessionCost could have run; ran: every seat that ran
+        blanked, ran, costed = set(), set(), set()  # blanked: the seats a session with no complete sessionCost could have run; ran: every seat that ran; costed: the seats a complete session's bySeat names
         for rs in prs.values():
             keyed = {}
             for f in _latest(rs)["findings"]:
@@ -249,6 +249,9 @@ def compute(inp, start, end, written_at=None):
                 ran |= ran_seats
                 if sc is None or not sc["complete"]:
                     blanked |= ran_seats | {s for name in (sc["bySeat"] if sc else ()) for s in review_learning._seats(name)}
+                    blanked |= {s for f in last["findings"] for s in review_learning._seats(f.get("reviewer"))}
+                else:
+                    costed |= {s for name in sc["bySeat"] for s in review_learning._seats(name)}
                 for name, by in sc["bySeat"].items() if sc else ():
                     for s in review_learning._seats(name):
                         for k in ("tokens", "minutes"):
@@ -257,14 +260,14 @@ def compute(inp, start, end, written_at=None):
         for s in sorted(set(outcomes) | set(costs) | ran):
             shown = {"outcomes": {o: outcomes[s][o] for o in (*review_findings_schema.OUTCOMES, "open")}}
             for k in ("tokens", "minutes"):
-                known = s not in blanked and s != "unattributed"  # no seat to record a cost against
+                known = s in costed and s not in blanked and s != "unattributed"  # no seat to record a cost against
                 shown[k] = ((round(costs[s][k], 1) if k == "minutes" else costs[s][k]) if known
                             else miss("seats.%s.%s" % (s, k), "cost-not-recorded"))
             m["seats"][s] = shown
         sizes = collections.Counter()
         for ss in per:
             for r in ss:
-                ran = [x for x in r["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN]
+                ran = [x for x in r["reviewers"] if x["ran"] != review_record.RAN_NOT_RUN and "carried" not in x]
                 sizes[str(len({s for x in ran for s in review_learning._seats(x["name"])}))] += 1
         m["panels"] = {"sizes": dict(sizes), "sessions": sum(n)}
 
