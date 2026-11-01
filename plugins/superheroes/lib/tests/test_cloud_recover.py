@@ -175,7 +175,8 @@ def _lane(w, launch_id, issue=17, *, premise=None, start_age=7200):
     assert ll.append(w.root, {
         "event": "started", "launchId": launch_id, "ts": time.time() - start_age, "schema": ll.SCHEMA, "attempt": 1,
         "pid": 999999999, "logPath": "/tmp/log", "errPath": "/tmp/err", "cloudSessionName": "cloud-%s" % launch_id,
-        "cloudSessionId": "session_%s" % launch_id, "cloudSessionUrl": "https://claude.ai/code/session_x"})
+        # the ledger accepts only session_[A-Za-z0-9]+, and real launch ids (launch-<hash>) carry a hyphen
+        "cloudSessionId": "session_%s" % launch_id.replace("-", ""), "cloudSessionUrl": "https://claude.ai/code/session_x"})
 
 
 def _local_lane(w, launch_id):

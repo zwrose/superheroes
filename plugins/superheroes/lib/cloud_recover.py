@@ -16,7 +16,9 @@ A successor is composed only for a cloud lane the launch ledger records as ended
 is limited and the lane started before the limit was recorded; or a confirmed handover), so no path through
 this module helps two builders work one issue. Every verb checks its inputs through the one `_inputs`.
 `assess` also answers `parked` (the issue holds a builder stop or park newer than the lane's last pushed
-work; never a recovery step).
+work; never a recovery step). Two stop readings override a park: a lane whose session is archived is `stopped`
+whatever the issue holds, and a lane whose issue holds the builder's own self-archive record is `stopped`
+(evidence `self-archived`) at the head that record names.
 
 Stdlib plus plugin imports only. A function that reads the environment takes `env=None` (a mapping; default
 the process environment), and one that runs a command also takes `run=None` (default `subprocess.run`).
@@ -202,14 +204,14 @@ def superseded_ids(repo_root, env=None):
 
 
 def handover_stopped_ids(repo_root, env=None):
-    """(the launch ids `assess` recorded as stopped on a confirmed handover, whether the state could be
-    read). A missing file is readable and empty; an unreadable one is not, and the caller treats no lane as
-    stopped."""
+    """(the launch ids `assess` recorded as stopped on a confirmed handover or on the builder's own
+    self-archive record, whether the state could be read). A missing file is readable and empty; an unreadable
+    one is not, and the caller treats no lane as stopped."""
     path, data = _load(repo_root, _env(env))
     if data is None:
         return set(), False
     return {lid for lid, entry in data["assessed"].items()
-            if entry.get("verdict") == "stopped" and entry.get("evidence") == "handover"}, True
+            if entry.get("verdict") == "stopped" and entry.get("evidence") in ("handover", "self-archived")}, True
 
 
 def _lane(repo_root, launch_id, env):
@@ -435,7 +437,10 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     """Whether the lane may be recovered now. `stopped` is returned only on positive stop evidence (the
     session failed, was archived or is gone; or the lane's own account reads limited and the lane started
     before the limit was recorded, evidence `account-limited`, the limit in `limitType`/`limitResetsAt`) or a
-    handover comment, and is recorded; every other verdict leaves the lane alone. `parked` (evidence
+    handover comment, and is recorded; every other verdict leaves the lane alone. An archived session reads
+    `stopped` even when the issue holds a newer park, and a self-archive record naming exactly this lane (made at
+    or after its start) reads `stopped` with evidence `self-archived`, its head recorded as `handoverSha` and its
+    time as `stoppedAt`; both come before a park, and neither overrides a `working` lane. `parked` (evidence
     `builder-stop` or `builder-park`, the comment in `parkComment`) means the issue holds a builder stop or park
     newer than the lane's last pushed work; it is never a recovery step. `parkRead` is `failed` when a read the
     park needed failed, so a park was not believed for want of it. A handed-back lane a fix order reopened is
@@ -470,13 +475,27 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     handover = found and {"commentId": found["commentId"], "url": found["url"], "sha": found["parsed"],
                           "createdAt": found["createdAt"]}
     out["handover"], out["handoverRead"] = handover, "ok" if read else "failed"
-    fresh = (session_state in _LIVE_STATES and _is_number(age)
+    cloud_builder = _sib("cloud_builder")
+
+    def own_self_archive(body):
+        pair = cloud_builder.self_archive_record(body)
+        return pair if pair and pair[0] == launch_id else None
+
+    archived = _newest(comments, start, own_self_archive) if read else None
+    fresh =(session_state in _LIVE_STATES and _is_number(age)
              and 0 <= age <= _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS)
     if not fresh:
         out["parkComment"], out["parkRead"] = _park_reading(repo_root, repo, info, reserved, comments, cutoff, env, run)
     # axis: a working or blocked session with recent activity is never recovered while it could still be working, whatever the comments say
     if fresh:
         out["verdict"] = "working"
+    # axis: an archived session is stopped whatever park or stop comment the issue holds, so a park left behind by a builder that was archived afterwards never blocks its recovery
+    elif session_state == "archived":
+        out["verdict"], out["evidence"] = "stopped", "session-archived"
+    # axis: a superseded builder's own self-archive record naming exactly this lane is stop evidence before any session read, so its named head is adopted without anyone archiving the session first
+    elif archived is not None:
+        out["verdict"], out["evidence"] = "stopped", "self-archived"
+        out["stoppedAt"] = _epoch(archived["createdAt"])
     # axis: a builder that stopped or parked on a question is not recovered, even when its session is gone
     elif out["parkComment"] is not None:
         out["verdict"], out["evidence"] = "parked", "builder-" + out["parkComment"]["kind"]
@@ -504,7 +523,8 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     if out["evidence"] == "handover":
         out["stoppedAt"] = _epoch(handover["createdAt"])
     entry = {"verdict": "stopped", "evidence": out["evidence"], "at": _iso(now), "stoppedAt": out["stoppedAt"],
-             "handoverSha": handover["sha"] if handover else None}
+             "handoverSha": (archived["parsed"][1] if out["evidence"] == "self-archived"
+                             else handover["sha"] if handover else None)}
     if out["evidence"] == "account-limited":
         entry["limitResetsAt"] = out["limitResetsAt"]
     wrote = _record(repo_root, "assessed", launch_id, entry, env=env)

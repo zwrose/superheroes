@@ -25,8 +25,13 @@ preflight, review and park.
                           the progress comment the builder keeps on its issue, as comment text
   cloud_builder.py review-lapsed
                           the park comment for a lapsed reviewer pass
+  cloud_builder.py review-rejected
+                          the park comment for a reviewer whose sign-in was rejected (401)
   cloud_builder.py handover --head SHA
                           the handover comment for work pushed and handed on, naming the head
+  cloud_builder.py self-archive --launch-id L --head SHA
+                          the record a superseded builder posts before it archives its own session,
+                          naming its lane (L, launch-<hash>) and its pushed head
   cloud_builder.py terminal --kind {handback,stop,park} --text-file F
                           the handback, stop or park comment, headed with its fixed first line
   cloud_builder.py pass-state
@@ -115,6 +120,14 @@ REVIEW_LAPSED_TEXT = (
     "The reviewer pass lapsed during this build, so no independent review happened. The work is "
     "pushed and this PR is not ready. It needs a fresh pass, then a review."
 )
+REVIEW_REJECTED_TEXT = (
+    "Parked: the review did not run.\n\n"
+    "The reviewer's sign-in was rejected during this build (the reviewer answered 401, for example "
+    "token_revoked), so no independent review happened. The work is pushed and this PR is not ready. "
+    "It needs a renewed sign-in and pass, then a review in a fresh session."
+)
+# deliberately not in TERMINAL_HEADERS: the newer lane's watch reads terminal headers created after its start, and a superseded builder's self-archive record is not the newer lane's ending
+SELF_ARCHIVE_HEADER = "Builder self-archive (cloud build)."
 
 
 def _sibling(name):
@@ -543,6 +556,32 @@ def review_lapsed_text():
     return {"comment": REVIEW_LAPSED_TEXT}
 
 
+def review_rejected_text():
+    """The park comment for a reviewer whose sign-in was rejected before the review ran."""
+    return {"comment": REVIEW_REJECTED_TEXT}
+
+
+def self_archive_text(launch_id, sha):
+    """The record a superseded builder posts before it archives its own session, naming its lane and its
+    pushed head; None when `launch_id` is not `launch-<hash>` or `sha` is not 40 lowercase hex."""
+    if not (isinstance(launch_id, str) and _LAUNCH_ID_RE.match(launch_id)
+            and isinstance(sha, str) and _SHA_RE.fullmatch(sha)):
+        return None
+    return (SELF_ARCHIVE_HEADER + "\n\nThis session's lane " + launch_id + " is superseded by a newer launch. "
+            "I stopped working on this issue and will push nothing more. My pushed head is " + sha + ". "
+            "I am archiving this session now; the platform may ask the owner to allow it.")
+
+
+def self_archive_record(body):
+    """(launch id, pushed head) a whole self-archive record names: exactly `self_archive_text`'s words,
+    optionally followed on a later line by the cloud harness's one `CLOUD_FOOTER`; None for any other body."""
+    text = strip_cloud_footer(body)
+    if text is None:
+        return None
+    match = re.search(r"lane (launch-[A-Za-z0-9]+) is superseded.*My pushed head is ([0-9a-f]{40})\.", text, re.DOTALL)
+    return match.groups() if match and text == self_archive_text(*match.groups()) else None
+
+
 def handover_text(sha):
     """The handover comment naming the pushed head; None when `sha` is not 40 lowercase hex."""
     if not isinstance(sha, str) or not _SHA_RE.fullmatch(sha):
@@ -718,7 +757,9 @@ def _build_parser():
          **{"--expected-minutes": {"type": int}}).add_argument("--lost", default=None)
     verb("note", "--question-file")
     verb("review-lapsed")
+    verb("review-rejected")
     verb("handover", "--head")
+    verb("self-archive", "--launch-id", "--head")
     verb("terminal", "--kind", "--text-file", **{"--kind": {"choices": ["handback", "stop", "park"]}})
     verb("pass-state")
     verb("superseded", "--repo", "--issue", "--launch-id", **{"--issue": {"type": int}})
@@ -756,10 +797,17 @@ def _dispatch(args):
         return note_text(question)
     if args.verb == "review-lapsed":
         return review_lapsed_text()
+    if args.verb == "review-rejected":
+        return review_rejected_text()
     if args.verb == "handover":
         comment = handover_text(args.head)
         if comment is None:
             return {"ok": False, "reason": "head-invalid"}
+        return {"ok": True, "comment": comment}
+    if args.verb == "self-archive":
+        comment = self_archive_text(args.launch_id, args.head)
+        if comment is None:
+            return {"ok": False, "reason": "input-invalid"}
         return {"ok": True, "comment": comment}
     if args.verb == "terminal":
         text = _read_text(args.text_file)
