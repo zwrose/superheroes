@@ -25,7 +25,8 @@ _PLACEHOLDER = "{{CLAUDE_MD_PATH}}"
 # A bare relative CLAUDE.md in a path slot: "...: CLAUDE.md" at end of line, a line that is only
 # the name, "(CLAUDE.md)" tail, or "...: CLAUDE.md and ..." (the five "Project conventions" lines).
 _BARE_SLOT = re.compile(r"(?:^|[:(]\s*)CLAUDE\.md\)?\s*$|:\s*CLAUDE\.md\s+and\b")
-_REVIEWER_PHASES = list(RO.ORDER_PHASES)
+# The sweep's seats are searchers, not reviewers: they search a fixed file list for one described mistake and judge nothing, so they need no CLAUDE.md.
+_REVIEWER_PHASES = [phase for phase in RO.ORDER_PHASES if phase != RP.P_SWEEP]
 
 
 def _template(phase):
@@ -50,6 +51,14 @@ def test_reviewer_phase_set_is_every_order_phase():
         RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_SEAMS, RP.P_SECOND_TEST, RP.P_AUDITS,
         RP.P_SCOPED]
     assert "CLAUDE_MD_PATH" in RD.ORDER_DERIVED_PLACEHOLDERS
+
+
+def test_sweep_is_an_order_phase_whose_template_has_no_bare_claude_md_slot():
+    # axis: the sweep stays a real order phase (t1) and its searcher template names no bare CLAUDE.md (t2)
+    # — see bite-proof record c4_wo2c_test_doubles
+    assert RP.P_SWEEP in RO.ORDER_PHASES
+    bare = [line for line in _template(RP.P_SWEEP).splitlines() if _BARE_SLOT.search(line)]
+    assert bare == [], "%s names CLAUDE.md as a bare relative path: %r" % (RP.P_SWEEP, bare)
 
 
 # --- (b)(c) the placeholder value ---------------------------------------------------

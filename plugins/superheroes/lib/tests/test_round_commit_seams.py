@@ -78,6 +78,9 @@ class FakeAdapters(object):
       return RD.payload_contracts.payload_fault(phase, payload, "apply-fixes")
     return "orchestrator-payload-unknown-phase:%s" % phase
 
+  def sweep_seat_key(self, sweep_id, part):
+    return "searcher:%s:%d" % (sweep_id, part)
+
   def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
                session_dir=None, orders_manifest=None):
     self.assembled.append({"phase": phase, "envelopes": envelopes,
