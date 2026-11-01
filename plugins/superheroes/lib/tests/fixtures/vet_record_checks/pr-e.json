@@ -138,6 +138,9 @@
     "sessionDisagreements": [],
     "sessionId": "s1",
     "status": "awaits-owner",
+    "testLens": {
+      "listed": false
+    },
     "unreadFiles": [],
     "whatIsMissing": [
       "finding code-retry-window waits for the owner's decision"
