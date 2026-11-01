@@ -41,6 +41,8 @@ NOW = datetime.datetime(2026, 10, 12, 12, tzinfo=datetime.timezone.utc).timestam
 PAST = "2026-10-05"
 LAUNCHED = datetime.datetime(2026, 10, 4, 12, tzinfo=datetime.timezone.utc).timestamp()  # before the park comment
 RELAUNCHED = datetime.datetime(2026, 10, 10, 12, tzinfo=datetime.timezone.utc).timestamp()
+EARLY = datetime.datetime(2026, 10, 1, tzinfo=datetime.timezone.utc).timestamp()  # a record written before any lane here started
+RENEWED_AT = datetime.datetime(2026, 10, 8, 12, tzinfo=datetime.timezone.utc).timestamp()  # after LAUNCHED, before RELAUNCHED
 FUTURE = "2026-12-01"
 REPO = "owner/name"
 BATCH = "b-parked"
@@ -111,12 +113,18 @@ def _account_file(directory, account):
         json.dumps({"oauthAccount": {"accountUuid": account}}), encoding="utf-8")
 
 
-def _setup_record(repo, store, account, lapses):
+def _written_at(repo, store, account, when):
+    """Set the setup record's modification time: the renewal time the send-back reads off it."""
+    os.utime(CS.record_path(repo, account, store), (when, when))
+
+
+def _setup_record(repo, store, account, lapses, written_at=EARLY):
     got = CS.record_check(
         repo, root=store, account=account, environment=ENVIRONMENT, plugin_version="1.2.3",
         picks_up_version=False, calibration_stamp=STAMP, calibration_date="2026-10-01",
         pass_lapses=lapses, checked_at="2026-10-01")
     assert got["action"] == "written", got
+    _written_at(repo, store, account, written_at)
 
 
 @pytest.fixture
@@ -158,16 +166,19 @@ def _park(w, pr, issue=None, **pull):
     return out
 
 
-def _renew(w, account=ACCOUNT, date=FUTURE):
-    """A renewal the way a cloud session confirms it: through the pass module's own recorder."""
+def _renew(w, account=ACCOUNT, date=FUTURE, written_at=EARLY):
+    """A renewal the way a cloud session confirms it: through the pass module's own recorder. The record is
+    stamped `written_at` (default before every lane here started) so the renewal time is the test's, not the clock's."""
     confirmation = {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": True,
                     "passLapses": date, "reason": None}
     got = cloud_pass.record_confirmation(
         w.repo, confirmation, account=account, environment=ENVIRONMENT, now=NOW, root=w.store, env=w.env)
     assert got["action"] == "written", got
+    _written_at(w.repo, w.store, account, written_at)
 
 
-def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None, ts=LAUNCHED, account_id=None):
+def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None, ts=LAUNCHED, account_id=None,
+          started_ts=None):
     extra = {"ts": ts} if config_dir is None else {"ts": ts, "configDir": config_dir}
     if account_id is not None:
         extra["accountId"] = account_id
@@ -176,6 +187,7 @@ def _lane(w, launch_id, issue, session, surface, finished=False, config_dir=None
     assert ll.reserve(w.repo, rec, env=w.env)["ok"]
     if session is not None:
         started = _started(launch_id)
+        started["ts"] = ts if started_ts is None else started_ts  # the session starts when the lane was reserved, unless told
         started.update(cloudSessionName=session, cloudSessionId="session_01AbCdEf123")
         assert ll.append_under_lock(w.repo, started, env=w.env)["ok"]
     if finished:
@@ -247,7 +259,8 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     _park(w, 10, issue=101)
     _renew(w)
     out = _send(w)
-    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [], "sendBack": [{
+    assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [],
+                   "adopt": [], "adopting": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
         "parkId": 910, "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
     assert _entries(w)[0]["outcome"] is None
@@ -517,6 +530,7 @@ def test_a_missing_unreadable_or_unresolvable_setup_record_renews_nothing(w):
     assert _send(w)["notRenewed"] == [10]
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(saved)
+    _written_at(w.repo, w.store, ACCOUNT, EARLY)  # the rewrite stamped the clock; keep the renewal before the lane
     assert [s["pr"] for s in _send(w)["sendBack"]] == [10]
     os.unlink(str(w.home / ".claude.json"))
     out = _send(w)
@@ -1177,3 +1191,318 @@ def test_a_legacy_acknowledgement_for_a_replaced_park_records_nothing(w):
     assert _notice(w, 10)["kind"] == "lapsed-pass"
     assert CP.sent(w.repo, REPO, 10, env=w.env) == {"ok": False, "reason": "park-changed"}
     assert _entries(w)[0]["outcome"] is None
+
+
+# ---------------------------------------------------------------- a rejected sign-in, and a renewal a running session never sees
+
+
+FIRST_LINE = "Parked: the review did not run."
+
+
+def _park_comment(pr, body, created_at="2026-10-05T10:00:00Z", cid=None):
+    return {"id": 900 + pr if cid is None else cid, "body": body, "created_at": created_at}
+
+
+def _rejected_comment(pr, **kw):
+    return _park_comment(pr, cloud_builder.REVIEW_REJECTED_TEXT, **kw)
+
+
+def _park_rejected(w, pr, issue=None):
+    w.gh.comments[pr] = [_rejected_comment(pr)]
+    w.gh.pulls[pr] = _pull(issue)
+    out = _notice(w, pr)
+    assert out["kind"] == "lapsed-pass" and out["cause"] == "rejected", out
+    return out
+
+
+def _confirmed_file(w):
+    return os.path.join(os.path.dirname(ll.ledger_path(w.repo, w.env)["path"]), CP.CONFIRMED_NAME)
+
+
+def _adopt_item(pr, issue, launch_id, session, park_id, cause):
+    return {"pr": pr, "repo": REPO, "issue": issue, "launchId": launch_id, "parkId": park_id,
+            "cloudSessionName": session, "configDir": None, "cause": cause,
+            "notice": cloud_builder.superseded_notice_text(launch_id), "message": CP.ADOPT_MESSAGE % launch_id}
+
+
+def test_t1_a_rejected_sign_in_park_is_classed_apart_recorded_with_its_cause_and_adopted_once_renewed(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    w.gh.comments[10] = [{"id": 1, "body": "hello"}, _rejected_comment(10)]
+    w.gh.pulls[10] = _pull(101)
+    out = _notice(w, 10)
+    assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "cause": "rejected", "text": CP.REJECTED_NOTICE_TEXT % 10}
+    assert "401" in out["text"] and "sign-in was rejected" in out["text"]
+    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": "2026-10-05", "outcome": None,
+                            "launchId": "l-a", "parkId": 910, "cause": "rejected"}]
+    # the same park written free-form before this change classes the same
+    free = FIRST_LINE + "\n\nThe reviewer answered 401 `token_revoked`, so no review happened."
+    w.gh.comments[11] = [_park_comment(11, free)]
+    w.gh.pulls[11] = _pull()
+    assert _notice(w, 11) == {"ok": True, "kind": "lapsed-pass", "pr": 11, "cause": "rejected",
+                              "text": CP.REJECTED_NOTICE_TEXT % 11}
+    assert _entries(w)[1]["cause"] == "rejected"
+    # not yet renewed: the record was written before the lane started
+    _renew(w)
+    assert _send(w)["adopt"] == [] and _send(w)["notRenewed"] == [10]
+    # renewed after the lane started: it is adopted
+    _written_at(w.repo, w.store, ACCOUNT, RENEWED_AT)
+    got = _send(w)
+    assert [a["pr"] for a in got["adopt"]] == [10] and got["adopt"][0]["cause"] == "rejected"
+    assert got["sendBack"] == [] and got["notRenewed"] == [] and got["noLane"] == [{"pr": 11, "issue": None}]
+
+
+def test_t1_e6_only_a_park_line_that_names_a_whole_number_401_is_a_rejected_park(w):
+    for n, body in enumerate([FIRST_LINE + "\n\nThe review was stopped for some other reason.",
+                              FIRST_LINE + "\n\nThe reviewer answered 4011.",
+                              FIRST_LINE + "\n\nRequest id 1401 failed.",
+                              "The review did not run (401).",
+                              "Note: " + FIRST_LINE + " 401"]):
+        w.gh.comments[20 + n] = [_park_comment(20 + n, body)]
+        assert _notice(w, 20 + n) == {"ok": True, "kind": "not-lapsed-pass", "pr": 20 + n, "text": None}, body
+    assert not os.path.exists(_state_file(w))
+    w.gh.comments[30] = [_park_comment(30, FIRST_LINE + "\n\nThe reviewer answered 401.")]
+    w.gh.pulls[30] = _pull()
+    assert _notice(w, 30)["cause"] == "rejected"
+
+
+def test_a_newer_park_of_the_other_cause_replaces_the_entry_and_the_newest_park_decides(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    assert "cause" not in _entries(w)[0]
+    w.gh.comments[10].append(_rejected_comment(10, created_at="2026-10-08T10:00:00Z", cid=1010))
+    assert _notice(w, 10)["cause"] == "rejected"
+    assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": "2026-10-08", "outcome": None, "launchId": "l-a",
+                            "parkId": 1010, "cause": "rejected"}]
+    w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-09T10:00:00Z", cid=1011))
+    assert _notice(w, 10) == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10}
+    assert "cause" not in _entries(w)[0] and _entries(w)[0]["parkId"] == 1011
+
+
+def test_a_stored_cause_other_than_rejected_makes_the_state_unreadable(w):
+    _park(w, 10)
+    good = _entries(w)
+    for bad in ("lapsed", None, 1):
+        with open(_state_file(w), "w", encoding="utf-8") as fh:
+            json.dump([dict(good[0], cause=bad)], fh)
+        assert _send(w) == {"ok": False, "reason": "parked-state-unreadable"}
+
+
+def test_t2_a_lane_started_before_the_renewal_is_adopted_and_one_started_after_is_messaged(w):
+    _lane(w, "l-a", 101, "session-a", "a")  # started 10-04
+    _lane(w, "l-b", 102, "session-b", "b", started_ts=RELAUNCHED)  # started 10-10
+    _park_rejected(w, 10, issue=101)
+    _park(w, 11, issue=102)
+    _renew(w, written_at=RENEWED_AT)  # renewed 10-08
+    out = _send(w)
+    assert out["adopt"] == [_adopt_item(10, 101, "l-a", "session-a", 910, "rejected")]
+    assert out["adopt"][0]["message"] == CP.ADOPT_MESSAGE % "l-a"
+    assert out["sendBack"] == [{"pr": 11, "repo": REPO, "issue": 102, "launchId": "l-b", "parkId": 911,
+                                "cloudSessionName": "session-b", "configDir": None, "message": CP.SEND_BACK_MESSAGE}]
+    assert [s["pr"] for s in out["sendBack"]] == [11] and 10 not in [s["pr"] for s in out["sendBack"]]
+    assert out["notRenewed"] == [] and out["adopting"] == []
+    assert [e["outcome"] for e in _entries(w)] == ["adopting", None]
+
+
+def test_a_renewed_lapsed_park_whose_renewal_time_cannot_be_read_is_adopted_not_messaged(w, monkeypatch):
+    _lane(w, "l-b", 102, "session-b", "b", started_ts=RELAUNCHED)  # started 10-10, after the renewal below
+    _park(w, 11, issue=102)
+    _renew(w, written_at=RENEWED_AT)  # renewed 10-08: the lapse date moved, so _renewed passes
+    monkeypatch.setattr(CP, "_renewal_time", lambda *a, **k: None)
+    out = _send(w)
+    assert [a["pr"] for a in out["adopt"]] == [11]
+    assert 11 not in [s["pr"] for s in out["sendBack"]] and out["sendBack"] == []
+    assert out["notRenewed"] == [] and [e["outcome"] for e in _entries(w)] == ["adopting"]
+
+
+def test_a_lapsed_park_of_a_lane_started_before_the_renewal_is_adopted_with_the_lapsed_cause(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w, written_at=RENEWED_AT)
+    out = _send(w)
+    assert out["adopt"] == [_adopt_item(10, 101, "l-a", "session-a", 910, "lapsed")] and out["sendBack"] == []
+
+
+def test_t3_an_adopting_entry_is_listed_once_then_as_adopting_until_a_replacement_started(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w, written_at=RENEWED_AT)
+    item = _adopt_item(10, 101, "l-a", "session-a", 910, "rejected")
+    assert _send(w)["adopt"] == [item]
+    assert _entries(w)[0]["outcome"] == "adopting"
+    second = _send(w)
+    assert second["adopt"] == [] and second["adopting"] == [item] and second["sendBack"] == []
+    # a notice and a sent on an adopting entry change nothing
+    assert _notice(w, 10) == {"ok": True, "kind": "park-resolved", "pr": 10, "text": None}
+    assert CP.sent(w.repo, REPO, 10, park_id=910, env=w.env) == {"ok": False, "reason": "already-decided"}
+    assert _entries(w)[0]["outcome"] == "adopting"
+    # a supersession mark with no launch started behind it leaves the lane adopting
+    _supersede(w, "l-a")
+    assert _send(w)["adopting"] == [item]
+    assert _entries(w)[0]["outcome"] == "adopting"
+    # once a later launch for the issue has started, the entry is adopted and listed under neither
+    assert ll.terminalize(w.repo, "l-a", child_ever_spawned=True, outcome="park", evidence="x", env=w.env)["ok"]
+    _lane(w, "l-new", 101, "new-session", "a2", ts=RELAUNCHED)
+    third = _send(w)
+    assert third["adopt"] == [] and third["adopting"] == [] and third["sendBack"] == []
+    assert third["skipped"] == [{"pr": 10, "outcome": "adopted"}]
+    assert _entries(w)[0]["outcome"] == "adopted"
+    assert _notice(w, 10)["kind"] == "park-resolved"
+    assert CP.sent(w.repo, REPO, 10, park_id=910, env=w.env) == {"ok": False, "reason": "already-decided"}
+    calls = len(w.gh.calls)
+    again = _send(w)
+    assert again["adopt"] == [] and again["adopting"] == [] and again["skipped"] == [] and len(w.gh.calls) == calls
+
+
+def test_an_adopting_entry_whose_pr_closed_reads_closed(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w, written_at=RENEWED_AT)
+    assert len(_send(w)["adopt"]) == 1
+    w.gh.pulls[10] = _pull(101, state="closed")
+    out = _send(w)
+    assert out["adopting"] == [] and out["skipped"] == [{"pr": 10, "outcome": "closed"}]
+    assert _entries(w)[0]["outcome"] == "closed"
+
+
+def test_an_adopting_entry_whose_pr_cannot_be_read_stays_adopting(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w, written_at=RENEWED_AT)
+    assert len(_send(w)["adopt"]) == 1
+    w.gh.broken.add(_pull_path(10))
+    out = _send(w)
+    assert out["unread"] == [{"pr": 10, "reason": "pr-read-failed"}] and out["adopting"] == []
+    assert _entries(w)[0]["outcome"] == "adopting"
+
+
+def test_a_rejected_park_with_no_lane_is_listed_under_no_lane_before_any_renewal_is_judged(w):
+    _lane(w, "l-unstarted", 101, None, "a")
+    _park_rejected(w, 10, issue=101)
+    _park_rejected(w, 11, issue=None)
+    out = _send(w)  # nothing renewed at all
+    assert out["noLane"] == [{"pr": 10, "issue": 101}, {"pr": 11, "issue": None}] and out["notRenewed"] == []
+    assert out["adopt"] == [] and out["sendBack"] == []
+
+
+def test_e1_a_rejected_park_is_not_renewed_by_a_record_written_before_the_lane_started(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w)  # a valid, unexpired lapse date, written before the lane started
+    out = _send(w)
+    assert out["notRenewed"] == [10] and out["adopt"] == [] and out["sendBack"] == []
+    assert _entries(w)[0]["outcome"] is None
+    # an old confirmation, from before the lane started, changes nothing
+    with open(_confirmed_file(w), "w", encoding="utf-8") as fh:
+        json.dump({ACCOUNT: LAUNCHED - 60}, fh)
+    assert _send(w)["notRenewed"] == [10]
+
+
+def test_e2_a_same_date_renewal_confirmed_after_the_lane_started_renews_a_rejected_park(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w)  # FUTURE lapse date, unchanged by the renewal
+    assert _send(w)["notRenewed"] == [10]
+    out = CP.send_back(w.repo, TODAY, confirmed=True, env=w.env, run=w.gh, now=RENEWED_AT)
+    assert out["notRenewed"] == [] and out["adopt"] == [_adopt_item(10, 101, "l-a", "session-a", 910, "rejected")]
+    with open(_confirmed_file(w), encoding="utf-8") as fh:
+        assert json.load(fh) == {ACCOUNT: RENEWED_AT}
+    assert CS.read(w.repo, ACCOUNT, w.store)["record"]["passLapses"] == FUTURE
+
+
+def test_a_rejected_park_needs_a_valid_lapse_date_that_is_not_past_even_when_confirmed(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _setup_record(w.repo, w.store, ACCOUNT, "2026-10-11")  # lapsed yesterday
+    out = CP.send_back(w.repo, TODAY, confirmed=True, env=w.env, run=w.gh, now=RENEWED_AT)
+    assert out["notRenewed"] == [10] and out["adopt"] == []
+
+
+@pytest.mark.parametrize("started", ["missing", None, "soon", float("nan"), float("inf"), True])
+def test_e3_a_lane_without_a_readable_start_adopts_and_is_never_messaged(w, monkeypatch, started):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park(w, 10, issue=101)
+    _renew(w)  # lapse date moved on, record written before the lane
+    real = CP._lane
+
+    def unreadable_start(*args, **kw):
+        launch_id, lane, why = real(*args, **kw)
+        lane = {k: v for k, v in lane.items() if k != "startedTs"}
+        if started != "missing":
+            lane["startedTs"] = started
+        return launch_id, lane, why
+    monkeypatch.setattr(CP, "_lane", unreadable_start)
+    out = _send(w)
+    assert out["sendBack"] == [] and [a["pr"] for a in out["adopt"]] == [10]
+    assert _entries(w)[0]["outcome"] == "adopting"
+
+
+def test_a_rejected_park_whose_lane_has_no_readable_start_is_not_renewed(w, monkeypatch):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w, written_at=RENEWED_AT)
+    real = CP._lane
+    monkeypatch.setattr(CP, "_lane", lambda *a, **k: (lambda r: (r[0], {x: y for x, y in r[1].items() if x != "startedTs"}, r[2]))(real(*a, **k)))
+    out = _send(w)
+    assert out["notRenewed"] == [10] and out["adopt"] == [] and out["sendBack"] == []
+
+
+@pytest.mark.parametrize("bad", ["{not json", "[]", '{"acct": "soon"}', '{"acct": true}', '{"acct": NaN}', '{"a": [1]}'])
+def test_e4_an_unreadable_confirmation_file_refuses_send_back_and_changes_nothing(w, bad):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w, written_at=RENEWED_AT)
+    with open(_confirmed_file(w), "w", encoding="utf-8") as fh:
+        fh.write(bad)
+    before = open(_state_file(w), encoding="utf-8").read()
+    for confirmed in (False, True):
+        assert CP.send_back(w.repo, TODAY, confirmed=confirmed, env=w.env, run=w.gh, now=RENEWED_AT) == {
+            "ok": False, "reason": "pass-confirmed-unreadable"}
+    assert open(_confirmed_file(w), encoding="utf-8").read() == bad
+    assert open(_state_file(w), encoding="utf-8").read() == before
+
+
+def test_e5_confirming_with_no_resolvable_account_refuses_and_writes_nothing(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    os.unlink(str(w.home / ".claude.json"))
+    before = open(_state_file(w), encoding="utf-8").read()
+    assert CP.send_back(w.repo, TODAY, confirmed=True, env=w.env, run=w.gh, now=RENEWED_AT) == {
+        "ok": False, "reason": "account-unknown"}
+    assert not os.path.exists(_confirmed_file(w))
+    assert open(_state_file(w), encoding="utf-8").read() == before
+
+
+def test_a_confirmation_that_cannot_be_written_refuses(w, monkeypatch):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+
+    def broken(path, text):
+        raise OSError("disk full")
+    monkeypatch.setattr(store_core, "atomic_write", broken)
+    assert CP.send_back(w.repo, TODAY, confirmed=True, env=w.env, run=w.gh, now=RENEWED_AT) == {
+        "ok": False, "reason": "pass-confirmed-unwritable"}
+    assert not os.path.exists(_confirmed_file(w))
+
+
+def test_the_confirmation_is_per_account_and_a_later_one_replaces_an_earlier_one(w):
+    _lane(w, "l-a", 101, "session-a", "a")
+    _park_rejected(w, 10, issue=101)
+    _renew(w)
+    with open(_confirmed_file(w), "w", encoding="utf-8") as fh:
+        json.dump({SECOND_ACCOUNT: RENEWED_AT, ACCOUNT: LAUNCHED - 60}, fh)
+    assert _send(w)["notRenewed"] == [10]  # another account's confirmation, and an older one of this account's, renew nothing
+    CP.send_back(w.repo, TODAY, confirmed=True, env=w.env, run=w.gh, now=RELAUNCHED)
+    with open(_confirmed_file(w), encoding="utf-8") as fh:
+        assert json.load(fh) == {SECOND_ACCOUNT: RENEWED_AT, ACCOUNT: RELAUNCHED}
+
+
+def test_the_cli_send_back_takes_confirmed_and_lists_the_new_keys(w, capsys, monkeypatch):
+    for k, v in w.env.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setenv("HOME", str(w.home))
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert CP.main(["send-back", "--repo-root", w.repo, "--confirmed"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["adopt"] == [] and out["adopting"] == []
+    with open(_confirmed_file(w), encoding="utf-8") as fh:
+        assert list(json.load(fh)) == [ACCOUNT]

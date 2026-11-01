@@ -21,6 +21,7 @@ if _LIB not in sys.path:
 
 import cloud_builder  # noqa: E402
 import cloud_recover as CR  # noqa: E402
+import launch_ledger as ll  # noqa: E402
 import wave_watch  # noqa: E402
 from test_cloud_recover import (  # noqa: E402,F401
     BRANCH, REPO, Gh, _assess, _comment, _died, _event, _git, _iso_ago, _lane, _push, _state, _successor, w,
@@ -203,3 +204,150 @@ def test_11_a_park_withdraws_an_earlier_stop_authorization(w):
     assert "l1" not in _state(w)["assessed"]
     _died(w, "l1")
     assert _successor(w, "l1") == {"ok": False, "reason": "lane-not-assessed-stopped"}
+
+
+# ---------------------------------------------------------------- #2319: an archived or self-archived lane reads stopped
+
+SA = "launch-s1"  # a real-shaped launch id: the fixtures' default "l1" does not match cloud_builder._LAUNCH_ID_RE
+
+
+def _self_archive(sha, launch_id=SA, age=300, cid=40, footer=""):
+    return _comment(cloud_builder.self_archive_text(launch_id, sha) + footer, age=age, cid=cid)
+
+
+def test_t1_an_archived_lane_with_a_newer_park_reads_stopped_and_gets_a_successor_premise(w):
+    _lane(w, "l1")
+    sha = _pushed_at(w, 1500)
+    w.gh.comments = [_comment(PARK, age=600, cid=11)]
+    out = _assess(w, state="archived")
+    assert (out["verdict"], out["evidence"]) == ("stopped", "session-archived")
+    _died(w, "l1")
+    got = _successor(w)
+    assert got["ok"] is True and got["premise"]["adoptsBranch"] == BRANCH and got["premise"]["adoptsHead"] == sha
+
+
+def test_t2_a_self_archive_record_newer_than_a_park_reads_stopped_and_names_its_head(w):
+    _lane(w, SA)
+    pushed = _pushed_at(w, 1500)
+    w.gh.comments = [_comment(PARK, age=600, cid=11), _self_archive(pushed, age=300)]
+    out = _assess(w, launch_id=SA, state="idle")
+    assert (out["verdict"], out["evidence"]) == ("stopped", "self-archived")
+    assert out["stoppedAt"] == CR._epoch(w.gh.comments[1]["created_at"])
+    assert _state(w)["assessed"][SA]["handoverSha"] == pushed
+    _died(w, SA)
+    got = _successor(w, launch_id=SA)
+    assert got["ok"] is True and got["premise"]["adoptsBranch"] == BRANCH and got["premise"]["adoptsHead"] == pushed
+
+
+def test_t2_the_self_archive_record_keeps_its_own_head_and_a_branch_moved_past_it_is_refused(w):
+    _lane(w, SA)
+    named = _pushed_at(w, 1500)
+    w.gh.comments = [_self_archive(named)]
+    _push(w, BRANCH, "b")  # work pushed after the record's head: the record's head is kept, not the newest pushed
+    out = _assess(w, launch_id=SA, state="idle")
+    assert (out["verdict"], out["evidence"]) == ("stopped", "self-archived")
+    assert _state(w)["assessed"][SA]["handoverSha"] == named
+    _died(w, SA)
+    assert _successor(w, launch_id=SA) == {"ok": False, "reason": "handover-head-not-pushed"}
+
+
+def test_t2_an_archived_session_keeps_the_self_archive_head_and_adopts_it_among_divergent_branches(w):
+    _lane(w, SA)
+    named = _push(w, "issue-17-a", "a")
+    _push(w, "issue-17-b", "b")
+    w.gh.comments = [_self_archive(named)]
+    out = _assess(w, launch_id=SA, state="archived")
+    assert (out["verdict"], out["evidence"]) == ("stopped", "session-archived")
+    assert _state(w)["assessed"][SA]["handoverSha"] == named
+    _died(w, SA)
+    got = _successor(w, launch_id=SA)
+    assert got["ok"] is True and got["premise"]["adoptsBranch"] == "issue-17-a" and got["premise"]["adoptsHead"] == named
+
+
+def test_t3_e1_a_record_naming_another_launch_or_a_longer_id_is_not_this_lanes_record(w):
+    _lane(w, SA)
+    sha = _pushed_at(w, 1500)
+    w.gh.comments = [_self_archive(sha, launch_id="launch-s2", cid=41), _self_archive(sha, launch_id="launch-s10", cid=42)]
+    out = _assess(w, launch_id=SA, state="idle")
+    assert out["verdict"] == "ask-to-push" and out["evidence"] is None
+
+
+def test_t3_e2_a_record_created_before_the_lanes_start_is_not_read(w):
+    _lane(w, SA, start_age=300)  # reserved 60s before it started
+    sha = _pushed_at(w, 100)
+    # dated from the ledger's own recorded times (not a second clock reading, which slow git could skew):
+    # the midpoint is after the reservation and before the start
+    lane = ll.fold(ll.read(w.root)["records"])["launches"][SA]
+    midpoint = (lane["reservedTs"] + lane["startedTs"]) / 2
+    assert lane["reservedTs"] < midpoint < lane["startedTs"]
+    record = _self_archive(sha)
+    record["created_at"] = record["updated_at"] = CR._iso(midpoint)
+    w.gh.comments = [record]
+    out = _assess(w, launch_id=SA, state="idle")
+    assert out["handoverRead"] == "ok" and out["verdict"] == "ask-to-push" and out["evidence"] is None
+
+
+@pytest.mark.parametrize("make", [
+    lambda t: t + "\n\n" + cloud_builder.CLOUD_FOOTER + "\n\n" + cloud_builder.CLOUD_FOOTER,
+    lambda t: t + " And one more thing.",
+    lambda t: t.replace("launch-s1", "launch-s1x-"),
+    lambda t: t.replace("launch-s1", "launch_s1"),
+    lambda t: t[:t.index("My pushed head is ") + len("My pushed head is ")] + "abc123. I am archiving this session now.",
+    lambda t: t.replace(t[t.index("head is ") + 8:t.index("head is ") + 48], t[t.index("head is ") + 8:t.index("head is ") + 48].upper()),
+], ids=["two-footers", "extra-text", "bad-launch-id", "malformed-launch-id", "bad-sha", "uppercase-sha"])
+def test_t3_e3_a_malformed_record_is_not_a_record(w, make):
+    _lane(w, SA)
+    sha = _pushed_at(w, 1500)
+    body = make(cloud_builder.self_archive_text(SA, sha))
+    assert cloud_builder.self_archive_record(body) is None
+    w.gh.comments = [_comment(body, age=300)]
+    out = _assess(w, launch_id=SA, state="idle")
+    assert out["verdict"] == "ask-to-push" and out["evidence"] is None
+
+
+def test_t3_e3_one_cloud_footer_is_still_a_record(w):
+    _lane(w, SA)
+    sha = _pushed_at(w, 1500)
+    w.gh.comments = [_self_archive(sha, footer="\n\n" + cloud_builder.CLOUD_FOOTER)]
+    out = _assess(w, launch_id=SA, state="idle")
+    assert (out["verdict"], out["evidence"]) == ("stopped", "self-archived")
+
+
+def test_t3_e4_a_comments_read_that_failed_yields_no_self_archive_record(w):
+    _lane(w, SA)
+    sha = _pushed_at(w, 1500)
+    w.gh.comments = [_self_archive(sha)]
+    w.gh.comments_fail = True
+    out = _assess(w, launch_id=SA, state="idle")
+    assert out["handoverRead"] == "failed" and out["verdict"] == "ask-to-push" and out["evidence"] is None
+
+
+def test_t3_e5_a_fresh_working_lane_with_a_self_archive_record_still_reads_working(w):
+    _lane(w, SA)
+    sha = _pushed_at(w, 1500)
+    w.gh.comments = [_self_archive(sha)]
+    out = _assess(w, launch_id=SA, state="working", age=60)
+    assert out["verdict"] == "working" and out["evidence"] is None
+    assert not os.path.exists(CR._state_path(w.root, os.environ))  # nothing was recorded as stopped
+
+
+def test_t4_a_parked_lane_that_is_not_archived_and_has_no_record_still_reads_parked(w):
+    _lane(w, "l1")
+    _pushed_at(w, 1500)
+    w.gh.comments = [_comment(PARK, age=600, cid=11)]
+    out = _assess(w, state="idle")
+    assert (out["verdict"], out["evidence"]) == ("parked", "builder-park")
+    _died(w, "l1")
+    assert _successor(w) == {"ok": False, "reason": "lane-not-assessed-stopped"}
+
+
+def test_t5_handover_stopped_ids_returns_a_self_archived_lane_and_not_a_session_archived_one(w):
+    _lane(w, SA)
+    _lane(w, "l2")
+    sha = _pushed_at(w, 1500)
+    w.gh.comments = [_self_archive(sha)]
+    assert _assess(w, launch_id=SA, state="idle")["evidence"] == "self-archived"
+    w.gh.comments = []
+    assert _assess(w, launch_id="l2", state="archived")["evidence"] == "session-archived"
+    ids, readable = CR.handover_stopped_ids(w.root)
+    assert readable is True and ids == {SA}

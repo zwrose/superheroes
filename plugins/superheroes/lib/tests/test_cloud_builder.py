@@ -635,6 +635,70 @@ def test_note_and_review_lapsed_cli(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out) == cb.review_lapsed_text()
 
 
+# ---------------------------------------------------------------- #2319: review-rejected and self-archive
+
+LAUNCH = "launch-abc123"
+SELF_ARCHIVE_EXACT = (
+    "Builder self-archive (cloud build).\n\nThis session's lane launch-abc123 is superseded by a newer launch. "
+    "I stopped working on this issue and will push nothing more. My pushed head is " + SHA + ". "
+    "I am archiving this session now; the platform may ask the owner to allow it.")
+
+
+def test_the_review_rejected_text_is_fixed_and_shares_the_lapsed_texts_first_line(capsys):
+    assert cb.review_rejected_text() == {"comment": cb.REVIEW_REJECTED_TEXT}
+    assert cb.REVIEW_REJECTED_TEXT == (
+        "Parked: the review did not run.\n\n"
+        "The reviewer's sign-in was rejected during this build (the reviewer answered 401, for example "
+        "token_revoked), so no independent review happened. The work is pushed and this PR is not ready. "
+        "It needs a renewed sign-in and pass, then a review in a fresh session.")
+    assert cb.REVIEW_REJECTED_TEXT.split("\n", 1)[0] == cb.REVIEW_LAPSED_TEXT.split("\n", 1)[0]
+    assert cb.main(["review-rejected"]) == 0
+    assert json.loads(capsys.readouterr().out) == {"comment": cb.REVIEW_REJECTED_TEXT}
+
+
+def test_the_self_archive_text_is_fixed_and_round_trips():
+    assert cb.self_archive_text(LAUNCH, SHA) == SELF_ARCHIVE_EXACT
+    assert cb.self_archive_record(SELF_ARCHIVE_EXACT) == (LAUNCH, SHA)
+    assert cb.self_archive_record("  " + SELF_ARCHIVE_EXACT + "\n") == (LAUNCH, SHA)
+    assert cb.self_archive_record(SELF_ARCHIVE_EXACT + "\n\n" + cb.CLOUD_FOOTER) == (LAUNCH, SHA)
+
+
+@pytest.mark.parametrize("launch_id,sha", [
+    ("l1", SHA), ("launch-", SHA), ("launch-a b", SHA), ("launch-abc\n", SHA), ("launch-abc123", "a" * 39),
+    ("launch-abc123", "A" * 40), ("launch-abc123", SHA + "\n"), (None, SHA), (LAUNCH, None), (7, SHA)])
+def test_the_self_archive_text_refuses_a_bad_pair(launch_id, sha):
+    assert cb.self_archive_text(launch_id, sha) is None
+
+
+@pytest.mark.parametrize("body", [
+    SELF_ARCHIVE_EXACT + "\n\n" + cb.CLOUD_FOOTER + "\n\n" + cb.CLOUD_FOOTER,
+    SELF_ARCHIVE_EXACT + " Extra.",
+    "Extra. " + SELF_ARCHIVE_EXACT,
+    SELF_ARCHIVE_EXACT.replace("launch-abc123", "launch_abc123"),
+    SELF_ARCHIVE_EXACT.replace(SHA, "a" * 39),
+    SELF_ARCHIVE_EXACT.replace(SHA, "A" * 40),
+    cb.handover_text(SHA), "", None, 7, ["x"]])
+def test_the_self_archive_record_is_none_for_any_other_body(body):
+    assert cb.self_archive_record(body) is None
+
+
+def test_the_self_archive_verb_prints_the_comment_or_refuses(capsys):
+    assert cb.main(["self-archive", "--launch-id", LAUNCH, "--head", SHA]) == 0
+    assert json.loads(capsys.readouterr().out) == {"ok": True, "comment": SELF_ARCHIVE_EXACT}
+    assert cb.main(["self-archive", "--launch-id", "l1", "--head", SHA]) == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "input-invalid"}
+    assert cb.main(["self-archive", "--launch-id", LAUNCH, "--head", "abc"]) == 1
+    assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "input-invalid"}
+
+
+def test_neither_new_header_is_a_terminal_header():
+    assert cb.SELF_ARCHIVE_HEADER not in cb.TERMINAL_HEADERS.values()
+    assert cb.REVIEW_REJECTED_TEXT.split("\n", 1)[0] not in cb.TERMINAL_HEADERS.values()
+    assert cb.terminal_kind(SELF_ARCHIVE_EXACT) is None
+    assert cb.terminal_kind(SELF_ARCHIVE_EXACT + "\n\n" + cb.CLOUD_FOOTER) is None
+    assert cb.terminal_kind(cb.REVIEW_REJECTED_TEXT) is None
+
+
 # ---------------------------------------------------------------- pass_state
 
 
