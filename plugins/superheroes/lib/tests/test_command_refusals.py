@@ -323,6 +323,8 @@ def test_delete_rule_has_one_home():
     allowed = [
         os.path.join("agents", "implementer.md"),
         os.path.join("lib", "command_refusals.py"),
+        # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is DELETE_RULE itself
+        os.path.join("rubric", "launch-doctrine.md"),
     ]
     copies = []
     for root, dirs, files in os.walk(_PLUGIN_ROOT):

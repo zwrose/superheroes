@@ -12,6 +12,13 @@ import hashlib
 import os
 import re
 import subprocess
+import sys
+
+_LIB_DIR = os.path.dirname(os.path.abspath(__file__))
+if _LIB_DIR not in sys.path:
+    sys.path.insert(0, _LIB_DIR)
+
+import command_refusals  # noqa: E402  DELETE_RULE — the one home of the compound-delete rule
 
 RULING_IDS = (
     "own-worktree",
@@ -20,6 +27,7 @@ RULING_IDS = (
     "design-forks",
     "await-dispatches",
     "turn-end",
+    "no-compound-delete",
     "remote-head",
     "git-identity",
     "gated-strings",
@@ -74,6 +82,7 @@ RULING_TEXT = {
         "session, so none of them is a turn's exit plan; until the handback or park comment is "
         "posted, end every turn with a tool call, and await every outcome in-turn or park durably first."
     ),
+    "no-compound-delete": command_refusals.DELETE_RULE,
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
     "git-identity": (
         "commits inherit the git identity the worktree resolves through git's normal cascade "
@@ -112,6 +121,10 @@ RULING_INVARIANTS = {
         "never ends a turn with a background task or subagent still running",
         "cannot wake a headless session",
         "end every turn with a tool call",
+    ),
+    "no-compound-delete": (
+        "inside a compound command",
+        "one path per call",
     ),
     "gated-strings": (
         "never embedded inline in Bash text",

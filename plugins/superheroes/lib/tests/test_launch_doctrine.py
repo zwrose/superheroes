@@ -23,6 +23,12 @@ def _load():
     return mod
 
 
+_LIB = os.path.dirname(_HERE)
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import command_refusals  # noqa: E402
+
 LD = _load()
 
 _NUMBER_WORDS = {
@@ -771,6 +777,30 @@ def test_doctrine_turn_end_ruling_invariant_missing():
     assert result["checks"] == []
     assert result["rulingsBlock"] is None
     assert result["digest"] is None
+
+
+def test_no_compound_delete_ruling_text_is_the_delete_rule():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "no-compound-delete")
+    assert text == command_refusals.DELETE_RULE
+    assert LD.RULING_TEXT["no-compound-delete"] is command_refusals.DELETE_RULE
+
+
+def test_doctrine_no_compound_delete_ruling_invariant_missing():
+    # axis: the no-compound-delete ruling must keep its "one path per call" phrase; the parse refuses and clears every payload field
+    text = _mutate_once(_read_doctrine(), "one path per call", "one file per call")
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == (
+        "doctrine-ruling-invariant-missing:no-compound-delete:one path per call"
+    )
+    assert result["rulings"] == []
+    assert result["checks"] == []
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+    assert result["cloudLaunchLine"] is None
+    assert result["detectiveCloudLine"] is None
 
 
 def test_turn_end_ruling_matches_dispatch_mechanics():
