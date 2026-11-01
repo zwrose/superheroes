@@ -266,8 +266,13 @@ def test_t5_place_results_survive_save_reload_audit_archive_and_render(world, tm
     key = RD._finding_identity_key(staged)
     state["findings"] = [copy.deepcopy(staged)]  # the live copy the fold keeps
     state = json.loads(json.dumps(state))  # save and reload
-    out = _audit(_target(_kind(3, 19), fid=key), [_row(3, True), _row(19, False)])
-    RD._record_place_results(state, out["audits"])  # the one enrichment step, as the audit fold calls it
+    state["_auditTargets"] = [dict(_target(_kind(3, 19), fid=key), independence="independent")]
+    state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
+    result = {"id": key, "ruling": "discharged", "reason": "the fix holds", "checks": CHECKS,
+              "places": [_row(3, True), _row(19, False)]}
+    # the audit fold itself writes the answers: removing its enrichment step fails this test
+    RD._fold(state, state["config"], RD.P_AUDITS, {"results": [result], "collectionManifest": {key: "codex"}},
+             session_dir=str(world.session))
     live = state["findings"][0]["kindOfMistake"]["places"]
     held = state["dispositionLedger"][0]["kindOfMistake"]["places"]
     assert [p.get("fixed") for p in live] == [True, False] and live == held
@@ -283,6 +288,23 @@ def test_t5_place_results_survive_save_reload_audit_archive_and_render(world, tm
     assert [p.get("fixed") for p in parts["kindOfMistake"]["places"]] == [True, False]
     body, _record = _record_body(tmp_path, kindOfMistake=parts["kindOfMistake"])
     assert "(1 of 2 fixed)" in body
+
+
+def test_t5_a_weakened_test_is_blocked_even_when_a_place_is_unanswered():
+    # axis: a weakened committed test is blocked before an incomplete-place return, so the mandatory restore is scheduled — see bite-proof record c4_wo1_kind
+    target = dict(_target(_kind(3, 19)), breakIt={"match": "changed-explained", "path": "tests/test_a.py"})
+    out = _audit(target, [], testMatch={"answer": "weakened", "why": "coverage narrowed"})
+    assert out["testMismatch"] == ["t-1"] and out["notDischarged"] == ["t-1"] and out["discharged"] == []
+    assert out["audits"][0]["testMatch"]["blocking"] is True
+
+
+def test_t5_a_narrower_reraise_keeps_the_places_an_unresolved_target_still_owes():
+    # axis: the kept entry owes every place a deduplicated sibling still names — see bite-proof record c4_wo1_kind
+    fresh = _finding("Retry without a cap", line=2)  # the scoped finder's report names no kind
+    held = dict(fresh, kindOfMistake={"kind": KIND, "places": [dict(_place(3), fixed=True), _place(19)]})
+    (batch,) = RD._union_open_blockers([fresh], [held])
+    assert batch["kindOfMistake"]["kind"] == KIND
+    assert batch["kindOfMistake"]["places"] == [dict(_place(3), fixed=True), _place(19)]
 
 
 # ---- T6 ------------------------------------------------------------------------------------------------------

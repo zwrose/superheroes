@@ -2283,6 +2283,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         # never turns a real one into a craft decision.
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
             [existing, entry])
+        # axis: a re-raise of an unresolved finding keeps the places it still owes, so a narrower report never drops a copy the last audit left unfixed — see bite-proof record c4_wo1_kind
+        verification.apply_kind_members(entry, [existing, entry])
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
     # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
     if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
@@ -9818,6 +9820,9 @@ def _union_open_blockers(*groups):
             if key is None:
                 continue
             if key in seen_keys:
+                # axis: the kept entry owes every place a deduplicated sibling still names, so a fresh report never hides an unresolved target's outstanding places — see bite-proof record c4_wo1_kind
+                kept = next(b for b in batch if session_contract.finding_identity_key(b) == key)
+                verification.apply_kind_members(kept, [kept, f])
                 continue
             batch.append(f)
             seen_keys.add(key)
