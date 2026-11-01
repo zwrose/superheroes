@@ -710,6 +710,42 @@ def test_sweep_record_path_reaches_populated_terminal_receipt(tmp_path):
     assert receipt["scriptRan"]["byPhase"]
 
 
+def test_sweep_hit_survives_the_real_adapter_assembly_and_reaches_the_verifiers(tmp_path):
+    """A searcher's non-empty hit goes land -> record-result -> advance through the real adapter: the assembler must
+    carry it to the fold, which stages it for the verifiers and counts it inside on the sweep's row."""
+    head = make_checkout(_fixture_repo(tmp_path, "s"))
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path, head_sha=head, sliced=True, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"))
+    described = dict(_blocking_finding("missing bounds guard", 2), searchDescription={
+        "kind": "missing bounds guard", "looksLike": "an index used with no range check", "examples": ["a[i]"]})
+    _drive_to_phase(session_dir, gitdir, [described], head_path, round_driver.P_SWEEP)
+
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(round_driver.P_SWEEP, state, state.get("config") or {})
+    assert reason is None, reason
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    (assigned,) = [p["part"] for p in state["_sweepParts"] if FILES[2] in p["files"]]
+    (sweep,) = state["_sweepPending"]
+    searcher = round_adapters.sweep_seat_key(sweep["sweepId"], assigned)
+    assert searcher in roster
+    hit = {"file": FILES[2], "line": 3, "what": "second bounds guard"}
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat, {"hits": [hit] if seat == searcher else []}, occurrence=occurrence)
+        out = _record(session_dir, seat, occurrence=occurrence)
+        assert out["ok"], (seat, out)
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is True, out
+    assert out["folded"]["phase"] == round_driver.P_SWEEP
+
+    state = _state(session_dir)
+    assert state["step"] == round_driver.P_VERIFIERS
+    assert [f["title"] for f in state["_toVerify"]] == ["second bounds guard"]
+    (row,) = state["rounds"]["1"]["sweeps"]
+    assert row["inside"] == 1 and row["missing"] == []
+
+
 def test_advance_refuses_an_incomplete_roster_before_it_ever_assembles(tmp_path):
     """A/B against the folding path above: one seat short refuses by NAME, and the refusal is the
     completeness one — never a downstream adapter reason."""

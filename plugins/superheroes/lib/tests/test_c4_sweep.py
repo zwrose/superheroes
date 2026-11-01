@@ -569,6 +569,24 @@ def test_s4_an_inside_hit_becomes_a_finding_of_its_own_with_the_parents_severity
     assert _rows(state)[0]["inside"] == 1
 
 
+def test_s4_a_hit_of_an_owners_choice_parent_carries_the_flag_and_is_held_never_batched(world):
+    # axis: a sweep copy of an owner's-choice finding is held for the owner like its parent
+    _to_sweep(world, _finding(tradeoff=True))
+    state = _sweep(world, _both(_hit(19, what="second site")))
+    (hit,) = state["_toVerify"]
+    assert hit["tradeoff"] is True
+    assert RD._hold_owner_choice(state, [hit]) == []  # held out of the fix batch
+    assert state["ownerChoiceHeld"] == [RD._finding_key_of(hit)]
+
+
+def test_s4_a_hit_of_a_parent_without_the_flag_carries_none_and_is_batched(world):
+    _to_sweep(world, _finding())
+    state = _sweep(world, _both(_hit(19, what="second site")))
+    (hit,) = state["_toVerify"]
+    assert not hit.get("tradeoff")
+    assert RD._hold_owner_choice(state, [hit]) == [hit]
+
+
 def test_s4_a_blank_what_titles_the_hit_by_the_descriptions_kind(world):
     _to_sweep(world)
     state = _sweep(world, _both({"file": "src/a.py", "line": 19, "what": "  "}, {"file": "README.md", "line": 3}))

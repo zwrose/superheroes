@@ -634,6 +634,9 @@ def sweep_hit_finding(hit, sweep, parent):
     for field in ("consequence", "consequenceKind"):
         if field in parent:
             out[field] = parent[field]
+    if parent.get("tradeoff"):
+        # An owner's-choice parent holds its copies for the owner too: the hold keys on this flag.
+        out["tradeoff"] = True
     return out
 
 
