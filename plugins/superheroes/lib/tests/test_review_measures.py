@@ -25,10 +25,28 @@ def _row(name, commit="c1", ran="engine-record", tokens=100, minutes=1.5):
     return {"name": name, "ran": ran, "commit": commit, "cost": {"tokens": tokens, "minutes": minutes}}
 
 
-def _rec(pr, session="s1", at="2026-10-03T10:00:00Z", rows=None, findings=(), count=2, status="reviewed"):
-    return {"pr": pr, "sessionId": session, "writtenAt": at, "status": status, "rounds": {"count": count},
-            "reviewers": rows if rows is not None else [_row("security-reviewer (round 1)")],
-            "findings": list(findings)}
+def _sc(tokens, minutes, runs=1, without=0, by_seat=None):
+    """A record's `sessionCost` (#2307): the session's own runs, summed over all its rounds."""
+    return {"tokens": tokens, "minutes": minutes, "runs": runs, "runsWithoutFigure": without,
+            "complete": without == 0, "bySeat": by_seat if by_seat is not None else {}}
+
+
+def _by(tokens, minutes, runs=1):
+    return {"tokens": tokens, "minutes": minutes, "runs": runs}
+
+
+_DEFAULT = object()
+
+
+def _rec(pr, session="s1", at="2026-10-03T10:00:00Z", rows=None, findings=(), count=2, status="reviewed", sc=_DEFAULT):
+    """A review record. `sc` is its `sessionCost`: by default one security-reviewer run of 100 tokens and 1.5 minutes, None for none."""
+    rec = {"pr": pr, "sessionId": session, "writtenAt": at, "status": status, "rounds": {"count": count},
+           "reviewers": rows if rows is not None else [_row("security-reviewer (round 1)")],
+           "findings": list(findings)}
+    sc = _sc(100, 1.5, by_seat={"security-reviewer": _by(100, 1.5)}) if sc is _DEFAULT else sc
+    if sc is not None:
+        rec["sessionCost"] = sc
+    return rec
 
 
 def _f(key, outcome="fixed", reviewer="Security"):
@@ -60,7 +78,7 @@ def test_the_row_shape_is_pinned():
     row = RM.compute(_full(), FROM, UNTIL)
     assert tuple(row) == RM.ROW_KEYS and tuple(row["measures"]) == RM.MEASURES and RM.problems(row) == []
     assert RM.MEASURE_KEYS["reviewerCostPerPr"] == ("tokens", "minutes", "prsLeftOut")
-    none_left = {"count": 0, "why": "a run that ran has no cost figure"}
+    none_left = {"count": 0, "why": "a review session has no complete sessionCost"}
     assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"] == {"tokens": none_left, "minutes": none_left}
 
 
@@ -91,7 +109,7 @@ def test_a_full_window_is_measured():
                        "suiteMedianMinutes": 3}
     assert m["escapes"] == {"missed": 0, "seenAndLeft": 0, "falsePrClaims": 0}
     assert m["lateFindsOnUnchangedCode"] == {"basis": "monthly", "value": 0, "source": SRC}
-    assert m["panels"] == {"sizes": {"1": 1}, "withoutGrounding": 1, "sessions": 1}
+    assert m["panels"] == {"sizes": {"1": 1}, "sessions": 1}
     assert set(_why(row)) == {"repeatFindingLocations"}
 
 
@@ -115,143 +133,108 @@ def test_rounds_and_sessions_per_pr_read_each_sessions_latest_record():
     assert m["sessionsPerPr"] == {"median": 1.5, "p90": 2, "shareOverOne": 0.5}
 
 
-def test_reviewer_cost_dedupes_by_session_name_and_commit_and_skips_rows_that_did_not_run_or_were_carried():
-    rows_a = [_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)", ran="not-run", tokens=None)]
-    rows_b = [dict(_row("security-reviewer (round 1)"), carried=True),
-              _row("security-reviewer (round 1)", commit="c2", tokens=50, minutes=0.5)]
-    recs = [_rec(1, "a", rows=rows_a), _rec(1, "a", "2026-10-03T11:00:00Z", rows=rows_a),
-            _rec(1, "b", "2026-10-04T00:00:00Z", rows=rows_b)]
-    row = RM.compute(_full(records=recs), FROM, UNTIL)
-    cost = row["measures"]["reviewerCostPerPr"]
-    assert cost["tokens"]["total"] == 150 and cost["minutes"]["total"] == 2.0
-    assert row["measures"]["seats"]["security-reviewer"]["tokens"] == 150
-    assert "premortem-reviewer" not in row["measures"]["seats"]
-
-
-def test_separate_sessions_on_the_same_commit_each_count_and_a_carried_row_is_not_counted_again():
-    recs = [_rec(1, "a", rows=[_row("security-reviewer (round 1)", tokens=100)]),
-            _rec(1, "b", "2026-10-04T00:00:00Z", rows=[_row("security-reviewer (round 1)", tokens=200),
-                                                        dict(_row("code-reviewer (round 1)", tokens=100), carried=True)])]
-    for order in (recs, recs[::-1]):
-        m = RM.compute(_full(records=order), FROM, UNTIL)["measures"]
-        assert m["reviewerCostPerPr"]["tokens"]["total"] == 300
-        assert m["seats"]["security-reviewer"]["tokens"] == 300 and "code-reviewer" not in m["seats"]
-
-
-def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
-    rows = [_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)", tokens=None, minutes=None)]
-    rows_old = [{"name": "code-reviewer (round 1)", "ran": "engine-record", "commit": "c1"}]  # a record from before the cost field
-    recs = [_rec(1, rows=rows), _rec(2, rows=rows_old)]
-    row = RM.compute(_full(records=recs, ciRuns=[{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]), FROM, UNTIL)
-    seats, why = row["measures"]["seats"], _why(row)
-    assert seats["security-reviewer"]["tokens"] == 100
-    assert seats["premortem-reviewer"]["tokens"] == U and why["seats.premortem-reviewer.tokens"] == "cost-not-recorded"
-    assert seats["code-reviewer"]["minutes"] == U
-    assert row["measures"]["reviewerCostPerPr"]["tokens"] == U and row["measures"]["reviewerCostPerPr"]["minutes"] == U
-    assert row["measures"]["reviewerCostPerPr"]["prsLeftOut"] == {"tokens": {"count": 2, "why": RM.LEFT_OUT_WHY},
-                                                                  "minutes": {"count": 2, "why": RM.LEFT_OUT_WHY}}
-    assert why["reviewerCostPerPr.tokens"] == "no-measured-pr"
-
-
-def test_a_null_among_the_rows_makes_the_sum_unmeasured_never_a_partial_sum():
-    """Axis: a PR's (or a seat's) figure is a measured sum only when every row it covers is measured."""
-    pair = [_row("security-reviewer (round 1)", tokens=100), _row("premortem-reviewer (round 1)", tokens=None)]
-    cost = RM.compute(_full(records=[_rec(1, rows=pair)]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]
-    assert cost["tokens"] == U
-    one_seat = [_row("security-reviewer (round 1)", tokens=100), _row("security-reviewer (round 2)", tokens=None)]
-    seats = RM.compute(_full(records=[_rec(2, rows=one_seat)], ciRuns=[{"pr": 2, "minutes": 1}]), FROM, UNTIL)["measures"]["seats"]
-    assert seats["security-reviewer"]["tokens"] == U
-
-
-def test_a_record_written_before_per_row_cost_gives_its_pr_cost_from_the_record_level_cost():
-    seen = {"observation": {"tokens": 3267465, "wallSeconds": 400}}  # a 0.46.x row: observed, but no `cost` key
-    observed = [dict(seen, name="security-reviewer (round 1)", ran="engine-record", commit="c1"),
-                dict(seen, name="premortem-reviewer (round 1)", ran="engine-record", commit="c1"),
-                {"name": "grounding-seat", "ran": "not-run", "commit": "c1"}]
-    record_cost = {"unit": "reviewer-minutes", "minutes": 13.4, "tokens": 6534930, "source": "engine records",
-                   "notCounted": ["grounding-seat"]}
-
-    def measures(rows, **over):
-        return RM.compute(_full(records=[dict(_rec(1, rows=rows), cost=dict(record_cost, **over))]), FROM, UNTIL)["measures"]
-    # (1) observed rows: the observations are the figures and the session total is not read
-    for m in (measures(observed), measures(observed, tokens=999)):
-        assert m["reviewerCostPerPr"]["tokens"]["total"] == 6534930 and m["reviewerCostPerPr"]["minutes"]["total"] == 13.4
-        assert m["seats"]["security-reviewer"]["tokens"] == 3267465 and m["seats"]["premortem-reviewer"]["tokens"] == 3267465
-    # (2) trimmed rows (no observation): the record-level cost is the PR's figure, and a seat reads per-row only
-    trimmed = [{k: v for k, v in x.items() if k != "observation"} for x in observed]
-    m = measures(trimmed)
-    assert m["reviewerCostPerPr"]["tokens"] != U and m["reviewerCostPerPr"]["minutes"] != U
-    assert m["reviewerCostPerPr"]["tokens"]["total"] == 6534930 and m["reviewerCostPerPr"]["minutes"]["total"] == 13.4
-    assert m["seats"]["security-reviewer"]["tokens"] == U and m["seats"]["premortem-reviewer"]["tokens"] == U  # per seat: per-row only
-    for over in ({"notCounted": ["security-reviewer (round 1)"]}, {"notCounted": "grounding-seat"}, {"tokens": None}):
-        got = measures(trimmed, **over)["reviewerCostPerPr"]
-        assert got["tokens"] == U and got["minutes"] == U
-    assert RM.compute(_full(records=[_rec(1, rows=trimmed)]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"] == U  # no cost at all
-    # a record with per-row cost keys never reads its record-level cost
-    both = dict(_rec(1, rows=[_row("security-reviewer (round 1)")]), cost={"tokens": 999, "minutes": 9, "notCounted": []})
-    assert RM.compute(_full(records=[both]), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"]["total"] == 100
-
-
 def _pr_cost(*recs, **over):
     return RM.compute(_full(records=list(recs), **over), FROM, UNTIL)["measures"]["reviewerCostPerPr"]
 
 
-def test_a_session_whose_records_list_only_their_own_runs_sums_them():
-    one = {"name": "security-reviewer (round 1)", "ran": "engine-record", "commit": "h1",
-           "observation": {"tokens": 100, "wallSeconds": 60}}  # no `cost` key: read from its observation
-    two = dict(one, commit="h2", observation={"tokens": 200, "wallSeconds": 120})
-    cost = _pr_cost(_rec(1, "s1", "2026-10-03T10:00:00Z", rows=[one]), _rec(1, "s1", "2026-10-04T10:00:00Z", rows=[two]))
-    assert cost["tokens"]["total"] == 300 and cost["minutes"]["total"] == 3.0
-
-
-def test_a_trimmed_pre_row_cost_session_reads_its_session_total():
-    row = {"name": "security-reviewer (round 1)", "ran": "engine-record", "commit": "c1"}  # no cost, no observation
-
-    def cost(**over):
-        return _pr_cost(dict(_rec(1, rows=[row]), cost=dict({"tokens": 500, "minutes": 4.0, "notCounted": []}, **over)))
-    got = cost()
-    assert got["tokens"]["total"] == 500 and got["minutes"]["total"] == 4.0
-    got = cost(notCounted=[row["name"]])
+def test_cost_comes_only_from_a_complete_session_cost():
+    got = _pr_cost(_rec(1, sc=_sc(250, 3.5)))
+    assert got["tokens"]["total"] == 250 and got["minutes"]["total"] == 3.5
+    got = _pr_cost(_rec(1, sc=_sc(250, 3.5, runs=2, without=1)))  # the same figures, but `complete` is false
     assert got["tokens"] == U and got["minutes"] == U
+    # no sessionCost: the reviewer rows' `cost` and `observation` and the record-level `cost` are never read
+    rows = [dict(_row("security-reviewer (round 1)"), observation={"tokens": 100, "wallSeconds": 90})]
+    old = dict(_rec(1, rows=rows, sc=None), cost={"tokens": 999, "minutes": 9, "notCounted": []})
+    got = _pr_cost(old)
+    assert got["tokens"] == U and got["minutes"] == U
+    # two sessions sum their latest records' sessionCost, and an earlier record of the same session is not added
+    a_early, a_late = _rec(1, "a", "2026-10-02T10:00:00Z", sc=_sc(100, 1.0)), _rec(1, "a", "2026-10-03T10:00:00Z", sc=_sc(300, 2.0))
+    b = _rec(1, "b", "2026-10-04T10:00:00Z", sc=_sc(50, 0.5))
+    for order in ([a_early, a_late, b], [b, a_late, a_early]):
+        got = _pr_cost(*order)
+        assert got["tokens"]["total"] == 350 and got["minutes"]["total"] == 2.5
+
+
+def _malformed(**over):
+    """A well-formed sessionCost with some fields made wrong (a value of `...` removes the field)."""
+    sc = {**_sc(100, 1.5, by_seat={"security-reviewer": _by(100, 1.5)}), **over}
+    return {k: v for k, v in sc.items() if v is not ...}
+
+
+@pytest.mark.parametrize("bad", [
+    _malformed(tokens="x"), _malformed(tokens=True), _malformed(tokens=-1), _malformed(tokens=1.5), _malformed(tokens=...),
+    _malformed(minutes="x"), _malformed(minutes=-0.5), _malformed(minutes=float("nan")), _malformed(minutes=True),
+    _malformed(runs="1"), _malformed(runs=-1), _malformed(runsWithoutFigure=None), _malformed(complete="yes"),
+    _malformed(complete=...), _malformed(runsWithoutFigure=2),  # `complete` true with two runs without a figure
+    {**_sc(0, 0, runs=0), "complete": False},  # runs 0 with `complete` false: complete must equal runsWithoutFigure == 0
+    _malformed(complete=False), _malformed(bySeat=[]), _malformed(bySeat=...),
+    _malformed(bySeat={"security-reviewer": 5}), _malformed(bySeat={"security-reviewer": _by("x", 1.5)}),
+    _malformed(bySeat={"security-reviewer": _by(100, "x")}), _malformed(bySeat={"security-reviewer": _by(100, 1.5, runs=True)}),
+    _malformed(bySeat={"security-reviewer": {"tokens": 100, "minutes": 1.5}}), "x", [], None])
+def test_a_malformed_session_cost_reads_unmeasured_and_leaves_the_record_whole(bad):
+    rec = dict(_rec(1, findings=[_f("k1")]), sessionCost=bad)  # the finding names the security seat
+    row = RM.compute(_full(records=[rec]), FROM, UNTIL)
+    cost, m = row["measures"]["reviewerCostPerPr"], row["measures"]
+    assert cost["tokens"] == U and cost["minutes"] == U and m["seats"]["security-reviewer"]["tokens"] == U
+    assert m["roundsPerPr"] == {"median": 2, "p90": 2} and m["sessionsPerPr"]["median"] == 1  # the record is still whole
+    assert m["panels"] == {"sizes": {"1": 1}, "sessions": 1} and row["prs"] == 1 and row["leftOut"]["malformed"] == 0
+    assert m["ci"] != U and m["vetSendBacksOnCleanLoops"] != U and RM.problems(row) == []
+
+
+def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
+    named = [_f("k1"), _f("k2", "craft", "Failure-Mode")]  # the findings name two seats
+    ci = [{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]
+    # every session has a complete sessionCost: a seat named by the findings that no session ran reads 0
+    seats = RM.compute(_full(records=[_rec(1, findings=named)]), FROM, UNTIL)["measures"]["seats"]
+    assert seats["security-reviewer"]["tokens"] == 100 and seats["premortem-reviewer"]["tokens"] == 0
+    # one session with no sessionCost blanks every seat's cost, not only its PR's
+    row = RM.compute(_full(records=[_rec(1, findings=named), _rec(2, sc=None)], ciRuns=ci), FROM, UNTIL)
+    seats, why = row["measures"]["seats"], _why(row)
+    assert seats["security-reviewer"]["tokens"] == U and seats["security-reviewer"]["minutes"] == U
+    assert seats["premortem-reviewer"]["tokens"] == U and why["seats.premortem-reviewer.tokens"] == "cost-not-recorded"
+    assert why["seats.security-reviewer.minutes"] == "cost-not-recorded"
+    cost = row["measures"]["reviewerCostPerPr"]
+    assert cost["tokens"]["total"] == 100 and cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY}
+    # an incomplete sessionCost blanks them too, while a session that ran nothing (runs 0) does not
+    row = RM.compute(_full(records=[_rec(1), _rec(2, sc=_sc(5, 0.1, runs=2, without=1))], ciRuns=ci), FROM, UNTIL)
+    assert row["measures"]["seats"]["security-reviewer"]["tokens"] == U
+    row = RM.compute(_full(records=[_rec(1), _rec(2, sc=_sc(0, 0.0, runs=0))], ciRuns=ci), FROM, UNTIL)
+    assert row["measures"]["seats"]["security-reviewer"]["tokens"] == 100
+    # no PR measured at all
+    row = RM.compute(_full(records=[_rec(1, sc=None), _rec(2, sc=None)], ciRuns=ci), FROM, UNTIL)
+    cost = row["measures"]["reviewerCostPerPr"]
+    assert cost["tokens"] == U and cost["minutes"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
+    assert cost["prsLeftOut"] == {"tokens": {"count": 2, "why": RM.LEFT_OUT_WHY}, "minutes": {"count": 2, "why": RM.LEFT_OUT_WHY}}
 
 
 def test_a_session_where_no_reviewer_ran_adds_zero():
-    carried = _rec(1, rows=[dict(_row("security-reviewer (round 1)"), carried=True)])
-    got = _pr_cost(carried)
+    # runs 0 adds zero whatever the sums say: the rule reads `runs`, not the figures
+    idle = _rec(1, "b", rows=[{"name": "grounding-seat", "ran": "not-run", "commit": "c1"}], count=0, sc=_sc(7, 0.5, runs=0))
+    got = _pr_cost(idle)
     assert got["tokens"]["total"] == 0 and got["minutes"]["total"] == 0.0
-    idle = dict(_rec(1, "b", rows=[{"name": "grounding-seat", "ran": "not-run", "commit": "c1"}], count=0),
-                cost={"tokens": None, "minutes": None, "notCounted": ["grounding-seat"]})
-    assert _pr_cost(idle)["tokens"]["total"] == 0
     got = _pr_cost(_rec(1, "a"), idle)
     assert got["tokens"]["total"] == 100 and got["minutes"]["total"] == 1.5
-    bare = _rec(1, "c", rows=[{"name": "code-reviewer (round 1)", "ran": "engine-record", "commit": "c1"}])
-    assert _pr_cost(_rec(1, "a"), bare)["tokens"] == U  # a run that ran with no figure still reads unmeasured
-
-
-def test_two_runs_in_one_record_both_count_and_a_rewritten_record_counts_them_once():
-    rows = [_row("security-reviewer (round 1)", tokens=100), _row("security-reviewer (round 1)", tokens=50)]
-    once = [_rec(1, rows=rows)]
-    for recs in (once, once + [_rec(1, at="2026-10-03T11:00:00Z", rows=rows)]):
-        m = RM.compute(_full(records=recs), FROM, UNTIL)["measures"]
-        assert m["reviewerCostPerPr"]["tokens"]["total"] == 150 and m["seats"]["security-reviewer"]["tokens"] == 150
+    bare = _rec(1, "c", sc=None)
+    assert _pr_cost(_rec(1, "a"), bare)["tokens"] == U  # a session without sessionCost still reads unmeasured
+    assert _pr_cost(bare)["tokens"] == U
 
 
 def test_the_window_cost_is_over_measured_prs_and_names_those_left_out():
     ci = [{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]
-    good, bad = _row("code-reviewer (round 1)", tokens=100), _row("code-reviewer (round 1)", tokens=None)
-    row = RM.compute(_full(records=[_rec(1, rows=[good]), _rec(2, rows=[bad])], ciRuns=ci), FROM, UNTIL)
+    bad = _sc(100, 1.5, runs=2, without=1)
+    row = RM.compute(_full(records=[_rec(1), _rec(2, sc=bad)], ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
-    assert cost["tokens"]["total"] == 100
-    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": "a run that ran has no cost figure"}
-    assert cost["prsLeftOut"]["minutes"]["count"] == 0 and RM.problems(row) == []
-    row = RM.compute(_full(records=[_rec(1, rows=[bad]), _rec(2, rows=[bad])], ciRuns=ci), FROM, UNTIL)
+    assert cost["tokens"]["total"] == 100 and cost["minutes"]["total"] == 1.5
+    assert cost["prsLeftOut"]["tokens"] == {"count": 1, "why": "a review session has no complete sessionCost"}
+    assert cost["prsLeftOut"]["minutes"]["count"] == 1 and RM.problems(row) == []
+    row = RM.compute(_full(records=[_rec(1, sc=None), _rec(2, sc=bad)], ciRuns=ci), FROM, UNTIL)
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
-    assert cost["prsLeftOut"]["tokens"]["count"] == 2 and cost["minutes"]["total"] == 3.0 and RM.problems(row) == []
+    assert cost["prsLeftOut"]["tokens"]["count"] == 2 and cost["minutes"] == U and RM.problems(row) == []
 
 
 def test_minute_medians_and_totals_are_rounded_to_one_decimal():
-    recs = [_rec(n, rows=[_row("code-reviewer (round 1)", minutes=mins)]) for n, mins in ((1, 0.1), (2, 0.2), (3, 0.25))]
+    recs = [_rec(n, sc=_sc(100, mins)) for n, mins in ((1, 0.1), (2, 0.2), (3, 0.25))]
     ci = [{"pr": n, "minutes": 1} for n in (1, 2, 3)]
     cost = RM.compute(_full(records=recs, ciRuns=ci), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["minutes"]
     assert cost["median"] == 0.2 and cost["p90"] == 0.2 and cost["total"] == 0.6
@@ -261,7 +244,7 @@ def test_minute_medians_and_totals_are_rounded_to_one_decimal():
 
 
 def test_the_top_tenth_share_is_the_costliest_tenth_of_prs():
-    recs = [_rec(n, rows=[_row("code-reviewer (round 1)", tokens=10 if n < 10 else 910)]) for n in range(1, 11)]
+    recs = [_rec(n, sc=_sc(10 if n < 10 else 910, 1.5)) for n in range(1, 11)]
     ci = [{"pr": n, "minutes": 1} for n in range(1, 11)]
     cost = RM.compute(_full(records=recs, ciRuns=ci), FROM, UNTIL)["measures"]["reviewerCostPerPr"]["tokens"]
     assert cost["total"] == 1000 and cost["topTenthShare"] == 0.91
@@ -270,8 +253,12 @@ def test_the_top_tenth_share_is_the_costliest_tenth_of_prs():
 def test_finding_outcomes_by_lens_key_an_undecided_finding_open_and_feed_the_seating_check():
     findings = [_f("k1"), _f("k2", None), _f("k3", "craft", "Failure-Mode"), _f("k4", "fixed", "Nonesuch")]
     rows = [_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)", tokens=7, minutes=0.2)]
-    row = RM.compute(_full(records=[_rec(1, rows=rows, findings=findings)]), FROM, UNTIL)
+    by_seat = {"security-reviewer": _by(60, 1.0), "Security": _by(40, 0.5), "premortem-reviewer": _by(7, 0.2),
+               "code-reviewer": _by(3, 0.1)}  # two keys land on one seat; code-reviewer is named only here
+    sc = _sc(110, 1.8, runs=4, by_seat=by_seat)
+    row = RM.compute(_full(records=[_rec(1, rows=rows, findings=findings, sc=sc)]), FROM, UNTIL)
     seats = row["measures"]["seats"]
+    assert seats["code-reviewer"] == {"outcomes": _filled(), "tokens": 3, "minutes": 0.1}  # a bySeat-only seat, zero-filled
     assert seats["security-reviewer"]["outcomes"] == _filled(fixed=1, open=1)
     assert seats["premortem-reviewer"]["outcomes"] == _filled(craft=1)
     assert seats["unattributed"] == {"outcomes": _filled(fixed=1), "tokens": U, "minutes": U}
@@ -419,11 +406,27 @@ def test_each_cap_choice_reads_the_follow_up_record_it_names():
 
 def test_a_rethink_reads_the_latest_record_of_the_first_follow_up_session():
     def later(first, second):
-        return [_rec(1, "x", "2026-10-05T00:00:00Z", findings=[_f("k1", first)]),
+        return [_rec(1, "w", "2026-10-03T00:00:00Z"),  # written before the vet: not the follow-up
+                _rec(1, "x", "2026-10-05T00:00:00Z", findings=[_f("k1", first)]),
                 _rec(1, "x", "2026-10-06T00:00:00Z", findings=[_f("k1", second)]),
                 _rec(1, "y", "2026-10-07T00:00:00Z", findings=[_f("k1", None)])]
     assert _caps("rethink", later(None, "fixed")) == {"converged": 1}
     assert _caps("rethink", later("fixed", None)) == {"not-converged": 1}
+
+
+def test_a_rethink_skips_the_session_that_wrote_before_the_vet():
+    a_before = _rec(1, "a", "2026-10-03T00:00:00Z", findings=[_f("k1", None)])
+    a_after = _rec(1, "a", "2026-10-05T00:00:00Z", findings=[_f("k1", None)])  # rewritten after the vet, still open
+    b = _rec(1, "b", "2026-10-06T00:00:00Z", findings=[_f("k1")])  # the follow-up session: fixed
+    assert _caps("rethink", [a_before, a_after, b]) == {"converged": 1}
+    assert _caps("rethink", [a_before, a_after]) == {"pending": 1}
+
+
+def test_the_panel_counts_no_longer_carry_without_grounding():
+    row = RM.compute(_full(), FROM, UNTIL)
+    assert list(row["measures"]["panels"]) == ["sizes", "sessions"] and RM.MEASURE_KEYS["panels"] == ("sizes", "sessions")
+    row["measures"]["panels"]["withoutGrounding"] = 0
+    assert RM.problems(row)
 
 
 def test_a_follow_up_outside_the_window_settles_a_cap_choice_and_nothing_else_reads_it():
@@ -464,7 +467,7 @@ def test_a_costly_measure_counts_only_with_its_source_and_names_it():
 
 def test_a_nested_unmeasured_leaf_needs_its_reason():
     old = [{"name": "code-reviewer (round 1)", "ran": "engine-record", "commit": "c1"}]  # a record from before the cost field
-    row = RM.compute(_full(records=[_rec(1, rows=old)]), FROM, UNTIL)
+    row = RM.compute(_full(records=[_rec(1, rows=old, sc=None)]), FROM, UNTIL)
     assert row["measures"]["reviewerCostPerPr"]["tokens"] == U and RM.problems(row) == []
     named = list(row["unmeasured"])
     row["unmeasured"] = [u for u in named if "." not in u["measure"]]  # the nested leaves lose their reasons
