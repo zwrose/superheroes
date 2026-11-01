@@ -19,6 +19,7 @@ RULING_IDS = (
     "no-force-push",
     "design-forks",
     "await-dispatches",
+    "turn-end",
     "remote-head",
     "git-identity",
     "gated-strings",
@@ -66,6 +67,13 @@ RULING_TEXT = {
         "The same rule covers anything long-running you start locally — a full-suite run, a build, a long script — "
         "not only engine dispatches: await it in-turn, or park; never end a turn to wait."
     ),
+    "turn-end": (
+        "A headless lane never ends a turn with a background task or subagent still running: "
+        "harness-tracked background work and a running subagent die when the turn ends, and "
+        "`Monitor`, harness background-run completion and wakeup scheduling cannot wake a headless "
+        "session, so none of them is a turn's exit plan; until the handback or park comment is "
+        "posted, end every turn with a tool call, and await every outcome in-turn or park durably first."
+    ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
     "git-identity": (
         "commits inherit the git identity the worktree resolves through git's normal cascade "
@@ -99,6 +107,11 @@ RULING_INVARIANTS = {
         "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end",
         "no result dependency, no shared writable worktree, and no shared output path",
         'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message.',
+    ),
+    "turn-end": (
+        "never ends a turn with a background task or subagent still running",
+        "cannot wake a headless session",
+        "end every turn with a tool call",
     ),
     "gated-strings": (
         "never embedded inline in Bash text",
