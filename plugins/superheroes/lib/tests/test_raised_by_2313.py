@@ -323,6 +323,39 @@ def test_s1_two_findings_staged_in_one_round_merge_to_the_kept_findings_raiser_i
     assert live["severity"] == "Important" and live[RAISED] == "premortem-reviewer" and row[RAISED] == "premortem-reviewer", (live, row)
 
 
+@pytest.mark.parametrize("reverse", [False, True])
+def test_s2_a_finding_first_raised_in_round_one_keeps_its_raiser_when_restaged_beside_a_fresh_round_two_finding(reverse):
+    # axis: staging rewrites raisedRound to the current round, so the merged raiser follows the driver-owned firstRaisedRound
+    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
+    RD._stage_findings(state, [_finding(title="Minor one", line=1, severity="Minor", **{RAISED: "code-reviewer"})])
+    first_round = state["round"]
+    state["round"] = first_round + 1
+    RD._stage_findings(state, [
+        _finding(title="Minor one", line=1, severity="Minor", **{RAISED: "scoped finder"}),
+        _finding(title="Important one", line=2, severity="Important", **{RAISED: "scoped finder"}),
+    ])
+    staged = verification.stage_ids(state["_toVerify"])
+    by_title = {f["title"]: f for f in staged}
+    assert by_title["Minor one"][SC.RAISED_ROUND_FIELD] == by_title["Important one"][SC.RAISED_ROUND_FIELD] == state["round"]
+    assert by_title["Minor one"][SC.FIRST_RAISED_ROUND_FIELD] == first_round
+    assert by_title["Important one"][SC.FIRST_RAISED_ROUND_FIELD] == state["round"]
+    state["_verified"] = staged
+    titles = ["Minor one", "Important one"]
+    ids = [by_title[t]["id"] for t in (reversed(titles) if reverse else titles)]
+    RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "g", "member_ids": ids}]})
+    (live,) = state["findings"]
+    ledger = state[SC.DISPOSITION_LEDGER_KEY]
+    row = ledger[RD._ledger_index_by_key(ledger)[RD._finding_identity_key(live)]]
+    assert live["severity"] == "Important" and live[RAISED] == "code-reviewer" and row[RAISED] == "code-reviewer", (live, row)
+
+
+def test_s2_a_first_raised_round_the_seat_sends_never_survives_compile():
+    # axis: firstRaisedRound is driver-owned — a value a seat sends is stripped at compile, like raisedBy
+    out = _compile(_finding(**{SC.FIRST_RAISED_ROUND_FIELD: 0}), source=SC.OUTSIDE_SEAMS_CHECK)
+    assert SC.FIRST_RAISED_ROUND_FIELD not in out
+    assert SC.FIRST_RAISED_ROUND_FIELD in SC.TRANSIENT_FINDING_FIELDS
+
+
 def test_s1_synthesis_carries_an_absent_raiser_onto_the_ledger_row():
     # axis: a chosen earliest member with no raiser clears the ledger row's raiser
     assert RAISED not in _synced_ledger_row("security-reviewer", None)

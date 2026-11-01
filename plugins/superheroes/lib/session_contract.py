@@ -51,6 +51,7 @@ __all__ = (
     "RAISED_ROUND_FIELD",
     "RAISED_SEQ_FIELD",
     "RAISED_BY_FIELD",
+    "FIRST_RAISED_ROUND_FIELD",
     "DISPOSITION_SEQ_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
     "has_disposition_family",
@@ -104,6 +105,8 @@ RAISED_ROUND_FIELD = "raisedRound"
 RAISED_SEQ_FIELD = "raisedSeq"
 # The name of the run that first raised a finding (a roster seat key, a stage name or a searcher seat key).
 RAISED_BY_FIELD = "raisedBy"
+# The round a finding was first raised in: driver-owned and never rewritten by a re-raise (unlike `raisedRound`).
+FIRST_RAISED_ROUND_FIELD = "firstRaisedRound"
 DISPOSITION_SEQ_FIELD = "dispositionSeq"
 
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
@@ -111,7 +114,7 @@ TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
     "dispositionRound", "refutedReason", "outOfScopeReason", "followUp", "mergedInto",
-    RAISED_ROUND_FIELD, RAISED_SEQ_FIELD, RAISED_BY_FIELD, DISPOSITION_SEQ_FIELD,
+    RAISED_ROUND_FIELD, RAISED_SEQ_FIELD, RAISED_BY_FIELD, FIRST_RAISED_ROUND_FIELD, DISPOSITION_SEQ_FIELD,
 })
 
 SEAT_TRANSPORT_KEY = "transport"

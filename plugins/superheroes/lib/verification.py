@@ -448,7 +448,7 @@ def _merge_group(members):
 
 def _keep_earliest_raiser(merged, members, rep):
     """Keep the representative's `raisedBy` on `merged` unless a member was raised strictly earlier. A member's round is
-    its integer (non-bool) `raisedRound`; a representative without one counts as raised in the current round, later than
+    its integer (non-bool) `firstRaisedRound`, else its integer `raisedRound`; a representative without one counts as raised in the current round, later than
     any member that has one. The earliest group is the members whose round equals the smallest. The raiser is the
     earliest group's member that `_merge_group` would keep as representative (highest severity, then input position), so
     the merged raiser follows the kept finding and never the order the synthesis seat listed the members in; in a tie
@@ -457,7 +457,9 @@ def _keep_earliest_raiser(merged, members, rep):
     one is its value copied, and only when it is a non-blank string, else `merged` has none: a merge never invents a
     raiser."""
     def _round(m):
-        value = m.get(session_contract.RAISED_ROUND_FIELD)
+        value = m.get(session_contract.FIRST_RAISED_ROUND_FIELD)
+        if not (isinstance(value, int) and not isinstance(value, bool)):
+            value = m.get(session_contract.RAISED_ROUND_FIELD)
         return value if isinstance(value, int) and not isinstance(value, bool) else None
 
     rounds = [_round(m) for m in members if _round(m) is not None]

@@ -1197,6 +1197,8 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
         fc.pop(SECOND_TEST_FIELD, None)
         # axis: a raiser the seat supplied itself never survives compile — only the driver's own roster key or stage name is stamped, and with neither the field is absent
         fc.pop(session_contract.RAISED_BY_FIELD, None)
+        # axis: a first-raise round the seat supplied itself never survives compile — only the ledger seeding stamps one
+        fc.pop(session_contract.FIRST_RAISED_ROUND_FIELD, None)
         raiser = sources.get(id(f))
         if not (isinstance(raiser, str) and raiser.strip()):
             raiser = source
@@ -2040,7 +2042,7 @@ def _with_carried(state, compiled):
         merged = _merge_same_finding(rows[id(h)], c)
         fresh_key = _finding_identity_key(c)
         for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD,
-                      session_contract.RAISED_BY_FIELD):
+                      session_contract.RAISED_BY_FIELD, session_contract.FIRST_RAISED_ROUND_FIELD):
             if field in h:
                 merged[field] = h[field]
             else:
@@ -2296,6 +2298,14 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         # axis: a re-raise of an unresolved finding keeps the places it still owes, so a narrower report never drops a copy the last audit left unfixed — see bite-proof record c4_wo1_kind
         verification.apply_kind_members(entry, [existing, entry], with_description=False)
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+    # axis: the first-raise round is the held row's own, else its raised round, else this round — a re-raise never moves it
+    first_round = round_no
+    if isinstance(existing, dict):
+        if session_contract.FIRST_RAISED_ROUND_FIELD in existing:
+            first_round = existing[session_contract.FIRST_RAISED_ROUND_FIELD]
+        elif session_contract.RAISED_ROUND_FIELD in existing:
+            first_round = existing[session_contract.RAISED_ROUND_FIELD]
+    entry[session_contract.FIRST_RAISED_ROUND_FIELD] = first_round
     if isinstance(existing, dict):
         # axis: a re-raise never changes the first raiser, and a ledger row with no raiser never gains one from it
         if session_contract.RAISED_BY_FIELD in existing:
