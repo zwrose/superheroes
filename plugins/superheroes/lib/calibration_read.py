@@ -30,6 +30,8 @@ import engine_adapter  # noqa: E402  the stream recognizers the tool-call counte
 from calibration_vocab import (  # noqa: E402,F401  the one home of the label and read-state vocabulary
     LABEL_CORE, LABEL_REVIEW_CREW, LABEL_CLAUDE_MD, LABELS, READ, NOT_READ, UNKNOWN)
 
+_READ_FILE_TOOLS = frozenset(("read_file", "read_text_file", "read_multiple_files"))
+
 _OK = "ok"
 _FAILED = "failed"
 _INDETERMINATE = "indeterminate"
@@ -131,8 +133,10 @@ def _exit_outcome(code):
     return _INDETERMINATE
 
 
-def _call(outcome, paths=(), texts=()):
-    return {"outcome": outcome, "paths": list(paths), "texts": list(texts)}
+def _call(outcome, paths=(), texts=(), named=()):
+    # paths: operands of a tool known to return the file's content; named: values that only name a
+    # path in some other tool call, so what the call did with it cannot be told
+    return {"outcome": outcome, "paths": list(paths), "texts": list(texts), "named": list(named)}
 
 
 def _string_values(value, depth=0):
@@ -175,7 +179,10 @@ def _codex_item_call(item, completed):
             outcome = _FAILED
         else:
             outcome = _INDETERMINATE
-        return _call(outcome, paths=values)
+        # axis: only a tool known to return the file's content credits a read; any other names it
+        if item.get("tool") in _READ_FILE_TOOLS:
+            return _call(outcome, paths=values)
+        return _call(outcome, named=values)
     return None
 
 
@@ -229,6 +236,13 @@ def _claude_calls(stdout):
                     call = _call(_INDETERMINATE, paths=[tool_input.get("file_path")])
                 elif block.get("name") == "Bash":
                     call = _call(_INDETERMINATE, texts=[tool_input.get("command")])
+                elif block.get("name") == "Grep":
+                    # axis: Grep credits a read only when it printed content from the exact path, uncapped
+                    printed = (tool_input.get("output_mode") == "content"
+                               and not tool_input.get("head_limit") and not tool_input.get("offset"))
+                    values = _string_values(tool_input)
+                    call = _call(_INDETERMINATE, paths=[tool_input.get("path")] if printed else (),
+                                 named=values)
                 else:
                     continue
                 calls.append(call)
@@ -370,6 +384,10 @@ def _file_operands(program, args):
     return files
 
 
+_CONTROL_WORDS = frozenset((
+    "if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "case", "esac",
+    "select", "function", "{", "}", "!",
+))
 _PATH_CHARS = r"[\w.\-/]"
 _MAX_SHELL_DEPTH = 3
 # A quoted word made only of separators and blanks, or a backslash before a separator.
@@ -379,9 +397,10 @@ _WORD_RE = re.compile(r"[^\s\"'`;&|()<>=]+")
 
 
 def _segments(command):
-    """The command split into simple commands (token lists) at ``|``, ``&&``, ``;``, ``&`` and an unquoted newline.
+    """The command split into (token list, guarded) simple commands at ``|``, ``&&``, ``;``, ``&`` and an unquoted newline.
 
-    Raises ValueError."""
+    ``guarded`` is True for a command that may not have run: from the first ``&&``, ``||``, parenthesis or
+    control word on, every later command is guarded. Raises ValueError."""
     # axis: shlex drops quotes, so a quoted or escaped separator would read as a real one; doubt grades unknown
     if _QUOTED_SEPARATOR_RE.search(command):
         raise ValueError("quoted or escaped separator")
@@ -389,16 +408,18 @@ def _segments(command):
     lexer.whitespace_split = True
     # axis: a newline is a command boundary, not whitespace; a quoted newline stays inside its word
     lexer.whitespace = " \t\r"
-    out, current = [], []
+    out, current, guarded = [], [], False
     for token in lexer:
         if token and all(ch in "|&;()\n" for ch in token):
             if current:
-                out.append(current)
+                out.append((current, guarded))
             current = []
+            guarded = guarded or any(op in token for op in ("&&", "||", "(", ")"))
         else:
+            guarded = guarded or (not current and token in _CONTROL_WORDS)
             current.append(token)
     if current:
-        out.append(current)
+        out.append((current, guarded))
     return out
 
 
@@ -428,7 +449,7 @@ def _command_hit(command, targets, depth=0):
     except ValueError:
         return _HIT_AMBIGUOUS
     verdict = None
-    for tokens in segments:
+    for tokens, guarded in segments:
         program, args = _segment_program(tokens)
         if program is None:
             continue
@@ -436,15 +457,19 @@ def _command_hit(command, targets, depth=0):
             for position, arg in enumerate(args[:-1]):
                 if arg.startswith("-") and "c" in arg:
                     inner = _command_hit(args[position + 1], targets, depth + 1)
-                    if inner == _HIT_READ:
+                    if inner == _HIT_READ and not guarded:
                         return _HIT_READ
-                    verdict = inner or verdict
+                    # axis: a read in a command that may not have run is ambiguous, never a read
+                    verdict = _HIT_AMBIGUOUS if inner == _HIT_READ else (inner or verdict)
                     break
             continue
         if not any(arg in targets for arg in args):
             continue
         if any(operand in targets for operand in _file_operands(program, args) or ()):
-            return _HIT_READ
+            if not guarded:
+                return _HIT_READ
+            verdict = _HIT_AMBIGUOUS
+            continue
         if program in _NONREAD_PROGRAMS:
             verdict = verdict or _HIT_NONREAD
         else:
@@ -458,7 +483,7 @@ def _call_hit(call, targets):
     """How one normalized call touches the target paths: _HIT_READ, _HIT_NONREAD, _HIT_AMBIGUOUS or None."""
     if any(isinstance(p, str) and p in targets for p in call["paths"]):
         return _HIT_READ
-    verdict = None
+    verdict = _HIT_AMBIGUOUS if any(isinstance(p, str) and p in targets for p in call["named"]) else None
     for text in call["texts"]:
         if not isinstance(text, str):
             continue

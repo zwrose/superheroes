@@ -152,10 +152,51 @@ def test_codex_existence_check_alone_records_not_read_and_unrecognized_program_r
 def test_codex_content_readers_in_pipelines_and_shell_wrappers_record_read(calib):
     stdout = _codex_stream(
         _codex_cmd("a", "/bin/bash -lc \"sed -n '1,40p' %s | head -n 5\"" % calib.core, exit_code=0),
-        _codex_cmd("b", "cd /x && cat %s" % calib.layer, exit_code=0),
+        _codex_cmd("b", "cd /x; cat %s" % calib.layer, exit_code=0),
     )
     assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {
         "core": "read", "review-crew": "read", "CLAUDE.md": "not-read"}
+
+
+@pytest.mark.parametrize("command", [
+    "true || cat {core}", "cd /x && cat {core}", "if true; then cat {core}; fi",
+    "(cat {core})", "for f in a; do\ncat {core}\ndone", "true && /bin/sh -c 'cat {core}'",
+])
+def test_codex_content_reader_that_may_not_have_run_is_unknown(calib, command):
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
+
+
+def _grep_stream(path, **extra):
+    use = {"type": "assistant", "message": {"content": [{
+        "type": "tool_use", "id": "g", "name": "Grep",
+        "input": dict({"pattern": ".", "path": path}, **extra)}]}}
+    result = {"type": "user", "message": {"content": [{
+        "type": "tool_result", "tool_use_id": "g", "is_error": False}]}}
+    return "\n".join(json.dumps(o) for o in (use, result))
+
+
+def test_claude_grep_content_on_the_exact_path_is_a_read(calib):
+    stdout = _grep_stream(calib.core, output_mode="content")
+    assert _reads(CR.read_states("claude", stdout, calib.stamp))["core"] == "read"
+
+
+@pytest.mark.parametrize("extra", [
+    {}, {"output_mode": "files_with_matches"}, {"output_mode": "count"},
+    {"output_mode": "content", "head_limit": 5},
+])
+def test_claude_grep_without_printed_content_is_unknown(calib, extra):
+    stdout = _grep_stream(calib.core, **extra)
+    assert _reads(CR.read_states("claude", stdout, calib.stamp))["core"] == "unknown"
+
+
+def test_mcp_metadata_tool_naming_the_path_is_unknown_and_read_file_is_read(calib):
+    def mcp(tool):
+        return _codex_stream({"type": "item.completed", "item": {
+            "id": "b", "type": "mcp_tool_call", "tool": tool, "arguments": {"path": calib.core},
+            "status": "completed", "error": None}})
+    assert _reads(CR.read_states("codex", mcp("get_file_info"), calib.stamp))["core"] == "unknown"
+    assert _reads(CR.read_states("codex", mcp("read_file"), calib.stamp))["core"] == "read"
 
 
 def _truncated_stream():
@@ -285,10 +326,10 @@ def test_codex_command_list_and_mcp_call_arguments(calib):
     stdout = _codex_stream(
         _codex_cmd("a", ["cat", calib.core], exit_code=0),
         {"type": "item.completed", "item": {
-            "id": "b", "type": "mcp_tool_call", "arguments": {"path": calib.layer},
+            "id": "b", "type": "mcp_tool_call", "tool": "read_file", "arguments": {"path": calib.layer},
             "status": "completed", "error": None}},
         {"type": "item.completed", "item": {
-            "id": "c", "type": "mcp_tool_call", "arguments": {"path": calib.claude},
+            "id": "c", "type": "mcp_tool_call", "tool": "read_file", "arguments": {"path": calib.claude},
             "status": "failed", "error": {"message": "denied"}}},
     )
     assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {
