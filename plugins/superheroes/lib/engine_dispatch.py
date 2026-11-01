@@ -6741,7 +6741,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         if bite_proof_block:
             prefix = prefix + bite_proof_block + "\n\n"
         content = (prefix + WRITE_DISPATCH_PROCESS_RULE + "\n\n" + command_refusals.ORDER_TEXT
-                   + "\n\n" + command_refusals.FILE_WRITE_RULE + "\n\n" + contract)
+                   + "\n\n" + command_refusals.FILE_WRITE_RULE + "\n\n" + command_refusals.DELETE_RULE
+                   + "\n\n" + contract)
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         staged_prompt_sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()

@@ -127,8 +127,8 @@ The build record holds, below the marker:
   attribution as a standing accounting duty. Each dispatch row also carries a **refusals** column.
   It lists the refused or denied commands that dispatch reported, taken from the terminal result's
   `refusals` (a `dispatch-write` or native `close` result) or from an implementer's or seat's
-  returned refusals list, and a route taken under the stop rule's exception is listed with its
-  refusal. The column reads `none` when the dispatch reported none. A build where no
+  returned refusals list, and a route taken under either of the stop rule's exceptions is listed
+  with its refusal. The column reads `none` when the dispatch reported none. A build where no
   dispatch reported any may write a single line, `Refusals: none`, in place of the column.
 - **In both lanes**, the *Follow-ups for the advisor* section, the size tripwire row, and the
   disclosed degradations section, each described below.
