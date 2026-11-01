@@ -65,6 +65,15 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: a reviewer's own `secondTest` mark is ignored, and a second-test seat that fails vendor authentication now leaves its held findings and first-pass survivors in the park receipt.** See [Review: the second-test seat's own marks are ignored](#review-the-second-test-seats-own-marks-are-ignored).
 
+- **After switching.** **At each gardening pass the advisor appends the window's review-loop measures row and shows it in the gardening record.** See [Gardening pass: the review-loop measures row](#gardening-pass-the-review-loop-measures-row).
+
+### Gardening pass: the review-loop measures row
+
+- **What an advisor now does at a pass.** At duty 3, before the walk, run `lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`. It appends one fixed-shape row of review-loop measures for the window to `state/review-loop-measures.jsonl` in the project store, or replaces the row already there for the same window. The input file carries the window's review records, CI runs, misses log, vet receipts, the day cap choices began to be recorded, and any monthly or sampled measures. Its docstring names each key. See [The gardening pass](skills/showrunner/reference/owner-decisions.md#the-gardening-pass).
+- **In the gardening record.** Paste what `review_measures.py render --cwd <root>` prints: the window's row as a table and a chart across windows. The seating check's row file is the row's `seatingRow`.
+- **Nothing reads it between passes.** A measure whose input is missing reads unmeasured with its reason, never zero, and no check fails on any value. A window before cap choices were recorded reads that measure unmeasured.
+- **Reviewer cost reads unmeasured until review records carry `sessionCost`.** The row reads each review session's cost only from its latest record's `sessionCost`, when complete. A record with no `sessionCost` field reads unmeasured, and the window's cost figures leave its PR out and say so in `prsLeftOut`.
+
 ### Review: a finding names its kind of mistake, and every place with it is fixed
 
 - **Named everywhere.** A finding names its [kind of mistake](rubric/glossary.md#kind-of-mistake) and every other place in the change that has it, on lines the change touched. A place on an untouched line goes on the outside list, under the raising reviewer.
