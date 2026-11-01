@@ -604,17 +604,41 @@ def _finding_parts(row, older):
             if run not in merged:
                 merged.append(run)
         out["breakItRuns"] = merged
-    held_kind, older_kind = (src.get("kindOfMistake") if isinstance(src, dict) else None for src in (row, older))
-    if isinstance(held_kind, dict) and isinstance(held_kind.get("places"), list) and isinstance(older_kind, dict):
-        # axis: a live row's kind of mistake never hides the per-place fix results the ledger row holds — see bite-proof record c4_wo1_kind
-        earlier = {(p.get("file"), p.get("line")): p["fixed"] for p in older_kind.get("places") or []
-                   if isinstance(p, dict) and isinstance(p.get("fixed"), bool)}
-        places = [dict(p, fixed=earlier[(p.get("file"), p.get("line"))])
-                  if isinstance(p, dict) and not isinstance(p.get("fixed"), bool)
-                  and (p.get("file"), p.get("line")) in earlier else p
-                  for p in held_kind["places"]]
-        out["kindOfMistake"] = dict(held_kind, places=places)
     return out
+
+
+def _kind_with_place_results(kind, own, by_key):
+    """A copy of the finding's `kindOfMistake` `kind` whose places each read `fixed` from the disposition the
+    finding's decision stands on: the ledger row `own`, or the row its `mergedInto` chain ends at.
+
+    A place reads `True` when that disposition is `fixed` and its `placeResults` holds a row for the same
+    `(file, line)`, every such row saying so; `False` when the cleared audit answered it unfixed; `None` in
+    every other case (no answer, a disposition that is not `fixed`, a chain that does not resolve, no ledger row).
+    A merged member's place that is the representative's own `(file, line)` reads fixed when the
+    representative's disposition is `fixed`: that location was the audited target. A `kind` without a list of
+    places is returned as it is."""
+    if not (isinstance(kind, dict) and isinstance(kind.get("places"), list)):
+        return kind
+    rep = sc.resolve_merged_into_entry(own, by_key) if isinstance(own, dict) else None
+    fixed_rep = isinstance(rep, dict) and rep.get("disposition") == "fixed"
+    answers = {}
+    for row in (rep.get("placeResults") if fixed_rep else None) or []:
+        if isinstance(row, dict) and isinstance(row.get("fixed"), bool):
+            pair = (row.get("file"), row.get("line"))
+            answers[pair] = answers.get(pair, True) and row["fixed"]  # a place answered twice is fixed only when every row says so
+    # axis: a merged member names the representative's own location as a place and reads it fixed once the representative is fixed; the audit never answers that location — see bite-proof record c4_wo1_kind
+    own_place = (rep.get("file"), rep.get("line")) if fixed_rep and rep is not own else None
+    places = []
+    for place in kind["places"]:
+        if isinstance(place, dict):
+            pair = (place.get("file"), place.get("line"))
+            if pair in answers:
+                state = answers[pair]
+            else:
+                state = True if pair == own_place else None
+            place = dict(place, fixed=state)
+        places.append(place)
+    return dict(kind, places=places)
 
 
 def _findings(state):
@@ -644,6 +668,9 @@ def _findings_and_merges(state):
         dim = row.get("dimension")
         # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
         held = _finding_parts(row, by_key.get(key))
+        if "kindOfMistake" in held:
+            # the one place the record finding's kind is built: each place's `fixed` is read from the disposition the decision stands on
+            held["kindOfMistake"] = _kind_with_place_results(held["kindOfMistake"], by_key.get(key), by_key)
         if isinstance(held.get("fixGroup"), dict) and _fix_commit_of(state, key):
             held["fixGroup"] = dict(held["fixGroup"], commit=_fix_commit_of(state, key))
             if _repaired_alone(state, key, held["fixGroup"].get("members")):

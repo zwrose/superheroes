@@ -322,6 +322,8 @@ The compile-side assertion at `:298` passes here and the first failure is at `:3
 
 ## g6a — the per-place results are written to the live row (and, with it, the ledger entry)
 
+**SUPERSEDED by "Amendment — WO-1g redesign" below.** The code this entry neutralizes (`_record_place_results`, `_with_place_results`) is deleted; k1 replaces it.
+
 **neutralization** (`round_driver.py:3235`): `row[KIND_OF_MISTAKE_FIELD] = _with_place_results(row[KIND_OF_MISTAKE_FIELD], answers[key])` → `pass  # g6a NEUTRALIZED: row[KIND_OF_MISTAKE_FIELD] = …`.
 
 **raw red** (`-k test_t5_place_results_survive_save_reload_audit_archive_and_render`):
@@ -352,6 +354,8 @@ FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_place_r
 I did not run that variant (budget), so it is unproven by a run.
 
 ## g6b — the archive keeps the ledger entry's results when the departing live copy replaces it
+
+**SUPERSEDED by "Amendment — WO-1g redesign" below.** The `_archive_departures` carry-over this entry neutralizes (`_place_results_of`) is deleted; k4 replaces it.
 
 **neutralization** (`round_driver.py:3272`): `if isinstance(prior.get(KIND_OF_MISTAKE_FIELD), dict):` → `if False and isinstance(prior.get(KIND_OF_MISTAKE_FIELD), dict):`.
 
@@ -385,6 +389,8 @@ and `git status --porcelain` at the end lists no modified product file.
 ```
 
 ## g6c — a live row's kind of mistake never hides the ledger row's results in the record
+
+**SUPERSEDED by "Amendment — WO-1g redesign" below.** The `_finding_parts` merge of ledger `fixed` into the live row's places is deleted; k2 and k3 replace it.
 
 **neutralization** (`review_record_session.py:608`): `… and isinstance(held_kind.get("places"), list) and isinstance(older_kind, dict):` → `… and isinstance(held_kind.get("places"), list) and False and isinstance(older_kind, dict):`.
 
@@ -557,6 +563,8 @@ The red stops at the `ranManifest` assertion, before the author assertion; the a
 
 ### h4 — place answers reach the rows of members merged into the audited finding
 
+**SUPERSEDED by "Amendment — WO-1g redesign" below.** The `_record_place_results` merged-member copy this entry neutralizes is deleted; k3 replaces it.
+
 Test: `test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_finding`.
 
 **neutralization** (`round_driver.py:3243`): `results = answers.get(into) if isinstance(into, str) else None` → `results = answers.get(into) if False and isinstance(into, str) else None`.
@@ -617,3 +625,200 @@ FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t6_the_fir
 The "no earlier count, so the count is the panel's own" edge is asserted by the existing `test_t6_kind_missing_counts_every_compile_…` (`== 0`) and `test_t6_a_null_or_blank_…` (`== 1`), which pass unchanged.
 
 `git status --porcelain` after the final run lists `M plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py` and untracked files that were not made by this dispatch (`.bash_profile`, `.bashrc`, `.claude/`, `.gitconfig`, `.gitmodules`, `.idea`, `.mcp.json`, `.profile`, `.ripgreprc`, `.vscode`, `.zprofile`, `.zshrc`); no product file is modified.
+
+## Amendment — WO-1g redesign
+
+**Provenance:** claude / sonnet-5.5 (implementer, work order WO-1g). Head at the start was `e57b5322860ae6fe50be0bd80b0242d76b61a61e`.
+The per-place answers now ride the fix disposition: `placeResults` is a member of `DISPOSITION_FAMILY_FIELDS`, written by `_fold_audits` through `_record_disposition(..., "fixed", placeResults=...)`
+for every id in the outcome's `discharged` list (which holds both clearing rulings: `audits.py` appends a `discharged-but-new-issue` clearance to `discharged` at the same place as a `discharged` one).
+The record reads each place's `fixed` at render time in `review_record_session._kind_with_place_results`. The g6a, g6b, g6c and h4 entries above guard deleted code and are superseded by k1-k4.
+Every run is `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest <file> -k <node> -q --tb=short`, the detector unedited, one node per run.
+Each neutralization is one targeted Edit, undone by the inverse Edit; the restore receipt is the restored line quoted back from a Grep. Nothing was redacted (no credential-like text appears).
+Dropped from every capture: the `UV_NATIVE_TLS` deprecation warning line. Captures are far under the 32 KiB / 128 KiB ceilings.
+Guarded-element set: k1, k2, k3, k4. Spares run beyond the order: k2b, k3b, k4b (sub-elements of k2, k3, k4).
+
+### k1 — the chokepoint write of `placeResults`, for both clearing rulings
+
+Detector: `test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition`, parametrized over `discharged` and `discharged-but-new-issue`.
+
+**neutralization** (`round_driver.py:8907`, `_fold_audits`): `placeResults=place_answers.get(tid) or None)` → `placeResults=None)  # k1 NEUTRALIZED: …`.
+
+**raw red:**
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition[discharged] _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:327: in test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition
+    assert row["disposition"] == "fixed" and row["placeResults"] == answers
+                                             ^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'placeResults'
+_ test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition[discharged-but-new-issue] _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:327: in test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition
+    assert row["disposition"] == "fixed" and row["placeResults"] == answers
+                                             ^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'placeResults'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition[discharged]
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition[discharged-but-new-issue]
+2 failed, 45 deselected in 1.04s
+```
+**restore:** inverse Edit. **restore receipt:** Grep after the restore: `8907:                            placeResults=place_answers.get(tid) or None)`.
+
+**raw green:**
+```
+..                                                                       [100%]
+2 passed, 45 deselected in 2.20s
+```
+
+### k2 — the render-time read of a finding's own disposition
+
+Detector: `test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition`.
+
+**neutralization** (`review_record_session.py:625`, `_kind_with_place_results`): `for row in (rep.get("placeResults") if fixed_rep else None) or []:` → `for row in []:  # k2 NEUTRALIZED: …`.
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:389: in test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition
+    assert _fixed_of(found["f-1"]) == [True, False, None]
+E   assert [None, None, None] == [True, False, None]
+E     
+E     At index 0 diff: None != True
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition
+1 failed, 46 deselected in 0.50s
+```
+
+**restore:** inverse Edit. **restore receipt:** Grep after the restore: `625:    for row in (rep.get("placeResults") if fixed_rep else None) or []:`.
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed, 46 deselected in 0.43s
+```
+
+**k2b (spare) — a disposition that is not `fixed` answers nothing.** Neutralization (`review_record_session.py`): `fixed_rep = isinstance(rep, dict) and rep.get("disposition") == "fixed"` → `fixed_rep = isinstance(rep, dict)  # k2b NEUTRALIZED: …`. Same detector.
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:390: in test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition
+    assert _fixed_of(found["f-2"]) == [None, None]
+E   assert [True, True] == [None, None]
+E     
+E     At index 0 diff: True != None
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition
+1 failed, 46 deselected in 0.54s
+```
+**restore:** inverse Edit; a Grep for `NEUTRALIZED` over `plugins/superheroes/lib/*.py` after it printed `No matches found`. **raw green:** the same selector's green run was folded into the four-file run after the last restore: `136 passed in 5.11s` (`test_c4_kind_of_mistake.py`, `test_layer2g_ledger_reader_1272.py`, `test_round_orders.py`, `test_disposition_family_home_1272.py`).
+
+### k3 — a merged member reads its representative's disposition through `mergedInto`, the representative's own place included
+
+Detector: `test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place`.
+
+**neutralization** (`review_record_session.py:622`): `rep = sc.resolve_merged_into_entry(own, by_key) if isinstance(own, dict) else None` → `rep = own if isinstance(own, dict) else None  # k3 NEUTRALIZED: …`.
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:370: in test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place
+    assert _fixed_of(found["f-k-shared"]) == [True, True]
+E   assert [None, None] == [True, True]
+E     
+E     At index 0 diff: None != True
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place
+1 failed, 46 deselected in 0.44s
+```
+
+**restore:** inverse Edit. **restore receipt:** Grep after the restore: `622:    rep = sc.resolve_merged_into_entry(own, by_key) if isinstance(own, dict) else None`.
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed, 46 deselected in 0.52s
+```
+
+**k3b (spare) — the representative's own place.** Neutralization (`review_record_session.py:630`): `own_place = (rep.get("file"), rep.get("line")) if fixed_rep and rep is not own else None` → `own_place = None  # k3b NEUTRALIZED: …`. Same detector.
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:370: in test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place
+    assert _fixed_of(found["f-k-shared"]) == [True, True]
+E   assert [True, None] == [True, True]
+E     
+E     At index 1 diff: None != True
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place
+1 failed, 46 deselected in 0.53s
+```
+**restore:** inverse Edit. **restore receipt:** Grep after the restore: `630:    own_place = (rep.get("file"), rep.get("line")) if fixed_rep and rep is not own else None`.
+**raw green:**
+```
+.                                                                        [100%]
+1 passed, 46 deselected in 0.40s
+```
+
+### k4 — survival through the archive, which is the family carry
+
+Detector: `test_t5_place_results_survive_save_reload_audit_archive_and_render`.
+
+**neutralization** (`round_driver.py:3221`, `_archive_departures`): `if field in prior and field not in replacement:` → `… and field != "placeResults":  # k4 NEUTRALIZED: …`. The generic family carry loop skips this one member; every other member (the disposition itself included) is still carried.
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_t5_place_results_survive_save_reload_audit_archive_and_render ______
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:352: in test_t5_place_results_survive_save_reload_audit_archive_and_render
+    assert archived["disposition"] == "fixed" and archived["placeResults"] == [_row(3, True), _row(19, True)]
+                                                  ^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'placeResults'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_place_results_survive_save_reload_audit_archive_and_render
+1 failed, 46 deselected in 0.44s
+```
+
+**restore:** inverse Edit. **restore receipt:** Grep after the restore: `3221:                    if field in prior and field not in replacement:`.
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed, 46 deselected in 0.44s
+```
+
+**k4b (spare) — membership in `DISPOSITION_FAMILY_FIELDS`.** Neutralization (`session_contract.py:381`): `"placeResults"` removed from the tuple (`# k4b NEUTRALIZED: …`). Same detector.
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_t5_place_results_survive_save_reload_audit_archive_and_render ______
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:346: in test_t5_place_results_survive_save_reload_audit_archive_and_render
+    assert _ledger_of(state, key)["placeResults"] == [_row(3, True), _row(19, True)]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   KeyError: 'placeResults'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_place_results_survive_save_reload_audit_archive_and_render
+1 failed, 46 deselected in 0.49s
+```
+The red stops at the assertion before the archive: the family write (`apply_disposition_family`) drops a field the tuple does not name, so the answer never reaches the ledger row. This shows the family membership is what carries it everywhere; it is not an archive-specific red (k4 is).
+**restore:** inverse Edit. **restore receipt:** Grep after the restore: `381:    "disposition", "dispositionRound", "dispositionReceipt", "placeResults", "refutedReason",`.
+**raw green:**
+```
+.                                                                        [100%]
+1 passed, 46 deselected in 0.46s
+```
+
+**Not neutralized separately:** the duplicate-row rule (`answers.get(pair, True) and row["fixed"]`) and the chain-end `fixed: None` for a dangling `mergedInto`; both are asserted in `test_t5_an_unanswered_or_unfixed_…` and are unproven by a run.
