@@ -388,7 +388,7 @@ def disposition_ledger_owner_classification(state):
         return DISPOSITION_LEDGER_OWNER_RECOGNIZED
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
 DISPOSITION_FAMILY_FIELDS = (
-    "disposition", "dispositionRound", "dispositionReceipt", "refutedReason",
+    "disposition", "dispositionRound", "dispositionReceipt", "placeResults", "refutedReason",
     "outOfScopeReason", "followUp", MERGED_INTO_FIELD, "settledReason", "decidedBy",
 )
 

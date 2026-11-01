@@ -3209,64 +3209,6 @@ def _fixed_ledger_rows(state):
     return rows, by_key, None
 
 
-def _place_results_of(kind):
-    """`{(file, line): fixed}` for each place of a `kindOfMistake` that holds a boolean `fixed`."""
-    places = kind.get("places") if isinstance(kind, dict) else None
-    return {(p.get("file"), p.get("line")): p["fixed"] for p in places if isinstance(p, dict)
-            and isinstance(p.get("fixed"), bool)} if isinstance(places, list) else {}
-
-
-def _with_place_results(kind, results):
-    """A copy of the `kindOfMistake` `kind` whose places carry `fixed` from `results`, a mapping
-    `(file, line) -> bool`; a place the mapping does not name keeps what it held."""
-    if not (isinstance(kind, dict) and isinstance(kind.get("places"), list)):
-        return kind
-    places = []
-    for place in kind["places"]:
-        if isinstance(place, dict) and (place.get("file"), place.get("line")) in results:
-            place = dict(place, fixed=results[(place.get("file"), place.get("line"))])
-        places.append(place)
-    return dict(kind, places=places)
-
-
-def _record_place_results(state, audit_entries):
-    """The one enrichment step for the fix auditor's per-place answers: every audit entry that carries `places`
-    writes each place's `fixed` onto BOTH the live finding row and its ledger entry, so the live row, the ledger,
-    the archive and the review record all read the same results."""
-    # axis: the per-place results land on the live row and the ledger entry together, so no later read finds one without them — see bite-proof record c4_wo1_kind
-    answers = {}
-    for entry in audit_entries or []:
-        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and isinstance(entry.get("places"), list):
-            answers[entry["id"]] = {(p.get("file"), p.get("line")): p["fixed"] for p in entry["places"]
-                                    if isinstance(p, dict) and isinstance(p.get("fixed"), bool)}
-    if not answers:
-        return
-
-    def _answers_for(row):
-        """The audited key's answers for a row: its own, else the representative's when the row is a member merged
-        into an audited one (a merged member keeps its own row, and its kind can name the same places)."""
-        if not isinstance(row, dict) or not isinstance(row.get(KIND_OF_MISTAKE_FIELD), dict):
-            return None
-        results = answers.get(_finding_identity_key(row))
-        if results is None:
-            # axis: a merged member's row takes the audited representative's answers for the places it names, so the record never shows it "0 of N fixed" after the shared places were repaired — see bite-proof record c4_wo1_kind
-            into = row.get(session_contract.MERGED_INTO_FIELD)
-            results = answers.get(into) if isinstance(into, str) else None
-        return results
-
-    live = state.get("findings")
-    for row in live if isinstance(live, list) else ():
-        results = _answers_for(row)
-        if results is not None:
-            row[KIND_OF_MISTAKE_FIELD] = _with_place_results(row[KIND_OF_MISTAKE_FIELD], results)
-    # fold-time writer: with answers and no ledger this now sets an empty one, the shape every other fold-time writer creates
-    ledger = _ensure_disposition_ledger_for_write(state)
-    for entry in ledger:
-        results = _answers_for(entry)
-        if results is not None:
-            entry[KIND_OF_MISTAKE_FIELD] = _with_place_results(entry[KIND_OF_MISTAKE_FIELD], results)
-
-
 def _archive_departures(state, departing):
     """Write every departing keyed finding into dispositionLedger (replace-by-key)."""
     if not departing:
@@ -3292,16 +3234,6 @@ def _archive_departures(state, departing):
             raised = session_contract.RAISED_ROUND_FIELD
             if raised in prior and raised not in replacement:
                 replacement[raised] = prior[raised]
-            # axis: the per-place audit results the ledger entry holds survive the departing live copy replacing it, as accumulated break-it runs do — see bite-proof record c4_wo1_kind
-            if isinstance(prior.get(KIND_OF_MISTAKE_FIELD), dict):
-                held = _place_results_of(prior[KIND_OF_MISTAKE_FIELD])
-                if isinstance(replacement.get(KIND_OF_MISTAKE_FIELD), dict):
-                    fresh = {pair: fixed for pair, fixed in held.items()
-                             if pair not in _place_results_of(replacement[KIND_OF_MISTAKE_FIELD])}
-                    replacement[KIND_OF_MISTAKE_FIELD] = _with_place_results(
-                        replacement[KIND_OF_MISTAKE_FIELD], fresh)
-                else:
-                    replacement[KIND_OF_MISTAKE_FIELD] = prior[KIND_OF_MISTAKE_FIELD]
             prior_runs = prior.get(break_it.RUNS_FIELD)
             if isinstance(prior_runs, list):
                 # axis: a live row older than the ledger entry never overwrites the runs the ledger accumulated (changedWhy included)
@@ -8869,6 +8801,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             for carried in ("body", "suggestion"):
                 if bf.get(carried) is not None:
                     sibling[carried] = bf[carried]
+            sibling_kind = _kind_of_mistake_projection(bf)
+            if sibling_kind is not None:
+                sibling[KIND_OF_MISTAKE_FIELD] = sibling_kind
             sib_ruling, sib_seq = _carried_owner_ruling(
                 _row_decision(state, effective, ledger_by_key, sibling["id"]))
             if sib_ruling is not None:
@@ -8931,12 +8866,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                 row[carried] = f[carried]
         # The kind of mistake rides every target with the other places it names (no earlier audit's `fixed` result):
         # the auditor answers every place, and the fold refuses a fix that leaves one open.
-        kind = f.get(KIND_OF_MISTAKE_FIELD)
-        if isinstance(kind, dict) and isinstance(kind.get("kind"), str) and kind["kind"].strip():
-            row[KIND_OF_MISTAKE_FIELD] = {
-                "kind": kind["kind"],
-                "places": [{"file": p.get("file"), "line": p.get("line")}
-                           for p in kind.get("places") or [] if isinstance(p, dict)]}
+        kind = _kind_of_mistake_projection(f)
+        if kind is not None:
+            row[KIND_OF_MISTAKE_FIELD] = kind
         row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
         # `fixerDelta` is the attempt's own diff (reviewed head -> fixed head) over every file it
         # changed; `batchFindings` are the attempt's other findings (id, file, line, title).
@@ -8996,6 +8928,17 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     return targets
 
 
+def _kind_of_mistake_projection(finding):
+    """The kind of mistake a finding names, with the other places it names and no earlier audit's `fixed`
+    result — the one shape an audit target and its sibling projections carry it in; None when it names none."""
+    kind = finding.get(KIND_OF_MISTAKE_FIELD) if isinstance(finding, dict) else None
+    if not (isinstance(kind, dict) and isinstance(kind.get("kind"), str) and kind["kind"].strip()):
+        return None
+    return {"kind": kind["kind"],
+            "places": [{"file": p.get("file"), "line": p.get("line")}
+                       for p in kind.get("places") or [] if isinstance(p, dict)]}
+
+
 def _round_finding_entry(key, finding, carried_ruling):
     """One round-findings entry — id, place, title, body and suggestion, and the finding's carried owner
     ruling — in the one shape every audit target lists its round's other findings in."""
@@ -9004,6 +8947,9 @@ def _round_finding_entry(key, finding, carried_ruling):
     for carried in ("body", "suggestion"):
         if finding.get(carried) is not None:
             entry[carried] = finding[carried]
+    sibling_kind = _kind_of_mistake_projection(finding)
+    if sibling_kind is not None:
+        entry[KIND_OF_MISTAKE_FIELD] = sibling_kind
     entry_ruling, entry_seq = carried_ruling
     if entry_ruling is not None:
         entry["ownerRuling"] = entry_ruling
@@ -9309,9 +9255,15 @@ def _fold_audits(state, config, artifact, session_dir=None):
     still_open = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
     if still_open is not None:
         still_open |= set(riders_open)  # a rider left open still holds its restage marks
+    # axis: the clearing audit's per-place answers ride the fix disposition itself, for either clearing ruling (`discharged` lists both), so the live row, the ledger, the archive and the merge projection carry them as one family — see bite-proof record c4_wo1_kind
+    place_answers = {a["id"]: [{"file": p.get("file"), "line": p.get("line"), "fixed": p["fixed"]}
+                               for p in a["places"] if isinstance(p, dict) and isinstance(p.get("fixed"), bool)]
+                     for a in outcome["audits"]
+                     if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("places"), list)}
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
-        _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
+        _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt,
+                            placeResults=place_answers.get(tid) or None)
         # The discharge supersedes the closure's earlier dispositions the ruling had reopened.
         # An unresolvable notDischarged list leaves every restage mark in place (fail closed).
         reopened = state.get("restagedAfterDispositionSeq")
@@ -9322,7 +9274,6 @@ def _fold_audits(state, config, artifact, session_dir=None):
                 (state.get("restagedInRound") or {}).pop(member, None)
     # the disclosure of an unfixed, unanswered or ignored place rides the round's `audits` entry (its `reason`,
     # `places` and `placesIgnored`), so the record of the round holds it
-    _record_place_results(state, outcome["audits"])
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)

@@ -25,7 +25,7 @@ Compare the fix (`fixHunks` in the audit target; `fixerDelta` is the whole attem
 suggestion and consequence. Whatever your verdict, when the fix changes behaviour the finding does
 not name, say so in plain words in the result's field for an unnamed behaviour change, but only for
 behaviour that neither this finding nor another finding in `batchFindings` names, by their text (a
-sibling's body and suggestion ride its entry): a change that belongs to a sibling finding's fix is
+sibling's body, suggestion and the locations its kind of mistake names ride its entry): a change that belongs to a sibling finding's fix is
 not unnamed. Report every other change there even when an attached `ownerRuling` (this finding's or a
 sibling's) allows it. Then, in the field for the allowing decision, give the sequence number
 (`ownerRulingSeq`, an integer) of the one carried decision (this finding's own, or a sibling's from

@@ -3,8 +3,8 @@
 The invariants: a finding's `kindOfMistake` keeps only places on lines the PR touched (a place elsewhere goes to the
 raising reviewer's outside entry), never its own citation, never twice, and a merge keeps the union including every
 merged member's own citation; the fix auditor answers every named place and a place left unfixed or unanswered makes the
-ruling not discharged; the per-place results are written once to the live row and the ledger entry and survive the archive
-and the record; a null or blank `kindOfMistake` / `searchDescription` is removed, not refused, and counted in
+ruling not discharged; the per-place results ride the fix disposition the clearing audit writes (a family member, so the
+live row, the ledger and the archive carry them) and the record reads each place's `fixed` from it; a null or blank `kindOfMistake` / `searchDescription` is removed, not refused, and counted in
 `kindMissing`; a `searchDescription` is stamped with its author only at the panel and seams folds, from the executed
 provenance, and never for a maker family.
 
@@ -120,7 +120,8 @@ def test_t1_a_panel_finding_keeps_two_touched_places_and_the_record_renders_them
     body, record = _record_body(tmp_path, kindOfMistake=staged["kindOfMistake"])
     assert "kind of mistake: unchecked retry" in body
     assert "also in this PR: src/a.py:3, src/a.py:19 (0 of 2 fixed)" in body
-    assert record["findings"][0]["kindOfMistake"] == _kind(3, 19)
+    # the record reads each place's `fixed` from the disposition: the row names no results, so every place reads unset
+    assert record["findings"][0]["kindOfMistake"] == {"kind": KIND, "places": [dict(_place(3), fixed=None), dict(_place(19), fixed=None)]}
 
 
 # ---- T2 ------------------------------------------------------------------------------------------------------
@@ -220,9 +221,8 @@ def test_t4c_every_place_fixed_is_discharged_and_the_record_reads_all_fixed(tmp_
     # axis: an answer of fixed for every named place discharges the target and the record renders "all fixed"
     out = _audit(_target(_kind(3, 19)), [_row(3, True), _row(19, True)])
     assert out["discharged"] == ["t-1"] and out["placesUnfixed"] == [] and out["placesIgnored"] == []
-    kind = RD._with_place_results(_kind(3, 19), {("src/a.py", p["line"]): p["fixed"] for p in out["audits"][0]["places"]})
-    assert [p["fixed"] for p in kind["places"]] == [True, True]
-    body, _record = _record_body(tmp_path, kindOfMistake=kind)
+    # the disposition the audit fold writes for the cleared id carries the answers; the record reads them from there
+    body, _record = _record_body(tmp_path, kindOfMistake=_kind(3, 19), placeResults=out["audits"][0]["places"])
     assert "also in this PR: src/a.py:3, src/a.py:19 (all fixed)" in body
 
 
@@ -268,63 +268,137 @@ def test_t4_the_submit_guard_judges_the_places_answer():
 # ---- T5 ------------------------------------------------------------------------------------------------------
 
 
-def test_t5_place_results_survive_save_reload_audit_archive_and_render(world, tmp_path):
-    # axis: the per-place results land on the live row and the ledger entry together, and survive the archive and the record — see bite-proof record c4_wo1_kind
-    state = _panel(world, code_reviewer=[_finding("Retry without a cap", kindOfMistake=_kind(3, 19))])
+def _audited_state(world, ruling="discharged", places=None, kind=None):
+    """A panel-raised finding carrying `kind` (default two places), then one audit round folded for it with the given
+    ruling and per-place answers. Returns `(state, key)`; the state is saved and reloaded before the fold."""
+    kind = kind or _kind(3, 19)
+    state = _panel(world, code_reviewer=[_finding("Retry without a cap", kindOfMistake=kind)])
     (staged,) = state["_toVerify"]
     key = RD._finding_identity_key(staged)
     state["findings"] = [copy.deepcopy(staged)]  # the live copy the fold keeps
     state = json.loads(json.dumps(state))  # save and reload
-    state["_auditTargets"] = [dict(_target(_kind(3, 19), fid=key), independence="independent")]
+    state["_auditTargets"] = [dict(_target(kind, fid=key), independence="independent")]
     state["_verifyThen"] = RD.VERIFY_THEN_POST_AUDITS
-    result = {"id": key, "ruling": "discharged", "reason": "the fix holds", "checks": CHECKS,
-              "places": [_row(3, True), _row(19, False)]}
-    # the audit fold itself writes the answers: removing its enrichment step fails this test
+    result = {"id": key, "ruling": ruling, "reason": "the fix holds", "checks": CHECKS,
+              "places": places if places is not None else [_row(3, True), _row(19, True)]}
+    if ruling == "discharged-but-new-issue":
+        result["newIssues"] = [_finding("A leak the fix opened", line=7)]
     RD._fold(state, state["config"], RD.P_AUDITS, {"results": [result], "collectionManifest": {key: "codex"}},
              session_dir=str(world.session))
-    live = state["findings"][0]["kindOfMistake"]["places"]
-    held = state["dispositionLedger"][0]["kindOfMistake"]["places"]
-    assert [p.get("fixed") for p in live] == [True, False] and live == held
-    # the departing live copy (a fresh row without results) replaces the ledger entry and keeps the results
-    fresh = copy.deepcopy(state["findings"][0])
-    fresh["kindOfMistake"]["places"] = [_place(3), _place(19)]
+    return state, key
+
+
+def _ledger_of(state, key):
+    return next(r for r in state["dispositionLedger"] if RD._finding_identity_key(r) == key)
+
+
+def _decided(row):
+    """A ledger row as the record reads it: the family the driver wrote, plus a raise and disposition order."""
+    family = RD.session_contract.disposition_family_snapshot(row)
+    return ledger_row(row["findingKey"], id="f-" + row["findingKey"], kindOfMistake=row["kindOfMistake"], **family)
+
+
+def _record_rows(tmp_path, *rows):
+    """Write the review record for a session whose ledger is `rows`; return its posted body and the record's findings by id."""
+    session = Session(tmp_path / "acct", dispositionLedger=list(rows)).seat("code-reviewer").save()
+    fake = Fake()
+    assert rs.write_from_session(session, put_extras(tmp_path, extras()), str(tmp_path), fake.readers())["ok"]
+    return fake.marked()[-1]["body"], {f["id"]: f for f in rr.read(7, readers=fake.readers())["findings"]}
+
+
+def _fixed_of(finding):
+    return [p["fixed"] for p in finding["kindOfMistake"]["places"]]
+
+
+def _member(key, line, kind, into):
+    """A merged member's ledger row: its raise and its `mergedInto`, no disposition of its own."""
+    row = ledger_row(key, id="f-" + key, line=line, kindOfMistake=kind, mergedInto=into)
+    for field in ("disposition", "dispositionRound", "dispositionSeq"):
+        row.pop(field)
+    return row
+
+
+@pytest.mark.parametrize("ruling", ["discharged", "discharged-but-new-issue"])
+def test_t5_the_clearing_fold_writes_the_places_answers_into_the_fix_disposition(world, tmp_path, ruling):
+    # axis: the clearing audit's per-place answers ride the fix disposition, for either clearing ruling, onto the live row and the ledger entry alike — see bite-proof record c4_wo1_kind
+    state, key = _audited_state(world, ruling=ruling, places=[_row(3, True), _row(19, True)])
+    answers = [_row(3, True), _row(19, True)]
+    for row in (state["findings"][0], _ledger_of(state, key)):
+        assert row["disposition"] == "fixed" and row["placeResults"] == answers
+    body, found = _record_rows(tmp_path, _decided(_ledger_of(state, key)))
+    assert "also in this PR: src/a.py:3, src/a.py:19 (all fixed)" in body
+    assert _fixed_of(next(iter(found.values()))) == [True, True]
+
+
+def test_t5_a_fold_leaves_no_fixed_on_any_rows_kind_of_mistake_places(world):
+    # axis: nothing writes `fixed` into a kind of mistake's places: the answers live only in the disposition — see bite-proof record c4_wo1_kind
+    state, key = _audited_state(world, places=[_row(3, True), _row(19, True)])
+    rows = list(state["findings"]) + list(state["dispositionLedger"]) + list(state.get("_toVerify") or [])
+    assert rows and any(r.get("placeResults") for r in rows)
+    for row in rows:
+        if isinstance(row.get("kindOfMistake"), dict):
+            assert all("fixed" not in place for place in row["kindOfMistake"]["places"]), row
+
+
+def test_t5_place_results_survive_save_reload_audit_archive_and_render(world, tmp_path):
+    # axis: the place results are a member of the disposition family, so the archive carries them with the disposition — see bite-proof record c4_wo1_kind
+    state, key = _audited_state(world, places=[_row(3, True), _row(19, True)])
+    assert _ledger_of(state, key)["placeResults"] == [_row(3, True), _row(19, True)]
+    # the live row departs: the copy the archive receives is a fresh row without the family
+    fresh = RD.session_contract.strip_disposition_family(copy.deepcopy(state["findings"][0]))
+    assert "placeResults" not in fresh and "disposition" not in fresh
     RD._archive_departures(state, [fresh])
-    assert [p.get("fixed") for p in state["dispositionLedger"][0]["kindOfMistake"]["places"]] == [True, False]
-    # the live row without results and the ledger row with them: the record reads "n of m fixed"
-    live_row = {"findingKey": key, "id": "f-1", "title": "Retry without a cap", "severity": "Important",
-                "file": "src/a.py", "line": 2, "kindOfMistake": {"kind": KIND, "places": [_place(3), _place(19)]}}
-    parts = rs._finding_parts(live_row, state["dispositionLedger"][0])
-    assert [p.get("fixed") for p in parts["kindOfMistake"]["places"]] == [True, False]
-    body, _record = _record_body(tmp_path, kindOfMistake=parts["kindOfMistake"])
-    assert "(1 of 2 fixed)" in body
+    archived = _ledger_of(state, key)
+    assert archived["disposition"] == "fixed" and archived["placeResults"] == [_row(3, True), _row(19, True)]
+    state = json.loads(json.dumps(state))  # save and reload again
+    body, found = _record_rows(tmp_path, _decided(_ledger_of(state, key)))
+    assert "also in this PR: src/a.py:3, src/a.py:19 (all fixed)" in body
+    assert _fixed_of(next(iter(found.values()))) == [True, True]
 
 
-def test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_finding(tmp_path):
-    # axis: a merged member's own row takes the audited representative's answer for each place it names that the audit answered, and a place the audit did not answer keeps `fixed` unset — see bite-proof record c4_wo1_kind
-    def row(key, line, kind, **extra):
-        return dict(_finding("Retry without a cap", line=line, kindOfMistake=kind), findingKey=key, **extra)
-
-    rep = row("k-rep", 2, _kind(3, 19))
-    shared = row("k-shared", 19, _kind(3, 2), mergedInto="k-rep")  # names only places the audit answered
-    partial = row("k-partial", 20, _kind(3, 7), mergedInto="k-rep")  # names a place (7) the audit did not answer
-    stranger = row("k-other", 4, _kind(3, 19))  # not merged into the audited finding: its places are not answered
-    rows = [rep, shared, partial, stranger]
-    state = {"findings": copy.deepcopy(rows), "dispositionLedger": copy.deepcopy(rows)}
-    RD._record_place_results(state, [{"id": "k-rep", "places": [_row(3, True), _row(19, True), _row(2, True)]}])
-    for holder in (state["findings"], state["dispositionLedger"]):
-        by_key = {r["findingKey"]: r["kindOfMistake"]["places"] for r in holder}
-        assert [p.get("fixed") for p in by_key["k-rep"]] == [True, True]
-        assert [p.get("fixed") for p in by_key["k-shared"]] == [True, True]
-        assert [p.get("fixed") for p in by_key["k-partial"]] == [True, None]  # 7 was never answered: unset
-        assert [p.get("fixed") for p in by_key["k-other"]] == [None, None]
-    # the record shows a merged member's places as fixed once the shared places were repaired, and an unanswered one open
-    shared_row = next(r for r in state["dispositionLedger"] if r["findingKey"] == "k-shared")
-    body, _record = _record_body(tmp_path, kindOfMistake=shared_row["kindOfMistake"])
+def test_t5_a_merged_member_reads_its_representatives_places_and_the_representatives_own_place(tmp_path):
+    # axis: a merged member reads the representative's fix disposition for each place it names, the representative's own location included; a place the audit never answered reads not fixed — see bite-proof record c4_wo1_kind
+    rep = ledger_row("k-rep", id="f-rep", file="src/a.py", line=2, kindOfMistake=_kind(3, 19),
+                     placeResults=[_row(3, True), _row(19, True)])
+    shared = _member("k-shared", 19, _kind(3, 2), "k-rep")  # 3 was answered, 2 is the representative's own location
+    partial = _member("k-partial", 20, _kind(3, 7), "k-rep")  # 7 was never answered
+    chained = _member("k-chained", 21, _kind(19), "k-shared")  # a member of a member: the chain ends at the representative
+    stranger = ledger_row("k-other", id="f-other", line=4, kindOfMistake=_kind(3, 19))  # no disposition results of its own
+    stranger.update(disposition="refuted", refutedReason="x")
+    body, found = _record_rows(tmp_path, rep, shared, partial, chained, stranger)
+    assert _fixed_of(found["f-rep"]) == [True, True]
+    assert _fixed_of(found["f-k-shared"]) == [True, True]
+    assert _fixed_of(found["f-k-partial"]) == [True, None]
+    assert _fixed_of(found["f-k-chained"]) == [True]
+    assert _fixed_of(found["f-other"]) == [None, None]
     assert "also in this PR: src/a.py:3, src/a.py:2 (all fixed)" in body
-    partial_row = next(r for r in state["dispositionLedger"] if r["findingKey"] == "k-partial")
-    (tmp_path / "partial").mkdir()
-    body, _record = _record_body(tmp_path / "partial", kindOfMistake=partial_row["kindOfMistake"])
     assert "also in this PR: src/a.py:3, src/a.py:7 (1 of 2 fixed)" in body
+
+
+def test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition(tmp_path):
+    # axis: only a place the fix disposition answers fixed reads fixed: an unfixed answer reads false, anything unresolved reads unset, and a disposition that is not `fixed` answers nothing — see bite-proof record c4_wo1_kind
+    unfixed = ledger_row("k-unfixed", id="f-1", kindOfMistake=_kind(3, 19, 7),
+                         placeResults=[_row(3, True), _row(19, False)])  # 7 is unanswered
+    not_fixed = ledger_row("k-refuted", id="f-2", kindOfMistake=_kind(3, 19), disposition="refuted",
+                           refutedReason="x", placeResults=[_row(3, True), _row(19, True)])
+    twice = ledger_row("k-twice", id="f-3", kindOfMistake=_kind(3, 19),
+                       placeResults=[_row(3, True), _row(3, False), _row(19, True)])  # a place answered both ways
+    dangling = _member("k-dangling", 5, _kind(3, 19), "k-missing")  # its chain does not resolve
+    old = ledger_row("k-old", id="f-5", kindOfMistake={"kind": KIND, "places": [dict(_place(3), fixed=True)]})
+    body, found = _record_rows(tmp_path, unfixed, not_fixed, twice, dangling, old)
+    assert _fixed_of(found["f-1"]) == [True, False, None]
+    assert _fixed_of(found["f-2"]) == [None, None]
+    assert _fixed_of(found["f-3"]) == [False, True]
+    assert _fixed_of(found["f-k-dangling"]) == [None, None]
+    assert _fixed_of(found["f-5"]) == [None]  # an older session's `fixed` on the place itself is no longer read
+    assert "(1 of 3 fixed)" in body and "(0 of 2 fixed)" in body
+
+
+def test_t5_a_finding_without_a_kind_of_mistake_renders_unchanged(tmp_path):
+    # axis: a finding with no kind of mistake gains none: the render reads place results only for a kind that names places
+    row = ledger_row("k-plain", id="f-1", placeResults=[_row(3, True)])
+    _body, found = _record_rows(tmp_path, row)
+    assert "kindOfMistake" not in found["f-1"]
 
 
 def test_t5_a_weakened_test_is_blocked_even_when_a_place_is_unanswered():
@@ -541,6 +615,22 @@ def test_t8_the_shipped_and_built_schemas_are_strict_valid_and_the_example_valid
     for key in ("kindOfMistake", "searchDescription"):  # the fallback literals stay aligned with the shipped schema
         assert RFS._FALLBACK_FINDING_PROPERTY_SCHEMAS[key] == ERC._sanitize_schema_node(shipped_props[key]), key
     assert RFS._FALLBACK_CANONICAL_MEMBER_KEYS == tuple(shipped_props)
+
+
+def test_t6_the_copy_locations_a_sibling_names_ride_every_audit_context(world):
+    # axis: a repair named only in a sibling finding's kind of mistake is attributable by the auditor of the other finding — see bite-proof record c4_wo1_kind
+    state = world.state
+    first = _finding("First defect", line=2)
+    second = _finding("Second defect", line=40, kindOfMistake=_kind(41, 77))
+    state["fixBatch"] = [first, second]
+    state["findings"] = [dict(first), dict(second), _finding("Outside defect", line=90, kindOfMistake=_kind(91))]
+    targets = RD._audit_targets(state, state["config"], {})
+    by_title = {t["title"]: t for t in targets}
+    (sibling,) = by_title["First defect"]["batchFindings"]
+    assert sibling["kindOfMistake"] == {"kind": KIND, "places": [_place(41), _place(77)]}
+    (outside,) = by_title["First defect"]["roundFindings"]
+    assert outside["kindOfMistake"] == {"kind": KIND, "places": [_place(91)]}
+    assert "kindOfMistake" not in by_title["First defect"]
 
 
 # ---- T9 ------------------------------------------------------------------------------------------------------
