@@ -69,6 +69,14 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Each external reviewer's line in the review record now shows whether it read each calibration file its order named, with each file's hash and policy version as they stood at dispatch, and the record has a new `Test lens:` line.** Nothing is owed: records and runs written before this release read unmeasured, never "did not read". See [Review: each reviewer's line shows its calibration read](#review-each-reviewers-line-shows-its-calibration-read).
 
+- **After switching.** **Nothing is owed: builders are given three field rules — a command refused only for its form may be re-issued once in plain form, a headless lane never ends a turn with work still running, and a delete never rides a compound command.** See [Builders: three field rules](#builders-three-field-rules).
+
+### Builders: three field rules
+
+- **A command refused only for its form may be re-issued once in plain form.** The stop rule (`lib/command_refusals.py`, `STOP_RULE`) gains its second exception. A refusals entry's non-null `route` is now valid with `refusedBy: permission` as well as `hook` and `sandbox`; the `refusals[i].route needs refusedBy hook or sandbox` fault is gone and `ROUTE_REFUSED_BY` is removed. A refusal about what a command does stays a stop.
+- **A headless lane never ends a turn with work still running.** The launch doctrine gains a standing ruling, `turn-end`, so every launched builder, local and cloud, is given the turn-end rule verbatim (`rubric/launch-doctrine.md`, `lib/launch_doctrine.py`).
+- **A delete never rides a compound command.** `DELETE_RULE` in `lib/command_refusals.py` is carried by every `dispatch-write` order, the native implementer preamble, `agents/implementer.md` and review-code's in-session fix step. The launch doctrine gains a tenth standing ruling, `no-compound-delete`, whose text is `DELETE_RULE`, so the builder session itself is given the rule in every launch prompt, local and cloud. review-code's own setup recipes (the per-round diff write and the `meta.json` write in `skills/review-code/SKILL.md`) no longer put a delete inside a compound command; they still halt on the same failures with the same messages.
+
 ### Gardening pass: the review-loop measures row
 
 - **What an advisor now does at a pass.** At duty 3, before the walk, run `lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`. It appends one fixed-shape row of review-loop measures for the window to `state/review-loop-measures.jsonl` in the project store, or replaces the row already there for the same window. The input file carries the window's review records, CI runs, misses log, vet receipts, the day cap choices began to be recorded, and any monthly or sampled measures. Its docstring names each key. See [The gardening pass](skills/showrunner/reference/owner-decisions.md#the-gardening-pass).

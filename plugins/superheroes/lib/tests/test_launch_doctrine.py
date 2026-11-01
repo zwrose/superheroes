@@ -23,6 +23,12 @@ def _load():
     return mod
 
 
+_LIB = os.path.dirname(_HERE)
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
+import command_refusals  # noqa: E402
+
 LD = _load()
 
 _NUMBER_WORDS = {
@@ -742,6 +748,70 @@ def test_await_dispatches_ruling_is_delivered_with_its_prohibitions():
     )
     # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
     # test_launcher.py — not here.
+
+
+_DISPATCH_MECHANICS = os.path.join(
+    _PLUGIN_ROOT, "skills", "workhorse", "reference", "dispatch-mechanics.md"
+)
+
+
+def test_turn_end_ruling_is_delivered_verbatim():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "turn-end" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "turn-end")
+    # The authoritative home is LD.RULING_TEXT; the parser also rejects any drift from it.
+    assert text == LD.RULING_TEXT["turn-end"]
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py::test_compose_turn_end_ruling_in_prompt — not here.
+
+
+def test_doctrine_turn_end_ruling_invariant_missing():
+    text = _mutate_once(_read_doctrine(), "cannot wake a headless session, so none", "cannot wake a headless lane, so none")
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == (
+        "doctrine-ruling-invariant-missing:turn-end:cannot wake a headless session"
+    )
+    assert result["rulings"] == []
+    assert result["checks"] == []
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+
+
+def test_no_compound_delete_ruling_text_is_the_delete_rule():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "no-compound-delete")
+    assert text == command_refusals.DELETE_RULE
+    assert LD.RULING_TEXT["no-compound-delete"] is command_refusals.DELETE_RULE
+
+
+def test_doctrine_no_compound_delete_ruling_invariant_missing():
+    # axis: the no-compound-delete ruling must keep its "one path per call" phrase; the parse refuses and clears every payload field
+    text = _mutate_once(_read_doctrine(), "one path per call", "one file per call")
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == (
+        "doctrine-ruling-invariant-missing:no-compound-delete:one path per call"
+    )
+    assert result["rulings"] == []
+    assert result["checks"] == []
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+    assert result["cloudLaunchLine"] is None
+    assert result["detectiveCloudLine"] is None
+
+
+def test_turn_end_ruling_is_cited_not_copied_in_dispatch_mechanics():
+    # axis: the dispatch-mechanics reference's "The turn's final act" section cites the turn-end
+    # ruling's home (CONVENTIONS §11.4) and does not carry a second copy of its text
+    with open(_DISPATCH_MECHANICS, encoding="utf-8") as fh:
+        doc = " ".join(fh.read().split())
+    start = doc.index("### The turn's final act")
+    assert 'RULING_TEXT["turn-end"]' in doc[start:]
+    assert "lib/launch_doctrine.py" in doc[start:]
+    assert " ".join(LD.RULING_TEXT["turn-end"].split()) not in doc
 
 
 def test_doctrine_gated_strings_ruling_invariant_missing():

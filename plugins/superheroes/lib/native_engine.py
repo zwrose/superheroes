@@ -84,7 +84,7 @@ do not try another route into the worktree.
 2. Work only in your own worktree. Do not commit. Leave your change in the working tree.
 3. Install nothing and reach no network: no package installs, no curl or wget, no git push, \
 fetch, pull or clone, no gh.
-4. """ + command_refusals.FILE_WRITE_RULE + """
+4. """ + command_refusals.FILE_WRITE_RULE + " " + command_refusals.DELETE_RULE + """
 5. """ + command_refusals.ORDER_TEXT + """
 6. When you finish, write your typed result to {RESULT_PATH} as one JSON object:
    {"status": "done" | "needs_context" | "blocked", "summary": "<text>", "refusals": [ ... ]}
