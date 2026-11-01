@@ -312,10 +312,6 @@ _HIT_READ = "read"            # a program that prints or scans the file's conten
 _HIT_NONREAD = "non-read"     # a program that only inspects the file's existence or metadata
 _HIT_AMBIGUOUS = "ambiguous"  # the file is named but what the command does with it is not clear
 
-_READER_PROGRAMS = frozenset((
-    "cat", "head", "tail", "less", "more", "sed", "awk", "grep", "egrep", "fgrep", "rg", "bat",
-    "nl", "tac", "od", "xxd", "hexdump", "strings", "sort", "uniq", "cut", "tr", "jq", "view",
-))
 _NONREAD_PROGRAMS = frozenset((
     "test", "[", "[[", "ls", "stat", "file", "wc", "realpath", "readlink", "basename", "dirname",
     "touch", "chmod", "chown", "du", "find", "cd", "mkdir", "rm", "mv", "cp", "sha256sum",
@@ -324,28 +320,54 @@ _NONREAD_PROGRAMS = frozenset((
 _SHELL_PROGRAMS = frozenset(("sh", "bash", "zsh", "dash", "ksh"))
 _WRAPPER_PROGRAMS = frozenset(("sudo", "env", "command", "time", "nice", "nohup", "exec"))
 # grep-family options known to leave the matched content printed; any other option grades unknown.
-_GREP_FAMILY = frozenset(("grep", "egrep", "fgrep", "rg"))
+_GREP_PROGRAMS = ("grep", "egrep", "fgrep", "rg")
 _CONTENT_SHORT_FLAGS = frozenset("niHheFEwx")
 _CONTENT_LONG_FLAGS = frozenset((
     "--line-number", "--ignore-case", "--with-filename", "--no-filename", "--regexp",
     "--fixed-strings", "--extended-regexp", "--word-regexp", "--line-regexp",
 ))
+_NR =r"NR\s*(==|>=|<=|>|<)\s*\d+"
+_NO_OPTION = "(?!)"
+# program: (an option word it allows, the option words that take the next argument, what that argument must be)
+_OPERAND_SPECS = {
+    **dict.fromkeys(("cat", "nl", "less", "more"), (_NO_OPTION, _NO_OPTION, _NO_OPTION)),
+    "head": (r"-n|-n\d+|-\d+|--lines=\d+", "-n", r"\d+"),
+    "tail": (r"-n|-n\+?\d+|-\d+|--lines=\+?\d+", "-n", r"\+?\d+"),
+    "sed": ("-n|-e", "-e", r"\s*(\d+|\$)?(\s*,\s*(\d+|\$))?\s*p\s*"),
+    "awk": (_NO_OPTION, _NO_OPTION, r"1|\s*(%s(\s*&&\s*%s)?\s*)?\{\s*print(\s+\$0)?\s*;?\s*\}\s*" % (_NR, _NR)),
+    **dict.fromkeys(_GREP_PROGRAMS, (
+        r"-(?=.)[%s]*e?|--regexp=.*|%s" % ("".join(sorted(_CONTENT_SHORT_FLAGS - {"e"})),
+                                           "|".join(sorted(_CONTENT_LONG_FLAGS))),
+        r"-\w*e|--regexp", r"(?s).*")),
+}
 
 
-def _content_printing_options(args):
-    """True when every option of a grep-family command is on the known content-printing list.
-
-    An abbreviated long option, a count/list/quiet option, ``--`` or anything unrecognised is False."""
-    for arg in args:
-        if not arg.startswith("-") or arg == "-":
-            continue
-        if arg.startswith("--"):
-            name, eq, _value = arg.partition("=")
-            if name not in _CONTENT_LONG_FLAGS or (eq and name != "--regexp"):
-                return False
-        elif not all(ch in _CONTENT_SHORT_FLAGS for ch in arg[1:]):
-            return False
-    return True
+def _file_operands(program, args):
+    """The file operands of an allowlisted content-printing command; None for any other program, option or form."""
+    # axis: a read is credited only for a FILE OPERAND found by position, never for any argument that equals the target
+    spec = _OPERAND_SPECS.get(program)
+    if spec is None:
+        return None
+    option, value_option, value = spec
+    files, flags, values, it = [], [], [], iter(args)
+    for arg in it:
+        if not arg.startswith("-"):
+            files.append(arg)
+        elif not re.fullmatch(option, arg):
+            return None
+        else:
+            flags.append(arg)
+            if re.fullmatch(value_option, arg):
+                values.append(next(it, None))
+    scripted = program in ("sed", "awk")
+    if scripted and not values:
+        values, files = files[:1], files[1:]
+    if not all(isinstance(v, str) and re.fullmatch(value, v) for v in values) or (
+            scripted and (len(values) != 1 or (program == "sed" and "-n" not in flags))):
+        return None
+    if program in _GREP_PROGRAMS and not values and not any(f.startswith("--regexp=") for f in flags):
+        files = files[1:]
+    return files
 
 
 _PATH_CHARS = r"[\w.\-/]"
@@ -397,8 +419,8 @@ def _segment_program(tokens):
 def _command_hit(command, targets, depth=0):
     """_HIT_READ, _HIT_NONREAD, _HIT_AMBIGUOUS or None for a shell command text and the target paths.
 
-    A read is credited only when a content-reading program is given the complete file path as one
-    argument. A command that merely names the path in some other way is ambiguous, not a read."""
+    A read is credited only when the path is a file operand of a content-printing command (``_file_operands``).
+    A command that names the path in any other way is non-read or ambiguous, not a read."""
     if not any(re.search(re.escape(t) + "(?!" + _PATH_CHARS + ")", command) for t in targets):
         return None
     try:
@@ -421,10 +443,7 @@ def _command_hit(command, targets, depth=0):
             continue
         if not any(arg in targets for arg in args):
             continue
-        if program in _READER_PROGRAMS:
-            if program in _GREP_FAMILY and not _content_printing_options(args):
-                verdict = _HIT_AMBIGUOUS
-                continue
+        if any(operand in targets for operand in _file_operands(program, args) or ()):
             return _HIT_READ
         if program in _NONREAD_PROGRAMS:
             verdict = verdict or _HIT_NONREAD

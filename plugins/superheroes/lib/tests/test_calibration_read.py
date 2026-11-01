@@ -236,6 +236,26 @@ def test_codex_listed_grep_options_are_a_read(calib, command):
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "read"
 
 
+@pytest.mark.parametrize("command,grade", [
+    ("cat <core>", "read"), ("head -n 50 <core>", "read"), ("tail -20 <core>", "read"),
+    ("nl <core>", "read"), ("sed -n '1,200p' <core>", "read"), ("sed -n -e p <core>", "read"),
+    ("awk '{print}' <core>", "read"), ("awk 'NR>=1 && NR<=40 {print $0}' <core>", "read"),
+    ("grep foo <core>", "read"), ("grep -n -e foo <core>", "read"), ("rg -i foo <core>", "read"),
+    ("grep -Fe foo <core>", "read"),
+    ("grep -F -e <core> /tmp/other.txt", "unknown"), ("grep <core> /tmp/other.txt", "unknown"),
+    ("grep --regexp=<core> /tmp/other.txt", "unknown"), ("grep -f <core> /tmp/other.txt", "unknown"),
+    ("grep -- foo <core>", "unknown"), ("sed 's/a/b/' <core>", "unknown"),
+    ("sed -n 's/a/b/p' <core>", "unknown"), ("sed -i -n p <core>", "unknown"),
+    ("awk '{system(\"x\")}' <core>", "unknown"), ("awk -f prog <core>", "unknown"),
+    ("cat -A <core>", "unknown"), ("head -c 10 <core>", "unknown"), ("xxd <core>", "unknown"),
+    ("sort <core>", "unknown"), ("less -N <core>", "unknown"),
+    ("test -f <core>", "not-read"), ("ls -l <core>", "not-read"),
+])
+def test_codex_read_is_credited_only_for_a_file_operand_of_a_content_printing_command(calib, command, grade):
+    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
 def test_vocabulary_has_one_home():
     import calibration_vocab
     import review_record
