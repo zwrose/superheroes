@@ -21,6 +21,7 @@ if _LIB not in sys.path:
 
 import cloud_builder  # noqa: E402
 import cloud_recover as CR  # noqa: E402
+import launch_ledger as ll  # noqa: E402
 import wave_watch  # noqa: E402
 from test_cloud_recover import (  # noqa: E402,F401
     BRANCH, REPO, Gh, _assess, _comment, _died, _event, _git, _iso_ago, _lane, _push, _state, _successor, w,
@@ -238,14 +239,16 @@ def test_t2_a_self_archive_record_newer_than_a_park_reads_stopped_and_names_its_
     assert got["ok"] is True and got["premise"]["adoptsBranch"] == BRANCH and got["premise"]["adoptsHead"] == pushed
 
 
-def test_t2_the_self_archive_record_names_the_head_that_is_adopted_not_the_newest_pushed(w):
+def test_t2_the_self_archive_record_keeps_its_own_head_and_a_branch_moved_past_it_is_refused(w):
     _lane(w, SA)
     named = _pushed_at(w, 1500)
     w.gh.comments = [_self_archive(named)]
-    _push(w, BRANCH, "b")  # work pushed after the record's head: the record's head is still what is adopted
+    _push(w, BRANCH, "b")  # work pushed after the record's head: the record's head is kept, not the newest pushed
     out = _assess(w, launch_id=SA, state="idle")
     assert (out["verdict"], out["evidence"]) == ("stopped", "self-archived")
     assert _state(w)["assessed"][SA]["handoverSha"] == named
+    _died(w, SA)
+    assert _successor(w, launch_id=SA) == {"ok": False, "reason": "handover-head-not-pushed"}
 
 
 def test_t3_e1_a_record_naming_another_launch_or_a_longer_id_is_not_this_lanes_record(w):
@@ -257,9 +260,16 @@ def test_t3_e1_a_record_naming_another_launch_or_a_longer_id_is_not_this_lanes_r
 
 
 def test_t3_e2_a_record_created_before_the_lanes_start_is_not_read(w):
-    _lane(w, SA, start_age=300)  # started 300s ago, reserved 360s ago
+    _lane(w, SA, start_age=300)  # reserved 60s before it started
     sha = _pushed_at(w, 100)
-    w.gh.comments = [_self_archive(sha, age=330)]  # after the reservation, before the start
+    # dated from the ledger's own recorded times (not a second clock reading, which slow git could skew):
+    # the midpoint is after the reservation and before the start
+    lane = ll.fold(ll.read(w.root)["records"])["launches"][SA]
+    midpoint = (lane["reservedTs"] + lane["startedTs"]) / 2
+    assert lane["reservedTs"] < midpoint < lane["startedTs"]
+    record = _self_archive(sha)
+    record["created_at"] = record["updated_at"] = CR._iso(midpoint)
+    w.gh.comments = [record]
     out = _assess(w, launch_id=SA, state="idle")
     assert out["handoverRead"] == "ok" and out["verdict"] == "ask-to-push" and out["evidence"] is None
 
