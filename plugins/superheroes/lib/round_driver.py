@@ -3224,12 +3224,25 @@ def _record_place_results(state, audit_entries):
     the archive and the review record all read the same results."""
     # axis: the per-place results land on the live row and the ledger entry together, so no later read finds one without them — see bite-proof record c4_wo1_kind
     answers = {}
+    discharged_ids = set()
     for entry in audit_entries or []:
         if isinstance(entry, dict) and isinstance(entry.get("id"), str) and isinstance(entry.get("places"), list):
             answers[entry["id"]] = {(p.get("file"), p.get("line")): p["fixed"] for p in entry["places"]
                                     if isinstance(p, dict) and isinstance(p.get("fixed"), bool)}
+            if entry.get("ruling") == "discharged":
+                discharged_ids.add(entry["id"])
     if not answers:
         return
+
+    # The audit never answers the representative's own location (it is the audited finding's own place), so a
+    # merged member that names it takes the representative's discharge as that location's repair.
+    own_places = {}
+    for holder in (state.get("findings"), state.get("dispositionLedger")):
+        for row in holder if isinstance(holder, list) else ():
+            if isinstance(row, dict):
+                row_key = _finding_identity_key(row)
+                if row_key in discharged_ids and row_key not in own_places:
+                    own_places[row_key] = (row.get("file"), row.get("line"))
 
     def _answers_for(row):
         """The audited key's answers for a row: its own, else the representative's when the row is a member merged
@@ -3241,6 +3254,10 @@ def _record_place_results(state, audit_entries):
             # axis: a merged member's row takes the audited representative's answers for the places it names, so the record never shows it "0 of N fixed" after the shared places were repaired — see bite-proof record c4_wo1_kind
             into = row.get(session_contract.MERGED_INTO_FIELD)
             results = answers.get(into) if isinstance(into, str) else None
+            if results is not None and into in own_places and all(results.values()):
+                # axis: a merged member that names the representative's own location reads it fixed once the representative's audit discharged — see bite-proof record c4_wo1_kind
+                results = dict(results)
+                results.setdefault(own_places[into], True)
         return results
 
     live = state.get("findings")
@@ -8510,6 +8527,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             for carried in ("body", "suggestion"):
                 if bf.get(carried) is not None:
                     sibling[carried] = bf[carried]
+            sibling_kind = _kind_of_mistake_projection(bf)
+            if sibling_kind is not None:
+                sibling[KIND_OF_MISTAKE_FIELD] = sibling_kind
             sib_ruling, sib_seq = _carried_owner_ruling(
                 _row_decision(state, effective, ledger_by_key, sibling["id"]))
             if sib_ruling is not None:
@@ -8572,12 +8592,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                 row[carried] = f[carried]
         # The kind of mistake rides every target with the other places it names (no earlier audit's `fixed` result):
         # the auditor answers every place, and the fold refuses a fix that leaves one open.
-        kind = f.get(KIND_OF_MISTAKE_FIELD)
-        if isinstance(kind, dict) and isinstance(kind.get("kind"), str) and kind["kind"].strip():
-            row[KIND_OF_MISTAKE_FIELD] = {
-                "kind": kind["kind"],
-                "places": [{"file": p.get("file"), "line": p.get("line")}
-                           for p in kind.get("places") or [] if isinstance(p, dict)]}
+        kind = _kind_of_mistake_projection(f)
+        if kind is not None:
+            row[KIND_OF_MISTAKE_FIELD] = kind
         row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
         # `fixerDelta` is the attempt's own diff (reviewed head -> fixed head) over every file it
         # changed; `batchFindings` are the attempt's other findings (id, file, line, title).
@@ -8637,6 +8654,17 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     return targets
 
 
+def _kind_of_mistake_projection(finding):
+    """The kind of mistake a finding names, with the other places it names and no earlier audit's `fixed`
+    result — the one shape an audit target and its sibling projections carry it in; None when it names none."""
+    kind = finding.get(KIND_OF_MISTAKE_FIELD) if isinstance(finding, dict) else None
+    if not (isinstance(kind, dict) and isinstance(kind.get("kind"), str) and kind["kind"].strip()):
+        return None
+    return {"kind": kind["kind"],
+            "places": [{"file": p.get("file"), "line": p.get("line")}
+                       for p in kind.get("places") or [] if isinstance(p, dict)]}
+
+
 def _round_finding_entry(key, finding, carried_ruling):
     """One round-findings entry — id, place, title, body and suggestion, and the finding's carried owner
     ruling — in the one shape every audit target lists its round's other findings in."""
@@ -8645,6 +8673,9 @@ def _round_finding_entry(key, finding, carried_ruling):
     for carried in ("body", "suggestion"):
         if finding.get(carried) is not None:
             entry[carried] = finding[carried]
+    sibling_kind = _kind_of_mistake_projection(finding)
+    if sibling_kind is not None:
+        entry[KIND_OF_MISTAKE_FIELD] = sibling_kind
     entry_ruling, entry_seq = carried_ruling
     if entry_ruling is not None:
         entry["ownerRuling"] = entry_ruling

@@ -310,7 +310,9 @@ def test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_find
     stranger = row("k-other", 4, _kind(3, 19))  # not merged into the audited finding: its places are not answered
     rows = [rep, shared, partial, stranger]
     state = {"findings": copy.deepcopy(rows), "dispositionLedger": copy.deepcopy(rows)}
-    RD._record_place_results(state, [{"id": "k-rep", "places": [_row(3, True), _row(19, True), _row(2, True)]}])
+    # the real audit output: line 2 is the representative's own place, which the audit ignores even when answered
+    outcome = _audit(_target(rep["kindOfMistake"], fid="k-rep"), [_row(3, True), _row(19, True), _row(2, True)])
+    RD._record_place_results(state, outcome["audits"])
     for holder in (state["findings"], state["dispositionLedger"]):
         by_key = {r["findingKey"]: r["kindOfMistake"]["places"] for r in holder}
         assert [p.get("fixed") for p in by_key["k-rep"]] == [True, True]
@@ -541,6 +543,22 @@ def test_t8_the_shipped_and_built_schemas_are_strict_valid_and_the_example_valid
     for key in ("kindOfMistake", "searchDescription"):  # the fallback literals stay aligned with the shipped schema
         assert RFS._FALLBACK_FINDING_PROPERTY_SCHEMAS[key] == ERC._sanitize_schema_node(shipped_props[key]), key
     assert RFS._FALLBACK_CANONICAL_MEMBER_KEYS == tuple(shipped_props)
+
+
+def test_t6_the_copy_locations_a_sibling_names_ride_every_audit_context(world):
+    # axis: a repair named only in a sibling finding's kind of mistake is attributable by the auditor of the other finding — see bite-proof record c4_wo1_kind
+    state = world.state
+    first = _finding("First defect", line=2)
+    second = _finding("Second defect", line=40, kindOfMistake=_kind(41, 77))
+    state["fixBatch"] = [first, second]
+    state["findings"] = [dict(first), dict(second), _finding("Outside defect", line=90, kindOfMistake=_kind(91))]
+    targets = RD._audit_targets(state, state["config"], {})
+    by_title = {t["title"]: t for t in targets}
+    (sibling,) = by_title["First defect"]["batchFindings"]
+    assert sibling["kindOfMistake"] == {"kind": KIND, "places": [_place(41), _place(77)]}
+    (outside,) = by_title["First defect"]["roundFindings"]
+    assert outside["kindOfMistake"] == {"kind": KIND, "places": [_place(91)]}
+    assert "kindOfMistake" not in by_title["First defect"]
 
 
 # ---- T9 ------------------------------------------------------------------------------------------------------

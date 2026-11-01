@@ -16,6 +16,7 @@ import break_it
 import circuit_breaker
 import finding_outcomes
 import panel_tally
+import review_findings_schema
 import round_phases
 
 VERDICTS = round_phases.VERDICTS
@@ -332,8 +333,8 @@ def _eff_sev(severity):
     return circuit_breaker.effective_severity(severity)
 
 
-KIND_OF_MISTAKE_FIELD = "kindOfMistake"
-SEARCH_DESCRIPTION_FIELD = "searchDescription"
+KIND_OF_MISTAKE_FIELD = review_findings_schema.KIND_OF_MISTAKE_KEY
+SEARCH_DESCRIPTION_FIELD = review_findings_schema.SEARCH_DESCRIPTION_KEY
 
 
 def _place_pair(place):
