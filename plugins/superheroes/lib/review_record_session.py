@@ -706,7 +706,7 @@ def _finding_parts(row, older):
 
 
 def _latest_audit_place_answers(state):
-    """``{finding key: the place rows of that finding's latest authenticated audit entry that answered places}``.
+    """``{finding key: (round number, the place rows) of that finding's latest authenticated audit entry that answered places}``.
 
     Rounds are read in order of their integer key (a non-integer key is skipped), the entries of a round's
     ``audits`` list in list order. An entry counts only when it is a dict whose ``id`` is a non-blank string, whose
@@ -718,7 +718,7 @@ def _latest_audit_place_answers(state):
         return {}
     numbered = [(int(k), k) for k in rounds if isinstance(k, str) and k.isascii() and k.isdigit()]
     out = {}
-    for _n, k in sorted(numbered, key=lambda nk: nk[0]):
+    for n, k in sorted(numbered, key=lambda nk: nk[0]):
         audits = rounds[k].get("audits") if isinstance(rounds[k], dict) else None
         for entry in audits if isinstance(audits, list) else ():
             if not isinstance(entry, dict):
@@ -726,7 +726,7 @@ def _latest_audit_place_answers(state):
             ident, auditor, places = entry.get("id"), entry.get("auditor"), entry.get("places")
             if isinstance(ident, str) and ident.strip() and isinstance(auditor, str) and auditor.strip() \
                     and isinstance(places, list):
-                out[ident] = places
+                out[ident] = (n, places)
     return out
 
 
@@ -751,7 +751,12 @@ def _kind_with_place_results(kind, own, by_key, audit_answers=None):
         rows = rep.get("placeResults")
     elif isinstance(rep, dict) and isinstance(audit_answers, dict):
         # axis: a finding whose disposition is not fixed reads its places from the latest authenticated audit entry that answered them, so a partly fixed finding shows the places already fixed — see bite-proof record c4_wo1_kind
-        rows = audit_answers.get(sc.finding_identity_key(rep))
+        answered = audit_answers.get(sc.finding_identity_key(rep))
+        rows = answered[1] if answered else None
+        raised = rep.get(sc.RAISED_ROUND_FIELD)
+        if answered and isinstance(raised, int) and not isinstance(raised, bool) and answered[0] < raised:
+            # axis: an audit answer that predates the finding's current raise says nothing of the re-raised finding, so a reopened finding never reads fixed from it
+            rows = None
     else:
         rows = None
     answers = {}

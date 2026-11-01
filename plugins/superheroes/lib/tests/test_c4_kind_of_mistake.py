@@ -483,6 +483,20 @@ def test_t6d_a_later_rounds_authenticated_entry_supersedes_an_earlier_one_and_ro
     assert "also in this PR: src/a.py:3, src/a.py:19 (all fixed)" in body
 
 
+def test_t6h_an_audit_answer_from_before_the_findings_current_raise_answers_nothing(tmp_path):
+    # axis: a finding raised again after an audit answered its places reads none of that audit's answers, so a reopened finding never says all fixed — see bite-proof record c4_wo1_kind
+    row = _open_row("k-1", "f-1", _kind(3, 19))
+    row["raisedRound"] = 3
+    rounds = {"2": {"audits": [_audit_entry("k-1", _row(3, True), _row(19, True))]}}
+    body, found = _record_rows(tmp_path, row, rounds=rounds)
+    assert _fixed_of(found["f-1"]) == [None, None]
+    assert "all fixed" not in body
+    rounds["3"] = {"audits": [_audit_entry("k-1", _row(3, True), _row(19, False))]}  # an audit of the new raise stands
+    (tmp_path / "again").mkdir()
+    _body, found = _record_rows(tmp_path / "again", row, rounds=rounds)
+    assert _fixed_of(found["f-1"]) == [True, False]
+
+
 def test_t6e_a_fixed_dispositions_place_results_win_over_any_audit_entry(tmp_path):
     # axis: a fixed representative reads its places from its own placeResults only; the round audit entries are not read — see bite-proof record c4_wo1_kind
     row = ledger_row("k-1", id="f-1", kindOfMistake=_kind(3, 19, 7), placeResults=[_row(3, True), _row(19, False)])
