@@ -221,7 +221,7 @@ def test_t10_a_synthesis_run_counts_under_its_own_name(tmp_path):
 def test_t11_a_missing_or_advanced_slot_is_a_run_only_with_a_nonce(tmp_path):
     # axis: a slot with no nonce that was not a recorded result never ran; a forfeit with a nonce still cost
     s = Session(tmp_path).seat("code-reviewer", nonce="n1").seat("security-reviewer", cmd="record-missing")
-    s.seat("performance-reviewer", cmd="advance")
+    s.seat("performance-reviewer", cmd="advance", envelope=False)
     rec = written(tmp_path, s.save(), {"n1": run("n1", 100, 60)})
     assert rec["sessionCost"]["runs"] == 1 and set(rec["sessionCost"]["bySeat"]) == {"code-reviewer"}
     again = tmp_path / "again"
@@ -231,6 +231,32 @@ def test_t11_a_missing_or_advanced_slot_is_a_run_only_with_a_nonce(tmp_path):
     rec2 = written(tmp_path, s2.save(), {"n1": run("n1", 100, 60), "n2": run("n2", 40, 30)})
     assert rec2["sessionCost"]["runs"] == 2 and rec2["sessionCost"]["tokens"] == 140
     assert rec2["sessionCost"]["bySeat"]["security-reviewer"] == {"tokens": 40, "minutes": 0.5, "runs": 1}
+
+
+def test_t11b_an_advance_ingested_host_seat_with_a_stored_result_is_a_run_without_a_figure(tmp_path):
+    # axis: a nonce-less advance row counts by slot, without a figure, only when its stored envelope is a real result
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2307_session_cost.md
+    s = Session(tmp_path).seat("code-reviewer", cmd="advance").seat("security-reviewer", cmd="advance", envelope=False)
+    s.seat("performance-reviewer", cmd="advance")
+    path = rs.record_paths.store_path(s.dir, 1, "dispatch-panel", rs.record_paths.storage_key("performance-reviewer", 0), 0)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"payload": {"vacuous": True}}, fh)  # a stored result that says its reviewer did not run
+    cost = written(tmp_path, s.save(), {})["sessionCost"]
+    assert cost["bySeat"] == {"code-reviewer": {"tokens": 0, "minutes": 0.0, "runs": 1}}
+    assert (cost["runs"], cost["runsWithoutFigure"], cost["complete"]) == (1, 1, False)
+
+
+def test_t11c_two_hand_submitted_audit_targets_of_one_vendor_are_two_runs(tmp_path):
+    # axis: a hand-submitted audit is one run per non-silent audit target under `audits <target id>`, never one per vendor
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2307_session_cost.md
+    audits = [{"id": "a.py::x@L1", "auditor": "codex"}, {"id": "b.py::y@L2", "auditor": "codex"},
+              {"id": "c.py::z@L3", "reason": rs.audits_mod.NO_AUDIT_RESULT_REASON}]
+    s = Session(tmp_path, rounds={"1": {"seatStatus": {"code-reviewer": "run"}, "audits": audits}})
+    cost = rs.account_from_session(s.save(), extras(), Fake().readers())["sessionCost"]
+    assert cost["bySeat"] == {"code-reviewer": {"tokens": 0, "minutes": 0.0, "runs": 1},
+                              "audits a.py::x@L1": {"tokens": 0, "minutes": 0.0, "runs": 1},
+                              "audits b.py::y@L2": {"tokens": 0, "minutes": 0.0, "runs": 1}}
+    assert (cost["runs"], cost["runsWithoutFigure"]) == (3, 3)
 
 
 def test_t12_a_secret_shaped_seat_key_is_shown_redacted_with_its_figures(tmp_path):

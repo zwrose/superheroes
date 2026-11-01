@@ -200,7 +200,7 @@ def _figure(obs):
     return (t, w) if ok else None
 
 
-def _session_cost(rows, run_dirs, engine_run, hand=()):
+def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=None):
     """The `sessionCost` of the reviewer runs this session's journal shows dispatched, each run once, every round and attempt.
 
     A run is a recorded review row with a runner nonce, or a `record-result`; its identity is the nonce, else the slot.
@@ -217,7 +217,11 @@ def _session_cost(rows, run_dirs, engine_run, hand=()):
         nonce = ev.get("runnerNonce") if isinstance(ev, dict) else None
         nonce = nonce if isinstance(nonce, str) and nonce.strip() else None
         if nonce is None and r["cmd"] != "record-result":
-            continue  # a missing or advanced slot with no nonce never ran
+            # axis: an advance-ingested host seat with no nonce is a run, by slot without a figure, when its stored envelope is a real result — see bite-proof record i2307_session_cost
+            key3 = (phase, r["round"], seat, r.get("occurrence", 0))
+            if not (r["cmd"] == "advance" and session_dir is not None and isinstance(state, dict) and _slot_ran(
+                    state, key3, r, _envelope(_path(session_dir, key3, r["attempt"])))):
+                continue  # a missing slot, or an advanced one with no stored result, never ran
         # axis: a run is counted once under its nonce, else its slot — see bite-proof record i2307_session_cost
         key = ("nonce", nonce) if nonce else ("slot", phase, r["round"], seat, r.get("occurrence", 0), r["attempt"])
         runs.setdefault(key, (seat if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " " + seat, nonce))
@@ -1083,14 +1087,17 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
         reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
                                     review_record._readers(readers)["engine_run"], raw_dir)
     # a hand submit journals no seat: each seat its rounds say ran (credited or not, as `_status_reviewers` lists it) is a run with no figure
-    hand = [REVIEWER_ROUND_SUFFIX.sub("", v["name"]) for v in reviewers if v.get("ran")] + [
+    # axis: a hand-submitted audit is one run per non-silent audit target, never one per auditor vendor — see bite-proof record i2307_session_cost
+    hand = [REVIEWER_ROUND_SUFFIX.sub("", v["name"]) for v in reviewers if v.get("ran") and not v["name"].startswith("audits auditor")] + [
+        f"audits {_audit_key(a)}" for rec in rounds.values() if isinstance(rec, dict) and isinstance(rec.get("audits"), list)
+        for a in rec["audits"] if isinstance(a, dict) and not _audit_silent(a) and _audit_key(a)] + [
         seat for rnd, seats in _panel_rounds_with_status(state).items() for seat, value in seats.items()
         if value == "run" and _panel_head(state, rnd, meta.get("headSha")) is None] if by_hand else []
     if by_hand:  # axis: a hand-accepted synthesis step is a run without a figure, once per (round, attempt) — see bite-proof record i2307_session_cost
         hand += ["synthesis synthesis"] * len({(r["round"], r["attempt"] if _int(r.get("attempt")) else 0) for r in rows
                                                if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
                                                and r.get("phase") == round_phases.P_SYNTHESIS and _int(r.get("round"))})
-    session_cost = _session_cost(rows, extras.get("runDirs", []), review_record._readers(readers)["engine_run"], hand)
+    session_cost = _session_cost(rows, extras.get("runDirs", []), review_record._readers(readers)["engine_run"], hand, session_dir, state)
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
     pr_body_line = pr_body_stage.record_line(session_dir)
     if pr_body_line is not None:
