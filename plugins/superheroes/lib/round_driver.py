@@ -5135,6 +5135,11 @@ def _sync_merged_consequences(state, kept):
             for field in ("consequence", "consequenceKind"):
                 if field in finding:
                     ledger[seen[key]][field] = finding[field]
+            # the earliest raiser synthesis chose for the representative, including its absence
+            if session_contract.RAISED_BY_FIELD in finding:
+                ledger[seen[key]][session_contract.RAISED_BY_FIELD] = finding[session_contract.RAISED_BY_FIELD]
+            else:
+                ledger[seen[key]].pop(session_contract.RAISED_BY_FIELD, None)
 
 
 def _verifier_head(state, session_dir, rnd):

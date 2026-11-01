@@ -270,6 +270,28 @@ def test_m1_an_earliest_member_with_no_raiser_leaves_the_merge_without_one():
     assert merged["severity"] == "Important" and RAISED not in merged, merged
 
 
+def _synced_ledger_row(ledger_raiser, rep_raiser):
+    rep = {"title": "t", "file": "f.py", "line": 1}
+    if rep_raiser is not None:
+        rep[RAISED] = rep_raiser
+    row = dict(rep)
+    if ledger_raiser is not None:
+        row[RAISED] = ledger_raiser
+    state = {SC.DISPOSITION_LEDGER_KEY: [row]}
+    RD._sync_merged_consequences(state, [rep])
+    return state[SC.DISPOSITION_LEDGER_KEY][0]
+
+
+def test_s1_synthesis_carries_the_chosen_earliest_raiser_onto_the_ledger_row():
+    # axis: the representative's ledger row takes the raiser synthesis chose, not the representative's original one
+    assert _synced_ledger_row("security-reviewer", "code-reviewer")[RAISED] == "code-reviewer"
+
+
+def test_s1_synthesis_carries_an_absent_raiser_onto_the_ledger_row():
+    # axis: a chosen earliest member with no raiser clears the ledger row's raiser
+    assert RAISED not in _synced_ledger_row("security-reviewer", None)
+
+
 # ---- W1: a sweep hit -------------------------------------------------------------------------------------------
 
 
