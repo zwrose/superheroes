@@ -72,7 +72,7 @@
     "compare `committedTest` with `reviewerTest` in light of `changedWhy`",
     "Never change the repository, and never claim a run you did not make",
     "Transport keys use the per-location target identifier",
-    "A fix that leaves a named place unfixed, or a place you leave unanswered, is not discharged"
+    "A fix that leaves a named location unfixed, or a location you leave unanswered, is left open by the driver"
   ],
   "dispatch-scoped-finder": [
     "You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round",
