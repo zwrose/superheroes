@@ -102,6 +102,8 @@ EXECUTION_EVIDENCE_OPTIONAL_FIELDS = (
 )
 EXECUTION_EVIDENCE_OBSERVATION_FIELDS = frozenset(
     ("tokens", "toolCalls", "stdoutBytes", "wallSeconds", "source", "read", "telemetry"))
+# #2311: the runner's engine record carries it; the review record reads it from there; it never enters the journal.
+EXECUTION_EVIDENCE_RUNNER_ONLY_OBSERVATION_FIELDS = frozenset(("calibration",))
 EXECUTION_EVIDENCE_TELEMETRY_VALUES = frozenset(("tool-calls", "none"))
 EXECUTION_EVIDENCE_READ_VALUES = frozenset(("engaged", "unknown"))
 _EXECUTION_EVIDENCE_POINTER_KEYS = frozenset(
@@ -209,6 +211,21 @@ def execution_evidence_fields(evidence):
         if field in evidence and _EXECUTION_EVIDENCE_TOP_LEVEL_TYPE_OK[field](evidence[field]):
             out[field] = evidence[field]
     return out
+
+
+def runner_record_evidence_fields(record):
+    """`execution_evidence_fields` for a runner engine record becoming journal evidence (#2311).
+
+    Drops only the runner-only observation keys (`EXECUTION_EVIDENCE_RUNNER_ONLY_OBSERVATION_FIELDS`)
+    from a copy; the caller's record is never mutated, and any other extra key is kept so the ingest
+    validator still refuses it. Not for stored envelopes: those go through `execution_evidence_fields`."""
+    if isinstance(record, dict) and isinstance(record.get("observation"), dict):
+        record = dict(record)
+        record["observation"] = {
+            key: value for key, value in record["observation"].items()
+            if key not in EXECUTION_EVIDENCE_RUNNER_ONLY_OBSERVATION_FIELDS
+        }
+    return execution_evidence_fields(record)
 
 
 def recorded_row_fields(stored_envelope, cited_head, cited_head_source):

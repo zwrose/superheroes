@@ -15779,7 +15779,7 @@ def _assemble_dispatch_evidence(session_dir, envelope, evidence_run_dir, anchor_
         cited_head_source = round_records.CITED_HEAD_SOURCE_RUNNER_VIEW
     else:
         return None, "view-head-underivable", {"runKind": run_kind}, None
-    evidence = _journal_execution_evidence_fields(record)
+    evidence = round_records.runner_record_evidence_fields(record)
     if evidence is None:
         return None, "evidence-run-dir-unreadable", {"detail": "result-binding-incomplete"}, None
     out = dict(envelope)
