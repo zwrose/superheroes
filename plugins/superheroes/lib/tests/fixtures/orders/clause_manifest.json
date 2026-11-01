@@ -51,6 +51,14 @@
     "Never change the repository, and never claim a run you did not make",
     "runs your test, exactly as you wrote it, in its own working copy"
   ],
+  "dispatch-sweep": [
+    "You are a searcher",
+    "You do not review the change, judge how serious a place is, or fix anything",
+    "Report every place, not only the first",
+    "Search only the files on your list",
+    "Do not judge how serious a place is and do not propose a fix",
+    "Never change the repository, and never claim a run you did not make"
+  ],
   "dispatch-second-test-correction": [
     "You are a fresh run of the test reviewer",
     "so your test has been put back and committed again as you wrote it",

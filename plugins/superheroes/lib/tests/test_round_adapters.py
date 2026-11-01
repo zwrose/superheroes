@@ -957,6 +957,7 @@ _SEAT_KEYS = {
     RD.P_VERIFY: RA.SEAT_VERIFY,
     RD.P_APPLY_FIXES: RA.SEAT_APPLY_FIXES,
     RD.P_AUDITS: "f.py::t",
+    RD.P_SWEEP: RA.sweep_seat_key("S-1", 1),
 }
 
 
@@ -966,7 +967,7 @@ def _minimal_payload_for_contract(phase, contract, seat_key):
         enums = contract.get("enums") or {}
         if field in enums:
             payload[field] = enums[field][0]
-        elif field == "findings":
+        elif field in ("findings", "hits"):
             payload[field] = []
         elif field == "verdicts":
             payload[field] = [{"id": "v0", "verdict": verification.VERDICTS[0], "reason": "grounds"}]

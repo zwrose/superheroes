@@ -404,6 +404,8 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
                              for f in (pend.get("payload") or {}).get("findings") or []]}
     if phase == round_driver.P_SYNTHESIS:
         return {"grouping": None}
+    if phase == round_driver.P_SWEEP:
+        return {"hits": []}  # every searcher answers: the search found no other place
     if phase in (round_driver.P_SEAMS, round_driver.P_SCOPED):
         return {"findings": []}
     if phase == round_driver.P_APPLY_FIXES:
@@ -622,12 +624,15 @@ def test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt(tmp_
     # The second-test seat is seated the same way. Its phase folds only when a finding's attached test passes
     # and the verifier says it never reached the path, so the session runs in a real checkout (its head in the
     # session meta, the interpreter named) and the test role raises such a finding beside the ordinary one.
+    # The repository sweep folds the same way: the ordinary finding is confirmed and carries its search
+    # description, which the panel seat's executed provenance stamps with an author outside the makers' families.
     head = make_checkout(_fixture_repo(tmp_path, "s"))
     session_dir, gitdir, head_path = _bootstrap(
         tmp_path, head_sha=head, sliced=True, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"),
         breakItInterpreter=shlex.quote(sys.executable))
-    folded = _drive_to_terminal(session_dir, gitdir,
-                                [_blocking_finding("missing bounds guard", 2), _test_finding()], head_path)
+    described = dict(_blocking_finding("missing bounds guard", 2), searchDescription={
+        "kind": "missing bounds guard", "looksLike": "an index used with no range check", "examples": ["a[i]"]})
+    folded = _drive_to_terminal(session_dir, gitdir, [described, _test_finding()], head_path)
 
     unexercised = [p for p in round_adapters.ADAPTER_PHASES if p not in folded]
     assert not unexercised, ("phases that never folded through the real adapter: %s (folded: %s)"

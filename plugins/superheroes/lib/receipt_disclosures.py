@@ -95,6 +95,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "verifierProvenance": dict_list,
     "synthesisUnseatable": dict_list,
     "secondTestUnseatable": dict_list,
+    "sweeps": dict_list,
     "judgmentDispositions": dict_list,
     "gateGuidanceRowCarried": dict_list,
     "breakItRuns": dict_list,
@@ -735,6 +736,28 @@ def build_degraded_prose(state, form, journal=None):
                 "second-test-unseatable (round %s): no second-test seat outside the makers' families on a "
                 "proven cell — %d held finding(s) were graded with the test they have (nothing dropped)"
                 % (rkey, sum(len(r.get("held") or []) for r in stu if isinstance(r, dict))))
+        sweeps = declared.get("sweeps")
+        if sweeps:
+            # axis: a sweep that did not run, a part no searcher answered and a hit left ungraded are each a degradation of the repository search, never a pass that hides them
+            for sweep in sweeps:
+                if not isinstance(sweep, dict):
+                    continue
+                if sweep.get("notRun"):
+                    degraded_out.append(
+                        "sweep-not-run (round %s): %s for \"%s\" — %s; no search ran and nothing stood in"
+                        % (rkey, sweep.get("sweepId"), sweep.get("title"), sweep.get("notRun")))
+                missing = sweep.get("missing")
+                if isinstance(missing, list) and missing:
+                    degraded_out.append(
+                        "sweep-incomplete (round %s): %s — searcher part(s) %s returned nothing; the search "
+                        "did not cover those files" % (rkey, sweep.get("sweepId"), ", ".join(str(m) for m in missing)))
+            ungraded = sum(s.get("ungraded") for s in sweeps
+                           if isinstance(s, dict) and isinstance(s.get("ungraded"), int)
+                           and not isinstance(s.get("ungraded"), bool))
+            if ungraded:
+                degraded_out.append(
+                    "sweep-hit-ungraded (round %s): %d sweep hit(s) left open without a verifier grade"
+                    % (rkey, ungraded))
         bik =declared.get("breakItKept")
         if bik:
             # axis: a row the owner ruled out of scope and the audit cleared is not a test the final change failed to hold — see bite-proof record wo_a_2072_ruled_exempt

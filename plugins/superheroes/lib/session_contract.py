@@ -82,7 +82,13 @@ __all__ = (
     "execution_only_admissible_for_phase",
     "RUN_KIND_REVIEW",
     "RUN_KIND_WRITE",
+    "RUN_KIND_SEARCH",
     "RUN_KIND_VALUES",
+    "add_sweep_hit",
+    "sweep_hit_finding",
+    "sweep_hit_title",
+    "SWEEP_SOURCE_NAME",
+    "SWEEP_OF_FIELD",
     "run_kind_value_ok",
     "run_kind_for_phase",
     "RUN_KIND_BY_PHASE",
@@ -140,7 +146,9 @@ AUDITS_PHASE = "dispatch-audits"
 
 RUN_KIND_REVIEW = "review"
 RUN_KIND_WRITE = "write"
-RUN_KIND_VALUES = frozenset((RUN_KIND_REVIEW, RUN_KIND_WRITE))
+# A repository-sweep searcher is neither a reviewer nor a writer: it only reads the files it is given for one described mistake.
+RUN_KIND_SEARCH = "search"
+RUN_KIND_VALUES = frozenset((RUN_KIND_REVIEW, RUN_KIND_WRITE, RUN_KIND_SEARCH))
 
 
 def run_kind_value_ok(value):
@@ -156,6 +164,7 @@ RUN_KIND_BY_PHASE = {
     "dispatch-scoped-finder": RUN_KIND_REVIEW,
     "dispatch-seams-check": RUN_KIND_REVIEW,
     "dispatch-second-test": RUN_KIND_REVIEW,
+    "dispatch-sweep": RUN_KIND_SEARCH,
 }
 
 EXECUTION_EVIDENCE_RUN_KIND_FIELD = "runKind"
@@ -521,6 +530,76 @@ def add_outside_hit(entries, name, file, line, title):
         return False
     target["hits"].append(hit)
     return True
+
+
+SWEEP_SOURCE_NAME = "searchers"  # the source name of a repository sweep's outside entry
+SWEEP_OF_FIELD = "sweepOf"  # marks a finding a repository sweep found: {"sweepId", "findingKey"} of the finding it searched for
+
+
+def add_sweep_hit(entries, sweep_id, name, file, line, title):
+    """Add one outside-scope hit of a repository sweep to `entries`, the review record's "Outside this PR" list, in
+    place; return True when the hit was added and False when that sweep's entry already held it. The one home of a
+    sweep entry's insertion policy for the driver's fold and the abandoned-session writer's recovery: one entry
+    `{"source": {"kind": "sweep", "name": name, "sweepId": sweep_id}, "hits": [...]}` per sweep id (opened at the end
+    when none exists; a reviewer entry is never the target, even when it shares the name); the new id is
+    `O-<1 + every hit already listed on every entry>`; a hit already under that entry (same file, line, title) adds
+    nothing; an entry with no hit list starts one."""
+    target, total = None, 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        hits = entry.get("hits") if isinstance(entry.get("hits"), list) else []
+        total += len(hits)
+        src = entry.get("source") if isinstance(entry.get("source"), dict) else {}
+        if src.get("kind") == "sweep" and src.get("sweepId") == sweep_id and target is None:
+            target = entry
+    hit = {"id": "O-%d" % (total + 1), "file": file, "line": line, "title": title}
+    if target is None:
+        entries.append({"source": {"kind": "sweep", "name": name, "sweepId": sweep_id}, "hits": [hit]})
+        return True
+    if not isinstance(target.get("hits"), list):
+        target["hits"] = []
+    if any(isinstance(h, dict) and (h.get("file"), h.get("line"), h.get("title")) == (file, line, title)
+           for h in target["hits"]):
+        return False
+    target["hits"].append(hit)
+    return True
+
+
+def sweep_hit_title(hit, parent):
+    """The title of a sweep hit: its `what`, stripped, else the kind of the description that was searched for."""
+    what = hit.get("what") if isinstance(hit, dict) else None
+    if isinstance(what, str) and what.strip():
+        return what.strip()
+    desc = parent.get("searchDescription") if isinstance(parent, dict) else None
+    kind = desc.get("kind") if isinstance(desc, dict) else None
+    return kind.strip() if isinstance(kind, str) and kind.strip() else "repository sweep hit"
+
+
+def sweep_hit_finding(hit, sweep, parent):
+    """The finding a repository sweep's hit on a touched line becomes: the parent's severity and consequence, the
+    parent's description kind as its kind of mistake (no other places, no description of its own), and the mark of the
+    sweep and finding it came from. It carries no `findingKey`, so its identity is the one `finding_identity_key`
+    mints from its content. The one home of the shape for the driver's fold and the abandoned-session writer."""
+    desc = parent.get("searchDescription") if isinstance(parent.get("searchDescription"), dict) else {}
+    kind = desc.get("kind").strip() if isinstance(desc.get("kind"), str) else ""
+    what = hit.get("what").strip() if isinstance(hit.get("what"), str) else ""
+    title = sweep_hit_title(hit, parent)
+    out = {
+        "title": title,
+        "file": hit.get("file"),
+        "line": hit.get("line"),
+        "severity": parent.get("severity"),
+        "body": "Found by repository sweep %s for the confirmed finding \"%s\" (%s:%s): %s" % (
+            sweep.get("sweepId"), parent.get("title"), parent.get("file"), parent.get("line"), what or title),
+        "kindOfMistake": {"kind": kind, "places": []},
+        "searchDescription": None,
+        SWEEP_OF_FIELD: {"sweepId": sweep.get("sweepId"), FINDING_KEY_FIELD: finding_identity_key(parent)},
+    }
+    for field in ("consequence", "consequenceKind"):
+        if field in parent:
+            out[field] = parent[field]
+    return out
 
 
 def minted_identity_key(finding):

@@ -328,6 +328,8 @@ def _seat_for(phase):
         return "verifier:c1"
     if phase == RD.P_AUDITS:
         return "t1"
+    if phase == RD.P_SWEEP:
+        return "searcher:S-1:1"
     return phase
 
 
@@ -336,6 +338,10 @@ def _payload_for(phase):
         return {"clusters": [{"key": "c1", "issues": []}]}
     if phase == RD.P_AUDITS:
         return {"targets": [{"id": "t1", "auditorVendor": "claude"}]}
+    if phase == RD.P_SWEEP:
+        return {"sweeps": [{"sweepId": "S-1", "searchDescription": {"kind": "k"},
+                            "parts": [{"part": 1, "files": ["a.py"]}]}],
+                "searcher": {"vendor": "claude", "model": "haiku-4.5", "effort": "medium"}}
     return {}
 
 
@@ -543,6 +549,7 @@ _FIXTURE_AUX_INPUTS = {
     RD.P_SECOND_TEST: frozenset({"CHANNEL", "ROLE_BRIEF_PATH", "BREAK_IT_GRAMMAR_TEXT"}),
     RD.P_AUDITS: frozenset({"CHANNEL"}),
     RD.P_SCOPED: frozenset({"CHANNEL", "FINDINGS_OUTPUT_PATH"}),
+    RD.P_SWEEP: frozenset({"CHANNEL"}),
 }
 
 # Realistic placeholder values preserved from the prior hand-typed fixture — keyed by phase then
@@ -606,6 +613,10 @@ _KNOWN_REALISTIC_VALUES = {
         "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
         "PR_BODY_LINE": ("the staged copy %s/pr-body/staged.md, to be read against the original "
                          "%s/pr-body/original.md" % (SESSION, SESSION)),
+    },
+    RD.P_SWEEP: {
+        "SEARCH_INPUT_PATH": SESSION + "/round-1/sweep/searcher-s-1-1.json",
+        "VERIFICATION_ROOT": "/proj",
     },
     RD.P_SCOPED: {
         "HUNKS_PATH": SESSION + "/round-1/scoped-hunks.json",

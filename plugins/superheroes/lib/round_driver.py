@@ -389,6 +389,7 @@ P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_SEAMS = round_phases.P_SEAMS
 P_SECOND_TEST = round_phases.P_SECOND_TEST
+P_SWEEP = round_phases.P_SWEEP
 P_VERIFY = round_phases.P_VERIFY
 P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 P_TERMINAL = round_phases.P_TERMINAL
@@ -433,7 +434,7 @@ ORDER_EMISSION_DISCLOSURE_CHANNELS = (
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
 # also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
 VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses", "verifierProvenance", "synthesisUnseatable",
-                                     "secondTestUnseatable")
+                                     "secondTestUnseatable", "sweeps")
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `CARRIED_DISCLOSURE_CHANNELS` so resume
@@ -3684,6 +3685,8 @@ def _advance(state, config):
             payload = {"findings": [_second_test_entry(row)
                                     for row in state.get("_secondTestHeld") or []
                                     if isinstance(row, dict)]}
+    elif step == P_SWEEP:
+        payload = _sweep_payload(state)
     elif step == P_AUDITS:
         payload = {"targets": state.get("_auditTargets") or []}
         if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
@@ -3800,6 +3803,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
             _fold_test_correction(state, config, artifact)
         else:
             _fold_second_test(state, config, artifact, session_dir=session_dir)
+    elif phase == P_SWEEP:
+        _fold_sweep(state, config, artifact, session_dir=session_dir)
     elif phase == P_AUDITS:
         _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
@@ -4551,23 +4556,28 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     _record_staged_id_bindings(state, state.get("_toVerify") or [], staged, "verifiers")
     applied = verification.apply_verdicts(staged, verdicts)
     second_pass = state.get("_secondTestPass") is True
+    sweep_pass = state.get("_sweepPass") is True
     survivors = list(applied["findings"])
-    if second_pass:
-        # every finding in this pass has had its one more test, so nothing is held; one that is anyway is
-        # kept, graded, and never held a second time
+    if second_pass or sweep_pass:
+        # every finding in this pass has had its one more test (or, a repository-sweep hit, has none to have), so
+        # nothing is held; one that is anyway is kept, graded, and never held a second time
         again, fault = _keep_held_again(state, staged, applied["held"])
         if fault:
             _park_cannot_certify(state, fault)
             state["step"] = P_TERMINAL
             return
         survivors += again
+    if sweep_pass:
+        # axis: a sweep hit the verifier left ungraded never reaches synthesis or a fix batch; its ledger row stays open — see bite-proof record c4_wo2a_sweep
+        survivors = _withhold_ungraded_sweep_hits(state, survivors)
     state["_verified"] = survivors
     verify_record = {"drops": applied["drops"], "downgrades": applied["downgrades"],
                      "unverified": applied["unverified"], "ambiguous": applied["ambiguous"],
                      "notExecuted": applied["notExecuted"],
                      # axis: the findings a passing test missed the path of are listed on the verify record, where the docs promise them — see bite-proof record c1l7_wo_f_held_record
                      "held": applied["held"]}
-    prior_verify = state["rounds"].get(str(state["round"]), {}).get("verify") if second_pass else None
+    prior_verify = (state["rounds"].get(str(state["round"]), {}).get("verify")
+                    if (second_pass or sweep_pass) else None)
     if isinstance(prior_verify, dict):
         # axis: the first pass's drops, downgrades and the rest stay on the round's record beside the second's
         for field, rows in verify_record.items():
@@ -4620,25 +4630,44 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
     state["_refuted"] = refuted  # this round's refuted findings (staged ids): they carry a repeat mark, never a merge
     for n in applied["notExecuted"]:
         _decision(state, "verifier-not-executed", n.get("reason"))
-    if applied["held"] and not second_pass:
+    if applied["held"] and not (second_pass or sweep_pass):
         # axis: a finding whose passing test missed its path is neither graded nor closed on that test; it gets one more test — see bite-proof record c1l7_wo_c_second_test
         state["_verified"] = []
         _hold_for_second_test(state, session_dir, staged, applied["held"], survivors, refuted)
         return
     if second_pass:
-        carried = state.pop("_secondTestCarry", None)
-        carried_refuted = state.pop("_secondTestRefutedCarry", None)
         state.pop("_secondTestHeld", None)
         state.pop("_secondTestPass", None)
-        carried = carried if isinstance(carried, list) else []
-        carried_refuted = carried_refuted if isinstance(carried_refuted, list) else []
-        # axis: the first pass's survivors and refuted findings and this pass's are staged afresh together, so the round's two lists carry unique ids and its refuted list holds both passes' — see bite-proof record c1l8_wo_a_repeat_marks
-        restaged = verification.stage_ids(carried + survivors + carried_refuted + refuted)
-        # axis: the second pass renumbers every row, so the renumbering is recorded as an attempt too — #2157
-        _record_staged_id_bindings(state, carried + survivors + carried_refuted + refuted,
-                                   restaged, "second-pass-restage")
-        split = len(carried) + len(survivors)
-        state["_verified"], state["_refuted"] = restaged[:split], restaged[split:]
+        _restage_with_carry(state, "_secondTestCarry", "_secondTestRefutedCarry", survivors, refuted,
+                            "second-pass-restage")
+    if sweep_pass:
+        for name in _SWEEP_PASS_KEYS:
+            state.pop(name, None)
+        _restage_with_carry(state, "_sweepCarry", "_sweepRefutedCarry", survivors, refuted,
+                            "sweep-pass-restage")
+    _route_to_synthesis(state, config, session_dir)
+
+
+def _restage_with_carry(state, carry_key, refuted_carry_key, survivors, refuted, source):
+    """After a pass that re-entered the verifiers (the second-test pass or the sweep pass): the earlier pass's survivors
+    and refuted findings (kept under ``carry_key`` / ``refuted_carry_key``) and this pass's are staged afresh together."""
+    carried = state.pop(carry_key, None)
+    carried_refuted = state.pop(refuted_carry_key, None)
+    carried = carried if isinstance(carried, list) else []
+    carried_refuted = carried_refuted if isinstance(carried_refuted, list) else []
+    # axis: the first pass's survivors and refuted findings and this pass's are staged afresh together, so the round's two lists carry unique ids and its refuted list holds both passes' — see bite-proof record c1l8_wo_a_repeat_marks
+    restaged = verification.stage_ids(carried + survivors + carried_refuted + refuted)
+    # axis: a later pass renumbers every row, so the renumbering is recorded as an attempt too — #2157
+    _record_staged_id_bindings(state, carried + survivors + carried_refuted + refuted, restaged, source)
+    split = len(carried) + len(survivors)
+    state["_verified"], state["_refuted"] = restaged[:split], restaged[split:]
+
+
+def _route_to_synthesis(state, config, session_dir):
+    """Where a verifier fold goes once its findings are final for the round: the round-1 repository sweep when one is
+    due, else synthesis (or the fold an empty round takes)."""
+    if _begin_sweep(state, config, session_dir):
+        return
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
     # armed on the delta path (see _fold_scoped) so _after_findings_settled re-settles the delta.
     # A round with refuted findings against a non-empty earlier pool still dispatches synthesis, to name repeats only.
@@ -4798,6 +4827,346 @@ def _fold_second_test(state, config, artifact, session_dir=None):
         copies.append(copy_)
     _record_second_test(state, ran=ran, noTest=no_test, unmatched=unmatched)
     _stage_second_pass(state, copies)
+
+
+# ---- the round-1 repository sweep -----------------------------------------------------------------------------
+# Each verifier-confirmed Critical or Important finding of round 1 gets one repository-wide search, by the description
+# its independent raising reviewer wrote. A hit on a line the PR touched becomes a finding of its own that the verifiers
+# grade before any fix can select it; any other hit is listed under the sweep's own "Outside this PR" entry.
+
+SWEEP_ROUND = 1
+SWEEPS_FIELD = "sweeps"
+SWEEP_OF_FIELD = session_contract.SWEEP_OF_FIELD
+SWEEP_SEVERITIES = ("Critical", "Important")
+SWEEP_NOT_RUN_NO_DESCRIPTION = "no-search-description"
+SWEEP_NOT_RUN_AUTHOR_INELIGIBLE = "search-description-author-ineligible"
+SWEEP_NOT_RUN_NO_CELL = "no-searcher-cell"
+SWEEP_NOT_RUN_NO_FILE_LIST = "no-file-list"
+SWEEP_NOT_RUN_NO_DIFF = "no-reviewed-diff"
+SWEEP_UNGRADED_REASON = "a repository-sweep hit the verifier did not grade"
+# the state keys one sweep pass holds; the pass pops them when it restages
+_SWEEP_PASS_KEYS = ("_sweepPass", "_sweepPending", "_sweepParts", "_sweepSearcher", "_sweepHitKeys")
+
+
+def _is_sweep_hit(state, row):
+    """True for a finding a repository sweep found: it carries the `sweepOf` mark, or its key is one the sweep staged."""
+    if not isinstance(row, dict):
+        return False
+    if isinstance(row.get(SWEEP_OF_FIELD), dict):
+        return True
+    keys = state.get("_sweepHitKeys")
+    return isinstance(keys, list) and _finding_identity_key(row) in keys
+
+
+def _sweep_qualifies(state, row):
+    """True when ``row`` (a verified survivor of round 1) is searched for: the verifier CONFIRMED it, its severity is
+    Critical or Important, it is not itself a sweep hit and its key has not been swept."""
+    if not isinstance(row, dict):
+        return False
+    # axis: only a CONFIRMED finding is searched for; a PLAUSIBLE one is not — see bite-proof record c4_wo2a_sweep
+    if row.get("verdict") != "CONFIRMED":
+        return False
+    # axis: only a Critical or Important finding (after the verifier's own severity call) is searched for — see bite-proof record c4_wo2a_sweep
+    if circuit_breaker.canonical_severity(row.get("severity")) not in SWEEP_SEVERITIES:
+        return False
+    if _is_sweep_hit(state, row):
+        return False  # a hit never starts a sweep of its own
+    key = _finding_identity_key(row)
+    swept = state.get("_swept")
+    # axis: a finding already swept is not searched for again — see bite-proof record c4_wo2a_sweep
+    return bool(key) and key not in (swept if isinstance(swept, list) else ())
+
+
+def _sweep_searcher(state):
+    """`{"vendor", "model", "effort"}` of the cell the searchers run on, or None: the host's own native vendor on its
+    mechanical cell. An unknown host, a host with no native vendor, a null cell or a registry that raises give None."""
+    host = receipt_disclosures.host_family(seat_map_receipts.effective_seat_map(state))
+    if host is None:
+        return None
+    try:
+        for vendor in model_registry.vendors():
+            if session_contract.runner_channel_vendor(vendor):
+                continue
+            if model_registry.family_for("reviewer", vendor) != host:
+                continue
+            cell = model_registry.matrix_config("mechanical", vendor)
+            if not cell:
+                return None
+            return {"vendor": vendor, "model": cell[0], "effort": cell[1]}
+    except Exception:  # noqa: BLE001 — a registry that cannot answer leaves the sweep without a cell
+        return None
+    return None
+
+
+def _sweep_split_files(entries, parts=round_phases.SWEEP_PARTS):
+    """``entries`` (`(path, size)`) cut into at most ``parts`` size-balanced parts: largest file first onto the lightest
+    part (ties to the part with fewer files, then the lower one), each part's paths sorted. Never an empty part."""
+    count = min(parts, len(entries))
+    loads, bins = [0] * count, [[] for _ in range(count)]
+    for path, size in sorted(entries, key=lambda e: (-e[1], e[0])):
+        target = min(range(count), key=lambda i: (loads[i], len(bins[i]), i))
+        loads[target] += size
+        bins[target].append(path)
+    return [{"part": index + 1, "files": sorted(files)} for index, files in enumerate(bins) if files]
+
+
+def _sweep_file_parts(session_dir, state, config):
+    """``(parts, reason)``: the head's tracked files (`git ls-tree -r -l`) cut into the sweep's parts, or
+    ``(None, "no-file-list")`` when there is no repository, no head, the listing fails or lists no file."""
+    repo_root, head = _break_it_scope(session_dir, state, config)
+    if not (isinstance(repo_root, str) and repo_root and isinstance(head, str) and head):
+        return None, SWEEP_NOT_RUN_NO_FILE_LIST
+    try:
+        done = subprocess.run(["git", "-C", repo_root, "ls-tree", "-r", "-l", "-z", head],
+                              capture_output=True, timeout=120, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None, SWEEP_NOT_RUN_NO_FILE_LIST
+    if done.returncode != 0:
+        return None, SWEEP_NOT_RUN_NO_FILE_LIST
+    entries = []
+    for record in done.stdout.decode("utf-8", errors="replace").split("\0"):
+        meta, _tab, path = record.partition("\t")
+        fields = meta.split()
+        # a regular or executable file only: a submodule has no size and a symlink is no file to read
+        if len(fields) == 4 and fields[1] == "blob" and fields[0] != "120000" and fields[3].isdigit() and path:
+            entries.append((path, int(fields[3])))
+    if not entries:
+        return None, SWEEP_NOT_RUN_NO_FILE_LIST
+    return _sweep_split_files(entries), None
+
+
+def _begin_sweep(state, config, session_dir):
+    """The trigger, at the point a verifier fold routes to synthesis. In round 1 of a session that is not a returning
+    review, the first time it is reached, each qualifying verified finding (``_sweep_qualifies``) is given a sweep id and
+    either a sweep or a recorded reason it did not run; nothing stands in for a sweep that did not run. Returns True
+    when at least one sweep runs: the verified findings are then kept aside and the step is the searchers'."""
+    rec = state["rounds"].get(str(SWEEP_ROUND)) if isinstance(state.get("rounds"), dict) else None
+    # axis: the sweep belongs to round 1 of a session that is not a returning review — see bite-proof record c4_wo2a_sweep
+    if state.get("round") != SWEEP_ROUND or (isinstance(rec, dict) and rec.get("roundKind") == RETURNING_KIND):
+        return False
+    # axis: a session sweeps once; a later pass through this point never sweeps again — see bite-proof record c4_wo2a_sweep
+    if state.get("_sweepDone"):
+        return False
+    state["_sweepDone"] = True
+    rows = [row for row in state.get("_verified") or [] if _sweep_qualifies(state, row)]
+    if not rows:
+        return False
+    swept = state.get("_swept")
+    swept = state["_swept"] = swept if isinstance(swept, list) else []
+    searcher = _sweep_searcher(state)
+    makers = receipt_disclosures.accumulated_maker_families(state)
+    parts, parts_reason = None, None
+    if searcher is not None and isinstance(state.get("reviewedDiff"), str):
+        parts, parts_reason = _sweep_file_parts(session_dir, state, config)
+    records, pending = [], []
+    for row in rows:
+        key = _finding_identity_key(row)
+        seq = state.get("_sweepSeq")
+        seq = (seq if _is_plain_int(seq) else 0) + 1
+        state["_sweepSeq"] = seq
+        sweep_id = "S-%d" % seq
+        swept.append(key)
+        record = {"sweepId": sweep_id, "findingKey": key, "title": row.get("title"),
+                  "file": row.get("file"), "line": row.get("line")}
+        desc = _clean_search_description(row)
+        author = desc.get(SEARCH_AUTHOR_FIELD) if desc is not None else None
+        reason = None
+        if desc is None or not desc["kind"] or not desc["looksLike"] or not isinstance(author, dict):
+            reason = SWEEP_NOT_RUN_NO_DESCRIPTION
+        # axis: the description's author must still be outside every maker family when the sweep is due — see bite-proof record c4_wo2a_sweep
+        elif author.get("family") in makers:
+            reason = SWEEP_NOT_RUN_AUTHOR_INELIGIBLE
+        # axis: a host with no searcher cell runs no sweep and emits no order — see bite-proof record c4_wo2a_sweep
+        elif searcher is None:
+            reason = SWEEP_NOT_RUN_NO_CELL
+        elif not isinstance(state.get("reviewedDiff"), str):
+            reason = SWEEP_NOT_RUN_NO_DIFF
+        elif parts is None:
+            reason = parts_reason or SWEEP_NOT_RUN_NO_FILE_LIST
+        if reason is not None:
+            record["notRun"] = reason
+            _decision(state, "sweep-not-run", "%s for \"%s\": %s; no search ran and nothing stood in"
+                      % (sweep_id, row.get("title"), reason))
+        else:
+            record.update(parts=len(parts), missing=[], inside=0, outside=0, covered=0, dropped=0, ungraded=0)
+            pending.append({"sweepId": sweep_id, "findingKey": key, "title": row.get("title"),
+                            "file": row.get("file"), "line": row.get("line"),
+                            "searchDescription": {k: v for k, v in desc.items() if k != SEARCH_AUTHOR_FIELD}})
+            _decision(state, "sweep-dispatched", "%s for \"%s\": %d searcher part(s) over the head's tracked files"
+                      % (sweep_id, row.get("title"), len(parts)))
+        records.append(record)
+    held = rec.get(SWEEPS_FIELD) if isinstance(rec, dict) else None
+    _record_round(state, SWEEPS_FIELD, (list(held) if isinstance(held, list) else []) + records)
+    if not pending:
+        return False
+    state["_sweepCarry"] = state.get("_verified") or []
+    state["_sweepRefutedCarry"] = state.get("_refuted") or []
+    state["_sweepPending"] = pending
+    state["_sweepParts"] = parts
+    state["_sweepSearcher"] = searcher
+    state["_verified"] = []
+    state["step"] = P_SWEEP
+    return True
+
+
+def _sweep_payload(state):
+    """The `dispatch-sweep` payload: each sweep with its description (never the author stamp) and the parts every
+    searcher reads, and the cell the searchers run on."""
+    parts = state.get("_sweepParts") if isinstance(state.get("_sweepParts"), list) else []
+    sweeps = [dict(sweep, parts=[{"part": p["part"], "files": list(p["files"])} for p in parts])
+              for sweep in state.get("_sweepPending") or [] if isinstance(sweep, dict)]
+    searcher = state.get("_sweepSearcher") if isinstance(state.get("_sweepSearcher"), dict) else {}
+    return {"sweeps": sweeps, "searcher": dict(searcher)}
+
+
+def _sweep_seat_input(payload, seat_key):
+    """The input one searcher seat (`searcher:<sweepId>:<part>`) reads: its sweep's id and description and its part's
+    files; None when the payload holds no such seat."""
+    prefix = payload_contracts.SEAT_SEARCHER_PREFIX
+    if not (isinstance(seat_key, str) and seat_key.startswith(prefix)):
+        return None
+    sweep_id, _colon, number = seat_key[len(prefix):].rpartition(":")
+    for sweep in payload.get("sweeps") or []:
+        if not (isinstance(sweep, dict) and sweep.get("sweepId") == sweep_id):
+            continue
+        for part in sweep.get("parts") or []:
+            if isinstance(part, dict) and str(part.get("part")) == number:
+                return {"sweepId": sweep_id, "part": part["part"], "searchDescription": sweep.get("searchDescription"),
+                        "files": list(part.get("files") or [])}
+    return None
+
+
+def _sweep_place_pairs(parent):
+    """The `(file, line)` of the parent finding and of each place of its kind of mistake: a hit there is already known."""
+    pairs = {(parent.get("file"), parent.get("line"))}
+    kind = parent.get(KIND_OF_MISTAKE_FIELD)
+    for place in (kind.get("places") if isinstance(kind, dict) and isinstance(kind.get("places"), list) else ()):
+        if isinstance(place, dict):
+            pairs.add((place.get("file"), place.get("line")))
+    return pairs
+
+
+def _sweep_record(records, sweep_id):
+    for record in records:
+        if isinstance(record, dict) and record.get("sweepId") == sweep_id:
+            return record
+    return None
+
+
+def _fold_sweep(state, config, artifact, session_dir=None):
+    """The searchers' results (`artifact["seats"]`, seat key -> `{"hits": [...]}`). A part whose seat returned no usable
+    result is recorded under its sweep's `missing` and the fold goes on. Per sweep each hit is dropped (malformed, or
+    citing the PR body), de-duplicated by place, counted covered (the parent's own place or one it names), staged as a
+    finding of its own (a touched line) or listed under the sweep's own "Outside this PR" entry (any other line). Every
+    staged hit goes to the verifiers; with none the carried findings go on to synthesis."""
+    seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else {}
+    pending = state.get("_sweepPending") if isinstance(state.get("_sweepPending"), list) else []
+    parts = state.get("_sweepParts") if isinstance(state.get("_sweepParts"), list) else []
+    carry = state.get("_sweepCarry") if isinstance(state.get("_sweepCarry"), list) else []
+    refuted_carry = state.get("_sweepRefutedCarry") if isinstance(state.get("_sweepRefutedCarry"), list) else []
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    records = rec.get(SWEEPS_FIELD) if isinstance(rec.get(SWEEPS_FIELD), list) else []
+    touched = _touched_scope(state.get("reviewedDiff"))
+    known = {_finding_identity_key(f) for f in carry + refuted_carry if isinstance(f, dict)}
+    staged, hit_keys = [], []
+    for sweep in pending:
+        sweep_id = sweep["sweepId"]
+        row = _sweep_record(records, sweep_id)
+        if row is None:
+            row = {"sweepId": sweep_id, "findingKey": sweep.get("findingKey"), "title": sweep.get("title"),
+                   "file": sweep.get("file"), "line": sweep.get("line"), "parts": len(parts), "missing": [],
+                   "inside": 0, "outside": 0, "covered": 0, "dropped": 0, "ungraded": 0}
+            records.append(row)
+        parent = next((f for f in carry if isinstance(f, dict)
+                       and _finding_identity_key(f) == sweep.get("findingKey")), None)
+        hits, missing = [], []
+        for part in parts:
+            result = seats.get(_adapters().sweep_seat_key(sweep_id, part["part"]))
+            # axis: a part whose searcher returned no usable result is recorded missing, never as a part that found nothing — see bite-proof record c4_wo2a_sweep
+            if result is None or _adapters().payload_fault(P_SWEEP, result, "") is not None:
+                missing.append(part["part"])
+                continue
+            hits.extend(result["hits"])
+        row["missing"] = missing
+        if missing:
+            _decision(state, "sweep-incomplete", "%s: searcher part(s) %s returned nothing; the search did not "
+                      "cover those files" % (sweep_id, ", ".join(str(m) for m in missing)))
+        if parent is None:
+            continue  # the finding this sweep searched for is gone from the round: there is nothing to attribute a hit to
+        places = _sweep_place_pairs(parent)
+        seen = set()
+        for hit in hits:
+            file = hit.get("file") if isinstance(hit, dict) else None
+            line = hit.get("line") if isinstance(hit, dict) else None
+            # the PR body is never searched: a searcher reads the repository, and `_diff_scope_ok` would call a body citation inside
+            # axis: a hit citing the PR body is dropped and counted, never staged — see bite-proof record c4_wo2a_sweep
+            if (not (isinstance(file, str) and file.strip()) or isinstance(line, bool) or not isinstance(line, int)
+                    or file == pr_body_stage.CITATION):
+                row["dropped"] += 1
+                continue
+            if (file, line) in seen:
+                continue
+            seen.add((file, line))
+            # axis: a hit at the parent's own place or one of its places is already known, so it is neither a finding nor an outside hit — see bite-proof record c4_wo2a_sweep
+            if (file, line) in places:
+                row["covered"] += 1
+                continue
+            title = session_contract.sweep_hit_title(hit, parent)
+            if _diff_scope_ok({"file": file, "line": line}, touched):
+                finding = session_contract.sweep_hit_finding(hit, sweep, parent)
+                key = _finding_identity_key(finding)
+                if key in known or key in hit_keys:
+                    row["covered"] += 1  # already a finding of this round: it is not raised twice
+                    continue
+                staged.append(finding)
+                hit_keys.append(key)
+                row["inside"] += 1
+            else:
+                entries = state.get("outsideThisPR")
+                if not isinstance(entries, list):
+                    entries = state["outsideThisPR"] = []  # a value that is not a list cannot hold a hit: replace it
+                # axis: an outside hit lands under its sweep's own entry, never a reviewer's — see bite-proof record c4_wo2a_sweep
+                session_contract.add_sweep_hit(entries, sweep_id, session_contract.SWEEP_SOURCE_NAME, file, line, title)
+                _note_outside_round(state, title, file, line, state["round"])
+                row["outside"] += 1
+        _decision(state, "sweep-folded", "%s: %d inside, %d outside, %d covered, %d dropped"
+                  % (sweep_id, row["inside"], row["outside"], row["covered"], row["dropped"]))
+    _record_round(state, SWEEPS_FIELD, records)
+    if staged:
+        # axis: an inside hit goes to the verifiers, never straight to the verified list — see bite-proof record c4_wo2a_sweep
+        _stage_findings(state, staged)
+        state["_sweepHitKeys"] = hit_keys
+        state["_sweepPass"] = True
+        state["step"] = P_VERIFIERS
+        return
+    # no inside hit: the verifiers are skipped and the carried findings go on exactly as they would have
+    for name in _SWEEP_PASS_KEYS:
+        state.pop(name, None)
+    state["_verified"] = carry
+    state["_refuted"] = refuted_carry
+    state.pop("_sweepCarry", None)
+    state.pop("_sweepRefutedCarry", None)
+    _route_to_synthesis(state, config, session_dir)
+
+
+def _withhold_ungraded_sweep_hits(state, survivors):
+    """``survivors`` without the sweep hits the verifiers left ungraded. Such a hit is never selected for a fix: it
+    reaches neither the verified list nor synthesis, its ledger row stays open (no disposition, so no outcome) and its
+    sweep counts it."""
+    kept = []
+    records = state["rounds"].get(str(state["round"]), {}).get(SWEEPS_FIELD)
+    for survivor in survivors:
+        # axis: a sweep hit with no verifier grade is removed from the survivors — see bite-proof record c4_wo2a_sweep
+        if not (_is_sweep_hit(state, survivor) and not isinstance(survivor.get(GRADE_FIELD), dict)):
+            kept.append(survivor)
+            continue
+        mark = survivor.get(SWEEP_OF_FIELD)
+        row = _sweep_record(records, mark.get("sweepId")) if isinstance(mark, dict) and isinstance(records, list) else None
+        if row is not None:
+            row["ungraded"] = row.get("ungraded", 0) + 1
+        _decision(state, "sweep-hit-ungraded", "%s (%s:%s): %s" % (
+            survivor.get("title"), survivor.get("file"), survivor.get("line"), SWEEP_UNGRADED_REASON))
+    return kept
 
 
 def _sync_merged_consequences(state, kept):
@@ -10663,6 +11032,17 @@ def _run_seam(seams, action, payload, state, config):
         if isinstance(vendor, str) and vendor.strip():
             artifact["reviewerVendor"] = vendor.strip()
         return artifact
+    if action == P_SWEEP:
+        # A searcher callback answers one part: `seams["searcher"](sweep, part, round)` returns `{"hits": [...]}`.
+        # With no callback every part is simply unanswered, which the fold records as missing.
+        seats = {}
+        searcher = seams.get("searcher")
+        for sweep in payload.get("sweeps") or []:
+            for part in sweep.get("parts") or []:
+                if callable(searcher):
+                    seats[_adapters().sweep_seat_key(sweep["sweepId"], part["part"])] = searcher(
+                        sweep, part, state["round"])
+        return {"seats": seats}
     if action == P_AUDITS:
         # This library layer IS the orchestrator here: it records its OWN dispatch manifest
         # out-of-band from the auditor's results — {target-id: the vendor it seated}, read straight
@@ -11436,7 +11816,8 @@ def _ruling_candidate_rows(state, ledger_entries=None, before_ledger_only=False)
         ledger_by_key, ledger_fault = _disposition_ledger_by_key(state)
         ledger_entries = list(ledger_by_key.values()) if ledger_fault is None else []
     take(ledger_entries, _finding_identity_key)
-    for store in ("_verified", "_refuted", "_secondTestCarry", "_secondTestRefutedCarry"):
+    for store in ("_verified", "_refuted", "_secondTestCarry", "_secondTestRefutedCarry",
+                  "_sweepCarry", "_sweepRefutedCarry"):
         take(state.get(store), _finding_key_of)
     held = state.get("_secondTestHeld")
     if isinstance(held, list):
@@ -13795,6 +14176,10 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
             if isinstance(target, dict) and target.get("id") == seat_key:
                 return {"vendor": target.get("auditorVendor"), "model": None, "engine": None}
         return {"vendor": None, "model": None, "engine": None}
+    if phase == P_SWEEP:
+        # a searcher is not a reviewer: it runs on the cell the sweep order named, never on a reviewer selection
+        searcher = payload.get("searcher") if isinstance(payload.get("searcher"), dict) else {}
+        return {"vendor": searcher.get("vendor"), "model": searcher.get("model"), "engine": None}
     if phase in _NONPANEL_REVIEWER_PHASES or phase == P_SYNTHESIS:
         vendor, source = _nonpanel_reviewer_vendor(state, cfg, repo_root, phase)
         return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
@@ -13889,6 +14274,7 @@ ORDER_SIDECAR_VERIFIED_FILE = "verified.json"
 ORDER_SIDECAR_SLICES_FILE = "seams-slices.json"
 ORDER_SIDECAR_HELD_FILE = "second-test-held.json"
 ORDER_SIDECAR_CORRECTION_FILE = "second-test-correction.json"
+ORDER_SIDECAR_SWEEP_DIR = "sweep"
 
 # Readable file inputs cited in emitted orders — existence guarded at emit (registry #723).
 ORDER_READABLE_FILE_INPUTS = frozenset({
@@ -13902,6 +14288,7 @@ ORDER_READABLE_FILE_INPUTS = frozenset({
     "HELD_FINDINGS_PATH",
     "SLICES_PATH",
     "CORRECTION_INPUTS_PATH",
+    "SEARCH_INPUT_PATH",
     "PRIOR_COMMENTS_PATH",
 })
 ORDER_SHIPPED_RESOURCE_INPUTS = frozenset({
@@ -13966,6 +14353,10 @@ def _order_correction_sidecar_path(rdir):
     return os.path.join(rdir, ORDER_SIDECAR_CORRECTION_FILE)
 
 
+def _order_sweep_sidecar_path(rdir, skey):
+    return os.path.join(rdir, ORDER_SIDECAR_SWEEP_DIR, "%s.json" % skey)
+
+
 def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
     """[(path, bytes)] sidecars named in orders, derived from the phase payload."""
     writes = []
@@ -13997,6 +14388,14 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
             hunks = {}
         path = _order_scoped_hunks_sidecar_path(rdir)
         writes.append((path, round_records.canonical(hunks).encode("utf-8")))
+    elif phase == P_SWEEP:
+        # one input file per searcher seat: the sweep's description and the files of that seat's part
+        for seat_key, occurrence in round_records.roster_slots(roster):
+            entry = _sweep_seat_input(payload, seat_key)
+            if entry is None:
+                continue
+            path = _order_sweep_sidecar_path(rdir, round_records.storage_key(seat_key, occurrence))
+            writes.append((path, round_records.canonical(entry).encode("utf-8")))
     elif phase == P_SYNTHESIS:
         findings = payload.get("findings")
         if not isinstance(findings, list):
@@ -14578,6 +14977,16 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             ph["CORRECTION_INPUTS_PATH"] = _order_correction_sidecar_path(rdir)
         else:
             ph["HELD_FINDINGS_PATH"] = _order_held_sidecar_path(rdir)
+    elif phase == P_SWEEP:
+        if _sweep_seat_input(payload, seat_key) is None:
+            raise ValueError("order-render-refused:unmatched-sweep-seat:%s" % seat_key)
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
+        ph = {
+            "SEARCH_INPUT_PATH": _order_sweep_sidecar_path(
+                rdir, round_records.storage_key(seat_key, occurrence)),
+            "VERIFICATION_ROOT": repo_root,
+            "CHANNEL": channel,
+        }
     elif phase == P_AUDITS:
         targets = payload.get("targets")
         if not isinstance(targets, list):
@@ -14969,6 +15378,10 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             # The verdict ids this seat's order assigned: `_assemble_verifiers` counts a verdict only from
             # the seat that was ordered it (the manifest is hashed into the emission anchor).
             seats[skey]["ids"] = _cluster_finding_ids(pending, seat_key)
+        if phase == P_SWEEP:
+            # the cell the searcher runs on, as the sweep order's payload named it (vendor and model ride the row)
+            searcher = pending.get("searcher") if isinstance(pending.get("searcher"), dict) else {}
+            seats[skey]["effort"] = searcher.get("effort")
         rendered.append((paths["order_path"], order_text.encode("utf-8"),
                          paths["envelope_stub_path"], order_sha, row, occurrence, seat_key))
 

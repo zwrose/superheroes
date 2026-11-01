@@ -68,6 +68,7 @@ ORDER_PHASES = (
     round_phases.P_SECOND_TEST,
     round_phases.P_AUDITS,
     round_phases.P_SCOPED,
+    round_phases.P_SWEEP,
 )
 
 # Placeholder inputs consumed by derivation but not substituted into the template body.
@@ -544,6 +545,11 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             "payload to %s — write an empty findings list rather than skipping the file when "
             "you have nothing to flag." % landing
         )
+    elif phase == round_phases.P_SWEEP:
+        ph["OUTPUT_CHANNEL_BLOCK"] = (
+            "Write your payload to %s — an empty `hits` list, never a skipped file, when you "
+            "found nothing." % landing
+        )
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = ""
     return ph
@@ -554,7 +560,8 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     if phase == round_phases.P_PANEL:
         ph = _panel_derived_placeholders(context)
     elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
-                   round_phases.P_SEAMS, round_phases.P_SECOND_TEST, round_phases.P_SCOPED):
+                   round_phases.P_SEAMS, round_phases.P_SECOND_TEST, round_phases.P_SCOPED,
+                   round_phases.P_SWEEP):
         ph = _channel_derived_placeholders(phase, context)
         if phase == round_phases.P_SECOND_TEST:
             ph = _test_role_derived_placeholders(ph)
