@@ -187,8 +187,9 @@ def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     # every session has a complete sessionCost: a seat named by the findings that no session ran reads 0
     seats = RM.compute(_full(records=[_rec(1, findings=named)]), FROM, UNTIL)["measures"]["seats"]
     assert seats["security-reviewer"]["tokens"] == 100 and seats["premortem-reviewer"]["tokens"] == 0
-    # one session with no sessionCost blanks every seat's cost, not only its PR's
-    row = RM.compute(_full(records=[_rec(1, findings=named), _rec(2, sc=None)], ciRuns=ci), FROM, UNTIL)
+    # one session with no sessionCost blanks the seats it ran, not only its PR's
+    unread = _rec(2, rows=[_row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)")], sc=None)
+    row = RM.compute(_full(records=[_rec(1, findings=named), unread], ciRuns=ci), FROM, UNTIL)
     seats, why = row["measures"]["seats"], _why(row)
     assert seats["security-reviewer"]["tokens"] == U and seats["security-reviewer"]["minutes"] == U
     assert seats["premortem-reviewer"]["tokens"] == U and why["seats.premortem-reviewer.tokens"] == "cost-not-recorded"
@@ -205,6 +206,21 @@ def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"] == U and cost["minutes"] == U and _why(row)["reviewerCostPerPr.tokens"] == "no-measured-pr"
     assert cost["prsLeftOut"] == {"tokens": {"count": 2, "why": RM.LEFT_OUT_WHY}, "minutes": {"count": 2, "why": RM.LEFT_OUT_WHY}}
+
+
+def test_a_session_without_a_readable_cost_blanks_only_the_seats_it_ran():
+    # (a) a light-lane account: one session's only row is `codex-light` (no seat) and it has no sessionCost
+    light = _rec(1, "a", rows=[{"name": "codex-light", "ran": "reported-by-session", "commit": "c1"}], sc=None)
+    row = RM.compute(_full(records=[light, _rec(1, "b")]), FROM, UNTIL)
+    sec = row["measures"]["seats"]["security-reviewer"]
+    assert sec["tokens"] == 100 and sec["minutes"] == 1.5 and "codex-light" not in row["measures"]["seats"]
+    # (b) a hand-submit session: incomplete sessionCost, its bySeat and its row name only the code seat
+    hand = _rec(1, "a", rows=[_row("code-reviewer (round 1)")], sc=_sc(5, 0.1, runs=1, without=1, by_seat={"code-reviewer": _by(5, 0.1)}))
+    row = RM.compute(_full(records=[hand, _rec(1, "b")]), FROM, UNTIL)
+    seats = row["measures"]["seats"]
+    assert seats["code-reviewer"]["tokens"] == U and seats["code-reviewer"]["minutes"] == U
+    assert _why(row)["seats.code-reviewer.tokens"] == "cost-not-recorded"
+    assert seats["security-reviewer"]["tokens"] == 100 and seats["security-reviewer"]["minutes"] == 1.5
 
 
 def test_a_session_where_no_reviewer_ran_adds_zero():
@@ -267,6 +283,17 @@ def test_finding_outcomes_by_lens_key_an_undecided_finding_open_and_feed_the_sea
     assert shown["security"]["tokens"] == 100 and shown["premortem"]["minutes"] == 0.2
     assert shown["security"]["outcomes"]["fixed"] == 1
     assert shown["security"]["outcomes"]["craft"] == 0 and shown["premortem"]["outcomes"]["fixed"] == 0  # never had: 0, not unmeasured
+
+
+def test_a_seat_that_ran_and_found_nothing_is_listed_with_zero_finds():
+    rows = [_row("code-reviewer (round 1)"), _row("security-reviewer (round 1)"), _row("premortem-reviewer (round 1)")]
+    sc = _sc(100, 1.5, runs=3, by_seat={"code-reviewer": _by(100, 1.5)})  # complete; only Code is named by cost and by a find
+    row = RM.compute(_full(records=[_rec(1, rows=rows, findings=[_f("k1", reviewer="Code")], sc=sc)]), FROM, UNTIL)
+    seats = row["measures"]["seats"]
+    assert set(seats) == {"code-reviewer", "security-reviewer", "premortem-reviewer"}
+    assert seats["code-reviewer"]["outcomes"] == _filled(fixed=1)
+    assert seats["security-reviewer"]["outcomes"] == _filled() and seats["premortem-reviewer"]["outcomes"] == _filled()
+    assert set(row["seatingRow"]) == {"premortem", "security"}
 
 
 def test_ci_reads_unmeasured_when_a_window_pr_has_no_receipt_or_a_receipt_is_damaged():
@@ -383,6 +410,33 @@ def test_a_vet_reads_a_clean_record_written_before_the_window():
     vets = [{"pr": 1, "at": "2026-10-01T10:00:00Z", "sentBack": True, "body": ""}]
     m = RM.compute(_full(records=recs, vetReceipts=vets), FROM, UNTIL)["measures"]
     assert m["vetSendBacksOnCleanLoops"] == {"sentBack": 1, "cleanLoopsVetted": 1}
+
+
+def test_a_vet_reading_a_not_reviewed_record_with_no_open_finding_is_not_a_clean_loop():
+    vets = [{"pr": 1, "at": "2026-10-04T00:00:00Z", "sentBack": True, "body": ""}]
+    m = RM.compute(_full(records=[_rec(1, status="not-reviewed")], vetReceipts=vets), FROM, UNTIL)["measures"]
+    assert m["vetSendBacksOnCleanLoops"] == {"sentBack": 0, "cleanLoopsVetted": 0}
+
+
+def test_a_sessions_records_fed_newest_first_still_read_the_latest():
+    def sc(tokens):
+        return _sc(tokens, 1.0, by_seat={"security-reviewer": _by(tokens, 1.0)})
+    new = _rec(1, at="2026-10-03T10:00:00Z", count=3, sc=sc(300))
+    old = _rec(1, at="2026-10-03T09:00:00Z", count=1, sc=sc(100))
+    m = RM.compute(_full(records=[new, old]), FROM, UNTIL)["measures"]  # newest first
+    assert m["roundsPerPr"]["median"] == 3 and m["seats"]["security-reviewer"]["tokens"] == 300
+
+
+def test_finding_identity_uses_the_finding_key_not_the_display_id():
+    def fk(id_, outcome="fixed"):
+        return {"id": id_, "findingKey": "k-1", "outcome": outcome, "reviewer": "Security"}
+    # two rows sharing a key but with different ids are one finding
+    seats = RM.compute(_full(records=[_rec(1, findings=[fk("v0"), fk("v1")])]), FROM, UNTIL)["measures"]["seats"]
+    assert seats["security-reviewer"]["outcomes"] == _filled(fixed=1)
+    # a cap-choice marker's key= is the findingKey; the later record is found by it, not by the display id
+    recs = [_rec(1), _audit("2026-10-05T00:00:00Z", "b", fk("v0"))]
+    assert _caps("extra-audit-round", recs, key="k-1") == {"settled": 1}
+    assert _caps("extra-audit-round", recs, key="v0") == {"not-settled": 1}
 
 
 def test_each_cap_choice_reads_the_follow_up_record_it_names():
