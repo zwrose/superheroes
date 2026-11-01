@@ -90,7 +90,9 @@ def stamp(repo_root, order_text):
 
     A list of {"label", "file", "path", "sha256", "policyVersion"} in the fixed order core,
     review-crew, CLAUDE.md. A file is kept only when its absolute path string occurs in
-    ``order_text``. Never raises: any failure gives []."""
+    ``order_text``: as resolved from ``repo_root``, with the root replaced by its realpath, or (core and
+    review-crew) as the file's own realpath. ``path`` is the spelling the order used. Never raises: any
+    failure gives []."""
     try:
         if not isinstance(order_text, str) or not order_text:
             return []
@@ -98,22 +100,28 @@ def stamp(repo_root, order_text):
             core_path, layer_path, _refusal = resolved_paths(repo_root)
         except Exception:
             core_path, layer_path = None, None
-        candidates = [(LABEL_CORE, core_path), (LABEL_REVIEW_CREW, layer_path)]
-        if isinstance(repo_root, str) and repo_root:
-            claude_md = os.path.join(repo_root, "CLAUDE.md")
-            candidates.append(
-                (LABEL_CLAUDE_MD, claude_md if os.path.isfile(claude_md) else None))
-        else:
-            candidates.append((LABEL_CLAUDE_MD, None))
+        root = repo_root if isinstance(repo_root, str) and repo_root else ""
+        claude_md = os.path.join(root, "CLAUDE.md") if root else ""
+        candidates = [(LABEL_CORE, core_path, True), (LABEL_REVIEW_CREW, layer_path, True),
+                      (LABEL_CLAUDE_MD, claude_md if os.path.isfile(claude_md) else None, False)]
         out = []
-        for label, path in candidates:
-            if not isinstance(path, str) or not path or path not in order_text:
+        for label, path, own_realpath in candidates:
+            if not isinstance(path, str) or not path:
+                continue
+            # axis: a file is named by the order under any spelling of its root, so a symlinked root keeps it
+            spellings, prefix = [path], os.path.join(root, "")
+            if root and path.startswith(prefix):
+                spellings.append(os.path.join(os.path.realpath(root), path[len(prefix):]))
+            if own_realpath:
+                spellings.append(os.path.realpath(path))
+            named = next((s for s in spellings if s in order_text), None)
+            if named is None:
                 continue
             digest, policy = _hash_and_policy(path)
             out.append({
                 "label": label,
                 "file": os.path.basename(path),
-                "path": path,
+                "path": named,
                 "sha256": digest,
                 "policyVersion": policy,
             })
@@ -170,7 +178,8 @@ def _codex_item_call(item, completed):
         return _call(outcome, texts=[command])
     if kind == "mcp_tool_call":
         # an argument value that is exactly a path is a path; a substring of some other value is not
-        values = _string_values(item.get("arguments"))
+        arguments, paths = item.get("arguments"), []
+        values = _string_values(arguments)
         if not completed:
             outcome = _INDETERMINATE
         elif item.get("status") == "completed" and not item.get("error"):
@@ -179,10 +188,15 @@ def _codex_item_call(item, completed):
             outcome = _FAILED
         else:
             outcome = _INDETERMINATE
-        # axis: only a tool known to return the file's content credits a read; any other names it
-        if item.get("tool") in _READ_FILE_TOOLS:
-            return _call(outcome, paths=values)
-        return _call(outcome, named=values)
+        # axis: only a tool known to return the file's content credits a read, and only for its `path`/`paths`
+        # argument values; every other value merely names the file
+        if item.get("tool") in _READ_FILE_TOOLS and isinstance(arguments, dict):
+            listed = arguments.get("paths")
+            paths = [v for v in [arguments.get("path")] + (listed if isinstance(listed, list) else [])
+                     if isinstance(v, str)]
+            for path in paths:
+                values.remove(path)
+        return _call(outcome, paths=paths, named=values)
     return None
 
 
@@ -332,7 +346,6 @@ _NONREAD_PROGRAMS = frozenset((
     "shasum", "md5sum", "cksum", "git",
 ))
 _SHELL_PROGRAMS = frozenset(("sh", "bash", "zsh", "dash", "ksh"))
-_WRAPPER_PROGRAMS = frozenset(("sudo", "env", "command", "time", "nice", "nohup", "exec"))
 # grep-family options known to leave the matched content printed; any other option grades unknown.
 _GREP_PROGRAMS = ("grep", "egrep", "fgrep", "rg")
 _CONTENT_SHORT_FLAGS = frozenset("niHheFEwx")
@@ -340,7 +353,6 @@ _CONTENT_LONG_FLAGS = frozenset((
     "--line-number", "--ignore-case", "--with-filename", "--no-filename", "--regexp",
     "--fixed-strings", "--extended-regexp", "--word-regexp", "--line-regexp",
 ))
-_NR =r"NR\s*(==|>=|<=|>|<)\s*\d+"
 _NO_OPTION = "(?!)"
 # program: (an option word it allows, the option words that take the next argument, what that argument must be)
 _OPERAND_SPECS = {
@@ -348,7 +360,7 @@ _OPERAND_SPECS = {
     "head": (r"-n|-n\d+|-\d+|--lines=\d+", "-n", r"\d+"),
     "tail": (r"-n|-n\+?\d+|-\d+|--lines=\+?\d+", "-n", r"\+?\d+"),
     "sed": ("-n|-e", "-e", r"\s*(\d+|\$)?(\s*,\s*(\d+|\$))?\s*p\s*"),
-    "awk": (_NO_OPTION, _NO_OPTION, r"1|\s*(%s(\s*&&\s*%s)?\s*)?\{\s*print(\s+\$0)?\s*;?\s*\}\s*" % (_NR, _NR)),
+    "awk": (_NO_OPTION, _NO_OPTION, r"\s*(1|\{\s*print(\s+\$0)?\s*\})\s*"),
     **dict.fromkeys(_GREP_PROGRAMS, (
         r"-(?=.)[%s]*e?|--regexp=.*|%s" % ("".join(sorted(_CONTENT_SHORT_FLAGS - {"e"})),
                                            "|".join(sorted(_CONTENT_LONG_FLAGS))),
@@ -379,104 +391,70 @@ def _file_operands(program, args):
     if not all(isinstance(v, str) and re.fullmatch(value, v) for v in values) or (
             scripted and (len(values) != 1 or (program == "sed" and "-n" not in flags))):
         return None
+    # axis: a count or line number of 0 shows no content, so every count of head, tail and sed must be at least 1
+    if program in ("head", "tail", "sed") and any(int(n) < 1 for s in flags + values for n in re.findall(r"\d+", s)):
+        return None
     if program in _GREP_PROGRAMS and not values and not any(f.startswith("--regexp=") for f in flags):
         files = files[1:]
     return files
 
 
-_CONTROL_WORDS = frozenset((
-    "if", "then", "else", "elif", "fi", "while", "until", "do", "done", "for", "case", "esac",
-    "select", "function", "{", "}", "!",
-))
 _PATH_CHARS = r"[\w.\-/]"
-_MAX_SHELL_DEPTH = 3
+_OPERATOR_CHARS = frozenset(";&|()<>\n")
 # A quoted word made only of separators and blanks, or a backslash before a separator.
 _QUOTED_SEPARATOR_RE = re.compile(r"""['"][ \t]*[|&;()<>\n][ \t|&;()<>\n]*['"]|\\[|&;()<>\n]""")
 # A path-like word of a command text: split at whitespace, quotes, redirections, operators and `=`.
 _WORD_RE = re.compile(r"[^\s\"'`;&|()<>=]+")
 
 
-def _segments(command):
-    """The command split into (token list, guarded) simple commands at ``|``, ``&&``, ``;``, ``&`` and an unquoted newline.
+def _program(token):
+    """The program a command's first token names, or None for an env assignment (``X=/bin/cat``)."""
+    return None if "=" in token else os.path.basename(token)
 
-    ``guarded`` is True for a command that may not have run: from the first ``&&``, ``||``, parenthesis or
-    control word on, every later command is guarded. Raises ValueError."""
-    # axis: shlex drops quotes, so a quoted or escaped separator would read as a real one; doubt grades unknown
-    if _QUOTED_SEPARATOR_RE.search(command):
-        raise ValueError("quoted or escaped separator")
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
+
+def _simple_command(text, unwrap=True):
+    """(tokens of the one simple command, True when a ``cd D`` joiner came first), or None.
+
+    The text is, after at most one ``sh|bash|zsh|dash|ksh`` wrapper with only ``-c`` or ``-lc`` and one
+    argument, either ``P`` or ``cd D && P`` or ``cd D ; P``; no other separator, pipe, redirection or newline."""
+    # axis: only a provably single command (no second command, pipe or redirection) can show the reviewer the file
+    if _QUOTED_SEPARATOR_RE.search(text):  # shlex drops quotes, so a quoted separator would read as a real one
+        return None
+    lexer = shlex.shlex(text, posix=True, punctuation_chars=";&|()<>\n")
     lexer.whitespace_split = True
-    # axis: a newline is a command boundary, not whitespace; a quoted newline stays inside its word
-    lexer.whitespace = " \t\r"
-    out, current, guarded = [], [], False
-    for token in lexer:
-        if token and all(ch in "|&;()\n" for ch in token):
-            if current:
-                out.append((current, guarded))
-            current = []
-            guarded = guarded or any(op in token for op in ("&&", "||", "(", ")"))
-        else:
-            guarded = guarded or (not current and token in _CONTROL_WORDS)
-            current.append(token)
-    if current:
-        out.append((current, guarded))
-    return out
+    lexer.whitespace = " \t\r"  # a newline is a command boundary, not whitespace
+    lexer.commenters = ""  # a `#` inside a word is not a comment in a shell
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    if unwrap and len(tokens) == 3 and tokens[1] in ("-c", "-lc") and _program(tokens[0]) in _SHELL_PROGRAMS:
+        return _simple_command(tokens[2], False)
+    joined = tokens[:1] == ["cd"] and len(tokens) > 3 and tokens[2] in ("&&", ";")
+    head, rest = (tokens[:2], tokens[3:]) if joined else ([], tokens)
+    if not rest or any(t and all(ch in _OPERATOR_CHARS for ch in t) for t in head + rest):
+        return None
+    return rest, joined
 
 
-def _segment_program(tokens):
-    """(program basename, argument tokens) of one simple command, past env assignments and wrappers."""
-    index = 0
-    while index < len(tokens):
-        token = tokens[index]
-        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) or os.path.basename(token) in _WRAPPER_PROGRAMS:
-            index += 1
-            continue
-        break
-    if index >= len(tokens):
-        return None, []
-    return os.path.basename(tokens[index]), tokens[index + 1:]
-
-
-def _command_hit(command, targets, depth=0):
+def _command_hit(command, targets):
     """_HIT_READ, _HIT_NONREAD, _HIT_AMBIGUOUS or None for a shell command text and the target paths.
 
-    A read is credited only when the path is a file operand of a content-printing command (``_file_operands``).
-    A command that names the path in any other way is non-read or ambiguous, not a read."""
+    A read is credited only when the text is exactly one allowlisted simple command (``_simple_command``)
+    and the path is one of its file operands (``_file_operands``). The text is non-read only when it is one
+    simple non-read command; every other text that names the path is ambiguous."""
     if not any(re.search(re.escape(t) + "(?!" + _PATH_CHARS + ")", command) for t in targets):
         return None
-    try:
-        segments = _segments(command)
-    except ValueError:
+    parsed = _simple_command(command)
+    if parsed is None:
         return _HIT_AMBIGUOUS
-    verdict = None
-    for tokens, guarded in segments:
-        program, args = _segment_program(tokens)
-        if program is None:
-            continue
-        if program in _SHELL_PROGRAMS and depth < _MAX_SHELL_DEPTH:
-            for position, arg in enumerate(args[:-1]):
-                if arg.startswith("-") and "c" in arg:
-                    inner = _command_hit(args[position + 1], targets, depth + 1)
-                    if inner == _HIT_READ and not guarded:
-                        return _HIT_READ
-                    # axis: a read in a command that may not have run is ambiguous, never a read
-                    verdict = _HIT_AMBIGUOUS if inner == _HIT_READ else (inner or verdict)
-                    break
-            continue
-        if not any(arg in targets for arg in args):
-            continue
-        if any(operand in targets for operand in _file_operands(program, args) or ()):
-            if not guarded:
-                return _HIT_READ
-            verdict = _HIT_AMBIGUOUS
-            continue
-        if program in _NONREAD_PROGRAMS:
-            verdict = verdict or _HIT_NONREAD
-        else:
-            verdict = _HIT_AMBIGUOUS
-    # The path occurs but no simple command takes it whole as an argument (a quoted script, a
-    # substitution): what happens to it cannot be told.
-    return verdict or _HIT_AMBIGUOUS
+    (word, *args), joined = parsed
+    program = _program(word)
+    if any(operand in targets for operand in _file_operands(program, args) or ()):
+        return _HIT_READ
+    if program in _NONREAD_PROGRAMS and not joined and any(arg in targets for arg in args):
+        return _HIT_NONREAD
+    return _HIT_AMBIGUOUS
 
 
 def _call_hit(call, targets):

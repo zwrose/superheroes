@@ -149,17 +149,17 @@ def test_codex_existence_check_alone_records_not_read_and_unrecognized_program_r
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
-def test_codex_content_readers_in_pipelines_and_shell_wrappers_record_read(calib):
+def test_codex_pipeline_in_a_shell_wrapper_is_unknown_and_a_cd_joined_reader_records_read(calib):
     stdout = _codex_stream(
         _codex_cmd("a", "/bin/bash -lc \"sed -n '1,40p' %s | head -n 5\"" % calib.core, exit_code=0),
         _codex_cmd("b", "cd /x; cat %s" % calib.layer, exit_code=0),
     )
     assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {
-        "core": "read", "review-crew": "read", "CLAUDE.md": "not-read"}
+        "core": "unknown", "review-crew": "read", "CLAUDE.md": "not-read"}
 
 
 @pytest.mark.parametrize("command", [
-    "true || cat {core}", "cd /x && cat {core}", "if true; then cat {core}; fi",
+    "true || cat {core}", "if true; then cat {core}; fi",
     "(cat {core})", "for f in a; do\ncat {core}\ndone", "true && /bin/sh -c 'cat {core}'",
 ])
 def test_codex_content_reader_that_may_not_have_run_is_unknown(calib, command):
@@ -197,6 +197,18 @@ def test_mcp_metadata_tool_naming_the_path_is_unknown_and_read_file_is_read(cali
             "status": "completed", "error": None}})
     assert _reads(CR.read_states("codex", mcp("get_file_info"), calib.stamp))["core"] == "unknown"
     assert _reads(CR.read_states("codex", mcp("read_file"), calib.stamp))["core"] == "read"
+
+
+def test_mcp_read_tool_credits_only_its_path_arguments(calib):
+    def mcp(tool, arguments):
+        return _codex_stream({"type": "item.completed", "item": {
+            "id": "b", "type": "mcp_tool_call", "tool": tool, "arguments": arguments,
+            "status": "completed", "error": None}})
+    assert _reads(CR.read_states("codex", mcp("read_file", {"path": calib.core}), calib.stamp))["core"] == "read"
+    other = {"path": "/tmp/notes.txt", "note": calib.core}
+    assert _reads(CR.read_states("codex", mcp("read_file", other), calib.stamp))["core"] == "unknown"
+    many = {"paths": [calib.core]}
+    assert _reads(CR.read_states("codex", mcp("read_multiple_files", many), calib.stamp))["core"] == "read"
 
 
 def test_unsupported_mcp_tool_naming_the_basename_relatively_is_unknown(calib):
@@ -250,9 +262,9 @@ def test_codex_basename_only_success_records_unknown(calib):
     "git status --short\ncat {core}",
     "/bin/bash -lc \"git status --short\ncat {core}\"",
 ])
-def test_codex_newline_is_a_command_boundary(calib, command):
+def test_codex_newline_is_a_command_boundary_so_two_commands_are_unknown(calib, command):
     stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
-    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "read"
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
 def test_codex_quoted_newline_does_not_split_a_command(calib):
@@ -295,7 +307,8 @@ def test_codex_listed_grep_options_are_a_read(calib, command):
 @pytest.mark.parametrize("command,grade", [
     ("cat <core>", "read"), ("head -n 50 <core>", "read"), ("tail -20 <core>", "read"),
     ("nl <core>", "read"), ("sed -n '1,200p' <core>", "read"), ("sed -n -e p <core>", "read"),
-    ("awk '{print}' <core>", "read"), ("awk 'NR>=1 && NR<=40 {print $0}' <core>", "read"),
+    ("awk '{print}' <core>", "read"), ("awk '{print $0}' <core>", "read"),
+    ("awk 'NR>=1 && NR<=40 {print $0}' <core>", "unknown"),
     ("grep foo <core>", "read"), ("grep -n -e foo <core>", "read"), ("rg -i foo <core>", "read"),
     ("grep -Fe foo <core>", "read"),
     ("grep -F -e <core> /tmp/other.txt", "unknown"), ("grep <core> /tmp/other.txt", "unknown"),
@@ -308,6 +321,30 @@ def test_codex_listed_grep_options_are_a_read(calib, command):
     ("test -f <core>", "not-read"), ("ls -l <core>", "not-read"),
 ])
 def test_codex_read_is_credited_only_for_a_file_operand_of_a_content_printing_command(calib, command, grade):
+    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
+@pytest.mark.parametrize("command,grade", [
+    ("cat <core>", "read"), ("cd /tmp && cat <core>", "read"), ("cd /tmp; head -n 5 <core>", "read"),
+    ("bash -lc 'cat <core>'", "read"), ("sh -c 'sed -n 1,5p <core>'", "read"), ("tail -n +1 <core>", "read"),
+    ("awk '{print}' <core>", "read"),
+    # the output is not shown to the reviewer, or the command may not have run
+    ("cat <core> > /dev/null", "unknown"), ("cat <core> | wc -l", "unknown"), ("cat <core> | tee x", "unknown"),
+    ("head -n 0 <core>", "unknown"), ("head -0 <core>", "unknown"), ("tail -n 0 <core>", "unknown"),
+    ("awk 'NR==0 {print}' <core>", "unknown"), ("cat <<EOF\n<core>\nEOF", "unknown"),
+    ("bash -n -c 'cat <core>'", "unknown"), ("exit 0; cat <core>", "unknown"),
+    ("kill -9 $$; cat <core>", "unknown"), ("set -e; false; cat <core>", "unknown"),
+    # more than one command, a second wrapper, a prefix word, or a count of zero
+    ("sed -n 1,5p <core> | head -n 5", "unknown"), ("cat <core> && echo done", "unknown"),
+    ("cd /a && cd /b && cat <core>", "unknown"), ("env X=1 cat <core>", "unknown"),
+    ("sudo cat <core>", "unknown"), ("bash -c 'bash -c \"cat <core>\"'", "unknown"),
+    ("bash -c 'cat <core>' extra", "unknown"), ("sed -n 0,5p <core>", "unknown"),
+    ("tail -n +0 <core>", "unknown"), ("awk 'NR<=5 {print}' <core>", "unknown"),
+    ("cat <core> a#b > /dev/null", "unknown"), ("X=/bin/cat <core>", "unknown"),
+    ("test -f <core>", "not-read"), ("ls -l <core>", "not-read"),
+])
+def test_codex_read_is_credited_only_for_one_structurally_single_command(calib, command, grade):
     stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
 
@@ -454,6 +491,26 @@ def test_stamp_keeps_only_files_the_order_names(calib):
     assert CR.stamp(calib.root, "") == []
     assert CR.stamp(calib.root, None) == []
     assert [entry["label"] for entry in calib.stamp] == ["core", "review-crew", "CLAUDE.md"]
+
+
+def test_stamp_names_a_file_under_the_real_root_when_the_root_is_given_through_a_symlink(calib, tmp_path, monkeypatch):
+    link = str(tmp_path / "root-link")
+    os.symlink(calib.root, link)
+    # the order names CLAUDE.md by its real path; the root arrives through the symlink
+    stamped = CR.stamp(link, "Read %s only.\n" % calib.claude)
+    assert [(e["label"], e["path"], e["sha256"]) for e in stamped] == [
+        ("CLAUDE.md", calib.claude, _sha(calib.bytes[calib.claude]))]
+    # the order names it through the symlink the root was given as
+    via_link = os.path.join(link, "CLAUDE.md")
+    stamped = CR.stamp(link, "Read %s only.\n" % via_link)
+    assert [(e["label"], e["path"]) for e in stamped] == [("CLAUDE.md", via_link)]
+    # a core file resolved through a symlink is named by its real path
+    core_link = str(tmp_path / "core-link.md")
+    os.symlink(calib.core, core_link)
+    monkeypatch.setattr(CR, "resolved_paths", lambda repo_root: (core_link, None, None))
+    stamped = CR.stamp(calib.root, "Read %s only.\n" % calib.core)
+    assert [(e["label"], e["path"]) for e in stamped] == [("core", calib.core)]
+    assert CR.stamp(link, "Read nothing named.\n") == []
 
 
 def test_stamp_hash_and_policy_are_taken_at_stamp_time(calib):

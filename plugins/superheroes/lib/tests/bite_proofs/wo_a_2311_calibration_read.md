@@ -1,5 +1,7 @@
 # Bite-proof record: WO-A (#2311), the runner records each seat's calibration read
 
+Note: _names_target, named below, was removed by later review fixes; the target match now lives in _file_operands and _call_hit in calibration_read.py.
+
 Detector: `plugins/superheroes/lib/tests/test_calibration_read.py`, run against
 `plugins/superheroes/lib/calibration_read.py` and the wiring in
 `plugins/superheroes/lib/engine_dispatch.py`.
