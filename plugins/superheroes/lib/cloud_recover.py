@@ -482,8 +482,8 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
         return pair if pair and pair[0] == launch_id else None
 
     archived = _newest(comments, start, own_self_archive) if read else None
-    fresh =(session_state in _LIVE_STATES and _is_number(age)
-             and 0 <= age <= _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS)
+    fresh = (session_state in _LIVE_STATES and _is_number(age)
+              and 0 <= age <= _sib("heartbeat").LIVENESS_QUIET_WINDOW_SECONDS)
     if not fresh:
         out["parkComment"], out["parkRead"] = _park_reading(repo_root, repo, info, reserved, comments, cutoff, env, run)
     # axis: a working or blocked session with recent activity is never recovered while it could still be working, whatever the comments say
