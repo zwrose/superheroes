@@ -18,6 +18,7 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **Each review record now carries its session's own reviewer cost (`sessionCost`): tokens, minutes and runs over the runs that session dispatched, per seat, and whether every run had a figure.** Nothing is owed: records written before this release carry none and read as unmeasured.
 - **After switching.** **Each review escape and false PR claim the advisor logs now ends with a `caught by: <kind> — <the exact fix>` line, and the gardening pass tallies escapes by kind and routes each kind to its home.** Nothing is owed at once: entries logged before this release carry no kind and read as unmeasured for kind. See [Showrunner: each escape names what would have caught it](#showrunner-each-escape-names-what-would-have-caught-it).
 - **After switching.** **A big change that cannot be split is reviewed in slices by size, with every unread part reviewed and one seams check, in place of the split by top-level folder and the gap sweep. A caller that reads the panel payload's `shards` or `big` keys, or the `dispatch-gap-sweep` phase, reads `slices` and `dispatch-seams-check` instead; a session saved at the gap-sweep step continues past it; a hand-landed panel `readParts` that differs from an engine run's is refused `evidence-read-parts-mismatch`.** See [Review: a big change is reviewed in slices](#review-a-big-change-is-reviewed-in-slices).
 
