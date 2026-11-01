@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.47.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.46.2...superheroes-v0.47.0) (2026-11-01)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** code review runs only as its loop, with a verify command ([#2235](https://github.com/zwrose/superheroes/issues/2235))
+* **superheroes:** code review has no grounding seat ([#2233](https://github.com/zwrose/superheroes/issues/2233))
+* **superheroes:** retire the forward-share dial and the kind labels ([#2249](https://github.com/zwrose/superheroes/issues/2249))
+
+### Features
+
+* **superheroes:** a finding names its kind of mistake, and its fix covers every place ([#2306](https://github.com/zwrose/superheroes/issues/2306)) ([a0cf089](https://github.com/zwrose/superheroes/commit/a0cf089f4de3d88f2f76fc9e9f6375b4406ffb2d))
+* **superheroes:** a returning PR's review reads only what changed, on every lane (C1-L11b) ([#2269](https://github.com/zwrose/superheroes/issues/2269)) ([59c5240](https://github.com/zwrose/superheroes/commit/59c524089eea563532cb9cda1b161d41e48daf33))
+* **superheroes:** a review's record keeps every finding through a crash or a restart ([#2227](https://github.com/zwrose/superheroes/issues/2227)) ([2bb8195](https://github.com/zwrose/superheroes/commit/2bb81956964681fa072f52ae71ff96da9f890efb))
+* **superheroes:** a stacked layer catches up at handback, not by restarting its review (C1-L11e) ([#2282](https://github.com/zwrose/superheroes/issues/2282)) ([24209d0](https://github.com/zwrose/superheroes/commit/24209d0cfbf7cdca00a94d63d860a7d1995d42b9))
+* **superheroes:** an empty returning round's record carries the earlier review (C1-L11d) ([#2274](https://github.com/zwrose/superheroes/issues/2274)) ([f02a482](https://github.com/zwrose/superheroes/commit/f02a4823fdda5ff996c7216799d6289241833126))
+* **superheroes:** attached break-it tests the build session runs ([#2252](https://github.com/zwrose/superheroes/issues/2252)) ([f89a821](https://github.com/zwrose/superheroes/commit/f89a82165ddb098a60ab22cb3ff14e2af657e8e6))
+* **superheroes:** break-it tests run in the build session's own working copy, not a throwaway copy ([#2250](https://github.com/zwrose/superheroes/issues/2250)) ([685ba36](https://github.com/zwrose/superheroes/commit/685ba36c76fc4503d94d28f2510d8088f9fc1681))
+* **superheroes:** build a spec PR's merge sheet without a review record ([#2229](https://github.com/zwrose/superheroes/issues/2229)) ([aefed8f](https://github.com/zwrose/superheroes/commit/aefed8f79d8fe72940e8d243884c9d036e8d8fc9))
+* **superheroes:** C1-L11a — the returning-review decider, the pinned review diff and the stack catch-up ([#2267](https://github.com/zwrose/superheroes/issues/2267)) ([d1ab40b](https://github.com/zwrose/superheroes/commit/d1ab40ba9d6055486201d16557808a655311c035))
+* **superheroes:** countable lines and proven copies (C1-L5b) ([#2248](https://github.com/zwrose/superheroes/issues/2248)) ([50b7adf](https://github.com/zwrose/superheroes/commit/50b7adfbf94720f19da8b6a467a7155e614b1333))
+* **superheroes:** each review escape names what would have caught it ([#2299](https://github.com/zwrose/superheroes/issues/2299)) ([1b4751f](https://github.com/zwrose/superheroes/commit/1b4751fafa5f111c40b892474300275ba99f7734))
+* **superheroes:** each review record carries its session's own reviewer cost ([#2308](https://github.com/zwrose/superheroes/issues/2308)) ([e1a0e6d](https://github.com/zwrose/superheroes/commit/e1a0e6d40ec632337c62d3c2df435ed463fe0cd2))
+* **superheroes:** findings outside the PR go to the review record's outside list ([#2292](https://github.com/zwrose/superheroes/issues/2292)) ([be0029a](https://github.com/zwrose/superheroes/commit/be0029a492e5a4024547c959f76bea10b746d711))
+* **superheroes:** findings that carry break-it tests and share a root cause get one fix (C1-L11c) ([#2270](https://github.com/zwrose/superheroes/issues/2270)) ([d180607](https://github.com/zwrose/superheroes/commit/d180607ed9e7519c1fd44f6a1ee3a6ff1a9a323a))
+* **superheroes:** later review rounds check only the fixes — three-check fix audit, scoped finder on the fixes' own diff, no mid-session full panel ([#2265](https://github.com/zwrose/superheroes/issues/2265)) ([04c090a](https://github.com/zwrose/superheroes/commit/04c090ada8066676997c927f35ee825e675f9061))
+* **superheroes:** let a detective lane run in the cloud ([#2247](https://github.com/zwrose/superheroes/issues/2247)) ([29bdbea](https://github.com/zwrose/superheroes/commit/29bdbea7faafa9dbcaa46fd52c69fa16902d5227))
+* **superheroes:** measure the review loop at each gardening pass ([#2300](https://github.com/zwrose/superheroes/issues/2300)) ([02a0d99](https://github.com/zwrose/superheroes/commit/02a0d99091928ad79e5a017fca8f1495fbb3eb79))
+* **superheroes:** one repository sweep per confirmed bug, its hits graded or listed outside ([#2309](https://github.com/zwrose/superheroes/issues/2309)) ([0e7c65c](https://github.com/zwrose/superheroes/commit/0e7c65c9a92e05f3e59a383d8b8900bcb3c94f03))
+* **superheroes:** only the verifier closes a finding as wrong, and a missed path gets one more test ([#2255](https://github.com/zwrose/superheroes/issues/2255)) ([2041766](https://github.com/zwrose/superheroes/commit/2041766e5a75c0fa8acaae1cf082521f442da56d))
+* **superheroes:** re-run a verify gate once after one failure, and publish the PR body over REST ([#2262](https://github.com/zwrose/superheroes/issues/2262)) ([d7b6dfc](https://github.com/zwrose/superheroes/commit/d7b6dfc12a5ff4a8f98755a26ca9ef374bfd895a))
+* **superheroes:** restore a weakened break-it test before any terminal path, with one correction; vet 728 and 729 folds (C1-L10b) ([#2271](https://github.com/zwrose/superheroes/issues/2271)) ([7bad375](https://github.com/zwrose/superheroes/commit/7bad375d3092e963cf50b053f3ffa3ad408c070b))
+* **superheroes:** retire the forward-share dial and the kind labels ([#2249](https://github.com/zwrose/superheroes/issues/2249)) ([9c1b3e0](https://github.com/zwrose/superheroes/commit/9c1b3e00c0f8e596907cb265e3ac65eaf75baf8d))
+* **superheroes:** review a big change in size slices with a seams check ([#2298](https://github.com/zwrose/superheroes/issues/2298)) ([7810c5f](https://github.com/zwrose/superheroes/commit/7810c5f28b8934dd664cbeddec5821ac9a1d5840))
+* **superheroes:** review sessions stop at 4 rounds and never wait on the owner mid-review ([#2240](https://github.com/zwrose/superheroes/issues/2240)) ([00b3ea9](https://github.com/zwrose/superheroes/commit/00b3ea9e828880bae84bb47f12abc888d48ff74d))
+* **superheroes:** round 1's panel pinned, reviewers return what they read, the build session is a maker (C1-L5) ([#2244](https://github.com/zwrose/superheroes/issues/2244)) ([1e69112](https://github.com/zwrose/superheroes/commit/1e69112e8f2e5e6e419361a9c9511df89a141144))
+* **superheroes:** settle open findings and check PR claims at the vet ([#2225](https://github.com/zwrose/superheroes/issues/2225)) ([bc9ed78](https://github.com/zwrose/superheroes/commit/bc9ed78c6cf8f5e65c49caff6d77bb6c29945001))
+* **superheroes:** spec lifecycle writers and the frozen-spec gate refusal ([#2191](https://github.com/zwrose/superheroes/issues/2191)) ([98a859f](https://github.com/zwrose/superheroes/commit/98a859f0aa7b3b3891d4ddb8b60f76ba073b3e45))
+* **superheroes:** synthesis marks repeats of earlier findings and keeps their outcomes ([#2259](https://github.com/zwrose/superheroes/issues/2259)) ([bc81f58](https://github.com/zwrose/superheroes/commit/bc81f58db6f22d4330e8bf823695ec7406e8d124))
+* **superheroes:** the build session applies review fixes itself ([#2261](https://github.com/zwrose/superheroes/issues/2261)) ([40d52ee](https://github.com/zwrose/superheroes/commit/40d52eed2d142b722da7ce41841d1d0551d5349e))
+* **superheroes:** the extra audit round, and earlier review sessions finishing (C1-L4b) ([#2242](https://github.com/zwrose/superheroes/issues/2242)) ([e1e1703](https://github.com/zwrose/superheroes/commit/e1e17036c1bb32457c05ffc76c3185273a94b795))
+* **superheroes:** the gardening pass's revisit checks and a false PR claim count ([#2223](https://github.com/zwrose/superheroes/issues/2223)) ([15da5a2](https://github.com/zwrose/superheroes/commit/15da5a26e280459e502019ae62ab194cdd24fa15))
+* **superheroes:** the launcher learns the detective charter ([#2200](https://github.com/zwrose/superheroes/issues/2200)) ([8fc3be2](https://github.com/zwrose/superheroes/commit/8fc3be22ef4211849a4d2efe056423519b1aa44f))
+* **superheroes:** the repeat-marks module (decision table for a finding that repeats an earlier one) ([#2256](https://github.com/zwrose/superheroes/issues/2256)) ([18fa7c9](https://github.com/zwrose/superheroes/commit/18fa7c9c2ad8f4252e56f858b6c94154adc5d3b4))
+* **superheroes:** the review record's new parts, shown only when present ([#2232](https://github.com/zwrose/superheroes/issues/2232)) ([3fe6f63](https://github.com/zwrose/superheroes/commit/3fe6f63b67e017590058efcc3da4d33632097d5e))
+
+
+### Bug Fixes
+
+* **superheroes:** a break-it test damaged by transit redaction is reported not run, never run broken ([#2287](https://github.com/zwrose/superheroes/issues/2287)) ([09fb49f](https://github.com/zwrose/superheroes/commit/09fb49fd40aff5fac0cd9910b064d58afe7a9889))
+* **superheroes:** a cloud build stopped by its account's usage limit recovers without the owner ([#2278](https://github.com/zwrose/superheroes/issues/2278)) ([1743969](https://github.com/zwrose/superheroes/commit/1743969272c81edb6f63c4560d7b36a345506f06))
+* **superheroes:** a new spec resolves to the confirmed doc policy's location, not the calibration store ([#2198](https://github.com/zwrose/superheroes/issues/2198)) ([8c1712a](https://github.com/zwrose/superheroes/commit/8c1712a70f1461b45e48adde967b9deced6a3bb8))
+* **superheroes:** a receipts-only fix round no longer reaches its re-vet held ([#2302](https://github.com/zwrose/superheroes/issues/2302)) ([7792ddc](https://github.com/zwrose/superheroes/commit/7792ddcc6ac2c4683af1dc4b3cce09bc60d16462))
+* **superheroes:** a returning review skips unchanged sections, keeps audit-parent links, and records every fix group ([#2291](https://github.com/zwrose/superheroes/issues/2291)) ([5e2f6ea](https://github.com/zwrose/superheroes/commit/5e2f6ea6fe9cbf014e1a1886d0d95bebc77afbfe))
+* **superheroes:** a review ruling refuses a finding id that names more than one finding ([#2293](https://github.com/zwrose/superheroes/issues/2293)) ([6ff373b](https://github.com/zwrose/superheroes/commit/6ff373b4fc501d3e8f85cd0538e6de0809ed4362))
+* **superheroes:** a spec freezes when its work is delivered, and later rulings mark it rather than amend it ([#2187](https://github.com/zwrose/superheroes/issues/2187)) ([0be694d](https://github.com/zwrose/superheroes/commit/0be694d5ee8715114bb3248b27e0471ffc932549))
+* **superheroes:** C1-L11f — the review-loop fixes vets 734 to 737 and 741 and ruling 436 ordered ([#2283](https://github.com/zwrose/superheroes/issues/2283)) ([ad30e3e](https://github.com/zwrose/superheroes/commit/ad30e3e991cd1d5351d15416fbb67fb75379532f))
+* **superheroes:** fix two twice-seen CI flakes at their demonstrated causes ([#2202](https://github.com/zwrose/superheroes/issues/2202)) ([c7f3c43](https://github.com/zwrose/superheroes/commit/c7f3c430254ca4a5d47926acd3dc1088a649d9c0))
+* **superheroes:** give breakdown bodies a fixed home so an unpinned body refuses the spec-PR sheet ([#2236](https://github.com/zwrose/superheroes/issues/2236)) ([3439810](https://github.com/zwrose/superheroes/commit/3439810e0b93a6780fb288f276eb6c1d0dc39e64))
+* **superheroes:** give builders three field rules: form-only re-issue, turn-end ruling, no delete in a compound ([#2316](https://github.com/zwrose/superheroes/issues/2316)) ([1d60fae](https://github.com/zwrose/superheroes/commit/1d60fae7d3611dc62e7b03a5ac229d5e8cd742c5))
+* **superheroes:** read back a reservation whose append reports failure, and keep the worktree while a live record may name it ([#2201](https://github.com/zwrose/superheroes/issues/2201)) ([c1bba6b](https://github.com/zwrose/superheroes/commit/c1bba6b998d8e26a2d394152c83d7dc8408a3254))
+* **superheroes:** recognize git 2.56's dead-gitfile refusal as not-a-repository ([#2226](https://github.com/zwrose/superheroes/issues/2226)) ([590e090](https://github.com/zwrose/superheroes/commit/590e090653a11bcf06edf92fb8e199a3220ab4a5))
+* **superheroes:** refuse the ready mark and a READY vet slot while a finding left for the owner is unnamed ([#2289](https://github.com/zwrose/superheroes/issues/2289)) ([5d46a65](https://github.com/zwrose/superheroes/commit/5d46a651cf0fe10b7347f4c9b1f5e7ff68fa6083))
+* **superheroes:** remove the empty read-only placeholders the Linux sandbox leaves after a claude write run ([#2286](https://github.com/zwrose/superheroes/issues/2286)) ([b494a76](https://github.com/zwrose/superheroes/commit/b494a7634c6b25afc1ef48399caa063cec800bb7))
+* **superheroes:** remove the fixer-only machinery, and ignore a reviewer seat's own secondTest mark ([#2263](https://github.com/zwrose/superheroes/issues/2263)) ([3047f67](https://github.com/zwrose/superheroes/commit/3047f67b088ca10ef3608e0f3939b58729d6d911))
+* **superheroes:** review a change made only of withheld config instead of refusing ([#2228](https://github.com/zwrose/superheroes/issues/2228)) ([4b07f12](https://github.com/zwrose/superheroes/commit/4b07f12d5aa7606b81315e31ec2456929c0cbdff))
+* **superheroes:** taking over a build never stalls on the owner (adopt-original-session check) ([#2257](https://github.com/zwrose/superheroes/issues/2257)) ([565175f](https://github.com/zwrose/superheroes/commit/565175f37f0a3b41ef3fb84cf6e3dcfb27e6951f))
+* **superheroes:** tests that fail only inside the claude write sandbox stop costing implementer orders ([#2281](https://github.com/zwrose/superheroes/issues/2281)) ([963d84e](https://github.com/zwrose/superheroes/commit/963d84e18d6b2853fd075bb101e39c429d4d6523))
+* **superheroes:** the relay check replaces a relay a usage limit left dead ([#2295](https://github.com/zwrose/superheroes/issues/2295)) ([58dfbbe](https://github.com/zwrose/superheroes/commit/58dfbbeefc64fbc46dec081796c015405da10085))
+* **superheroes:** the verify-command doctor's check 6 says "could not be checked" instead of a false "missing" ([#2203](https://github.com/zwrose/superheroes/issues/2203)) ([a465ffc](https://github.com/zwrose/superheroes/commit/a465ffc6269c1b833a9b6006629ad10bd5db8607))
+
+
+### Chores
+
+* **superheroes:** committed files name no consuming project ([#2297](https://github.com/zwrose/superheroes/issues/2297)) ([868cf39](https://github.com/zwrose/superheroes/commit/868cf39ff64b42ccb69f714b76730f22eb9b5715))
+* **superheroes:** epics pick a short tag that starts their children's titles ([#2246](https://github.com/zwrose/superheroes/issues/2246)) ([47fe513](https://github.com/zwrose/superheroes/commit/47fe5138f7b477440058db14e672fae23a499436))
+
+
+### Code Refactoring
+
+* **superheroes:** code review has no grounding seat ([#2233](https://github.com/zwrose/superheroes/issues/2233)) ([477228b](https://github.com/zwrose/superheroes/commit/477228bb0ee7bf6809da06c41a4816c1ce22e3a7))
+* **superheroes:** code review runs only as its loop, with a verify command ([#2235](https://github.com/zwrose/superheroes/issues/2235)) ([229decd](https://github.com/zwrose/superheroes/commit/229decdae537d672cdc0d9118b844bcc7336a221))
+
 ## [0.46.2](https://github.com/zwrose/superheroes/compare/superheroes-v0.46.1...superheroes-v0.46.2) (2026-10-26)
 
 
