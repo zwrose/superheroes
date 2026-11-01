@@ -1965,7 +1965,9 @@ def _seed_carried(state, cfg, returning):
         if key and key not in rows:  # two carried findings with one key are one row
             rows[key] = finding
             # axis: a carried finding is on the ledger, with a raised sequence, before its disposition is recorded — see bite-proof record c1l11b_wo_d2_carried_findings
-            _seed_ledger_entry(state, ledger, seen, finding, key, state["round"])
+            entry = _seed_ledger_entry(state, ledger, seen, finding, key, state["round"])
+            # axis: a carried finding ranks before every finding first raised in this session, whatever first-raise round it brought
+            entry[session_contract.FIRST_RAISED_ROUND_FIELD] = session_contract.CARRIED_FIRST_RAISED_ROUND
     if not rows:
         return False
     state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = session_contract.DISPOSITION_LEDGER_OWNER_VALUE

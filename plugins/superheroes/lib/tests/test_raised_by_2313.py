@@ -28,6 +28,8 @@ import round_phases  # noqa: E402
 import session_contract as SC  # noqa: E402
 import verification  # noqa: E402
 from test_audit_spawned_riders_2115 import P_KEY, _audit_issue, _child, _scoped_state  # noqa: E402
+from test_c1l11b_carried_findings import _finding as _carried_record, _session  # noqa: E402
+from test_c1l11b_returning_session import _isolated_git  # noqa: E402,F401  (autouse: no global git config)
 from test_c4_kind_of_mistake import DIFF, _record_rows  # noqa: E402
 from test_c4_sweep import _both, _finding as _sweep_parent, _hit, _sweep, _to_sweep, world  # noqa: E402,F401
 from test_c4_sweep_recovery import INSIDE, SEAT_1, _account, _hits, _stored  # noqa: E402
@@ -106,13 +108,20 @@ def test_c1_a_stage_compile_carries_its_stage_name(stage):
 
 
 def test_c1_a_panel_fold_stamps_each_staged_finding_with_its_seat(world):
-    # axis: the panel fold passes the roster key through to compile
+    # axis: the panel fold gives each staged finding and ledger row its own seat's key, not the first finding's seat or a seat-sent value
     from test_c4_sweep import _panel
-    state = _panel(world, code_reviewer=[_sweep_parent(dimension="Failure-Mode", **{RAISED: "premortem-reviewer"})])
-    (staged,) = state["_toVerify"]
-    assert staged[RAISED] == "code-reviewer"
-    (row,) = state[SC.DISPOSITION_LEDGER_KEY]
-    assert row[RAISED] == "code-reviewer"
+    # a fold that gave every finding the first finding's seat would pass a test staging one seat's findings only
+    state = _panel(world,
+                   code_reviewer=[_sweep_parent(title="Retry without a cap", line=2, dimension="Failure-Mode", **{RAISED: "premortem-reviewer"})],
+                   premortem_reviewer=[_sweep_parent(title="Loop without a bound", line=19, **{RAISED: "code-reviewer"})])
+    staged = {f["title"]: f for f in state["_toVerify"]}
+    assert set(staged) == {"Retry without a cap", "Loop without a bound"}, staged
+    assert staged["Retry without a cap"][RAISED] == "code-reviewer"
+    assert staged["Loop without a bound"][RAISED] == "premortem-reviewer"
+    rows = {r["title"]: r for r in state[SC.DISPOSITION_LEDGER_KEY]}
+    assert set(rows) == set(staged), rows
+    assert rows["Retry without a cap"][RAISED] == "code-reviewer"
+    assert rows["Loop without a bound"][RAISED] == "premortem-reviewer"
 
 
 # ---- C2: a merge keeps the first raiser ------------------------------------------------------------------------
@@ -263,6 +272,15 @@ def test_m1_members_that_tie_on_the_round_keep_the_kept_findings_raiser_in_eithe
         assert merged["severity"] == "Important" and merged[RAISED] == "premortem-reviewer", merged
 
 
+def test_m1_equal_severity_members_tied_on_the_round_keep_the_last_listed_members_raiser():
+    # axis: equal severity keeps the last-listed member, and the merged raiser follows it
+    first_round = SC.FIRST_RAISED_ROUND_FIELD
+    code = dict(_member("Important", "code-reviewer"), **{first_round: 1})
+    premortem = dict(_member("Important", "premortem-reviewer"), **{first_round: 1})
+    assert verification._merge_group([code, premortem])[RAISED] == "premortem-reviewer"
+    assert verification._merge_group([premortem, code])[RAISED] == "code-reviewer"
+
+
 def test_m1_a_strictly_earlier_member_beats_a_later_representative_in_either_order():
     # axis: a member raised in round 1 beats a higher-severity representative raised in round 2, whatever the member order
     early = _member("Minor", "code-reviewer", raised_round=1)
@@ -374,6 +392,53 @@ def test_s2_a_first_raised_round_the_seat_sends_never_survives_compile():
     out = _compile(_finding(**{SC.FIRST_RAISED_ROUND_FIELD: 0}), source=SC.OUTSIDE_SEAMS_CHECK)
     assert SC.FIRST_RAISED_ROUND_FIELD not in out
     assert SC.FIRST_RAISED_ROUND_FIELD in SC.TRANSIENT_FINDING_FIELDS
+
+
+def _returning_state(tmp_path, monkeypatch, **record_over):
+    """A returning session driven through `_seed_carried`: one Minor finding `code-reviewer` raised in an earlier
+    session, sent back to the verifier (line 3: the later commit touches only the hunk around line 27, so no audit
+    targets it). Returns (state, its row key)."""
+    carried = _carried_record(3, title="the carried value is wrong", severity="Minor", **dict({RAISED: "code-reviewer"}, **record_over))
+    s = _session(tmp_path, monkeypatch, [carried])
+    s.next()
+    state = s.state()
+    key = carried[SC.FINDING_KEY_FIELD]
+    assert [RD._finding_identity_key(f) for f in state["_carriedToVerify"]] == [key], state.get("_carriedToVerify")
+    return state, key
+
+
+def _ledger_row(state, key):
+    ledger = state[SC.DISPOSITION_LEDGER_KEY]
+    return ledger[RD._ledger_index_by_key(ledger)[key]]
+
+
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+def test_s3_a_finding_carried_from_an_earlier_session_keeps_its_raiser_beside_a_fresh_more_severe_finding_in_either_grouping_order(
+        tmp_path, monkeypatch, order):
+    # axis: a carried finding ranks before every finding first raised in the returning session, so its raiser survives a merge with a fresher, more severe one
+    state, key = _returning_state(tmp_path, monkeypatch)
+    fresh = _finding(title="Important one", line=2, severity="Important", **{RAISED: "premortem-reviewer"})
+    RD._stage_findings(state, RD._with_carried(state, [fresh]))  # the staging the carried finding meets later in the same session
+    staged = verification.stage_ids(state["_toVerify"])
+    by_title = {f["title"]: f for f in staged}
+    state["_verified"] = staged
+    ids = [staged[i]["id"] for i in order]
+    RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "g", "member_ids": ids}]})
+    (live,) = state["findings"]
+    row = _ledger_row(state, RD._finding_identity_key(live))
+    assert live["severity"] == "Important", live
+    assert live[RAISED] == "code-reviewer" and row[RAISED] == "code-reviewer", (live, row)
+    assert live[SC.FIRST_RAISED_ROUND_FIELD] == row[SC.FIRST_RAISED_ROUND_FIELD] == SC.CARRIED_FIRST_RAISED_ROUND, (live, row)
+    # the stamp `_seed_carried` wrote survived the later staging (the existing-row path), and the fresh finding ranks after it
+    assert by_title["the carried value is wrong"][SC.FIRST_RAISED_ROUND_FIELD] == SC.CARRIED_FIRST_RAISED_ROUND
+    assert by_title["Important one"][SC.FIRST_RAISED_ROUND_FIELD] == state["round"] == 1
+    assert _ledger_row(state, key)[SC.FIRST_RAISED_ROUND_FIELD] == SC.CARRIED_FIRST_RAISED_ROUND
+
+
+def test_s3_a_carried_finding_that_arrives_with_its_own_first_raise_round_is_seeded_at_the_carried_constant(tmp_path, monkeypatch):
+    # axis: `_seed_carried` stamps the carried constant whatever firstRaisedRound the carried finding brought
+    state, key = _returning_state(tmp_path, monkeypatch, **{SC.FIRST_RAISED_ROUND_FIELD: 3})
+    assert _ledger_row(state, key)[SC.FIRST_RAISED_ROUND_FIELD] == SC.CARRIED_FIRST_RAISED_ROUND != 3
 
 
 def test_s1_synthesis_carries_an_absent_raiser_onto_the_ledger_row():

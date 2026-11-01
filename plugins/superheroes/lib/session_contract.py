@@ -52,6 +52,7 @@ __all__ = (
     "RAISED_SEQ_FIELD",
     "RAISED_BY_FIELD",
     "FIRST_RAISED_ROUND_FIELD",
+    "CARRIED_FIRST_RAISED_ROUND",
     "DISPOSITION_SEQ_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
     "has_disposition_family",
@@ -107,6 +108,10 @@ RAISED_SEQ_FIELD = "raisedSeq"
 RAISED_BY_FIELD = "raisedBy"
 # The round a finding was first raised in: driver-owned and never rewritten by a re-raise (unlike `raisedRound`).
 FIRST_RAISED_ROUND_FIELD = "firstRaisedRound"
+# The `firstRaisedRound` of a finding carried in from an earlier review session. Review rounds start at 1 in every
+# session, so 0 is before every round of the returning session. Two carried findings from different earlier sessions
+# both rank 0 and tie: the merge then keeps the kept finding's raiser by its tie rule (records keep no cross-session order).
+CARRIED_FIRST_RAISED_ROUND = 0
 DISPOSITION_SEQ_FIELD = "dispositionSeq"
 
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
