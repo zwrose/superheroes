@@ -1,19 +1,25 @@
 #!/usr/bin/env python3
-"""The one home of the refused-command stop rule, the refusal-entry shape (#2011), and the
-file-write rule (#2067, #2126).
+"""The one home of the refused-command stop rule, the refusal-entry shape (#2011), the
+file-write rule (#2067, #2126), and the delete rule (#2314).
 
-Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT` and
-`FILE_WRITE_RULE`; no order surface keeps a hand copy of either. `refusals_fault` is the one
+Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT`,
+`FILE_WRITE_RULE` and `DELETE_RULE`; no order surface keeps a hand copy of any. `refusals_fault` is the one
 check of a result's `refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
 """
 
 STOP_RULE = (
     "A refused or denied command is a stop. Report it in your result's refusals list and do not "
     "retry it in another form: not another path to the program, another tool, another wrapper, "
-    "or another command with the same effect. The one exception: when the refusing guard's or "
-    "hook's own refusal message names a route (an exact command or tool to use instead), you may "
-    "take exactly that route, once, and record it as that entry's route; every other form, and "
-    "every auto-mode classifier denial, stays a stop."
+    "or another command with the same effect. There are two exceptions. First: when the refusing "
+    "guard's or hook's own refusal message names a route (an exact command or tool to use "
+    "instead), you may take exactly that route, once, and record it as that entry's route. "
+    "Second: when a refusal is only about the command's form (a compound command, a variable or "
+    "program inside `bash -c`, a heredoc or pipe the guard will not parse) and not about what the "
+    "command does, you may re-issue the same command once in plain form (each command its own "
+    "plain call, with no compound, wrapper, heredoc or pipe) and record that plain form as that "
+    "entry's route. A second refusal, and any refusal about what the command does (a delete, a "
+    "push, a network call, a permission), stays a stop; so does every other form. A refused "
+    "command that carries a delete is never only about its form."
 )
 
 REFUSAL_MEANING = (
@@ -25,17 +31,14 @@ REFUSAL_MEANING = (
 )
 
 REFUSED_BY = ("permission", "hook", "sandbox")
-# The refusers whose own message may name a route (#2167): a hook, or the sandbox ("split into
-# plain commands"). A permission entry never carries one: an auto-mode classifier denial stays a stop.
-ROUTE_REFUSED_BY = ("hook", "sandbox")
 ENTRY_REQUIRED = ("command", "refusedBy", "next")
 ENTRY_OPTIONAL = ("hook", "route")
 
 ENTRY_SHAPE = (
     "Each refusals entry carries command (the command exactly as you wrote it), refusedBy "
     "(permission, hook or sandbox), hook (the hook's name when the refusal gave one, else null), "
-    "route (the route a hook's or the sandbox's own refusal message named and you took, else "
-    "null), and next "
+    "route (the route a refusal message named and you took, or the plain form you re-issued "
+    "after a form-only refusal, else null), and next "
     "(what you did next). An empty list means you met none."
 )
 
@@ -45,6 +48,12 @@ FILE_WRITE_RULE = (
     "Create and edit files only with the host's file-write and file-edit tools (Write and Edit on "
     "Claude Code); never through a shell command that writes a file — a heredoc, `cat >` or `>` "
     "redirection, `tee`, `sed -i`, or an interpreter script (`python -`, `node -e`)."
+)
+
+DELETE_RULE = (
+    "Never put `rm`, or any other delete, inside a compound command: not after `&&`, `||` or `;`, "
+    "not in a pipe, and not inside `bash -c` or a subshell. A delete is always its own plain call, "
+    "one path per call."
 )
 
 
@@ -79,8 +88,6 @@ def refusals_fault(value):
             if "route" in entry and entry["route"] is not None:
                 if _blank(entry["route"]):
                     return where + ".route"
-                if by not in ROUTE_REFUSED_BY:
-                    return where + ".route needs refusedBy hook or sandbox"
         return None
     except Exception as exc:  # noqa: BLE001 — a validator must never raise
         return "refusals-check-error:%s" % type(exc).__name__
