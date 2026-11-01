@@ -67,6 +67,14 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **At each gardening pass the advisor appends the window's review-loop measures row and shows it in the gardening record.** See [Gardening pass: the review-loop measures row](#gardening-pass-the-review-loop-measures-row).
 
+- **After switching.** **Nothing is owed: builders are given three field rules — a command refused only for its form may be re-issued once in plain form, a headless lane never ends a turn with work still running, and a delete never rides a compound command.** See [Builders: three field rules](#builders-three-field-rules).
+
+### Builders: three field rules
+
+- **A command refused only for its form may be re-issued once in plain form.** The stop rule (`lib/command_refusals.py`, `STOP_RULE`) gains its second exception. A refusals entry's non-null `route` is now valid with `refusedBy: permission` as well as `hook` and `sandbox`; the `refusals[i].route needs refusedBy hook or sandbox` fault is gone and `ROUTE_REFUSED_BY` is removed. A refusal about what a command does stays a stop.
+- **A headless lane never ends a turn with work still running.** The launch doctrine gains a ninth standing ruling, `turn-end`, so every launched builder, local and cloud, is given the turn-end rule verbatim (`rubric/launch-doctrine.md`, `lib/launch_doctrine.py`).
+- **A delete never rides a compound command.** A new `DELETE_RULE` in `lib/command_refusals.py` is carried by every `dispatch-write` order (implementer and fixer), by the native implementer preamble and by `agents/implementer.md`.
+
 ### Gardening pass: the review-loop measures row
 
 - **What an advisor now does at a pass.** At duty 3, before the walk, run `lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`. It appends one fixed-shape row of review-loop measures for the window to `state/review-loop-measures.jsonl` in the project store, or replaces the row already there for the same window. The input file carries the window's review records, CI runs, misses log, vet receipts, the day cap choices began to be recorded, and any monthly or sampled measures. Its docstring names each key. See [The gardening pass](skills/showrunner/reference/owner-decisions.md#the-gardening-pass).
