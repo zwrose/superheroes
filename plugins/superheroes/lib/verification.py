@@ -390,15 +390,17 @@ def merged_kind_of_mistake(kept, members):
     return {"kind": kind_text, "places": [rows[pair] for pair in order]}
 
 
-def apply_kind_members(merged, members):
+def apply_kind_members(merged, members, with_description=True):
     """Set the merged finding's `kindOfMistake` from `merged_kind_of_mistake` (or remove it when none carries
-    one), and give it the first member's `searchDescription` when the kept finding has none."""
+    one), and, when `with_description` holds, give it the first member's `searchDescription` when the kept finding
+    has none. A caller that keeps a finding across rounds (a re-raise, an open-blocker dedup) passes False: the
+    finding never named a description there, so the merge must not give it one."""
     kind = merged_kind_of_mistake(merged, members)
     if kind is None:
         merged.pop(KIND_OF_MISTAKE_FIELD, None)
     else:
         merged[KIND_OF_MISTAKE_FIELD] = kind
-    if not isinstance(merged.get(SEARCH_DESCRIPTION_FIELD), dict):
+    if with_description and not isinstance(merged.get(SEARCH_DESCRIPTION_FIELD), dict):
         for member in members:
             if isinstance(member, dict) and isinstance(member.get(SEARCH_DESCRIPTION_FIELD), dict):
                 merged[SEARCH_DESCRIPTION_FIELD] = member[SEARCH_DESCRIPTION_FIELD]

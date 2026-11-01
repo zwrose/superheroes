@@ -587,6 +587,24 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 places_ignored.append(fid)
                 base["placesIgnored"] = [{"file": k[0], "line": k[1]} for k in placed["ignored"]]
             incomplete = placed["unfixed"] + placed["unanswered"]
+        else:
+            incomplete = []
+        # axis: a weakened committed test is blocked before an incomplete-place return, so the mandatory restore is scheduled — see bite-proof record c4_wo1_kind
+        if match == MATCH_CHANGED_EXPLAINED:
+            base["testMatch"]["answer"] = reported
+            if reported == "weakened":
+                base["testMatch"]["blocking"] = True
+                if fid is not None:
+                    test_mismatch.append(fid)
+                    not_discharged.append(fid)
+                base.update(ruling="not-discharged",
+                            reason="break-it test weakened: %s" % test_match["why"].strip())
+                # axis: a weakened-test return keeps the new issues a not-discharged result raised — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
+                if keeps_new_issues:
+                    new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
+                audits.append(base)
+                continue
+        if placed is not None:
             if incomplete and ruling in _CLEARS:
                 if fid is not None:
                     places_unfixed.append(fid)
@@ -602,20 +620,6 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 base.update(ruling="not-discharged",
                             reason="the fix leaves a place of the same kind of mistake open (%s)"
                             % "; ".join(parts))
-                audits.append(base)
-                continue
-        if match == MATCH_CHANGED_EXPLAINED:
-            base["testMatch"]["answer"] = reported
-            if reported == "weakened":
-                base["testMatch"]["blocking"] = True
-                if fid is not None:
-                    test_mismatch.append(fid)
-                    not_discharged.append(fid)
-                base.update(ruling="not-discharged",
-                            reason="break-it test weakened: %s" % test_match["why"].strip())
-                # axis: a weakened-test return keeps the new issues a not-discharged result raised — see bite-proof record c1l11f_wo_d_exempt_and_new_issues
-                if keeps_new_issues:
-                    new_issues.extend(_valid_new_issues(r.get("newIssues"), fid))
                 audits.append(base)
                 continue
         # A clearing ruling stands only when all three checks are answered `yes`.

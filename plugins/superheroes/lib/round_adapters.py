@@ -493,6 +493,12 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
         if fault is not None:
             return None, fault
         artifact = _assemble_findings(roster, indexed, disclosures)
+        if phase == P_SEAMS:
+            # axis: the seams artifact carries the executed vendor the authentication above checked, so the fold stamps a search description's author on the durable path as the panel's `ranManifest` does — see bite-proof record c4_wo1_kind
+            ran_manifest = _trusted_vendors(roster, indexed, dispatch_manifest, {}, orders_manifest,
+                                            _maker_barred(state, config))
+            if ran_manifest:
+                artifact["ranManifest"] = ran_manifest
     elif phase == P_APPLY_FIXES:
         artifact = _assemble_apply_fixes(roster, indexed)
     else:

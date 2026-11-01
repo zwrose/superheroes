@@ -2284,6 +2284,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         # never turns a real one into a craft decision.
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
             [existing, entry])
+        # axis: a re-raise of an unresolved finding keeps the places it still owes, so a narrower report never drops a copy the last audit left unfixed — see bite-proof record c4_wo1_kind
+        verification.apply_kind_members(entry, [existing, entry], with_description=False)
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
     # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
     if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
@@ -3229,18 +3231,29 @@ def _record_place_results(state, audit_entries):
                                     if isinstance(p, dict) and isinstance(p.get("fixed"), bool)}
     if not answers:
         return
+
+    def _answers_for(row):
+        """The audited key's answers for a row: its own, else the representative's when the row is a member merged
+        into an audited one (a merged member keeps its own row, and its kind can name the same places)."""
+        if not isinstance(row, dict) or not isinstance(row.get(KIND_OF_MISTAKE_FIELD), dict):
+            return None
+        results = answers.get(_finding_identity_key(row))
+        if results is None:
+            # axis: a merged member's row takes the audited representative's answers for the places it names, so the record never shows it "0 of N fixed" after the shared places were repaired — see bite-proof record c4_wo1_kind
+            into = row.get(session_contract.MERGED_INTO_FIELD)
+            results = answers.get(into) if isinstance(into, str) else None
+        return results
+
     live = state.get("findings")
     for row in live if isinstance(live, list) else ():
-        key = _finding_identity_key(row) if isinstance(row, dict) else None
-        if key in answers and isinstance(row.get(KIND_OF_MISTAKE_FIELD), dict):
-            row[KIND_OF_MISTAKE_FIELD] = _with_place_results(row[KIND_OF_MISTAKE_FIELD], answers[key])
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    if not isinstance(ledger, list):
-        return
-    seen = _ledger_index_by_key(ledger)
-    for key, results in answers.items():
-        entry = ledger[seen[key]] if key in seen else None
-        if isinstance(entry, dict) and isinstance(entry.get(KIND_OF_MISTAKE_FIELD), dict):
+        results = _answers_for(row)
+        if results is not None:
+            row[KIND_OF_MISTAKE_FIELD] = _with_place_results(row[KIND_OF_MISTAKE_FIELD], results)
+    # fold-time writer: with answers and no ledger this now sets an empty one, the shape every other fold-time writer creates
+    ledger = _ensure_disposition_ledger_for_write(state)
+    for entry in ledger:
+        results = _answers_for(entry)
+        if results is not None:
             entry[KIND_OF_MISTAKE_FIELD] = _with_place_results(entry[KIND_OF_MISTAKE_FIELD], results)
 
 
@@ -4133,9 +4146,10 @@ def _fold_panel(state, config, artifact, session_dir=None):
     compile_stats = {}
     compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped,
                                          sources=seat_sources, stats=compile_stats)
-    prior_kind_missing = state["rounds"].get(str(state["round"]), {}).get(KIND_MISSING_FIELD) if later else None
+    # axis: the panel's kind-missing count is added to the count the round already holds (an audit that ran before the panel, an earlier wave), never written over it — see bite-proof record c4_wo1_kind
+    held_kind_missing = state["rounds"].get(str(state["round"]), {}).get(KIND_MISSING_FIELD)
     _record_round(state, "kindMissing",
-                  (prior_kind_missing if _is_plain_int(prior_kind_missing) else 0)
+                  (held_kind_missing if _is_plain_int(held_kind_missing) else 0)
                   + (compile_stats.get(KIND_MISSING_FIELD) or 0))
     if runs:
         runs = _break_it_run_keys(runs, compiled, _outside_anchors(drops))
@@ -10167,6 +10181,9 @@ def _union_open_blockers(*groups):
             if key is None:
                 continue
             if key in seen_keys:
+                # axis: the kept entry owes every place a deduplicated sibling still names, so a fresh report never hides an unresolved target's outstanding places — see bite-proof record c4_wo1_kind
+                kept = next(b for b in batch if session_contract.finding_identity_key(b) == key)
+                verification.apply_kind_members(kept, [kept, f], with_description=False)
                 continue
             batch.append(f)
             seen_keys.add(key)

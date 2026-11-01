@@ -27,6 +27,7 @@ _ALLOWED_WRITER_FUNCTIONS = frozenset({
     "_record_repeat",  # fold-time: its only caller is _apply_repeat_marks, from _fold_synthesis; writes repeatOf / repeatKept, never a disposition
     "_seed_carried",  # first-next seeding: its only caller is _seed_returning_round; writes each carried finding as a raised row, never a disposition
     "_sync_reviewer_test_ledger_row",  # fold-time: its only caller is _sync_reviewer_test (the restore and the correction); writes the reviewer's test and testCorrection onto the row, never a disposition
+    "_record_place_results",  # fold-time: its only product caller is _fold_audits (a C4 test calls it directly); writes each named place's fixed answer onto the row, never a disposition
 })
 _ALLOWED_LEDGER_KEY_FUNCTIONS = frozenset({_WRITER_NAME})
 _SESSION_CONTRACT_BASENAME = "session_contract.py"
