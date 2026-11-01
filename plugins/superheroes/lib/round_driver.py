@@ -5036,16 +5036,6 @@ def _sweep_seat_input(payload, seat_key):
     return None
 
 
-def _sweep_place_pairs(parent):
-    """The `(file, line)` of the parent finding and of each place of its kind of mistake: a hit there is already known."""
-    pairs = {(parent.get("file"), parent.get("line"))}
-    kind = parent.get(KIND_OF_MISTAKE_FIELD)
-    for place in (kind.get("places") if isinstance(kind, dict) and isinstance(kind.get("places"), list) else ()):
-        if isinstance(place, dict):
-            pairs.add((place.get("file"), place.get("line")))
-    return pairs
-
-
 def _sweep_row(records, sweep_id):
     for record in records:
         if isinstance(record, dict) and record.get("sweepId") == sweep_id:
@@ -5093,42 +5083,29 @@ def _fold_sweep(state, config, artifact, session_dir=None):
                       "cover those files" % (sweep_id, ", ".join(str(m) for m in missing)))
         if parent is None:
             continue  # the finding this sweep searched for is gone from the round: there is nothing to attribute a hit to
-        places = _sweep_place_pairs(parent)
-        seen = set()
-        for hit in hits:
-            file = hit.get("file") if isinstance(hit, dict) else None
-            line = hit.get("line") if isinstance(hit, dict) else None
-            # the PR body is never searched: a searcher reads the repository, and `_diff_scope_ok` would call a body citation inside
-            # axis: a hit citing the PR body is dropped and counted, never staged — see bite-proof record c4_wo2a_sweep
-            if (not (isinstance(file, str) and file.strip()) or isinstance(line, bool) or not isinstance(line, int)
-                    or file == pr_body_stage.CITATION):
-                row["dropped"] += 1
+        # the drop, de-duplication and covered steps are the shared classifier's; the scope test is this round's touched lines
+        sorted_hits = session_contract.classify_sweep_hits(
+            hits, parent, lambda hit: _diff_scope_ok({"file": hit["file"], "line": hit["line"]}, touched))
+        row["dropped"] += sorted_hits["dropped"]
+        row["covered"] += sorted_hits["covered"]
+        for hit in sorted_hits["inside"]:
+            finding = session_contract.sweep_hit_finding(hit, sweep, parent)
+            key = _finding_identity_key(finding)
+            if key in known or key in hit_keys:
+                row["covered"] += 1  # already a finding of this round: it is not raised twice
                 continue
-            if (file, line) in seen:
-                continue
-            seen.add((file, line))
-            # axis: a hit at the parent's own place or one of its places is already known, so it is neither a finding nor an outside hit — see bite-proof record c4_wo2a_sweep
-            if (file, line) in places:
-                row["covered"] += 1
-                continue
+            staged.append(finding)
+            hit_keys.append(key)
+            row["inside"] += 1
+        for hit in sorted_hits["outside"]:
             title = session_contract.sweep_hit_title(hit, parent)
-            if _diff_scope_ok({"file": file, "line": line}, touched):
-                finding = session_contract.sweep_hit_finding(hit, sweep, parent)
-                key = _finding_identity_key(finding)
-                if key in known or key in hit_keys:
-                    row["covered"] += 1  # already a finding of this round: it is not raised twice
-                    continue
-                staged.append(finding)
-                hit_keys.append(key)
-                row["inside"] += 1
-            else:
-                entries = state.get("outsideThisPR")
-                if not isinstance(entries, list):
-                    entries = state["outsideThisPR"] = []  # a value that is not a list cannot hold a hit: replace it
-                # axis: an outside hit lands under its sweep's own entry, never a reviewer's — see bite-proof record c4_wo2a_sweep
-                session_contract.add_sweep_hit(entries, sweep_id, session_contract.SWEEP_SOURCE_NAME, file, line, title)
-                _note_outside_round(state, title, file, line, state["round"])
-                row["outside"] += 1
+            entries = state.get("outsideThisPR")
+            if not isinstance(entries, list):
+                entries = state["outsideThisPR"] = []  # a value that is not a list cannot hold a hit: replace it
+            # axis: an outside hit lands under its sweep's own entry, never a reviewer's — see bite-proof record c4_wo2a_sweep
+            session_contract.add_sweep_hit(entries, sweep_id, session_contract.SWEEP_SOURCE_NAME, hit["file"], hit["line"], title)
+            _note_outside_round(state, title, hit["file"], hit["line"], state["round"])
+            row["outside"] += 1
         _decision(state, "sweep-folded", "%s: %d inside, %d outside, %d covered, %d dropped"
                   % (sweep_id, row["inside"], row["outside"], row["covered"], row["dropped"]))
     _record_round(state, SWEEPS_FIELD, records)
@@ -5164,6 +5141,9 @@ def _withhold_ungraded_sweep_hits(state, survivors):
         row = _sweep_row(records, mark.get("sweepId")) if isinstance(mark, dict) and isinstance(records, list) else None
         if row is not None:
             row["ungraded"] = row.get("ungraded", 0) + 1
+            # axis: the withheld hit's identity key is kept on its sweep row so the record can give the reason it stayed open — see bite-proof record c4_wo2b_recovery
+            keys = row["ungradedKeys"] = row["ungradedKeys"] if isinstance(row.get("ungradedKeys"), list) else []
+            keys.append(_finding_identity_key(survivor))
         _decision(state, "sweep-hit-ungraded", "%s (%s:%s): %s" % (
             survivor.get("title"), survivor.get("file"), survivor.get("line"), SWEEP_UNGRADED_REASON))
     return kept

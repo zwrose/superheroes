@@ -166,6 +166,9 @@ no order is emitted, the round records `secondTestUnseatable`, and the held find
 to the second pass with no new test. A held finding the seat returns no test for goes to the
 second pass with its first test only, listed under the round's `secondTest.noTest`.
 
+Sweep hits on touched lines (see `dispatch-sweep` in [the round driver](round-driver.md#actions-and-payloads))
+are graded in one more verifier pass before synthesis, and a hit left without a grade stays open and is never fixed.
+
 ## Synthesis merge + rank
 
 After verification, dispatch **one** synthesis judge at `model: $SYNTH_MODEL` (`--role

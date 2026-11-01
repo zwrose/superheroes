@@ -33,6 +33,7 @@ import countable_lines  # noqa: E402
 import decision_kinds  # noqa: E402
 import diff_scope  # noqa: E402
 import dispatch_outcome  # noqa: E402
+import payload_contracts  # noqa: E402
 import pr_body_stage  # noqa: E402
 import receipt_disclosures  # noqa: E402
 import record_paths  # noqa: E402
@@ -58,7 +59,9 @@ HAND_SUBMIT_NOTE = "the session was driven by hand submit; reviewers' raw output
 ABANDONED_CHECKED = "the review loop was abandoned before it ended: %s"
 UNFOLDED_FINDINGS_CHECKED = "findings in seat results that were recorded but never folded are listed as open findings"
 UNFOLDED_OPEN = "recorded by a reviewer but never taken into the loop before it was closed"
-NO_SEAT_RESULT = "the session recorded no seat result or seat status"
+SWEEP_UNGRADED_OPEN = "a repository-sweep hit the verifier did not grade"  # the driver's reason for withholding it
+SWEEP_UNFOLDED_OPEN = "found by a repository sweep that never reached the verifier before the loop was closed"
+NO_SEAT_RESULT ="the session recorded no seat result or seat status"
 RETURNING_ROUND_KIND = "returning"  # round_driver.RETURNING_KIND: the driver's `roundKind` for a returning round (not imported here)
 SKIPPED_EMPTY_SURFACE = "skipped-empty-surface"  # the driver's `scopedFinder` value for an empty change
 CARRIED_WHY = ("the change since the last reviewed commit %s held nothing countable — catch-up merges and proven copies "
@@ -142,6 +145,22 @@ def _slots(rows):
         if r.get("outcome") != "recorded" or not (isinstance(seat, str) and isinstance(phase, str)):
             continue  # a row naming no seat or phase names no reviewer
         if sc.run_kind_for_phase(phase) != sc.RUN_KIND_REVIEW or not (_int(rnd) and _int(att)):
+            continue
+        key = (phase, rnd, seat, r.get("occurrence", 0))
+        if key not in out or att >= out[key][0]:
+            out[key] = (att, r)
+    return out
+
+
+def _search_slots(rows):
+    """Active searcher slots, shaped like `_slots` but for the search run kind only. Only sweep recovery reads them:
+    a searcher is never a reviewer, so no reviewer row is built from one."""
+    out = {}
+    for r in rows:
+        phase, seat, rnd, att = r.get("phase"), r.get("seat"), r.get("round"), r.get("attempt")
+        if r.get("outcome") != "recorded" or not (isinstance(seat, str) and isinstance(phase, str)):
+            continue
+        if sc.run_kind_for_phase(phase) != sc.RUN_KIND_SEARCH or not (_int(rnd) and _int(att)):
             continue
         key = (phase, rnd, seat, r.get("occurrence", 0))
         if key not in out or att >= out[key][0]:
@@ -432,21 +451,37 @@ def _decided_by(rep, outcome):
     return held if outcome is not None and isinstance(held, dict) else None
 
 
-def _decide(own, by_key, rulings, exempt=None):
+def _ungraded_keys(state):
+    """The identity keys of the sweep hits the driver withheld ungraded: every sweep row's `ungradedKeys`, in every
+    round. A row without the list (a session from before it was kept) holds none."""
+    out = set()
+    for rec in (state.get("rounds") or {}).values() if isinstance(state.get("rounds"), dict) else ():
+        rows = rec.get("sweeps") if isinstance(rec, dict) else None
+        for row in rows if isinstance(rows, list) else ():
+            keys = row.get("ungradedKeys") if isinstance(row, dict) else None
+            if isinstance(keys, list):
+                out.update(k for k in keys if isinstance(k, str))
+    return out
+
+
+def _decide(own, by_key, rulings, exempt=None, ungraded=frozenset()):
     """(outcome, reason, representative): undecided unless the ledger shows a disposition newer than the finding.
 
     `exempt` maps a finding key to the driver's `ruled-out-of-scope` break-it row: a fixed finding named there
-    was ruled out of scope and only cleared by the audit, so it reads as the ruling, never as fixed."""
+    was ruled out of scope and only cleared by the audit, so it reads as the ruling, never as fixed. `ungraded` is
+    the set of sweep-hit keys the verifier left ungraded: such a finding that is still open says why."""
+    # axis: a sweep hit the verifier did not grade reads open with that reason, not the generic one — see bite-proof record c4_wo2b_recovery
+    still_open = SWEEP_UNGRADED_OPEN if sc.finding_identity_key(own) in ungraded else STILL_OPEN
     rep = sc.resolve_merged_into_entry(own, by_key)
     if not isinstance(rep, dict):
-        return None, STILL_OPEN, None
+        return None, still_open, None
     kept = rep.get("repeatKept")
     # axis: a kept repeat reads the earlier finding's outcome and reason, whatever its own disposition says; a malformed mark is ignored — see bite-proof record c1l8_wo_b_record_repeats
     if isinstance(kept, dict) and kept.get("outcome") in review_findings_schema.OUTCOMES and _text(kept.get("reason")):
         return kept["outcome"], kept["reason"], rep
     disp, seq, raised = rep.get("disposition"), rep.get(sc.DISPOSITION_SEQ_FIELD), own.get(sc.RAISED_SEQ_FIELD)
     if disp not in sc.DISPOSITIONS or not (_int(seq) and _int(raised) and seq > raised):  # a stale disposition decides nothing
-        return None, STILL_OPEN, rep
+        return None, still_open, rep
     held = (exempt or {}).get(sc.finding_identity_key(rep))
     # axis: a fixed finding the driver ruled out of scope is the ruling in the record, never "fixed and audited" — see bite-proof record wo_a_2072_ruled_exempt
     if disp == "fixed" and isinstance(held, dict):
@@ -628,6 +663,7 @@ def _findings_and_merges(state):
     The map is the ledger's own resolved merge, the one `_decide` follows; a member whose merge does not
     resolve is not in it."""
     by_key, rulings, exempt = decision_inputs(state)
+    ungraded = _ungraded_keys(state)
     live = state.get("findings") or []
     if not isinstance(live, list) or not all(isinstance(f, dict) for f in live):
         raise Refusal(UNREADABLE, "findings")
@@ -636,7 +672,8 @@ def _findings_and_merges(state):
     for key, row in content.items():
         if row.get("summaryEntry"):
             continue
-        outcome, reason, rep = (None, STILL_OPEN, None) if key not in by_key else _decide(by_key[key], by_key, rulings, exempt)
+        outcome, reason, rep = ((None, SWEEP_UNGRADED_OPEN if key in ungraded else STILL_OPEN, None) if key not in by_key
+                                else _decide(by_key[key], by_key, rulings, exempt, ungraded))
         if rep is not None and sc.finding_identity_key(rep) != key:
             merged[key] = sc.finding_identity_key(rep)
         if rep is not None and reason and sc.finding_identity_key(rep) != key:
@@ -866,15 +903,19 @@ def _outside_the_round(f, scope):
     return line if ok and line not in (scope.get(file) or ()) else None
 
 
-def _with_recovered_outside(outside, recovered):
+def _with_recovered_outside(outside, recovered, swept=()):
     """The state's outside list with each recovered hit `(source name, title, file, line)` added by
     `session_contract.add_outside_hit`, the insertion policy `round_driver._record_outside` shares: under the entry of
     its source name (a new name opens an entry at the end; a sweep entry is never a target), numbered `O-<n>` with
-    n = 1 + every hit already listed, and never twice."""
+    n = 1 + every hit already listed, and never twice. Each recovered sweep hit `(sweep id, file, line, title)` is
+    added by `session_contract.add_sweep_hit`, under its own sweep's entry, after the reviewer hits."""
     entries = [{**e, "hits": list(e["hits"]) if isinstance(e.get("hits"), list) else []} if isinstance(e, dict) else e
                for e in (outside if isinstance(outside, list) else [])]
     for name, title, file, line in recovered:
         sc.add_outside_hit(entries, name, file, line, title)
+    for sweep_id, file, line, title in swept:
+        # axis: a recovered sweep hit lands under its sweep's own entry, never a reviewer's — see bite-proof record c4_wo2b_recovery
+        sc.add_sweep_hit(entries, sweep_id, sc.SWEEP_SOURCE_NAME, file, line, title)
     return entries
 
 
@@ -957,6 +998,67 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
     return out
 
 
+def _sweep_of_seat(seat):
+    """`(sweep id, part)` of a searcher seat key `searcher:<sweepId>:<part>`, else None."""
+    prefix = payload_contracts.SEAT_SEARCHER_PREFIX
+    if not (isinstance(seat, str) and seat.startswith(prefix)):
+        return None
+    sweep_id, _, part = seat[len(prefix):].rpartition(":")
+    return (sweep_id, int(part)) if sweep_id and part.isascii() and part.isdecimal() else None
+
+
+def _unswept(session_dir, rows, state, findings):
+    """`(outside, inside)` for the repository sweeps that stored searcher results but never folded: `outside` is
+    `[(sweep id, file, line, title)]` for the caller to add under each sweep's own entry, `inside` is one open finding
+    row for each hit on a line the round touched that is not already listed. Each hit is sorted by
+    `session_contract.classify_sweep_hits`, the classifier the driver's fold uses, so a covered, repeated or malformed hit
+    recovers nothing. Only a sweep still in the state's `_sweepPending` is recovered; the parent is that row, filled from
+    the `_sweepCarry` row with the same finding key (which holds the severity and the kind of mistake's places)."""
+    pending = state.get("_sweepPending")
+    if not isinstance(pending, list):
+        return [], []
+    carry = [f for f in state.get("_sweepCarry") or [] if isinstance(f, dict)] if isinstance(state.get("_sweepCarry"), list) else []
+    stored = {}  # sweep id -> {part: (seat, round, [hit])}
+    # axis: a stored searcher result is read from the search slots, which `_slots` never holds — see bite-proof record c4_wo2b_recovery
+    for key, (att, _) in _search_slots(rows).items():
+        found = _sweep_of_seat(key[2])
+        env = _envelope(_path(session_dir, key, att))
+        payload = env.get("payload") if isinstance(env, dict) else None
+        hits = payload.get("hits") if isinstance(payload, dict) else None
+        if found is not None and isinstance(hits, list):
+            stored.setdefault(found[0], {})[found[1]] = (key[2], key[1], hits)
+    outside, inside, listed = [], [], {f["findingKey"] for f in findings}
+    for sweep in pending:
+        # axis: a sweep no longer pending was folded and its hits are in the state, so it recovers nothing — see bite-proof record c4_wo2b_recovery
+        if not (isinstance(sweep, dict) and sweep.get("sweepId") in stored):
+            continue
+        parts = stored[sweep["sweepId"]]
+        seat_of, hits = {}, []
+        for part in sorted(parts):
+            seat, _, held = parts[part]
+            seat_of.update({id(h): seat for h in held})
+            hits += held
+        carried = next((f for f in carry if sc.finding_identity_key(f) == sweep.get("findingKey")), {})
+        parent = {**carried, **sweep}  # the pending row names the sweep; the carried row adds what the pending row lacks
+        scope = _round_scope(session_dir, max(r for _, r, _ in parts.values()), state.get("round") if _int(state.get("round")) else None,
+                             state.get("reviewedDiff"))
+        # axis: with no readable scope no hit is known to be on a touched line, so every hit is recovered outside and none as open work (the driver runs no sweep without the diff) — see bite-proof record c4_wo2b_recovery
+        sorted_hits = sc.classify_sweep_hits(
+            hits, parent, lambda hit: scope is not None and _outside_the_round(hit, scope) is None)
+        outside += [(sweep["sweepId"], h["file"], h["line"], sc.sweep_hit_title(h, parent)) for h in sorted_hits["outside"]]
+        for hit in sorted_hits["inside"]:
+            finding = sc.sweep_hit_finding(hit, sweep, parent)
+            fkey = sc.finding_identity_key(finding)
+            if fkey in listed:
+                continue
+            listed.add(fkey)
+            inside.append({"id": fkey, "findingKey": fkey, "title": finding["title"], "severity": finding.get("severity"),
+                           "file": finding["file"], "line": finding["line"], "consequence": finding.get("consequence"),
+                           "body": finding["body"], "reviewer": seat_of.get(id(hit)), "outcome": None,
+                           "reason": SWEEP_UNFOLDED_OPEN, "decidedBy": None})
+    return outside, inside
+
+
 def _wider_rounds(rounds):
     """``[{round, why}]`` for every round whose recorded focus is wider, in round order."""
     out = []
@@ -1005,6 +1107,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings, merged = _findings_and_merges(state)
     recovered_outside = []  # outside hits found in stored seat results the loop never folded (abandoned sessions only)
+    swept_outside = []  # the same for a repository sweep's stored hits: `(sweep id, file, line, title)`
     if abandoned is not None:  # the loop never took these in: each is listed open rather than only in a raw file
         # axis: in an abandoned session a finding recorded in a stored seat result but never folded is listed open — see bite-proof record c1l1_wo_b_session_seam
         ledger, _ = sc.read_disposition_ledger(state, required=False)
@@ -1018,6 +1121,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                               state.get("round") if _int(state.get("round")) else None,
                               state.get("outsideThisPR"), state.get("_outsideRounds"), state.get("reviewedDiff"),
                               recovered_outside)
+        swept_outside, swept_inside = _unswept(session_dir, rows, state, findings)  # sweeps whose results never folded
+        findings += swept_inside
     carry = None  # the lastReviewed commit of an empty returning round: its record may carry the earlier review's reviewers
     if by_hand:  # a hand submit journals no seat: the rounds' seat status is the only record of who ran
         try:
@@ -1087,8 +1192,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                        **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {})},
             **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
             **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
-            **({"outsideThisPR": _with_recovered_outside(state.get("outsideThisPR"), recovered_outside)}
-               if recovered_outside else {}),
+            **({"outsideThisPR": _with_recovered_outside(state.get("outsideThisPR"), recovered_outside, swept_outside)}
+               if recovered_outside or swept_outside else {}),
             **({"provenCopies": proven_copies} if proven_copies else {}),
             "reviewers": reviewers, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),

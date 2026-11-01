@@ -85,6 +85,7 @@ __all__ = (
     "RUN_KIND_SEARCH",
     "RUN_KIND_VALUES",
     "add_sweep_hit",
+    "classify_sweep_hits",
     "sweep_hit_finding",
     "sweep_hit_title",
     "SWEEP_SOURCE_NAME",
@@ -564,6 +565,40 @@ def add_sweep_hit(entries, sweep_id, name, file, line, title):
         return False
     target["hits"].append(hit)
     return True
+
+
+def classify_sweep_hits(hits, parent, scope_ok):
+    """Sort the hits of every part of one sweep (in part order) into `{"inside": [hit], "outside": [hit], "covered": n,
+    "dropped": n}`: the one home of the per-hit steps for the driver's fold and the abandoned-session writer's recovery.
+    A hit is dropped when its file is not a non-blank string, its line is not an integer, or it cites the PR body; the
+    same place found twice is one hit (the first is kept); a hit at the parent's place or one of its kind of mistake's
+    places is covered; any other hit is inside when `scope_ok(hit)` says its line is one the PR touched, else outside."""
+    import pr_body_stage  # lazy: pr_body_stage imports modules that import this one
+    places = {(parent.get("file"), parent.get("line"))}
+    kind = parent.get("kindOfMistake")
+    for place in (kind.get("places") if isinstance(kind, dict) and isinstance(kind.get("places"), list) else ()):
+        if isinstance(place, dict):
+            places.add((place.get("file"), place.get("line")))
+    out = {"inside": [], "outside": [], "covered": 0, "dropped": 0}
+    seen = set()
+    for hit in hits:
+        file = hit.get("file") if isinstance(hit, dict) else None
+        line = hit.get("line") if isinstance(hit, dict) else None
+        # axis: a hit citing the PR body is dropped and counted, never classified — see bite-proof record c4_wo2b_recovery
+        if (not (isinstance(file, str) and file.strip()) or isinstance(line, bool) or not isinstance(line, int)
+                or file == pr_body_stage.CITATION):
+            out["dropped"] += 1
+            continue
+        # axis: the same place found twice is one hit, the first kept — see bite-proof record c4_wo2b_recovery
+        if (file, line) in seen:
+            continue
+        seen.add((file, line))
+        # axis: a hit at the parent's own place or one of its places is covered, neither inside nor outside — see bite-proof record c4_wo2b_recovery
+        if (file, line) in places:
+            out["covered"] += 1
+            continue
+        out["inside" if scope_ok(hit) else "outside"].append(hit)
+    return out
 
 
 def sweep_hit_title(hit, parent):

@@ -734,3 +734,13 @@ computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats carries 
   missing, malformed or maker-family seat, and unusable liveness evidence still fails closed to a
   violation for any seat that does name a maker family. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.
+
+**Dispatching searchers.** The `dispatch-sweep` phase's seats (`searcher:<sweepId>:<part>`) are native host
+subagents, each seated at the registry's mechanical cell, which the payload's `searcher` names. They are
+outside the review independence rule because they search a list of files for one described mistake and do not
+judge: a searcher is never a reviewer, never appears in the record's reviewers, and needs no seat-map entry.
+The orchestrator passes each searcher the order and its part's input as given and never edits the search
+description. A searcher's result goes back per seat, `{hits: [{file, line, what}]}`, each seat in the one
+artifact of the phase; a seat that returns nothing usable is left out of the artifact, so the fold records it
+missing, and is never submitted as an empty list. See [the `dispatch-sweep` row](round-driver.md#actions-and-payloads)
+for the payload and how the hits are routed.

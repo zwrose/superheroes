@@ -455,7 +455,7 @@ The class a finding belongs to, in a few plain words, such as "a retry with no c
 
 ### Search description
 
-What the independent reviewer that raised a finding writes so the mistake can be found elsewhere in the repository: the kind of mistake, what it looks like in code, and short examples. It is never written by the build session. It is used for one repository-wide search when the finding is confirmed as Important or Critical. The rule is in [the base rubric](review-base.md) (Findings output format).
+What the independent reviewer that raised a finding writes so the mistake can be found elsewhere in the repository: the kind of mistake, what it looks like in code, and short examples. It is never written by the build session. It is used for one repository-wide search when the finding is confirmed as Important or Critical. The rule is in [the base rubric](review-base.md) (Findings output format). The repository-wide search runs once per such finding, by cheap searchers over the whole repository; a hit on a touched line goes to the verifier before any fix, and a hit elsewhere goes on the outside list under that search's own entry.
 
 ## Cloud builds
 
