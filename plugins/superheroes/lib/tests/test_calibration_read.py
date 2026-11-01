@@ -199,6 +199,13 @@ def test_mcp_metadata_tool_naming_the_path_is_unknown_and_read_file_is_read(cali
     assert _reads(CR.read_states("codex", mcp("read_file"), calib.stamp))["core"] == "read"
 
 
+def test_unsupported_mcp_tool_naming_the_basename_relatively_is_unknown(calib):
+    stdout = _codex_stream({"type": "item.completed", "item": {
+        "id": "b", "type": "mcp_tool_call", "tool": "load_file", "arguments": {"path": "./core.md"},
+        "status": "completed", "error": None}})
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
+
+
 def _truncated_stream():
     return _codex_stream(_codex_cmd("a", "git status --short", exit_code=0))
 

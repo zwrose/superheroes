@@ -502,7 +502,8 @@ def _names_basename(call, basename):
     an absolute path to some other directory is not."""
     def names(word):
         return not word.startswith("/") and os.path.basename(word) == basename
-    return (any(isinstance(p, str) and os.path.basename(p) == basename for p in call["paths"])
+    return (any(isinstance(p, str) and os.path.basename(p) == basename
+                for p in (*call["paths"], *call["named"]))
             or any(isinstance(t, str) and any(names(w) for w in _WORD_RE.findall(t)) for t in call["texts"]))
 
 
