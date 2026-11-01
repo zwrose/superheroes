@@ -40,6 +40,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import build_lane  # noqa: E402
+import calibration_vocab  # noqa: E402
 import cloud_pass  # noqa: E402
 import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
@@ -51,6 +52,7 @@ import pr_comment  # noqa: E402
 import returning_review  # noqa: E402
 import review_diff_bytes  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import review_seats  # noqa: E402
 import round_phases  # noqa: E402
 import sanitized_view  # noqa: E402
 import seat_map as seat_map_module  # noqa: E402
@@ -1138,9 +1140,40 @@ def _carried_row(r, carry):
     return None, "no matching covering reviewer in the earlier record"
 
 
+_CAL_KEYS = ("label", "file", "sha256", "policyVersion", "read")
+_CAL_LABELS = calibration_vocab.LABELS
+_CAL_READ_STATES = calibration_vocab.READ_STATES
+_CAL_FILE = re.compile(r"[\w.\-]{1,100}")
+_CAL_POLICY = re.compile(r"[\w.\-+:]{1,64}")
+_CAL_SHA = re.compile(r"[0-9a-f]{64}")
+
+
+def _calibration_entry(e):
+    """True when `e` is one calibration entry of the contract: the five keys, each of the right type."""
+    if not isinstance(e, dict) or not all(k in e for k in _CAL_KEYS):
+        return False
+    file, sha, policy = e["file"], e["sha256"], e["policyVersion"]
+    return (isinstance(e["label"], str) and e["label"] in _CAL_LABELS
+            and isinstance(file, str) and _CAL_FILE.fullmatch(file) is not None
+            and (sha is None or (isinstance(sha, str) and _CAL_SHA.fullmatch(sha) is not None))
+            and (policy is None or (isinstance(policy, str) and _CAL_POLICY.fullmatch(policy) is not None))
+            and isinstance(e["read"], str) and e["read"] in _CAL_READ_STATES)
+
+
+def _valid_calibration(value):
+    """The calibration list as it goes on a row: a copy holding only the well-formed entries, in order; None when `value`
+    is no list, or is a non-empty list with no well-formed entry (a fact that cannot be read is no fact, never "none
+    named"). A malformed entry is dropped and never raises."""
+    if not isinstance(value, list):
+        return None
+    kept = [{k: e[k] for k in _CAL_KEYS} for e in value if _calibration_entry(e)]
+    return kept if kept or not value else None
+
+
 def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_value=None, maker_families=frozenset(),
               carry=None):
     out = {k: r.get(k) for k in ("name", "vendor", "model", "planned", "runDir")}
+    carried_calibration = None
     out["family"] = _family(r["vendor"], r["model"])
     if "readParts" in r:
         out["readParts"] = r["readParts"]
@@ -1155,6 +1188,7 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
         if held is not None:
             out.update(ran=held["ran"], family=held.get("family"), carried={"commit": r["carriedFrom"]})
             carried_reading = held.get("reading")
+            carried_calibration = held.get("calibrationRead")
             named, target = True, r["carriedFrom"]
         else:
             out.update(ran="not-run", runNote=why)
@@ -1249,7 +1283,60 @@ def _reviewer(r, rd, dis, head, shared=frozenset(), reported_commit=None, lane_v
     wall = obs.get("wallSeconds")
     out["cost"] = {"tokens": obs.get("tokens") if _is_int(obs.get("tokens")) else None,
                    "minutes": round(wall / 60, 1) if isinstance(wall, (int, float)) and not isinstance(wall, bool) else None}
+    # The calibration read is credited with the row, after every demotion: only a row credited from an engine record
+    # carries what that record says, and a carried row takes what the earlier record's held row carried.
+    if out["ran"] == RAN_ENGINE_RECORD and "carried" not in out:
+        calibration = _valid_calibration(obs.get("calibration"))
+    elif "carried" in out:
+        calibration = _valid_calibration(carried_calibration)
+    else:
+        calibration = None
+    if calibration is not None:
+        out["calibrationRead"] = calibration
     return out
+
+
+def _is_test_lens_row(v):
+    """True for a reviewer row of the test lens: a seat with no phase stem whose lens is test-role (the mapping `_roles` uses)."""
+    seat = _seat_round(v["name"])[0]
+    return isinstance(seat, str) and not any(seat.startswith(prefix) for prefix in _STEM_ROLE) \
+        and round_phases.seat_lens(seat) == "test-role"
+
+
+def _test_lens(reviewers, findings, final_sha):
+    """The record's test-lens part: whether a test-role reviewer was listed, whether one ran, on which commit, whether
+    that covers the final commit, what calibration it read, and how many findings the test lens raised. The chosen row
+    is the last ran test-lens row that covers the final commit, else the last ran one, else none."""
+    rows = [v for v in reviewers if _is_test_lens_row(v)]
+    if not rows:
+        return {"listed": False}
+    ran = [v for v in rows if v["ran"] != "not-run"]
+    covering = [v for v in ran if v["coversFinalCommit"] is True]
+    # axis: the chosen row is the last one covering the final commit, not the first row that ran — see bite-proof record wo_b_2311_record_calibration
+    chosen = (covering or ran)[-1] if ran else None
+    # axis: a finding carries its dimension label (`Test`, a merged `Code, Test`) or bare seat, never the row's `(round n)` name
+    identities = set()
+    for v in rows:
+        seat = _seat_round(v["name"])[0]
+        lens = round_phases.seat_lens(seat)
+        identities.update((v["name"], seat, lens, review_seats.dimension_label(lens)))
+    identities.discard(None)
+    part = {"listed": True, "ran": bool(ran),
+            "ranFrom": chosen["ran"] if chosen else None,
+            "row": chosen["name"] if chosen else None,
+            "commit": (chosen["commit"] or final_sha) if chosen else None,
+            "coversFinalCommit": bool(chosen and chosen["coversFinalCommit"]),
+            "calibrationRead": [dict(e) for e in chosen["calibrationRead"]] if chosen and "calibrationRead" in chosen else None,
+            "findings": sum(1 for f in findings if _raised_by(f.get("reviewer"), identities))}
+    # a carried row covers the final commit without having run on it: the part says so, and the line reads "carried from"
+    if chosen and isinstance(chosen.get("carried"), dict):
+        part["carried"] = {"commit": chosen["carried"].get("commit")}
+    return part
+
+
+def _raised_by(reviewer, identities):
+    """True when a finding's reviewer text (one identity, or a merged `, `-joined list) names one of ``identities``."""
+    return isinstance(reviewer, str) and any(part.strip() in identities for part in reviewer.split(","))
 
 
 _OPAQUE_KEY = "rr1:"
@@ -1621,7 +1708,10 @@ def build_record(account, readers, prior=None, history=()):
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "withheldFromReviewers": withheld,
         **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
-        "ci": ci, "reviewers": reviewers, "findings": findings, "decisionRechecks": rechecks,
+        "ci": ci, "reviewers": reviewers,
+        # axis: the test-lens part is computed from the credited reviewer rows and the record's findings, never from the account's own claim — see bite-proof record wo_b_2311_record_calibration
+        "testLens": _test_lens(reviewers, findings, fc["sha"]),
+        "findings": findings, "decisionRechecks": rechecks,
         "carriedRechecks": carried_rows,
         "refused": a["refused"], **({"commandRefusals": a["commandRefusals"]} if a["commandRefusals"] else {}),
         # axis: a part shows in the record exactly when the account carries it — see bite-proof record c1l1_wo_a_record_seam
@@ -1903,6 +1993,29 @@ def _seat_round(name):
     return (m.group(1), int(m.group(2))) if m else (name, None)
 
 
+def _calibration_words(row):
+    """What a reviewer row's line says about its calibration read; None for a row that did not run. A missing
+    `calibrationRead` key and a None value are the same case."""
+    # axis: an engine-record row with no calibration fact reads unmeasured, never "did not read"; a session-reported row never claims a read — see bite-proof record wo_b_2311_record_calibration
+    if row.get("ran") == "not-run":
+        return None
+    if row.get("ran") == "reported-by-session":
+        return "calibration read: not shown (no engine record)"
+    files = _valid_calibration(row.get("calibrationRead"))
+    if files is None:
+        return "calibration read: unmeasured"
+    if not files:
+        return "calibration read: none named in its order"
+    parts = []
+    for state, lead in (("read", "read its calibration: "), ("not-read", "did not read "),
+                        ("unknown", "calibration read unknown for ")):
+        named = [e["file"] for e in files if e["read"] == state]
+        if named:
+            parts.append(lead + ", ".join(named))
+    policies = list(dict.fromkeys(e["policyVersion"] for e in files if e["policyVersion"] is not None))
+    return "; ".join(parts) + (f" (policy {', '.join(policies)})" if policies else "")
+
+
 def _row_bullet(v, final_sha):
     """The bullet for one reviewer row that carries no round suffix."""
     label = {"engine-record": "ran (engine record)", "reported-by-session": f"ran ({SESSION})"}.get(
@@ -1914,11 +2027,13 @@ def _row_bullet(v, final_sha):
         label += f" on {v['commit'][:7]}"
     word = v.get("ownerWord")
     read = _read_words([v])
+    calibration = _calibration_words(v)
     return (f"- {v['name']}: {label}"
             + ("; not independent of the makers" if v.get("notIndependent") else "")
             + (f" (owner's word: {word['where']})" if v.get("notIndependent") and isinstance(word, dict)
                and isinstance(word.get("where"), str) and word["where"] else "")
-            + f"; findings: {v['findingsCoverage']}" + (f"; {read}" if read else ""))
+            + f"; findings: {v['findingsCoverage']}" + (f"; {read}" if read else "")
+            + (f"; {calibration}" if calibration else ""))
 
 
 def _read_words(rows):
@@ -1972,7 +2087,10 @@ def _seat_bullet(seat, rows, final_sha):
     said.append("findings: " + (coverage[0] if len(coverage) == 1
                                 else "; ".join(f"round {n}: {v['findingsCoverage']}" for v, n in rows)))
     read = _read_words([v for v, _ in rows])
-    return f"- {seat}: " + "; ".join(said + ([read] if read else []))
+    words = [(n, w) for v, n in rows for w in [_calibration_words(v)] if w]
+    distinct = list(dict.fromkeys(w for _, w in words))
+    calibration = (distinct[0] if len(distinct) == 1 else "; ".join(f"round {n}: {w}" for n, w in words)) if words else None
+    return f"- {seat}: " + "; ".join(said + ([read] if read else []) + ([calibration] if calibration else []))
 
 
 def _seat_groups(r):
@@ -2228,6 +2346,38 @@ def _transit_line(damage, level):
     return f"Transit damage: redacted text in {count}, so that text is lost: " + ", ".join(str(f) for f in fields) + "."
 
 
+def _test_lens_line(r):
+    """The one `Test lens:` line. A record with no usable `testLens` part reads unmeasured."""
+    part = r.get("testLens")
+    # axis: a record written before the test-lens part reads unmeasured, never "did not run" — see bite-proof record wo_b_2311_record_calibration
+    if not isinstance(part, dict):
+        return "Test lens: unmeasured (the record predates the test-lens part)."
+    if part.get("listed") is not True:
+        return "Test lens: no test-role reviewer was listed."
+    if part.get("ran") is not True:
+        return "Test lens: did not run."
+    # the calibration words are the chosen row's own, so the source label and the words describe the same row
+    row = next((v for v in reversed(r["reviewers"]) if v["name"] == part.get("row") and v["ran"] != "not-run"),
+               {"ran": part.get("ranFrom"), "calibrationRead": part.get("calibrationRead")})
+    source = "engine record" if part.get("ranFrom") == "engine-record" else SESSION
+    findings = part.get("findings")
+    carried = part.get("carried")
+    if isinstance(carried, dict):
+        # a carried row did not run in this record's round: say where it ran and that the earlier review is what covers the final commit
+        head = (f"Test lens: carried from the earlier review of {_short(carried.get('commit') or part.get('commit'))} "
+                f"({source}), not run in this round"
+                + ("; it covers the final commit" if part.get("coversFinalCommit") is True
+                   else "; it does not cover the final commit"))
+    else:
+        head = (f"Test lens: ran on {_short(part.get('commit'))} ({source})"
+                + (", the final commit" if part.get("coversFinalCommit") is True else ", not the final commit"))
+    return (head
+            + f"; {_calibration_words(row) or 'calibration read: unmeasured'}"
+            + (f"; {_plural(findings, 'finding', 'findings')} raised" if isinstance(findings, int)
+               and not isinstance(findings, bool) else "")
+            + ".")
+
+
 def _summary(r, level):
     """The summary text. Level 0 lists everything; level 1 turns each unbounded list (what is left, who ran,
     which findings wait, which were not taken) into a count; level 2 also turns the per-seat reviewer bullets
@@ -2306,6 +2456,7 @@ def _summary(r, level):
         *([refusals_line] if refusals_line else []),
         *([_not_checked_line(r["earlierRecordsNotChecked"], compact)] if r.get("earlierRecordsNotChecked") else []),
         *who,
+        _test_lens_line(r),
         # axis: the shed line is present whenever a reviewer step ran — see bite-proof record wo_d_1795_reviewer-shed
         *([_reviewer_shed_line(r)] if r.get("reviewerShed") else []),
         *wider_lines,

@@ -67,6 +67,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **At each gardening pass the advisor appends the window's review-loop measures row and shows it in the gardening record.** See [Gardening pass: the review-loop measures row](#gardening-pass-the-review-loop-measures-row).
 
+- **After switching.** **Each external reviewer's line in the review record now shows whether it read each calibration file its order named, with each file's hash and policy version as they stood at dispatch, and the record has a new `Test lens:` line.** Nothing is owed: records and runs written before this release read unmeasured, never "did not read". See [Review: each reviewer's line shows its calibration read](#review-each-reviewers-line-shows-its-calibration-read).
+
 - **After switching.** **Nothing is owed: builders are given three field rules — a command refused only for its form may be re-issued once in plain form, a headless lane never ends a turn with work still running, and a delete never rides a compound command.** See [Builders: three field rules](#builders-three-field-rules).
 
 ### Builders: three field rules
@@ -81,6 +83,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **In the gardening record.** Paste what `review_measures.py render --cwd <root>` prints: the window's row as a table and a chart across windows. The seating check's row file is the row's `seatingRow`.
 - **Nothing reads it between passes.** A measure whose input is missing reads unmeasured with its reason, never zero, and no check fails on any value. A window before cap choices were recorded reads that measure unmeasured.
 - **Reviewer cost reads unmeasured until review records carry `sessionCost`.** The row reads each review session's cost only from its latest record's `sessionCost`, when complete. A record with no `sessionCost` field reads unmeasured, and the window's cost figures leave its PR out and say so in `prsLeftOut`.
+
+### Review: each reviewer's line shows its calibration read
+
+- **On each reviewer's line.** A row credited from an engine record carries `calibrationRead`, one entry per calibration file the seat's order named, each `read`, `not-read` or `unknown`; its line says which. `unknown` means the engine's event stream could not tell, and is never a claim the file went unread.
+- **On the record.** A `testLens` part and one `Test lens:` line say whether the test lens ran, on which commit, whether that is the final commit, what calibration it read at which policy version, and how many findings it raised. A project's test-lens rule reads these two; the review run writes them on every review, so no builder-written test-lens record is owed.
+- **Unmeasured, not "did not read".** A credited row with no `calibrationRead` key, a row reported by the session, and a record with no `testLens` read `calibration read: unmeasured`, `calibration read: not shown (no engine record)` and `Test lens: unmeasured`; none reads "did not read".
 
 ### Review: a finding names its kind of mistake, and every place with it is fixed
 

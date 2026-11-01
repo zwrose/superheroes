@@ -40,6 +40,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import calibration_read  # noqa: E402  per-seat calibration read stamp and states (#2311)
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
 import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import bite_proof_format  # noqa: E402  the record format an order that asks for one carries (#2082)
@@ -6067,6 +6068,12 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
+    # The calibration files the order named, hashed as they stand now (#2311). base_prompt is the
+    # order text before the sanitized-view notice is added; the order's own paths are in it.
+    try:
+        record["calibration"] = calibration_read.stamp(repo_root_real or repo_root, base_prompt)
+    except Exception:
+        record["calibration"] = None
     if native_schema_path is not None:
         record["nativeSchemaPath"] = native_schema_path
     if cfg is not None:
@@ -7587,6 +7594,7 @@ def _observation_from_attempt(run_dir_real, state, attempt):
         engine, stdout, stderr_tail, elapsed, stdout_bytes,
         native_result_path=slot.get("nativeResultPath"),
         native_result_handoff_path=slot.get("nativeResultHandoffPath"))
+    observation = None
     if _opened_channel(opened) == engine_result_channel.CHANNEL_NATIVE:
         if opened.get("runKind") == RUN_KIND_WRITE:
             return _engagement_with_read(engagement)
@@ -7596,11 +7604,36 @@ def _observation_from_attempt(run_dir_real, state, attempt):
         if admitted.get("ok"):
             kind = admitted["resultKind"]
             has_payload, payload = _review_result_payload(admitted, kind)
-            return _engagement_with_read(
+            observation = _engagement_with_read(
                 engagement, result_kind=kind,
                 items=payload if has_payload else [])
-        return _engagement_with_read(engagement)
-    return _engagement_with_read(engagement)
+        else:
+            observation = _engagement_with_read(engagement)
+    else:
+        observation = _engagement_with_read(engagement)
+    # Which calibration files the seat read, from the stamp the run opened with (#2311). A write
+    # run, a run opened before the stamp, and a failed stamp (None) carry no key.
+    stamped = opened.get("calibration")
+    if opened.get("runKind") != RUN_KIND_WRITE and isinstance(stamped, list):
+        observation["calibration"] = calibration_read.read_states(
+            engine, stdout, stamped, truncated=_calibration_capture_truncated(ended, stdout))
+    return observation
+
+
+def _calibration_capture_truncated(ended, stdout):
+    """True when the stdout the calibration grade reads lost its head to the capture cap (so an earlier read may be gone).
+
+    The producer's pre-cap byte count is authoritative when stamped; otherwise the head marker decides. A failed
+    capped rewrite also lost the head. Never raises."""
+    try:
+        if ended.get("stdoutCapRewriteFailed") is True:
+            return True
+        observed = ended.get("stdoutBytes")
+        if ended.get("stdoutBytesPreCap") is True and isinstance(observed, int) and not isinstance(observed, bool):
+            return observed > MAX_STDOUT_CAPTURE
+        return _stdout_capture_truncated(stdout)
+    except Exception:
+        return True
 
 
 def run_execution_record(run_dir):
