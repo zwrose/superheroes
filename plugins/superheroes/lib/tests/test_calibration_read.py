@@ -219,11 +219,21 @@ def test_codex_absolute_path_elsewhere_with_the_basename_is_not_a_read(calib):
 
 @pytest.mark.parametrize("command", [
     "rg --files-with-matches . {core}", "grep --files-without-match x {core}", "grep --count x {core}",
-    "rg --quiet x {core}", "grep --files-with x {core}",
+    "rg --quiet x {core}", "grep --files-with x {core}", "grep --cou . {core}", "grep -c x {core}",
+    "grep -l x {core}", "rg --files {core}", "grep -A2 x {core}", "grep --colour x {core}",
+    "echo '\n' cat {core}",
 ])
-def test_codex_long_name_or_count_options_are_not_a_read(calib, command):
+def test_codex_unlisted_grep_options_or_quoted_separators_are_never_a_read(calib, command):
     stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
-    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
+
+
+@pytest.mark.parametrize("command", [
+    "grep x {core}", "grep -n -i x {core}", "rg --line-number --ignore-case x {core}", "grep -inH -e x {core}",
+])
+def test_codex_listed_grep_options_are_a_read(calib, command):
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "read"
 
 
 def test_vocabulary_has_one_home():

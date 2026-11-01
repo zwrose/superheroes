@@ -323,26 +323,35 @@ _NONREAD_PROGRAMS = frozenset((
 ))
 _SHELL_PROGRAMS = frozenset(("sh", "bash", "zsh", "dash", "ksh"))
 _WRAPPER_PROGRAMS = frozenset(("sudo", "env", "command", "time", "nice", "nohup", "exec"))
-# grep/rg options that report a match count or file name, never the content.
-_NONCONTENT_FLAG_RE = re.compile(r"^-[A-Za-z]*[lLcq][A-Za-z]*$")
-_NONCONTENT_LONG_FLAGS = (
-    "--files-with-matches", "--files-without-match", "--files", "--count", "--count-matches",
-    "--quiet", "--silent",
-)
+# grep-family options known to leave the matched content printed; any other option grades unknown.
+_GREP_FAMILY = frozenset(("grep", "egrep", "fgrep", "rg"))
+_CONTENT_SHORT_FLAGS = frozenset("niHheFEwx")
+_CONTENT_LONG_FLAGS = frozenset((
+    "--line-number", "--ignore-case", "--with-filename", "--no-filename", "--regexp",
+    "--fixed-strings", "--extended-regexp", "--word-regexp", "--line-regexp",
+))
 
 
-def _noncontent_flag(arg):
-    """True for a grep/rg option that reports names or counts only, short or long (or an unambiguous prefix)."""
-    if _NONCONTENT_FLAG_RE.match(arg):
-        return True
-    if not arg.startswith("--"):
-        return False
-    name = arg.split("=", 1)[0]
-    return any(name == flag or (len(name) >= 7 and flag.startswith(name)) for flag in _NONCONTENT_LONG_FLAGS)
+def _content_printing_options(args):
+    """True when every option of a grep-family command is on the known content-printing list.
+
+    An abbreviated long option, a count/list/quiet option, ``--`` or anything unrecognised is False."""
+    for arg in args:
+        if not arg.startswith("-") or arg == "-":
+            continue
+        if arg.startswith("--"):
+            name, eq, _value = arg.partition("=")
+            if name not in _CONTENT_LONG_FLAGS or (eq and name != "--regexp"):
+                return False
+        elif not all(ch in _CONTENT_SHORT_FLAGS for ch in arg[1:]):
+            return False
+    return True
 
 
 _PATH_CHARS = r"[\w.\-/]"
 _MAX_SHELL_DEPTH = 3
+# A quoted word made only of separators and blanks, or a backslash before a separator.
+_QUOTED_SEPARATOR_RE = re.compile(r"""['"][ \t]*[|&;()<>\n][ \t|&;()<>\n]*['"]|\\[|&;()<>\n]""")
 # A path-like word of a command text: split at whitespace, quotes, redirections, operators and `=`.
 _WORD_RE = re.compile(r"[^\s\"'`;&|()<>=]+")
 
@@ -351,6 +360,9 @@ def _segments(command):
     """The command split into simple commands (token lists) at ``|``, ``&&``, ``;``, ``&`` and an unquoted newline.
 
     Raises ValueError."""
+    # axis: shlex drops quotes, so a quoted or escaped separator would read as a real one; doubt grades unknown
+    if _QUOTED_SEPARATOR_RE.search(command):
+        raise ValueError("quoted or escaped separator")
     lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
     lexer.whitespace_split = True
     # axis: a newline is a command boundary, not whitespace; a quoted newline stays inside its word
@@ -410,9 +422,8 @@ def _command_hit(command, targets, depth=0):
         if not any(arg in targets for arg in args):
             continue
         if program in _READER_PROGRAMS:
-            if program in ("grep", "egrep", "fgrep", "rg") and any(
-                    _noncontent_flag(arg) for arg in args if arg.startswith("-")):
-                verdict = verdict or _HIT_NONREAD
+            if program in _GREP_FAMILY and not _content_printing_options(args):
+                verdict = _HIT_AMBIGUOUS
                 continue
             return _HIT_READ
         if program in _NONREAD_PROGRAMS:
