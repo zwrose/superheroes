@@ -119,7 +119,7 @@ def test_t1_a_panel_finding_keeps_two_touched_places_and_the_record_renders_them
     assert "outsideThisPR" not in state
     body, record = _record_body(tmp_path, kindOfMistake=staged["kindOfMistake"])
     assert "kind of mistake: unchecked retry" in body
-    assert "also in this PR: src/a.py:3, src/a.py:19 (0 of 2 fixed)" in body
+    assert "also in this PR: src/a.py:3, src/a.py:19 (fixed in 0 of 2 places)" in body
     # the record reads each place's `fixed` from the disposition: the row names no results, so every place reads unset
     assert record["findings"][0]["kindOfMistake"] == {"kind": KIND, "places": [dict(_place(3), fixed=None), dict(_place(19), fixed=None)]}
 
@@ -309,9 +309,11 @@ def _decided(row):
     return ledger_row(row["findingKey"], id="f-" + row["findingKey"], kindOfMistake=row["kindOfMistake"], **family)
 
 
-def _record_rows(tmp_path, *rows):
-    """Write the review record for a session whose ledger is `rows`; return its posted body and the record's findings by id."""
-    session = Session(tmp_path / "acct", dispositionLedger=list(rows)).seat("code-reviewer").save()
+def _record_rows(tmp_path, *rows, rounds=None):
+    """Write the review record for a session whose ledger is `rows` (and whose `rounds` are `rounds`, when given);
+    return its posted body and the record's findings by id."""
+    extra = {} if rounds is None else {"rounds": rounds}
+    session = Session(tmp_path / "acct", dispositionLedger=list(rows), **extra).seat("code-reviewer").save()
     fake = Fake()
     assert rs.write_from_session(session, put_extras(tmp_path, extras()), str(tmp_path), fake.readers())["ok"]
     return fake.marked()[-1]["body"], {f["id"]: f for f in rr.read(7, readers=fake.readers())["findings"]}
@@ -383,11 +385,11 @@ def test_t5_a_merged_member_reads_its_representatives_places_and_the_representat
     assert _fixed_of(found["f-k-chained"]) == [True]
     assert _fixed_of(found["f-other"]) == [None, None]
     assert "also in this PR: src/a.py:3, src/a.py:2 (all fixed)" in body
-    assert "also in this PR: src/a.py:3, src/a.py:7 (1 of 2 fixed)" in body
+    assert "also in this PR: src/a.py:3, src/a.py:7 (fixed in 1 of 2 places)" in body
 
 
 def test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_place_of_an_unfixed_disposition(tmp_path):
-    # axis: only a place the fix disposition answers fixed reads fixed: an unfixed answer reads false, anything unresolved reads unset, and a disposition that is not `fixed` answers nothing — see bite-proof record c4_wo1_kind
+    # axis: only a place the fix disposition answers fixed reads fixed: an unfixed answer reads false, anything unresolved reads unset, and a disposition that is not `fixed` answers nothing, and no authenticated audit answered it — see bite-proof record c4_wo1_kind
     unfixed = ledger_row("k-unfixed", id="f-1", kindOfMistake=_kind(3, 19, 7),
                          placeResults=[_row(3, True), _row(19, False)])  # 7 is unanswered
     not_fixed = ledger_row("k-refuted", id="f-2", kindOfMistake=_kind(3, 19), disposition="refuted",
@@ -402,7 +404,103 @@ def test_t5_an_unanswered_or_unfixed_place_reads_not_fixed_and_so_does_every_pla
     assert _fixed_of(found["f-3"]) == [False, True]
     assert _fixed_of(found["f-k-dangling"]) == [None, None]
     assert _fixed_of(found["f-5"]) == [None]  # an older session's `fixed` on the place itself is no longer read
-    assert "(1 of 3 fixed)" in body and "(0 of 2 fixed)" in body
+    assert "(fixed in 1 of 3 places)" in body and "(fixed in 0 of 2 places)" in body
+
+
+def _open_row(key, id, kind):
+    """A ledger row with no disposition of its own: a finding that is not discharged."""
+    row = ledger_row(key, id=id, kindOfMistake=kind)
+    for field in ("disposition", "dispositionRound", "dispositionSeq"):
+        row.pop(field)
+    return row
+
+
+def _audit_entry(key, *places, authenticated=True):
+    """A round's audit entry as the audit fold records it: authenticated (it names its auditor) unless told otherwise."""
+    entry = {"id": key, "ruling": "not-discharged", "auditor": "codex", "places": list(places)}
+    if not authenticated:
+        del entry["auditor"]
+    return entry
+
+
+@pytest.mark.parametrize("row_kind", ["open", "left-for-owner"])
+def test_t6a_a_not_discharged_finding_reads_its_places_from_the_latest_authenticated_audit(tmp_path, row_kind):
+    # axis: a finding whose disposition is not fixed reads each place's `fixed` from the latest authenticated audit entry that answered its places, so the summary says how many places were fixed — see bite-proof record c4_wo1_kind
+    row = _open_row("k-1", "f-1", _kind(3, 19))
+    if row_kind == "left-for-owner":
+        row.update(disposition="left-for-owner", dispositionRound=2, dispositionSeq=4, leftReason="x")
+    rounds = {"1": {"audits": [_audit_entry("k-1", _row(3, True), _row(19, False))]}}
+    body, found = _record_rows(tmp_path, row, rounds=rounds)
+    assert _fixed_of(found["f-1"]) == [True, False]
+    assert "also in this PR: src/a.py:3, src/a.py:19 (fixed in 1 of 2 places)" in body
+
+
+def test_t6b_an_unauthenticated_audit_entry_answers_nothing(tmp_path):
+    # axis: an audit entry whose auditor the collection manifest did not authenticate answers no place — see bite-proof record c4_wo1_kind
+    row = _open_row("k-1", "f-1", _kind(3, 19))
+    rounds = {"1": {"audits": [_audit_entry("k-1", _row(3, True), _row(19, False), authenticated=False)]}}
+    body, found = _record_rows(tmp_path, row, rounds=rounds)
+    assert _fixed_of(found["f-1"]) == [None, None]
+    assert "(fixed in 0 of 2 places)" in body
+
+
+def test_t6c_a_later_audit_without_places_keeps_the_earlier_answers(tmp_path):
+    # axis: an audit entry with no place answers (a silent audit) never erases an earlier authenticated entry's answers — see bite-proof record c4_wo1_kind
+    row = _open_row("k-1", "f-1", _kind(3, 19))
+    silent = {"id": "k-1", "ruling": "not-discharged", "auditor": "codex"}
+    other = _audit_entry("k-other", _row(3, False), _row(19, False))  # another finding's entry is no answer for this one
+    rounds = {"1": {"audits": [_audit_entry("k-1", _row(3, True), _row(19, False))]}, "2": {"audits": [silent, other]}}
+    body, found = _record_rows(tmp_path, row, rounds=rounds)
+    assert _fixed_of(found["f-1"]) == [True, False]
+    assert "(fixed in 1 of 2 places)" in body
+
+
+def test_t6d_a_later_rounds_authenticated_entry_supersedes_an_earlier_one_and_rounds_order_numerically(tmp_path):
+    # axis: the latest authenticated entry with place answers stands, rounds ordered by their integer key (round 10 after round 9) — see bite-proof record c4_wo1_kind
+    row = _open_row("k-1", "f-1", _kind(3, 19))
+    rounds = {"1": {}, "10": {"audits": [_audit_entry("k-1", _row(3, True), _row(19, True))]},
+              "9": {"audits": [_audit_entry("k-1", _row(3, True), _row(19, False))]}}
+    body, found = _record_rows(tmp_path, row, rounds=rounds)
+    assert _fixed_of(found["f-1"]) == [True, True]
+    assert "also in this PR: src/a.py:3, src/a.py:19 (all fixed)" in body
+
+
+def test_t6e_a_fixed_dispositions_place_results_win_over_any_audit_entry(tmp_path):
+    # axis: a fixed representative reads its places from its own placeResults only; the round audit entries are not read — see bite-proof record c4_wo1_kind
+    row = ledger_row("k-1", id="f-1", kindOfMistake=_kind(3, 19, 7), placeResults=[_row(3, True), _row(19, False)])
+    rounds = {"1": {"audits": [_audit_entry("k-1", _row(3, False), _row(19, True), _row(7, True))]}}
+    _body, found = _record_rows(tmp_path, row, rounds=rounds)
+    assert _fixed_of(found["f-1"]) == [True, False, None]
+
+
+def test_t6g_a_place_answered_both_ways_in_one_audit_entry_is_not_fixed_and_a_merged_member_reads_its_representatives_entry(tmp_path):
+    # axis: the audit entry's rows follow the same rule as placeResults: a place answered twice is fixed only when every row says so; a member reads the entry of its representative's key — see bite-proof record c4_wo1_kind
+    rep = _open_row("k-rep", "f-rep", _kind(3, 19))
+    member = _member("k-member", 20, _kind(3, 19), "k-rep")
+    rounds = {"1": {"audits": [_audit_entry("k-rep", _row(3, True), _row(3, False), _row(19, True)),
+                               _audit_entry("k-member", _row(3, True), _row(19, True))]}}
+    _body, found = _record_rows(tmp_path, rep, member, rounds=rounds)
+    assert _fixed_of(found["f-rep"]) == [False, True]
+    assert _fixed_of(found["f-k-member"]) == [False, True]
+
+
+@pytest.mark.parametrize("bad", [None, [], "rounds", {"x": {"audits": [{"id": "k-1"}]}}])
+def test_t6f_malformed_rounds_audits_and_entries_are_skipped_without_raising(bad):
+    # axis: anything in the rounds that is not the expected shape is skipped, never raised, and never hides a well-formed entry — see bite-proof record c4_wo1_kind
+    good = _audit_entry("k-1", _row(3, True), _row(19, False))
+    blank = dict(_audit_entry("k-1", _row(3, False), _row(19, False)), auditor="  ")
+    wrong_type = dict(_audit_entry("k-1", _row(3, False), _row(19, False)), auditor=7)
+    junk = {"1": {"audits": [good, "entry", None, 3, [], {"id": 5, "auditor": "codex", "places": []},
+                             blank, wrong_type, {"id": "k-1", "auditor": "codex", "places": "all"}]},
+            "2": "not a round", "3": {"audits": "not a list"}, "x": {"audits": [_audit_entry("k-1", _row(3, False))]},
+            "-1": {"audits": [_audit_entry("k-1", _row(3, False))]}, 4: {"audits": [_audit_entry("k-1", _row(3, False))]}}
+    assert rs._latest_audit_place_answers({"rounds": bad}) == {}
+    state = {"rounds": junk, "findings": [], "dispositionLedger": [_open_row("k-1", "f-1", _kind(3, 19))]}
+    (finding,) = rs._findings(state)
+    assert _fixed_of(finding) == [True, False]  # only the one well-formed, authenticated entry is read
+    state["rounds"] = {"1": {"audits": [good, "entry", None]}, "2": "x", "3": {"audits": "y"}}
+    (finding,) = rs._findings(state)
+    assert _fixed_of(finding) == [True, False]
 
 
 def test_t5_a_finding_without_a_kind_of_mistake_renders_unchanged(tmp_path):
