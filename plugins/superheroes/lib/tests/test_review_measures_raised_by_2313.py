@@ -34,6 +34,7 @@ def _seats(row):
 
 
 def test_a_finding_raised_by_the_code_seat_in_the_premortem_lens_counts_for_code_not_premortem():
+    # axis: a finding counts for the seat its raisedBy names, never the lens it sits in
     rec = _rec(1, rows=[_row(CODE), _row(PRE)], findings=[_raised("k1", "code-reviewer", "Failure-Mode")],
                sc=_sc(200, 3.0, runs=2, by_seat={"code-reviewer": _by(100, 1.5), "premortem-reviewer": _by(100, 1.5)}))
     seats = _seats(_compute(rec))
@@ -43,6 +44,7 @@ def test_a_finding_raised_by_the_code_seat_in_the_premortem_lens_counts_for_code
 
 
 def test_a_pr_where_premortem_never_ran_adds_nothing_to_its_catches_even_with_a_premortem_lens_finding():
+    # axis: a seat that ran on no counted PR reads a measured zero, never a catch from another PR's lens
     no_premortem = _rec(1, rows=[_row(CODE)], findings=[_raised("k1", "code-reviewer", "Failure-Mode")],
                         sc=_sc(100, 1.5, by_seat={"code-reviewer": _by(100, 1.5)}))
     premortem_ran = _rec(2, rows=[_row(PRE)], sc=_sc(7, 0.2, by_seat={"premortem-reviewer": _by(7, 0.2)}))
@@ -54,7 +56,30 @@ def test_a_pr_where_premortem_never_ran_adds_nothing_to_its_catches_even_with_a_
     assert shown["fixed"] == 0  # a measured zero, not unmeasured
 
 
+def test_a_raiser_that_did_not_run_on_the_pr_is_credited_nothing_and_the_finding_counts_unattributed():
+    # axis: a raisedBy naming a seat whose row is not-run on the PR credits that seat nothing; the finding counts unattributed
+    one = _rec(1, rows=[_row(CODE), _row(PRE, ran="not-run")], findings=[_raised("k1", "premortem-reviewer", "Failure-Mode")],
+               sc=_sc(100, 1.5, by_seat={"code-reviewer": _by(100, 1.5)}))
+    elsewhere = _rec(2, rows=[_row(PRE)], sc=_sc(7, 0.2, by_seat={"premortem-reviewer": _by(7, 0.2)}))  # premortem ran here, raised nothing
+    seats = _seats(_compute(one, elsewhere))
+    assert seats["premortem-reviewer"]["outcomes"] == _filled()
+    assert seats["unattributed"]["outcomes"] == _filled(fixed=1)
+    assert seats["code-reviewer"]["outcomes"] == _filled()
+
+
+def test_a_raiser_with_no_reviewer_row_on_the_pr_is_credited_nothing_and_the_finding_counts_unattributed():
+    # axis: a raisedBy naming a seat with no reviewer row at all on the PR credits that seat nothing; the finding counts unattributed
+    one = _rec(1, rows=[_row(CODE)], findings=[_raised("k1", "premortem-reviewer", "Failure-Mode")],
+               sc=_sc(100, 1.5, by_seat={"code-reviewer": _by(100, 1.5)}))
+    elsewhere = _rec(2, rows=[_row(PRE)], sc=_sc(7, 0.2, by_seat={"premortem-reviewer": _by(7, 0.2)}))
+    seats = _seats(_compute(one, elsewhere))
+    assert seats["premortem-reviewer"]["outcomes"] == _filled()
+    assert seats["unattributed"]["outcomes"] == _filled(fixed=1)
+    assert seats["code-reviewer"]["outcomes"] == _filled()
+
+
 def test_a_carried_finding_keeps_the_seat_that_raised_it_across_sessions():
+    # axis: the raiser an earlier session recorded survives a later session's lens and carried row, in either record order
     first = _rec(1, "a", "2026-10-02T10:00:00Z", rows=[_row(CODE), _row(PRE)],
                  findings=[_raised("k1", "premortem-reviewer", "Failure-Mode", None)],
                  sc=_sc(200, 3.0, runs=2, by_seat={"code-reviewer": _by(100, 1.5), "premortem-reviewer": _by(100, 1.5)}))
@@ -69,6 +94,7 @@ def test_a_carried_finding_keeps_the_seat_that_raised_it_across_sessions():
 
 
 def test_a_record_without_the_field_reads_unmeasured_for_the_seats_that_ran_on_its_pr_only():
+    # axis: a finding with no raiser blanks the outcomes of the seats that ran on its PR (any record) and no other seat's
     unstamped = {k: v for k, v in _raised("k1", "x", "Security").items() if k != "raisedBy"}
     # PR 1: security ran in the window, code ran in an earlier record of the same PR (outside it); no finding names its raiser
     old_code = _rec(1, "old", "2026-09-20T10:00:00Z", rows=[_row(CODE)], sc=None)
@@ -90,6 +116,7 @@ def test_a_record_without_the_field_reads_unmeasured_for_the_seats_that_ran_on_i
 
 
 def test_a_receiptless_review_with_a_premortem_lens_finding_does_not_blank_premortems_cost():
+    # axis: a finding's lens never blanks a seat's cost; only a session that ran the seat can
     receiptless = _rec(1, rows=[_row(CODE)], findings=[_raised("k1", "code-reviewer", "Failure-Mode")], sc=None)
     costed = _rec(2, rows=[_row(PRE)], sc=_sc(7, 0.2, by_seat={"premortem-reviewer": _by(7, 0.2)}))
     row = _compute(receiptless, costed)
@@ -100,6 +127,7 @@ def test_a_receiptless_review_with_a_premortem_lens_finding_does_not_blank_premo
 
 
 def test_a_seat_that_ran_in_a_session_with_an_incomplete_cost_reads_unmeasured():
+    # axis: a seat that ran in a session whose cost is incomplete reads unmeasured, whatever the other sessions cost
     incomplete = _rec(1, "a", rows=[_row(PRE)], sc=_sc(5, 0.1, runs=2, without=1, by_seat={"premortem-reviewer": _by(5, 0.1, 2)}))
     complete = _rec(1, "b", rows=[_row(PRE)], sc=_sc(7, 0.2, by_seat={"premortem-reviewer": _by(7, 0.2)}))
     row = _compute(incomplete, complete)
@@ -110,6 +138,7 @@ def test_a_seat_that_ran_in_a_session_with_an_incomplete_cost_reads_unmeasured()
 
 
 def test_a_complete_cost_that_leaves_out_a_seat_that_ran_makes_that_seats_cost_unmeasured():
+    # axis: a complete cost that omits a seat that ran does not cost it; a cost key no row shows ran still adds its figures
     # S6 v0: session a costs premortem; session b ran premortem too, and its complete cost names only the code seat
     a = _rec(1, "a", rows=[_row(PRE)], sc=_sc(7, 0.2, by_seat={"premortem-reviewer": _by(7, 0.2)}))
     b = _rec(1, "b", rows=[_row(CODE), _row(PRE)], sc=_sc(100, 1.5, by_seat={"code-reviewer": _by(100, 1.5)}))

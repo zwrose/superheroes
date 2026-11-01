@@ -27,7 +27,7 @@ Counting rules (written fresh: the post-0.43 assessment's counting scripts did n
     `runs: 0` adds zero; a record without a well-formed one reads unmeasured, never zero.
     A seat's tokens and minutes are a number only when every in-window session that ran it has a complete `sessionCost` whose `bySeat` names it (an incomplete one's `bySeat` also counts as a run); a finding's lens never blanks a cost, and any other seat reads unmeasured.
     The window figures are over the measured PRs, and `prsLeftOut` counts the rest.
-  - Finding outcomes read each PR's latest record, one per finding key, merged members left out, and count for the seats the finding's `raisedBy` names, never its lens; one that names no lens seat counts under `unattributed`, and a PR with a counted finding that has no `raisedBy` leaves the outcomes of every seat that ran on it unmeasured (`raising-seat-not-recorded`). An
+  - Finding outcomes read each PR's latest record, one per finding key, merged members left out, and count for the seats the finding's `raisedBy` names, never its lens; one that names no lens seat, or only a seat that did not run on the PR (in any of its valid records, in the window or not), counts under `unattributed` and credits that seat nothing, and a PR with a counted finding that has no `raisedBy` leaves the outcomes of every seat that ran on it unmeasured (`raising-seat-not-recorded`). An
     undecided finding is `open`. Seats are named through `review_learning._seats`.
   - A loop came back clean when the record a vet read (the PR's latest at or before the vet) is `reviewed` with
     no finding open or left for the owner.
@@ -247,6 +247,7 @@ def compute(inp, start, end, written_at=None):
         unread = set()  # the seats that ran on a PR whose counted finding names no raiser: their outcomes are unmeasured
         for pr, rs in prs.items():
             keyed, lacking = {}, False
+            ran_on_pr = _ran_seats(x for r in every[pr] for x in r["reviewers"])  # the seats that ran on this PR, from every valid record of it
             for f in _latest(rs)["findings"]:
                 if not review_learning._merged_member(f):
                     got = keyed.setdefault(f.get(session_contract.FINDING_KEY_FIELD) or f.get("id"),
@@ -258,7 +259,7 @@ def compute(inp, start, end, written_at=None):
                 if not named:
                     lacking = True  # the raiser is not recorded: the finding counts for no seat, never for its lens
                     continue
-                for s in seats or ("unattributed",):
+                for s in (seats & ran_on_pr) or ("unattributed",):  # a seat that did not run on this PR is credited nothing
                     outcomes[s][outcome] += 1
             if lacking:
                 unread |= _ran_seats(x for r in every[pr] for x in r["reviewers"])

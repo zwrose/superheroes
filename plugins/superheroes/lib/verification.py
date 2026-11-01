@@ -19,6 +19,7 @@ from finding_identity import place_pair as _place_pair
 import panel_tally
 import review_findings_schema
 import round_phases
+import session_contract
 
 VERDICTS = round_phases.VERDICTS
 _DEFAULT_BLOCKING_SEVERITY = "Important"
@@ -441,7 +442,25 @@ def _merge_group(members):
     dims = _union_dimensions(members)
     if dims:
         merged["dimension"] = dims
+    _keep_earliest_raiser(merged, members)
     return merged
+
+
+def _keep_earliest_raiser(merged, members):
+    """Give `merged` the `raisedBy` of the member raised earliest: the smallest integer `raisedRound` (the first such
+    member on a tie); a member without one was raised this round, so it is later than any member that has one. When no
+    member has one they were raised together and the representative's `raisedBy` stays. The chosen member's value is
+    copied when it is a non-blank string, else `merged` has none: a merge never invents a raiser."""
+    rounds = [(m[session_contract.RAISED_ROUND_FIELD], i) for i, m in enumerate(members)
+              if isinstance(m.get(session_contract.RAISED_ROUND_FIELD), int)
+              and not isinstance(m.get(session_contract.RAISED_ROUND_FIELD), bool)]
+    if not rounds:
+        return
+    raiser = members[min(rounds)[1]].get(session_contract.RAISED_BY_FIELD)
+    if isinstance(raiser, str) and raiser.strip():
+        merged[session_contract.RAISED_BY_FIELD] = raiser
+    else:
+        merged.pop(session_contract.RAISED_BY_FIELD, None)
 
 
 def _coverage_fault_from_seen(expected, seen):

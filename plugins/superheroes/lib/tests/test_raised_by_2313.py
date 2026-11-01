@@ -26,6 +26,8 @@ import review_record_session as rs  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_phases  # noqa: E402
 import session_contract as SC  # noqa: E402
+import verification  # noqa: E402
+from test_audit_spawned_riders_2115 import P_KEY, _audit_issue, _child, _scoped_state  # noqa: E402
 from test_c4_kind_of_mistake import DIFF, _record_rows  # noqa: E402
 from test_c4_sweep import _both, _finding as _sweep_parent, _hit, _sweep, _to_sweep, world  # noqa: E402,F401
 from test_c4_sweep_recovery import INSIDE, SEAT_1, _account, _hits, _stored  # noqa: E402
@@ -63,6 +65,7 @@ def test_c1_a_panel_finding_is_stamped_with_its_roster_seat_not_its_lens():
 
 
 def test_c1_a_sliced_seat_key_is_kept_whole():
+    # axis: a sliced seat key is stamped whole, never cut back to its base seat
     f = _finding()
     assert _compile(f, sources={id(f): "code-reviewer:s1"})[RAISED] == "code-reviewer:s1"
 
@@ -84,17 +87,20 @@ def test_c1_with_neither_sources_nor_source_the_field_is_absent(sent):
 
 @pytest.mark.parametrize("blank", ["", "   ", None, 3])
 def test_c1_a_blank_source_is_no_raiser(blank):
+    # axis: a blank or non-string source stamps no raiser
     f = _finding()
     assert RAISED not in _compile(f, sources={id(f): blank}, source=blank)
 
 
 def test_c1_a_blank_sources_entry_falls_to_the_stage_source():
+    # axis: a blank per-finding source falls through to the stage name rather than stamping nothing
     f = _finding()
     assert _compile(f, sources={id(f): " "}, source=SC.OUTSIDE_SEAMS_CHECK)[RAISED] == SC.OUTSIDE_SEAMS_CHECK
 
 
 @pytest.mark.parametrize("stage", [SC.OUTSIDE_FIX_AUDITOR, SC.OUTSIDE_SCOPED_FINDER, SC.OUTSIDE_SEAMS_CHECK])
 def test_c1_a_stage_compile_carries_its_stage_name(stage):
+    # axis: a non-panel compile stamps its own stage name
     assert stage in ("fix auditor", "scoped finder", "seams check")
     assert _compile(_finding(), source=stage)[RAISED] == stage
 
@@ -122,6 +128,7 @@ def test_c2_a_compile_dedupe_keeps_the_first_seats_raiser_even_when_the_later_on
 
 
 def test_c2_merge_same_finding_keeps_existings_raiser_when_incoming_wins():
+    # axis: the merged raiser is existing's when the incoming side wins the base on severity
     existing = dict(_compile(_finding(severity="Minor"), source="seams check"), **{RAISED: "code-reviewer"})
     incoming = dict(_compile(_finding(severity="Critical"), source="seams check"), **{RAISED: "premortem-reviewer"})
     merged = RD._merge_same_finding(existing, incoming)
@@ -129,6 +136,7 @@ def test_c2_merge_same_finding_keeps_existings_raiser_when_incoming_wins():
 
 
 def test_c2_merge_same_finding_keeps_existings_raiser_when_existing_wins():
+    # axis: the merged raiser is existing's when existing wins the base on severity
     existing = dict(_compile(_finding(severity="Critical"), source="seams check"), **{RAISED: "code-reviewer"})
     incoming = dict(_compile(_finding(severity="Minor"), source="seams check"), **{RAISED: "premortem-reviewer"})
     assert RD._merge_same_finding(existing, incoming)[RAISED] == "code-reviewer"
@@ -181,6 +189,7 @@ def test_l1_an_existing_row_without_a_raiser_stays_without_one():
 
 
 def test_l2_a_fresh_report_merged_into_a_carried_finding_keeps_the_carried_raiser():
+    # axis: the carried merge keeps the carried finding's raiser even when the fresh report wins on severity
     held = dict(_compile(_finding(severity="Minor"), source="fix auditor"), **{RAISED: "code-reviewer"})
     fresh = dict(_compile(_finding(severity="Critical"), source="fix auditor"), **{RAISED: "premortem-reviewer"})
     [row] = RD._with_carried({"_carriedToVerify": [held]}, [fresh])
@@ -188,16 +197,84 @@ def test_l2_a_fresh_report_merged_into_a_carried_finding_keeps_the_carried_raise
 
 
 def test_l2_a_carried_finding_without_a_raiser_stays_without_one():
+    # axis: a carried finding with no known raiser never gains one from the fresh report
     held = _compile(_finding(severity="Minor"))
     fresh = dict(_compile(_finding(severity="Critical")), **{RAISED: "premortem-reviewer"})
     [row] = RD._with_carried({"_carriedToVerify": [held]}, [fresh])
     assert row["severity"] == "Critical" and RAISED not in row
 
 
+def _scoped_fold(scoped=(), issues=()):
+    """Fold the scoped scan over a built state; the staged findings by title."""
+    state = _scoped_state()
+    state["_newIssues"] = [dict(i) for i in issues]
+    RD._fold_scoped(state, state["config"], {"findings": [dict(f) for f in scoped]})
+    return {f["title"]: f for f in state["_toVerify"]}
+
+
+def test_c3_a_scoped_candidate_at_an_audit_issues_anchor_keeps_the_auditor_as_raiser():
+    # axis: the fix audits run first, so the auditor stays the raiser where the compile kept the scoped dict at the anchor
+    staged = _scoped_fold(scoped=[_child(), _child(title="Other drift", line=1)], issues=[_audit_issue(P_KEY)])  # the round diff touches lines 1 and 2 of f.py
+    assert staged["Stale comment"][RAISED] == SC.OUTSIDE_FIX_AUDITOR
+    assert "Other drift" in staged, sorted(staged)
+    assert staged["Other drift"][RAISED] == SC.OUTSIDE_SCOPED_FINDER  # a scoped-only anchor keeps the scoped finder
+
+
+def test_c3_a_scoped_candidate_that_forges_a_raiser_never_gets_the_auditor_stamp():
+    # axis: only an anchor an audit new issue raised takes the auditor stamp; a seat-sent raisedBy never survives
+    staged = _scoped_fold(scoped=[dict(_child(), **{RAISED: SC.OUTSIDE_FIX_AUDITOR})], issues=[])
+    assert staged["Stale comment"][RAISED] == SC.OUTSIDE_SCOPED_FINDER
+
+
+# ---- M1: a synthesis merge keeps the earliest member's raiser --------------------------------------------------
+
+
+def _member(severity, raised_by=None, raised_round=None):
+    out = {"title": "Retry without a cap", "file": "src/a.py", "line": 2, "severity": severity, "consequence": CONSEQUENCE}
+    if raised_by is not None:
+        out[RAISED] = raised_by
+    if raised_round is not None:
+        out[SC.RAISED_ROUND_FIELD] = raised_round
+    return out
+
+
+def test_m1_a_merge_takes_the_raiser_of_the_member_raised_earliest_not_the_severity_representative():
+    # axis: the merged raiser is the earliest member's (smallest raisedRound; none means this round), not the representative's
+    carried = _member("Minor", "code-reviewer", raised_round=1)
+    fresh = _member("Important", "scoped finder")
+    for members in ([carried, fresh], [fresh, carried]):
+        merged = verification._merge_group(members)
+        assert merged["severity"] == "Important" and merged[RAISED] == "code-reviewer", merged
+
+
+def test_m1_the_earliest_of_two_carried_members_wins():
+    # axis: among members that carry a raisedRound the smaller one is earlier
+    later = _member("Important", "premortem-reviewer", raised_round=3)
+    earlier = _member("Minor", "code-reviewer", raised_round=2)
+    assert verification._merge_group([later, earlier])[RAISED] == "code-reviewer"
+
+
+def test_m1_members_raised_in_one_round_keep_the_representatives_raiser():
+    # axis: with no raisedRound on any member the representative's raiser stands
+    low = _member("Minor", "code-reviewer")
+    high = _member("Important", "premortem-reviewer")
+    assert verification._merge_group([low, high])[RAISED] == "premortem-reviewer"
+    assert verification._merge_group([high, low])[RAISED] == "premortem-reviewer"
+
+
+def test_m1_an_earliest_member_with_no_raiser_leaves_the_merge_without_one():
+    # axis: a merge never invents a raiser — the earliest member has none, so the merged finding has none
+    earliest = _member("Minor", None, raised_round=1)
+    fresh = _member("Important", "scoped finder")
+    merged = verification._merge_group([earliest, fresh])
+    assert merged["severity"] == "Important" and RAISED not in merged, merged
+
+
 # ---- W1: a sweep hit -------------------------------------------------------------------------------------------
 
 
 def test_w1_a_sweep_hit_finding_carries_the_searcher_seat_key():
+    # axis: the hit finding carries the searcher seat key it was given
     parent = _sweep_parent()
     hit = _hit(19)
     assert SC.sweep_hit_finding(hit, {"sweepId": "S-1"}, parent, raised_by="searcher:S-1:2")[RAISED] == "searcher:S-1:2"
@@ -205,18 +282,21 @@ def test_w1_a_sweep_hit_finding_carries_the_searcher_seat_key():
 
 @pytest.mark.parametrize("blank", [None, "", "  ", 3, ["searcher:S-1:1"]])
 def test_w1_a_blank_or_non_string_raiser_stamps_nothing(blank):
+    # axis: a blank, non-string or absent searcher key stamps no raiser
     assert RAISED not in SC.sweep_hit_finding(_hit(19), {"sweepId": "S-1"}, _sweep_parent(), raised_by=blank)
     assert RAISED not in SC.sweep_hit_finding(_hit(19), {"sweepId": "S-1"}, _sweep_parent())
 
 
 def test_w1_the_fold_stamps_each_inside_hit_with_the_seat_of_the_part_that_found_it(world):
     # axis: the sweep fold maps each hit to the seat key of its own part
+    # a fold that stamped every hit with the loop's last seat key would pass a test whose hits all come from the last part
     _to_sweep(world, _sweep_parent(severity="Critical"))
-    state = _sweep(world, {"searcher:S-1:1": [], "searcher:S-1:2": [_hit(19, file="src/a.py")]})
-    (hit,) = state["_toVerify"]
-    assert hit["line"] == 19 and hit[RAISED] == "searcher:S-1:2"
-    (row,) = [r for r in state[SC.DISPOSITION_LEDGER_KEY] if r["line"] == 19]
-    assert row[RAISED] == "searcher:S-1:2"
+    state = _sweep(world, {"searcher:S-1:1": [_hit(3, file="src/a.py")], "searcher:S-1:2": [_hit(19, file="src/a.py", what="loops without a bound")]})
+    by_line = {h["line"]: h for h in state["_toVerify"]}
+    assert set(by_line) == {3, 19}, by_line
+    assert by_line[3][RAISED] == "searcher:S-1:1" and by_line[19][RAISED] == "searcher:S-1:2"
+    rows = {r["line"]: r for r in state[SC.DISPOSITION_LEDGER_KEY] if r["line"] in (3, 19) and r.get(RAISED, "").startswith("searcher:")}
+    assert rows[3][RAISED] == "searcher:S-1:1" and rows[19][RAISED] == "searcher:S-1:2"
 
 
 # ---- R1: the record writer -------------------------------------------------------------------------------------
@@ -224,30 +304,33 @@ def test_w1_the_fold_stamps_each_inside_hit_with_the_seat_of_the_part_that_found
 
 def test_r1_the_record_finding_carries_the_ledger_rows_raiser_not_its_lens(tmp_path):
     # axis: the writer copies raisedBy from the ledger row onto the record finding
-    row = ledger_row("k-1", id="f-1", dimension="Failure-Mode", **{RAISED: "premortem-reviewer"})
+    row = ledger_row("k-1", id="f-1", dimension="Failure-Mode", **{RAISED: "code-reviewer"})  # the raiser is not the lens's seat
     plain = ledger_row("k-2", id="f-2", line=4)
     _, by_id = _record_rows(tmp_path, row, plain)
-    assert by_id["f-1"][RAISED] == "premortem-reviewer"
+    assert by_id["f-1"][RAISED] == "code-reviewer"
     assert RAISED not in by_id["f-2"]  # no known raiser: absent, never guessed from the dimension
 
 
 def test_r1_a_blank_raiser_on_a_ledger_row_is_no_raiser(tmp_path):
+    # axis: a blank or non-string ledger raiser reaches the record as no raiser
     rows = [ledger_row("k-%d" % i, id="f-%d" % i, line=3 + i, **{RAISED: v}) for i, v in enumerate(["", "  ", None, 5])]
     _, by_id = _record_rows(tmp_path, *rows)
     assert all(RAISED not in f for f in by_id.values()), by_id
 
 
 def test_r1_the_ledger_rows_raiser_wins_over_a_live_rows(tmp_path):
-    held = ledger_row("k-1", id="f-1", **{RAISED: "code-reviewer"})
+    # axis: the ledger row's raiser is kept over a live row's, and it is neither seat the dimension names
+    held = ledger_row("k-1", id="f-1", **{RAISED: "premortem-reviewer"})  # the ledger row's dimension is code-reviewer
     live = {"findingKey": "k-1", "id": "f-1", "title": "t", "severity": "Important", "file": "a.py", "line": 3,
-            "detail": "d", "dimension": "code-reviewer", RAISED: "premortem-reviewer"}
+            "detail": "d", "dimension": "code-reviewer", RAISED: "security-reviewer"}
     session = Session(tmp_path / "acct", dispositionLedger=[held], findings=[live]).seat("code-reviewer").save()
     account = rs.account_from_session(session, extras(), Fake().readers())
     (f,) = account["findings"]
-    assert f[RAISED] == "code-reviewer"
+    assert f[RAISED] == "premortem-reviewer"
 
 
 def test_r1_a_live_row_with_no_ledger_row_supplies_its_raiser(tmp_path):
+    # axis: a live row with no ledger row supplies the raiser itself
     live = {"findingKey": "k-9", "id": "f-9", "title": "t", "severity": "Important", "file": "a.py", "line": 3,
             "detail": "d", "dimension": "code-reviewer", RAISED: "code-reviewer:s1"}
     session = Session(tmp_path / "acct", findings=[live]).seat("code-reviewer").save()
@@ -275,6 +358,7 @@ def test_r2_fill_gives_a_finding_the_earlier_records_first_raiser():
 
 
 def test_r2_fill_names_the_raiser_on_a_later_finding_that_lacks_one():
+    # axis: a later finding with no raiser takes the earlier record's
     account = {"findings": [_earlier()]}
     rs._fill(account, [_earlier(**{RAISED: "code-reviewer"})])
     assert account["findings"][0][RAISED] == "code-reviewer"
@@ -282,12 +366,14 @@ def test_r2_fill_names_the_raiser_on_a_later_finding_that_lacks_one():
 
 @pytest.mark.parametrize("held", ["", "  ", None, 4])
 def test_r2_fill_treats_a_blank_earlier_raiser_as_none(held):
+    # axis: a blank or non-string earlier raiser is none, so it clears nothing and names nothing
     account = {"findings": [_earlier(**{RAISED: "premortem-reviewer"})]}
     rs._fill(account, [_earlier(**{RAISED: held})])
     assert RAISED not in account["findings"][0]
 
 
 def test_r2_a_finding_this_session_did_not_raise_is_carried_with_its_raiser_and_without_one_when_it_had_none():
+    # axis: a carried earlier finding keeps its raiser, and has none when it had none
     account = {"findings": []}
     earlier = [_earlier(reason="fixed in abc", **{RAISED: "code-reviewer"}),
                dict(_earlier(reason="fixed in abc"), findingKey="k-2", id="f-2")]
@@ -306,6 +392,7 @@ def test_v1_an_empty_whitespace_or_non_string_raiser_is_refused(tmp_path, bad):
 
 
 def test_v1_an_absent_or_non_blank_raiser_is_accepted(tmp_path):
+    # axis: the validator accepts an absent or non-blank raiser and the record posts it unchanged
     fake = RecordFake()
     for kwargs in ({}, {RAISED: "code-reviewer"}, {RAISED: "searcher:S-1:2"}, {RAISED: "fix auditor"}):
         out = rr.write(put(tmp_path, acct(findings=[record_finding(**kwargs)])), str(tmp_path), fake.readers())
@@ -341,14 +428,17 @@ def _unfolded(tmp_path, seat, phase):
 
 
 def test_a1_an_unfolded_panel_report_is_raised_by_its_seat(tmp_path):
+    # axis: recovery stamps an unfolded panel report with its seat key
     assert _unfolded(tmp_path, "code-reviewer", round_phases.P_PANEL)[RAISED] == "code-reviewer"
 
 
 def test_a1_an_unfolded_stage_report_is_raised_by_its_stage_name(tmp_path):
+    # axis: recovery stamps an unfolded non-panel report with its stage name
     assert _unfolded(tmp_path, "seams-check", round_phases.P_SEAMS)[RAISED] == SC.OUTSIDE_SEAMS_CHECK
 
 
 def test_a1_an_unfolded_sweep_hit_is_raised_by_its_searcher_seat(tmp_path):
+    # axis: recovery stamps an unfolded sweep hit with its searcher seat key
     account = _account(_stored(tmp_path, {SEAT_1: _hits(INSIDE)}))
     (f,) = account["findings"]
     assert f[RAISED] == SEAT_1 and f["reviewer"] == SEAT_1

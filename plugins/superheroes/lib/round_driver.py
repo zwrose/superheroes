@@ -9446,6 +9446,28 @@ def _audit_spawned(state):
     return spawned if isinstance(spawned, dict) else {}
 
 
+def _new_issue_anchor(ni):
+    """The compile anchor of an audit's new issue (its line coerced as the compile coerces it), or None when it has
+    no string file or no usable line: such an issue anchors nothing."""
+    if not isinstance(ni.get("file"), str) or ni.get("line") is None:
+        return None
+    ok, line = _coerce_line(ni.get("line"))
+    if not ok:
+        return None
+    return _finding_anchor(dict(ni, line=line))
+
+
+def _stamp_audit_raisers(new_issues, compiled):
+    """The compiled survivors with `raisedBy` set to `OUTSIDE_FIX_AUDITOR` on each one whose anchor an audit's new
+    issue raised. The fix audits run before the scoped finder, so the auditor is the first raiser of that anchor even
+    when the compile kept the scoped finder's dict (it keeps it at equal severity, see `_bind_audit_spawned`). The
+    stamped value is the one `mechanical_compile` gives every new issue through `new_issue_sources`."""
+    anchors = {a for a in (_new_issue_anchor(ni) for ni in new_issues) if a is not None}
+    return [dict(f, **{session_contract.RAISED_BY_FIELD: OUTSIDE_FIX_AUDITOR})
+            if isinstance(f, dict) and not f.get("summaryEntry") and _finding_anchor(f) in anchors else f
+            for f in compiled]
+
+
 def _bind_audit_spawned(state, new_issues, compiled):
     """Record, for each compiled survivor an audit's new issue produced, the audit target it came from.
 
@@ -9458,14 +9480,11 @@ def _bind_audit_spawned(state, new_issues, compiled):
     origins_by_anchor = {}
     for ni in new_issues:
         origin = ni.get(AUDIT_ORIGIN_FIELD)
-        if not (isinstance(origin, str) and origin.strip()) or not isinstance(ni.get("file"), str):
+        if not (isinstance(origin, str) and origin.strip()):
             continue
-        if ni.get("line") is None:
+        anchor = _new_issue_anchor(ni)
+        if anchor is None:
             continue
-        ok, line = _coerce_line(ni.get("line"))
-        if not ok:
-            continue
-        anchor = _finding_anchor(dict(ni, line=line))
         origins_by_anchor.setdefault(anchor, set()).add(origin)
     bound, ambiguous = {}, []
     for finding in compiled:
@@ -9504,6 +9523,8 @@ def _fold_scoped(state, config, artifact):
                                          stats=compile_stats)
     _note_compile_stats(state, compile_stats)
     _bind_audit_spawned(state, new_issues, compiled)
+    # axis: the fix audits run before the scoped finder, so a survivor an audit raised keeps the auditor as its raiser even where the compile kept the scoped dict
+    compiled = _stamp_audit_raisers(new_issues, compiled)
     _record_compile_drops(state, drops)
     compiled = _with_carried(state, compiled)  # the carried findings sent back go to the verifier with the round's candidates
     state["_postAudit"] = True
