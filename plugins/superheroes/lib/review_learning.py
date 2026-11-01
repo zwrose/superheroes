@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """The review learning loop's code: the adoption day, the owner-approved
-calibration change, and the seat tally that starts counting at the adoption day.
+calibration change (a Risk and trust half, a standing ruling, a project focus hint or a CLAUDE.md rule),
+and the seat and escape-kind tally that starts counting at the adoption day.
 
 CLI (`python3 -B lib/review_learning.py <verb>`; one JSON object on stdout; exit 0 on ok, 1 on a refusal):
   adopt --cwd D [--root R] --date YYYY-MM-DD      # record the adoption day once
@@ -28,6 +29,7 @@ import canon  # noqa: E402
 import control_plane  # noqa: E402
 import core_md  # noqa: E402
 import definition_doc  # noqa: E402
+import mode_registry  # noqa: E402
 import project_config  # noqa: E402
 import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
@@ -35,6 +37,7 @@ import review_record_session  # noqa: E402
 import review_seats  # noqa: E402
 import round_phases  # noqa: E402
 import session_contract  # noqa: E402
+import store_core  # noqa: E402
 
 SINCE_KEY = "reviewLearningSince"
 PROPOSAL_SCHEMA = "calibration-proposal/1"
@@ -42,7 +45,13 @@ COMMIT_MESSAGE = "docs: record an approved calibration change in Canon"
 GIT_TIMEOUT_SECONDS = 60  # a stalled signer or commit hook must not hang apply after Canon is appended
 _FIXED = review_findings_schema.OUTCOMES[0]
 _KEYS = {"risk-and-trust": {"schema", "kind", "half", "value", "ruling"},
-         "standing-ruling": {"schema", "kind", "ruling"}}
+         "standing-ruling": {"schema", "kind", "ruling"},
+         "focus-hint": {"schema", "kind", "hint", "ruling"},
+         "claude-md-rule": {"schema", "kind", "rule", "ruling"}}
+_LINE_FIELD = {"focus-hint": "hint", "claude-md-rule": "rule"}  # the one line each text kind adds
+REVIEW_LAYER_HERO = "review-crew"  # the review settings' layer, whose Focus hints section a focus hint joins
+FOCUS_HEADING = "## Focus hints"
+CLAUDE_MD = "CLAUDE.md"
 SUPERSEDES_KEY = "supersedes"  # optional on either kind: the Canon entry id a replacement retires
 DIMENSION_SEAT = review_seats.DIMENSION_SEAT
 _SEATS = set(DIMENSION_SEAT.values())
@@ -50,6 +59,9 @@ _KNOWN = set(DIMENSION_SEAT) | _SEATS
 FALSE_CLAIM_MARKER = "false-pr-claim"  # an escape input item carrying this "marker" is a false PR claim, counted apart from escapes
 SEATING_SEATS = ("security", "premortem")
 UNMEASURED = "unmeasured"
+# what would have caught an escape: the eight kinds, in the order owner-decisions.md lists them
+ESCAPE_KINDS = ("claude-md-rule", "focus-hint", "plugin-reviewer-instruction", "one-time-sweep",
+                "permanent-check", "environment-test", "risk-setting-or-leftover-rule", "nothing-reachable")
 
 
 def _canon_id(value):
@@ -124,7 +136,7 @@ def _proposal_problem(p):
     kind = p.get("kind") if isinstance(p, dict) else None
     keys = _KEYS.get(kind) if isinstance(kind, str) else None
     if keys is None:
-        return "kind must be 'risk-and-trust' or 'standing-ruling'"
+        return "kind must be one of %s" % ", ".join(repr(k) for k in _KEYS)
     if set(p) - {SUPERSEDES_KEY} != keys or p.get("schema") != PROPOSAL_SCHEMA:
         return "a %s proposal is exactly %s (plus an optional %s) with schema %s" % (
             p["kind"], sorted(keys), SUPERSEDES_KEY, PROPOSAL_SCHEMA)
@@ -138,6 +150,14 @@ def _proposal_problem(p):
         item = project_config._item_by_slug("riskAndTrust")
         if not isinstance(p["half"], str) or project_config.validate_item_value(item, {p["half"]: p["value"]}):
             return "half must name one riskAndTrust half, and value must be that half's valid value"
+    field = _LINE_FIELD.get(p["kind"])
+    if field:
+        text = p[field]
+        # axis: a hint or rule is one plain line, so it can never add a heading or a second line — see bite-proof record wo_2190_one-line
+        # one line by splitlines(), the same split the writer's read-back uses, so a Unicode line separator is refused too
+        if (not isinstance(text, str) or not text.strip() or text != text.strip()
+                or len(text.splitlines()) != 1 or text.startswith("#")):
+            return "%s must be one non-empty line with no surrounding space, not a heading" % field
     return None
 
 
@@ -233,6 +253,92 @@ def _commit_canon(res, line):
         return None, "git could not be run (%s: %s)" % (type(exc).__name__, exc)
 
 
+# --- the two text kinds: a project focus hint and a CLAUDE.md rule ---
+
+class TargetUnreadable(OSError):
+    """A text kind's home file exists but cannot be read as UTF-8 text."""
+
+
+def _text_target(cwd, kind, root):
+    """The file a text kind writes, or raises OSError naming why there is none. A focus hint joins the
+    review settings' layer; a CLAUDE.md rule joins the CLAUDE.md at the project's git root. Neither file
+    is created: a project with none has not set that home up, and the owner's yes does not set it up."""
+    if kind == "focus-hint":
+        try:
+            path = core_md.layer_path(cwd, REVIEW_LAYER_HERO, root)
+        except store_core.RepoRootUnavailable as exc:
+            raise OSError("the review settings' layer could not be located: %s" % exc) from exc
+    else:
+        try:  # the one sanctioned repo-root resolution (store_core), on the same scrubbed git env as _run_git
+            top = store_core.repo_root(cwd, env=definition_doc._scrubbed_git_env())
+        except store_core.RepoRootUnavailable as exc:
+            raise OSError("the project's git root could not be read: %s" % exc) from exc
+        path = os.path.join(top, CLAUDE_MD)
+    if not os.path.isfile(path):
+        raise OSError("%s does not exist" % path)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            fh.read()
+    except UnicodeError as exc:
+        # axis: a home file that is not UTF-8 text is refused before Canon is written — see bite-proof record wo_2190_target-unreadable
+        raise TargetUnreadable("%s is not UTF-8 text: %s" % (path, exc)) from exc
+    # the cloud calibration guard reads the path as given (a link standing where a calibration file belongs),
+    # so it runs here, before the writer resolves the link to its target
+    # axis: a cloud session never writes a calibration file through a symlinked layer — see bite-proof record wo_2190_cloud-guard
+    if store_core.in_cloud_session() and store_core.is_calibration_path(path):
+        raise store_core.CalibrationWriteRefused("%s: %s" % (store_core.CLOUD_REFUSAL_REASON, path))
+    return path
+
+
+def _with_focus_hint(text, line):
+    """The layer text with `line` as the last bullet of its Focus hints section (a new section at the end
+    when there is none), or None when the section already holds that bullet."""
+    lines = text.splitlines()
+    start = next((i for i, l in enumerate(lines) if l.strip() == FOCUS_HEADING), None)
+    if start is None:
+        return text.rstrip("\n") + "\n\n%s\n\n%s\n" % (FOCUS_HEADING, line)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    if line in (l.rstrip() for l in lines[start + 1:end]):
+        return None
+    at = end
+    while at > start + 1 and not lines[at - 1].strip():
+        at -= 1
+    added = [line] if at > start + 1 else ["", line]
+    lines[at:at] = added + ([""] if at < len(lines) and lines[at].strip() else [])
+    return "\n".join(lines) + "\n"
+
+
+def _with_claude_md_rule(text, line):
+    """CLAUDE.md with `line` appended as its own paragraph, or None when a line already reads exactly that."""
+    if line in (l.rstrip() for l in text.splitlines()):
+        return None
+    return text.rstrip("\n") + "\n\n" + line + "\n"
+
+
+def _write_text_kind(cwd, proposal, root):
+    """Write the one line a text kind adds, under the project's config lock, and read it back. Returns
+    (action, path) with action "written" or "noop", or raises OSError / RuntimeError naming the failure."""
+    kind = proposal["kind"]
+    line = ("- " if kind == "focus-hint" else "") + proposal[_LINE_FIELD[kind]]
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            raise RuntimeError("the project's config lock is held by another writer")
+        given = _text_target(cwd, kind, root)
+        # a symlinked CLAUDE.md (a supported layout) is written through to its target, so the link survives;
+        # the layer is written where it stands, as every other layer write does
+        path = os.path.realpath(given) if kind == "claude-md-rule" else given
+        with open(path, encoding="utf-8") as fh:
+            before = fh.read()
+        after = (_with_focus_hint if kind == "focus-hint" else _with_claude_md_rule)(before, line)
+        if after is None:
+            return "noop", given
+        store_core.atomic_write(path, after)
+        with open(path, encoding="utf-8") as fh:
+            if line not in (l.rstrip() for l in fh.read().splitlines()):
+                raise RuntimeError("%s does not hold the added line after the write" % path)
+    return "written", given
+
+
 def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     """Record an owner-approved calibration change. The caller applies between reviews: the command
     does not check for a running review, so the advisor runs it only when no review loop is in flight.
@@ -240,6 +346,13 @@ def apply(cwd, proposal, approval, *, canon_root, session_id, root=None):
     Canon's append path cannot carry a store root (`canon._locate` resolves the ambient store), so a
     `root` naming any other store is refused (`store-override-unsupported`) before anything is written,
     rather than recording the approval in one store and the calibration in another.
+
+    A focus hint joins the Focus hints section of the review settings' layer; a CLAUDE.md rule joins the
+    project's CLAUDE.md, left uncommitted for the advisor to land (on the Canon entry's branch when
+    Canon is in the project's repository, otherwise through a project PR). Neither file is
+    created: with no such file the proposal is refused (`target-missing`), a file that is not UTF-8 text is refused
+    (`target-unreadable`), and a cloud session's calibration write is refused (`calibration-write-in-cloud-session`), each
+    before anything is written.
 
     Every apply appends a fresh Canon entry; a failed apply (canon-not-committed or partial) is retried by hand after reading Canon."""
     # axis: a calibration change is written only on the owner's exact yes, with their words, place and date — see bite-proof record wo_a_1718_no-owner-yes
@@ -268,6 +381,16 @@ def _apply_bound(cwd, proposal, approval, canon_root, session_id, root):
     if canon_home != project_home:
         return _result(False, "refused", "canon-root-mismatch",
                        "--canon-root resolves Canon to %s but --cwd resolves it to %s; nothing was written" % (canon_home, project_home))
+    if proposal["kind"] in _LINE_FIELD:
+        try:
+            _text_target(cwd, proposal["kind"], root)
+        except store_core.CalibrationWriteRefused as exc:
+            return _noted(_result(False, "refused", store_core.CLOUD_REFUSAL_REASON, "%s; nothing was written" % exc), note)
+        except TargetUnreadable as exc:
+            return _noted(_result(False, "refused", "target-unreadable", "%s; nothing was written" % exc), note)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            # axis: a text kind whose home file is missing writes nothing, Canon included — see bite-proof record wo_2190_target-missing
+            return _noted(_result(False, "refused", "target-missing", "%s; nothing was written" % exc), note)
     try:
         res = _append_canon(canon_root, session_id, proposal, approval)
         line = res["appended"][0]
@@ -281,6 +404,15 @@ def _apply_bound(cwd, proposal, approval, canon_root, session_id, root):
         return _noted(_result(False, "canon-not-committed", "canon-commit-failed", failure, canonEntry=line), note)
     if proposal["kind"] == "standing-ruling":
         return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration="canon-only"), note)
+    if proposal["kind"] in _LINE_FIELD:
+        try:
+            action, path = _write_text_kind(cwd, proposal, root)
+        except (OSError, RuntimeError, UnicodeError, subprocess.TimeoutExpired) as exc:
+            return _noted(_result(False, "partial", "calibration-not-written",
+                                  "Canon holds %s (commit %s); the %s write failed: %s" % (line, commit, proposal["kind"], exc),
+                                  canonEntry=line, canonCommit=commit), note)
+        return _noted(_result(True, "applied", canonEntry=line, canonCommit=commit, calibration=proposal["kind"],
+                              set={"action": action, "path": path}), note)
     half = proposal["half"]
     try:
         wrote = project_config.set_item(cwd, "riskAndTrust", {half: proposal["value"]}, root=root)
@@ -346,12 +478,15 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     a PR is dated by that record's `writtenAt`, and counts when that day is on or after the adoption day and inside the window.
     Its reviews are its seat rows that ran; its catches are its fixed findings, one per finding key, credited to every seat the
     finding's rows name, leaving out merged members (the representative carries the catch). A PR supplied more than once reads `incomplete-evidence`.
-    An escape item marked `"marker": "false-pr-claim"` is counted in `falsePrClaims`, never in `escapes`; `falsePrClaims` is None wherever `escapes` reads None."""
+    An escape item marked `"marker": "false-pr-claim"` is counted in `falsePrClaims`, never in `escapes`; `falsePrClaims` is None wherever `escapes` reads None.
+    An escape's optional `kind` (one of ESCAPE_KINDS, what would have caught it) is counted in `escapesByKind`; an escape with no
+    kind counts there as `unmeasured`, never as `nothing-reachable`, and a kind outside the list reads malformed."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
            "measured": False, "reason": None, "seats": {}, "unattributedCatches": None,
-           "escapes": {"missed": None, "seenAndLeft": None}, "falsePrClaims": None, "leftOut": dict.fromkeys(left)}
+           "escapes": {"missed": None, "seenAndLeft": None}, "escapesByKind": None, "falsePrClaims": None,
+           "leftOut": dict.fromkeys(left)}
     if since is None:
         return dict(out, reason="no-adoption-day")
     start = _day(since)
@@ -422,6 +557,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             unattributed += not seats
             caught.update(seats)
     counts, claims = {"missed": 0, "seenAndLeft": 0}, 0
+    by_kind = dict.fromkeys(ESCAPE_KINDS + (UNMEASURED,), 0)
     for esc in escapes if isinstance(escapes, list) else []:
         day = _day(esc.get("reviewedAt")) if isinstance(esc, dict) else None
         call = esc.get("call") if isinstance(esc, dict) else None
@@ -434,7 +570,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         elif day is None and isinstance(esc, dict):
             left["undated"] += 1
             incomplete = True
-        elif label is None:
+        elif label is None or esc.get("kind") not in ESCAPE_KINDS + (None,):
+            # axis: a kind outside the eight reads malformed, never counted — see bite-proof record wo_2190_unknown-kind
             left["malformed"] += 1
             incomplete = True
         elif outside(day):
@@ -444,11 +581,13 @@ def tally(records, escapes, since, *, until=None, window_days=None):
             claims += 1
         else:
             counts[label] += 1
+            # axis: an escape logged with no kind counts as unmeasured, never as nothing reachable — see bite-proof record wo_2190_kind-missing
+            by_kind[esc.get("kind") or UNMEASURED] += 1
     if incomplete:  # missing evidence reads unmeasured, never zero (owner-decisions.md, the gardening pass)
         # axis: an unmeasured tally leaves the false-claim count None, never zero — see bite-proof record wo_revisit_claims-unmeasured
         return dict(out, measured=False, reason=out["reason"] or "incomplete-evidence", leftOut=left)
     out.update(seats={s: {"reviews": len(reviews[s]), "caught": caught[s]} for s in sorted(set(reviews) | set(caught))},
-               unattributedCatches=unattributed, escapes=counts, falsePrClaims=claims, leftOut=left)
+               unattributedCatches=unattributed, escapes=counts, escapesByKind=by_kind, falsePrClaims=claims, leftOut=left)
     return out
 
 
