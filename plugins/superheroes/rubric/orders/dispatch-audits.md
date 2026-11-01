@@ -25,7 +25,7 @@ Compare the fix (`fixHunks` in the audit target; `fixerDelta` is the whole attem
 suggestion and consequence. Whatever your verdict, when the fix changes behaviour the finding does
 not name, say so in plain words in the result's field for an unnamed behaviour change, but only for
 behaviour that neither this finding nor another finding in `batchFindings` names, by their text (a
-sibling's body and suggestion ride its entry): a change that belongs to a sibling finding's fix is
+sibling's body, suggestion and the locations its kind of mistake names ride its entry): a change that belongs to a sibling finding's fix is
 not unnamed. Report every other change there even when an attached `ownerRuling` (this finding's or a
 sibling's) allows it. Then, in the field for the allowing decision, give the sequence number
 (`ownerRulingSeq`, an integer) of the one carried decision (this finding's own, or a sibling's from
@@ -48,6 +48,7 @@ these fields out when every change in `fixerDelta` is named by a finding of the 
 Whatever your verdict, answer three questions about the fix in the result's field for them, which holds one entry per question, each as `{"answer": "yes" or "no", "why": "<your grounds>"}`: `right` (is the fix right?), `brokeNothing` (did it break nothing next to it?) and `testWouldFail` (would a test fail if the fix were wrong?). A result missing an entry, with an answer other than `yes` or `no`, or with a blank `why` is refused. A verdict that clears the fix, with or without a new issue, stands only when all three answers are `yes`; with any `no` the driver leaves the fix open. A verdict that leaves the fix open may carry any answers.
 When the target carries `breakIt` and its `match` is `changed-explained`, the committed break-it test is not the test role's own text: compare `committedTest` with `reviewerTest` in light of `changedWhy` (the build session's explanation), and answer in the result's field for the test comparison, `{"answer": "matches" or "weakened", "why": "<your grounds>"}`. Answer `weakened` when the change lets the test pass on code it should fail on, or narrows what it covers. Answer `matches` when it only makes the test run (for example a type, syntax or import fix) and covers the same behaviour. A `weakened` answer blocks the fix. When `match` is `missing` or `changed-unexplained`, the driver has already left the fix open; still answer the three questions.
 When the target carries `fixGroup`, the fix is that group's one fix: judge it against this target's own break-it test; the other members are audited on their own targets.
+When the target carries `kindOfMistake`, it names other locations in the change with the same mistake. Answer every one of them in the result's field for them, one entry per named location, each as `{"file": "<the file>", "line": <the line or null>, "fixed": true or false}`, with `fixed` true only when the fix repaired that location. A fix that leaves a named location unfixed, or a location you leave unanswered, is left open by the driver. Leave the field out when the target names no locations.
 
 ## Hard rules
 - Judge only this one target. Do NOT audit other targets or decide the run's outcome.

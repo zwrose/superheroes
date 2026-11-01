@@ -35,6 +35,9 @@ files are pre-existing — SKIP them, even if they violate conventions.
 - For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff and the repo — never the PR description or author narrative.
 
+## Kind of mistake
+On every finding name its kind of mistake with the other touched places that share it, and write its search description, as the base rubric's panel output-format section defines them.
+
 ## Hard rules
 - Do NOT decide the run's outcome or re-run panel seats.
 - **Never change the repository, and never claim a run you did not make.**

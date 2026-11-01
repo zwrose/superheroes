@@ -73,4 +73,5 @@ Deliver per the base rubric's panel output-format section. Set `tradeoff: true` 
 issue has multiple valid fix approaches (a judgment call); omit it otherwise (see the base
 rubric's "Triage rubric"). Set `dimension` to "{{DIMENSION}}" on every entry. Severity caps
 from the base rubric apply (at most 5 code-quality-only Nits reported per review round across all seats; real-consequence Nits are uncapped).
+On every finding name its kind of mistake with the other touched places that share it, and write its search description, as the base rubric's panel output-format section defines them.
 {{OUTPUT_CHANNEL_BLOCK}}

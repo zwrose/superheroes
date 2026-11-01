@@ -103,7 +103,7 @@ import session_mode  # noqa: E402
 import slicing  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
-from finding_identity import finding_identity, finding_label, normalize_title  # noqa: E402
+from finding_identity import finding_identity, finding_label, normalize_title, place_pair  # noqa: E402
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -466,7 +466,7 @@ VERIFY_FOLD_DISCLOSURE_CHANNELS = ("verifyVia",)
 # downgrades, unverified, ambiguous) that round-records.json never stores — the receipt gets
 # `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`).
 UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
-                               "verify")
+                               "verify", "kindMissing")
 
 def _round_disclosure_key(value):
     """The rounds-map key for a durable record's round value — one home for producer and restorer.
@@ -830,6 +830,126 @@ def _touched_scope(diff_text):
     return diff_scope.parse_touched_lines(diff_text) if diff_text is not None else None
 
 
+KIND_OF_MISTAKE_FIELD = review_findings_schema.KIND_OF_MISTAKE_KEY
+SEARCH_DESCRIPTION_FIELD = review_findings_schema.SEARCH_DESCRIPTION_KEY
+SEARCH_AUTHOR_FIELD = review_findings_schema.SEARCH_AUTHOR_KEY
+KIND_MISSING_FIELD = "kindMissing"  # the round record's count of findings that came without a usable kind of mistake
+SEAMS_SEAT_KEY = "seams-check"  # the seat key of the seams check's single reviewer
+KIND_PLACE_DROP = "kindPlace"  # marks an outside drop row that is a place of a kept finding, not a finding of its own
+
+
+def _place_row(place):
+    """`{"file", "line"}` of a usable place, else None: a blank or non-string file, or a line that is neither an
+    integer nor null, is no place. A `fixed` result never rides in from a reviewer; only the audit writes one."""
+    pair = place_pair(place)
+    return None if pair is None else {"file": pair[0], "line": pair[1]}
+
+
+def _clean_kind_of_mistake(finding):
+    """The finding's `kindOfMistake` as `{"kind", "places": [{file, line}]}`, or None when it carries none: a value that
+    is null, not an object, or has a blank `kind` is no kind of mistake (the finding stays). A `places` that is not a
+    list reads empty; a place with a blank file or a line that is not an integer or null, a place equal to the finding's
+    own `(file, line)`, and a repeated place are dropped."""
+    kind = finding.get(KIND_OF_MISTAKE_FIELD)
+    if not (isinstance(kind, dict) and isinstance(kind.get("kind"), str) and kind["kind"].strip()):
+        return None
+    own = (finding.get("file"), finding.get("line"))
+    places, seen = [], {own}
+    raw = kind.get("places")
+    for place in raw if isinstance(raw, list) else ():
+        row = _place_row(place)
+        if row is None:
+            continue
+        pair = (row["file"], row["line"])
+        if pair in seen:
+            continue
+        seen.add(pair)
+        places.append(row)
+    return {"kind": kind["kind"].strip(), "places": places}
+
+
+def _clean_search_description(finding):
+    """The finding's `searchDescription` as `{"kind", "looksLike", "examples"}` (plus the driver's `author` stamp when
+    it holds one), or None when it carries none: a value that is null, not an object, or has a blank `kind` is none."""
+    desc = finding.get(SEARCH_DESCRIPTION_FIELD)
+    if not (isinstance(desc, dict) and isinstance(desc.get("kind"), str) and desc["kind"].strip()):
+        return None
+    looks, examples = desc.get("looksLike"), desc.get("examples")
+    out = {"kind": desc["kind"].strip(),
+           "looksLike": looks.strip() if isinstance(looks, str) else "",
+           "examples": [e.strip() for e in examples if isinstance(e, str) and e.strip()]
+           if isinstance(examples, list) else []}
+    author = desc.get(SEARCH_AUTHOR_FIELD)
+    if isinstance(author, dict):
+        out[SEARCH_AUTHOR_FIELD] = dict(author)
+    return out
+
+
+def _without_search_authors(value):
+    """`(value, changed)`: `value` with the `author` key removed from every `searchDescription` object anywhere inside
+    it. Only the driver stamps an author, at the panel and seams folds, so any other one is removed before a fold
+    reads it; `value` itself is returned untouched when it holds none."""
+    if isinstance(value, dict):
+        out, changed = {}, False
+        for key, item in value.items():
+            new, did = _without_search_authors(item)
+            if key == SEARCH_DESCRIPTION_FIELD and isinstance(new, dict) and SEARCH_AUTHOR_FIELD in new:
+                new = {k: v for k, v in new.items() if k != SEARCH_AUTHOR_FIELD}
+                did = True
+            out[key] = new
+            changed = changed or did
+        return (out, True) if changed else (value, False)
+    if isinstance(value, list):
+        items = [_without_search_authors(item) for item in value]
+        if any(did for _item, did in items):
+            return [item for item, _did in items], True
+    return value, False
+
+
+def _executed_author(state, config, vendor, seat):
+    """`{"seat", "vendor", "family"}`, the search-description author stamp, from the vendor the adapter's authenticated
+    provenance says EXECUTED the seat (`ranManifest`) — never from the payload and never from the configured transport
+    row, which names the selected vendor and can differ. None when that vendor is unknown, its family cannot be
+    resolved, or it is a maker family of the change (the build session never writes a search description)."""
+    # axis: the author is the executed vendor and its family, and a maker family or an unknown provenance leaves the description unstamped — see bite-proof record c4_wo1_kind
+    if not (isinstance(vendor, str) and vendor in _PANEL_VENDORS):
+        return None
+    host = receipt_disclosures.host_family(seat_map_receipts.effective_seat_map(state))
+    native = vendor in model_registry.vendors() and not session_contract.runner_channel_vendor(vendor)
+    family = host if native else model_registry.family_for("reviewer", vendor)
+    if not (isinstance(family, str) and family):
+        return None
+    if receipt_disclosures.nonpanel_barred(state, config)(vendor):
+        return None
+    if family in receipt_disclosures.accumulated_maker_families(state):
+        return None
+    return {"seat": seat, "vendor": vendor, "family": family}
+
+
+def _stamp_search_author(finding, author):
+    """Put `author` on the finding's `searchDescription` (the finding's own copy); nothing when there is no author or no
+    usable description."""
+    desc = finding.get(SEARCH_DESCRIPTION_FIELD)
+    if author is None or not isinstance(desc, dict):
+        return
+    stamped = {k: v for k, v in desc.items() if k != SEARCH_AUTHOR_FIELD}
+    stamped[SEARCH_AUTHOR_FIELD] = dict(author)
+    finding[SEARCH_DESCRIPTION_FIELD] = stamped
+
+
+def _add_kind_missing(state, count):
+    """Add `count` to the round record's `kindMissing`, the findings that came without a usable kind of mistake."""
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    held = rec.get(KIND_MISSING_FIELD)
+    rec[KIND_MISSING_FIELD] = (held if _is_plain_int(held) else 0) + count
+
+
+def _note_compile_stats(state, stats):
+    """Record a compile's `kindMissing` count on the round when the compile saw any finding."""
+    if isinstance(stats, dict) and stats.get("compiled"):
+        _add_kind_missing(state, stats.get("kindMissing") or 0)
+
+
 def _note_outside_round(state, title, file, line, rnd):
     """Remember that the round `rnd` sent the hit (title, file, line) to the "Outside this PR" list: one
     `{"title", "file", "line", "round"}` row in `state["_outsideRounds"]`, never doubled. A non-list value is
@@ -924,6 +1044,8 @@ def _merge_same_finding(existing, incoming):
                 merged.pop(field, None)
     merged["consequence"], merged["consequenceKind"] = finding_outcomes.merged_consequence(
         [existing, incoming])
+    # axis: the merged finding's places are the union of both findings' places and the other finding's own citation — see bite-proof record c4_wo1_kind
+    verification.apply_kind_members(merged, [existing, incoming])
     merged["dimension"] = dims
     merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
     merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
@@ -977,7 +1099,39 @@ def _compile_by_anchor(findings):
     return out
 
 
-def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None, sources=None, source=None):
+def _normalize_kind_members(fc, valid, outside_source, drops, stats):
+    """Normalize a kept finding's `kindOfMistake` and `searchDescription` in place (the compile's own copy of the
+    finding): an unusable one is removed, never refused. Each place of the kind of mistake that is not on a touched
+    line (`_diff_scope_ok`, the same test as the finding's own citation) is added to `drops` as an outside row for the
+    raising reviewer's entry and leaves `places`. Counts into `stats` when given."""
+    kind = _clean_kind_of_mistake(fc)
+    if kind is None:
+        fc.pop(KIND_OF_MISTAKE_FIELD, None)
+    else:
+        in_scope = []
+        for place in kind["places"]:
+            # axis: a place on an untouched line is outside the PR: it leaves `places` for the raising reviewer's outside entry and is never fixed — see bite-proof record c4_wo1_kind
+            if _diff_scope_ok(place, valid):
+                in_scope.append(place)
+            else:
+                drops.append({"file": place["file"], "line": place["line"], "title": kind["kind"],
+                              "reason": COMPILE_DROP_OUTSIDE, "source": outside_source, KIND_PLACE_DROP: True})
+        kind["places"] = in_scope
+        fc[KIND_OF_MISTAKE_FIELD] = kind
+    # axis: a null, non-object or blank-kind member is removed from the finding, which stays — see bite-proof record c4_wo1_kind
+    description = _clean_search_description(fc)
+    if description is None:
+        fc.pop(SEARCH_DESCRIPTION_FIELD, None)
+    else:
+        fc[SEARCH_DESCRIPTION_FIELD] = description
+    if isinstance(stats, dict):
+        stats["compiled"] = stats.get("compiled", 0) + 1
+        if kind is None:
+            stats[KIND_MISSING_FIELD] = stats.get(KIND_MISSING_FIELD, 0) + 1
+
+
+def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None, sources=None, source=None,
+                       stats=None):
     """Port of SKILL §4 steps 1-4 + 6, deterministic and fail-closed:
       1. citation check — drop file/line-less findings;
       2. diff-scope check — drop findings whose (file,line) is not a line the PR touched
@@ -997,6 +1151,11 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
     An outside-scope drop row also carries `source`, the name of whoever raised it: `sources[id(finding)]`
     when `sources` (a dict of `id()` of an input dict -> name) has it, else `source`, else "reviewer";
     `_record_outside` routes those rows to the record's "Outside this PR" list.
+    Every kept finding's `kindOfMistake` and `searchDescription` are normalized: one that is null, not an object or
+    has a blank `kind` is removed (the finding stays); a place of `kindOfMistake` that is not on a line the PR touched
+    leaves `places` as an outside drop row (same source name as the finding's own, titled with the kind of mistake,
+    marked `kindPlace`); with no diff the places are kept as given. When `stats` is a dict it gets `compiled` (the
+    findings that reached the end of the checks) and `kindMissing` (those without a usable kind of mistake).
     Returns (compiled, drops) where each drop names WHY (never silently dropped)."""
     if not isinstance(findings, list):
         findings = []
@@ -1037,6 +1196,7 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": COMPILE_DROP_NO_CONSEQUENCE})
             continue
+        _normalize_kind_members(fc, valid, sources.get(id(f)) or source or OUTSIDE_SOURCE_DEFAULT, drops, stats)
         fc.pop(session_contract.FINDING_KEY_FIELD, None)
         fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
@@ -2117,6 +2277,8 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         # never turns a real one into a craft decision.
         entry["consequence"], entry["consequenceKind"] = finding_outcomes.merged_consequence(
             [existing, entry])
+        # axis: a re-raise of an unresolved finding keeps the places it still owes, so a narrower report never drops a copy the last audit left unfixed — see bite-proof record c4_wo1_kind
+        verification.apply_kind_members(entry, [existing, entry], with_description=False)
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
     # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
     if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
@@ -3561,6 +3723,8 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     ):
         raise DispositionLedgerOwnerRefusal(DISPOSITION_LEDGER_OWNER_UNRECOGNIZED_CAUSE)
     artifact = artifact if isinstance(artifact, dict) else {}
+    # axis: an `author` that arrives inside any payload's search description is removed before any fold reads it; only the panel and seams folds stamp one, from the executed provenance — see bite-proof record c4_wo1_kind
+    artifact, _stripped = _without_search_authors(artifact)
     _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
         _fold_panel(state, config, artifact, session_dir=session_dir)
@@ -3729,7 +3893,8 @@ def _outside_anchors(drops):
     """The `(file, normalized title, line)` anchors of the outside-scope drops, for `_break_it_run_keys`."""
     anchors = set()
     for drop in drops or []:
-        if isinstance(drop, dict) and drop.get("reason") == COMPILE_DROP_OUTSIDE and isinstance(drop.get("file"), str):
+        if (isinstance(drop, dict) and drop.get("reason") == COMPILE_DROP_OUTSIDE
+                and not drop.get(KIND_PLACE_DROP) and isinstance(drop.get("file"), str)):
             line_ok, line = _coerce_line(drop.get("line"))
             anchors.add((drop["file"], normalize_title(str(drop.get("title") or "")), line if line_ok else None))
     return anchors
@@ -3821,6 +3986,7 @@ def _fold_panel(state, config, artifact, session_dir=None):
     seat_sources = {}
     break_it_raw = []
     seat_status = {}
+    ran_in = artifact.get("ranManifest") if isinstance(artifact.get("ranManifest"), dict) else {}
     unverified = []
     missing_dims = []
     vacuous_dims = []
@@ -3848,8 +4014,11 @@ def _fold_panel(state, config, artifact, session_dir=None):
         if status == "missing":
             missing_dims.append(dim)
         seat_status[dim] = status
+        # axis: a search description is stamped with the vendor and family that EXECUTED the seat (the trusted `ranManifest`), never the payload or the configured transport row; a maker family or unknown provenance leaves it unstamped — see bite-proof record c4_wo1_kind
+        seat_author = _executed_author(state, config, ran_in.get(dim), dim) if status == "run" else None
         for f in findings:
             g = dict(f)
+            _stamp_search_author(g, seat_author)
             g.setdefault("dimension", round_phases.seat_lens(dim))
             if status == "missing":
                 g["unverified"] = True
@@ -3895,8 +4064,14 @@ def _fold_panel(state, config, artifact, session_dir=None):
     # intercept returns exactly one copy per input finding, in order
     for original, g in zip(break_it_raw, intercepted):
         seat_sources[id(g)] = seat_sources.get(id(original), break_it.ROLE)  # the copies are new dicts: they came from the original's seat
+    compile_stats = {}
     compiled, drops = mechanical_compile(kept, state.get("reviewedDiff"), scope_exempt=exempt, stamped=stamped,
-                                         sources=seat_sources)
+                                         sources=seat_sources, stats=compile_stats)
+    # axis: the panel's kind-missing count is added to the count the round already holds (an audit that ran before the panel, an earlier wave), never written over it — see bite-proof record c4_wo1_kind
+    held_kind_missing = state["rounds"].get(str(state["round"]), {}).get(KIND_MISSING_FIELD)
+    _record_round(state, "kindMissing",
+                  (held_kind_missing if _is_plain_int(held_kind_missing) else 0)
+                  + (compile_stats.get(KIND_MISSING_FIELD) or 0))
     if runs:
         runs = _break_it_run_keys(runs, compiled, _outside_anchors(drops))
         _record_round_wave(state, "breakItRuns", runs, later)
@@ -4992,7 +5167,20 @@ def _fold_seams(state, config, artifact):
     """The seams check: candidate findings from the whole-change pass fold through the same compile
     path as the panel's, then stage with the panel's held findings for the verifiers."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
-    compiled, drops = mechanical_compile(candidates, state.get("reviewedDiff"), source=OUTSIDE_SEAMS_CHECK)
+    # the seams check's search descriptions are stamped from the vendor that executed it, when the artifact's
+    # trusted `ranManifest` names one; candidates are copied so the stamp never reaches the submitted artifact
+    ran = artifact.get("ranManifest") if isinstance(artifact.get("ranManifest"), dict) else {}
+    seams_author = _executed_author(state, config, ran.get(SEAMS_SEAT_KEY), SEAMS_SEAT_KEY)
+    stamped_candidates = []
+    for cand in candidates:
+        if isinstance(cand, dict):
+            cand = dict(cand)
+            _stamp_search_author(cand, seams_author)
+        stamped_candidates.append(cand)
+    compile_stats = {}
+    compiled, drops = mechanical_compile(stamped_candidates, state.get("reviewedDiff"), source=OUTSIDE_SEAMS_CHECK,
+                                         stats=compile_stats)
+    _note_compile_stats(state, compile_stats)
     _record_compile_drops(state, drops)
     held = state.pop("_panelStaged", None) or []
     _stage_findings(state, compiled)
@@ -7026,6 +7214,11 @@ def _audit_result_entry_fault(entry, index, target_ids, targets_by_id=None):
     if checks_fault is not None:
         return ("%s is refused: %s; expected `checks` with `right`, `brokeNothing` and `testWouldFail`, "
                 "each {\"answer\": \"yes\" or \"no\", \"why\": <reason>}" % (where, checks_fault))
+    # axis: the optional `places` answer is a list of {file, line, fixed} rows — `audits.place_answers_fault`, the fold's own judge
+    places_fault = audits.place_answers_fault(entry)
+    if places_fault is not None:
+        return ("%s is refused: %s; expected `places` as a list of {\"file\", \"line\", \"fixed\": true or false} "
+                "for each place its target's kind of mistake names, or leave the field out" % (where, places_fault))
     return None
 
 
@@ -8243,6 +8436,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             for carried in ("body", "suggestion"):
                 if bf.get(carried) is not None:
                     sibling[carried] = bf[carried]
+            sibling_kind = _kind_of_mistake_projection(bf)
+            if sibling_kind is not None:
+                sibling[KIND_OF_MISTAKE_FIELD] = sibling_kind
             sib_ruling, sib_seq = _carried_owner_ruling(
                 _row_decision(state, effective, ledger_by_key, sibling["id"]))
             if sib_ruling is not None:
@@ -8303,6 +8499,11 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         for carried in ("body", "suggestion", review_findings_schema.CONSEQUENCE_KEY):
             if f.get(carried) is not None:
                 row[carried] = f[carried]
+        # The kind of mistake rides every target with the other places it names (no earlier audit's `fixed` result):
+        # the auditor answers every place, and the fold refuses a fix that leaves one open.
+        kind = _kind_of_mistake_projection(f)
+        if kind is not None:
+            row[KIND_OF_MISTAKE_FIELD] = kind
         row["fixHunks"] = _fix_hunks_over_line(audit_targets_map, f.get("file"), f.get("line"))
         # `fixerDelta` is the attempt's own diff (reviewed head -> fixed head) over every file it
         # changed; `batchFindings` are the attempt's other findings (id, file, line, title).
@@ -8362,6 +8563,17 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
     return targets
 
 
+def _kind_of_mistake_projection(finding):
+    """The kind of mistake a finding names, with the other places it names and no earlier audit's `fixed`
+    result — the one shape an audit target and its sibling projections carry it in; None when it names none."""
+    kind = finding.get(KIND_OF_MISTAKE_FIELD) if isinstance(finding, dict) else None
+    if not (isinstance(kind, dict) and isinstance(kind.get("kind"), str) and kind["kind"].strip()):
+        return None
+    return {"kind": kind["kind"],
+            "places": [{"file": p.get("file"), "line": p.get("line")}
+                       for p in kind.get("places") or [] if isinstance(p, dict)]}
+
+
 def _round_finding_entry(key, finding, carried_ruling):
     """One round-findings entry — id, place, title, body and suggestion, and the finding's carried owner
     ruling — in the one shape every audit target lists its round's other findings in."""
@@ -8370,6 +8582,9 @@ def _round_finding_entry(key, finding, carried_ruling):
     for carried in ("body", "suggestion"):
         if finding.get(carried) is not None:
             entry[carried] = finding[carried]
+    sibling_kind = _kind_of_mistake_projection(finding)
+    if sibling_kind is not None:
+        entry[KIND_OF_MISTAKE_FIELD] = sibling_kind
     entry_ruling, entry_seq = carried_ruling
     if entry_ruling is not None:
         entry["ownerRuling"] = entry_ruling
@@ -8675,9 +8890,15 @@ def _fold_audits(state, config, artifact, session_dir=None):
     still_open = _open_audit_ids_from_not_discharged(outcome.get("notDischarged"))
     if still_open is not None:
         still_open |= set(riders_open)  # a rider left open still holds its restage marks
+    # axis: the clearing audit's per-place answers ride the fix disposition itself, for either clearing ruling (`discharged` lists both), so the live row, the ledger, the archive and the merge projection carry them as one family — see bite-proof record c4_wo1_kind
+    place_answers = {a["id"]: [{"file": p.get("file"), "line": p.get("line"), "fixed": p["fixed"]}
+                               for p in a["places"] if isinstance(p, dict) and isinstance(p.get("fixed"), bool)]
+                     for a in outcome["audits"]
+                     if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("places"), list)}
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
-        _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt)
+        _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt,
+                            placeResults=place_answers.get(tid) or None)
         # The discharge supersedes the closure's earlier dispositions the ruling had reopened.
         # An unresolvable notDischarged list leaves every restage mark in place (fail closed).
         reopened = state.get("restagedAfterDispositionSeq")
@@ -8686,6 +8907,8 @@ def _fold_audits(state, config, artifact, session_dir=None):
             for member in _ruling_closure(state, ledger_now or {}, tid) - {tid} - still_open:
                 reopened.pop(member, None)
                 (state.get("restagedInRound") or {}).pop(member, None)
+    # the disclosure of an unfixed, unanswered or ignored place rides the round's `audits` entry (its `reason`,
+    # `places` and `placesIgnored`), so the record of the round holds it
     state["_newIssues"] = outcome["newIssues"]
     for aid in outcome["notDischarged"]:
         _decision(state, "not-discharged", aid)
@@ -8713,7 +8936,10 @@ def _after_audits(state, config):
         # follows. What the audits raised is compiled as a scoped finder's candidates are and waits with the carried findings
         # sent back, to join the panel's candidates at the verifier.
         new_issues = [ni for ni in state.pop("_newIssues", None) or [] if isinstance(ni, dict)]
-        raised, drops = mechanical_compile(new_issues, state.get("reviewedDiff"), source=OUTSIDE_FIX_AUDITOR)
+        compile_stats = {}
+        raised, drops = mechanical_compile(new_issues, state.get("reviewedDiff"), source=OUTSIDE_FIX_AUDITOR,
+                                           stats=compile_stats)
+        _note_compile_stats(state, compile_stats)
         # axis: a child an audit raised on the full returning path is linked to its parent here, as `_fold_scoped` links it, so a later audit of the parent carries it — see bite-proof record c1_followups_2288
         _bind_audit_spawned(state, new_issues, raised)
         _record_compile_drops(state, drops)
@@ -8888,8 +9114,11 @@ def _fold_scoped(state, config, artifact):
     scoped = [{k: v for k, v in c.items() if k != AUDIT_ORIGIN_FIELD} if isinstance(c, dict) else c
               for c in candidates]
     new_issue_sources = {id(ni): OUTSIDE_FIX_AUDITOR for ni in new_issues}
+    compile_stats = {}
     compiled, drops = mechanical_compile(scoped + new_issues, state.get("reviewedDiff"),
-                                         sources=new_issue_sources, source=OUTSIDE_SCOPED_FINDER)
+                                         sources=new_issue_sources, source=OUTSIDE_SCOPED_FINDER,
+                                         stats=compile_stats)
+    _note_compile_stats(state, compile_stats)
     _bind_audit_spawned(state, new_issues, compiled)
     _record_compile_drops(state, drops)
     compiled = _with_carried(state, compiled)  # the carried findings sent back go to the verifier with the round's candidates
@@ -9548,6 +9777,9 @@ def _union_open_blockers(*groups):
             if key is None:
                 continue
             if key in seen_keys:
+                # axis: the kept entry owes every place a deduplicated sibling still names, so a fresh report never hides an unresolved target's outstanding places — see bite-proof record c4_wo1_kind
+                kept = next(b for b in batch if session_contract.finding_identity_key(b) == key)
+                verification.apply_kind_members(kept, [kept, f], with_description=False)
                 continue
             batch.append(f)
             seen_keys.add(key)
@@ -13928,6 +14160,18 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
     return _ensure_bytes_at_path(session_dir, path, _fix_batch_canonical_bytes(state))
 
 
+KIND_PLACES_GUIDANCE = ("The fix covers each finding's own place and every place its kind of mistake names; "
+                        "a place left unfixed leaves the finding open.")
+
+
+def _batch_names_places(state):
+    """True when a finding of the apply-fixes step's batch names at least one other place of its kind of mistake."""
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    return any(isinstance(row, dict) and audits.target_places(row) for row in batch or [])
+
+
 def _fix_guidance_path_for_round(session_dir, rnd, state):
     """The guidance file beside the slice's fix batch, named the way the batch file is."""
     rdir = round_records.round_dir(session_dir, rnd)
@@ -13950,6 +14194,10 @@ def _apply_fixes_payload_fields(session_dir, state, rnd, attempt):
             session_dir, rnd, P_APPLY_FIXES,
             round_records.storage_key(payload_contracts.SEAT_APPLY_FIXES), attempt)}
     guidance = _gate_guidance_block(_gate_guidance_entries(state, rnd))
+    # axis: a batch with a finding that names other places of its kind of mistake guides the fix to cover every one of them, in the one guidance file both the batch and its slices read — see bite-proof record c4_wo1_kind
+    if _batch_names_places(state):
+        guidance = (KIND_PLACES_GUIDANCE if guidance == _GATE_GUIDANCE_NO_GUIDANCE
+                    else guidance + "\n\n" + KIND_PLACES_GUIDANCE)
     fields = {"fixBatchPath": _ensure_fix_batch_file(session_dir, rnd, state)}
     guidance_path = _fix_guidance_path_for_round(session_dir, rnd, state)
     if guidance == _GATE_GUIDANCE_NO_GUIDANCE:

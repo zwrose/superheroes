@@ -65,7 +65,13 @@ def _example_finding_member():
     member = {}
     for key in RFS.CANONICAL_MEMBER_KEYS:
         schema = RFS.FINDING_PROPERTY_SCHEMAS[key]
-        if "enum" in schema:
+        if key == "kindOfMistake":
+            member[key] = {"kind": "example kind",
+                           "places": [{"file": "other/file.py", "line": 7}]}
+        elif key == "searchDescription":
+            member[key] = {"kind": "example kind", "looksLike": "example shape",
+                           "examples": ["example one"]}
+        elif "enum" in schema:
             member[key] = next(v for v in schema["enum"] if v is not None)
         elif schema.get("type") == ["integer", "null"]:
             member[key] = None
@@ -97,6 +103,7 @@ def _valid_review_branch(kind):
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
             "checks": None,
+            "places": None,
             "testMatch": None,
             "readParts": None,
             "investigated": investigated,
@@ -130,6 +137,7 @@ def _valid_review_branch(kind):
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
             "checks": None,
+            "places": None,
             "testMatch": None,
             "readParts": None,
             "investigated": investigated,
@@ -151,6 +159,7 @@ def _valid_review_branch(kind):
             "unnamedChangeFixes": None,
             "unnamedChangeReverts": None,
             "checks": None,
+            "places": None,
             "testMatch": None,
             "readParts": None,
             "investigated": investigated,

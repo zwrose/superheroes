@@ -77,6 +77,21 @@ _STRICT_MODE_REFINEMENTS = {
             for name in audits.CHECK_NAMES
         },
     },
+    # The fix auditor's answer for each place the target finding's kind of mistake names; the shape's one
+    # judge is audits.place_answers_fault.
+    ("ruling", "places"): {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["file", "line", "fixed"],
+            "properties": {
+                "file": {"type": "string"},
+                "line": {"type": ["integer", "null"]},
+                "fixed": {"type": "boolean"},
+            },
+        },
+    },
     ("ruling", "testMatch"): {
         "type": "object",
         "additionalProperties": False,

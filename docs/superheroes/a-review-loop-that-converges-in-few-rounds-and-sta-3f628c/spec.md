@@ -10,7 +10,7 @@ approved: "2026-10-27"
 gates: {review: passed}
 producedBy: "the-architect@0.46.2"
 created: "2026-10-27"
-updated: "2026-10-30"
+updated: "2026-11-01"
 ---
 # A review loop that converges in few rounds and stays simple
 
@@ -619,6 +619,7 @@ The approved requirements and shipped rules below change under this spec. The ad
   2026-10-30-0b372f49-2. Sections touched: Significant unhappy paths (UFR-8, its statement and a
   second acceptance); Amendments. Coverage map re-checked the same day: UFR-8's new acceptance is
   allocated to C1-L10a, which built it.
+- **2026-11-01 (owner-stamped, substantive):** C4 (copies of a bug) merges whole as a native stack of two layers instead of one PR: layer 1, every finding's kind of mistake and places with the every-place fix audit; layer 2, the repository sweep and its hits. The stack merges with one `gh stack merge` only once both layers are vetted, so no part of C4 reaches the trunk alone. The owner's ruling: "453 a" on collector #695 item 453, 2026-11-01, after C4's build measured about twice its estimate. Sections touched: frontmatter (`updated`); register R1. Coverage: C4's criteria stay allocated to C4 exactly once; the layers split them, and the coverage map is unchanged.
 
 ## Coverage
 
