@@ -744,6 +744,55 @@ def test_await_dispatches_ruling_is_delivered_with_its_prohibitions():
     # test_launcher.py — not here.
 
 
+_DISPATCH_MECHANICS = os.path.join(
+    _PLUGIN_ROOT, "skills", "workhorse", "reference", "dispatch-mechanics.md"
+)
+
+
+def test_turn_end_ruling_is_delivered_verbatim():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "turn-end" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "turn-end")
+    # Pinned in full: the independent third site, so a coordinated edit to launch-doctrine.md and
+    # RULING_TEXT still fails here unless this literal is updated too.
+    assert text == (
+        "A headless lane never ends a turn with a background task or subagent still running: "
+        "harness-tracked background work and a running subagent die when the turn ends, and "
+        "`Monitor`, harness background-run completion and wakeup scheduling cannot wake a headless "
+        "session, so none of them is a turn's exit plan; until the handback or park comment is "
+        "posted, end every turn with a tool call, and await every outcome in-turn or park durably first."
+    )
+    assert LD.RULING_INVARIANTS["turn-end"] == (
+        "never ends a turn with a background task or subagent still running",
+        "cannot wake a headless session",
+        "end every turn with a tool call",
+    )
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py::test_compose_turn_end_ruling_in_prompt — not here.
+
+
+def test_doctrine_turn_end_ruling_invariant_missing():
+    text = _mutate_once(_read_doctrine(), "cannot wake a headless session, so none", "cannot wake a headless lane, so none")
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == (
+        "doctrine-ruling-invariant-missing:turn-end:cannot wake a headless session"
+    )
+    assert result["rulings"] == []
+    assert result["checks"] == []
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+
+
+def test_turn_end_ruling_matches_dispatch_mechanics():
+    # axis: the turn-end ruling text is carried verbatim (whitespace-normalised) in the
+    # dispatch-mechanics reference's "The turn's final act" section
+    with open(_DISPATCH_MECHANICS, encoding="utf-8") as fh:
+        doc = " ".join(fh.read().split())
+    assert " ".join(LD.RULING_TEXT["turn-end"].split()) in doc
+
+
 def test_doctrine_gated_strings_ruling_invariant_missing():
     text = _mutate_once(
         _read_doctrine(),

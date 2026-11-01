@@ -63,6 +63,13 @@ survival.
 
 ### The turn's final act
 
+**The standing ruling `turn-end` (launch doctrine), verbatim:** A headless lane never ends a turn
+with a background task or subagent still running: harness-tracked background work and a running
+subagent die when the turn ends, and `Monitor`, harness background-run completion and wakeup
+scheduling cannot wake a headless session, so none of them is a turn's exit plan; until the
+handback or park comment is posted, end every turn with a tool call, and await every outcome
+in-turn or park durably first.
+
 A headless session (`claude -p`) **exits when its turn ends**. Until the durable handback comment,
 or a durable park, is posted on the issue or the PR, end every turn with a tool call. Narration
 rides alongside a tool call in the same message. A standalone narrative message ends the turn, and
