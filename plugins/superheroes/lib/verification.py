@@ -15,6 +15,7 @@ import re
 import break_it
 import circuit_breaker
 import finding_outcomes
+from finding_identity import place_pair as _place_pair
 import panel_tally
 import review_findings_schema
 import round_phases
@@ -335,19 +336,6 @@ def _eff_sev(severity):
 
 KIND_OF_MISTAKE_FIELD = review_findings_schema.KIND_OF_MISTAKE_KEY
 SEARCH_DESCRIPTION_FIELD = review_findings_schema.SEARCH_DESCRIPTION_KEY
-
-
-def _place_pair(place):
-    """`(file, line)` of a place or a citation, or None when the file is blank or not a string or the line is
-    neither an integer nor null."""
-    if not isinstance(place, dict):
-        return None
-    file, line = place.get("file"), place.get("line")
-    if not isinstance(file, str) or not file.strip():
-        return None
-    if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
-        return None
-    return (file, line)
 
 
 def _usable_kind(member):

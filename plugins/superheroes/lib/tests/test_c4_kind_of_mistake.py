@@ -217,6 +217,17 @@ def test_t4b_places_left_unanswered_are_not_discharged_and_disclosed():
         assert "not answered: " in out["audits"][0]["reason"]
 
 
+def test_t4e_an_unnamed_change_reported_with_an_incomplete_place_is_kept_for_the_driver_record():
+    out = _audit(_target(_kind(3, 19)), [_row(3, True), _row(19, False)], unnamedChange="also drops the log line")
+    (entry,) = out["audits"]
+    assert entry["ruling"] == "not-discharged" and out["placesUnfixed"] == ["t-1"]
+    assert entry["reportedUnnamedChange"] == "also drops the log line"
+    assert "left unfixed: src/a.py:19" in entry["reason"]
+    assert entry["reason"].endswith(" Unnamed change: also drops the log line")
+    plain = _audit(_target(_kind(3, 19)), [_row(3, True), _row(19, False)])["audits"][0]
+    assert "reportedUnnamedChange" not in plain and "Unnamed change" not in plain["reason"]
+
+
 def test_t4c_every_place_fixed_is_discharged_and_the_record_reads_all_fixed(tmp_path):
     # axis: an answer of fixed for every named place discharges the target and the record renders "all fixed"
     out = _audit(_target(_kind(3, 19)), [_row(3, True), _row(19, True)])

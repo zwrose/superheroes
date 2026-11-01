@@ -11,7 +11,7 @@ unaudited fix (the expensive failure direction: a real defect ships believed fix
 uncertain / malformed / missing ruling collapses to `not-discharged` and is disclosed.
 """
 
-from finding_identity import finding_identity
+from finding_identity import finding_identity, place_pair as _place_key
 
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
 
@@ -117,19 +117,6 @@ def audit_checks_fault(result, target=None):
             return ("`testMatch` %s — the committed break-it test was changed, so the audit owes "
                     "whether it still matches the test role's" % why)
     return None
-
-
-def _place_key(place):
-    """`(file, line)` of a place row, or None when the row is no place (not an object, a blank or
-    non-string file, a line that is neither an integer nor null)."""
-    if not isinstance(place, dict):
-        return None
-    file, line = place.get("file"), place.get("line")
-    if not isinstance(file, str) or not file.strip():
-        return None
-    if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
-        return None
-    return (file, line)
 
 
 def target_places(target):
@@ -617,9 +604,15 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 candidates = (_valid_new_issues(r.get("newIssues"), fid)
                               if ruling == "discharged-but-new-issue" else [])
                 new_issues.extend(candidates)
-                base.update(ruling="not-discharged",
-                            reason="the fix leaves a place of the same kind of mistake open (%s)"
-                            % "; ".join(parts))
+                reason_text = ("the fix leaves a place of the same kind of mistake open (%s)"
+                               % "; ".join(parts))
+                # An unnamed change reported with an incomplete-place return is kept on the entry and in
+                # its reason, so the driver's record of reported changes and the next fixer still carry it.
+                reported_unnamed = r.get("unnamedChange")
+                if has_usable_unnamed_change(reported_unnamed):
+                    base["reportedUnnamedChange"] = reported_unnamed.strip()
+                    reason_text += ". Unnamed change: %s" % reported_unnamed.strip()
+                base.update(ruling="not-discharged", reason=reason_text)
                 audits.append(base)
                 continue
         # A clearing ruling stands only when all three checks are answered `yes`.

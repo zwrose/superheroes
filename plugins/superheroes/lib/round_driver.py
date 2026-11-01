@@ -103,7 +103,7 @@ import session_mode  # noqa: E402
 import slicing  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
-from finding_identity import finding_identity, finding_label, normalize_title  # noqa: E402
+from finding_identity import finding_identity, finding_label, normalize_title, place_pair  # noqa: E402
 
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
@@ -842,14 +842,8 @@ KIND_PLACE_DROP = "kindPlace"  # marks an outside drop row that is a place of a 
 def _place_row(place):
     """`{"file", "line"}` of a usable place, else None: a blank or non-string file, or a line that is neither an
     integer nor null, is no place. A `fixed` result never rides in from a reviewer; only the audit writes one."""
-    if not isinstance(place, dict):
-        return None
-    file, line = place.get("file"), place.get("line")
-    if not isinstance(file, str) or not file.strip():
-        return None
-    if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
-        return None
-    return {"file": file, "line": line}
+    pair = place_pair(place)
+    return None if pair is None else {"file": pair[0], "line": pair[1]}
 
 
 def _clean_kind_of_mistake(finding):
