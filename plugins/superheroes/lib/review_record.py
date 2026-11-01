@@ -1799,7 +1799,7 @@ def _shown_session_cost(cost):
     out = {}
     for k, v in cost["bySeat"].items():
         n, shown = 0, k
-        if _has_secret(k) or pr_comment.scrub(k) != k:
+        if _has_secret(k) or _secret_key(k) or pr_comment.scrub(k) != k:
             shown = "[REDACTED SEAT]"
             while shown in out or shown in cost["bySeat"]:
                 n += 1
