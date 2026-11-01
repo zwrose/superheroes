@@ -149,11 +149,12 @@ printf '%s' "$BASE_REF" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' && VERIFY_CMD
 **Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above. On fresh state the round-1 artifact passed to the driver is refused in code (`round-diff-unreadable`, `round-diff-empty`, `round-diff-malformed`, `round-diff-required`); rounds 2+ rely on the shell halt above.
 
 ```bash
-git diff --no-ext-diff --no-textconv --no-color -M -U3 --src-prefix=a/ --dst-prefix=b/ "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt.tmp" && mv "$SESSION_DIR/round-<round>/diff.txt.tmp" "$SESSION_DIR/round-<round>/diff.txt" || { rm -f "$SESSION_DIR/round-<round>/diff.txt.tmp"; echo "review-code: git diff against $BASE_REF FAILED — refusing to review the artifact it left behind (#637)" >&2; exit 1; }
+git diff --no-ext-diff --no-textconv --no-color -M -U3 --src-prefix=a/ --dst-prefix=b/ "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt.tmp" || { echo "review-code: git diff against $BASE_REF FAILED — refusing to review the artifact it left behind (#637)" >&2; exit 1; }
+mv "$SESSION_DIR/round-<round>/diff.txt.tmp" "$SESSION_DIR/round-<round>/diff.txt" || { echo "review-code: git diff against $BASE_REF FAILED — refusing to review the artifact it left behind (#637)" >&2; exit 1; }
 [ -s "$SESSION_DIR/round-<round>/diff.txt" ] || { echo "review-code: round diff against $BASE_REF is EMPTY — an empty review surface is never certifiable-clean; halt and investigate (#637)" >&2; exit 1; }
 ```
 
-The flags are the review diff's fixed shape (`REVIEW_DIFF_ARGS` in `lib/review_diff_bytes.py`), so a user's git settings (copy detection, context lines, prefixes, an external diff) never change what the loop reads.
+The flags are the review diff's fixed shape (`REVIEW_DIFF_ARGS` in `lib/review_diff_bytes.py`), so a user's git settings (copy detection, context lines, prefixes, an external diff) never change what the loop reads. Each step halts on its own failure, and no delete rides a compound command (the delete rule, `DELETE_RULE` in `lib/command_refusals.py`): a `.tmp` file a failed step leaves is never read.
 
 **If `$BASE_REF` is not in scope** — a resumed or compacted orchestrator, or a fresh shell — restore the pin from the session record rather than re-deriving it: `BASE_REF=$(jq -r '.baseRef // empty' "$SESSION_DIR/meta.json")`, then **re-run the resolve-to-a-commit check from the setup block** (`BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || exit 1`) before any diff. Use `// empty`, never a bare `.baseRef`: `jq -r` prints the literal string `null` for an absent key, which is non-empty and would sail past a naive check. Re-running the setup block instead would silently re-pin to a moved `origin/<base>`.
 
@@ -172,9 +173,8 @@ jq -n --arg mode "$MODE" --arg path loop --arg repo "$REPO" --arg branch "$BRANC
   --argjson pr "$PR_ARG" --argjson focusNotes "$FOCUS_ARG" \
   --argjson storageMode "$STORAGE_MODE_ARG" --argjson storageSource "$STORAGE_SOURCE_ARG" --argjson storageProvisional "$STORAGE_PROVISIONAL_ARG" \
   '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes,storageMode:$storageMode,storageSource:$storageSource,storageProvisional:$storageProvisional}' \
-  > "$SESSION_DIR/meta.json.tmp" \
-  && mv "$SESSION_DIR/meta.json.tmp" "$SESSION_DIR/meta.json" \
-  || { rm -f "$SESSION_DIR/meta.json.tmp"; echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
+  > "$SESSION_DIR/meta.json.tmp" || { echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
+mv "$SESSION_DIR/meta.json.tmp" "$SESSION_DIR/meta.json" || { echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
 ```
 
 The `path` field is always `loop`. `post` was once a value and was removed with its mode — never re-add it; `review-only` was removed the same way. A resumed run carrying either has no flow left to continue. The `verify` field is the verify command string, so a cold-resumed orchestrator recovers the verify story. `storageMode`, `storageSource`, and `storageProvisional` record storage-bootstrap disclosure when bootstrap ran (`$LOC`, `$SOURCE`, `$PROVISIONAL`); when bootstrap did not run they are JSON `null` — not empty strings — so a reader can tell no storage decision was taken this run.
