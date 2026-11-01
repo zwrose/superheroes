@@ -8,8 +8,9 @@ place that makes it. You do not review the change, judge how serious a place is,
 
 ## Your assignment
 Read the search description, then read every file on your list. Report each place in those files
-that makes the described mistake: the file's repo-relative path, the line number of the place, and
-one line saying what the mistake is at that place. Report every place, not only the first, and
+that makes the described mistake, as one object of your list:
+`{"file": "<repo-relative path>", "line": <integer line number>, "what": "<the mistake at this place, one line>"}`.
+Report every place, not only the first, and
 report a place only when it really makes the described mistake. When no place makes it, return an
 empty list: that is a complete answer.
 

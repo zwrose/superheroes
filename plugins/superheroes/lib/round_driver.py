@@ -5046,7 +5046,7 @@ def _sweep_place_pairs(parent):
     return pairs
 
 
-def _sweep_record(records, sweep_id):
+def _sweep_row(records, sweep_id):
     for record in records:
         if isinstance(record, dict) and record.get("sweepId") == sweep_id:
             return record
@@ -5071,7 +5071,7 @@ def _fold_sweep(state, config, artifact, session_dir=None):
     staged, hit_keys = [], []
     for sweep in pending:
         sweep_id = sweep["sweepId"]
-        row = _sweep_record(records, sweep_id)
+        row = _sweep_row(records, sweep_id)
         if row is None:
             row = {"sweepId": sweep_id, "findingKey": sweep.get("findingKey"), "title": sweep.get("title"),
                    "file": sweep.get("file"), "line": sweep.get("line"), "parts": len(parts), "missing": [],
@@ -5161,7 +5161,7 @@ def _withhold_ungraded_sweep_hits(state, survivors):
             kept.append(survivor)
             continue
         mark = survivor.get(SWEEP_OF_FIELD)
-        row = _sweep_record(records, mark.get("sweepId")) if isinstance(mark, dict) and isinstance(records, list) else None
+        row = _sweep_row(records, mark.get("sweepId")) if isinstance(mark, dict) and isinstance(records, list) else None
         if row is not None:
             row["ungraded"] = row.get("ungraded", 0) + 1
         _decision(state, "sweep-hit-ungraded", "%s (%s:%s): %s" % (
