@@ -27,6 +27,9 @@ OTHER_GRADE = {"verdict": "plausible", "reason": "read, not reproduced"}
 REPEAT = {"findingKey": "a.py::t@L3", "id": "f-0", "fixHolds": True}
 STORED_REPEAT = dict(REPEAT, findingKey=rr._key({"findingKey": REPEAT["findingKey"]}))
 KIND = {"kind": "unchecked index", "places": [{"file": "b.py", "line": 4, "fixed": True}]}
+# the stored shape of a fixed place: the kind holds no `fixed`, the `fixed` disposition's placeResults answer it
+STORED_KIND = {"kind": "unchecked index", "places": [{"file": "b.py", "line": 4}]}
+PLACE_ANSWERS = [{"file": "b.py", "line": 4, "fixed": True}]
 RUN_1 = {"test": "tests/test_a.py::test_t", "commit": "abc1234", "status": "ran", "exitCode": 1,
          "output": "AssertionError: boom", "reason": None, "changedWhy": None}
 RUN_2 = dict(RUN_1, commit="def5678", exitCode=0, output="ok")
@@ -80,7 +83,8 @@ def _abandoned(tmp_path, seats=(("code-reviewer", [UNFOLDED]),), **state):
 
 def test_e1_a_live_row_without_a_part_keeps_the_ledger_rows(tmp_path):
     # axis: a newer row never erases a finding part an older row held, for each of the four parts — see bite-proof record c1l1_wo_b_session_seam
-    session = Session(tmp_path, findings=[LIVE], dispositionLedger=[ledger_row(**VALUES)]).seat("code-reviewer").save()
+    session = Session(tmp_path, findings=[LIVE], dispositionLedger=[ledger_row(**dict(VALUES, kindOfMistake=STORED_KIND), placeResults=PLACE_ANSWERS)]
+                      ).seat("code-reviewer").save()
     (row,) = _account(session)["findings"]
     assert {p: row[p] for p in PARTS} == dict(VALUES, repeatOf=STORED_REPEAT)
 
@@ -300,7 +304,8 @@ def test_fill_the_earlier_grade_and_runs_survive_a_later_session_that_lacks_them
     fake = Fake()
     first = Session(tmp_path, dispositionLedger=[ledger_row(grade=GRADE, repeatOf=REPEAT, breakItRuns=[RUN_1])]).seat("code-reviewer").save()
     assert send(tmp_path, first, fake)["ok"]
-    second = _later(tmp_path, "b", dispositionLedger=[ledger_row(breakItRuns=[RUN_2], kindOfMistake=KIND)])
+    second = _later(tmp_path, "b", dispositionLedger=[ledger_row(breakItRuns=[RUN_2], kindOfMistake=STORED_KIND,
+                                                                           placeResults=PLACE_ANSWERS)])
     assert send(tmp_path, second, fake)["ok"]
     (row,) = _record(fake)["findings"]
     assert row["grade"] == GRADE and row["repeatOf"] == STORED_REPEAT and row["kindOfMistake"] == KIND
@@ -372,7 +377,8 @@ def test_dod_the_carried_parts_render_in_the_summary(tmp_path):
              "decision": "went-on"}
     s = Session(tmp_path, config={"maxRounds": 7}, rounds={"1": {}, "2": {"rerunChecks": [check]}},
                 extraAudit={"why": "the advisor ordered one audit of round 2's fixes"},
-                dispositionLedger=[ledger_row(grade=GRADE, repeatOf=REPEAT, breakItRuns=[RUN_1], kindOfMistake=KIND)])
+                dispositionLedger=[ledger_row(grade=GRADE, repeatOf=REPEAT, breakItRuns=[RUN_1], kindOfMistake=STORED_KIND,
+                                         placeResults=PLACE_ANSWERS)])
     s.seat("code-reviewer").rows.append(dict(SYNTHESIS, round=1))
     fake = Fake()
     assert _write(tmp_path, s.save(), fake)["ok"]
