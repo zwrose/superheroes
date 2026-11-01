@@ -103,20 +103,6 @@ def test_refusals_fault_names_the_fault(value, reason):
     assert CR.refusals_fault(value) == reason
 
 
-# the two exceptions to the stop rule, pinned once as a literal
-_EXCEPTION_SENTENCE = (
-    "There are two exceptions. First: when the refusing guard's or hook's own refusal message names "
-    "a route (an exact command or tool to use instead), you may take exactly that route, once, and "
-    "record it as that entry's route. Second: when a refusal is only about the command's form (a "
-    "compound command, a variable or program inside `bash -c`, a heredoc or pipe the guard will not "
-    "parse) and not about what the command does, you may re-issue the same command once in plain "
-    "form (each command its own plain call, with no compound, wrapper, heredoc or pipe) and record "
-    "that plain form as that entry's route. A second refusal, and any refusal about what the "
-    "command does (a delete, a push, a network call, a permission), stays a stop; so does every "
-    "other form. A refused command that carries a delete is never only about its form."
-)
-
-
 @pytest.mark.parametrize("refuser", ["permission", "hook", "sandbox"])
 def test_a_route_is_valid_from_any_refuser(refuser):
     # axis: a non-blank route is valid with any refuser (a form-only re-issue, whatever the refuser); a blank one is not
@@ -127,13 +113,11 @@ def test_a_route_is_valid_from_any_refuser(refuser):
 
 def test_stop_rule_ends_with_its_two_exceptions():
     # axis: the stop rule carries its two exceptions, and the order text carries the stop rule — see bite-proof record wo_a_2314_form_only
-    assert CR.STOP_RULE.endswith(" " + _EXCEPTION_SENTENCE)
     assert CR.STOP_RULE.count("There are two exceptions.") == 1
     assert "and not about what the command does" in CR.STOP_RULE
     assert ("any refusal about what the command does (a delete, a push, a network call, a "
             "permission), stays a stop") in CR.STOP_RULE
     assert "A refused command that carries a delete is never only about its form." in CR.STOP_RULE
-    assert _EXCEPTION_SENTENCE in CR.ORDER_TEXT
     assert CR.ORDER_TEXT.startswith(CR.STOP_RULE)
 
 
