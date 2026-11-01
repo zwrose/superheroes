@@ -3248,9 +3248,8 @@ def _record_place_results(state, audit_entries):
         results = _answers_for(row)
         if results is not None:
             row[KIND_OF_MISTAKE_FIELD] = _with_place_results(row[KIND_OF_MISTAKE_FIELD], results)
-    ledger = state.get(session_contract.DISPOSITION_LEDGER_KEY)
-    if not isinstance(ledger, list):
-        return
+    # fold-time writer: with answers and no ledger this now sets an empty one, the shape every other fold-time writer creates
+    ledger = _ensure_disposition_ledger_for_write(state)
     for entry in ledger:
         results = _answers_for(entry)
         if results is not None:
