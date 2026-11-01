@@ -442,21 +442,32 @@ def _merge_group(members):
     dims = _union_dimensions(members)
     if dims:
         merged["dimension"] = dims
-    _keep_earliest_raiser(merged, members)
+    _keep_earliest_raiser(merged, members, rep)
     return merged
 
 
-def _keep_earliest_raiser(merged, members):
-    """Give `merged` the `raisedBy` of the member raised earliest: the smallest integer `raisedRound` (the first such
-    member on a tie); a member without one was raised this round, so it is later than any member that has one. When no
-    member has one they were raised together and the representative's `raisedBy` stays. The chosen member's value is
-    copied when it is a non-blank string, else `merged` has none: a merge never invents a raiser."""
-    rounds = [(m[session_contract.RAISED_ROUND_FIELD], i) for i, m in enumerate(members)
-              if isinstance(m.get(session_contract.RAISED_ROUND_FIELD), int)
-              and not isinstance(m.get(session_contract.RAISED_ROUND_FIELD), bool)]
+def _keep_earliest_raiser(merged, members, rep):
+    """Keep the representative's `raisedBy` on `merged` unless a member was raised strictly earlier. A member's round is
+    its integer (non-bool) `raisedRound`; a representative without one counts as raised in the current round, later than
+    any member that has one. The earliest group is the members whose round equals the smallest. The raiser is the
+    earliest group's member that `_merge_group` would keep as representative (highest severity, then input position), so
+    the merged raiser follows the kept finding and never the order the synthesis seat listed the members in; in a tie
+    that member is the representative itself and `merged` keeps its `raisedBy` as `dict(rep)` copied it, absence
+    included. When no member has a round, `merged` keeps the representative's too. Only when that member is another
+    one is its value copied, and only when it is a non-blank string, else `merged` has none: a merge never invents a
+    raiser."""
+    def _round(m):
+        value = m.get(session_contract.RAISED_ROUND_FIELD)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    rounds = [_round(m) for m in members if _round(m) is not None]
     if not rounds:
         return
-    raiser = members[min(rounds)[1]].get(session_contract.RAISED_BY_FIELD)
+    group = [m for m in members if _round(m) == min(rounds)]
+    chosen = max(group, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
+    if chosen is rep:
+        return
+    raiser = chosen.get(session_contract.RAISED_BY_FIELD)
     if isinstance(raiser, str) and raiser.strip():
         merged[session_contract.RAISED_BY_FIELD] = raiser
     else:

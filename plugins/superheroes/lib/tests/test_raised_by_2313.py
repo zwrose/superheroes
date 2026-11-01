@@ -248,10 +248,28 @@ def test_m1_a_merge_takes_the_raiser_of_the_member_raised_earliest_not_the_sever
 
 
 def test_m1_the_earliest_of_two_carried_members_wins():
-    # axis: among members that carry a raisedRound the smaller one is earlier
+    # axis: among members that carry a raisedRound the strictly smaller one is earlier, in either member order
     later = _member("Important", "premortem-reviewer", raised_round=3)
     earlier = _member("Minor", "code-reviewer", raised_round=2)
-    assert verification._merge_group([later, earlier])[RAISED] == "code-reviewer"
+    for members in ([later, earlier], [earlier, later]):
+        assert verification._merge_group(members)[RAISED] == "code-reviewer", members
+
+
+def test_m1_members_that_tie_on_the_round_keep_the_kept_findings_raiser_in_either_order():
+    # axis: with equal raisedRound the raiser follows the kept (highest-severity) member, never the order the seat listed them in
+    for members in ([_member("Minor", "code-reviewer", raised_round=1), _member("Important", "premortem-reviewer", raised_round=1)],
+                    [_member("Important", "premortem-reviewer", raised_round=1), _member("Minor", "code-reviewer", raised_round=1)]):
+        merged = verification._merge_group(members)
+        assert merged["severity"] == "Important" and merged[RAISED] == "premortem-reviewer", merged
+
+
+def test_m1_a_strictly_earlier_member_beats_a_later_representative_in_either_order():
+    # axis: a member raised in round 1 beats a higher-severity representative raised in round 2, whatever the member order
+    early = _member("Minor", "code-reviewer", raised_round=1)
+    late = _member("Important", "scoped finder", raised_round=2)
+    for members in ([early, late], [late, early]):
+        merged = verification._merge_group(members)
+        assert merged["severity"] == "Important" and merged[RAISED] == "code-reviewer", merged
 
 
 def test_m1_members_raised_in_one_round_keep_the_representatives_raiser():
@@ -285,6 +303,24 @@ def _synced_ledger_row(ledger_raiser, rep_raiser):
 def test_s1_synthesis_carries_the_chosen_earliest_raiser_onto_the_ledger_row():
     # axis: the representative's ledger row takes the raiser synthesis chose, not the representative's original one
     assert _synced_ledger_row("security-reviewer", "code-reviewer")[RAISED] == "code-reviewer"
+
+
+@pytest.mark.parametrize("order", [(0, 1), (1, 0)])
+def test_s1_two_findings_staged_in_one_round_merge_to_the_kept_findings_raiser_in_either_grouping_order(order):
+    # axis: through the synthesis fold the kept finding's live row and ledger row both carry its own raiser, not the first-listed member's
+    state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
+    minor = _finding(title="Minor one", line=1, severity="Minor", **{RAISED: "code-reviewer"})
+    important = _finding(title="Important one", line=2, severity="Important", **{RAISED: "premortem-reviewer"})
+    RD._stage_findings(state, [minor, important])
+    staged = verification.stage_ids(state["_toVerify"])
+    assert {f[SC.RAISED_ROUND_FIELD] for f in staged} == {state["round"]}  # both staged rows carry the one current round
+    state["_verified"] = staged
+    ids = [staged[i]["id"] for i in order]
+    RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "g", "member_ids": ids}]})
+    (live,) = state["findings"]
+    ledger = state[SC.DISPOSITION_LEDGER_KEY]
+    row = ledger[RD._ledger_index_by_key(ledger)[RD._finding_identity_key(live)]]
+    assert live["severity"] == "Important" and live[RAISED] == "premortem-reviewer" and row[RAISED] == "premortem-reviewer", (live, row)
 
 
 def test_s1_synthesis_carries_an_absent_raiser_onto_the_ledger_row():
