@@ -67,6 +67,14 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **At each gardening pass the advisor appends the window's review-loop measures row and shows it in the gardening record.** See [Gardening pass: the review-loop measures row](#gardening-pass-the-review-loop-measures-row).
 
+- **After switching.** **Nothing is owed: an advisor recovers pass-parked cloud builds by adoption (`send-back`'s new `adopt` and `adopting` lists and its `--confirmed` flag), a builder posts `review-rejected` on a 401 and its self-archive record when superseded, and `assess` reads archived or self-archived lanes as stopped.** See [Cloud builds: a pass-parked build is recovered by adoption](#cloud-builds-a-pass-parked-build-is-recovered-by-adoption).
+
+### Cloud builds: a pass-parked build is recovered by adoption
+
+- **Why.** A cloud session gets the reviewer pass only when it starts, so a renewed pass never reaches a session that is already parked. A message could not make it run its review.
+- **What an advisor now does.** After a `cloud_pass.py record-confirmation` that answered, run `cloud_parked.py send-back --repo-root <root> --confirmed`. A parked build whose session started before the renewal is listed once under `adopt`, never under `sendBack`, and then under `adopting` on each later run until a replacement launch has started. A session that started after the renewal is still under `sendBack`. `send-back` launches nothing itself. See [Lapsed-pass parks and the send-back](skills/showrunner/reference/orchestration.md#lapsed-pass-parks-and-the-send-back).
+- **What a builder now does.** On a 401 from the reviewer it posts the `comment` from `cloud_builder.py review-rejected`, and parks. `cloud_parked.py notice` classes that park as a pass park with `cause: rejected`. A superseded builder posts the `self-archive` record, naming its launch id and pushed head, and archives its own session before its PR closes.
+- **What `assess` now reads.** A lane whose session reads archived, or whose issue holds a self-archive record naming its launch id, reads `stopped` (evidence `session-archived` or `self-archived`) even when its park comment is newer than its pushed work. `successor` adopts the head the record names.
 ### Gardening pass: the review-loop measures row
 
 - **What an advisor now does at a pass.** At duty 3, before the walk, run `lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`. It appends one fixed-shape row of review-loop measures for the window to `state/review-loop-measures.jsonl` in the project store, or replaces the row already there for the same window. The input file carries the window's review records, CI runs, misses log, vet receipts, the day cap choices began to be recorded, and any monthly or sampled measures. Its docstring names each key. See [The gardening pass](skills/showrunner/reference/owner-decisions.md#the-gardening-pass).

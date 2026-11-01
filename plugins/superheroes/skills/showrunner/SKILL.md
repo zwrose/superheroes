@@ -709,7 +709,7 @@ above).
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` when you arm or re-arm a wave watch.**
    **When the wave watch reports `builder-note`, a cloud builder is waiting on your answer: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` and answer before you re-arm.**
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/wave-watch.md` § Answering a builder note when you answer one: on another account the answer goes through the relay, and the note is recorded answered only after a confirmed delivery.**
-   **When a cloud build's PR is parked because the reviewer pass lapsed, tell the owner, and send it back for review once the pass is renewed: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back.**
+   **When a cloud build's PR is parked because the reviewer pass lapsed or its sign-in was rejected, tell the owner, and once the pass is renewed recover the review (a fresh session adopts the pushed branch, or the message goes to a session that started after the renewal): read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back.**
    **When a cloud lane stops or stalls, recover it at once from its pushed work: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Adoption mechanics.**
    **When a cloud-built stack layer hands back, link it, or record the link still owed, before the vet: read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/orchestration.md` § Cloud lanes.**
 
