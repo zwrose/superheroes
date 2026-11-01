@@ -284,12 +284,13 @@ def test_r7_a_driven_session_keeps_the_withheld_hits_key_and_the_record_reads_it
     (row,) = state["rounds"]["1"]["sweeps"]
     (ledger,) = [e for e in state[sc.DISPOSITION_LEDGER_KEY] if e.get("title") == "ungraded site"]
     assert row["ungraded"] == 1 and row["ungradedKeys"] == [sc.finding_identity_key(ledger)]
-    # the ledger as it stood before the end-of-loop settle gave each open row its own disposition
-    ledger = [{k: v for k, v in e.items() if not k.startswith("disposition")} for e in state[sc.DISPOSITION_LEDGER_KEY]]
-    session = Session(tmp_path / "acct", dispositionLedger=ledger, rounds=state["rounds"]).seat("code-reviewer").save()
+    # the ledger exactly as the end-of-loop settle left it: the settled reason must keep the explanation
+    session = Session(tmp_path / "acct", dispositionLedger=state[sc.DISPOSITION_LEDGER_KEY],
+                      rounds=state["rounds"]).seat("code-reviewer").save()
     finding = [f for f in rs.account_from_session(session, extras(), Fake().readers())["findings"]
                if f["title"] == "ungraded site"]
-    assert [(f["outcome"], f["reason"]) for f in finding] == [(None, UNGRADED_REASON)]
+    assert [f["reason"] for f in finding] == [UNGRADED_REASON]
+    assert ledger.get("disposition") is not None and finding[0]["outcome"] == ledger.get("disposition")
 
 
 @pytest.mark.parametrize("keys", [pytest.param(None, id="no-ungradedKeys"), pytest.param(False, id="empty-ungradedKeys")])

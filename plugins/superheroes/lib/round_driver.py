@@ -3132,6 +3132,13 @@ def _settle_open_findings(state, cap=False):
             sources = {}
         if not isinstance(sources, dict):
             sources = {}
+    ungraded = set()
+    for rec in (state.get("rounds") or {}).values() if isinstance(state.get("rounds"), dict) else ():
+        sweeps = rec.get(SWEEPS_FIELD) if isinstance(rec, dict) else None
+        for sweep_row in sweeps if isinstance(sweeps, list) else ():
+            held = sweep_row.get("ungradedKeys") if isinstance(sweep_row, dict) else None
+            if isinstance(held, list):
+                ungraded.update(k for k in held if isinstance(k, str))
     for key, row, content in todo:
         reason = why_open
         pending = _undispatched_ruling(state, rulings, ledger_by_key, key)
@@ -3145,6 +3152,9 @@ def _settle_open_findings(state, cap=False):
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
         result = finding_outcomes.settle(
             content, ruling=bound[key], sources=sources, open_reason=reason)
+        if key in ungraded and bound[key] is None:
+            # an ungraded sweep hit keeps its settled outcome; its reason names the withheld sweep hit, not the generic open reason
+            result = dict(result, reason=SWEEP_UNGRADED_REASON)
         live = live_by_key.get(key)
         if content is row and live is not None and live is not row:
             # The newer staged report outranks the live copy: the owner record reads live content first.
