@@ -1050,6 +1050,11 @@ def _merge_same_finding(existing, incoming):
     merged["dimension"] = dims
     merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
     merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
+    # axis: the first raiser survives a merge — `existing`'s, whichever side wins the base; `incoming` never supplies one and a row with none stays without
+    if session_contract.RAISED_BY_FIELD in existing:
+        merged[session_contract.RAISED_BY_FIELD] = existing[session_contract.RAISED_BY_FIELD]
+    else:
+        merged.pop(session_contract.RAISED_BY_FIELD, None)
     seqs = [f.get(session_contract.RAISED_SEQ_FIELD) for f in (existing, incoming)]
     seqs = [q for q in seqs if isinstance(q, int) and not isinstance(q, bool)]
     if seqs:  # the newest raise, so settlement sees the merged live copy as current
@@ -1152,6 +1157,8 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
     An outside-scope drop row also carries `source`, the name of whoever raised it: `sources[id(finding)]`
     when `sources` (a dict of `id()` of an input dict -> name) has it, else `source`, else "reviewer";
     `_record_outside` routes those rows to the record's "Outside this PR" list.
+    Every kept finding's `raisedBy` is the driver's own: `sources[id(finding)]` when it is a non-blank string, else
+    `source` when it is, else absent; a `raisedBy` the seat sent never survives.
     Every kept finding's `kindOfMistake` and `searchDescription` are normalized: one that is null, not an object or
     has a blank `kind` is removed (the finding stays); a place of `kindOfMistake` that is not on a line the PR touched
     leaves `places` as an outside drop row (same source name as the finding's own, titled with the kind of mistake,
@@ -1188,6 +1195,15 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
             fc.pop(break_it.RUNS_FIELD, None)
         # axis: a seat never marks its own finding as having had its one more test, whatever value it sends — only the driver's second-test step (staged without compile) sets it
         fc.pop(SECOND_TEST_FIELD, None)
+        # axis: a raiser the seat supplied itself never survives compile — only the driver's own roster key or stage name is stamped, and with neither the field is absent
+        fc.pop(session_contract.RAISED_BY_FIELD, None)
+        # axis: a first-raise round the seat supplied itself never survives compile — only the ledger seeding stamps one
+        fc.pop(session_contract.FIRST_RAISED_ROUND_FIELD, None)
+        raiser = sources.get(id(f))
+        if not (isinstance(raiser, str) and raiser.strip()):
+            raiser = source
+        if isinstance(raiser, str) and raiser.strip():
+            fc[session_contract.RAISED_BY_FIELD] = raiser
         if id(f) not in exempt and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": COMPILE_DROP_OUTSIDE,
@@ -1949,7 +1965,9 @@ def _seed_carried(state, cfg, returning):
         if key and key not in rows:  # two carried findings with one key are one row
             rows[key] = finding
             # axis: a carried finding is on the ledger, with a raised sequence, before its disposition is recorded — see bite-proof record c1l11b_wo_d2_carried_findings
-            _seed_ledger_entry(state, ledger, seen, finding, key, state["round"])
+            entry = _seed_ledger_entry(state, ledger, seen, finding, key, state["round"])
+            # axis: a carried finding ranks before every finding first raised in this session, whatever first-raise round it brought
+            entry[session_contract.FIRST_RAISED_ROUND_FIELD] = session_contract.CARRIED_FIRST_RAISED_ROUND
     if not rows:
         return False
     state[session_contract.DISPOSITION_LEDGER_OWNER_FIELD] = session_contract.DISPOSITION_LEDGER_OWNER_VALUE
@@ -2025,7 +2043,8 @@ def _with_carried(state, compiled):
         held_key = _finding_identity_key(rows[id(h)])
         merged = _merge_same_finding(rows[id(h)], c)
         fresh_key = _finding_identity_key(c)
-        for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
+        for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD,
+                      session_contract.RAISED_BY_FIELD, session_contract.FIRST_RAISED_ROUND_FIELD):
             if field in h:
                 merged[field] = h[field]
             else:
@@ -2281,6 +2300,20 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         # axis: a re-raise of an unresolved finding keeps the places it still owes, so a narrower report never drops a copy the last audit left unfixed — see bite-proof record c4_wo1_kind
         verification.apply_kind_members(entry, [existing, entry], with_description=False)
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+    # axis: the first-raise round is the held row's own, else its raised round, else this round — a re-raise never moves it
+    first_round = round_no
+    if isinstance(existing, dict):
+        if session_contract.FIRST_RAISED_ROUND_FIELD in existing:
+            first_round = existing[session_contract.FIRST_RAISED_ROUND_FIELD]
+        elif session_contract.RAISED_ROUND_FIELD in existing:
+            first_round = existing[session_contract.RAISED_ROUND_FIELD]
+    entry[session_contract.FIRST_RAISED_ROUND_FIELD] = first_round
+    if isinstance(existing, dict):
+        # axis: a re-raise never changes the first raiser, and a ledger row with no raiser never gains one from it
+        if session_contract.RAISED_BY_FIELD in existing:
+            entry[session_contract.RAISED_BY_FIELD] = existing[session_contract.RAISED_BY_FIELD]
+        else:
+            entry.pop(session_contract.RAISED_BY_FIELD, None)
     # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
     if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
             and not break_it.carries_test(entry)):
@@ -5020,12 +5053,16 @@ def _fold_sweep(state, config, artifact, session_dir=None):
         parent = next((f for f in carry if isinstance(f, dict)
                        and _finding_identity_key(f) == sweep.get("findingKey")), None)
         hits, missing = [], []
+        hit_seat = {}  # id() of a hit -> the searcher seat key whose run raised it
         for part in parts:
-            result = seats.get(_adapters().sweep_seat_key(sweep_id, part["part"]))
+            seat_key = _adapters().sweep_seat_key(sweep_id, part["part"])
+            result = seats.get(seat_key)
             # axis: a part whose searcher returned no usable result is recorded missing, never as a part that found nothing — see bite-proof record c4_wo2a_sweep
             if result is None or _adapters().payload_fault(P_SWEEP, result, "") is not None:
                 missing.append(part["part"])
                 continue
+            for hit in result["hits"]:
+                hit_seat[id(hit)] = seat_key
             hits.extend(result["hits"])
         row["missing"] = missing
         if missing:
@@ -5039,7 +5076,7 @@ def _fold_sweep(state, config, artifact, session_dir=None):
         row["dropped"] += sorted_hits["dropped"]
         row["covered"] += sorted_hits["covered"]
         for hit in sorted_hits["inside"]:
-            finding = session_contract.sweep_hit_finding(hit, sweep, parent)
+            finding = session_contract.sweep_hit_finding(hit, sweep, parent, raised_by=hit_seat.get(id(hit)))
             key = _finding_identity_key(finding)
             if key in known or key in hit_keys:
                 row["covered"] += 1  # already a finding of this round: it is not raised twice
@@ -5110,6 +5147,14 @@ def _sync_merged_consequences(state, kept):
             for field in ("consequence", "consequenceKind"):
                 if field in finding:
                     ledger[seen[key]][field] = finding[field]
+            # the earliest raiser synthesis chose for the representative, including its absence
+            if session_contract.RAISED_BY_FIELD in finding:
+                ledger[seen[key]][session_contract.RAISED_BY_FIELD] = finding[session_contract.RAISED_BY_FIELD]
+            else:
+                ledger[seen[key]].pop(session_contract.RAISED_BY_FIELD, None)
+            # the chosen raiser's first-raise round travels with its name, so the ledger pair stays consistent
+            if session_contract.FIRST_RAISED_ROUND_FIELD in finding:
+                ledger[seen[key]][session_contract.FIRST_RAISED_ROUND_FIELD] = finding[session_contract.FIRST_RAISED_ROUND_FIELD]
 
 
 def _verifier_head(state, session_dir, rnd):
@@ -9421,6 +9466,28 @@ def _audit_spawned(state):
     return spawned if isinstance(spawned, dict) else {}
 
 
+def _new_issue_anchor(ni):
+    """The compile anchor of an audit's new issue (its line coerced as the compile coerces it), or None when it has
+    no string file or no usable line: such an issue anchors nothing."""
+    if not isinstance(ni.get("file"), str) or ni.get("line") is None:
+        return None
+    ok, line = _coerce_line(ni.get("line"))
+    if not ok:
+        return None
+    return _finding_anchor(dict(ni, line=line))
+
+
+def _stamp_audit_raisers(new_issues, compiled):
+    """The compiled survivors with `raisedBy` set to `OUTSIDE_FIX_AUDITOR` on each one whose anchor an audit's new
+    issue raised. The fix audits run before the scoped finder, so the auditor is the first raiser of that anchor even
+    when the compile kept the scoped finder's dict (it keeps it at equal severity, see `_bind_audit_spawned`). The
+    stamped value is the one `mechanical_compile` gives every new issue through `new_issue_sources`."""
+    anchors = {a for a in (_new_issue_anchor(ni) for ni in new_issues) if a is not None}
+    return [dict(f, **{session_contract.RAISED_BY_FIELD: OUTSIDE_FIX_AUDITOR})
+            if isinstance(f, dict) and not f.get("summaryEntry") and _finding_anchor(f) in anchors else f
+            for f in compiled]
+
+
 def _bind_audit_spawned(state, new_issues, compiled):
     """Record, for each compiled survivor an audit's new issue produced, the audit target it came from.
 
@@ -9433,14 +9500,11 @@ def _bind_audit_spawned(state, new_issues, compiled):
     origins_by_anchor = {}
     for ni in new_issues:
         origin = ni.get(AUDIT_ORIGIN_FIELD)
-        if not (isinstance(origin, str) and origin.strip()) or not isinstance(ni.get("file"), str):
+        if not (isinstance(origin, str) and origin.strip()):
             continue
-        if ni.get("line") is None:
+        anchor = _new_issue_anchor(ni)
+        if anchor is None:
             continue
-        ok, line = _coerce_line(ni.get("line"))
-        if not ok:
-            continue
-        anchor = _finding_anchor(dict(ni, line=line))
         origins_by_anchor.setdefault(anchor, set()).add(origin)
     bound, ambiguous = {}, []
     for finding in compiled:
@@ -9479,6 +9543,8 @@ def _fold_scoped(state, config, artifact):
                                          stats=compile_stats)
     _note_compile_stats(state, compile_stats)
     _bind_audit_spawned(state, new_issues, compiled)
+    # axis: the fix audits run before the scoped finder, so a survivor an audit raised keeps the auditor as its raiser even where the compile kept the scoped dict
+    compiled = _stamp_audit_raisers(new_issues, compiled)
     _record_compile_drops(state, drops)
     compiled = _with_carried(state, compiled)  # the carried findings sent back go to the verifier with the round's candidates
     state["_postAudit"] = True

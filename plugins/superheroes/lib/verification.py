@@ -19,6 +19,7 @@ from finding_identity import place_pair as _place_pair
 import panel_tally
 import review_findings_schema
 import round_phases
+import session_contract
 
 VERDICTS = round_phases.VERDICTS
 _DEFAULT_BLOCKING_SEVERITY = "Important"
@@ -441,7 +442,40 @@ def _merge_group(members):
     dims = _union_dimensions(members)
     if dims:
         merged["dimension"] = dims
+    _keep_earliest_raiser(merged, members, rep)
     return merged
+
+
+def _keep_earliest_raiser(merged, members, rep):
+    """Keep the representative's `raisedBy` on `merged` unless a member was raised strictly earlier. A member's round is
+    its integer (non-bool) `firstRaisedRound`, else its integer `raisedRound`; a representative without one counts as raised in the current round, later than
+    any member that has one. The earliest group is the members whose round equals the smallest. The raiser is the
+    earliest group's member that `_merge_group` would keep as representative (highest severity, then input position), so
+    the merged raiser follows the kept finding and never the order the synthesis seat listed the members in; in a tie
+    that member is the representative itself and `merged` keeps its `raisedBy` as `dict(rep)` copied it, absence
+    included. When no member has a round, `merged` keeps the representative's too. Only when that member is another
+    one is its value copied, and only when it is a non-blank string, else `merged` has none: a merge never invents a
+    raiser."""
+    def _round(m):
+        value = m.get(session_contract.FIRST_RAISED_ROUND_FIELD)
+        if not (isinstance(value, int) and not isinstance(value, bool)):
+            value = m.get(session_contract.RAISED_ROUND_FIELD)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    rounds = [_round(m) for m in members if _round(m) is not None]
+    if not rounds:
+        return
+    group = [m for m in members if _round(m) == min(rounds)]
+    chosen = max(group, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
+    if chosen is rep:
+        return
+    # the chosen member's round travels with its raiser, so the pair never describes two different reports
+    merged[session_contract.FIRST_RAISED_ROUND_FIELD] = min(rounds)
+    raiser = chosen.get(session_contract.RAISED_BY_FIELD)
+    if isinstance(raiser, str) and raiser.strip():
+        merged[session_contract.RAISED_BY_FIELD] = raiser
+    else:
+        merged.pop(session_contract.RAISED_BY_FIELD, None)
 
 
 def _coverage_fault_from_seen(expected, seen):
