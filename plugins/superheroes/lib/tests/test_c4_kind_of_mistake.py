@@ -248,6 +248,24 @@ def test_t4_edges_an_unlisted_place_is_ignored_and_disclosed_and_a_target_withou
     assert _audit(_target(_kind(3)), [_row(3, False)], ruling="not-discharged")["audits"][0]["places"] == [_row(3, False)]
 
 
+def test_t4f_a_place_answered_twice_is_fixed_only_when_every_answer_says_so():
+    # axis: a place answered twice counts fixed only when every answer says so, whichever answer comes last (#2312 item 3)
+    kind = _kind(3, 19)
+    for order, fixed in (([False, True], False), ([True, False], False), ([True, True], True)):
+        places = [_row(3, order[0]), _row(3, order[1]), _row(19, True)]
+        judged = audits.judge_places(_target(kind), {"places": places})
+        assert judged["rows"] == [{"file": "src/a.py", "line": 3, "fixed": fixed},
+                                  {"file": "src/a.py", "line": 19, "fixed": True}], order
+        assert judged["unfixed"] == ([] if fixed else [("src/a.py", 3)]), order
+        assert judged["unanswered"] == [] and judged["ignored"] == [], order
+        out = _audit(_target(kind), places)
+        assert out["discharged"] == (["t-1"] if fixed else []), order
+        assert out["notDischarged"] == ([] if fixed else ["t-1"]), order
+        assert out["placesUnfixed"] == ([] if fixed else ["t-1"]), order
+        if not fixed:
+            assert "left unfixed: src/a.py:3" in out["audits"][0]["reason"], order
+
+
 def test_t4d_a_fix_of_only_the_representative_of_a_merged_pair_is_not_discharged():
     # axis: a merged-away member's citation is a place the audit must answer, so fixing only the representative's places is not a discharge — see bite-proof record c4_wo1_kind
     rep = _finding("Retry without a cap", line=2, kindOfMistake=_kind(3), severity="Important")
