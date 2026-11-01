@@ -679,6 +679,63 @@ def test_s5_a_hit_two_sweeps_both_found_is_one_finding(world):
     assert [r["covered"] for r in _rows(state)] == [0, 1]
 
 
+def test_s5_a_record_write_park_during_the_sweep_pass_keeps_the_confirmed_finding_beside_the_hit(world, monkeypatch):
+    # axis: every finding held in the sweep's carry reaches `findings` before a record-write park, so the receipt names
+    # the confirmed finding as well as the copies the search found (#2312 item 2)
+    _to_sweep(world)
+    state = _sweep(world, _both(_hit(19, what="second site")))
+    # the state right after the fold staged one inside hit: the verifier phase, the hit staged, the confirmed finding carried
+    assert state["step"] == RD.P_VERIFIERS and state["_sweepPass"] is True
+    assert [f["title"] for f in state["_toVerify"]] == ["second site"]
+    assert [f["title"] for f in state["_sweepCarry"]] == ["Retry without a cap"]
+    assert not state.get("findings")
+    # the real chain: a records path, one ledger record, and a write that raises OSError
+    state["config"]["recordsPath"] = str(world.session / "round-records.json")
+    state["_records"] = [TRD._seed_record(1)]
+
+    def _raise_oserror(path, data):
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _raise_oserror)
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify" and state["step"] == RD.P_TERMINAL
+    assert any(d["kind"] == "cannot-certify" and "permission denied" in d["detail"] for d in state["decisions"])
+    assert sorted(f["title"] for f in state["findings"]) == ["Retry without a cap", "second site"]
+    receipt = RD.build_receipt(state)
+    assert sorted(f["title"] for f in receipt["findings"]) == ["Retry without a cap", "second site"]
+
+
+def test_s5_a_record_write_park_during_the_second_test_pass_keeps_the_held_back_survivors_beside_the_held_finding(
+        world, monkeypatch):
+    # axis: every finding held in the second-test carry reaches `findings` before a record-write park, so the receipt
+    # names the pass-1 survivors as well as the finding held for one more test (#2312 item 4)
+    _panel(world, code_reviewer=[_finding("Plain", line=2), _finding("Held", line=3)])
+    for staged in world.state["_toVerify"]:
+        if staged["title"] == "Held":
+            staged["breakItRun"] = {"outcome": "passed"}
+    state = _verify(world, {"Held": MISSED_PATH})
+    if state["step"] == RD.P_SECOND_TEST:
+        RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
+    # the state in the second-test window: the verifiers' second pass, the held finding staged, the survivors carried
+    assert state["step"] == RD.P_VERIFIERS and state["_secondTestPass"] is True
+    assert [f["title"] for f in state["_toVerify"]] == ["Held"]
+    assert [f["title"] for f in state["_secondTestCarry"]] == ["Plain"]
+    assert not state.get("findings")
+    # the real chain: a records path, one ledger record, and a write that raises OSError
+    state["config"]["recordsPath"] = str(world.session / "round-records.json")
+    state["_records"] = [TRD._seed_record(1)]
+
+    def _raise_oserror(path, data):
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _raise_oserror)
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify" and state["step"] == RD.P_TERMINAL
+    assert sorted(f["title"] for f in state["findings"]) == ["Held", "Plain"]
+    receipt = RD.build_receipt(state)
+    assert sorted(f["title"] for f in receipt["findings"]) == ["Held", "Plain"]
+
+
 # ---- S6 a session resumed between steps -----------------------------------------------------------------------
 
 
