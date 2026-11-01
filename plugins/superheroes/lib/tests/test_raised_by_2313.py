@@ -423,9 +423,10 @@ def test_r1_the_record_finding_carries_the_ledger_rows_raiser_not_its_lens(tmp_p
 
 
 def test_r1_a_blank_raiser_on_a_ledger_row_is_no_raiser(tmp_path):
-    # axis: a blank or non-string ledger raiser reaches the record as no raiser
+    # axis: a blank or non-string ledger raiser is stripped, and the finding still reaches the record as no raiser
     rows = [ledger_row("k-%d" % i, id="f-%d" % i, line=3 + i, **{RAISED: v}) for i, v in enumerate(["", "  ", None, 5])]
     _, by_id = _record_rows(tmp_path, *rows)
+    assert set(by_id) == {r["id"] for r in rows} and len(by_id) == len(rows), by_id
     assert all(RAISED not in f for f in by_id.values()), by_id
 
 
