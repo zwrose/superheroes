@@ -33,7 +33,9 @@ import model_registry  # noqa: E402
 import review_findings_schema as RFS  # noqa: E402
 import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
+import round_adapters as RA  # noqa: E402
 import round_driver as RD  # noqa: E402
+import round_records as RR  # noqa: E402
 import test_break_it_loop as BL  # noqa: E402
 import verification  # noqa: E402
 from test_review_record_session import Fake, Session, extras, ledger_row, put_extras  # noqa: E402
@@ -134,6 +136,7 @@ def test_t2_a_place_on_a_context_line_leaves_places_for_the_raising_seats_outsid
 
 
 def test_t2_edges_own_citation_duplicates_and_unusable_places_are_dropped_and_no_diff_keeps_places():
+    # axis: a place equal to the finding's own citation, a repeat, or an unusable one is dropped from `places`, and with no diff the rest are kept unchecked
     own, dup, blank, bad_line = _place(2), _place(3), _place(3, file="  "), {"file": "src/a.py", "line": "x"}
     kom = {"kind": KIND, "places": [own, dup, dict(dup), blank, bad_line, "src/a.py:3", _place(None)]}
     compiled, drops = RD.mechanical_compile([_finding("t", kindOfMistake=kom)], None)
@@ -162,6 +165,7 @@ def test_t3_a_merge_keeps_the_union_of_places_and_every_members_own_citation():
 
 
 def test_t3_a_member_without_a_kind_still_leaves_its_citation_as_a_place_of_the_one_that_has_one():
+    # axis: a member that names no kind still contributes its own citation as a place of the member that does, and a merge of two kindless findings gains none — see bite-proof record c4_wo1_kind
     kept = _finding("t", line=2, kindOfMistake=_kind(3), severity="Important")
     other = _finding("t", line=19, severity="Minor")
     assert RD._merge_same_finding(kept, other)["kindOfMistake"] == _kind(3, 19)
@@ -205,6 +209,7 @@ def test_t4_one_of_two_places_answered_unfixed_is_not_discharged_with_the_disclo
 
 
 def test_t4b_places_left_unanswered_are_not_discharged_and_disclosed():
+    # axis: an absent, empty, partial or malformed `places` answer leaves the named places unanswered, so the clearing ruling is refused with the disclosure — see bite-proof record c4_wo1_kind
     for places in (None, [], [_row(3, True)], "not a list"):
         out = _audit(_target(_kind(3, 19)), places)
         assert out["discharged"] == [] and out["placesUnfixed"] == ["t-1"], places
@@ -212,6 +217,7 @@ def test_t4b_places_left_unanswered_are_not_discharged_and_disclosed():
 
 
 def test_t4c_every_place_fixed_is_discharged_and_the_record_reads_all_fixed(tmp_path):
+    # axis: an answer of fixed for every named place discharges the target and the record renders "all fixed"
     out = _audit(_target(_kind(3, 19)), [_row(3, True), _row(19, True)])
     assert out["discharged"] == ["t-1"] and out["placesUnfixed"] == [] and out["placesIgnored"] == []
     kind = RD._with_place_results(_kind(3, 19), {("src/a.py", p["line"]): p["fixed"] for p in out["audits"][0]["places"]})
@@ -221,6 +227,7 @@ def test_t4c_every_place_fixed_is_discharged_and_the_record_reads_all_fixed(tmp_
 
 
 def test_t4_edges_an_unlisted_place_is_ignored_and_disclosed_and_a_target_without_places_is_unchanged():
+    # axis: an answered place the target does not name is ignored and disclosed without blocking, and a target with no places is audited exactly as before
     out = _audit(_target(_kind(3)), [_row(3, True), _row(7, False)])
     assert out["discharged"] == ["t-1"] and out["placesIgnored"] == ["t-1"]
     assert out["audits"][0]["placesIgnored"] == [{"file": "src/a.py", "line": 7}]
@@ -231,6 +238,7 @@ def test_t4_edges_an_unlisted_place_is_ignored_and_disclosed_and_a_target_withou
 
 
 def test_t4d_a_fix_of_only_the_representative_of_a_merged_pair_is_not_discharged():
+    # axis: a merged-away member's citation is a place the audit must answer, so fixing only the representative's places is not a discharge — see bite-proof record c4_wo1_kind
     rep = _finding("Retry without a cap", line=2, kindOfMistake=_kind(3), severity="Important")
     member = _finding("Retry without a cap", line=19, kindOfMistake=_kind(3), severity="Minor")
     merged = verification._merge_group([rep, member])
@@ -241,6 +249,7 @@ def test_t4d_a_fix_of_only_the_representative_of_a_merged_pair_is_not_discharged
 
 
 def test_t4_the_submit_guard_judges_the_places_answer():
+    # axis: the submit guard refuses a malformed `places` answer (and accepts a well-formed or absent one) through the same judge the fold uses
     assert audits.place_answers_fault({"places": [_row(3, True)]}) is None
     assert audits.place_answers_fault({}) is None and audits.place_answers_fault({"places": None}) is None
     for bad in ("x", [{"file": "", "line": 1, "fixed": True}], [{"file": "a", "line": "1", "fixed": True}],
@@ -290,6 +299,34 @@ def test_t5_place_results_survive_save_reload_audit_archive_and_render(world, tm
     assert "(1 of 2 fixed)" in body
 
 
+def test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_finding(tmp_path):
+    # axis: a merged member's own row takes the audited representative's answer for each place it names that the audit answered, and a place the audit did not answer keeps `fixed` unset — see bite-proof record c4_wo1_kind
+    def row(key, line, kind, **extra):
+        return dict(_finding("Retry without a cap", line=line, kindOfMistake=kind), findingKey=key, **extra)
+
+    rep = row("k-rep", 2, _kind(3, 19))
+    shared = row("k-shared", 19, _kind(3, 2), mergedInto="k-rep")  # names only places the audit answered
+    partial = row("k-partial", 20, _kind(3, 7), mergedInto="k-rep")  # names a place (7) the audit did not answer
+    stranger = row("k-other", 4, _kind(3, 19))  # not merged into the audited finding: its places are not answered
+    rows = [rep, shared, partial, stranger]
+    state = {"findings": copy.deepcopy(rows), "dispositionLedger": copy.deepcopy(rows)}
+    RD._record_place_results(state, [{"id": "k-rep", "places": [_row(3, True), _row(19, True), _row(2, True)]}])
+    for holder in (state["findings"], state["dispositionLedger"]):
+        by_key = {r["findingKey"]: r["kindOfMistake"]["places"] for r in holder}
+        assert [p.get("fixed") for p in by_key["k-rep"]] == [True, True]
+        assert [p.get("fixed") for p in by_key["k-shared"]] == [True, True]
+        assert [p.get("fixed") for p in by_key["k-partial"]] == [True, None]  # 7 was never answered: unset
+        assert [p.get("fixed") for p in by_key["k-other"]] == [None, None]
+    # the record shows a merged member's places as fixed once the shared places were repaired, and an unanswered one open
+    shared_row = next(r for r in state["dispositionLedger"] if r["findingKey"] == "k-shared")
+    body, _record = _record_body(tmp_path, kindOfMistake=shared_row["kindOfMistake"])
+    assert "also in this PR: src/a.py:3, src/a.py:2 (all fixed)" in body
+    partial_row = next(r for r in state["dispositionLedger"] if r["findingKey"] == "k-partial")
+    (tmp_path / "partial").mkdir()
+    body, _record = _record_body(tmp_path / "partial", kindOfMistake=partial_row["kindOfMistake"])
+    assert "also in this PR: src/a.py:3, src/a.py:7 (1 of 2 fixed)" in body
+
+
 def test_t5_a_weakened_test_is_blocked_even_when_a_place_is_unanswered():
     # axis: a weakened committed test is blocked before an incomplete-place return, so the mandatory restore is scheduled — see bite-proof record c4_wo1_kind
     target = dict(_target(_kind(3, 19)), breakIt={"match": "changed-explained", "path": "tests/test_a.py"})
@@ -305,6 +342,26 @@ def test_t5_a_narrower_reraise_keeps_the_places_an_unresolved_target_still_owes(
     (batch,) = RD._union_open_blockers([fresh], [held])
     assert batch["kindOfMistake"]["kind"] == KIND
     assert batch["kindOfMistake"]["places"] == [dict(_place(3), fixed=True), _place(19)]
+
+
+def test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description(world):
+    # axis: a re-raise and an open-blocker dedup keep the places the earlier report still owes but never give the kept finding a search description it did not name — see bite-proof record c4_wo1_kind
+    state = world.state
+    fresh = _finding("Retry without a cap", line=2)  # the new report names neither a kind nor a description
+    owed = {"kind": KIND, "places": [dict(_place(3), fixed=True), _place(19)]}
+    held = dict(fresh, kindOfMistake=owed, searchDescription=_description())
+    (batch,) = RD._union_open_blockers([fresh], [held])  # the open-blocker dedup
+    assert batch["kindOfMistake"]["places"] == owed["places"]
+    assert "searchDescription" not in batch
+    key = RD._finding_identity_key(fresh)
+    ledger, seen = [dict(held, findingKey=key)], {key: 0}
+    entry = RD._seed_ledger_entry(state, ledger, seen, dict(fresh), key, 2)  # the re-raise of an unresolved finding
+    assert entry["kindOfMistake"]["places"] == owed["places"]
+    assert "searchDescription" not in entry
+    # a finding that did name a description keeps its own on both paths
+    named = dict(fresh, searchDescription=_description(looksLike="its own"))
+    (batch,) = RD._union_open_blockers([named], [held])
+    assert batch["searchDescription"]["looksLike"] == "its own"
 
 
 # ---- T6 ------------------------------------------------------------------------------------------------------
@@ -327,11 +384,19 @@ def test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused
 
 
 def test_t6_kind_missing_counts_every_compile_and_is_zero_when_all_findings_name_a_kind(world):
+    # axis: `kindMissing` counts exactly the compiled findings without a usable kind of mistake, and is zero when every one names a kind
     state = _panel(world, code_reviewer=[_finding("a", kindOfMistake=_kind())])
     assert state["rounds"]["1"]["kindMissing"] == 0
     stats = {}
     RD.mechanical_compile([_finding("a"), _finding("b", line=3, kindOfMistake=_kind())], DIFF, stats=stats)
     assert stats == {"compiled": 2, "kindMissing": 1}
+
+
+def test_t6_the_first_panel_wave_adds_its_kind_missing_count_to_the_one_an_earlier_audit_recorded(world):
+    # axis: the panel's `kindMissing` is added to the count the round already holds (an audit that ran before the panel), never written over it, and with no earlier count it is the panel's own — see bite-proof record c4_wo1_kind
+    RD._add_kind_missing(world.state, 2)  # what an audit of a full returning review recorded before the panel
+    state = _panel(world, code_reviewer=[_finding("a"), _finding("b", line=3, kindOfMistake=_kind())])
+    assert state["rounds"]["1"]["kindMissing"] == 3  # 2 held + the panel's 1 finding without a kind
 
 
 # ---- T7 ------------------------------------------------------------------------------------------------------
@@ -355,6 +420,7 @@ def test_t7_an_author_is_stamped_from_the_executed_provenance(world):
 
 @pytest.mark.parametrize("ran", [None, {}, {"code-reviewer": "not-a-vendor"}, {"code-reviewer": 7}])
 def test_t7_unavailable_provenance_leaves_the_description_unstamped(world, ran):
+    # axis: a missing, empty, unknown-vendor or non-string executed provenance leaves the description unstamped
     state = _panel(world, ran=ran,
                    code_reviewer=[_finding("Retry without a cap", searchDescription=_description())])
     assert _author_of(state) == "unstamped"
@@ -390,6 +456,7 @@ def test_t7_a_payload_supplied_author_is_removed_and_replaced_only_by_the_driver
 
 
 def test_t7_a_search_description_from_any_other_phase_carries_no_author(world, monkeypatch):
+    # axis: a description arriving in the synthesis, scoped or audit-result payloads loses any `author` it carries, without rewriting the submitted artifact — see bite-proof record c4_wo1_kind
     seen = {}
     monkeypatch.setattr(RD, "_fold_synthesis", lambda state, config, artifact, session_dir=None: seen.update(syn=artifact))
     forged = _description(author={"seat": "x", "vendor": "x", "family": "x"})
@@ -411,6 +478,7 @@ def test_t7_a_search_description_from_any_other_phase_carries_no_author(world, m
 @pytest.mark.parametrize("ran,stamped", [({RD.SEAMS_SEAT_KEY: INDEPENDENT}, True), ({RD.SEAMS_SEAT_KEY: "claude"}, False),
                                          (None, False)])
 def test_t7_the_seams_fold_stamps_from_the_artifacts_executed_provenance(world, ran, stamped):
+    # axis: the seams fold stamps from the artifact's executed vendor, and a maker family or no provenance leaves the description unstamped
     state = world.state
     artifact = {"findings": [_finding("From seams", searchDescription=_description())]}
     if ran is not None:
@@ -420,10 +488,39 @@ def test_t7_the_seams_fold_stamps_from_the_artifacts_executed_provenance(world, 
     assert (author["seat"] == RD.SEAMS_SEAT_KEY) if stamped else author == "unstamped"
 
 
+def _seams_envelope(source, findings):
+    """The runner's v2 landing for the seams-check seat: execution evidence names the vendor that ran it."""
+    return {"schema": RR.SEAT_RESULT_SCHEMA_V2, "seat": RA.SEAT_SEAMS, "attempt": 0, "vendor": source, "model": "m",
+            "provenance": RR.PROVENANCE_DISPATCH_OBSERVED, "executionEvidence": {"source": source},
+            "payload": {"findings": findings}}
+
+
+@pytest.mark.parametrize("envelope,stamped", [
+    (_seams_envelope(INDEPENDENT, [_finding("From seams", searchDescription=_description())]), True),
+    (_seams_envelope("claude", [_finding("From seams", searchDescription=_description())]), False),
+    # a landing with no runner evidence (a v1 envelope, no dispatch manifest) names no executed vendor
+    ({"schema": RR.SEAT_RESULT_SCHEMA, "seat": RA.SEAT_SEAMS, "attempt": 0, "vendor": INDEPENDENT, "model": "m",
+      "payload": {"findings": [_finding("From seams", searchDescription=_description())]}}, False)])
+def test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold(world, envelope, stamped):
+    # axis: the adapter carries the executed vendor into the seams artifact so the fold stamps the author on the durable path, and a maker family or no runner evidence leaves the description unstamped — see bite-proof record c4_wo1_kind
+    state = world.state
+    artifact, reason = RA.assemble(RD.P_SEAMS, [envelope], state, state["config"])
+    assert reason is None, reason
+    assert ("ranManifest" in artifact) is (envelope["schema"] == RR.SEAT_RESULT_SCHEMA_V2)
+    RD._fold_seams(state, state["config"], artifact)  # the artifact as the adapter built it, no hand-built map
+    author = _author_of(state, "From seams")
+    if stamped:
+        assert author == {"seat": RD.SEAMS_SEAT_KEY, "vendor": INDEPENDENT,
+                          "family": model_registry.family_for("reviewer", INDEPENDENT)}
+    else:
+        assert author == "unstamped"
+
+
 # ---- T8 ------------------------------------------------------------------------------------------------------
 
 
 def test_t8_the_shipped_and_built_schemas_are_strict_valid_and_the_example_validates():
+    # axis: the shipped and built schemas carry the new members strictly, the example validates, and the fallback literals stay aligned with the shipped file
     jsonschema = pytest.importorskip("jsonschema")
     with open(RFS.REVIEW_FINDINGS_SCHEMA_PATH, encoding="utf-8") as fh:
         shipped = json.load(fh)

@@ -11857,6 +11857,9 @@ def _native_review_branch(kind, **overrides):
                 member[key] = None
             elif schema.get("type") == ["boolean", "null"]:
                 member[key] = None
+            elif schema.get("type") == ["object", "null"]:
+                # kindOfMistake / searchDescription: required-nullable object members; null unless a test is about them
+                member[key] = None
             elif schema.get("type") == ["string", "null"]:
                 member[key] = "example"
             else:
@@ -11878,6 +11881,7 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeReverts": None,
             "checks": None,
             "testMatch": None,
+            "places": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -11911,6 +11915,7 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeReverts": None,
             "checks": None,
             "testMatch": None,
+            "places": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -11932,6 +11937,7 @@ def _native_review_branch(kind, **overrides):
             "unnamedChangeReverts": None,
             "checks": None,
             "testMatch": None,
+            "places": None,
             "readParts": None,
             "investigated": investigated,
         }
@@ -12620,6 +12626,9 @@ def test_grade_native_review_attempt_scrubs_secret_from_result_and_journal(tmp_p
         elif schema.get("type") == ["integer", "null"]:
             finding[key] = None
         elif schema.get("type") == ["boolean", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["object", "null"]:
+            # kindOfMistake / searchDescription: required-nullable object members; null unless a test is about them
             finding[key] = None
         elif schema.get("type") == ["string", "null"]:
             finding[key] = "example"
@@ -14311,6 +14320,9 @@ def test_cursor_typed_file_secret_scrubbed_from_result_and_journal(tmp_path):
             finding[key] = None
         elif schema.get("type") == ["boolean", "null"]:
             finding[key] = None
+        elif schema.get("type") == ["object", "null"]:
+            # kindOfMistake / searchDescription: required-nullable object members; null unless a test is about them
+            finding[key] = None
         elif schema.get("type") == ["string", "null"]:
             finding[key] = "example"
         else:
@@ -15207,6 +15219,9 @@ def test_claude_review_secret_scrubbed_from_result_and_journal(tmp_path, monkeyp
         elif schema.get("type") == ["integer", "null"]:
             finding[key] = None
         elif schema.get("type") == ["boolean", "null"]:
+            finding[key] = None
+        elif schema.get("type") == ["object", "null"]:
+            # kindOfMistake / searchDescription: required-nullable object members; null unless a test is about them
             finding[key] = None
         elif schema.get("type") == ["string", "null"]:
             finding[key] = "example"

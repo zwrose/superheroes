@@ -128,6 +128,7 @@ def _native_verdicts_branch():
         "unnamedChangeReverts": None,
         "checks": None,
         "testMatch": None,
+        "places": None,
         "readParts": None,
         "investigated": ["plugins/superheroes/lib/engine_result_channel.py"],
     }
@@ -3344,6 +3345,9 @@ class _AstraCliFakeRunner:
                     member[key] = None
                 elif schema.get("type") == ["boolean", "null"]:
                     member[key] = None
+                elif schema.get("type") == ["object", "null"]:
+                    # kindOfMistake / searchDescription: required-nullable object members; null here
+                    member[key] = None
                 elif schema.get("type") == ["string", "null"]:
                     member[key] = "example"
                 else:
@@ -3365,6 +3369,7 @@ class _AstraCliFakeRunner:
                 "unnamedChangeReverts": None,
                 "checks": None,
                 "testMatch": None,
+                "places": None,
                 "readParts": None,
                 "investigated": ["app/session_guard.py"],
             }

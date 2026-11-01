@@ -452,4 +452,168 @@ FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t9_the_fix
 33 passed in 1.67s
 ```
 
+## Amendment — review round 1
+
+**Provenance:** claude / sonnet-5.5 (implementer, work order WO-1e). Head at the start was `5d7aaee3a8203068185e53133676d972162763c9`.
+Every run is `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest <node> -q --tb=short`, the detector unedited, one node per run.
+Each neutralization is one targeted Edit, undone by the inverse Edit; the restore receipt is the restored line quoted back from a Grep.
+Nothing was redacted (no credential-like text appears). Dropped from every capture: the `UV_NATIVE_TLS` deprecation warning line.
+Captures are far under the 32 KiB / 128 KiB ceilings.
+
+**F6 (axis declarations) adds no neutralization run.** Every test in the file now has an `# axis:` line. Eight of them (`test_t2_edges_…`, `test_t4c_…`,
+`test_t4_edges_…`, `test_t4_the_submit_guard_…`, `test_t6_kind_missing_counts_…`, `test_t7_unavailable_provenance_…`, `test_t7_the_seams_fold_stamps_…`,
+`test_t8_…`) are declarations only: they state what the test bites and do not cite this record, because none of them was neutralized here or in the entries above.
+
+### h2 — a re-raise and an open-blocker dedup keep the places but give the kept finding no description
+
+Two call sites, one failure mode (the merge gives the kept finding a `searchDescription` it never named). Each site was neutralized and run on its own.
+Representative test: `test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description`. The merge in `_merge_same_finding` (`round_driver.py:1054`) is excluded on purpose and keeps the default `with_description=True`; it was not neutralized.
+
+**neutralization A** (`round_driver.py:9838`, `_union_open_blockers`): `verification.apply_kind_members(kept, [kept, f], with_description=False)` → `… with_description=True)`.
+
+**raw red A:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:355: in test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description
+    assert "searchDescription" not in batch
+E   AssertionError: assert 'searchDescription' not in {'title': 'Retry without a cap', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description
+1 failed in 5.50s
+```
+**restore A:** inverse Edit, done before neutralization B.
+
+**neutralization B** (`round_driver.py:2287`, `_seed_ledger_entry`): `verification.apply_kind_members(entry, [existing, entry], with_description=False)` → `… with_description=True)`.
+
+**raw red B** (A restored, so the run gets past the dedup assertion and fails on the re-raise one):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:360: in test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description
+    assert "searchDescription" not in entry
+E   AssertionError: assert 'searchDescription' not in {'title': 'Retry without a cap', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_a_reraise_and_an_open_blocker_dedup_keep_the_places_but_gain_no_description
+1 failed in 2.53s
+```
+**restore B:** inverse Edit. **restore receipt:** `grep -n apply_kind_members round_driver.py` after the restore:
+```
+1054:    verification.apply_kind_members(merged, [existing, incoming])
+2287:        verification.apply_kind_members(entry, [existing, entry], with_description=False)
+9838:                verification.apply_kind_members(kept, [kept, f], with_description=False)
+```
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 3.34s
+```
+
+### h3 — the seams artifact the adapter assembles carries the executed vendor, so the fold stamps the author on the durable path
+
+Representative test: `test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold` (three parameters: an independent vendor with runner evidence, a maker family with runner evidence, and a landing with no runner evidence).
+
+**neutralization** (`round_adapters.py:462`): `if phase == P_SEAMS:` → `if phase == P_SEAMS and False:`.
+
+**raw red** (`-k test_t7_the_durable_seams_artifact`; the third parameter, no runner evidence, stays green because it expects no `ranManifest`):
+```
+FF.                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold[envelope0-True] _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:509: in test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold
+    assert ("ranManifest" in artifact) is (envelope["schema"] == RR.SEAT_RESULT_SCHEMA_V2)
+E   AssertionError: assert ('ranManifest' in {'findings': [{'title': 'From seams', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...}]}) is ('seat-result/2' == 'seat-result/2'
+E
+E       seat-result/2)
+_ test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold[envelope1-False] _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:509: in test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold
+    assert ("ranManifest" in artifact) is (envelope["schema"] == RR.SEAT_RESULT_SCHEMA_V2)
+E   AssertionError: assert ('ranManifest' in {'findings': [{'title': 'From seams', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...}]}) is ('seat-result/2' == 'seat-result/2'
+E
+E       seat-result/2)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold[envelope0-True]
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t7_the_durable_seams_artifact_the_adapter_assembles_is_stamped_through_the_fold[envelope1-False]
+2 failed, 1 passed, 38 deselected in 0.59s
+```
+The red stops at the `ranManifest` assertion, before the author assertion; the author assertion on the independent-vendor parameter is therefore unproven by this run.
+
+**restore:** inverse Edit. **restore receipt:** `grep -n "phase == P_SEAMS" -A6 round_adapters.py`:
+```
+462:        if phase == P_SEAMS:
+463-            # axis: the seams artifact carries the executed vendor the authentication above checked, so the fold stamps a search description's author on the durable path as the panel's `ranManifest` does — see bite-proof record c4_wo1_kind
+464-            ran_manifest = _trusted_vendors(roster, indexed, dispatch_manifest, {}, orders_manifest,
+465-                                            _maker_barred(state, config))
+466-            if ran_manifest:
+467-                artifact["ranManifest"] = ran_manifest
+```
+**raw green** (same selector):
+```
+...                                                                      [100%]
+3 passed, 38 deselected in 0.48s
+```
+
+### h4 — place answers reach the rows of members merged into the audited finding
+
+Test: `test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_finding`.
+
+**neutralization** (`round_driver.py:3243`): `results = answers.get(into) if isinstance(into, str) else None` → `results = answers.get(into) if False and isinstance(into, str) else None`.
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_finding _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:317: in test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_finding
+    assert [p.get("fixed") for p in by_key["k-shared"]] == [True, True]
+E   assert [None, None] == [True, True]
+E
+E     At index 0 diff: None != True
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_place_answers_reach_the_rows_of_members_merged_into_the_audited_finding
+1 failed in 0.40s
+```
+**restore:** inverse Edit. **restore receipt:** `grep -n "results = answers.get(into)" round_driver.py`: `3243:            results = answers.get(into) if isinstance(into, str) else None`.
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.48s
+```
+The unanswered-place half (`k-partial`'s place 7 stays unset) and the not-merged half (`k-other` untouched) are asserted in the same test and were not neutralized separately.
+
+### h5 — the panel's kind-missing count is added to the count the round already holds
+
+Test: `test_t6_the_first_panel_wave_adds_its_kind_missing_count_to_the_one_an_earlier_audit_recorded`.
+
+**neutralization** (`round_driver.py:4148`): `(held_kind_missing if _is_plain_int(held_kind_missing) else 0)` → `(held_kind_missing if False and _is_plain_int(held_kind_missing) else 0)`.
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t6_the_first_panel_wave_adds_its_kind_missing_count_to_the_one_an_earlier_audit_recorded _
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:399: in test_t6_the_first_panel_wave_adds_its_kind_missing_count_to_the_one_an_earlier_audit_recorded
+    assert state["rounds"]["1"]["kindMissing"] == 3  # 2 held + the panel's 1 finding without a kind
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   assert 1 == 3
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t6_the_first_panel_wave_adds_its_kind_missing_count_to_the_one_an_earlier_audit_recorded
+1 failed in 0.49s
+```
+**restore:** inverse Edit. **restore receipt:** `grep -n held_kind_missing round_driver.py`:
+```
+4146:    held_kind_missing = state["rounds"].get(str(state["round"]), {}).get(KIND_MISSING_FIELD)
+4148:                  (held_kind_missing if _is_plain_int(held_kind_missing) else 0)
+```
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```
+The "no earlier count, so the count is the panel's own" edge is asserted by the existing `test_t6_kind_missing_counts_every_compile_…` (`== 0`) and `test_t6_a_null_or_blank_…` (`== 1`), which pass unchanged.
+
 `git status --porcelain` after the final run lists `M plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py` and untracked files that were not made by this dispatch (`.bash_profile`, `.bashrc`, `.claude/`, `.gitconfig`, `.gitmodules`, `.idea`, `.mcp.json`, `.profile`, `.ripgreprc`, `.vscode`, `.zprofile`, `.zshrc`); no product file is modified.
