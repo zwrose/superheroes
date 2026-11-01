@@ -63,6 +63,7 @@ VALID_LISTS = [
     [_entry(route="git checkout --theirs f.txt")],
     [_ROUTE_ENTRY],
     [_SANDBOX_ROUTE_ENTRY],
+    [_entry(refusedBy="permission", hook=None, route="git status")],  # a form-only re-issue, recorded as the route
 ]
 
 # the valid lists the strict write schema accepts: it needs `hook` and `route` on every entry, null when unused
@@ -70,7 +71,7 @@ SCHEMA_VALID_LISTS = [v for v in VALID_LISTS if all("hook" in e and "route" in e
 
 # every malformed case `refusals_fault` refuses: not a list, a non-dict element, an unknown key, a
 # refusedBy outside the enum, a missing key, a blank command / next / hook / route, a route that is not
-# a string, a route on a permission refusal
+# a string
 MALFORMED_LISTS = [
     "not-a-list",
     {"command": "x"},
@@ -88,7 +89,6 @@ MALFORMED_LISTS = [
     [_entry(route="")],
     [_entry(route="  ")],
     [_entry(route=5)],
-    [_entry(refusedBy="permission", hook=None, route="git status")],
     [dict(_SANDBOX_ROUTE_ENTRY, route="  ")],
 ]
 
@@ -107,15 +107,13 @@ SCHEMA_REFUSED_LISTS = [
     [_entry(route=5)],
 ]
 
-# the cases only the admission check refuses: well-shaped but blank strings, and a route on a
-# permission refusal
+# the cases only the admission check refuses: well-shaped but blank strings
 BLANK_LISTS = [
     [_entry(command="")],
     [_entry(command="   ")],
     [_entry(next="  ")],
     [_entry(hook="  ")],
     [_entry(route="  ")],
-    [_entry(refusedBy="permission", hook=None, route="git status")],
 ]
 
 
