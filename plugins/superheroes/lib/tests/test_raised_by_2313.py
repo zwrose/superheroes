@@ -288,6 +288,26 @@ def test_m1_an_earliest_member_with_no_raiser_leaves_the_merge_without_one():
     assert merged["severity"] == "Important" and RAISED not in merged, merged
 
 
+def test_m2_a_merge_carries_the_chosen_members_first_raise_round_with_its_raiser_across_two_merges():
+    # axis: the chosen earliest member's round travels with its raiser, so a second merge never swaps in a later seat
+    first = verification._merge_group([_member("Minor", "code-reviewer", raised_round=1),
+                                       _member("Important", "scoped finder", raised_round=3)])
+    assert first[RAISED] == "code-reviewer" and first[SC.FIRST_RAISED_ROUND_FIELD] == 1, first
+    round_two = _member("Important", "premortem-reviewer", raised_round=2)
+    for members in ([first, round_two], [round_two, first]):
+        merged = verification._merge_group(members)
+        assert merged[RAISED] == "code-reviewer" and merged[SC.FIRST_RAISED_ROUND_FIELD] == 1, merged
+
+
+def test_m2_synthesis_syncs_the_first_raise_round_onto_the_ledger_row_with_the_raiser():
+    # axis: the representative's ledger row takes the chosen member's firstRaisedRound together with its raiser
+    rep = {"title": "t", "file": "f.py", "line": 1, RAISED: "code-reviewer", SC.FIRST_RAISED_ROUND_FIELD: 1}
+    row = {"title": "t", "file": "f.py", "line": 1, RAISED: "scoped finder", SC.FIRST_RAISED_ROUND_FIELD: 3}
+    state = {SC.DISPOSITION_LEDGER_KEY: [row]}
+    RD._sync_merged_consequences(state, [rep])
+    assert row[RAISED] == "code-reviewer" and row[SC.FIRST_RAISED_ROUND_FIELD] == 1, row
+
+
 def _synced_ledger_row(ledger_raiser, rep_raiser):
     rep = {"title": "t", "file": "f.py", "line": 1}
     if rep_raiser is not None:

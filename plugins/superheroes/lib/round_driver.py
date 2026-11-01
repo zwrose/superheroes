@@ -5150,6 +5150,9 @@ def _sync_merged_consequences(state, kept):
                 ledger[seen[key]][session_contract.RAISED_BY_FIELD] = finding[session_contract.RAISED_BY_FIELD]
             else:
                 ledger[seen[key]].pop(session_contract.RAISED_BY_FIELD, None)
+            # the chosen raiser's first-raise round travels with its name, so the ledger pair stays consistent
+            if session_contract.FIRST_RAISED_ROUND_FIELD in finding:
+                ledger[seen[key]][session_contract.FIRST_RAISED_ROUND_FIELD] = finding[session_contract.FIRST_RAISED_ROUND_FIELD]
 
 
 def _verifier_head(state, session_dir, rnd):

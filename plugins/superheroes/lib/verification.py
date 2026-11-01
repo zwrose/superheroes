@@ -469,6 +469,8 @@ def _keep_earliest_raiser(merged, members, rep):
     chosen = max(group, key=lambda m: (-_severity_rank(m.get("severity")), members.index(m)))
     if chosen is rep:
         return
+    # the chosen member's round travels with its raiser, so the pair never describes two different reports
+    merged[session_contract.FIRST_RAISED_ROUND_FIELD] = min(rounds)
     raiser = chosen.get(session_contract.RAISED_BY_FIELD)
     if isinstance(raiser, str) and raiser.strip():
         merged[session_contract.RAISED_BY_FIELD] = raiser
