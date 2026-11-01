@@ -17,6 +17,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -141,6 +142,24 @@ def _call(outcome, paths=(), texts=()):
     return {"outcome": outcome, "paths": list(paths), "texts": list(texts)}
 
 
+def _string_values(value, depth=0):
+    """Every string value in a JSON-like structure (bounded depth)."""
+    if isinstance(value, str):
+        return [value]
+    if depth > 6:
+        return []
+    if isinstance(value, dict):
+        children = value.values()
+    elif isinstance(value, list):
+        children = value
+    else:
+        return []
+    out = []
+    for child in children:
+        out.extend(_string_values(child, depth + 1))
+    return out
+
+
 def _codex_item_call(item, completed):
     """A normalized call for a codex action item, or None for any other item. Never raises."""
     kind = item.get("type")
@@ -153,10 +172,8 @@ def _codex_item_call(item, completed):
         outcome = _exit_outcome(item.get("exit_code")) if completed else _INDETERMINATE
         return _call(outcome, texts=[command])
     if kind == "mcp_tool_call":
-        try:
-            text = json.dumps(item.get("arguments"), ensure_ascii=False)
-        except (TypeError, ValueError):
-            text = ""
+        # an argument value that is exactly a path is a path; a substring of some other value is not
+        values = _string_values(item.get("arguments"))
         if not completed:
             outcome = _INDETERMINATE
         elif item.get("status") == "completed" and not item.get("error"):
@@ -165,7 +182,7 @@ def _codex_item_call(item, completed):
             outcome = _FAILED
         else:
             outcome = _INDETERMINATE
-        return _call(outcome, texts=[text])
+        return _call(outcome, paths=values)
     return None
 
 
@@ -297,29 +314,144 @@ _STREAM_PARSERS = {
 }
 
 
-def _names_target(call, targets):
-    return (any(isinstance(p, str) and p in targets for p in call["paths"])
-            or any(isinstance(t, str) and target in t
-                   for t in call["texts"] for target in targets))
+# What a shell command does with a file argument it names.
+_HIT_READ = "read"            # a program that prints or scans the file's content
+_HIT_NONREAD = "non-read"     # a program that only inspects the file's existence or metadata
+_HIT_AMBIGUOUS = "ambiguous"  # the file is named but what the command does with it is not clear
+
+_READER_PROGRAMS = frozenset((
+    "cat", "head", "tail", "less", "more", "sed", "awk", "grep", "egrep", "fgrep", "rg", "bat",
+    "nl", "tac", "od", "xxd", "hexdump", "strings", "sort", "uniq", "cut", "tr", "jq", "view",
+))
+_NONREAD_PROGRAMS = frozenset((
+    "test", "[", "[[", "ls", "stat", "file", "wc", "realpath", "readlink", "basename", "dirname",
+    "touch", "chmod", "chown", "du", "find", "cd", "mkdir", "rm", "mv", "cp", "sha256sum",
+    "shasum", "md5sum", "cksum", "git",
+))
+_SHELL_PROGRAMS = frozenset(("sh", "bash", "zsh", "dash", "ksh"))
+_WRAPPER_PROGRAMS = frozenset(("sudo", "env", "command", "time", "nice", "nohup", "exec"))
+# grep/rg options that report a match count or file name, never the content.
+_NONCONTENT_FLAG_RE = re.compile(r"^-[A-Za-z]*[lLcq][A-Za-z]*$")
+_PATH_CHARS = r"[\w.\-/]"
+_MAX_SHELL_DEPTH = 3
+
+
+def _segments(command):
+    """The command split into simple commands (token lists) at ``|``, ``&&``, ``;``, ``&``. Raises ValueError."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    out, current = [], []
+    for token in lexer:
+        if token and all(ch in "|&;()" for ch in token):
+            if current:
+                out.append(current)
+            current = []
+        else:
+            current.append(token)
+    if current:
+        out.append(current)
+    return out
+
+
+def _segment_program(tokens):
+    """(program basename, argument tokens) of one simple command, past env assignments and wrappers."""
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", token) or os.path.basename(token) in _WRAPPER_PROGRAMS:
+            index += 1
+            continue
+        break
+    if index >= len(tokens):
+        return None, []
+    return os.path.basename(tokens[index]), tokens[index + 1:]
+
+
+def _command_hit(command, targets, depth=0):
+    """_HIT_READ, _HIT_NONREAD, _HIT_AMBIGUOUS or None for a shell command text and the target paths.
+
+    A read is credited only when a content-reading program is given the complete file path as one
+    argument. A command that merely names the path in some other way is ambiguous, not a read."""
+    if not any(re.search(re.escape(t) + "(?!" + _PATH_CHARS + ")", command) for t in targets):
+        return None
+    try:
+        segments = _segments(command)
+    except ValueError:
+        return _HIT_AMBIGUOUS
+    verdict = None
+    for tokens in segments:
+        program, args = _segment_program(tokens)
+        if program is None:
+            continue
+        if program in _SHELL_PROGRAMS and depth < _MAX_SHELL_DEPTH:
+            for position, arg in enumerate(args[:-1]):
+                if arg.startswith("-") and "c" in arg:
+                    inner = _command_hit(args[position + 1], targets, depth + 1)
+                    if inner == _HIT_READ:
+                        return _HIT_READ
+                    verdict = inner or verdict
+                    break
+            continue
+        if not any(arg in targets for arg in args):
+            continue
+        if program in _READER_PROGRAMS:
+            if program in ("grep", "egrep", "fgrep", "rg") and any(
+                    _NONCONTENT_FLAG_RE.match(arg) for arg in args if arg.startswith("-")):
+                verdict = verdict or _HIT_NONREAD
+                continue
+            return _HIT_READ
+        if program in _NONREAD_PROGRAMS:
+            verdict = verdict or _HIT_NONREAD
+        else:
+            verdict = _HIT_AMBIGUOUS
+    # The path occurs but no simple command takes it whole as an argument (a quoted script, a
+    # substitution): what happens to it cannot be told.
+    return verdict or _HIT_AMBIGUOUS
+
+
+def _call_hit(call, targets):
+    """How one normalized call touches the target paths: _HIT_READ, _HIT_NONREAD, _HIT_AMBIGUOUS or None."""
+    if any(isinstance(p, str) and p in targets for p in call["paths"]):
+        return _HIT_READ
+    verdict = None
+    for text in call["texts"]:
+        if not isinstance(text, str):
+            continue
+        hit = _command_hit(text, targets)
+        if hit == _HIT_READ:
+            return _HIT_READ
+        if hit == _HIT_AMBIGUOUS or (hit == _HIT_NONREAD and verdict is None):
+            verdict = hit
+    return verdict
 
 
 def _names_basename(call, basename):
+    pattern = re.compile(r"(?<!" + _PATH_CHARS + ")" + re.escape(basename) + "(?!" + _PATH_CHARS + ")")
     return (any(isinstance(p, str) and os.path.basename(p) == basename for p in call["paths"])
-            or any(isinstance(t, str) and basename in t for t in call["texts"]))
+            or any(isinstance(t, str) and pattern.search(t) for t in call["texts"]))
 
 
-def _file_state(calls, path):
-    """read | not-read | unknown for one file given the normalized calls."""
+def _file_state(calls, path, truncated=False):
+    """read | not-read | unknown for one file given the normalized calls.
+
+    ``truncated`` says the stream lost its head to the capture cap: a positive read still counts, but
+    the absence of one cannot show the file was not read."""
     targets = {path, os.path.realpath(path)}
     basename = os.path.basename(path)
-    target_hits = [call for call in calls if _names_target(call, targets)]
-    # axis: `read` only on a completed, successful call naming the path; `unknown` whenever the
-    # stream cannot tell (an undeterminable outcome, or a basename-only success).
-    if any(call["outcome"] == _OK for call in target_hits):
+    hits = [(call, _call_hit(call, targets)) for call in calls]
+    hits = [(call, hit) for call, hit in hits if hit is not None]
+    # axis: `read` only on a completed, successful content-reading call naming the whole path;
+    # `unknown` whenever the stream cannot tell (an undeterminable outcome, an ambiguous command, a
+    # basename-only success, or a truncated capture with no positive read).
+    if any(hit == _HIT_READ and call["outcome"] == _OK for call, hit in hits):
         return READ
-    if any(call["outcome"] == _INDETERMINATE for call in target_hits):
+    if any(call["outcome"] == _INDETERMINATE and hit != _HIT_NONREAD for call, hit in hits):
         return UNKNOWN
-    target_ids = {id(call) for call in target_hits}
+    if any(call["outcome"] == _OK and hit == _HIT_AMBIGUOUS for call, hit in hits):
+        return UNKNOWN
+    if truncated:
+        return UNKNOWN
+    target_ids = {id(call) for call, _hit in hits}
     for call in calls:
         if id(call) in target_ids:
             continue
@@ -338,9 +470,11 @@ def _observation_entry(entry, state):
     }
 
 
-def read_states(engine, stdout, stamped):
+def read_states(engine, stdout, stamped, truncated=False):
     """The observation's ``calibration`` list: the stamp minus ``path``, plus ``read``.
 
+    ``truncated`` is True when ``stdout`` is only the tail of the engine's output: a file with no
+    positive read in the retained events is then ``unknown``, never ``not-read``.
     Never raises; any failure gives ``unknown`` for every file."""
     try:
         if not isinstance(stamped, list):
@@ -355,7 +489,8 @@ def read_states(engine, stdout, stamped):
                     for entry in entries:
                         path = entry.get("path")
                         states[id(entry)] = (
-                            _file_state(calls, path) if isinstance(path, str) and path else UNKNOWN)
+                            _file_state(calls, path, truncated is True)
+                            if isinstance(path, str) and path else UNKNOWN)
         except Exception:
             states = {}
         return [_observation_entry(entry, states.get(id(entry), UNKNOWN)) for entry in entries]

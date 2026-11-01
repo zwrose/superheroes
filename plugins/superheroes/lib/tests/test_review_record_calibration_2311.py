@@ -205,6 +205,15 @@ def test_a_test_role_row_that_ran_gives_the_test_lens_part_and_line():
                     f"core.md, review-crew.md, CLAUDE.md (policy {POLICY}); 3 findings raised.")
 
 
+def test_findings_labelled_by_dimension_or_bare_seat_count_for_the_test_lens():
+    # axis: the session writer labels a finding by its dimension (`Test`, merged `Code, Test`) or bare seat, never the row's round suffix
+    rows = [reviewer("test-role (round 1)"), reviewer("code-reviewer")]
+    runs = {"/run/test-role (round 1)": run(cal()), "/run/code-reviewer": run()}
+    found = [finding("a", reviewer="Test"), finding("b", reviewer="Code, Test"), finding("c", reviewer="test-role"),
+             finding("d", reviewer="Code"), finding("e", reviewer="Testing")]
+    assert rec_of(rows, runs, findings=found)["testLens"]["findings"] == 3
+
+
 def test_the_chosen_row_is_the_last_one_covering_the_final_commit_not_the_first_that_ran():
     # axis: the chosen-row rule; an earlier-commit row that ran first, or a later one that does not cover, taking the part
     early_first = [reviewer("test-role (round 1)", commit=EARLIER), reviewer("test-role (round 2)")]

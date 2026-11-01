@@ -133,6 +133,57 @@ def test_unknown_engine_records_unknown(calib):
     assert set(_reads(CR.read_states("mystery", stdout, calib.stamp)).values()) == {"unknown"}
 
 
+@pytest.mark.parametrize("command", [
+    "test -f {core}", "ls -l {core}", "stat {core}", "/bin/bash -lc 'test -f {core}'",
+    "cat {core}.backup", "cat {core}.md",
+])
+def test_codex_existence_checks_and_other_files_are_not_a_read(calib, command):
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] != "read"
+
+
+def test_codex_existence_check_alone_records_not_read_and_unrecognized_program_records_unknown(calib):
+    stdout = _codex_stream(_codex_cmd("a", "test -f %s" % calib.core, exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
+    stdout = _codex_stream(_codex_cmd("a", "mytool --load %s" % calib.core, exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
+
+
+def test_codex_content_readers_in_pipelines_and_shell_wrappers_record_read(calib):
+    stdout = _codex_stream(
+        _codex_cmd("a", "/bin/bash -lc \"sed -n '1,40p' %s | head -n 5\"" % calib.core, exit_code=0),
+        _codex_cmd("b", "cd /x && cat %s" % calib.layer, exit_code=0),
+    )
+    assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {
+        "core": "read", "review-crew": "read", "CLAUDE.md": "not-read"}
+
+
+def _truncated_stream():
+    return _codex_stream(_codex_cmd("a", "git status --short", exit_code=0))
+
+
+def test_truncated_capture_without_a_positive_read_records_unknown(calib):
+    stdout = _truncated_stream()
+    assert set(_reads(CR.read_states("codex", stdout, calib.stamp, truncated=True)).values()) == {"unknown"}
+    assert set(_reads(CR.read_states("codex", stdout, calib.stamp)).values()) == {"not-read"}
+
+
+def test_truncated_capture_keeps_a_positive_read(calib):
+    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core, exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp, truncated=True)) == {
+        "core": "read", "review-crew": "unknown", "CLAUDE.md": "unknown"}
+
+
+def test_capture_truncation_helper_prefers_the_stamped_count_then_the_head_marker():
+    cap = ED.MAX_STDOUT_CAPTURE
+    marker = ED._stdout_truncation_marker(cap + 5)
+    assert ED._calibration_capture_truncated({"stdoutBytes": cap + 1, "stdoutBytesPreCap": True}, "") is True
+    assert ED._calibration_capture_truncated({"stdoutBytes": 10, "stdoutBytesPreCap": True}, marker) is False
+    assert ED._calibration_capture_truncated({}, marker + "{}") is True
+    assert ED._calibration_capture_truncated({}, "{}") is False
+    assert ED._calibration_capture_truncated({"stdoutCapRewriteFailed": True}, "{}") is True
+
+
 def test_codex_basename_only_success_records_unknown(calib):
     stdout = _codex_stream(_codex_cmd("a", "cd /somewhere && cat core.md", exit_code=0))
     assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {

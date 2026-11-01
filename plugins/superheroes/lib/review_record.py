@@ -51,6 +51,7 @@ import pr_comment  # noqa: E402
 import returning_review  # noqa: E402
 import review_diff_bytes  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
+import review_seats  # noqa: E402
 import round_phases  # noqa: E402
 import sanitized_view  # noqa: E402
 import seat_map as seat_map_module  # noqa: E402
@@ -1312,14 +1313,25 @@ def _test_lens(reviewers, findings, final_sha):
     covering = [v for v in ran if v["coversFinalCommit"] is True]
     # axis: the chosen row is the last one covering the final commit, not the first row that ran — see bite-proof record wo_b_2311_record_calibration
     chosen = (covering or ran)[-1] if ran else None
-    names = [v["name"] for v in rows]
+    # axis: a finding carries its dimension label (`Test`, a merged `Code, Test`) or bare seat, never the row's `(round n)` name
+    identities = set()
+    for v in rows:
+        seat = _seat_round(v["name"])[0]
+        lens = round_phases.seat_lens(seat)
+        identities.update((v["name"], seat, lens, review_seats.dimension_label(lens)))
+    identities.discard(None)
     return {"listed": True, "ran": bool(ran),
             "ranFrom": chosen["ran"] if chosen else None,
             "row": chosen["name"] if chosen else None,
             "commit": (chosen["commit"] or final_sha) if chosen else None,
             "coversFinalCommit": bool(chosen and chosen["coversFinalCommit"]),
             "calibrationRead": [dict(e) for e in chosen["calibrationRead"]] if chosen and "calibrationRead" in chosen else None,
-            "findings": sum(1 for f in findings if f.get("reviewer") in names)}
+            "findings": sum(1 for f in findings if _raised_by(f.get("reviewer"), identities))}
+
+
+def _raised_by(reviewer, identities):
+    """True when a finding's reviewer text (one identity, or a merged `, `-joined list) names one of ``identities``."""
+    return isinstance(reviewer, str) and any(part.strip() in identities for part in reviewer.split(","))
 
 
 _OPAQUE_KEY = "rr1:"

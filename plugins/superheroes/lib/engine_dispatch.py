@@ -7614,8 +7614,25 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     # run, a run opened before the stamp, and a failed stamp (None) carry no key.
     stamped = opened.get("calibration")
     if opened.get("runKind") != RUN_KIND_WRITE and isinstance(stamped, list):
-        observation["calibration"] = calibration_read.read_states(engine, stdout, stamped)
+        observation["calibration"] = calibration_read.read_states(
+            engine, stdout, stamped, truncated=_calibration_capture_truncated(ended, stdout))
     return observation
+
+
+def _calibration_capture_truncated(ended, stdout):
+    """True when the stdout the calibration grade reads lost its head to the capture cap (so an earlier read may be gone).
+
+    The producer's pre-cap byte count is authoritative when stamped; otherwise the head marker decides. A failed
+    capped rewrite also lost the head. Never raises."""
+    try:
+        if ended.get("stdoutCapRewriteFailed") is True:
+            return True
+        observed = ended.get("stdoutBytes")
+        if ended.get("stdoutBytesPreCap") is True and isinstance(observed, int) and not isinstance(observed, bool):
+            return observed > MAX_STDOUT_CAPTURE
+        return _stdout_capture_truncated(stdout)
+    except Exception:
+        return True
 
 
 def run_execution_record(run_dir):
