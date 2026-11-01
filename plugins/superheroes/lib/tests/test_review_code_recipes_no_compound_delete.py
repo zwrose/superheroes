@@ -246,3 +246,18 @@ def test_the_meta_json_recipe_halts_on_each_failure(tmp_path):
     assert "could not write meta.json" in moved.stderr
     assert "REACHED-END" not in moved.stdout
     assert not (session / "meta.json").exists()
+    (session / "meta.json.tmp").unlink(missing_ok=True)
+
+    # (d) the producer fails after its redirection opened the file: the session directory exists (so the > and the
+    # mv would both succeed) and a PATH shim named jq only exits 1; only the producer's own guard can halt here
+    jq_shim = tmp_path / "jq-shim"
+    jq_shim.mkdir()
+    jq = jq_shim / "jq"
+    jq.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    os.chmod(jq, 0o755)
+    produced = run(session, path=str(jq_shim) + os.pathsep + os.environ["PATH"])
+    assert produced.returncode == 1, (produced.returncode, produced.stderr)
+    assert "could not write meta.json" in produced.stderr
+    assert "REACHED-END" not in produced.stdout
+    assert not (session / "meta.json").exists()
+    assert (session / "meta.json.tmp").exists()

@@ -54,9 +54,8 @@ refusal, else null), and next (what you did next). An empty list means you met n
 This dominates every rung below: a refused or denied command is never a command you "could not run"
 under rung 3 or rung 4 — you stop and report.
 
-**Deletes.** Never put `rm`, or any other delete, inside a compound command: not after `&&`, `||`
-or `;`, not in a pipe, and not inside `bash -c` or a subshell. A delete is always its own plain
-call, one path per call.
+**Deletes.** The delete rule (`DELETE_RULE` in `lib/command_refusals.py`) binds every command you
+run; read it there and follow it. This file does not restate it.
 
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when

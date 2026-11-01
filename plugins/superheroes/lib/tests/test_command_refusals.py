@@ -297,11 +297,11 @@ def test_census_delete_rule_native_preamble(tmp_path, monkeypatch, capsys):
 def test_census_delete_rule_implementer_md():
     with open(_IMPLEMENTER_MD, encoding="utf-8") as fh:
         body = " ".join(fh.read().split())
-    # axis: the delete rule reaches the implementer template — see bite-proof record wo_a_2314_form_only
-    assert " ".join(CR.DELETE_RULE.split()) in body
-    rule = body.index(" ".join(CR.DELETE_RULE.split()))
+    # axis: the implementer template cites the delete rule's home, never a copy (CONVENTIONS §11.4) — see bite-proof record wo_a_2314_form_only
+    assert " ".join(CR.DELETE_RULE.split()) not in body
+    cite = body.index("`DELETE_RULE` in `lib/command_refusals.py`")
     rung_one = body.index("1. **Never claim a run you did not make.**")
-    assert body.index("**Refused or denied commands.**") < rule < rung_one
+    assert body.index("**Refused or denied commands.**") < cite < rung_one
 
 
 def test_census_delete_rule_apply_fixes_step():
@@ -317,11 +317,10 @@ def test_census_delete_rule_apply_fixes_step():
 
 
 def test_delete_rule_has_one_home():
-    # A hand copy of the sentence anywhere in the shipped plugin outside its home and the
-    # implementer template (which is prose, not a Python import) is a second copy.
+    # A hand copy of the sentence anywhere in the shipped plugin outside its home is a second
+    # copy; prose consumers (the implementer template) cite the home instead.
     marker = "A delete is always its own plain call"
     allowed = [
-        os.path.join("agents", "implementer.md"),
         os.path.join("lib", "command_refusals.py"),
         # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is DELETE_RULE itself
         os.path.join("rubric", "launch-doctrine.md"),

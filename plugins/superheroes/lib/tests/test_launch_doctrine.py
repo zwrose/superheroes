@@ -803,12 +803,15 @@ def test_doctrine_no_compound_delete_ruling_invariant_missing():
     assert result["detectiveCloudLine"] is None
 
 
-def test_turn_end_ruling_matches_dispatch_mechanics():
-    # axis: the turn-end ruling text is carried verbatim (whitespace-normalised) in the
-    # dispatch-mechanics reference's "The turn's final act" section
+def test_turn_end_ruling_is_cited_not_copied_in_dispatch_mechanics():
+    # axis: the dispatch-mechanics reference's "The turn's final act" section cites the turn-end
+    # ruling's home (CONVENTIONS §11.4) and does not carry a second copy of its text
     with open(_DISPATCH_MECHANICS, encoding="utf-8") as fh:
         doc = " ".join(fh.read().split())
-    assert " ".join(LD.RULING_TEXT["turn-end"].split()) in doc
+    start = doc.index("### The turn's final act")
+    assert 'RULING_TEXT["turn-end"]' in doc[start:]
+    assert "lib/launch_doctrine.py" in doc[start:]
+    assert " ".join(LD.RULING_TEXT["turn-end"].split()) not in doc
 
 
 def test_doctrine_gated_strings_ruling_invariant_missing():
