@@ -196,15 +196,15 @@ def test_a_malformed_session_cost_reads_unmeasured_and_leaves_the_record_whole(b
 def test_a_seat_with_no_cost_recorded_reads_unmeasured_never_zero():
     named = [_f("k1"), _f("k2", "craft", "Failure-Mode")]  # the findings name two seats
     ci = [{"pr": 1, "minutes": 1}, {"pr": 2, "minutes": 1}]
-    # every session has a complete sessionCost: a seat named only by the findings reads unmeasured
+    # every session has a complete sessionCost: a seat named only by a finding whose raiser did not run gets no row, and the finding counts under `unattributed`
     seats = RM.compute(_full(records=[_rec(1, findings=named)]), FROM, UNTIL)["measures"]["seats"]
-    assert seats["security-reviewer"]["tokens"] == 100 and seats["premortem-reviewer"]["tokens"] == U
+    assert seats["security-reviewer"]["tokens"] == 100 and "premortem-reviewer" not in seats and seats["unattributed"]["outcomes"]["craft"] == 1
     # one session with no sessionCost blanks the seats it ran, not only its PR's
     unread = _rec(2, sc=None)
     row = RM.compute(_full(records=[_rec(1, findings=named), unread], ciRuns=ci), FROM, UNTIL)
     seats, why = row["measures"]["seats"], _why(row)
     assert seats["security-reviewer"]["tokens"] == U and seats["security-reviewer"]["minutes"] == U
-    assert seats["premortem-reviewer"]["tokens"] == U and why["seats.premortem-reviewer.tokens"] == "cost-not-recorded"
+    assert "premortem-reviewer" not in seats and "seats.premortem-reviewer.tokens" not in why
     assert why["seats.security-reviewer.minutes"] == "cost-not-recorded"
     cost = row["measures"]["reviewerCostPerPr"]
     assert cost["tokens"]["total"] == 100 and cost["prsLeftOut"]["tokens"] == {"count": 1, "why": RM.LEFT_OUT_WHY}
@@ -253,7 +253,8 @@ def test_a_seat_found_under_by_an_unreadable_session_reads_unmeasured():
     light = _rec(1, "a", rows=[{"name": "codex-light", "ran": "reported-by-session", "commit": "c1"}],
                  findings=[_f("k1", reviewer="Code")], sc=None)
     seats = RM.compute(_full(records=[light, _rec(1, "b")]), FROM, UNTIL)["measures"]["seats"]
-    assert seats["code-reviewer"]["tokens"] == U
+    # axis: a seat that did not run on the PR gets neither credit nor a cost row from a finding that names it
+    assert "code-reviewer" not in seats and seats["unattributed"]["outcomes"]["fixed"] == 1
     assert seats["security-reviewer"]["tokens"] == 100
 
 
