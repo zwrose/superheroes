@@ -251,6 +251,19 @@ def test_t2_the_self_archive_record_keeps_its_own_head_and_a_branch_moved_past_i
     assert _successor(w, launch_id=SA) == {"ok": False, "reason": "handover-head-not-pushed"}
 
 
+def test_t2_an_archived_session_keeps_the_self_archive_head_and_adopts_it_among_divergent_branches(w):
+    _lane(w, SA)
+    named = _push(w, "issue-17-a", "a")
+    _push(w, "issue-17-b", "b")
+    w.gh.comments = [_self_archive(named)]
+    out = _assess(w, launch_id=SA, state="archived")
+    assert (out["verdict"], out["evidence"]) == ("stopped", "session-archived")
+    assert _state(w)["assessed"][SA]["handoverSha"] == named
+    _died(w, SA)
+    got = _successor(w, launch_id=SA)
+    assert got["ok"] is True and got["premise"]["adoptsBranch"] == "issue-17-a" and got["premise"]["adoptsHead"] == named
+
+
 def test_t3_e1_a_record_naming_another_launch_or_a_longer_id_is_not_this_lanes_record(w):
     _lane(w, SA)
     sha = _pushed_at(w, 1500)

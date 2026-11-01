@@ -523,7 +523,7 @@ def assess(repo_root, launch_id, *, session_state, activity_age_seconds=None, re
     if out["evidence"] == "handover":
         out["stoppedAt"] = _epoch(handover["createdAt"])
     entry = {"verdict": "stopped", "evidence": out["evidence"], "at": _iso(now), "stoppedAt": out["stoppedAt"],
-             "handoverSha": (archived["parsed"][1] if out["evidence"] == "self-archived"
+             "handoverSha": (archived["parsed"][1] if archived and (out["evidence"] == "self-archived" or not handover)
                              else handover["sha"] if handover else None)}
     if out["evidence"] == "account-limited":
         entry["limitResetsAt"] = out["limitResetsAt"]
