@@ -59,6 +59,8 @@ _SANDBOX_ROUTE_ENTRY = {
     [_entry(refusedBy="permission", hook=None, route=None), _entry(refusedBy="sandbox", route=None)],
     [_entry(hook=None, route="gh pr view 5")],
     [_SANDBOX_ROUTE_ENTRY],
+    # a form-only re-issue: the plain form is recorded as the route of a permission entry
+    [_entry(refusedBy="permission", hook=None, route="git status")],
 ])
 def test_refusals_fault_accepts_valid_lists(value):
     # axis: acceptance of valid refusals — see bite-proof record wo1_2011_stop_rule
@@ -91,10 +93,6 @@ def test_refusals_fault_accepts_valid_lists(value):
     ([_entry(route=5)], "refusals[0].route"),
     ([_entry(route=["git status"])], "refusals[0].route"),
     ([_entry(refusedBy="permission", route="")], "refusals[0].route"),
-    ([_entry(refusedBy="permission", hook=None, route="git status")],
-     "refusals[0].route needs refusedBy hook or sandbox"),
-    ([_entry(), _entry(refusedBy="permission", route="git status")],
-     "refusals[1].route needs refusedBy hook or sandbox"),
     ([dict(_SANDBOX_ROUTE_ENTRY, route="  ")], "refusals[0].route"),
     ([dict(_SANDBOX_ROUTE_ENTRY, route=["split"])], "refusals[0].route"),
     ([dict(_SANDBOX_ROUTE_ENTRY, next="")], "refusals[0].next blank"),
@@ -105,29 +103,21 @@ def test_refusals_fault_names_the_fault(value, reason):
     assert CR.refusals_fault(value) == reason
 
 
-# the one exception to the stop rule, pinned once as a literal
-_EXCEPTION_SENTENCE = (
-    "The one exception: when the refusing guard's or hook's own refusal message names a route "
-    "(an exact command or tool to use instead), you may take exactly that route, once, and record "
-    "it as that entry's route; every other form, and every auto-mode classifier denial, stays a stop."
-)
+@pytest.mark.parametrize("refuser", ["permission", "hook", "sandbox"])
+def test_a_route_is_valid_from_any_refuser(refuser):
+    # axis: a non-blank route is valid with any refuser (a form-only re-issue, whatever the refuser); a blank one is not
+    assert not hasattr(CR, "ROUTE_REFUSED_BY")
+    assert CR.refusals_fault([_entry(refusedBy=refuser, hook=None, route="git status")]) is None
+    assert CR.refusals_fault([_entry(refusedBy=refuser, hook=None, route="  ")]) == "refusals[0].route"
 
 
-def test_a_route_is_valid_from_a_hook_or_the_sandbox_only():
-    # axis: a route is read from the refusers whose own message can name one, never from a permission denial (#2167)
-    assert CR.ROUTE_REFUSED_BY == ("hook", "sandbox")
-    assert set(CR.ROUTE_REFUSED_BY) < set(CR.REFUSED_BY)
-    assert CR.refusals_fault([_SANDBOX_ROUTE_ENTRY]) is None
-    assert CR.refusals_fault([_entry(route="git checkout --theirs f.txt")]) is None
-    assert CR.refusals_fault([dict(_SANDBOX_ROUTE_ENTRY, refusedBy="permission")]) == (
-        "refusals[0].route needs refusedBy hook or sandbox")
-
-
-def test_stop_rule_ends_with_the_one_exception():
-    # axis: the stop rule carries its one exception, and the order text carries the stop rule — see bite-proof record wo_a_2054_route
-    assert CR.STOP_RULE.endswith(" " + _EXCEPTION_SENTENCE)
-    assert CR.STOP_RULE.count("exception") == 1
-    assert _EXCEPTION_SENTENCE in CR.ORDER_TEXT
+def test_stop_rule_ends_with_its_two_exceptions():
+    # axis: the stop rule carries its two exceptions, and the order text carries the stop rule — see bite-proof record wo_a_2314_form_only
+    assert CR.STOP_RULE.count("There are two exceptions.") == 1
+    assert "and not about what the command does" in CR.STOP_RULE
+    assert ("any refusal about what the command does (a delete, a push, a network call, a "
+            "permission), stays a stop") in CR.STOP_RULE
+    assert "A refused command that carries a delete is never only about its form." in CR.STOP_RULE
     assert CR.ORDER_TEXT.startswith(CR.STOP_RULE)
 
 
@@ -258,3 +248,75 @@ def test_file_write_rule_has_one_home():
                 if marker in " ".join(fh.read().split()):
                     copies.append(os.path.relpath(path, _PLUGIN_ROOT))
     assert copies == [os.path.relpath(home, _PLUGIN_ROOT)]
+
+
+# --- the delete rule (#2314): one home, every implementer order -----------------------------
+
+
+def test_census_delete_rule_write_prompt(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    prompt_path = _prompt(tmp_path, "Implement exactly the assigned work order.\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
+    assert res["ok"] is True
+    with open(os.path.join(str(tmp_path / "run"), ED.PROMPT_NAME), encoding="utf-8") as fh:
+        staged = fh.read()
+    # axis: the delete rule reaches every dispatch-write order — see bite-proof record wo_a_2314_form_only
+    assert staged.count(CR.DELETE_RULE) == 1
+    assert staged.index(CR.FILE_WRITE_RULE) < staged.index(CR.DELETE_RULE)
+
+
+def test_census_delete_rule_native_preamble(tmp_path, monkeypatch, capsys):
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _out = _open(capsys, r, deadline=600, items=["src/new.txt"])
+    assert code == 0
+    with open(os.path.join(os.path.realpath(r.run), "agent-prompt.md"), encoding="utf-8") as fh:
+        prompt = fh.read()
+    # axis: the delete rule reaches the native implementer preamble — see bite-proof record wo_a_2314_form_only
+    assert prompt.count(CR.DELETE_RULE) == 1
+    assert prompt.index(CR.DELETE_RULE) < prompt.index("The order follows, verbatim.")
+
+
+def test_census_delete_rule_implementer_md():
+    with open(_IMPLEMENTER_MD, encoding="utf-8") as fh:
+        body = " ".join(fh.read().split())
+    # axis: the implementer template cites the delete rule's home, never a copy (CONVENTIONS §11.4) — see bite-proof record wo_a_2314_form_only
+    assert " ".join(CR.DELETE_RULE.split()) not in body
+    cite = body.index("`DELETE_RULE` in `lib/command_refusals.py`")
+    rung_one = body.index("1. **Never claim a run you did not make.**")
+    assert body.index("**Refused or denied commands.**") < cite < rung_one
+
+
+def test_census_delete_rule_apply_fixes_step():
+    path = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "auto-fix-loop.md")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    start = text.index("## Applying the fixes")
+    end = text.find("\n## ", start + 1)
+    section = text[start:] if end == -1 else text[start:end]
+    # axis: the in-session fix step cites the delete rule by name and home — see bite-proof record wo_c_2314_brief_fold
+    assert "DELETE_RULE" in section
+    assert "lib/command_refusals.py" in section
+
+
+def test_delete_rule_has_one_home():
+    # A hand copy of the sentence anywhere in the shipped plugin outside its home is a second
+    # copy; prose consumers (the implementer template) cite the home instead.
+    marker = "A delete is always its own plain call"
+    allowed = [
+        os.path.join("lib", "command_refusals.py"),
+        # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is DELETE_RULE itself
+        os.path.join("rubric", "launch-doctrine.md"),
+    ]
+    copies = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                if marker in " ".join(fh.read().split()):
+                    copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+    assert sorted(copies) == allowed

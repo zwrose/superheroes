@@ -73,8 +73,11 @@ These obligations attach to the order on your side, when you write it.
 - **The orders that carry the stop rule for refused or denied commands never restate it.** The
   `dispatch-write` runner, the native preamble and the implementer template carry
   it, and its home is `lib/command_refusals.py`. An order never asks for what that rule forbids.
-  The rule's one exception is a route the refusing guard's or hook's own message names, taken once
-  and recorded as the entry's `route`. When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
+  The rule has two exceptions: a route the refusing guard's or hook's own message names, and a
+  re-issue in plain form after a refusal only about the command's form; each is taken once and
+  recorded as the entry's `route`. Those same orders also carry the delete rule (`DELETE_RULE`,
+  same home): a delete never rides a compound command; it is its own plain call, one path per
+  call. When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
   so as its own instruction and names the refusal it answers. The refusals each dispatch reports go
   into the build record's dispatch provenance (`handback.md` § The build record).
 - **An order to an external engine carries a no-install, no-network block and a provenance-accuracy

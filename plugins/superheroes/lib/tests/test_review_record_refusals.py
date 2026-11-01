@@ -200,10 +200,11 @@ def test_the_refusals_line_shows_no_route_when_none_was_taken(route):
     assert line == rr._command_refusals_line([dict(REFUSAL, round=1)], False)
 
 
-def test_validate_accepts_a_taken_route_and_refuses_one_on_a_permission_refusal():
+def test_validate_accepts_a_taken_route_from_any_refuser_and_refuses_a_blank_one():
     assert _validated([dict(ROUTED, round=1)])["commandRefusals"][0]["route"] == "git checkout --theirs f.txt"
+    assert _validated([dict(OTHER, round=1, route="git status")])["commandRefusals"][0]["route"] == "git status"
     with pytest.raises(rr.Refusal) as e:
-        _validated([dict(OTHER, round=1, route="git status")])
+        _validated([dict(OTHER, round=1, route="  ")])
     assert e.value.reason == "review-account-invalid" and e.value.detail.startswith("commandRefusals[0]")
 
 

@@ -34,19 +34,28 @@ proceeding on a guessed premise. A **bite-proof red run** is not a missing premi
 
 **Refused or denied commands.** A refused or denied command is a stop. Report it in your result's
 refusals list and do not retry it in another form: not another path to the program, another tool,
-another wrapper, or another command with the same effect. The one exception: when the refusing
-guard's or hook's own refusal message names a route (an exact command or tool to use instead), you
-may take exactly that route, once, and record it as that entry's route; every other form, and every
-auto-mode classifier denial, stays a stop. A refused or denied command is one that a
-permission denial, a hook refusal, a sandbox refusal, or the harness's own safety checks (a
-shell-command checker or an auto-mode classifier) stopped, or one held for an approval that nobody
-answers; record those last two kinds with refusedBy permission. A command that ran and failed is
-not a refusal, and the failure rules cover it. Each refusals entry carries command (the command
-exactly as you wrote it), refusedBy (permission, hook or sandbox), hook (the hook's name when the
-refusal gave one, else null), route (the route a hook's or the sandbox's own refusal message named
-and you took, else null), and next (what you did next). An empty list means you met none.
+another wrapper, or another command with the same effect. There are two exceptions. First: when the
+refusing guard's or hook's own refusal message names a route (an exact command or tool to use
+instead), you may take exactly that route, once, and record it as that entry's route. Second: when
+a refusal is only about the command's form (a compound command, a variable or program inside
+`bash -c`, a heredoc or pipe the guard will not parse) and not about what the command does, you may
+re-issue the same command once in plain form (each command its own plain call, with no compound,
+wrapper, heredoc or pipe) and record that plain form as that entry's route. A second refusal, and
+any refusal about what the command does (a delete, a push, a network call, a permission), stays a
+stop; so does every other form. A refused command that carries a delete is never only about its
+form. A refused or denied command is one that a permission denial, a hook refusal, a sandbox
+refusal, or the harness's own safety checks (a shell-command checker or an auto-mode classifier)
+stopped, or one held for an approval that nobody answers; record those last two kinds with
+refusedBy permission. A command that ran and failed is not a refusal, and the failure rules cover
+it. Each refusals entry carries command (the command exactly as you wrote it), refusedBy
+(permission, hook or sandbox), hook (the hook's name when the refusal gave one, else null), route
+(the route a refusal message named and you took, or the plain form you re-issued after a form-only
+refusal, else null), and next (what you did next). An empty list means you met none.
 This dominates every rung below: a refused or denied command is never a command you "could not run"
 under rung 3 or rung 4 — you stop and report.
+
+**Deletes.** The delete rule (`DELETE_RULE` in `lib/command_refusals.py`) binds every command you
+run; read it there and follow it. This file does not restate it.
 
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when
