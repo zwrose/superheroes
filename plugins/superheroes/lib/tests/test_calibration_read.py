@@ -190,6 +190,42 @@ def test_codex_basename_only_success_records_unknown(calib):
         "core": "unknown", "review-crew": "not-read", "CLAUDE.md": "not-read"}
 
 
+@pytest.mark.parametrize("command", [
+    "git status --short\ncat {core}",
+    "/bin/bash -lc \"git status --short\ncat {core}\"",
+])
+def test_codex_newline_is_a_command_boundary(calib, command):
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "read"
+
+
+def test_codex_quoted_newline_does_not_split_a_command(calib):
+    stdout = _codex_stream(_codex_cmd("a", "echo 'a\nb' {core}".format(core=calib.core), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] != "read"
+
+
+@pytest.mark.parametrize("command", [
+    "cd {root} && cat ./core.md", "cat ./core.md", "cat sub/core.md", "bash -c 'cat ./core.md'",
+])
+def test_codex_relative_path_to_the_basename_records_unknown(calib, command):
+    stdout = _codex_stream(_codex_cmd("a", command.format(root=os.path.dirname(calib.core)), exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
+
+
+def test_codex_absolute_path_elsewhere_with_the_basename_is_not_a_read(calib):
+    stdout = _codex_stream(_codex_cmd("a", "cat /elsewhere/core.md", exit_code=0))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
+
+
+def test_vocabulary_has_one_home():
+    import calibration_vocab
+    import review_record
+    assert (CR.LABELS, CR.READ, CR.NOT_READ, CR.UNKNOWN) == (
+        calibration_vocab.LABELS, calibration_vocab.READ, calibration_vocab.NOT_READ, calibration_vocab.UNKNOWN)
+    assert review_record._CAL_LABELS is calibration_vocab.LABELS
+    assert review_record._CAL_READ_STATES == calibration_vocab.READ_STATES
+
+
 def test_codex_completed_call_without_exit_code_records_unknown(calib):
     stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"

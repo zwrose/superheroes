@@ -27,15 +27,8 @@ if _LIB_DIR not in sys.path:
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import engine_adapter  # noqa: E402  the stream recognizers the tool-call counters use
-
-LABEL_CORE = "core"
-LABEL_REVIEW_CREW = "review-crew"
-LABEL_CLAUDE_MD = "CLAUDE.md"
-LABELS = (LABEL_CORE, LABEL_REVIEW_CREW, LABEL_CLAUDE_MD)
-
-READ = "read"
-NOT_READ = "not-read"
-UNKNOWN = "unknown"
+from calibration_vocab import (  # noqa: E402,F401  the one home of the label and read-state vocabulary
+    LABEL_CORE, LABEL_REVIEW_CREW, LABEL_CLAUDE_MD, LABELS, READ, NOT_READ, UNKNOWN)
 
 _OK = "ok"
 _FAILED = "failed"
@@ -334,15 +327,21 @@ _WRAPPER_PROGRAMS = frozenset(("sudo", "env", "command", "time", "nice", "nohup"
 _NONCONTENT_FLAG_RE = re.compile(r"^-[A-Za-z]*[lLcq][A-Za-z]*$")
 _PATH_CHARS = r"[\w.\-/]"
 _MAX_SHELL_DEPTH = 3
+# A path-like word of a command text: split at whitespace, quotes, redirections, operators and `=`.
+_WORD_RE = re.compile(r"[^\s\"'`;&|()<>=]+")
 
 
 def _segments(command):
-    """The command split into simple commands (token lists) at ``|``, ``&&``, ``;``, ``&``. Raises ValueError."""
-    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    """The command split into simple commands (token lists) at ``|``, ``&&``, ``;``, ``&`` and an unquoted newline.
+
+    Raises ValueError."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|()<>\n")
     lexer.whitespace_split = True
+    # axis: a newline is a command boundary, not whitespace; a quoted newline stays inside its word
+    lexer.whitespace = " \t\r"
     out, current = [], []
     for token in lexer:
-        if token and all(ch in "|&;()" for ch in token):
+        if token and all(ch in "|&;()\n" for ch in token):
             if current:
                 out.append(current)
             current = []
@@ -426,9 +425,14 @@ def _call_hit(call, targets):
 
 
 def _names_basename(call, basename):
-    pattern = re.compile(r"(?<!" + _PATH_CHARS + ")" + re.escape(basename) + "(?!" + _PATH_CHARS + ")")
+    """True when the call names a file called ``basename`` by something other than an absolute path.
+
+    A relative or unresolvable argument (``./core.md``, ``core.md``, ``$DIR/core.md``) may be the stamped file;
+    an absolute path to some other directory is not."""
+    def names(word):
+        return not word.startswith("/") and os.path.basename(word) == basename
     return (any(isinstance(p, str) and os.path.basename(p) == basename for p in call["paths"])
-            or any(isinstance(t, str) and pattern.search(t) for t in call["texts"]))
+            or any(isinstance(t, str) and any(names(w) for w in _WORD_RE.findall(t)) for t in call["texts"]))
 
 
 def _file_state(calls, path, truncated=False):

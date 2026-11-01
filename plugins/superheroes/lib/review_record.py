@@ -40,6 +40,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import build_lane  # noqa: E402
+import calibration_vocab  # noqa: E402
 import cloud_pass  # noqa: E402
 import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
@@ -1140,8 +1141,8 @@ def _carried_row(r, carry):
 
 
 _CAL_KEYS = ("label", "file", "sha256", "policyVersion", "read")
-_CAL_LABELS = ("core", "review-crew", "CLAUDE.md")
-_CAL_READ_STATES = ("read", "not-read", "unknown")
+_CAL_LABELS = calibration_vocab.LABELS
+_CAL_READ_STATES = calibration_vocab.READ_STATES
 _CAL_FILE = re.compile(r"[\w.\-]{1,100}")
 _CAL_POLICY = re.compile(r"[\w.\-+:]{1,64}")
 _CAL_SHA = re.compile(r"[0-9a-f]{64}")
