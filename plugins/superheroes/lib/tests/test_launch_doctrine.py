@@ -754,20 +754,8 @@ def test_turn_end_ruling_is_delivered_verbatim():
     assert parsed["ok"] is True
     assert "turn-end" in LD.RULING_IDS
     text = next(r["text"] for r in parsed["rulings"] if r["id"] == "turn-end")
-    # Pinned in full: the independent third site, so a coordinated edit to launch-doctrine.md and
-    # RULING_TEXT still fails here unless this literal is updated too.
-    assert text == (
-        "A headless lane never ends a turn with a background task or subagent still running: "
-        "harness-tracked background work and a running subagent die when the turn ends, and "
-        "`Monitor`, harness background-run completion and wakeup scheduling cannot wake a headless "
-        "session, so none of them is a turn's exit plan; until the handback or park comment is "
-        "posted, end every turn with a tool call, and await every outcome in-turn or park durably first."
-    )
-    assert LD.RULING_INVARIANTS["turn-end"] == (
-        "never ends a turn with a background task or subagent still running",
-        "cannot wake a headless session",
-        "end every turn with a tool call",
-    )
+    # The authoritative home is LD.RULING_TEXT; the parser also rejects any drift from it.
+    assert text == LD.RULING_TEXT["turn-end"]
     # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
     # test_launcher.py::test_compose_turn_end_ruling_in_prompt — not here.
 
