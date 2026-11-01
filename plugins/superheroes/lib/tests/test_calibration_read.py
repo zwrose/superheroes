@@ -206,6 +206,14 @@ def test_unsupported_mcp_tool_naming_the_basename_relatively_is_unknown(calib):
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
+def test_unsupported_mcp_tool_naming_an_absolute_path_elsewhere_is_not_read(calib):
+    other = "/elsewhere/" + calib.core.rsplit("/", 1)[-1]
+    stdout = _codex_stream({"type": "item.completed", "item": {
+        "id": "b", "type": "mcp_tool_call", "tool": "load_file", "arguments": {"path": other},
+        "status": "completed", "error": None}})
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
+
+
 def _truncated_stream():
     return _codex_stream(_codex_cmd("a", "git status --short", exit_code=0))
 
