@@ -1,0 +1,455 @@
+# C4 WO-1 bite-proof — a finding names its kind of mistake and the other places that share it
+
+**Provenance:** claude / sonnet-5.5 (implementer). Detector file: `plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py`.
+Worktree `/home/user/wt-2220`, branch `claude/workhorse-issue-2220-i8zkg1`, base commit `ff999bf1a6c8fdb7ec9d4c3da690ac67725231ab`.
+Every run is `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py -q -n auto`
+plus the `-k` selector named in each entry, the detector unedited. Each neutralization is one targeted Edit, undone by the inverse Edit.
+The restore receipt is the restored line quoted back from a Read or Grep, and at the end `git status --porcelain` shows no product file
+modified (only the test file, which gained the two tests named below). Captures are far under the 32 KiB / 128 KiB ceilings.
+Nothing was redacted (no credential-like text appears). Dropped from every capture: the `UV_NATIVE_TLS` deprecation warning line and the
+two `bringing up nodes...` lines. Where a capture is shortened, the entry says what was elided.
+
+## Guarded elements (declared in the order) and the cited sites
+
+| ID | Class (failure mode) | Representative neutralized | Other cited sites in the class | Detector |
+|---|---|---|---|---|
+| g1 | the per-place audit arm: an unfixed/unanswered place no longer refuses a clearing ruling | `audits.py:590` | `audits.py:582` (the axis line of the same arm) | `test_t4_…`, `test_t4b_…`, `test_t4d_…` |
+| g2 | the place scope check: a place on an untouched line is kept in `places` | `round_driver.py:1120` | `round_driver.py:1119` (axis line) | `test_t2_a_place_on_a_context_line_…` |
+| g3a | the compile merge does not union the other finding's places | `round_driver.py:1054` | `round_driver.py:1053` (axis line) | `test_t3_…` |
+| g3b | the verifier/shared merge drops a member's own citation | `verification.py:380` | `verification.py:379` (axis line) | `test_t3_…`, `test_t4d_…` |
+| g4a | a maker family (or an unknown provenance) is stamped as an author | `round_driver.py:928,930` (`_executed_author`) | `round_driver.py:4078` (the panel fold's stamp, in the class); `round_driver.py:5233` (the seams fold's stamp, which carries no axis line) | `test_t7_a_known_maker_family_is_never_stamped` (added) |
+| g4b | an `author` arriving inside a payload survives to the folds | `round_driver.py:3788` | `round_driver.py:3787` (axis line) | `test_t7_a_payload_supplied_author_…`, `test_t7_a_search_description_from_any_other_phase_…` |
+| g5a | a null / non-object / blank-kind `searchDescription` stays on the compiled finding | `round_driver.py:1130` | `round_driver.py:1127` (axis line) | `test_t6_a_null_or_blank_…` |
+| g5b | a null / non-object `kindOfMistake` is carried to the record projection | `review_record_session.py:595` | `review_record_session.py:594` (axis line) | `test_t6_a_null_or_blank_…` (last assertion) |
+| g6a | the per-place results are not written to the live row | `round_driver.py:3235` | `round_driver.py:3223` (axis line) | `test_t5_place_results_survive_…` |
+| g6b | the archive replaces the ledger entry and loses its results | `round_driver.py:3272` | `round_driver.py:3271` (axis line) | `test_t5_place_results_survive_…` |
+| g6c | a live row without results hides the ledger row's results in the record | `review_record_session.py:608` | `review_record_session.py:609` (axis line) | `test_t5_place_results_survive_…` |
+| g7 | the fix guidance does not name every place | `round_driver.py:14236` | `round_driver.py:14235` (axis line) | `test_t9_…` (added) |
+
+## g1 — the per-place audit arm
+
+**neutralization** (`audits.py:590`): `if incomplete and ruling in _CLEARS:` → `if False and incomplete and ruling in _CLEARS:`.
+
+**raw red** (whole file, detector unedited; the three failures, each shown in full):
+```
+.....FFF.......................                                          [100%]
+=================================== FAILURES ===================================
+_ test_t4_one_of_two_places_answered_unfixed_is_not_discharged_with_the_disclosure _
+>       assert out["discharged"] == [] and out["notDischarged"] == ["t-1"] and out["placesUnfixed"] == ["t-1"]
+E       AssertionError: assert (['t-1'] == []
+E         Left contains one more item: 't-1'
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:199: AssertionError
+_______ test_t4b_places_left_unanswered_are_not_discharged_and_disclosed _______
+>           assert out["discharged"] == [] and out["placesUnfixed"] == ["t-1"], places
+E           AssertionError: None
+E           assert (['t-1'] == []
+E             Left contains one more item: 't-1'
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:209: AssertionError
+_ test_t4d_a_fix_of_only_the_representative_of_a_merged_pair_is_not_discharged _
+>       assert out["discharged"] == [] and "not answered: src/a.py:19" in out["audits"][0]["reason"]
+E       AssertionError: assert (['t-1'] == []
+E         Left contains one more item: 't-1'
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:238: AssertionError
+=========================== short test summary info ============================
+FAILED …::test_t4_one_of_two_places_answered_unfixed_is_not_discharged_with_the_disclosure
+FAILED …::test_t4b_places_left_unanswered_are_not_discharged_and_disclosed
+FAILED …::test_t4d_a_fix_of_only_the_representative_of_a_merged_pair_is_not_discharged
+3 failed, 28 passed in 3.22s
+```
+(Elided from the failure sections: the `[gwN] linux -- Python 3.12.13 …` lines, the `def` / comment source lines above the `>` line, and the `Use -v to get more diff` lines.)
+
+**restore:** inverse Edit. **restore receipt:** `audits.py:590:            if incomplete and ruling in _CLEARS:` (Grep after the restore).
+
+**raw green** (`-k test_t4`):
+```
+......                                                                   [100%]
+6 passed in 1.71s
+```
+
+## g2 — the place scope check
+
+**neutralization** (`round_driver.py:1120`): `if _diff_scope_ok(place, valid):` → `if True or _diff_scope_ok(place, valid):`.
+
+**raw red** (`-k test_t2_a_place_on_a_context_line_leaves_places_for_the_raising_seats_outside_entry`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t2_a_place_on_a_context_line_leaves_places_for_the_raising_seats_outside_entry _
+>       assert staged["kindOfMistake"] == _kind(3)  # the touched place stays, the context line (1) left
+E       AssertionError: assert {'kind': 'unc..., 'line': 1}]} == {'kind': 'unc..., 'line': 3}]}
+E         Differing items:
+E         {'places': [{'file': 'src/a.py', 'line': 3}, {'file': 'src/a.py', 'line': 1}]} != {'places': [{'file': 'src/a.py', 'line': 3}]}
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:130: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t2_a_place_on_a_context_line_leaves_places_for_the_raising_seats_outside_entry
+1 failed in 1.65s
+```
+
+**restore:** inverse Edit. **restore receipt:** `1120:            if _diff_scope_ok(place, valid):` (Grep after the restore).
+
+**raw green** (same selector):
+```
+.                                                                        [100%]
+1 passed in 1.47s
+```
+
+## g3a — the compile merge unions both findings' places
+
+**neutralization** (`round_driver.py:1054`): `verification.apply_kind_members(merged, [existing, incoming])` → `pass  # g3a NEUTRALIZED verification.apply_kind_members(merged, [existing, incoming])`.
+
+**raw red** (`-k "test_t3 or test_t4d"`; `test_t4d`, which merges through `verification._merge_group`, stays green, so the compile merge is a different failure mode from g3b):
+```
+.FF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_t3_a_member_without_a_kind_still_leaves_its_citation_as_a_place_of_the_one_that_has_one _
+>       assert RD._merge_same_finding(kept, other)["kindOfMistake"] == _kind(3, 19)
+E       AssertionError: assert {'kind': 'unc..., 'line': 3}]} == {'kind': 'unc... 'line': 19}]}
+E         Differing items:
+E         {'places': [{'file': 'src/a.py', 'line': 3}]} != {'places': [{'file': 'src/a.py', 'line': 3}, {'file': 'src/a.py', 'line': 19}]}
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:166: AssertionError
+___ test_t3_a_merge_keeps_the_union_of_places_and_every_members_own_citation ___
+>       assert merged["kindOfMistake"] == _kind(3, 20, 19)  # own (2) dropped; the member's citation (19) joined
+E       AssertionError: assert {'kind': 'unc..., 'line': 3}]} == {'kind': 'unc... 'line': 19}]}
+E         Differing items:
+E         {'places': [{'file': 'src/a.py', 'line': 3}]} != {'places': [{'file': 'src/a.py', 'line': 3}, {'file': 'src/a.py', 'line': 20}, {'file': 'src/a.py', 'line': 19}]}
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:156: AssertionError
+=========================== short test summary info ============================
+FAILED …::test_t3_a_member_without_a_kind_still_leaves_its_citation_as_a_place_of_the_one_that_has_one
+FAILED …::test_t3_a_merge_keeps_the_union_of_places_and_every_members_own_citation
+2 failed, 1 passed in 1.28s
+```
+
+**restore:** inverse Edit. **restore receipt:** Grep after the restore, over `round_driver.py` for `NEUTRALIZED|apply_kind_members\(merged`: `1054:    verification.apply_kind_members(merged, [existing, incoming])` and nothing for `NEUTRALIZED`.
+
+**raw green** (same selector):
+```
+...                                                                      [100%]
+3 passed in 1.30s
+```
+(Run-order note: this green run and the Edit that began g3b were issued in the same tool batch. The run passed 3 of 3, which a neutralized g3b would have failed, so it ran against the restored g3a and the intact g3b.)
+
+## g3b — a merged-away member's own citation joins the places (the shared merge, reached by the verifier merge)
+
+**neutralization** (`verification.py:380`): `candidates.append({"file": member.get("file"), "line": member.get("line")})` → `pass  # g3b NEUTRALIZED candidates.append({"file": member.get("file"), "line": member.get("line")})`.
+
+**raw red** (`-k "test_t3 or test_t4d"`; `test_t4d` fails here, and it goes only through `verification._merge_group`):
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_t4d_a_fix_of_only_the_representative_of_a_merged_pair_is_not_discharged _
+>       assert out["discharged"] == [] and "not answered: src/a.py:19" in out["audits"][0]["reason"]
+E       AssertionError: assert (['t-1'] == []
+E         Left contains one more item: 't-1'
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:238: AssertionError
+___ test_t3_a_merge_keeps_the_union_of_places_and_every_members_own_citation ___
+>       assert merged["kindOfMistake"] == _kind(3, 20, 19)  # own (2) dropped; the member's citation (19) joined
+E       AssertionError: assert {'kind': 'unc... 'line': 20}]} == {'kind': 'unc... 'line': 19}]}
+E         Differing items:
+E         {'places': [{'file': 'src/a.py', 'line': 3}, {'file': 'src/a.py', 'line': 20}]} != {'places': [{'file': 'src/a.py', 'line': 3}, {'file': 'src/a.py', 'line': 20}, {'file': 'src/a.py', 'line': 19}]}
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:156: AssertionError
+_ test_t3_a_member_without_a_kind_still_leaves_its_citation_as_a_place_of_the_one_that_has_one _
+>       assert RD._merge_same_finding(kept, other)["kindOfMistake"] == _kind(3, 19)
+E       AssertionError: assert {'kind': 'unc..., 'line': 3}]} == {'kind': 'unc... 'line': 19}]}
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:166: AssertionError
+=========================== short test summary info ============================
+FAILED …::test_t4d_a_fix_of_only_the_representative_of_a_merged_pair_is_not_discharged
+FAILED …::test_t3_a_merge_keeps_the_union_of_places_and_every_members_own_citation
+FAILED …::test_t3_a_member_without_a_kind_still_leaves_its_citation_as_a_place_of_the_one_that_has_one
+3 failed in 1.34s
+```
+
+**restore:** inverse Edit. **restore receipt:** Grep after the restore over `verification.py` for `NEUTRALIZED|candidates.append`: `380:        candidates.append({"file": member.get("file"), "line": member.get("line")})` and nothing for `NEUTRALIZED`.
+
+**raw green** (same selector):
+```
+...                                                                      [100%]
+3 passed in 1.37s
+```
+
+## g4a — a maker family is never stamped as an author
+
+**Unproven before this record's test.** The order expected a red in the existing `test_t7_…` tests. There was none. The unit's own stop is earlier:
+`test_t7_a_transport_row_naming_an_independent_vendor_…` runs a world with no `hostFamily` in the seat map, so for the native `claude` vendor
+`family = host = None` and `_executed_author` returns `None` at `round_driver.py:926`, before either maker bar (`:928` `nonpanel_barred`, `:930`
+`accumulated_maker_families`) is read. Three runs of `-k test_t7` with no red, each reported as run:
+- run 9: `930` neutralized (`if False and family in …`) with the Edit issued in the same tool batch as the run, so which state it ran against is **unknown**: `12 passed in 1.46s`.
+- run 10: `930` neutralized, the Edit confirmed applied first: `12 passed in 1.46s`.
+- run 11: `928` and `930` both neutralized (`if False and receipt_disclosures.nonpanel_barred(state, config)(vendor):` and `if False and family in …`): `12 passed in 1.47s`.
+
+(Each of those three captures was the full text `warning … / bringing up nodes... / ............ / 12 passed in …s`.)
+
+**Added test** (the order's fail-closed edge 1; `test_c4_kind_of_mistake.py`, after `test_t7_a_transport_row_…`): `test_t7_a_known_maker_family_is_never_stamped`.
+Its seat map carries `"hostFamily": "claude"` and `"makerFamilies": ["claude"]`, so the executed family resolves and only the maker bars withhold the stamp.
+It also asserts the seat's `seatStatus` is `run`, so a not-run seat cannot make "unstamped" vacuous.
+
+**neutralization** (`round_driver.py:928,930`, both): `if receipt_disclosures.nonpanel_barred(state, config)(vendor):` → `if False and receipt_disclosures.nonpanel_barred(state, config)(vendor):`, and `if family in receipt_disclosures.accumulated_maker_families(state):` → `if False and family in receipt_disclosures.accumulated_maker_families(state):`.
+
+**raw red** (`-k test_t7_a_known_maker_family_is_never_stamped`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________________ test_t7_a_known_maker_family_is_never_stamped _________________
+        assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "run"  # the seat ran: only the stamp is withheld
+>       assert _author_of(state) == "unstamped"
+E       AssertionError: assert {'seat': 'code-reviewer', 'vendor': 'claude', 'family': 'claude'} == 'unstamped'
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:357: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t7_a_known_maker_family_is_never_stamped
+1 failed in 1.42s
+```
+
+**restore:** inverse Edit of both lines. **restore receipt:** Read after the restore:
+```
+928:    if receipt_disclosures.nonpanel_barred(state, config)(vendor):
+929:        return None
+930:    if family in receipt_disclosures.accumulated_maker_families(state):
+931:        return None
+```
+
+**raw green:** the order's separate g4a green run was folded into the g4b runs below (budget; disclosed in the return). The new test passed with `928,930` restored
+in the g4b red run (`2 failed, 11 passed`; the two failures are g4b's, the new test is not among them) and in the g4b green run (`13 passed`, which includes it).
+
+**Not proven by a neutralization of its own:** each of `928` and `930` alone (either one bars a maker on its own in this fixture, because the
+fixer vendor is `claude` and the seat map names `claude` a maker). The unknown-provenance stops at `921` and `926` are guarded by the existing
+`test_t7_unavailable_provenance_…` tests but were not neutralized here. The seams stamp at `5233` and the panel stamp at `4078` call this one function and share its class.
+
+## g4b — a payload-supplied `author` is removed before any fold reads it
+
+**neutralization** (`round_driver.py:3788`): `artifact, _stripped = _without_search_authors(artifact)` → `_stripped = False  # g4b NEUTRALIZED: artifact, _stripped = _without_search_authors(artifact)`.
+
+**raw red** (`-k test_t7`):
+```
+.......F...F.                                                            [100%]
+=================================== FAILURES ===================================
+_ test_t7_a_payload_supplied_author_is_removed_and_replaced_only_by_the_driver_stamp[None-unstamped] _
+>       assert author == "unstamped" if expected == "unstamped" else author["vendor"] == expected
+E       assert False
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:366: AssertionError
+_____ test_t7_a_search_description_from_any_other_phase_carries_no_author ______
+>       assert "author" not in seen["syn"]["findings"][0]["searchDescription"]
+E       AssertionError: assert 'author' not in {'kind': 'unchecked retry', 'looksLike': 'a retry with no cap', 'examples': ['while True: retry()'], 'author': {'seat': 'x', 'vendor': 'x', 'family': 'x'}}
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:375: AssertionError
+=========================== short test summary info ============================
+FAILED …::test_t7_a_payload_supplied_author_is_removed_and_replaced_only_by_the_driver_stamp[None-unstamped]
+FAILED …::test_t7_a_search_description_from_any_other_phase_carries_no_author
+2 failed, 11 passed in 1.67s
+```
+
+**restore:** inverse Edit. **restore receipt:** Grep after the restore: `3788:    artifact, _stripped = _without_search_authors(artifact)`, and a Grep over `round_driver.py` for `NEUTRALIZED|if False|if True or` printed nothing.
+
+**raw green** (`-k test_t7`; this run also covers the restored g4a lines and the new g4a test):
+```
+.............                                                            [100%]
+13 passed in 1.53s
+```
+
+## g5a — a null normalization at the compile (the `searchDescription` removal)
+
+**neutralization** (`round_driver.py:1130`): `fc.pop(SEARCH_DESCRIPTION_FIELD, None)` → `pass  # g5a NEUTRALIZED: fc.pop(SEARCH_DESCRIPTION_FIELD, None)`.
+
+**raw red** (`-k test_t6`): all five parameters of the null test fail on the same assertion; the first failure is shown, the other four are identical in message and elided here (their node ids are in the summary).
+```
+FFFF.F                                                                   [100%]
+=================================== FAILURES ===================================
+_ test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad2] _
+bad = ['a']
+>       assert "kindOfMistake" not in staged["Retry without a cap"] and "searchDescription" not in staged["Retry without a cap"]
+E       AssertionError: assert ('kindOfMistake' not in {'title': 'Retry without a cap', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...} and 'searchDescription' not in {'title': 'Retry without a cap', 'file': 'src/a.py', 'line': 2, 'severity': 'Important', ...})
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:298: AssertionError
+[… four more failures at :298, parameters [None], [text], [bad3], [bad4], elided …]
+=========================== short test summary info ============================
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad2]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[None]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[text]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad3]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad4]
+5 failed, 1 passed in 1.29s
+```
+
+**restore:** inverse Edit. **restore receipt:** Read after the restore:
+```
+1128:    description = _clean_search_description(fc)
+1129:    if description is None:
+1130:        fc.pop(SEARCH_DESCRIPTION_FIELD, None)
+```
+
+**raw green** (`-k test_t6`):
+```
+......                                                                   [100%]
+6 passed in 1.51s
+```
+
+**Not neutralized separately:** the same normalization for `kindOfMistake` (`round_driver.py:1115`, `fc.pop(KIND_OF_MISTAKE_FIELD, None)`). It sits in the same class and is asserted on the same line (`:298`).
+
+## g5b — a null normalization at the record projection
+
+**neutralization** (`review_record_session.py:595`): `(k != "kindOfMistake" or isinstance(src[k], dict))` → `(k != "kindOfMistake" or True)`.
+
+**raw red** (`-k test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused`). **This capture is INCOMPLETE:** the tool output carried a harness note
+`[1207 characters truncated]` in the middle of the third failure. The text below is exactly what came back, shortened by me only where marked; the assertion line and the summary are intact.
+```
+FFFFF                                                                    [100%]
+=================================== FAILURES ===================================
+_ test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad2] _
+bad = ['a']
+        # a null that reaches the account from a live row is not carried either: the record would refuse it
+>       assert "kindOfMistake" not in rs._finding_parts({"kindOfMistake": None}, None)
+E       AssertionError: assert 'kindOfMistake' not in {'kindOfMistake': None}
+E        +  where {'kindOfMistake': None} = <function _finding_parts at 0x7fbffe5aaca0>({'kindOfMistake': None}, None)
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:303: AssertionError
+[… the [bad3], [None] and [text] failures: the same assertion at :303; the [None] one is the part the harness truncated …]
+[… the [bad4] failure: the same assertion at :303 …]
+=========================== short test summary info ============================
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad2]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad3]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[None]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[text]
+FAILED …::test_t6_a_null_or_blank_kind_of_mistake_is_removed_counted_and_never_refused[bad4]
+5 failed in 1.50s
+```
+The compile-side assertion at `:298` passes here and the first failure is at `:303`, the projection, so this is a separate red from g5a.
+
+**restore:** inverse Edit. **restore receipt:** Read after the restore:
+```
+595:            if isinstance(src, dict) and k in src and (k != "kindOfMistake" or isinstance(src[k], dict)):
+```
+
+**raw green** (`-k test_t6`):
+```
+......                                                                   [100%]
+6 passed in 1.53s
+```
+
+## g6a — the per-place results are written to the live row (and, with it, the ledger entry)
+
+**neutralization** (`round_driver.py:3235`): `row[KIND_OF_MISTAKE_FIELD] = _with_place_results(row[KIND_OF_MISTAKE_FIELD], answers[key])` → `pass  # g6a NEUTRALIZED: row[KIND_OF_MISTAKE_FIELD] = …`.
+
+**raw red** (`-k test_t5_place_results_survive_save_reload_audit_archive_and_render`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_t5_place_results_survive_save_reload_audit_archive_and_render ______
+        RD._record_place_results(state, out["audits"])  # the one enrichment step, as the audit fold calls it
+        live = state["findings"][0]["kindOfMistake"]["places"]
+        held = state["dispositionLedger"][0]["kindOfMistake"]["places"]
+>       assert [p.get("fixed") for p in live] == [True, False] and live == held
+E       assert ([None, None] == [True, False]
+E         At index 0 diff: None != True
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:272: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_place_results_survive_save_reload_audit_archive_and_render
+1 failed in 1.44s
+```
+**restore:** inverse Edit. **restore receipt:** Read after the restore: `3235:            row[KIND_OF_MISTAKE_FIELD] = _with_place_results(row[KIND_OF_MISTAKE_FIELD], answers[key])`.
+
+**raw green** (same selector):
+```
+.                                                                        [100%]
+1 passed in 1.37s
+```
+
+**Not neutralized separately:** the ledger-entry write in the same function (`round_driver.py:3243`). The same assertion (`:272`, `live == held`) fails if only that write is removed.
+I did not run that variant (budget), so it is unproven by a run.
+
+## g6b — the archive keeps the ledger entry's results when the departing live copy replaces it
+
+**neutralization** (`round_driver.py:3272`): `if isinstance(prior.get(KIND_OF_MISTAKE_FIELD), dict):` → `if False and isinstance(prior.get(KIND_OF_MISTAKE_FIELD), dict):`.
+
+**raw red** (same selector):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_t5_place_results_survive_save_reload_audit_archive_and_render ______
+        RD._archive_departures(state, [fresh])
+>       assert [p.get("fixed") for p in state["dispositionLedger"][0]["kindOfMistake"]["places"]] == [True, False]
+E       assert [None, None] == [True, False]
+E         At index 0 diff: None != True
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:277: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_place_results_survive_save_reload_audit_archive_and_render
+1 failed in 1.40s
+```
+
+**restore:** inverse Edit. (The first neutralizing Edit dropped the trailing space of its `old_string` line, so the neutralized state read `held =_place_results_of(…`. The first undo attempt failed with "String to replace not found", changed nothing, and the undo was redone against the exact text.)
+**restore receipt:** Read after the restore:
+```
+3272:            if isinstance(prior.get(KIND_OF_MISTAKE_FIELD), dict):
+3273:                held = _place_results_of(prior[KIND_OF_MISTAKE_FIELD])
+```
+and `git status --porcelain` at the end lists no modified product file.
+
+**raw green** (same selector):
+```
+.                                                                        [100%]
+1 passed in 1.42s
+```
+
+## g6c — a live row's kind of mistake never hides the ledger row's results in the record
+
+**neutralization** (`review_record_session.py:608`): `… and isinstance(held_kind.get("places"), list) and isinstance(older_kind, dict):` → `… and isinstance(held_kind.get("places"), list) and False and isinstance(older_kind, dict):`.
+
+**raw red** (same selector):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_t5_place_results_survive_save_reload_audit_archive_and_render ______
+        parts = rs._finding_parts(live_row, state["dispositionLedger"][0])
+>       assert [p.get("fixed") for p in parts["kindOfMistake"]["places"]] == [True, False]
+E       assert [None, None] == [True, False]
+E         At index 0 diff: None != True
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:282: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t5_place_results_survive_save_reload_audit_archive_and_render
+1 failed in 1.26s
+```
+
+**restore:** inverse Edit. **restore receipt:** Read after the restore:
+```
+608:    if isinstance(held_kind, dict) and isinstance(held_kind.get("places"), list) and isinstance(older_kind, dict):
+```
+
+**raw green** (same selector):
+```
+.                                                                        [100%]
+1 passed in 1.35s
+```
+
+## g7 — the fix guidance names every place
+
+**Unproven before this record's test.** No WO-1 test reached `_apply_fixes_payload_fields` with a batch naming places.
+
+**Added test** (`test_c4_kind_of_mistake.py`, new section T9): `test_t9_the_fix_guidance_names_every_place_for_a_batch_with_places_and_a_batch_without_has_none`.
+It asserts that the guidance file the driver writes for a batch with a finding naming places holds `RD.KIND_PLACES_GUIDANCE`,
+and that a batch whose findings name no place (an empty `places` list, and a finding with no kind) writes no guidance file (`guidancePath is None`).
+The module docstring's list gained `T9 the fix guidance names every place`.
+
+**neutralization** (`round_driver.py:14236`): `if _batch_names_places(state):` → `if False and _batch_names_places(state):`.
+
+**raw red** (`-k test_t9`):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t9_the_fix_guidance_names_every_place_for_a_batch_with_places_and_a_batch_without_has_none _
+        fields = RD._apply_fixes_payload_fields(placed_dir, state, 1, 0)
+>       assert fields["guidancePath"] is not None
+E       assert None is not None
+/home/user/wt-2220/plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py:437: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py::test_t9_the_fix_guidance_names_every_place_for_a_batch_with_places_and_a_batch_without_has_none
+1 failed in 1.33s
+```
+
+**restore:** inverse Edit. **restore receipt:** a Grep over `round_driver.py`, `audits.py`, `verification.py`, `review_record_session.py` for `NEUTRALIZED|if False|if True or|and False and` printed `No matches found`.
+
+**raw green:** the order's separate g7 green run was folded into the whole-file final run below (budget; disclosed in the return). That run is the first run after the last restore and it includes the new test.
+
+**Not neutralized separately:** the negative half (a batch without places gets no sentence). It is asserted (`:445`) but a `True or` variant was not run.
+
+## Final run — the whole file, nothing neutralized
+
+```
+.................................                                        [100%]
+33 passed in 1.67s
+```
+
+`git status --porcelain` after the final run lists `M plugins/superheroes/lib/tests/test_c4_kind_of_mistake.py` and untracked files that were not made by this dispatch (`.bash_profile`, `.bashrc`, `.claude/`, `.gitconfig`, `.gitmodules`, `.idea`, `.mcp.json`, `.profile`, `.ripgreprc`, `.vscode`, `.zprofile`, `.zshrc`); no product file is modified.

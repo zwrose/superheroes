@@ -9,7 +9,8 @@ and the record; a null or blank `kindOfMistake` / `searchDescription` is removed
 provenance, and never for a maker family.
 
 T1 places kept and rendered · T2 a context-line place goes outside · T3 merges keep the union · T4 the audit arm
-(a-d) · T5 results survive save, archive and render · T6 null normalization · T7 the author stamp · T8 the schemas.
+(a-d) · T5 results survive save, archive and render · T6 null normalization · T7 the author stamp · T8 the schemas ·
+T9 the fix guidance names every place.
 
 Bite-proof record: c4_wo1_kind
 """
@@ -347,6 +348,16 @@ def test_t7_a_transport_row_naming_an_independent_vendor_does_not_stamp_when_the
     assert _author_of(state) == "unstamped"
 
 
+def test_t7_a_known_maker_family_is_never_stamped(world):
+    # axis: a maker family is never stamped even when the host family is known, so the family resolves and only the maker bar withholds the stamp — see bite-proof record c4_wo1_kind
+    seat_map = {"seats": {"code-reviewer": {"vendor": "claude", "source": "pinned"}},
+                "hostFamily": "claude", "makerFamilies": ["claude"]}
+    state = _panel(world, ran={"code-reviewer": "claude"}, seat_map=seat_map,
+                   code_reviewer=[_finding("Retry without a cap", searchDescription=_description())])
+    assert state["rounds"]["1"]["seatStatus"]["code-reviewer"] == "run"  # the seat ran: only the stamp is withheld
+    assert _author_of(state) == "unstamped"
+
+
 @pytest.mark.parametrize("ran,expected", [(None, "unstamped"), ({"code-reviewer": INDEPENDENT}, INDEPENDENT)])
 def test_t7_a_payload_supplied_author_is_removed_and_replaced_only_by_the_driver_stamp(world, ran, expected):
     # axis: an `author` that arrives inside a payload is removed before the fold reads it — see bite-proof record c4_wo1_kind
@@ -411,3 +422,24 @@ def test_t8_the_shipped_and_built_schemas_are_strict_valid_and_the_example_valid
     for key in ("kindOfMistake", "searchDescription"):  # the fallback literals stay aligned with the shipped schema
         assert RFS._FALLBACK_FINDING_PROPERTY_SCHEMAS[key] == ERC._sanitize_schema_node(shipped_props[key]), key
     assert RFS._FALLBACK_CANONICAL_MEMBER_KEYS == tuple(shipped_props)
+
+
+# ---- T9 ------------------------------------------------------------------------------------------------------
+
+
+def test_t9_the_fix_guidance_names_every_place_for_a_batch_with_places_and_a_batch_without_has_none(world, tmp_path):
+    # axis: a batch with a finding that names other places of its kind of mistake guides the fix to cover every one of them — see bite-proof record c4_wo1_kind
+    state = world.state
+    state["_fixBatch"] = [{"title": "Retry without a cap", "file": "src/a.py", "line": 2, "kindOfMistake": _kind(3, 19)}]
+    placed_dir = str(tmp_path / "with-places")
+    os.makedirs(placed_dir)
+    fields = RD._apply_fixes_payload_fields(placed_dir, state, 1, 0)
+    assert fields["guidancePath"] is not None
+    with open(fields["guidancePath"], encoding="utf-8") as fh:
+        assert RD.KIND_PLACES_GUIDANCE in fh.read()
+    state["_fixBatch"] = [{"title": "Retry without a cap", "file": "src/a.py", "line": 2,
+                           "kindOfMistake": {"kind": KIND, "places": []}},
+                          {"title": "Another defect", "file": "src/a.py", "line": 3}]
+    bare_dir = str(tmp_path / "without-places")
+    os.makedirs(bare_dir)
+    assert RD._apply_fixes_payload_fields(bare_dir, state, 1, 0)["guidancePath"] is None  # no place, no guidance file
