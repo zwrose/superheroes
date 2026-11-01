@@ -1303,6 +1303,17 @@ def test_t2_a_lane_started_before_the_renewal_is_adopted_and_one_started_after_i
     assert [e["outcome"] for e in _entries(w)] == ["adopting", None]
 
 
+def test_a_renewed_lapsed_park_whose_renewal_time_cannot_be_read_is_adopted_not_messaged(w, monkeypatch):
+    _lane(w, "l-b", 102, "session-b", "b", started_ts=RELAUNCHED)  # started 10-10, after the renewal below
+    _park(w, 11, issue=102)
+    _renew(w, written_at=RENEWED_AT)  # renewed 10-08: the lapse date moved, so _renewed passes
+    monkeypatch.setattr(CP, "_renewal_time", lambda *a, **k: None)
+    out = _send(w)
+    assert [a["pr"] for a in out["adopt"]] == [11]
+    assert 11 not in [s["pr"] for s in out["sendBack"]] and out["sendBack"] == []
+    assert out["notRenewed"] == [] and [e["outcome"] for e in _entries(w)] == ["adopting"]
+
+
 def test_a_lapsed_park_of_a_lane_started_before_the_renewal_is_adopted_with_the_lapsed_cause(w):
     _lane(w, "l-a", 101, "session-a", "a")
     _park(w, 10, issue=101)

@@ -409,8 +409,8 @@ def _adopt_item(e, issue, launch_id, lane, rejected):
 def send_back(repo_root, today=None, *, confirmed=False, env=None, run=None, now=None):
     """The undecided entries due for their review. A closed or let-through entry is decided here. A due
     entry whose lane started after the account's renewal is listed under `sendBack` and stays undecided
-    until `sent` records it. One whose lane started before the renewal (or has no readable start) is listed
-    under `adopt` once and becomes `adopting`: a renewed pass never reaches a running session, so a fresh
+    until `sent` records it. One whose lane started before the renewal (or has no readable start, or whose
+    renewal time cannot be read) is listed under `adopt` once and becomes `adopting`: a renewed pass never reaches a running session, so a fresh
     session takes it over; later runs list it under `adopting` until a replacement launch has started
     (`adopted`) or the PR closes. An entry whose send could not be confirmed is never listed for sending
     again, but is listed under `uncertain` every time. With `confirmed`, the time `now` (default the
@@ -501,8 +501,8 @@ def send_back(repo_root, today=None, *, confirmed=False, env=None, run=None, now
         if launch_id in superseded:
             out["superseded"].append({"pr": e["pr"], "launchId": launch_id})
             continue
-        # axis: a lane that started before the renewal (or has no readable start) never gets the message; a fresh session adopts it
-        if not _is_time(started) or (renewal is not None and started < renewal):
+        # axis: a lane that started before the renewal, or has no readable start, or whose renewal time cannot be read, never gets the message; a fresh session adopts it
+        if not _is_time(started) or renewal is None or started < renewal:
             out["adopt"].append(_adopt_item(e, issue, launch_id, lane, rejected))
             e["outcome"], changed = "adopting", True
             continue
