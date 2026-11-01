@@ -2093,7 +2093,9 @@ def test_a_long_session_sheds_reviewer_detail_to_fit_and_says_so(monkeypatch):
     lines = body.split("\n")
     shed = SHED_LINE_RUN_RECORDS % "engine telemetry"
     assert lines.count(shed) == 1 and sum(l.startswith("Reviewer detail trimmed") for l in lines) == 1
-    assert lines[lines.index(shed) - 1].startswith("- security-reviewer: did not run")
+    # the Test lens line sits right after the reviewer bullets, so the shed line follows it
+    assert lines[lines.index(shed) - 1].startswith("Test lens:")
+    assert lines[lines.index(shed) - 2].startswith("- security-reviewer: did not run")
     posted = rr._parse_body(body)
     assert posted["reviewerShed"] == ["observation"]
     assert _protected(posted) == _protected(rec)
