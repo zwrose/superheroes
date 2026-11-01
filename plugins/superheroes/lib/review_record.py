@@ -2146,7 +2146,7 @@ def _finding_bullet(f):
         if places:
             fixed = sum(1 for p in places if p.get("fixed") is True)
             bullet += (f" · also in this PR: {', '.join(_place_text(p) for p in places)} "
-                       f"({'all fixed' if fixed == len(places) else f'{fixed} of {len(places)} fixed'})")
+                       f"({'all fixed' if fixed == len(places) else f'fixed in {fixed} of {len(places)} places'})")
     return bullet
 
 
