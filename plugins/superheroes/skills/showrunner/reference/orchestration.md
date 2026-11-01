@@ -325,9 +325,16 @@ it does not add a check to the preflight list. The walk and the owner's launch-w
 
 ## Lapsed-pass parks and the send-back
 
-A cloud build's PR is parked with the review not run when the reviewer pass lapsed mid-build. The
-builder's park comment opens "Parked: the review did not run." `lib/cloud_parked.py` tells that park
-from any other and keeps the record, in `cloud-parked.json` beside the launch ledger.
+A cloud build's PR is parked with the review not run for one of two causes. The reviewer pass lapsed
+mid-build (`cause: lapsed`), or the reviewer answered 401, a revoked or rejected sign-in such as
+`token_revoked` (`cause: rejected`). Both park comments open "Parked: the review did not run."
+`lib/cloud_parked.py` tells such a park from any other and keeps the record, in `cloud-parked.json`
+beside the launch ledger.
+
+A cloud session gets the reviewer pass only when it starts. So a renewed pass never reaches a session
+that is already parked, and a message cannot make that session run its review. The recovery is a
+fresh session that adopts the pushed branch. Only a session that started after the renewal gets the
+message.
 
 **Tell the owner.** Run `python3 -B <plugin root>/lib/cloud_parked.py notice --repo-root <root> --repo
 <owner/name> --pr <n>` when a cloud lane ends parked, and whenever you read a cloud build's PR (a vet,
@@ -335,7 +342,8 @@ a sweep, a builder's comment) and see the park. Running it once records the PR; 
 harmless.
 
 - `kind: lapsed-pass`: put `text` in your next message to the owner, as it is. It names the PR, the
-  reason and the renewal.
+  reason and the renewal. Its `cause` is `lapsed` or `rejected`. The text for a rejected park tells
+  the owner to renew the sign-in and the pass, and that a fresh session will run the review.
 - `kind: not-lapsed-pass`: a review that did not run for any other reason is reported as
   `rubric/review-discipline.md` says, with no advice to renew the pass.
 - A lapsed pass still shows up in the launch report and the "Still on your machine" line
@@ -350,11 +358,43 @@ environment (`skills/configure/reference/set-up.md` § 6, "When the pick is need
 
 **Send it back.** Run `python3 -B <plugin root>/lib/cloud_parked.py send-back --repo-root <root>`
 after every `cloud_pass.py record-confirmation` that writes, after every passed setup check, and at
-each gardening pass while any parked PR is still recorded. The pass command alone renews nothing:
-until a cloud session confirms the new pass, `send-back` lists the PR under `notRenewed`. It marks
-nothing sent, so a listed PR stays listed until `sent` records it.
+each gardening pass while any parked PR is still recorded. Right after a `record-confirmation` that
+answered, add `--confirmed`, even when the lapse date did not move: it records, for the account the
+current config dir names, that a confirmation of a renewed pass just happened. The pass command alone
+renews nothing: until a cloud session confirms the new pass, `send-back` lists the PR under
+`notRenewed`. A lapsed park counts renewed when the lapse date moved past the park day. A rejected
+park counts renewed when the account's setup record was written, or a confirmation was recorded,
+after the lane started. `send-back` never launches anything itself.
 
-For each item under `sendBack`, send `message` to the item's `cloudSessionName` as
+For each renewed park, `send-back` compares the renewal with the start of the lane's session. A lane
+whose session started **after** the renewal goes to `sendBack`. A lane whose session started
+**before** it (or whose start cannot be read) goes to `adopt` and never to `sendBack`.
+
+**Adopt a pass-parked lane.** For each item under `adopt` (it carries `pr`, `repo`, `issue`,
+`launchId`, `parkId`, `cloudSessionName`, `configDir`, `notice` and `message`), in order:
+
+1. Post the item's `notice` on the item's `issue`. It is the
+   `cloud_builder.py superseded-notice --launch-id <the lane>` text.
+2. Send the item's `message` to `cloudSessionName`. It asks the parked builder to run its wake check
+   for a newer launch now. On the same account that is `SendMessage`. On another account
+   (`configDir`) it is the relay's `ensure`, `compose`, `SendMessage`, `check`, as
+   `skills/showrunner/reference/wave-watch.md` § Answering a builder note sends an answer. The builder
+   stands down, posts its self-archive record when it has pushed work, and archives its own session
+   (`skills/workhorse/reference/cloud.md` § Workspace).
+3. When the builder's self-archive record is on the issue, or the session reads archived, run
+   `cloud_recover.py assess` and follow § Adoption mechanics, step 4 (`successor`, then
+   `launcher.py launch`). Until one of those shows, wait. Nothing launches, and the next `send-back`
+   lists the lane under `adopting` as the reminder. The platform may still show the owner its own
+   prompt to allow the archive; recovery never waits on it.
+4. If the builder says it has no tool that archives a session and posts no self-archive record, ask
+   the owner to archive that one session. This is the only case the owner is asked.
+
+The `adopt` entry is recorded `adopting` at once, so it is listed under `adopt` only once and no
+`sent` is run for it. An `adopting` entry is listed under `adopting` (same fields) on every later
+`send-back` until a replacement launch for its lane has started. Then it reads resolved.
+
+For each item under `sendBack` (a session that started after the renewal and so holds the new
+pass), send `message` to the item's `cloudSessionName` as
 `skills/showrunner/reference/wave-watch.md` § Answering a builder note sends an answer. On the same
 account that is `SendMessage`. On another account (`configDir`) it is the relay's `ensure`,
 `compose`, `SendMessage`, `check`. Then record it:
@@ -370,12 +410,18 @@ account that is `SendMessage`. On another account (`configDir`) it is the relay'
 - After an `ensure` refusal or `relay-send-failed`, do not run `sent`. Nothing reached the builder,
   and the PR stays listed for the next `send-back`.
 
-No further word from the owner is needed for any of this. The message resumes the parked cloud
-session, which runs its review and hands back as usual (`skills/workhorse/reference/cloud.md` § Review
-has the builder's side).
+No further word from the owner is needed for any of this, except the one archive in step 4 above.
+On the `sendBack` path the message resumes a session that started after the renewal, which runs its
+review and hands back as usual. On the `adopt` path the message only makes the old builder stand
+down; the review runs in the fresh session that adopts the pushed branch. That session finds the
+park on its PR, builds nothing more, and re-verifies, reviews and hands back
+(`skills/workhorse/reference/cloud.md` § Review has the builder's side).
 
 **The other lists.**
 
+- `adopting`: an adopt that was started and whose replacement launch has not started. Do the
+  remaining `adopt` step it is waiting on (the same fields as `adopt`). It is the reminder, never a
+  new adopt.
 - `skipped`: nothing to do. The PR closed before the renewal, or the owner already let it through.
 - `noLane`: the PR has no cloud lane session to send to. Tell the owner which PR it is and that its
   review needs a fresh launch.
@@ -396,7 +442,10 @@ such a step to the owner first.
 - **Archiving a finished cloud lane** is the cleanup in
   `skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane: the relay
   carries the archive request, and the builder archives its own session with the tool it has.
-  Confirm the archive from the session list. Never assume it.
+  Confirm the archive from the session list. Never assume it. A superseded lane's builder is the
+  exception to the wait for a closed PR: it archives itself on the supersession, before its PR
+  closes (§ Lapsed-pass parks and the send-back). The owner is asked to archive only when that
+  builder has no tool to archive itself.
 - **Reading or archiving a builders'-account session** goes to a one-off cloud helper session on
   that account. Start it as the launcher starts a cloud lane:
 
@@ -478,7 +527,12 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
      status ping through the relay first.
   2. Run `assess`. Its answer is `working`, `unresolved`, `parked`, `awaiting-handover`,
      `ask-to-push` or `stopped`. `assess` returns `stopped` with evidence `account-limited` for a
-     lane that started before the limit was recorded, while the limit holds. `working`,
+     lane that started before the limit was recorded, while the limit holds. A lane whose session
+     reads `archived`, or whose issue holds a self-archive record naming its launch id, reads
+     `stopped` (evidence `session-archived` or `self-archived`) whatever the age of its park
+     comment, so `parked` never holds an archived or self-archived lane. A self-archived lane counts
+     like a handover in the launcher's original-session check, and `successor` adopts the head the
+     record names. `working`,
      `unresolved`, `parked` and `awaiting-handover` never recover. `parked` means the lane's issue holds a builder stop or park comment newer than its last
      pushed work, and the answer names that comment (`parkComment`). An alive session that
      never hands over is resolved by the cloud helper archiving it (§ Acting on the builders'
@@ -511,7 +565,7 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   The state is `cloud-recover.json`, beside the launch ledger. Recovery never leaves two builders on
   one issue: it recovers only on positive stop evidence or a confirmed handover; `successor` refuses
   a lane the ledger has not ended or that has no `stopped` assessment; `send-back` never messages a
-  superseded lane; and the successor's intake refuses a branch that moved. A cloud lane that ended
+  superseded lane and never launches anything itself; and the successor's intake refuses a branch that moved. A cloud lane that ended
   `refusal` because the cloud runs another plugin version is relaunched at once: run
   `cloud_recover.py relaunch-refusal`, then launch its premise with `launcher.py launch --place cloud`.
   The version the cloud reported stands as the cloud's, so the build runs on the owner's machine

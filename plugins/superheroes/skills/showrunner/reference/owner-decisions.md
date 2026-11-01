@@ -684,7 +684,8 @@ advisor run together to keep calibration honest.
    before the next pass is owed, the two hand steps: run the pass command, and paste the new pass into
    the cloud environment. **After the owner pastes the new pass, finish the renewal.** Have a cloud
    session run `cloud_pass.py confirm`, then record it on the owner's machine with `cloud_pass.py
-   record-confirmation`, which moves the saved lapse date, then send the parked builds back as
+   record-confirmation`, which moves the saved lapse date, then run `cloud_parked.py send-back
+   --confirmed` and recover the parked builds as
    `skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back says. If the
    confirmed lapse date did not move past the old one, the pass command copied the same sign-in again,
    so tell the owner the separate reviewer sign-in must be signed in again before the pass command.

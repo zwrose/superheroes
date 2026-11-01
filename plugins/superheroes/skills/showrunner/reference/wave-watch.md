@@ -579,7 +579,7 @@ A `relay-start-failed` naming an untrusted workspace means that account lacks th
 **Delivered.** Run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
 --comment-id <id>` for that note, then re-arm.
 
-The message resumes a parked cloud session, which re-reads its issue and carries on, so the answer
+The message resumes a cloud session parked on a note, which re-reads its issue and carries on, so the answer
 reaches a builder that already parked. When you are back after being away, the first arm reports every
 note still waiting (`notes`, oldest first). Answer each in turn as above, each with its own gate; that
 also resumes each lane that parked on one. There is no separate resume step.
