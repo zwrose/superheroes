@@ -326,7 +326,7 @@ it does not add a check to the preflight list. The walk and the owner's launch-w
 ## Lapsed-pass parks and the send-back
 
 A cloud build's PR is parked with the review not run for one of two causes. The reviewer pass lapsed
-mid-build (`cause: lapsed`), or the reviewer answered 401, a revoked or rejected sign-in such as
+mid-build, or the reviewer answered 401, a revoked or rejected sign-in such as
 `token_revoked` (`cause: rejected`). Both park comments open "Parked: the review did not run."
 `lib/cloud_parked.py` tells such a park from any other and keeps the record, in `cloud-parked.json`
 beside the launch ledger.
@@ -342,7 +342,8 @@ a sweep, a builder's comment) and see the park. Running it once records the PR; 
 harmless.
 
 - `kind: lapsed-pass`: put `text` in your next message to the owner, as it is. It names the PR, the
-  reason and the renewal. Its `cause` is `lapsed` or `rejected`. The text for a rejected park tells
+  reason and the renewal. A rejected park's result also carries `cause: rejected`; a lapsed park's
+  carries no `cause`. The text for a rejected park tells
   the owner to renew the sign-in and the pass, and that a fresh session will run the review.
 - `kind: not-lapsed-pass`: a review that did not run for any other reason is reported as
   `rubric/review-discipline.md` says, with no advice to renew the pass.
