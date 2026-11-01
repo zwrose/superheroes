@@ -59,6 +59,7 @@ P_VERIFIERS = round_phases.P_VERIFIERS
 P_SYNTHESIS = round_phases.P_SYNTHESIS
 P_SEAMS = round_phases.P_SEAMS
 P_SECOND_TEST = round_phases.P_SECOND_TEST
+P_SWEEP = round_phases.P_SWEEP
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
@@ -72,6 +73,7 @@ SEAT_SECOND_TEST = payload_contracts.SEAT_SECOND_TEST
 SEAT_SCOPED = payload_contracts.SEAT_SCOPED
 SEAT_VERIFY = payload_contracts.SEAT_VERIFY
 SEAT_APPLY_FIXES = payload_contracts.SEAT_APPLY_FIXES
+SEAT_SEARCHER_PREFIX = payload_contracts.SEAT_SEARCHER_PREFIX
 RULING_NEW_ISSUE = payload_contracts.RULING_NEW_ISSUE
 VACUOUS_FIELD = payload_contracts.VACUOUS_FIELD
 TYPE_TOKENS = payload_contracts.TYPE_TOKENS
@@ -128,6 +130,10 @@ _MISSING_POLICY = {
     P_VERIFIERS: MISSING_FOLD_FAIL_CLOSED,
     # A silent auditor leaves its target `unaudited` -> not-discharged. Omit the result.
     P_AUDITS: MISSING_FOLD_FAIL_CLOSED,
+    # A searcher that returned nothing leaves its part of the file list unsearched. The fold goes on
+    # without it and records the part under that sweep's `missing`; the receipt discloses it. A refusal
+    # would stall the review on a seat that finds nothing new, and an empty result is never invented.
+    P_SWEEP: MISSING_FOLD_FAIL_CLOSED,
     # Single-seat phases: an empty success artifact could let the run certify. Refuse.
     P_SYNTHESIS: MISSING_REFUSE_FOLD,
     P_SEAMS: MISSING_REFUSE_FOLD,
@@ -199,7 +205,33 @@ def roster_for(phase, state, config):
                 return [], "audit-target-has-no-id:index-%d" % index
             keys.append(tid)
         return keys, None
+    if phase == P_SWEEP:
+        # one searcher seat per (sweep, part): every sweep searches the same parts of the head's tracked files
+        pending = st.get("_sweepPending")
+        parts = st.get("_sweepParts")
+        if not isinstance(pending, list) or not pending:
+            return [], "sweep-pending-missing"
+        if not isinstance(parts, list) or not parts:
+            return [], "sweep-parts-missing"
+        numbers = []
+        for part in parts:
+            number = part.get("part") if isinstance(part, dict) else None
+            if isinstance(number, bool) or not isinstance(number, int):
+                return [], "sweep-part-has-no-number"
+            numbers.append(number)
+        keys = []
+        for index, sweep in enumerate(pending):
+            sid = sweep.get("sweepId") if isinstance(sweep, dict) else None
+            if not isinstance(sid, str) or not sid:
+                return [], "sweep-has-no-id:index-%d" % index
+            keys.extend(sweep_seat_key(sid, number) for number in numbers)
+        return keys, None
     return [_SINGLE_SEAT[phase]], None
+
+
+def sweep_seat_key(sweep_id, part):
+    """The seat key of one searcher: `searcher:<sweepId>:<part>`."""
+    return "%s%s:%d" % (SEAT_SEARCHER_PREFIX, sweep_id, part)
 
 
 def _roster_slots(keys):
@@ -447,6 +479,8 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
                                        orders_manifest, _maker_barred(state, config))
     elif phase == P_AUDITS:
         artifact = _assemble_audits(roster, indexed, dispatch_manifest, disclosures)
+    elif phase == P_SWEEP:
+        artifact = _assemble_sweep(roster, indexed, disclosures)
     elif phase == P_SYNTHESIS:
         fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,
                                      _maker_barred(state, config), disclosures)
@@ -459,6 +493,12 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
         if fault is not None:
             return None, fault
         artifact = _assemble_findings(roster, indexed, disclosures)
+        if phase == P_SEAMS:
+            # axis: the seams artifact carries the executed vendor the authentication above checked, so the fold stamps a search description's author on the durable path as the panel's `ranManifest` does — see bite-proof record c4_wo1_kind
+            ran_manifest = _trusted_vendors(roster, indexed, dispatch_manifest, {}, orders_manifest,
+                                            _maker_barred(state, config))
+            if ran_manifest:
+                artifact["ranManifest"] = ran_manifest
     elif phase == P_APPLY_FIXES:
         artifact = _assemble_apply_fixes(roster, indexed)
     else:
@@ -577,6 +617,22 @@ def _assemble_audits(roster, indexed, dispatch_manifest, disclosures):
     if omitted:
         disclosures["unauditedTargets"] = omitted
     return artifact
+
+
+def _assemble_sweep(roster, indexed, disclosures):
+    """`{"seats": {<searcher seat key>: {"hits": [...]}}}` of the searchers that landed a result. A searcher that
+    landed none is left out: the fold records its part missing, never as a part that found nothing."""
+    seats = {}
+    omitted = []
+    for seat, occurrence in _roster_slots(roster):
+        entry, is_result = _landed(indexed, seat, occurrence)
+        if not is_result:
+            omitted.append(_missing_detail(seat, occurrence, entry))
+            continue
+        seats[seat] = dict(entry["payload"])
+    if omitted:
+        disclosures["unsearchedParts"] = omitted
+    return {"seats": seats}
 
 
 def _assemble_synthesis(roster, indexed, disclosures):

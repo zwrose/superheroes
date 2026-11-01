@@ -22,13 +22,14 @@ P_VERIFIERS = round_phases.P_VERIFIERS
 P_SYNTHESIS = round_phases.P_SYNTHESIS
 P_SEAMS = round_phases.P_SEAMS
 P_SECOND_TEST = round_phases.P_SECOND_TEST
+P_SWEEP = round_phases.P_SWEEP
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
 P_VERIFY = round_phases.P_VERIFY
 P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 
 ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_SEAMS, P_SECOND_TEST, P_AUDITS,
-                  P_SCOPED, P_VERIFY, P_APPLY_FIXES)
+                  P_SCOPED, P_VERIFY, P_APPLY_FIXES, P_SWEEP)
 
 SEAT_SYNTHESIS = "synthesis"
 SEAT_SEAMS = "seams-check"
@@ -36,6 +37,8 @@ SEAT_SECOND_TEST = "second-test"
 SEAT_SCOPED = "scoped-finder"
 SEAT_VERIFY = "verify"
 SEAT_APPLY_FIXES = "apply-fixes"
+# A repository-sweep searcher seat is `searcher:<sweepId>:<part>`, one per part of one sweep's file list.
+SEAT_SEARCHER_PREFIX = "searcher:"
 
 # The one ruling whose claim is unusable without a new-issue payload. `audits` exposes the ENUM
 # (`AUDIT_RULINGS`, which this module validates against and never hand-copies) but no per-member
@@ -393,6 +396,11 @@ def _second_test_payload_fault(payload, seat_key):
     return _payload_fault_from_contract(payload, P_SECOND_TEST, seat_key)
 
 
+def _sweep_payload_fault(payload, seat_key):
+    """One searcher's hits. A hit missing its file or line is not refused here: the fold drops it and counts it."""
+    return _payload_fault_from_contract(payload, P_SWEEP, seat_key)
+
+
 def _scoped_payload_fault(payload, seat_key):
     """The scoped-finder candidate list."""
     return _payload_fault_from_contract(payload, P_SCOPED, seat_key)
@@ -432,6 +440,7 @@ _PAYLOAD_CHECKERS = {
     P_SYNTHESIS: _synthesis_payload_fault,
     P_SEAMS: _seams_payload_fault,
     P_SECOND_TEST: _second_test_payload_fault,
+    P_SWEEP: _sweep_payload_fault,
     P_SCOPED: _scoped_payload_fault,
     P_APPLY_FIXES: _apply_fixes_payload_fault,
     P_VERIFY: _verify_payload_fault,
@@ -538,6 +547,17 @@ _PAYLOAD_FIELD_BINDINGS = {
         },
         "predicates": [],
     },
+    P_SWEEP: {
+        "required": ["hits"],
+        "optional": [],
+        "conditional": {},
+        "enums": {},
+        "types": {"hits": "list-of-objects"},
+        "elements": {
+            "hits": {"required": [], "optional": [], "types": {}, "enums": {}},
+        },
+        "predicates": [],
+    },
     P_SCOPED: {
         "required": ["findings"],
         "optional": ["reviewerVendor"],
@@ -604,7 +624,7 @@ _PAYLOAD_FIELD_BINDINGS = {
         "required": ["id", "ruling", "reason", "checks"],
         "optional": ["newIssues", "evidence", "auditorVendor", "unnamedChange",
                      "unnamedChangeAllowedBySeq", "unnamedChangeFixes", "unnamedChangeReverts",
-                     "testMatch"],
+                     "testMatch", "places"],
         "conditional": {
             "newIssues": "required when ruling is %s" % RULING_NEW_ISSUE,
         },
@@ -622,6 +642,7 @@ _PAYLOAD_FIELD_BINDINGS = {
             "unnamedChangeFixes": "list",
             "unnamedChangeReverts": "list",
             "testMatch": "any",
+            "places": "list",
         },
         "elements": {
             "newIssues": {"required": [], "optional": [], "types": {}, "enums": {}},

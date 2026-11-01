@@ -449,6 +449,14 @@ The one reviewer that reads a whole sliced change for problems between its [slic
 
 A finding a reviewer raises on lines the change did not touch. It goes to the [review record](#review-record)'s "Outside this PR" list, never into the review's findings. A reviewer may raise at most 3 from its own reading, and every one raised is kept. A sweep's hits are not counted against any reviewer and stay together under the sweep's entry. It is never fixed, never blocks the merge, and never becomes an owner card. At the vet the advisor sorts each into a proposed follow-up filing, which waits on the owner's word, or a dismissal with its reason. The rule is in [the base rubric](review-base.md) (Verification rule 2); the sort is in [the vet receipt reference](../skills/showrunner/reference/vet-receipt.md#the-outside-list).
 
+### Kind of mistake
+
+The class a finding belongs to, in a few plain words, such as "a retry with no cap" or "a path joined from user input without a check", together with every other place in the change that makes the same mistake. The reviewer that raises the finding names both. The [fix auditor](#fix-auditor) answers every named place, and a fix that leaves one unfixed is not accepted. A place on a line the change did not touch is an [outside finding](#outside-finding) instead. The [review record](#review-record) shows it on the finding as "also in this PR". The rule is in [the base rubric](review-base.md) (Findings output format).
+
+### Search description
+
+What the independent reviewer that raised a finding writes so the mistake can be found elsewhere in the repository: the kind of mistake, what it looks like in code, and short examples. It is never written by the build session. It is used for one repository-wide search when the finding is confirmed as Important or Critical. The rule is in [the base rubric](review-base.md) (Findings output format). The repository-wide search runs once per such finding, by cheap searchers over the whole repository; a hit on a touched line goes to the verifier before any fix, and a hit elsewhere goes on the outside list under that search's own entry.
+
 ## Cloud builds
 
 ### Cloud environment

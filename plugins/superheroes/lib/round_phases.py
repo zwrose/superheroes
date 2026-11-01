@@ -14,6 +14,7 @@ P_AUDITS = "dispatch-audits"
 P_SCOPED = round_panel_contract.P_SCOPED_FINDER_PHASE
 P_SEAMS = "dispatch-seams-check"
 P_SECOND_TEST = "dispatch-second-test"
+P_SWEEP = "dispatch-sweep"
 P_VERIFY = "run-verify"
 P_APPLY_FIXES = "apply-fixes"
 P_TERMINAL = "terminal"
@@ -27,8 +28,12 @@ ROUND_CAP = 4
 
 ALL_PHASES = (
     P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_AUDITS, P_SCOPED, P_SEAMS, P_VERIFY, P_APPLY_FIXES,
-    P_TERMINAL, P_SECOND_TEST,
+    P_TERMINAL, P_SECOND_TEST, P_SWEEP,
 )
+
+# The repository-sweep search is cut into at most this many size-balanced parts of the tracked files;
+# one searcher seat reads each part.
+SWEEP_PARTS = 4
 
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.

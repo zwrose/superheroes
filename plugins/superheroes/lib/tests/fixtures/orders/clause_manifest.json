@@ -8,7 +8,8 @@
     "Base rubric (binding) > CLAUDE.md (conventions)",
     "Never one whole-file read",
     "Set `dimension` to",
-    "at most 5 code-quality-only Nits reported per review round across all seats"
+    "at most 5 code-quality-only Nits reported per review round across all seats",
+    "name its kind of mistake with the other touched places that share it"
   ],
   "dispatch-verifiers": [
     "You are the per-finding verifier for one cluster",
@@ -38,7 +39,8 @@
     "`file:line` citation required",
     "Never change the repository, and never claim a run you did not make",
     "Do NOT decide the run's outcome or re-run panel seats",
-    "Never one whole-file read"
+    "Never one whole-file read",
+    "name its kind of mistake with the other touched places that share it"
   ],
   "dispatch-second-test": [
     "You are a fresh run of the test reviewer",
@@ -48,6 +50,14 @@
     "Return only the items you were given, each once, by its staged `id`",
     "Never change the repository, and never claim a run you did not make",
     "runs your test, exactly as you wrote it, in its own working copy"
+  ],
+  "dispatch-sweep": [
+    "You are a searcher",
+    "You do not review the change, judge how serious a place is, or fix anything",
+    "Report every place, not only the first",
+    "Search only the files on your list",
+    "Do not judge how serious a place is and do not propose a fix",
+    "Never change the repository, and never claim a run you did not make"
   ],
   "dispatch-second-test-correction": [
     "You are a fresh run of the test reviewer",
@@ -69,7 +79,8 @@
     "stands only when all three answers are `yes`",
     "compare `committedTest` with `reviewerTest` in light of `changedWhy`",
     "Never change the repository, and never claim a run you did not make",
-    "Transport keys use the per-location target identifier"
+    "Transport keys use the per-location target identifier",
+    "A fix that leaves a named location unfixed, or a location you leave unanswered, is left open by the driver"
   ],
   "dispatch-scoped-finder": [
     "You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round",

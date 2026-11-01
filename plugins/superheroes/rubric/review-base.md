@@ -162,7 +162,9 @@ reads the channel, never your reasoning.
     "confidence": "High | Low",
     "tradeoff": "<true only if multiple valid fix approaches exist; omit otherwise>",
     "consequence": "<what goes wrong for the owner or the user if this is left unfixed, in plain words; code quality only when that is all it costs>",
-    "consequenceKind": "code-quality | real"
+    "consequenceKind": "code-quality | real",
+    "kindOfMistake": {"kind": "<the kind of mistake this is, in a few plain words>", "places": [{"file": "<path>", "line": "<number or null>"}]},
+    "searchDescription": {"kind": "<the kind of mistake>", "looksLike": "<what it looks like in code>", "examples": ["<a short example>"]}
   }
 ]
 ```
@@ -172,6 +174,8 @@ reads the channel, never your reasoning.
 - `severity` is a **closed enum** — exactly one of `Critical`, `Important`, `Minor`, `Nit`. Do **not** emit any other scale: no `high`/`medium`/`low`, no `blocker`/`major`/`info`, no lowercase variants. A blocker is `Critical` or `Important`. Consumers fail **closed** — any unrecognized severity is treated as **blocking**, so an off-scale label mis-routes your finding rather than silently downgrading it.
 - `consequence` states what happens if the finding is left unfixed. A finding whose only cost is code quality says so. Emit the key on every finding (null only when you cannot state one).
 - `consequenceKind` is `code-quality` when the only cost of leaving the finding is code quality, and `real` for any other consequence. A code-quality finding the review leaves unfixed is decided as craft and listed for the owner's veto; a real one comes to the owner. Emit the key on every finding (null only when no consequence is stated).
+- `kindOfMistake` names the [kind of mistake](glossary.md#kind-of-mistake) the finding is, and lists in `places` every *other* place in the change with the same mistake, each on a line the change touched (`+` lines, and the line on each side of a `-` line). Never list the finding's own `file` and `line`. A finding you cannot generalise still names its kind and lists no places. A copy of the mistake on an untouched line is not listed here: it goes in as an outside finding, under the rules above. Emit the key on every finding (null only when you cannot name a kind).
+- `searchDescription` is the finding's [search description](glossary.md#search-description), written for someone searching the whole repository for copies of the mistake: `kind` (the kind of mistake), `looksLike` (what it looks like in code, general enough to search for) and `examples` (short, concrete). It is yours to write because you read the code; the build session never writes one. Emit the key on every finding (null only when you cannot describe the mistake).
 
 **Dimensions** (the orchestrator reads this list; it is data, not hard-wired —
 adding one later is a single-place change): `Architecture`, `Code`, `Security`,

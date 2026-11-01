@@ -25,6 +25,20 @@ def normalize_title(title):
     return t.strip()
 
 
+def place_pair(place):
+    """`(file, line)` of a place or a citation, or None when it is no place: not an object, a blank or
+    non-string file, or a line that is neither an integer nor null. The one home of the place-validity
+    rule (compilation, merging and auditing all call it)."""
+    if not isinstance(place, dict):
+        return None
+    file, line = place.get("file"), place.get("line")
+    if not isinstance(file, str) or not file.strip():
+        return None
+    if line is not None and (not isinstance(line, int) or isinstance(line, bool)):
+        return None
+    return (file, line)
+
+
 def _str_field(value):
     return value if isinstance(value, str) and value else None
 

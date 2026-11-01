@@ -826,6 +826,20 @@ def _validate(a):
         fault = _proven_copies_fault(a["provenCopies"])
         # axis: a proven copy names its file, its source and a 64-hex checksum the vet can check, each file once — see bite-proof record c1l5b_wo_d_proven_copies
         chk(fault is None, f"provenCopies{fault}")
+    if "sessionCost" in a:
+        c, num = a["sessionCost"], lambda v: isinstance(v, (int, float)) and not isinstance(v, bool) and v >= 0  # noqa: E731
+        cnt = lambda v: _is_int(v) and v >= 0  # noqa: E731
+        chk(isinstance(c, dict) and set(c) == {"tokens", "minutes", "runs", "runsWithoutFigure", "complete", "bySeat"}, "sessionCost")
+        chk(cnt(c["tokens"]) and cnt(c["runs"]) and cnt(c["runsWithoutFigure"]) and num(c["minutes"]), "sessionCost")
+        chk(c["runsWithoutFigure"] <= c["runs"], "sessionCost.runsWithoutFigure")
+        # axis: complete is true exactly when every run had a figure — see bite-proof record i2307_session_cost
+        chk(c["complete"] is (c["runsWithoutFigure"] == 0), "sessionCost.complete")
+        seats = c["bySeat"]
+        chk(isinstance(seats, dict) and all(_nb(k) and isinstance(v, dict) and set(v) == {"tokens", "minutes", "runs"}
+                                           and cnt(v["tokens"]) and cnt(v["runs"]) and num(v["minutes"])
+                                           for k, v in seats.items()), "sessionCost.bySeat")
+        chk(sum(v["tokens"] for v in seats.values()) == c["tokens"] and sum(v["runs"] for v in seats.values()) == c["runs"]
+            and round(sum((v["minutes"] for v in seats.values()), 0.0), 1) == c["minutes"], "sessionCost.bySeat")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -1612,6 +1626,8 @@ def build_record(account, readers, prior=None, history=()):
         "refused": a["refused"], **({"commandRefusals": a["commandRefusals"]} if a["commandRefusals"] else {}),
         # axis: a part shows in the record exactly when the account carries it — see bite-proof record c1l1_wo_a_record_seam
         **{k: a[k] for k in _ROUND_PARTS if k in a},
+        # axis: the session's own reviewer cost rides the record whenever the account carries it — see bite-proof record i2307_session_cost
+        **({"sessionCost": _shown_session_cost(a["sessionCost"])} if "sessionCost" in a else {}),
         "unreadFiles": unread, "rawOutputs": [],
         # axis: a kept left-for-owner repeat is not listed again beside the earlier finding that holds it — see bite-proof record c1l8_wo_b_record_repeats
         "leftForOwner": [_name(f) for f in findings
@@ -1775,6 +1791,21 @@ def _scrubbed(value):
             out[k2] = "[REDACTED]" if secret and v is not None else _scrubbed(v)
         return out
     return value
+
+
+def _shown_session_cost(cost):
+    """The session cost with each seat key the record's own detector would hide shown as `[REDACTED SEAT]` (`-1`, `-2`, ... when taken), its figures kept."""
+    # axis: a seat key the scrubber would hide keeps its figures under a neutral key, so the cost is never lost to the scrub — see bite-proof record i2307_session_cost
+    out = {}
+    for k, v in cost["bySeat"].items():
+        n, shown = 0, k
+        if _has_secret(k) or _secret_key(k) or pr_comment.scrub(k) != k:
+            shown = "[REDACTED SEAT]"
+            while shown in out or shown in cost["bySeat"]:
+                n += 1
+                shown = f"[REDACTED SEAT]-{n}"
+        out[shown] = v
+    return dict(cost, bySeat=out)
 
 
 def _shed_why_paths(basis):
