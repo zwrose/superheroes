@@ -617,9 +617,15 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 candidates = (_valid_new_issues(r.get("newIssues"), fid)
                               if ruling == "discharged-but-new-issue" else [])
                 new_issues.extend(candidates)
-                base.update(ruling="not-discharged",
-                            reason="the fix leaves a place of the same kind of mistake open (%s)"
-                            % "; ".join(parts))
+                reason_text = ("the fix leaves a place of the same kind of mistake open (%s)"
+                               % "; ".join(parts))
+                # An unnamed change reported with an incomplete-place return is kept on the entry and in
+                # its reason, so the driver's record of reported changes and the next fixer still carry it.
+                reported_unnamed = r.get("unnamedChange")
+                if has_usable_unnamed_change(reported_unnamed):
+                    base["reportedUnnamedChange"] = reported_unnamed.strip()
+                    reason_text += ". Unnamed change: %s" % reported_unnamed.strip()
+                base.update(ruling="not-discharged", reason=reason_text)
                 audits.append(base)
                 continue
         # A clearing ruling stands only when all three checks are answered `yes`.
