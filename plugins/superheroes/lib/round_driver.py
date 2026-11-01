@@ -3325,6 +3325,9 @@ def _seed_findings_before_record_park(state):
     carry = state.get("_sliceCarry")  # the findings of unread waves already folded, held until the last wave
     if isinstance(carry, list) and carry:
         fresh = list(carry) + (fresh if isinstance(fresh, list) else [])
+    sweep_carry = state.get("_sweepCarry")  # the round's confirmed findings, held while the sweep's extra verifier pass runs
+    if isinstance(sweep_carry, list) and sweep_carry:
+        fresh = list(sweep_carry) + (fresh if isinstance(fresh, list) else [])
     if not isinstance(fresh, list) or not fresh:
         return
     existing = state.get("findings") or []
