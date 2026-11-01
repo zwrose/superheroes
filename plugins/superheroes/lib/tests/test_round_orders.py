@@ -125,6 +125,14 @@ def _second_test_placeholders(channel="file"):
     }
 
 
+def _sweep_placeholders(channel="file"):
+    return {
+        "SEARCH_INPUT_PATH": os.path.join(_SESSION, "round-1", "sweep", "searcher-s-1-1.json"),
+        "VERIFICATION_ROOT": _REPO,
+        "CHANNEL": channel,
+    }
+
+
 def _audits_placeholders(channel="file"):
     return {
         "TARGET_SUMMARY_PATH": os.path.join(_SESSION, "round-2", "audit-targets", "t0.json"),
@@ -185,6 +193,12 @@ _GOLDEN_CONTEXTS = {
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-second-test",
                                   "second-test.a0.payload.json"),
         placeholders=_second_test_placeholders(),
+    ),
+    RP.P_SWEEP: lambda: _base_context(
+        host_seat=True,
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-sweep",
+                                  RR.storage_key("searcher:S-1:1", 0) + ".a0.payload.json"),
+        placeholders=_sweep_placeholders(),
     ),
     RP.P_AUDITS: lambda: _base_context(
         host_seat=True,

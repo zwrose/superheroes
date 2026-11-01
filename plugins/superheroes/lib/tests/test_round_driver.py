@@ -1126,7 +1126,9 @@ def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
     assert ok
     assert not state.get("auditRounds"), state.get("auditRounds")
     assert not state.get("_auditOutcome"), state.get("_auditOutcome")
-    assert not state.get("decisions"), state.get("decisions")
+    # the scaffold's round-1 finding has no search description, so its sweep is recorded as not run; that is the one
+    # decision allowed, and nothing the audits fold would record
+    assert not [d for d in state.get("decisions") or [] if d.get("kind") != "sweep-not-run"], state.get("decisions")
 
 
 def test_verifier_results_fault_pure():
@@ -2811,6 +2813,9 @@ _ALL_CHANNELS = {
     "secondTestUnseatable": [{"makerFamilies": ["anthropic"], "fixerVendor": "claude",
                               "held": ["f.py::bug@L1"]}],
     "seatMapUnjudgeable": [_load("seat_map").VIOLATION_BASIS_NO_AUTHOR_FAMILY],
+    "sweeps": [{"sweepId": "S-1", "findingKey": "f.py::bug@L1", "title": "bug", "file": "f.py", "line": 1,
+                "parts": 1, "missing": [], "inside": 1, "outside": 0, "covered": 0, "dropped": 0,
+                "ungraded": 1, "ungradedKeys": ["g.py::copy@L2"]}],
     "judgmentDispositions": [{"id": "f.py::tradeoff@L1", "title": "tradeoff",
                               "disposition": "fix-with-guidance",
                               "userGuidance": "keep narrow"}],

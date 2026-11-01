@@ -1047,6 +1047,8 @@ def test_order_placeholder_registry_partition_is_complete():
         RP.P_SECOND_TEST: {"findings": []},
         RP.P_AUDITS: {"targets": [{"id": "finding::auth.py::12"}]},
         RP.P_SCOPED: {"hunks": {}},
+        RP.P_SWEEP: {"sweeps": [{"sweepId": "S-1", "searchDescription": {"kind": "k"},
+                                 "parts": [{"part": 1, "files": ["a.py"]}]}], "searcher": {}},
     }
     seat_keys = {
         RP.P_PANEL: "code-reviewer",
@@ -1056,6 +1058,7 @@ def test_order_placeholder_registry_partition_is_complete():
         RP.P_SECOND_TEST: "second-test",
         RP.P_AUDITS: "finding::auth.py::12",
         RP.P_SCOPED: "scoped-finder",
+        RP.P_SWEEP: "searcher:S-1:1",
     }
     missing = []
     for phase in RO.ORDER_PHASES:
