@@ -304,6 +304,18 @@ def test_census_delete_rule_implementer_md():
     assert body.index("**Refused or denied commands.**") < rule < rung_one
 
 
+def test_census_delete_rule_apply_fixes_step():
+    path = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "auto-fix-loop.md")
+    with open(path, encoding="utf-8") as fh:
+        text = fh.read()
+    start = text.index("## Applying the fixes")
+    end = text.find("\n## ", start + 1)
+    section = text[start:] if end == -1 else text[start:end]
+    # axis: the in-session fix step cites the delete rule by name and home — see bite-proof record wo_c_2314_brief_fold
+    assert "DELETE_RULE" in section
+    assert "lib/command_refusals.py" in section
+
+
 def test_delete_rule_has_one_home():
     # A hand copy of the sentence anywhere in the shipped plugin outside its home and the
     # implementer template (which is prose, not a Python import) is a second copy.

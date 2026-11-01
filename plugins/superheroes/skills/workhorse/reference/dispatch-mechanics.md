@@ -904,7 +904,7 @@ but whitespace.
 is **not** an acceptance verdict, and the implementer never marks its own work done. `ok: false`
 carries `signal` of `"plan_wrong"` (the order's premise is wrong) or `"needs_context"` (anything
 else). `evidence.testFailed` / `evidence.testPassed` report whether a test was **observed** failing
-/ passing during that attempt. `refusals` lists the refused or denied commands, as `lib/command_refusals.py` defines them, one entry each, and is `[]` when none were met; `lib/command_refusals.py` owns the entry shape. An entry may carry `route`, the route a refusing guard's or hook's own message named that the implementer took under the stop rule's one exception.
+/ passing during that attempt. `refusals` lists the refused or denied commands, as `lib/command_refusals.py` defines them, one entry each, and is `[]` when none were met; `lib/command_refusals.py` owns the entry shape. An entry may carry `route`: the route a refusing guard's or hook's own message named, or the plain form re-issued after a form-only refusal, under the stop rule's two exceptions (`lib/command_refusals.py` owns their wording).
 
 **Grading is strict, and keyed to the prompt.** When the runner contracted the prompt, a report is
 recognised only as a final tail matching this grammar: a line whose trimmed content is the sentinel,
