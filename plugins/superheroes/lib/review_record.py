@@ -1320,13 +1320,17 @@ def _test_lens(reviewers, findings, final_sha):
         lens = round_phases.seat_lens(seat)
         identities.update((v["name"], seat, lens, review_seats.dimension_label(lens)))
     identities.discard(None)
-    return {"listed": True, "ran": bool(ran),
+    part = {"listed": True, "ran": bool(ran),
             "ranFrom": chosen["ran"] if chosen else None,
             "row": chosen["name"] if chosen else None,
             "commit": (chosen["commit"] or final_sha) if chosen else None,
             "coversFinalCommit": bool(chosen and chosen["coversFinalCommit"]),
             "calibrationRead": [dict(e) for e in chosen["calibrationRead"]] if chosen and "calibrationRead" in chosen else None,
             "findings": sum(1 for f in findings if _raised_by(f.get("reviewer"), identities))}
+    # a carried row covers the final commit without having run on it: the part says so, and the line reads "carried from"
+    if chosen and isinstance(chosen.get("carried"), dict):
+        part["carried"] = {"commit": chosen["carried"].get("commit")}
+    return part
 
 
 def _raised_by(reviewer, identities):
@@ -2356,8 +2360,17 @@ def _test_lens_line(r):
                {"ran": part.get("ranFrom"), "calibrationRead": part.get("calibrationRead")})
     source = "engine record" if part.get("ranFrom") == "engine-record" else SESSION
     findings = part.get("findings")
-    return (f"Test lens: ran on {_short(part.get('commit'))} ({source})"
-            + (", the final commit" if part.get("coversFinalCommit") is True else ", not the final commit")
+    carried = part.get("carried")
+    if isinstance(carried, dict):
+        # a carried row did not run in this record's round: say where it ran and that the earlier review is what covers the final commit
+        head = (f"Test lens: carried from the earlier review of {_short(carried.get('commit') or part.get('commit'))} "
+                f"({source}), not run in this round"
+                + ("; it covers the final commit" if part.get("coversFinalCommit") is True
+                   else "; it does not cover the final commit"))
+    else:
+        head = (f"Test lens: ran on {_short(part.get('commit'))} ({source})"
+                + (", the final commit" if part.get("coversFinalCommit") is True else ", not the final commit"))
+    return (head
             + f"; {_calibration_words(row) or 'calibration read: unmeasured'}"
             + (f"; {_plural(findings, 'finding', 'findings')} raised" if isinstance(findings, int)
                and not isinstance(findings, bool) else "")

@@ -205,6 +205,21 @@ def test_a_test_role_row_that_ran_gives_the_test_lens_part_and_line():
                     f"core.md, review-crew.md, CLAUDE.md (policy {POLICY}); 3 findings raised.")
 
 
+def test_a_carried_test_role_row_reads_carried_not_ran_on_the_final_commit():
+    # axis: a carried test-role row covers the final commit without a run on it; the line says carried from the earlier commit
+    row = {"name": "test-role", "ran": "engine-record", "commit": EARLIER, "coversFinalCommit": True,
+           "carried": {"commit": EARLIER}}
+    part = rr._test_lens([row], [], HEAD)
+    assert part["carried"] == {"commit": EARLIER} and part["coversFinalCommit"] is True
+    line = rr._test_lens_line({"testLens": part, "reviewers": [row]})
+    assert line.startswith(f"Test lens: carried from the earlier review of {EARLIER[:7]} (engine record), "
+                           "not run in this round; it covers the final commit;")
+    assert "ran on" not in line and ", the final commit" not in line
+    plain = dict(row, commit=HEAD)
+    plain.pop("carried")
+    assert "carried" not in rr._test_lens([plain], [], HEAD)
+
+
 def test_findings_labelled_by_dimension_or_bare_seat_count_for_the_test_lens():
     # axis: the session writer labels a finding by its dimension (`Test`, merged `Code, Test`) or bare seat, never the row's round suffix
     rows = [reviewer("test-role (round 1)"), reviewer("code-reviewer")]
