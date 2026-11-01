@@ -62,6 +62,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cli_contract  # noqa: E402
 import audits  # noqa: E402
 import break_it  # noqa: E402
+import calibration_read  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import countable_lines  # noqa: E402
@@ -13832,18 +13833,7 @@ def _claude_md_path_placeholder(repo_root):
 
 def _resolved_calibration_paths(repo_root):
     """(core_path_or_None, layer_path_or_None, root_refusal_or_None) from calibration_resolve."""
-    cwd = repo_root if isinstance(repo_root, str) and repo_root else os.getcwd()
-    try:
-        info = calibration_resolve.resolve(cwd)
-    except calibration_resolve.UnresolvableRootError as exc:
-        refusal = core_md.gate_refusal_line(
-            core_md.gate_refusal(exc.reason, str(exc.root)))
-        return None, None, refusal
-    core = info.get("dispatch_core")
-    layer = info.get("dispatch_layer")
-    core_path = core if isinstance(core, str) and os.path.isfile(core) else None
-    layer_path = layer if isinstance(layer, str) and os.path.isfile(layer) else None
-    return core_path, layer_path, None
+    return calibration_read.resolved_paths(repo_root)
 
 
 def _vendor_is_external_engine(vendor):
