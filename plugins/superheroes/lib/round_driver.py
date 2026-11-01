@@ -1050,6 +1050,11 @@ def _merge_same_finding(existing, incoming):
     merged["dimension"] = dims
     merged["tradeoff"] = bool(existing.get("tradeoff") or incoming.get("tradeoff"))
     merged["classification"] = "judgment" if merged["tradeoff"] else "mechanical"
+    # axis: the first raiser survives a merge — `existing`'s, whichever side wins the base; `incoming` never supplies one and a row with none stays without
+    if session_contract.RAISED_BY_FIELD in existing:
+        merged[session_contract.RAISED_BY_FIELD] = existing[session_contract.RAISED_BY_FIELD]
+    else:
+        merged.pop(session_contract.RAISED_BY_FIELD, None)
     seqs = [f.get(session_contract.RAISED_SEQ_FIELD) for f in (existing, incoming)]
     seqs = [q for q in seqs if isinstance(q, int) and not isinstance(q, bool)]
     if seqs:  # the newest raise, so settlement sees the merged live copy as current
@@ -1152,6 +1157,8 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
     An outside-scope drop row also carries `source`, the name of whoever raised it: `sources[id(finding)]`
     when `sources` (a dict of `id()` of an input dict -> name) has it, else `source`, else "reviewer";
     `_record_outside` routes those rows to the record's "Outside this PR" list.
+    Every kept finding's `raisedBy` is the driver's own: `sources[id(finding)]` when it is a non-blank string, else
+    `source` when it is, else absent; a `raisedBy` the seat sent never survives.
     Every kept finding's `kindOfMistake` and `searchDescription` are normalized: one that is null, not an object or
     has a blank `kind` is removed (the finding stays); a place of `kindOfMistake` that is not on a line the PR touched
     leaves `places` as an outside drop row (same source name as the finding's own, titled with the kind of mistake,
@@ -1188,6 +1195,13 @@ def mechanical_compile(findings, diff_text=None, scope_exempt=None, stamped=None
             fc.pop(break_it.RUNS_FIELD, None)
         # axis: a seat never marks its own finding as having had its one more test, whatever value it sends — only the driver's second-test step (staged without compile) sets it
         fc.pop(SECOND_TEST_FIELD, None)
+        # axis: a raiser the seat supplied itself never survives compile — only the driver's own roster key or stage name is stamped, and with neither the field is absent
+        fc.pop(session_contract.RAISED_BY_FIELD, None)
+        raiser = sources.get(id(f))
+        if not (isinstance(raiser, str) and raiser.strip()):
+            raiser = source
+        if isinstance(raiser, str) and raiser.strip():
+            fc[session_contract.RAISED_BY_FIELD] = raiser
         if id(f) not in exempt and not _diff_scope_ok(fc, valid):
             drops.append({"file": fc.get("file"), "line": fc.get("line"),
                           "title": fc.get("title"), "reason": COMPILE_DROP_OUTSIDE,
@@ -2025,7 +2039,8 @@ def _with_carried(state, compiled):
         held_key = _finding_identity_key(rows[id(h)])
         merged = _merge_same_finding(rows[id(h)], c)
         fresh_key = _finding_identity_key(c)
-        for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD):
+        for field in (session_contract.FINDING_KEY_FIELD, session_contract.RAISED_ROUND_FIELD,
+                      session_contract.RAISED_BY_FIELD):
             if field in h:
                 merged[field] = h[field]
             else:
@@ -2281,6 +2296,12 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         # axis: a re-raise of an unresolved finding keeps the places it still owes, so a narrower report never drops a copy the last audit left unfixed — see bite-proof record c4_wo1_kind
         verification.apply_kind_members(entry, [existing, entry], with_description=False)
     entry[session_contract.RAISED_SEQ_FIELD] = _next_disposition_seq(state)
+    if isinstance(existing, dict):
+        # axis: a re-raise never changes the first raiser, and a ledger row with no raiser never gains one from it
+        if session_contract.RAISED_BY_FIELD in existing:
+            entry[session_contract.RAISED_BY_FIELD] = existing[session_contract.RAISED_BY_FIELD]
+        else:
+            entry.pop(session_contract.RAISED_BY_FIELD, None)
     # a ledger row replaced on a re-raise keeps the lost-test marker it held unless the new row carries a test
     if (isinstance(existing, dict) and existing.get(CARRIED_TEST_LOST_FIELD) is True
             and not break_it.carries_test(entry)):
@@ -5020,12 +5041,16 @@ def _fold_sweep(state, config, artifact, session_dir=None):
         parent = next((f for f in carry if isinstance(f, dict)
                        and _finding_identity_key(f) == sweep.get("findingKey")), None)
         hits, missing = [], []
+        hit_seat = {}  # id() of a hit -> the searcher seat key whose run raised it
         for part in parts:
-            result = seats.get(_adapters().sweep_seat_key(sweep_id, part["part"]))
+            seat_key = _adapters().sweep_seat_key(sweep_id, part["part"])
+            result = seats.get(seat_key)
             # axis: a part whose searcher returned no usable result is recorded missing, never as a part that found nothing — see bite-proof record c4_wo2a_sweep
             if result is None or _adapters().payload_fault(P_SWEEP, result, "") is not None:
                 missing.append(part["part"])
                 continue
+            for hit in result["hits"]:
+                hit_seat[id(hit)] = seat_key
             hits.extend(result["hits"])
         row["missing"] = missing
         if missing:
@@ -5039,7 +5064,7 @@ def _fold_sweep(state, config, artifact, session_dir=None):
         row["dropped"] += sorted_hits["dropped"]
         row["covered"] += sorted_hits["covered"]
         for hit in sorted_hits["inside"]:
-            finding = session_contract.sweep_hit_finding(hit, sweep, parent)
+            finding = session_contract.sweep_hit_finding(hit, sweep, parent, raised_by=hit_seat.get(id(hit)))
             key = _finding_identity_key(finding)
             if key in known or key in hit_keys:
                 row["covered"] += 1  # already a finding of this round: it is not raised twice
