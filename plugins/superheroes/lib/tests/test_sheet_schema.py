@@ -246,11 +246,11 @@ def test_final_and_plain_sheets_validate():
     final = {
         "schema": "superheroes-sheet/1",
         "kind": "final",
-        "title": "Weekly meal planner spec review",
+        "title": "Tool-lending app spec review",
         "final": {
             "history": {"reviewRounds": 4, "fixesMade": 9, "vet": "The vet found nothing to fix."},
             "declinedFindings": [
-                {"summary": "Add a calorie counter.", "reason": "It is outside the planner's scope."}
+                {"summary": "Add a late-fee counter.", "reason": "It is outside the app's scope."}
             ],
             "approval": {"approvedBoard": True, "boardSavedWithSpec": False},
         },
@@ -259,7 +259,7 @@ def test_final_and_plain_sheets_validate():
     plain = {
         "schema": "superheroes-sheet/1",
         "kind": "plain",
-        "title": "Weekly meal planner spec review",
+        "title": "Tool-lending app spec review",
         "cards": [card],
     }
     assert errors_for(final) == []
@@ -279,7 +279,7 @@ def final_sheet(cards=None, approved=True, saved=False):
     return {
         "schema": "superheroes-sheet/1",
         "kind": "final",
-        "title": "Weekly meal planner spec review",
+        "title": "Tool-lending app spec review",
         "final": {
             "history": {"reviewRounds": 4, "fixesMade": 9, "vet": "The vet found nothing to fix."},
             "declinedFindings": [],
@@ -362,8 +362,8 @@ def with_context(context):
 def test_card_context_needs_no_fixed_fields():
     # Axis: a card's context is any list of titled sections, with no fixed heading and no required section, so an empty list is accepted by both readers.
     sections = [{"title": "What you're accepting", "blocks": [
-        {"paragraph": "You are choosing how leftovers count."},
-        {"bullets": ["Fewer recipes", "More repeats"]}]}]
+        {"paragraph": "You are choosing how same-day returns count."},
+        {"bullets": ["Fewer tools", "More repeats"]}]}]
     for context in (sections, []):
         sheet = with_context(context)
         assert errors_for(sheet) == [], context

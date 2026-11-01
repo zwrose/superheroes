@@ -97,15 +97,16 @@ def _synthesis_placeholders(channel="file"):
     }
 
 
-def _gapsweep_placeholders(channel="file"):
+def _seams_placeholders(channel="file"):
     return {
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "SLICES_PATH": os.path.join(_SESSION, "round-2", "seams-slices.json"),
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "VERIFICATION_ROOT": _REPO,
         "CLAUDE_MD_PATH": _CLAUDE_MD,
-        "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "gap-sweep-findings.json"),
+        "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "seams-check-findings.json"),
         "CHANNEL": channel,
     }
 
@@ -173,11 +174,11 @@ _GOLDEN_CONTEXTS = {
                                   "synthesis.a0.payload.json"),
         placeholders=_synthesis_placeholders(),
     ),
-    RP.P_GAPSWEEP: lambda: _base_context(
+    RP.P_SEAMS: lambda: _base_context(
         host_seat=True,
-        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-gap-sweep",
-                                  "gap-sweep.a0.payload.json"),
-        placeholders=_gapsweep_placeholders(),
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-seams-check",
+                                  "seams-check.a0.payload.json"),
+        placeholders=_seams_placeholders(),
     ),
     RP.P_SECOND_TEST: lambda: _base_context(
         host_seat=True,
@@ -371,7 +372,7 @@ def test_clause_manifest_survives_in_rendered_orders():
         "dispatch-panel": (RP.P_PANEL, _panel_placeholders),
         "dispatch-verifiers": (RP.P_VERIFIERS, _verifier_placeholders),
         "dispatch-synthesis": (RP.P_SYNTHESIS, _synthesis_placeholders),
-        "dispatch-gap-sweep": (RP.P_GAPSWEEP, _gapsweep_placeholders),
+        "dispatch-seams-check": (RP.P_SEAMS, _seams_placeholders),
         "dispatch-audits": (RP.P_AUDITS, _audits_placeholders),
         "dispatch-scoped-finder": (RP.P_SCOPED, _scoped_placeholders),
     }
@@ -946,7 +947,7 @@ def test_panel_order_modeless_session_renders_without_refusal(tmp_path):
     (RP.P_PANEL, _panel_placeholders),
     (RP.P_VERIFIERS, _verifier_placeholders),
     (RP.P_SYNTHESIS, _synthesis_placeholders),
-    (RP.P_GAPSWEEP, _gapsweep_placeholders),
+    (RP.P_SEAMS, _seams_placeholders),
     (RP.P_SCOPED, _scoped_placeholders),
 ])
 def test_engine_order_template_body_has_no_file_channel_delivery(phase, ph_fn):

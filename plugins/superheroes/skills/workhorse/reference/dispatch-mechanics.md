@@ -832,11 +832,13 @@ A claude write dispatch runs Claude Code's built-in Bash sandbox, set by the inl
   that list), because the sandbox auto-allow
   alone leaves some shapes needing approval, which print mode denies: python `-X` flags (the pinned
   gate command's `-X pycache_prefix=…`) and `$?`. Those shapes now run, still inside the sandbox
-  (`allowUnsandboxedCommands: false`). An env-var prefix outside the harness's safe list
-  (`FOO=1 cmd`, `export FOO=1 && cmd`) is still denied: set the variable inside the test, or use
-  Python's own `PYTHON*` variables, which the harness accepts. A command that managed policy excludes
-  from the sandbox and that matches one of these rules runs outside the sandbox without a prompt, by
-  that policy.
+  (`allowUnsandboxedCommands: false`). A command whose leading `NAME=value` assignments precede one
+  of the allowed families (for example `DB_URL=… SKIP_SETUP=true npx --no-install vitest
+  run …`) runs, still inside the sandbox; a leading assignment before any other command is still
+  denied. Because the rule's leading `*` matches any characters, a command line that carries an `=`
+  anywhere before an allowed family's name followed by a space or the line's end (for example
+  `touch x=1 npx f`) also matches a rule; it still runs inside the sandbox, and only a command that
+  managed policy excludes from the sandbox runs unprompted outside it.
 - **Staging-dir residue is swept at fold.** Claude Code creates an empty `.claude/.cc-writes`
   under each directory the shell works in, outside the sandbox. When a claude write run folds, the
   runner removes every empty `.claude/.cc-writes` in the worktree, and its `.claude` parent when

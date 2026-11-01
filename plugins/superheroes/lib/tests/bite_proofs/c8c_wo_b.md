@@ -1,5 +1,7 @@
 # C8c WO-B bite-proof — test-only fixes (issue #1862)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 **Provenance:** claude write channel. Each detector was run alone, as one node, from the worktree root:
 `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest '<node>' -q -p no:cacheprovider --tb=short`.
 Each neutralization was a targeted edit; each restore was the inverse edit (no `git checkout`, `restore`,
@@ -53,7 +55,7 @@ carried the sandbox's proxy settings):
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____ test_root_conftest_unsets_claude_code_remote_for_module_scope_and_undo ____
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_root_conftest_cloud_env.py:78: in test_root_conftest_unsets_claude_code_remote_for_module_scope_and_undo
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_root_conftest_cloud_env.py:78: in test_root_conftest_unsets_claude_code_remote_for_module_scope_and_undo
     assert proc.returncode == 0, combined
 E   AssertionError: FF                                                                       [100%]
 E     =================================== FAILURES ===================================
@@ -156,7 +158,7 @@ under test is charged 99 s of history instead of 100 s).
 F                                                                        [100%]
 =================================== FAILURES ===================================
 __________ test_history_time_is_charged_to_the_first_wait_slice_only ___________
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_dispatch_review_cloud_history.py:247: in test_history_time_is_charged_to_the_first_wait_slice_only
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_dispatch_review_cloud_history.py:247: in test_history_time_is_charged_to_the_first_wait_slice_only
     assert slices == [full - 100, full, full], slices
 E   AssertionError: [441.0, 540.0, 540.0]
 E   assert [441.0, 540.0, 540.0] == [440, 540, 540]
@@ -199,9 +201,9 @@ the machine's locale. The test also asserts the proxy saw exactly one open with 
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _____ test_atomic_write_encodes_utf8_when_the_default_text_encoding_is_not _____
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_calibration_paths.py:275: in test_atomic_write_encodes_utf8_when_the_default_text_encoding_is_not
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_calibration_paths.py:275: in test_atomic_write_encodes_utf8_when_the_default_text_encoding_is_not
     sc.atomic_write(str(path), "café — ok\n")
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/store_core.py:487: in atomic_write
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/store_core.py:487: in atomic_write
     fh.write(text)
 E   UnicodeEncodeError: 'latin-1' codec can't encode character '—' in position 5: ordinal not in range(256)
 =========================== short test summary info ============================
@@ -241,7 +243,7 @@ where it resolves, not by its lexical path.
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ______ test_classification_follows_a_symlink_to_an_intermediate_directory ______
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_calibration_paths.py:107: in test_classification_follows_a_symlink_to_an_intermediate_directory
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_calibration_paths.py:107: in test_classification_follows_a_symlink_to_an_intermediate_directory
     assert cp.is_calibration_path(str(alias / "registry.json")) is True
 E   AssertionError: assert False is True
 E    +  where False = <function is_calibration_path at 0x106be3ec0>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1576/test_classification_follows_a_0/alias/registry.json')
@@ -285,7 +287,7 @@ only losing both reads the lexical `..` path. Both neutralizations were measured
 F                                                                        [100%]
 =================================== FAILURES ===================================
 __ test_classification_collapses_a_dotdot_alias_back_to_the_calibration_file ___
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_calibration_paths.py:118: in test_classification_collapses_a_dotdot_alias_back_to_the_calibration_file
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_calibration_paths.py:118: in test_classification_collapses_a_dotdot_alias_back_to_the_calibration_file
     assert cp.is_calibration_path(path) is True
 E   AssertionError: assert False is True
 E    +  where False = <function is_calibration_path at 0x108f6fec0>('/private/tmp/claude-501/pytest-of-zwrose/pytest-1578/test_classification_collapses_0/store/projects/k/../k/registry.json')
@@ -318,7 +320,7 @@ commands, in the order make, start, judge. The detector pins each `before `verb`
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ___________ test_the_picker_row_compares_before_make_start_and_judge ___________
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_c8b_doctrine_wording.py:66: in test_the_picker_row_compares_before_make_start_and_judge
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_c8b_doctrine_wording.py:66: in test_the_picker_row_compares_before_make_start_and_judge
     assert places == sorted(places), places
 E   AssertionError: [434, 415, 399]
 E   assert [434, 415, 399] == [399, 415, 434]
@@ -357,7 +359,7 @@ became `at each gardening pass, after a passed check and after a confirmation of
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ___ test_the_parked_build_row_names_the_three_runs_and_the_duplicate_window ____
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_c8b_doctrine_wording.py:91: in test_the_parked_build_row_names_the_three_runs_and_the_duplicate_window
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_c8b_doctrine_wording.py:91: in test_the_parked_build_row_names_the_three_runs_and_the_duplicate_window
     assert places == sorted(places), places
 E   AssertionError: [424, 399, 375, 767]
 E   assert [424, 399, 375, 767] == [375, 399, 424, 767]
@@ -404,7 +406,7 @@ became
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ___ test_a_sandbox_tools_install_that_fails_once_is_retried_after_apt_update ___
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_cloud_setup_text.py:357: in test_a_sandbox_tools_install_that_fails_once_is_retried_after_apt_update
+/path/to/home/.superheroes-worktrees/superheroes/issue-1862-c8c-wo-b/plugins/superheroes/lib/tests/test_cloud_setup_text.py:357: in test_a_sandbox_tools_install_that_fails_once_is_retried_after_apt_update
     assert "sandbox tools ok" in setup_log
 E   AssertionError: assert 'sandbox tools ok' in 'reviewer cli ok\nduplication checker ok\nsandbox tools FAILED\npinned python ok\ncat: /private/tmp/claude-501/pytest-...a_sandbox_tools_install_t0/opt/src/plugins/superheroes/version.txt: No such file or directory\nplugin ok \nsetup end\n'
 =========================== short test summary info ============================

@@ -2192,7 +2192,7 @@ def test_phase_name_constants_agree_across_modules():
         ("P_SYNTHESIS", RP.P_SYNTHESIS),
         ("P_AUDITS", RP.P_AUDITS),
         ("P_SCOPED", RP.P_SCOPED),
-        ("P_GAPSWEEP", RP.P_GAPSWEEP),
+        ("P_SEAMS", RP.P_SEAMS),
         ("P_VERIFY", RP.P_VERIFY),
         ("P_APPLY_FIXES", RP.P_APPLY_FIXES),
     )

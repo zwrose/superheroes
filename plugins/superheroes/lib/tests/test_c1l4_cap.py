@@ -76,7 +76,7 @@ def _new_blockers_every_round():
     seq = {"n": 0}
 
     def reviewer(dim, tier, rnd, ctx):
-        if dim == "gap-sweep":
+        if dim == "seams-check":
             return []
         if dim == "scoped-finder":
             seq["n"] += 1

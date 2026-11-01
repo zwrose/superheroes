@@ -1,5 +1,7 @@
 # #1162 bite-proofs — the last three censuses stop reading bite-proof records
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Orchestrator-typed (light lane, no implementer dispatch). Every run below was executed on this
 branch's head, not transcribed. Raw captures are unredacted only because none of them carry a
 secret, token, private URL, or PII — nothing was elided.
@@ -187,7 +189,7 @@ Traceback (most recent call last):
     _rmtree_safe_fd(dirfd, fullname, onerror)
   File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 673, in _rmtree_safe_fd
     os.unlink(entry.name, dir_fd=topfd)
-  File "/Users/zwrose/.superheroes-worktrees/superheroes/issue-1162-50434cad4344faff/source_guard.py", line 261, in audit
+  File "/path/to/home/.superheroes-worktrees/superheroes/issue-1162-50434cad4344faff/source_guard.py", line 261, in audit
     raise ShippedSourceWrite(
 source_guard.ShippedSourceWrite: os.remove on shipped source 'conftest.py' blocked — see <unknown test>
 ```
@@ -212,7 +214,7 @@ Traceback (most recent call last):
     _rmtree_safe_fd(dirfd, fullname, onerror)
   File "/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/shutil.py", line 673, in _rmtree_safe_fd
     os.unlink(entry.name, dir_fd=topfd)
-  File "/Users/zwrose/.superheroes-worktrees/superheroes/issue-1162-50434cad4344faff/source_guard.py", line 261, in audit
+  File "/path/to/home/.superheroes-worktrees/superheroes/issue-1162-50434cad4344faff/source_guard.py", line 261, in audit
     raise ShippedSourceWrite(
 source_guard.ShippedSourceWrite: os.remove on shipped source 'conftest.py' blocked — see <unknown test>
 ```

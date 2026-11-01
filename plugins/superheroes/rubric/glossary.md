@@ -198,7 +198,7 @@ declined-then-escaped, launched-then-regretted, mis-tiered, [review escapes](#re
 
 ### Review escape
 
-A bug traced after merge to a PR that had a review. The act that traces it logs it in the [misses log](#misses-log): a vet of a fix, a detective diagnosis, a field report, or the owner's own report. The entry links that PR's [review record](#review-record) and makes one call, missed or seen and left. It counts only from the project's adoption day. The rule for logging it is in [the owner-decisions reference](../skills/showrunner/reference/owner-decisions.md#every-grading-keeps-its-scoring-and-the-misses-log).
+A bug traced after merge to a PR that had a review. The act that traces it logs it in the [misses log](#misses-log): a vet of a fix, a detective diagnosis, a field report, or the owner's own report. The entry links that PR's [review record](#review-record), makes one call, missed or seen and left, and names what would have caught it, as one of eight kinds plus the exact fix. It counts only from the project's adoption day. The rule for logging it is in [the owner-decisions reference](../skills/showrunner/reference/owner-decisions.md#every-grading-keeps-its-scoring-and-the-misses-log).
 
 ### False PR claim
 
@@ -436,6 +436,18 @@ The reviewer that, in every round after the first, looks for new problems only i
 ### Extra audit round
 
 The one extra round the advisor may order at the vet for a PR a session handed back at the 4-round cap. It audits only the fixes the cap round applied, runs no panel and no new search, and is allowed once per PR. The [review record](#review-record) labels it and does not count it in its rounds. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#the-extra-audit-round).
+
+### Slice
+
+One of the parts a change over the countable-lines bar is cut into for round-1 code review, cut by size and never by folder. A slice stays at or under the bar, and a copy proven identical to its source is in no slice. Each slice has its own code reviewer and test reviewer, and a security reviewer when the panel seats security and the slice touches a risk area or its risk is unclear. Every part a slice reviewer was given and did not read becomes a new slice, in up to two further waves. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#big-changes-slices-unread-parts-and-the-seams-check).
+
+### Seams check
+
+The one reviewer that reads a whole sliced change for problems between its [slices](#slice): a caller in one slice and its callee in another, a contract changed on one side only, a half-applied rename. It runs once per sliced change, in round 1 only, after the slices and before the [verifier](#verifier), and its findings go through the same checks as the panel's. The rules are in [the round driver reference](../skills/review-code/reference/round-driver.md#big-changes-slices-unread-parts-and-the-seams-check).
+
+### Outside finding
+
+A finding a reviewer raises on lines the change did not touch. It goes to the [review record](#review-record)'s "Outside this PR" list, never into the review's findings. A reviewer may raise at most 3 from its own reading, and every one raised is kept. A sweep's hits are not counted against any reviewer and stay together under the sweep's entry. It is never fixed, never blocks the merge, and never becomes an owner card. At the vet the advisor sorts each into a proposed follow-up filing, which waits on the owner's word, or a dismissal with its reason. The rule is in [the base rubric](review-base.md) (Verification rule 2); the sort is in [the vet receipt reference](../skills/showrunner/reference/vet-receipt.md#the-outside-list).
 
 ## Cloud builds
 

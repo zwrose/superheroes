@@ -15,6 +15,7 @@ Everything here drives the session the way the orchestrator does: land a seat en
 LANDING area, `record-result` it into the durable store, then `advance` — lock, reconcile, sweep,
 completeness, assemble, fold, emit. No `cmd_submit` is ever called by hand.
 """
+import copy
 import importlib.util
 import json
 import os
@@ -23,6 +24,7 @@ import shlex
 import subprocess
 import sys
 import time
+from unittest import mock
 
 import pytest
 
@@ -58,14 +60,18 @@ AUDIT_CHECKS = {name: {"answer": "yes", "why": "checked"}
                 for name in ("right", "brokeNothing", "testWouldFail")}
 
 # =============================================================================================
-# the diffs — a BIG round-1 diff (so the gap-sweep phase is on the path) and its post-fix head
+# the diffs — a round-1 diff cut into two slices (so the seams-check phase is on the path) and its
+# post-fix head
 # =============================================================================================
 
-# >20 changed files ⇒ `delta_surface.shard_plan` says big ⇒ `_fold_synthesis` routes through
-# `dispatch-gap-sweep`, which is otherwise unreachable and would leave that adapter unexercised.
+# The session's slice plan says the change was sliced, so round 1 routes its panel findings through
+# `dispatch-seams-check`, which is otherwise unreachable and would leave that adapter unexercised.
 FILES = ["src/f%02d.py" % i for i in range(21)]
 FIXED_FILE = FILES[0]
 NEW_SURFACE_FILE = "src/new_surface.py"
+SLICE_PLAN = {"sliced": True, "slices": [
+    {"id": "s1", "parts": [{"file": p, "lines": []} for p in FILES[:11]]},
+    {"id": "s2", "parts": [{"file": p, "lines": []} for p in FILES[11:]]}]}
 
 
 def _section(path, third):
@@ -363,11 +369,27 @@ def _verdict_for(finding):
             "reason": "reproduced the cited line", "evidence": "read %s" % finding.get("file")}
 
 
+def _seat_raising(state, finding):
+    """The roster seat that raises ``finding``: the seat it names in `_seat` (the finding seat when it
+    names none). In a sliced round the roster holds `<lens>:<slice id>` seats rather than the bare
+    lens, so the finding goes to its lens's seat for the slice that holds its file (the first slice
+    when none does)."""
+    seat = finding.get("_seat", FINDING_SEAT)
+    plan = state.get("slicePlan") or {}
+    slices = plan.get("slices") or [] if plan.get("sliced") is True else []
+    if not slices:
+        return seat
+    for sl in slices:
+        if any(p["file"] == finding.get("file") for p in sl["parts"]):
+            return "%s:%s" % (seat, sl["id"])
+    return "%s:%s" % (seat, slices[0]["id"])
+
+
 def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path):
     phase = pend["phase"]
     if phase == round_driver.P_PANEL:
         # a finding names the seat that raises it in `_seat` (the finding seat when it names none)
-        findings = [f for f in panel_findings if f.get("_seat", FINDING_SEAT) == seat] \
+        findings = [f for f in panel_findings if _seat_raising(state, f) == seat] \
             if state["round"] == 1 else []
         return {"findings": [{k: v for k, v in f.items() if k != "_seat"} for f in findings],
                 "confidence": "high", "tier": round_driver.DEEP}
@@ -382,7 +404,7 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
                              for f in (pend.get("payload") or {}).get("findings") or []]}
     if phase == round_driver.P_SYNTHESIS:
         return {"grouping": None}
-    if phase in (round_driver.P_GAPSWEEP, round_driver.P_SCOPED):
+    if phase in (round_driver.P_SEAMS, round_driver.P_SCOPED):
         return {"findings": []}
     if phase == round_driver.P_APPLY_FIXES:
         return {"fixes": [{"file": FIXED_FILE, "summary": "guard restored"}],
@@ -398,7 +420,7 @@ def _payload_for(session_dir, state, pend, seat, panel_findings, head_diff_path)
 def _auditor_vendor_for(state):
     targets = state.get("_auditTargets") or []
     by_id = {t.get("id"): t.get("auditorVendor") for t in targets if isinstance(t, dict)}
-    # A verifier / gap-sweep / scoped / grouping seat runs on the driver's selected non-maker vendor;
+    # A verifier / seams-check / scoped / grouping seat runs on the driver's selected non-maker vendor;
     # its result counts only when the runner's execution evidence names that vendor. The grouping
     # pass is seated the same way but is not a `_NONPANEL_REVIEWER_PHASES` member, so it is added here.
     selected = {phase: round_driver._nonpanel_selection(state, None, phase)[0] or "claude"
@@ -407,8 +429,8 @@ def _auditor_vendor_for(state):
     def vendor_for(seat):
         if seat.startswith(round_adapters.VERIFIER_SEAT_PREFIX):
             return selected[round_driver.P_VERIFIERS]
-        if seat == round_adapters.SEAT_GAPSWEEP:
-            return selected[round_driver.P_GAPSWEEP]
+        if seat == round_adapters.SEAT_SEAMS:
+            return selected[round_driver.P_SEAMS]
         if seat == round_adapters.SEAT_SCOPED:
             return selected[round_driver.P_SCOPED]
         if seat == round_adapters.SEAT_SECOND_TEST:
@@ -486,7 +508,22 @@ def _fixture_repo(tmp_path, name):
     return str(repo_root)
 
 
-def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
+def _fixture_slice_plan(state, cfg):
+    """Stands in for `round_driver._plan_slices` when a test asks for a sliced round: it stores the
+    fixture's hand-made `SLICE_PLAN` where the real planner would store its own."""
+    state["slicePlan"] = copy.deepcopy(SLICE_PLAN)
+
+
+def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, sliced=False, **cfg_over):
+    """A bootstrapped session. By default the change is in one piece (a small fixture diff is not a big
+    change). ``sliced=True`` gives it the fixture's slice plan, so round 1 routes the panel's findings
+    through `dispatch-seams-check`.
+
+    The plan is in the state BEFORE the first panel emission, as in a real session (`new_state` plans
+    the slices before the first `cmd_next` emits): the one real `cmd_next` runs with `_plan_slices`
+    swapped for `_fixture_slice_plan`, so the emitted orders, the dispatch anchor and the roster all
+    read the same plan. Writing the plan into saved state AFTER `cmd_next` would leave the anchor
+    holding plain-roster orders and refuse every slice seat `manifest-anchor-mismatch`."""
     session_dir = str(tmp_path / name)
     os.makedirs(session_dir, exist_ok=True)
     gitdir = str(tmp_path / (name + "-gitdir"))
@@ -509,7 +546,11 @@ def _bootstrap(tmp_path, name="s", head_sha=_WRITE_META_HEAD, **cfg_over):
     repo_root = _fixture_repo(tmp_path, name)
     cfg_over.setdefault("repoRoot", repo_root)
     enter_checkout(repo_root)
-    out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
+    if sliced:
+        with mock.patch.object(round_driver, "_plan_slices", _fixture_slice_plan):
+            out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
+    else:
+        out = round_driver.cmd_next(session_dir, _cfg(**cfg_over))
     assert out["ok"], out
     return session_dir, gitdir, head_diff_path
 
@@ -561,7 +602,7 @@ def test_advance_folds_the_panel_through_the_real_adapter(tmp_path):
     Pre-fix this refuses `assemble-refused` with `envelopes-not-a-list:dict` — the driver handed the
     adapter a mapping. Nothing about the driver's own bookkeeping was wrong, which is exactly why a
     stubbed adapter could not see it."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, sliced=False)
     phase, out = _drive_one_phase(session_dir, gitdir,
                                   [_blocking_finding("missing bounds guard", 2)], head_path)
     assert phase == round_driver.P_PANEL
@@ -583,7 +624,7 @@ def test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt(tmp_
     # session meta, the interpreter named) and the test role raises such a finding beside the ordinary one.
     head = make_checkout(_fixture_repo(tmp_path, "s"))
     session_dir, gitdir, head_path = _bootstrap(
-        tmp_path, head_sha=head, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"),
+        tmp_path, head_sha=head, sliced=True, fixerVendor="cursor", seatMap=dict(SEAT_MAP, hostFamily="anthropic"),
         breakItInterpreter=shlex.quote(sys.executable))
     folded = _drive_to_terminal(session_dir, gitdir,
                                 [_blocking_finding("missing bounds guard", 2), _test_finding()], head_path)

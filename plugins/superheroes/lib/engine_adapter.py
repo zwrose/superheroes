@@ -302,26 +302,33 @@ def _sandbox_access_valid(access):
 
 
 # WORKAROUND: the harness's sandbox auto-allow misses command shapes its safety check flags (`-X` on
-# a Python call, `$?`), so the write channel allows the project's Python, pytest, echo, node
-# toolchain (npm, npx, node, pnpm, yarn) and `ps` command families by rule and lets the sandbox
-# confine them
+# a Python call, `$?`, leading `NAME=value` assignments), so the write channel allows the project's
+# Python, pytest, echo, node toolchain (npm, npx, node, pnpm, yarn) and `ps` command families by
+# rule, with and without leading assignments, and lets the sandbox confine them
 # delete-when: `autoAllowBashIfSandboxed` auto-approves every sandboxed command shape on the Claude
 # Code version the channel runs
 # axis: the rules cover only the named command families; every other shape keeps the harness's
-# auto-allow, and a command managed policy excludes from the sandbox and that matches a rule runs
-# unprompted outside it (the disclosed residual)
+# auto-allow, a command line that carries an `=` anywhere before a family's name followed by a
+# space or the end (e.g. `touch x=1 npx f`) also matches a rule and still runs inside the sandbox,
+# and only a command managed policy excludes from the sandbox runs unprompted outside it (the
+# disclosed residual)
+CLAUDE_WRITE_BASH_FAMILIES = (
+    "python",
+    "python3",
+    "pytest",
+    "scripts/pinned-python",
+    "echo",
+    "npm",
+    "npx",
+    "node",
+    "pnpm",
+    "yarn",
+    "ps",
+)
 CLAUDE_WRITE_BASH_ALLOW = (
-    "Bash(python:*)",
-    "Bash(python3:*)",
-    "Bash(pytest:*)",
-    "Bash(scripts/pinned-python:*)",
-    "Bash(echo:*)",
-    "Bash(npm:*)",
-    "Bash(npx:*)",
-    "Bash(node:*)",
-    "Bash(pnpm:*)",
-    "Bash(yarn:*)",
-    "Bash(ps:*)",
+    tuple(f"Bash({family}:*)" for family in CLAUDE_WRITE_BASH_FAMILIES)
+    + tuple(f"Bash(*=* {family} *)" for family in CLAUDE_WRITE_BASH_FAMILIES)
+    + tuple(f"Bash(*=* {family})" for family in CLAUDE_WRITE_BASH_FAMILIES)
 )
 
 

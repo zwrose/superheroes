@@ -19,7 +19,7 @@ from test_review_record_session import (  # noqa: E402
 )
 
 REASON = "owner stopped the loop"
-PANEL, GAPSWEEP, SCOPED = round_phases.P_PANEL, round_phases.P_GAPSWEEP, round_phases.P_SCOPED
+PANEL, SEAMS, SCOPED = round_phases.P_PANEL, round_phases.P_SEAMS, round_phases.P_SCOPED
 ABANDONED_LINE = "session abandoned: the review loop was closed before it ended, so this record cannot read reviewed"
 CHECKED_ABANDONED = "the review loop was abandoned before it ended: " + REASON
 CHECKED_UNFOLDED = "findings in seat results that were recorded but never folded are listed as open findings"
@@ -210,11 +210,11 @@ def test_a_passing_break_it_proposal_is_not_recovered_as_an_open_finding_in_an_a
     assert got == [("Real defect", 4)]
 
 
-def test_a_gap_sweep_finding_sharing_a_passed_proposals_title_and_file_is_listed_open(tmp_path):
-    """axis: the passed-proposal skip settles only the test role's panel proposal; a gap-sweep finding of the same title
+def test_a_seams_check_finding_sharing_a_passed_proposals_title_and_file_is_listed_open(tmp_path):
+    """axis: the passed-proposal skip settles only the test role's panel proposal; a seams-check finding of the same title
     and file at another line stays open — see bite-proof record c1l1_wo_b_session_seam"""
     got = _abandoned_slots(tmp_path, {"1": {"breakItRuns": [PASSED_RUN]}}, [
-        ("test-role", PANEL, 1, [PROPOSAL]), ("gap-sweep", GAPSWEEP, 1, [SAME_PLACE])])
+        ("test-role", PANEL, 1, [PROPOSAL]), ("seams-check", SEAMS, 1, [SAME_PLACE])])
     assert got == [("Break it", 9)]
 
 
@@ -229,7 +229,7 @@ def test_a_code_reviewer_finding_sharing_a_passed_proposals_title_and_file_is_li
     ("test-role", PANEL, 1, dict(PROPOSAL, taxonomy="other"), "E1 a test-role finding that is not a break-it proposal"),
     ("test-role", PANEL, 1, {k: v for k, v in PROPOSAL.items() if k != "taxonomy"}, "E1 a test-role finding with no taxonomy"),
     ("code-reviewer", PANEL, 1, PROPOSAL, "E2 a break-it proposal from another seat"),
-    ("test-role", GAPSWEEP, 1, PROPOSAL, "E3 a break-it proposal from the test role in a gap-sweep slot"),
+    ("test-role", SEAMS, 1, PROPOSAL, "E3 a break-it proposal from the test role in a seams-check slot"),
     ("test-role", SCOPED, 1, PROPOSAL, "E3 a break-it proposal from the test role in a scoped-finder slot"),
     ("test-role", PANEL, 2, PROPOSAL, "E4 a passing run recorded for another round"),
 ])
@@ -243,7 +243,7 @@ def test_a_finding_the_passed_rule_does_not_cover_is_listed_open(tmp_path, seat,
 @pytest.mark.parametrize("phase,reopened", [
     (SCOPED, True),  # runs after the round's fix audit settled the finding: the defect came back
     (PANEL, False),  # runs before the round's fix: the settlement answers it
-    (GAPSWEEP, False),
+    (SEAMS, False),
 ])
 def test_a_same_round_report_after_the_settling_audit_reopens_the_finding_in_an_abandoned_session(tmp_path, phase, reopened):
     """axis: a finding settled (fixed) in round N and reported again in round N by a phase that runs after the audit

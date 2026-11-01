@@ -57,7 +57,7 @@ import receipt_disclosures  # noqa: E402
 P_PANEL = round_phases.P_PANEL
 P_VERIFIERS = round_phases.P_VERIFIERS
 P_SYNTHESIS = round_phases.P_SYNTHESIS
-P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_SEAMS = round_phases.P_SEAMS
 P_SECOND_TEST = round_phases.P_SECOND_TEST
 P_AUDITS = round_phases.P_AUDITS
 P_SCOPED = round_phases.P_SCOPED
@@ -67,7 +67,7 @@ P_APPLY_FIXES = round_phases.P_APPLY_FIXES
 # Re-export payload-contract names from the single contract home (CONVENTIONS §11 Pattern 1).
 ADAPTER_PHASES = payload_contracts.ADAPTER_PHASES
 SEAT_SYNTHESIS = payload_contracts.SEAT_SYNTHESIS
-SEAT_GAPSWEEP = payload_contracts.SEAT_GAPSWEEP
+SEAT_SEAMS = payload_contracts.SEAT_SEAMS
 SEAT_SECOND_TEST = payload_contracts.SEAT_SECOND_TEST
 SEAT_SCOPED = payload_contracts.SEAT_SCOPED
 SEAT_VERIFY = payload_contracts.SEAT_VERIFY
@@ -83,7 +83,7 @@ _type_name = payload_contracts._type_name
 # Single-seat phases: one dispatch, one seat, one payload.
 _SINGLE_SEAT = {
     P_SYNTHESIS: SEAT_SYNTHESIS,
-    P_GAPSWEEP: SEAT_GAPSWEEP,
+    P_SEAMS: SEAT_SEAMS,
     P_SECOND_TEST: SEAT_SECOND_TEST,
     P_SCOPED: SEAT_SCOPED,
     P_VERIFY: SEAT_VERIFY,
@@ -130,7 +130,7 @@ _MISSING_POLICY = {
     P_AUDITS: MISSING_FOLD_FAIL_CLOSED,
     # Single-seat phases: an empty success artifact could let the run certify. Refuse.
     P_SYNTHESIS: MISSING_REFUSE_FOLD,
-    P_GAPSWEEP: MISSING_REFUSE_FOLD,
+    P_SEAMS: MISSING_REFUSE_FOLD,
     P_SECOND_TEST: MISSING_REFUSE_FOLD,
     P_SCOPED: MISSING_REFUSE_FOLD,
     P_VERIFY: MISSING_REFUSE_FOLD,
@@ -164,7 +164,7 @@ def roster_for(phase, state, config):
     """(seat keys this phase owes, reason_or_None).
 
     Deterministic. Order is SEMANTIC on every multi-seat phase and is therefore preserved, not
-    sorted: the panel folds in `_panel_dimensions` order, the verifiers artifact concatenates in
+    sorted: the panel folds in `round_phases.panel_roster` order, the verifiers artifact concatenates in
     cluster order (`verification.cluster_findings` already sorts by (file, bucket)), and the audits
     artifact lists results in audit-target order. A reason is returned only when the roster cannot
     be derived at all — never an empty roster standing in for an underivable one.
@@ -174,7 +174,7 @@ def roster_for(phase, state, config):
     st = state if isinstance(state, dict) else {}
     cfg = config if isinstance(config, dict) else {}
     if phase == P_PANEL:
-        return list(round_phases.panel_dimensions(cfg)), None
+        return list(round_phases.panel_roster(st, cfg)), None
     if phase == P_VERIFIERS:
         staged = verification.stage_ids(st.get("_toVerify") or [])
         keys = []
@@ -453,7 +453,7 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, session_dir,
         if fault is not None:
             return None, fault
         artifact = _assemble_synthesis(roster, indexed, disclosures)
-    elif phase in (P_GAPSWEEP, P_SECOND_TEST, P_SCOPED):
+    elif phase in (P_SEAMS, P_SECOND_TEST, P_SCOPED):
         fault = _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest,
                                      _maker_barred(state, config), disclosures)
         if fault is not None:
@@ -589,7 +589,7 @@ def _assemble_synthesis(roster, indexed, disclosures):
 
 def _authenticate_finder(roster, indexed, dispatch_manifest, orders_manifest, is_barred,
                          disclosures):
-    """Fault string when the single-seat finder (gap-sweep / scoped) result is not authenticated,
+    """Fault string when the single-seat finder (seams-check / scoped) result is not authenticated,
     else None. The executed vendor (runner `executionEvidence.source`, or the driver's own manifest
     vendor for a driver-wrapped host-seat landing) must equal the vendor the orders manifest recorded
     at emission for the seat and pass the eligibility bar (``is_barred``); anything else is a review

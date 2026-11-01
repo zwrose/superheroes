@@ -1,5 +1,7 @@
 # #1583 WO-B bite-proof — the `sizeExclude` calibration key
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for the `sizeExclude` key in `core.md`'s JSON block (`plugins/superheroes/lib/core_md.py`, `plugins/superheroes/lib/configure_view.py`), detectors in `plugins/superheroes/lib/tests/test_size_exclude_calibration_1583.py` (`T`).
 
 **Declared guarded-element set (from the order): E1–E7.** One neutralization and one red per element, each a targeted Edit restored by the inverse Edit. Every red below is the single detector node run alone: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <node> -q`. Every green is the same command after the restore. Token literals are spelled as strings in the tests; `T::test_literal_pins` pins the constants.
@@ -58,7 +60,7 @@ E       assert 0 == 1
 
 ```
 E       RuntimeError: synthetic
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1583-2a62b08ef9933a10/plugins/superheroes/lib/tests/test_size_exclude_calibration_1583.py:336: RuntimeError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1583-2a62b08ef9933a10/plugins/superheroes/lib/tests/test_size_exclude_calibration_1583.py:336: RuntimeError
 ```
 
 - **Restore.** Inverse Edit; quoted back: `    except Exception as exc:  # total: any other failure is a named read refusal, never a raise`.

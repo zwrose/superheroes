@@ -5,8 +5,8 @@ Adapted to the base guardian seam: every tool AND every git call routes through
 no project-interpreter resolution). Collectors are PATH-only through the seam; the tool
 argv operands are absolute (``--packageFile`` / ``--prefix`` / ``-r`` / ``git -C``). The
 tool-output fixtures are VERBATIM output captured at the command line on 2026-07-21 from
-the owner's real checkouts — /Users/zwrose/weekly-eats (node) and /Users/zwrose/aiogrilla
-(python: pip-audit 2.9.0). Where a fixture is modified, the test says so.
+the owner's real checkouts — /path/to/project and /path/to/second-project
+(pip-audit 2.9.0). Where a fixture is modified, the test says so.
 """
 import json
 import os
@@ -21,7 +21,7 @@ import guardian_vitals as gv
 import pytest
 
 # --------------------------------------------------------------------------- fixtures
-# Verbatim: `npx --yes npm-check-updates --jsonUpgraded` in /Users/zwrose/weekly-eats
+# Verbatim: `npx --yes npm-check-updates --jsonUpgraded` in /path/to/project
 # (excerpt — 8 of the 28 reported packages, values unchanged).
 NCU_JSON = """\
 {
@@ -36,9 +36,9 @@ NCU_JSON = """\
 }
 """
 
-# Verbatim ranges from /Users/zwrose/weekly-eats/package.json for those packages.
+# Verbatim ranges from /path/to/project/package.json for those packages.
 PACKAGE_JSON = json.dumps({
-    "name": "weekly-eats",
+    "name": "consumer",
     "dependencies": {
         "@better-auth/mongo-adapter": "1.6.19",
         "@mui/material": "^9.0.0",
@@ -54,7 +54,7 @@ PACKAGE_JSON = json.dumps({
     },
 })
 
-# Verbatim: `npm audit --json` in /Users/zwrose/weekly-eats (exit 1, 3 vulnerabilities).
+# Verbatim: `npm audit --json` in /path/to/project (exit 1, 3 vulnerabilities).
 NPM_AUDIT_JSON = """\
 {
   "auditReportVersion": 2,
@@ -185,7 +185,7 @@ PIP_AUDIT_JSON = json.dumps({
     "fixes": [],
 })
 
-# Verbatim: /Users/zwrose/weekly-eats/renovate.json (packageRules trimmed to the two npm
+# Verbatim: /path/to/project/renovate.json (packageRules trimmed to the two npm
 # rules + the github-actions rule that carry matchManagers).
 RENOVATE_JSON = json.dumps({
     "$schema": "https://docs.renovatebot.com/renovate-schema.json",
@@ -341,7 +341,7 @@ def _python_repo(tmp_path, req="pkg==1.0\n"):
 
 
 DAY = 86400
-# Real measurement from weekly-eats on 2026-07-21: last renovate[bot] commit epoch
+# Real measurement from a consuming project on 2026-07-21: last renovate[bot] commit epoch
 # 1783165834, now 1784640653 → 17 days.
 NOW = 1784640653.0
 RENOVATE_LAST = 1783165834
@@ -592,7 +592,7 @@ def test_npm_audit_real_output_parsed_and_duplicate_advisory_aggregated(tmp_path
     yaml = cands["deps:audit:node:js-yaml:GHSA-52CP-R559-CP3M"]
     assert yaml["severity"] == "high" and yaml["metric"] == 4
 
-    # Real weekly-eats output lists GHSA-3jxr-9vmj-r5cp TWICE for brace-expansion (two
+    # Real consuming-project output lists GHSA-3jxr-9vmj-r5cp TWICE for brace-expansion (two
     # affected ranges). One candidate, occurrences counted, both occurrences in receipt.
     brace = cands["deps:audit:node:brace-expansion:GHSA-3JXR-9VMJ-R5CP"]
     assert brace["occurrences"] == 2
@@ -2775,7 +2775,7 @@ def test_metric_is_numeric_for_the_ledger_reraise_rule(tmp_path):
 # injected through the run seam (git -C <repo> ... via run_tool), never store_core.
 
 def test_liveness_under_threshold_is_no_finding(tmp_path):
-    """Real weekly-eats history: last renovate[bot] commit 17 days before the measurement."""
+    """Real consuming-project history: last renovate[bot] commit 17 days before the measurement."""
     repo = _covered_repo(tmp_path)
     run = _run(git_log=[("--author=renovate", RENOVATE_LAST)])
     result = gld.measure_liveness(_ctx(repo, run), repo, "renovate", "renovate.json", now=NOW)
@@ -2978,7 +2978,7 @@ def test_suppression_contributes_nothing_to_resolved(tmp_path):
 
 
 def test_inferred_scope_is_provisional_and_suppresses_nothing(tmp_path):
-    """Real weekly-eats renovate.json: matchManagers ["npm"] → node inferred, not proven."""
+    """Real consuming-project renovate.json: matchManagers ["npm"] → node inferred, not proven."""
     repo = _covered_repo(tmp_path)
     out = gld.LENS.collect(
         _ctx(repo, _run(git_log=[("--author=renovate", RENOVATE_LAST)]),

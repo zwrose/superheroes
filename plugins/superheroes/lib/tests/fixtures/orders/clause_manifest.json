@@ -3,7 +3,7 @@
     "only flag code in `+` or\n`-` lines",
     "`file:line` citation required. No citation",
     "You are reviewing CHANGES MADE BY THIS PR/BRANCH",
-    "That's the #1 source of false\npositives",
+    "Context lines (no prefix) and unchanged code in modified files are\nuntouched",
     "raise the finding AND note the prior justification",
     "Base rubric (binding) > CLAUDE.md (conventions)",
     "Never one whole-file read",
@@ -29,8 +29,10 @@
     "Echo staged ids verbatim",
     "every survivor id appears exactly once"
   ],
-  "dispatch-gap-sweep": [
-    "You are the gap-sweep finder for a big-diff review round",
+  "dispatch-seams-check": [
+    "You are the seams-check finder for a sliced review round",
+    "look for problems that sit",
+    "a caller in one slice and its callee in another",
     "only flag code in `+` or `-` lines",
     "You are reviewing CHANGES MADE BY THIS PR/BRANCH",
     "`file:line` citation required",

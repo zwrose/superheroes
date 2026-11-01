@@ -99,7 +99,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > repo-local agent-config surface removed (`AGENTS.md`, `.cursor/`, `CLAUDE.md`, and the other basenames
 > the runner strips at every directory level). That config is **not discoverable** from the seat's cwd —
 > which is the point of the view. The project's own conventions still reach the seat by path: every
-> reviewer order the driver renders (panel, verifiers, synthesis, gap-sweep, audits, scoped finder)
+> reviewer order the driver renders (panel, verifiers, synthesis, seams-check, audits, scoped finder)
 > names the core calibration, the review-crew layer and the project's `CLAUDE.md` by absolute paths
 > into the live checkout, resolved once when the order renders, and the view's notice tells the seat
 > that a file its order names by an absolute path is readable there. A project with no `CLAUDE.md`
@@ -649,7 +649,7 @@ settle when the loop converges.
 These are the base rubric's binding verification rules, restated in every subagent prompt. Some are additionally checked when findings are compiled and some are not — the compile step in `skills/review-code/SKILL.md` is the authority on exactly what it does, and this paragraph does not restate it. Rule 8 has no compile-time check at all — it is **obligation-only**, exactly as its own text and the `LEDGERS.md` §3 row say: nothing mechanically drops or downgrades a finding for violating it. See the base rubric's "Verification rules" and "In-pass Chain-of-Verification & single-pass discipline" sections for the authoritative statement.
 
 1. **`file:line` citation required.** No citation → finding is dropped at compile time, before presentation.
-2. **Diff-scope rule.** Only `+` and `-` lines of `$SESSION_DIR/round-<N>/diff.txt` are in scope. Context lines (no prefix) and unchanged code in modified files are pre-existing — flagging them is the #1 source of false findings.
+2. **Diff-scope rule.** Only `+` and `-` lines of `$SESSION_DIR/round-<N>/diff.txt` are in scope. Context lines (no prefix) and unchanged code in modified files are pre-existing — flagging them as findings on the change is the #1 source of false findings. A real defect there may be raised as an outside finding under the base rubric's cap, which never blocks.
 3. **Grep-before-flag.** Before flagging "missing X", search for X under variant names. In PR mode, grep `$SESSION_DIR/repo/`, not the main working tree.
 4. **Reachability check on Important findings.** Read the caller(s) of the affected symbol. If the only caller already guards the edge case, downgrade or drop.
 5. **Worktree-as-source-of-truth (PR mode).** All code verification reads go through `$SESSION_DIR/repo/`. The main working tree may be on a different branch with stale or missing code; using it for verification produces false findings against code that doesn't exist on the PR.
@@ -663,7 +663,7 @@ These are the base rubric's binding verification rules, restated in every subage
 
 | Mistake                                                 | Fix                                                                                                                                                                |
 | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Flagging pre-existing code as a PR issue**            | **The #1 mistake.** Diff-scope rule: only flag `+`/`-` lines. Context lines and unchanged code are out of scope even if they violate conventions.                  |
+| **Flagging pre-existing code as a PR issue**            | **The #1 mistake.** Diff-scope rule: only flag `+`/`-` lines. Context lines and unchanged code are not findings on the change, even if they violate conventions.   |
 | Loading the full diff into main context                 | The orchestrator only ever runs `wc -l < $SESSION_DIR/round-<N>/diff.txt`. Subagents read the diff from disk; the orchestrator reads JSON findings.                |
 | Finding based on assumed code state                     | Subagents must verify against `$SESSION_DIR/repo/` (PR mode) or the working tree (branch mode). No "I think this calls X" — open the file and confirm.             |
 | Marking test issues as Critical                         | Critical is reserved for production bugs, data loss, security vulns. Test anti-patterns are Important at most — see the base rubric's "Severity tiers".            |

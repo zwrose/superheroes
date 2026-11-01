@@ -1,5 +1,7 @@
 # #1712 bite-proof — risk areas (WO-A: storage, item 10, the reader, the view)
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Per-element bite-proof for the risk-area detectors in `plugins/superheroes/lib/core_md.py`, `plugins/superheroes/lib/risk_areas.py` and `plugins/superheroes/lib/project_config.py`. Each element was neutralized with one targeted edit, its single test node ran alone and went red, the edit was undone by the inverse edit, the restored line was quoted back, and the same node ran green. No test file was edited between a red and its green.
 
 Command for every run (never `-k`, never filtered):
@@ -53,7 +55,7 @@ E
 E         Right contains one more item: {'index': 1, 'field': 'name', 'reason': 'risk-area-duplicate-name'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:141: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:141: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_duplicate_names_refused
 1 failed in 0.15s
@@ -87,7 +89,7 @@ E
 E         - pattern-leading-dot-slash
 E         + pattern-dot-segment
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:93: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:93: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_leading_dot_slash_pattern_refused
 1 failed in 2.07s
@@ -122,7 +124,7 @@ E
 E         Right contains one more item: {'index': 0, 'field': 'undo', 'reason': 'risk-area-missing-field'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:147: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:147: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_missing_undo_refused
 1 failed in 0.17s
@@ -154,7 +156,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1178/test_
         repo, store = _repo(tmp_path, with_key=False)
 >       _assert_not_set(R.touched(repo, ["src/payments/charge.py"], root=store), "missing")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:288: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:288: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 got = {'riskAreas': 'set', 'reason': None, 'detail': None, 'areas': [], ...}
@@ -167,7 +169,7 @@ E
 E         - not-set
 E         + set
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:274: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:274: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_no_riskareas_key_is_not_set_missing
 1 failed in 1.78s
@@ -199,7 +201,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1180/test_
         repo, store = _repo(tmp_path, [])
 >       _assert_not_set(R.touched(repo, ["src/payments/charge.py"], root=store), "empty")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:293: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:293: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 got = {'riskAreas': 'set', 'reason': None, 'detail': None, 'areas': [], ...}
@@ -212,7 +214,7 @@ E
 E         - not-set
 E         + set
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:274: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:274: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_empty_list_is_not_set_empty
 1 failed in 2.05s
@@ -245,7 +247,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1182/test_
         got = R.touched(repo, ["src/payments/charge.py"], root=store)
 >       _assert_not_set(got, "unreadable")
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:306: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:306: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 got = {'riskAreas': 'not-set', 'reason': 'missing', 'detail': None, 'areas': [], ...}
@@ -259,7 +261,7 @@ E
 E         - unreadable
 E         + missing
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:275: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:275: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_project_configuration_not_an_object_is_not_set_unreadable
 1 failed in 0.26s
@@ -299,7 +301,7 @@ E
 E             Right contains one more item: {'area': {'name': 'Payments', 'covers': ['src/payments/*'], 'why': 'Charges customers.', 'undo': 'Hard: a charge needs a refund.'}, 'matched': ['src/payments/charge.py']}
 E             Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:229: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:229: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_payments_path_and_its_dot_slash_spelling_are_reported_touched
 1 failed in 2.07s
@@ -345,9 +347,9 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10b480ec0>
 >           got = R.touched(repo, ["src/payments/charge.py", "./src/payments/charge.py"], root=store)
                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:366: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:366: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/risk_areas.py:71: in touched
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/risk_areas.py:71: in touched
     subprocess.run(["true"])
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
@@ -357,7 +359,7 @@ args = (['true'],), kwargs = {}
 >       raise AssertionError("a process, a shell or a connection was started")
 E       AssertionError: a process, a shell or a connection was started
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:356: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:356: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_touched_makes_no_model_call
 1 failed in 2.60s
@@ -396,7 +398,7 @@ E
 E         - written
 E         + refused
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:222: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:222: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py::test_set_risk_areas_writes_once_then_noops_and_leaves_the_threat_model_bytes
 1 failed in 1.51s
@@ -443,7 +445,7 @@ E
 E         - refused
 E         + written)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:280: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:280: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py::test_set_that_changes_the_other_half_is_a_mismatch_naming_that_half
 1 failed in 1.83s
@@ -486,7 +488,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1268/test_
 >       assert got["malformed"] is True
 E       assert False is True
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:424: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:424: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py::test_stored_null_areas_read_malformed_with_no_effective_list
 1 failed in 14.73s
@@ -517,7 +519,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1270/test_
 >       assert got["malformed"] is True
 E       assert False is True
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:444: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py:444: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_project_config_risk_and_trust.py::test_project_configuration_that_is_a_list_reads_malformed_with_no_effective_list
 1 failed in 8.49s
@@ -554,7 +556,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1272/test_
 E       assert False
 E        +  where False = all(<generator object test_no_profile_renders_without_raising.<locals>.<genexpr> at 0x10b342f60>)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_configure_view_project_config.py:137: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_configure_view_project_config.py:137: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_configure_view_project_config.py::test_no_profile_renders_without_raising
 1 failed in 23.04s
@@ -609,7 +611,7 @@ E
 E             Right contains one more item: {'area': {'name': 'Payments', 'covers': ['src/payments'], 'why': 'Charges customers.', 'undo': 'Hard: a charge needs a refund.'}, 'matched': ['src/payments/charge.py']}
 E             Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:260: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:260: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_folder_pattern_covers_every_file_beneath_it
 1 failed in 6.26s
@@ -642,7 +644,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1332/test_
 E       AssertionError: assert False
 E        +  where False = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1332/test_a_folder_named_with_glob_0'), ['app/[id]'], 'app/[id]/page.tsx')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:270: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:270: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_folder_named_with_glob_characters_covers_what_is_beneath_it
 1 failed in 4.74s
@@ -675,7 +677,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1334/test_
 E       AssertionError: assert False
 E        +  where False = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1334/test_a_glob_that_names_folders0'), ['src/*/payments'], 'src/eu/payments/charge.py')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:280: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:280: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_glob_that_names_folders_covers_what_is_beneath_them
 1 failed in 4.85s
@@ -708,7 +710,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1336/test_
 E       AssertionError: assert False
 E        +  where False = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1336/test_a_literal_pattern_holding0'), ['app/[id]/page.tsx'], 'app/[id]/page.tsx')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:275: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:275: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_literal_pattern_holding_glob_characters_covers_its_own_path
 1 failed in 4.87s
@@ -741,7 +743,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1338/test_
 E       AssertionError: assert not True
 E        +  where True = _covered(PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1338/test_a_folder_pattern_stops_at0'), ['src/pay'], 'src/payments/charge.py')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:264: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:264: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_a_folder_pattern_stops_at_the_slash_boundary
 1 failed in 5.69s
@@ -782,7 +784,7 @@ E
 E         At index 0 diff: 'src/payments/a b.py' != 'src/payments/a b.py '
 E         Use -v to get more diff)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:478: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:478: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_cli_keeps_in_name_whitespace_and_drops_only_line_endings
 1 failed in 5.59s
@@ -844,11 +846,11 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x109808440>
 >       got = R.touched(repo, ["src/payments/charge.py", "./src/payments/charge.py"], root=store)
               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:424:
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:424:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/risk_areas.py:75: in touched
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/risk_areas.py:75: in touched
     subprocess.run(["true"])
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:416: in _only_the_identity_lookups
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:416: in _only_the_identity_lookups
     return _refuse()
            ^^^^^^^^^
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
@@ -859,7 +861,7 @@ args = (), kwargs = {}
 >       raise AssertionError("a process, a shell or a connection was started")
 E       AssertionError: a process, a shell or a connection was started
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:400: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1712-908b6c467f62dd01/plugins/superheroes/lib/tests/test_risk_areas.py:400: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_risk_areas.py::test_touched_makes_no_model_call
 1 failed in 5.27s

@@ -1,7 +1,7 @@
 """#1851 (review C5 L4) — the non-panel selector reads per-phase cell proof and the host family.
 
 A non-panel phase seats its reviewer only on a vendor whose dispatched cell for THAT phase (the
-`verifier` cell for verifiers, the `reviewer-deep` cell for gap sweep and scoped) the seat map
+`verifier` cell for verifiers, the `reviewer-deep` cell for seams check and scoped) the seat map
 proves live; a native host seat takes the seat map's `hostFamily`.
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/wo_1a_1851_nonpanel_cells.md
@@ -22,8 +22,8 @@ import receipt_disclosures as RDS  # noqa: E402
 import round_adapters as RA  # noqa: E402
 import round_driver as RD  # noqa: E402
 
-NONPANEL = (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED)
-FINDER_PHASES = (RD.P_GAPSWEEP, RD.P_SCOPED)
+NONPANEL = (RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED)
+FINDER_PHASES = (RD.P_SEAMS, RD.P_SCOPED)
 
 
 def _cell(role, vendor):
@@ -217,7 +217,7 @@ def test_a_partial_seat_map_is_not_legacy_and_proves_only_what_it_carries(monkey
 
 # --- edge 7: proven for one phase, not the other ------------------------------------------------
 
-def test_a_vendor_proven_for_verifiers_only_is_not_seated_for_gap_sweep_or_scoped(monkeypatch):
+def test_a_vendor_proven_for_verifiers_only_is_not_seated_for_seams_check_or_scoped(monkeypatch):
     # axis: the phase -> cell role mapping (verifier vs reviewer-deep) — see bite-proof record
     # wo_1a_1851_nonpanel_cells (G1)
     _engine(monkeypatch, "codex")
@@ -227,7 +227,7 @@ def test_a_vendor_proven_for_verifiers_only_is_not_seated_for_gap_sweep_or_scope
     for phase in FINDER_PHASES:
         assert _pick(state, phase) == (None, None)
         assert RD._nonpanel_unseatable(state, None, phase)
-    row = RD._seat_transport_row(state, RD.P_GAPSWEEP, "seat", 0, state["config"], {}, "/repo")
+    row = RD._seat_transport_row(state, RD.P_SEAMS, "seat", 0, state["config"], {}, "/repo")
     assert row["vendor"] is None
 
 
@@ -345,7 +345,7 @@ def test_the_non_panel_helpers_require_the_phase():
 
 
 def test_every_non_panel_phase_maps_to_a_cell_role():
-    assert RD._NONPANEL_PHASE_ROLE == {RD.P_VERIFIERS: "verifier", RD.P_GAPSWEEP: "reviewer-deep",
+    assert RD._NONPANEL_PHASE_ROLE == {RD.P_VERIFIERS: "verifier", RD.P_SEAMS: "reviewer-deep",
                                        RD.P_SCOPED: "reviewer-deep", RD.P_SYNTHESIS: "synthesis",
                                        RD.P_SECOND_TEST: "reviewer-deep"}
     assert set(RD._NONPANEL_PHASE_ROLE) == set(RD._NONPANEL_REVIEWER_PHASES) | {RD.P_SYNTHESIS}

@@ -12,6 +12,8 @@ and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and
 conventions. Apply the diff-scope rule: only flag code in `+` or
 `-` lines.
 
+{{SLICE_SCOPE_LINE}}
+
 ## Context files
 - Diff: {{DIFF_PATH}}
 - Base rubric (severity, verification rules, panel output format): {{RUBRIC_PATH}}
@@ -29,11 +31,14 @@ Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUD
 > strict fallback when a needed field is absent in all of them.
 
 ## Diff-scope rule — CRITICAL
-You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing
-issues. Only flag code in `+` or `-` lines of the diff. Context lines
-(no prefix) and unchanged code in modified files are pre-existing — SKIP
-them, even if they violate conventions. That's the #1 source of false
-positives.
+You are reviewing CHANGES MADE BY THIS PR/BRANCH. Raise a finding on the change
+only on the lines it touched: the `+` lines, and the line on each side of a `-`
+line. Context lines (no prefix) and unchanged code in modified files are
+untouched; an issue there is not a finding on the change. If you notice a real
+defect there while reading, you may add it as an outside finding: at most 3 outside
+finding entries, from your own reading, each cited at its real `file:line` with its
+consequence stated. They go to the record's "Outside this PR" list and never block.
+The base rubric's Verification rule 2 states the rule.
 
 ## Verification rules
 - `file:line` citation required. No citation → drop your own finding

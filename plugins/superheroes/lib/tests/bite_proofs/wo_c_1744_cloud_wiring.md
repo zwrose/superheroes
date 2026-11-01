@@ -1,5 +1,7 @@
 # #1744 WO-C bite-proof: the stamp view and the confirmation recorder
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for the stamp view in `plugins/superheroes/lib/cloud_setup_text.py` (`_without_setting`, used by `stamped_files` and `compose`) and for `record_confirmation` in `plugins/superheroes/lib/cloud_pass.py`. Detectors: `plugins/superheroes/lib/tests/test_cloud_setup_text.py` (`TS`) and `plugins/superheroes/lib/tests/test_cloud_pass.py` (`TP`).
 
 **Status.** The implementer ran every proof (C1 to C3): each neutralization is a targeted Edit, the red is the single named node run alone, the restore is the inverse Edit, and the green is the same node. Reds and greens below are the full pytest output of each run; absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -34,7 +36,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-683/test_t
 E       AssertionError: assert (3 == 1)
 E        +  where 3 = len({'sha256:1e38ffd42054c4199cd5d61108c2fdd744da6c09bd792361d648f91a8052d68e', 'sha256:76f421eb5368c7d8ed8f04846e44b532cb0ebcf02e8f4fbdd7be851f56f6e5d0', 'sha256:ddbb78d93fd9a41a605b7b04f7ba9c9ccb77d5837eba274cc758997f1f1fd3d6'})
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_setup_text.py:666: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_setup_text.py:666: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup_text.py::test_toggling_the_setting_leaves_the_stamp_unchanged
 1 failed in 1.14s
@@ -72,7 +74,7 @@ E         Right contains 1 more item:
 E         {'reason': 'reviewer-did-not-answer'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:869: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:869: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_record_confirmation_r2_reviewer_did_not_answer_moves_nothing
 1 failed in 0.83s
@@ -110,7 +112,7 @@ E         Right contains 1 more item:
 E         {'reason': 'pass-lapsed'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:891: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1744-9d9043901276fccf/plugins/superheroes/lib/tests/test_cloud_pass.py:891: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_pass.py::test_record_confirmation_r4_lapsed_date_moves_nothing
 1 failed in 1.32s

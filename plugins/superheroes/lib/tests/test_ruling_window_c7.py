@@ -75,7 +75,9 @@ def _finding(title, line, severity="Important", kind="real"):
 
 
 def _session(tmp_path, findings, to_phase=P_APPLY_FIXES, name="c7", **cfg):
-    """A session driven to `to_phase` pending: (session_dir, gitdir, head_diff_path)."""
+    """A session driven to `to_phase` pending: (session_dir, gitdir, head_diff_path). A session driven to the
+    seams check is a sliced round (the `dispatch-seams-check` step exists only for one); any other is not."""
+    cfg.setdefault("sliced", to_phase == RD.P_SEAMS)
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name=name, **cfg)
     _drive_to_phase(session_dir, gitdir, findings, head_path, to_phase)
     return session_dir, gitdir, head_path
@@ -133,7 +135,7 @@ def _offered(state, session_dir, key):
 def _two_important(tmp_path, name="c7-two", **cfg):
     """Fixer attempt emitted over a batch holding both findings F and G."""
     session_dir, gitdir, head_path = _session(
-        tmp_path, [_finding("bounds F", 1), _finding("bounds G", 2)], name=name, **cfg)
+        tmp_path, [_finding("bounds F", 2), _finding("bounds G", 3)], name=name, **cfg)
     state = _state(session_dir)
     assert state["pending"]["phase"] == P_APPLY_FIXES
     return (session_dir, gitdir, head_path,
@@ -171,17 +173,17 @@ def test_vet_442_ruling_on_a_pending_step_is_accepted_and_reaches_its_files_and_
     assert sent == [], "A went out under the ruling with the pending step; B carries none: %s" % sent
 
 
-@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_AUDITS, RD.P_APPLY_FIXES])
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_SEAMS, RD.P_AUDITS, RD.P_APPLY_FIXES])
 def test_rule_is_accepted_at_every_step_it_can_arrive(tmp_path, keep_severity, phase):
     """axis: REFUSAL — `rule` records `guidance` whichever step is pending (the verifiers, the
-    gap-sweep, the audits, an emitted fixer attempt); none of them refuses on timing."""
+    seams-check, the audits, an emitted fixer attempt); none of them refuses on timing."""
     if phase == RD.P_AUDITS:
         session_dir, gitdir, head_path, key_a, _b = _two_important(tmp_path, "c7-step")
         _drive_one_phase(session_dir, gitdir, [], head_path)
         assert _state(session_dir)["pending"]["phase"] == RD.P_AUDITS
     else:
         session_dir, gitdir, head_path = _session(
-            tmp_path, [_finding("bounds F", 1)], to_phase=phase, name="c7-step")
+            tmp_path, [_finding("bounds F", 2)], to_phase=phase, name="c7-step")
         key_a = _finding_key_by_title(_state(session_dir), "bounds F")
     before = len(_state(session_dir).get("rulingsLog") or [])
     out = _rule(session_dir, _guidance_file(tmp_path, "g.json", key_a, "GUIDED-%s" % phase))
@@ -220,7 +222,7 @@ def test_1835_ruling_after_a_fixer_that_changed_nothing_rides_the_next_order(
 
     monkeypatch.setattr(_TRI, "_payload_for", idle)
     session_dir, gitdir, head_path = _session(
-        tmp_path, [_finding("bounds F", 1)], name="c7-1835")
+        tmp_path, [_finding("bounds F", 2)], name="c7-1835")
     key_f = _finding_key_by_title(_state(session_dir), "bounds F")
     _drive_one_phase(session_dir, gitdir, [], head_path)
     assert _state(session_dir)["pending"]["phase"] == RD.P_AUDITS
@@ -342,8 +344,8 @@ def test_a_converged_loop_settles_its_minors_and_never_puts_them_in_a_fix_batch(
     """
     import review_record_session
     session_dir, gitdir, head_path = _session(
-        tmp_path, [_finding("blocker B", 1),
-                   _finding("real minor", 2, "Minor", "real"),
+        tmp_path, [_finding("blocker B", 2),
+                   _finding("real minor", 3, "Minor", "real"),
                    _finding("quality minor", 3, "Minor", "code-quality")], name="c7-settle")
     sent, state = _run_recording_fixer_batches(session_dir, gitdir, head_path)
     assert state["terminal"] == "converged"
@@ -365,8 +367,8 @@ def test_a_minor_named_by_guidance_reaches_the_pending_step(tmp_path, keep_sever
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 3)
     """
     session_dir, gitdir, head_path = _session(
-        tmp_path, [_finding("blocker B", 1),
-                   _finding("real minor", 2, "Minor", "real"),
+        tmp_path, [_finding("blocker B", 2),
+                   _finding("real minor", 3, "Minor", "real"),
                    _finding("quality minor", 3, "Minor", "code-quality")], name="c7-minor")
     state = _state(session_dir)
     assert [r["title"] for r in state["_fixBatch"]] == ["blocker B"]
@@ -416,35 +418,44 @@ def test_a_ruling_on_a_reworded_finding_reaches_the_one_live_row():
     assert RD._gate_guidance_entries(state, 2)[0]["guidance"] == "G"
 
 
-def _merged_into_session(tmp_path):
-    """F1 and F2 reported together; the synthesis seat cannot be seated in this harness, so the merge
-    it would record is made through the driver's own writers (`_record_merged_into`, `_set_findings`)
-    at the gap-sweep step, before the fix batch is built. Returns
+def _merged_into_session(tmp_path, monkeypatch):
+    """F1 and F2 reported together; the synthesis seat is seated (a fixer outside the anthropic family,
+    a known host family) and groups both findings as one root cause, so the real synthesis fold records
+    the merge before the fix batch is built. Returns
     (session_dir, gitdir, head_path, member_key, kept_key)."""
+    wrapped = _TRI._payload_for
+
+    def grouping(session_dir, state, pend, seat, panel_findings, head_diff_path):
+        if pend["phase"] == RD.P_SYNTHESIS:
+            ids = [f["id"] for f in (pend.get("payload") or {}).get("findings") or []]
+            return {"grouping": [{"group_id": "g0", "member_ids": ids}]}
+        return wrapped(session_dir, state, pend, seat, panel_findings, head_diff_path)
+
+    monkeypatch.setattr(_TRI, "_payload_for", grouping)
     session_dir, gitdir, head_path = _session(
-        tmp_path, [_finding("bounds F1", 1), _finding("bounds F2", 2)],
-        to_phase=RD.P_GAPSWEEP, name="c7-merge")
-    state = _state(session_dir)
-    kept = _finding_key_by_title(state, "bounds F1")
-    member = _finding_key_by_title(state, "bounds F2")
-    RD._record_merged_into(state, member, kept)
-    RD._set_findings(state, [f for f in state["findings"] if _key(f) == kept])
-    RD.save_state(session_dir, state)
+        tmp_path, [_finding("bounds F1", 2), _finding("bounds F2", 3)],
+        to_phase=RD.P_SEAMS, name="c7-merge", fixerVendor="cursor",
+        seatMap=dict(_TRI.SEAT_MAP, hostFamily="anthropic"))
     _drive_to_phase(session_dir, gitdir, [], head_path, P_APPLY_FIXES)
     state = _state(session_dir)
-    assert _batch_keys(state) == [kept]
-    assert _ledger_row(state, member)[session_contract.MERGED_INTO_FIELD] == kept
+    batch = _batch_keys(state)
+    assert len(batch) == 1
+    kept = batch[0]
+    members = [row for row in state.get(session_contract.DISPOSITION_LEDGER_KEY) or []
+               if row.get(session_contract.MERGED_INTO_FIELD) == kept]
+    assert len(members) == 1
+    member = RD._finding_identity_key(members[0])
     return session_dir, gitdir, head_path, member, kept
 
 
 def test_a_ruling_on_a_member_merged_into_another_reaches_the_one_live_row(
-        tmp_path, keep_severity):
+        tmp_path, keep_severity, monkeypatch):
     """axis: ATTACH — guidance given on a finding merged into another binds the representative: the
     representative is the row the pending `apply-fixes` step carries, with the member's guidance on it.
 
     bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1b_c7_ruling_window.md (element 2)
     """
-    session_dir, gitdir, head_path, member, kept = _merged_into_session(tmp_path)
+    session_dir, gitdir, head_path, member, kept = _merged_into_session(tmp_path, monkeypatch)
     assert _rule(session_dir, _guidance_file(tmp_path, "g.json", member, "FOR-THE-MERGED"))["ok"]
     state = _state(session_dir)
     assert _batch_keys(state) == [kept] and _offered(state, session_dir, kept)
@@ -506,11 +517,11 @@ def test_a_ruling_on_a_finding_the_next_round_rewords_reaches_the_reworded_row(
     def reword(session_dir, state, pend, seat, panel_findings, head_diff_path):
         payload = wrapped(session_dir, state, pend, seat, panel_findings, head_diff_path)
         if pend["phase"] == RD.P_SCOPED and state["round"] == 2:
-            return {"findings": [_finding("bounds F, said differently", 1)]}
+            return {"findings": [_finding("bounds F, said differently", 2)]}
         return payload
 
     monkeypatch.setattr(_TRI, "_payload_for", reword)
-    session_dir, gitdir, head_path = _session(tmp_path, [_finding("bounds F", 1)], name="c7-reword")
+    session_dir, gitdir, head_path = _session(tmp_path, [_finding("bounds F", 2)], name="c7-reword")
     key_old = _finding_key_by_title(_state(session_dir), "bounds F")
     assert _rule(session_dir, _guidance_file(tmp_path, "g.json", key_old, "FOR-BOTH-WORDINGS"))["ok"]
     _drive_one_phase(session_dir, gitdir, [], head_path)
@@ -636,7 +647,7 @@ def test_guidance_while_the_step_is_pending_brings_in_a_finding_the_batch_lacks(
     code-quality Minor a `guidance` ruling names joins the batch and the step's files carry the
     guidance."""
     session_dir, _g, _h = _session(
-        tmp_path, [_finding("blocker B", 1), _finding("quality minor", 2, "Minor", "code-quality")],
+        tmp_path, [_finding("blocker B", 2), _finding("quality minor", 3, "Minor", "code-quality")],
         name="c7-before-emit")
     state = _state(session_dir)
     key_q = _finding_key_by_title(state, "quality minor")

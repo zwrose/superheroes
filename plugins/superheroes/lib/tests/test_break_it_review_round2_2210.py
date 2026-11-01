@@ -245,6 +245,7 @@ def _assert_refused_over(record, pid):
 
 
 @needs_sleep
+@pytest.mark.process_listing
 def test_g3a_a_detached_worker_no_sample_saw_is_not_killed_and_the_run_is_refused(repo, tmp_path, monkeypatch):
     # axis: an orphan in the working copy that nothing shows is the run's is never signalled (it may be the owner's work), and the run is refused rather than certified over a possibly live worker
     pidfile = tmp_path / "worker.pid"
@@ -276,6 +277,7 @@ def test_g3b_a_process_started_before_the_run_with_its_directory_in_the_working_
 
 @needs_sleep
 @pytest.mark.proc_containment
+@pytest.mark.process_listing
 def test_g3a_the_proc_reader_finds_the_detached_worker_and_the_run_is_refused_without_killing_it(repo, tmp_path, monkeypatch):
     # axis: the real /proc reader sees the orphaned worker in the working copy; it is reported, not signalled, and the run is refused
     monkeypatch.setattr(break_it._DescendantWatch, "sample", lambda self: None)

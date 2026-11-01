@@ -241,10 +241,10 @@ def test_item_14_row_follows_item_10_and_reads_unset(tmp_path):
 
 def test_item_14_stamped_shows_as_one_line_of_prose(tmp_path):
     repo, store = _setup_repo(tmp_path)
-    PC.set_item(repo, "whoItsFor", "Home cooks\nwho want a weeknight recipe.", root=store)
+    PC.set_item(repo, "whoItsFor", "Neighbours\nwho want to borrow a tool for the weekend.", root=store)
     block = _project_config_section(CV.render(repo, root=store))
     row = next(r for r in block if r.startswith("14. "))
-    assert row == "14. Who it's for and what it's for — Home cooks who want a weeknight recipe."
+    assert row == "14. Who it's for and what it's for — Neighbours who want to borrow a tool for the weekend."
 
 
 def test_adopted_item_13_row_points_to_canon(tmp_path):

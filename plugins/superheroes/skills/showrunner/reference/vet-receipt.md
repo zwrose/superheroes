@@ -5,6 +5,7 @@
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
 - [The review record checks](#the-review-record-checks)
 - [A handback with open findings](#a-handback-with-open-findings)
+- [The outside list](#the-outside-list)
 - [The claims check](#the-claims-check)
 - [Project vet checks](#project-vet-checks)
 - [The `None` convention](#the-none-convention)
@@ -215,6 +216,7 @@ are never holding the inventory in working memory.
 | the review record carries `commandRefusals`, or the build record's dispatch provenance lists a refusal | a **refusals line**: each refusal was read, and any refusal followed by the same act in another form, as the stop rule defines that, is named as a **finding**, without listing the forms. The rule's one home is `lib/command_refusals.py` |
 | the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 | the review record shows a finding still **open at handback** (the review stopped at its round cap, or handed back as it does at the cap) | the **handback with open findings** — the craft list and the cap choices, as [A handback with open findings](#a-handback-with-open-findings) says |
+| the review record carries `outsideThisPR` | the **outside-list row** — every hit sorted into a proposed follow-up filing or a dismissal with its reason, as [The outside list](#the-outside-list) says |
 | the PR body claims tests ran or passed, carries a definition-of-done table, or claims the verify command passed | the **claims check** — each such claim listed with holds or does not hold and its evidence, as [The claims check](#the-claims-check) says |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
@@ -242,9 +244,11 @@ receipt names the row that held it.
 | Check | What it reads from the record | The PR is held when |
 |---|---|---|
 | **The record exists** | the result of the `read` verb, and the record link in the PR's build record | `read` refuses, with `review-record-missing`, `review-record-unreadable` or any other reason; or the PR's build record names no record; or the record carries `transitDamage` or a non-empty `earlierRecordsNotChecked` and the vet has not read each named record's comments directly and confirmed that no finding went missing or changed its meaning (the receipt says what was read) |
-| **The checks ran on the final commit** | `finalCommit.sha` and `finalCommit.source`; `ci.state`, `ci.sha` and `ci.source`; `missingReviews` and `parked`; and, from the PR itself, its head now and CI on that head (spine field 1) | `finalCommit.sha` is not the PR's head now, so the record was written on an earlier commit, whatever it says about CI (one exception: when the head moved by a bring-current and spine field 1's re-pin form finds the diff digest **equal**, a record written on the head before the bring-current still counts, CI must still be green on the new head, and the receipt names both commits; on an unequal digest or `digest-unavailable`, when spine field 1's re-pin form finds every changed hunk mechanically non-semantic, a record written on the head before the bring-current likewise still counts on that field's CI and disclosure line, with no further reviewer, and the receipt names both commits and the disclosure; otherwise the row holds as written); `finalCommit.source` is not `GitHub PR`; `ci.source` is not `GitHub checks`, `ci.state` is anything other than green, pending or none, or `ci.sha` is not `finalCommit.sha` (a stored `ci.state` of pending or none only means the checks had not finished, or had no result yet, when the record was written: neither holds the PR when `ci.sha` is `finalCommit.sha`, which is the PR's head now, and CI on that head is now green by spine field 1's selection, and the receipt names the stored state and the current green); CI is not green on the PR's head now; or an entry of `missingReviews` has a null `goAhead` (`parked` is true), so a planned review did not run and the owner gave no go-ahead; or its go-ahead cannot be followed to an owner-attributed record (a standing ruling's canon entry, or the place the owner's words were said) that authorizes skipping that review |
+| **The checks ran on the final commit** | `finalCommit.sha` and `finalCommit.source`; `ci.state`, `ci.sha` and `ci.source`; `missingReviews` and `parked`; and, from the PR itself, its head now and CI on that head (spine field 1) | `finalCommit.sha` is not the PR's head now, so the record was written on an earlier commit, whatever it says about CI (exceptions, read in this order. A bring-current: when the head moved by a bring-current and spine field 1's re-pin form finds the diff digest **equal**, a record written on the head before the bring-current still counts, CI must still be green on the new head, and the receipt names both commits; on an unequal digest or `digest-unavailable`, when spine field 1's re-pin form finds every changed hunk mechanically non-semantic, a record written on the head before the bring-current likewise still counts on that field's CI and disclosure line, with no further reviewer, and the receipt names both commits and the disclosure; otherwise the bring-current exception does not apply. A receipts-only round: when the head moved after the record only by builder commits that are not a bring-current, graded docs / comments / mechanical under the first row of workhorse SKILL.md §12 (the grade this exception trusts no further than its own reading), and the vet's own reading of every hunk from `finalCommit.sha` to the head now finds none that changes meaning, a record written on the earlier commit still counts, CI must still be green on the new head, and the receipt names both commits and lists every hunk it read as non-semantic; under this exception a stored `ci.state` of pending or none on the earlier commit is settled by green CI on the new head (a superseded run on the earlier commit may be cancelled), and the receipt names the stored state and the current green; a hunk changes meaning when it touches product code, a test's assertions or fixtures' expected values, prose that states a rule a session or a gate follows, or a claim the PR makes, or that changes behaviour in any other way (configuration, CI, a hook, or test code beyond its assertions, such as a skip mark, a removed test or a changed input), and any such hunk, or one the vet cannot call non-semantic, keeps the row holding as written, whatever the builder graded it; when no exception applies, the row holds as written); `finalCommit.source` is not `GitHub PR`; `ci.source` is not `GitHub checks`, `ci.state` is anything other than green, pending or none, or `ci.sha` is not `finalCommit.sha` (a stored `ci.state` of pending or none only means the checks had not finished, or had no result yet, when the record was written: neither holds the PR when `ci.sha` is `finalCommit.sha`, which is the PR's head now, and CI on that head is now green by spine field 1's selection, and the receipt names the stored state and the current green); CI is not green on the PR's head now; or an entry of `missingReviews` has a null `goAhead` (`parked` is true), so a planned review did not run and the owner gave no go-ahead; or its go-ahead cannot be followed to an owner-attributed record (a standing ruling's canon entry, or the place the owner's words were said) that authorizes skipping that review |
 | **No leftover skipped the owner's review** | every entry of `findings` (its `title`, `body`, `consequence`, `outcome` and `reason`), `leftForOwner`, and the PR's owner half | a finding with a real consequence has outcome `craft`, or has no outcome; or has outcome `ruling` and its `reason` names no ruling the vet can follow to a record; or has outcome `left-for-owner` and is shown to the owner neither as a card on the PR's sheet, nor as an entry of the sheet's decided-for-you list, nor, where no sheet is built, under the owner half's `## What we're accepting`; or is an entry of the sheet's decided-for-you list and has a real consequence that none of the template's three grounds covers (another card on the same sheet carries it; a fix in another layer of the same stack, named in the ground, removed it; a Canon entry, cited by id, answers it), names no ground, or re-grades a finding the owner already answered or took back on this PR |
 | **The proven copies match their source** | the record's `provenCopies` (each `{file, source, sha256}`) | the record carries `provenCopies` and the vet has not read each named `source` where the proof names it and compared its sha256 with the entry's `sha256`, or a source cannot be read, or its sha256 does not match (the receipt says, per copy, what was found) |
+
+**The receipts-only exception, worked.** The latest record was written on commit A, and CI was green there. **Not holding:** the builder then pushes commit B, graded docs / comments / mechanical under workhorse §12, whose only hunk rewords a code comment and changes no claim. The vet reads that hunk, finds it changes no meaning, and CI is green on B: the row does not hold, and the receipt names A and B and lists the comment hunk as non-semantic. **Holding:** commit B, graded the same way, changes the expected value in one of a test's assertions. A test's assertion is behaviour-bearing, so the vet cannot call the hunk non-semantic: the row holds as written, whatever the builder graded it, until a review record is written on B (workhorse §12's second row).
 
 A `ruling` whose reason starts `owner ruling "<words>" (<url>)` is followable. The vet opens the link and checks that the comment is the owner's ruling covering that finding and that no later owner decision overturned it. If either fails, the row holds the PR.
 
@@ -271,7 +275,8 @@ record whose finding with a real consequence was decided as craft reads `reviewe
 the fields the rows name. Any line of `whatIsMissing` that the four rows do not account for is a vet
 finding. The line saying no planned reviewer ran is accounted for when every planned review that did
 not run carries a go-ahead. The line saying CI was pending or none on the final commit is accounted
-for once CI is green on that commit now. The line saying a finding waits for the owner's decision is
+for once CI is green on that commit now, or, when the final-commit row's receipts-only exception
+lets the record count, once CI is green on the PR's head now. The line saying a finding waits for the owner's decision is
 accounted for when the third row finds that finding shown to the owner. Any other line of
 `whatIsMissing` holds the PR, and the receipt names the line.
 
@@ -349,6 +354,41 @@ the receipt is edited in place: a later vet's choice for the same finding, such 
 an extra audit round that did not settle it, is a new line in that vet's receipt, carrying that
 vet's ordinal. A receipt that records `leftover` for a Critical is a defect in the receipt. A vet
 with no open finding that has a real owner consequence writes no field.
+
+## The outside list
+
+A reviewer that noticed a real defect on lines the change did not touch raised it as an
+[outside finding](../../../rubric/glossary.md#outside-finding). The review record lists them under
+`outsideThisPR`, and the review never fixed them. Read the list from the latest review record and
+sort **every** hit, reviewer entries and sweep entries alike, into one of two choices:
+
+1. **A proposed follow-up filing.** A proposal only. Append it to the owner's pending calls as
+   `skills/showrunner/reference/owner-decisions.md` says for an owner call: an entry in the owner's
+   pending calls, not a card on the PR's review sheet. Nothing is filed until the owner's word; this
+   vet files nothing.
+2. **A dismissal with its reason.** The hit is not worth an issue, and the receipt says why.
+
+An outside finding never holds the PR, never becomes a cap choice, and never reaches the owner as a
+card on the PR's sheet.
+
+**The outside field.** The receipt records the sort in one fixed field, `**Outside this PR.**`, one
+bullet per hit:
+
+```markdown
+**Outside this PR.**
+- <hit id> <file>:<line> · <title> — follow-up | dismissed — <the proposed issue's one-line scope, or the reason>
+```
+
+A list not sorted in full, meaning a hit of the record that the field does not carry, is a vet
+finding. A vet whose record carries no `outsideThisPR` writes no field.
+
+A sample for a fixture PR with two hits:
+
+```markdown
+**Outside this PR.**
+- O-1 lib/cloud_check.py:212 · The retry loop never stops on a permanent error — follow-up — Stop retrying on a permanent error and report it, in `lib/cloud_check.py`
+- O-2 lib/cloud_check.py:340 · A helper's name no longer matches what it returns — dismissed — Nothing calls the helper any more, so no one is misled by its name
+```
 
 ## The claims check
 

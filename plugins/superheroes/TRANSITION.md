@@ -18,6 +18,9 @@ switch only on before-switching steps, and a bullet with no marker counts as bef
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **Each review escape and false PR claim the advisor logs now ends with a `caught by: <kind> — <the exact fix>` line, and the gardening pass tallies escapes by kind and routes each kind to its home.** Nothing is owed at once: entries logged before this release carry no kind and read as unmeasured for kind. See [Showrunner: each escape names what would have caught it](#showrunner-each-escape-names-what-would-have-caught-it).
+- **After switching.** **A big change that cannot be split is reviewed in slices by size, with every unread part reviewed and one seams check, in place of the split by top-level folder and the gap sweep. A caller that reads the panel payload's `shards` or `big` keys, or the `dispatch-gap-sweep` phase, reads `slices` and `dispatch-seams-check` instead; a session saved at the gap-sweep step continues past it; a hand-landed panel `readParts` that differs from an engine run's is refused `evidence-read-parts-mismatch`.** See [Review: a big change is reviewed in slices](#review-a-big-change-is-reviewed-in-slices).
+
 - **After switching.** **A PR whose review left findings for the owner names each one, by record id and title, under What we're accepting before it is marked ready or vetted READY.** `vet_slot.py handback --pr` and a READY `vet_slot.py write` now refuse `leftover-not-accepted` or `review-record-unreadable`. See [Vet slot: findings left for the owner are named before ready](#vet-slot-findings-left-for-the-owner-are-named-before-ready).
 
 - **After switching.** **A light- or micro-lane review record over four rounds (five with the extra audit round) is refused `review-record-round-cap-exceeded`; a session that wrote one now parks instead.** See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
@@ -25,6 +28,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Before switching.** **Finish or hand back any review session in flight before upgrading.** A session caught in a later round's audit, post-audit verify or scoped-finder step, or holding a build-session test change without the reviewer's original, is handed back with its findings open and reviewed again in a fresh review. See [Review: rounds stop at 4, and nothing waits on the owner mid-review](#review-rounds-stop-at-4-and-nothing-waits-on-the-owner-mid-review).
 
 - **After switching.** **A build that runs code review in PR mode passes `--earlier-findings` on the first `next`; a session that does not gets repeat matching against its own earlier rounds only.** See [Review: a finding that repeats an earlier one keeps its outcome](#review-a-finding-that-repeats-an-earlier-one-keeps-its-outcome).
+
+- **After switching.** **From this release, reviews list findings on untouched lines on the record's "Outside this PR" list instead of the refused list; they never block a merge or reach the owner as a card. The advisor sorts each at the vet into a proposed follow-up filing (it waits on the owner's word) or a dismissal with its reason. A caller that read `outside the round diff scope` rows from `compileDrops` or the record's `refused` reads `outsideThisPR` instead.** See [Review: findings on untouched lines go on the outside list](#review-findings-on-untouched-lines-go-on-the-outside-list).
 
 - **After switching.** **A caller that reads a break-it run's `copy-failed`, `dependency-link-failed` or `dependency-link-unsafe` reason reads the new run reasons instead; a passing break-it run no longer drops its finding; `round_driver.py break-it-change` is the one edit the build session makes to a reviewer's break-it test.** See [Review: break-it tests run in the session's working copy](#review-break-it-tests-run-in-the-sessions-working-copy).
 
@@ -62,6 +67,20 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **In the gardening record.** Paste what `review_measures.py render --cwd <root>` prints: the window's row as a table and a chart across windows. The seating check's row file is the row's `seatingRow`.
 - **Nothing reads it between passes.** A measure whose input is missing reads unmeasured with its reason, never zero, and no check fails on any value. A window before cap choices were recorded reads that measure unmeasured.
 
+### Showrunner: each escape names what would have caught it
+
+- **The escape line.** A review escape's misses-log entry, and a false PR claim's, ends with one line spelled `caught by: <kind> — <the exact fix>`. The kind is one of eight: `claude-md-rule`, `focus-hint`, `plugin-reviewer-instruction`, `one-time-sweep`, `permanent-check`, `environment-test`, `risk-setting-or-leftover-rule` or `nothing-reachable`. The fix is the sentence to add or the search to run. The act that logs the escape decides the kind by six questions asked in order (`skills/showrunner/reference/owner-decisions.md` § Every grading keeps its scoring, and the misses log).
+- **At the gardening pass.** The advisor adds each escape's `kind` to the tally's escape input. `review_learning.py tally` returns a new key, `escapesByKind`, beside the per-seat tally: a count for each of the eight kinds plus `unmeasured` for an escape with no kind, and `null` wherever the escape counts are `null`. A `kind` outside the eight reads malformed, so the tally reads `incomplete-evidence`. The owner can veto each call, and duty 3 routes each kind to its home. A single escape with a determinate fix may produce a proposal without waiting for the seat windows.
+- **Two new proposal kinds.** `review_learning.py apply` accepts `kind: focus-hint` (keys `schema`, `kind`, `hint`, `ruling`) and `kind: claude-md-rule` (keys `schema`, `kind`, `rule`, `ruling`), through the same owner-yes and Canon path as `risk-and-trust` and `standing-ruling`. The hint or rule is one plain line. A focus hint joins the review settings' Focus hints section; a CLAUDE.md rule joins the project's CLAUDE.md, left uncommitted for the advisor to land: on the Canon entry's branch when Canon is in the project's repository, otherwise through an ordinary project PR. With no such file, `apply` refuses `target-missing`; with a file that is not UTF-8 text, `target-unreadable`; and in a cloud session a focus hint is refused `calibration-write-in-cloud-session`. Each writes nothing. An applied result carries `calibration: "focus-hint"` or `"claude-md-rule"` and `set: {action, path}`, where `action` is `written` or `noop`.
+### Review: a big change is reviewed in slices
+
+- **Slices by size.** A change whose countable lines are over the bar (1,000) is reviewed in round 1 in slices cut by size, never by folder, each slice with its own code and test reviewers and a security reviewer where the slice touches a risk area or its risk is unclear. Splitting a big change into separate PRs stays the first answer. The rules are in [Big changes: slices, unread parts and the seams check](skills/review-code/reference/round-driver.md#big-changes-slices-unread-parts-and-the-seams-check).
+- **Every unread part is reviewed.** After the slices report, each part a slice reviewer did not list as read becomes a new slice with the same reviewers, in up to two further waves. What is still unread after the last wave is recorded in the review record's `unreadShare`, filled on every sliced change.
+- **One seams check.** One reviewer reads the whole change for problems between slices, once, in round 1, after the slices and before the verifier. It replaces the gap sweep, and the split by top-level folder (over 1,500 changed lines or 20 files) is gone.
+- **Payload and phase.** The panel payload's `shards` and `big` keys are gone; it carries `slices` (`{id, seats}`) and, on a sliced round 1, a roster of whole-change seats plus `<lens>:<slice id>` seats. The `dispatch-gap-sweep` phase is gone; the `dispatch-seams-check` phase replaces it.
+- **Saved sessions.** A session saved at the gap-sweep step continues past it when loaded.
+- **Read lists.** An engine reviewer's `readParts` in the record is the list the dispatch runner graded for that run. A landed list that differs is refused `evidence-read-parts-mismatch`, and a landing with no list takes the runner's.
+
 ### Review: a ruling refuses an id that names more than one finding
 
 - **Ambiguous ids.** `round_driver.py rule` refuses `ruling-target-ambiguous` when the ruling's id names more than one finding across the session's verifier attempts (a staged id like `v0` is reused every round and by the second-test pass). The refusal lists the candidate findings and their `findingKey`, and nothing is written. A ruling that names the finding by its `findingKey` binds; a unique id binds as before. Nothing is owed by a consuming project.
@@ -75,6 +94,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **Repeat marks.** Code review marks a finding that repeats one of the PR's earlier findings and keeps the earlier outcome, unless the verifier finds it no longer holds. The rule is in [Repeats](skills/review-code/reference/synthesis-pass.md#repeats).
 - **`next --earlier-findings <path>`.** The build passes the PR's earlier findings on the first `next`, beside `--prior-comments`: the JSON that `review_record.py read --pr <N>` prints, saved as `<session dir>/earlier-findings.json`. A session that does not pass it gets exact-identity matching against its own earlier rounds only, and the round record discloses `earlierFindingsUnavailable` with reason `not-supplied`. See [next / submit protocol](skills/review-code/reference/round-driver.md#next--submit-protocol).
+
+### Review: findings on untouched lines go on the outside list
+
+- **Raised, not dropped.** A finding cited on a line the PR did not touch is no longer dropped at compile. The touched lines are the added lines and the line on each side of a deletion. The finding goes to the review record's "Outside this PR" list (`outsideThisPR`) under the reviewer that raised it. A reviewer raises at most 3 from its own reading, and every one raised is kept. A gap sweep's hits stay together under the sweep's own entry and are not counted against any reviewer. The rule is in [the base rubric](rubric/review-base.md) (Verification rule 2).
+- **Never fixed, never blocking.** An outside finding does not go to the fix, does not block the merge and does not become an owner card. It never counts toward a round's decision, the extra audit round's included. `compileDrops` no longer carries the reason `outside the round diff scope`.
+- **Sorted at the vet.** The advisor sorts each outside finding into a proposed follow-up filing, which waits on the owner's word, or a dismissal with its reason, and records the sort in the receipt field `**Outside this PR.**`. See [The outside list](skills/showrunner/reference/vet-receipt.md#the-outside-list).
 
 ### Review: break-it tests run in the session's working copy
 
@@ -142,7 +167,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Findings in the summary.** The record's summary now lists each finding with its outcome under a `Findings:` line; at the compact levels it gives the count and the full list stays in the record.
 - **Roles on the reviewer line.** The `Reviewers:` line now names the review's roles (the panel lenses, then verifier, synthesis, fix auditor, scoped finder, gap sweep) when it finds any.
 - **Cost on every reviewer row.** Each record row carries `cost`, `{tokens, minutes}`, computed by the writer from the engine's run record. A value it could not measure is null, never zero, and trimming a long record does not remove it. An account cannot set it.
-- **Other parts, only once a review fills them.** `rounds.extraAudit`, `rerunChecks`, `synthesisRounds`, `outsideThisPR`, `unreadShare`, a reviewer row's `readParts`, and a finding's `grade`, `repeatOf`, `breakItRuns` and `kindOfMistake` appear on a record only when the account carries them. A record without them reads as before. See [Parts that show only when present](skills/review-code/reference/review-record.md#parts-that-show-only-when-present).
+- **Other parts, only once a review fills them.** `rounds.extraAudit`, `rerunChecks`, `synthesisRounds`, `outsideThisPR`, `unreadShare`, a reviewer row's `readParts`, and a finding's `grade`, `repeatOf`, `breakItRuns` and `kindOfMistake` appear on a record only when the account carries them. A record without them reads as before. `outsideThisPR` lists each finding a reviewer raised on untouched lines, under that reviewer's name; a full-lane session fills it from the driver and a light- or micro-lane account lists it by hand. See [Parts that show only when present](skills/review-code/reference/review-record.md#parts-that-show-only-when-present).
 - **Abandoned sessions.** The record of an abandoned session now lists a finding that was recorded but never folded into the loop as open, with the reason saying so, instead of leaving it only in the raw findings files.
 
 ### Review: the grounding seat is gone
@@ -251,6 +276,8 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 
 - **After switching.** **Nothing is owed, unless a spec package keeps its breakdown bodies outside `children/`, `seams/` and `epic.md`: then move them into that home and re-pin them before its spec PR's sheet is built.** A spec PR now gets a merge sheet without a code review record. See [Spec PRs: a merge sheet without a review record, and a fixed home for breakdown bodies](#spec-prs-a-merge-sheet-without-a-review-record-and-a-fixed-home-for-breakdown-bodies).
 
+- **Before switching.** **Finish or abandon in-flight claude write runs.** A claude write run opened by an older plugin refuses its continuation: the spawn argv check rebuilds the sandbox settings from the current allow rules, and the run's stored settings lack the new assignment-prefixed rules. Open a fresh dispatch. See [Claude write channel: leading NAME=value assignments run](#claude-write-channel-leading-namevalue-assignments-run).
+
 ### Verify-command doctor: check 6 fails safe
 
 - `lib/repo_doctor.py` check 6 reports a missing path only when the verify command certainly runs it from the project root; a path in an `if`/`while`/`for`/`case` construct, a subshell or group, on either side of `&&` or `||`, after a `cd`-like builtin, in a comment, or in a shape the walk does not model now reads "verify command path(s) could not be checked", a note that never marks the profile stale.
@@ -315,6 +342,13 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 - **`cloud_recover.py helper-read`.** `helper-read --repo O/N --issue N --session-id S [--session-id S …]` prints the cloud helper's prompt. The helper posts only the five fields `cloud_recover.HELPER_READ_FIELDS` names for each session, never usage or cost data: the issue is public.
 - **The launcher.** The original-session check reads the limit: while the builders' account is at its usage limit, a lane that started before the limit needs no session read until the reset time, and a listing that shows it live still refuses. The deleted-branch exemption is removed: a bound lane whose branch is gone from the remote now needs the session read, because deleting a branch does not stop its builder. An adoption's cloud launch is checked against `adoptsHead` (a refusal's detail key `checkedAgainst` names what the checkout was checked against), so no pointer branch at the premise's `baseCommit` is needed.
 - **`cloud_builder.py superseded`.** `superseded --repo O/N --issue N --launch-id L` tells a cloud builder that woke after the reset whether a newer launch took its issue over (a supersession notice that names its own launch id `L`, `launch-<hash>` from its session name `issue-<n>-<hash>`, as a whole token, whatever its time; intake comments never order launches); its result carries `superseded`, `newerLaunch` and the `comment` to post. The comment is headed `Builder stand-down (cloud build).`, is not a terminal comment, and the builder pushes nothing after it. `cloud_builder.py superseded-notice --launch-id L` prints the `Builder superseded (cloud build).` comment the advisor posts on the issue before it launches any successor, so a successor on the owner's machine also stops an earlier builder that wakes.
+
+### Claude write channel: leading NAME=value assignments run
+
+- **What now runs.** A command whose leading `NAME=value` assignments precede one of the allowed families (`python`, `python3`, `pytest`, `scripts/pinned-python`, `echo`, `npm`, `npx`, `node`, `pnpm`, `yarn`, `ps`), for example `DB_URL=… SKIP_SETUP=true npx --no-install vitest run …`, now runs in a sandboxed Claude implementer, still inside the sandbox. Before, it was refused with "This command requires approval" and the implementer handed back untested work. Each family gains two rules in `permissions.allow`, `Bash(*=* <family> *)` and `Bash(*=* <family>)`, in `CLAUDE_WRITE_BASH_FAMILIES` / `CLAUDE_WRITE_BASH_ALLOW` in `lib/engine_adapter.py`. Every project's claude write sandbox settings gain these rules; nothing else in the default settings changes.
+- **Still refused.** A leading assignment before any other command (`FOO=1 touch f`, `FOO=1 rm -rf x`) is still denied.
+- **A wider match.** Because the rule's leading `*` matches any characters, a command line that carries an `=` anywhere before an allowed family's name followed by a space or the line's end (for example `touch x=1 npx f`) also matches a rule. It still runs inside the sandbox, and only a command that managed policy excludes from the sandbox runs unprompted outside it.
+- **In-flight runs.** A claude write run opened by an older plugin refuses its continuation, because the spawn argv check (`_canonical_spawn_argv` / `_spawn_argv_coherence` in `lib/engine_dispatch.py`) rebuilds the settings from the current allow rules and the run's stored settings lack the new ones. Open a fresh dispatch.
 
 ## 0.46.2
 
@@ -2207,7 +2241,7 @@ shorter of its stamped TTL and that value.
 
 ### Registered consumers
 
-**weekly-eats write dispatches** omit effort today. After this release they must pass `--seat` as the
+**A registered consumer's write dispatches** omit effort today. After this release they must pass `--seat` as the
 four-key JSON object on every write dispatch, with vendor, model, effort, and role supplied inside
 the seat bundle.
 

@@ -1,5 +1,7 @@
 # wo_d_1795_reviewer-shed — the review record sheds reviewer detail to fit, and never sheds the decision
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Per-element bite-proof for the reviewer shed steps in `render` (`plugins/superheroes/lib/review_record.py`). Declared
 guarded-element set (from the work order): **K1** the reviewer steps run; **K2** the shed line is present; **K3** the
 never-shed census; **K4** the refusal after the last step. Each element was neutralized with one targeted edit, its
@@ -48,7 +50,7 @@ decisive end of the traceback, as printed:
 >           raise Refusal("review-record-too-large", f"{len(body)} characters")
 E           review_record.Refusal: ('review-record-too-large', '73403 characters')
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/review_record.py:872: Refusal
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/review_record.py:872: Refusal
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_a_long_session_sheds_reviewer_detail_to_fit_and_says_so
 1 failed in 0.26s
@@ -91,7 +93,7 @@ E       assert (0 == 1)
 E        +  where 0 = <built-in method count of list object at 0x108b87280>("Reviewer detail trimmed to fit this comment (engine telemetry); each reviewer's full output is in its raw-output comment linked under rawOutputs.")
 E        +    where <built-in method count of list object at 0x108b87280> = ['<!-- superheroes:review-record -->', '**Review record: not reviewed.** Checked: CI on bbbbbbb: green; Reviewers that... names no repository, so its risk areas were not read.', 'CI on the final commit bbbbbbb: green (GitHub checks).', ...].count
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1814: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1814: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_a_long_session_sheds_reviewer_detail_to_fit_and_says_so
 1 failed in 0.35s
@@ -135,7 +137,7 @@ E
 E         Right contains one more item: 'security-reviewer did not run; go-ahead: standing ruling canon-7'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1830: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1830: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_a_never_shed_census_of_the_decision_content_over_a_shed_record
 1 failed in 0.23s
@@ -176,7 +178,7 @@ ___ test_a_record_that_cannot_fit_after_every_step_is_refused_not_truncated ____
                  ^^^^^^^^^^^^^^^^^^^^^^^^^
 E           Failed: DID NOT RAISE Refusal
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1883: Failed
+/path/to/home/.superheroes-worktrees/superheroes/issue-1713-92994e7f22aa2a28/plugins/superheroes/lib/tests/test_review_record.py:1883: Failed
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_record.py::test_a_record_that_cannot_fit_after_every_step_is_refused_not_truncated
 1 failed in 0.30s

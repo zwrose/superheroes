@@ -1,5 +1,7 @@
 # Place call WO-D bite-proof: the switch-on guard reads the failed-check marker, the single resolved base and the stale cloud version
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 Bite-proof record for `plugins/superheroes/lib/project_config.py` (D1, D2), `plugins/superheroes/lib/launcher.py` (D3) and `plugins/superheroes/lib/cloud_ready.py` (D4). Detectors are in `plugins/superheroes/lib/tests/test_cloud_setup.py`, `test_launcher_place.py` and `test_cloud_ready.py`.
 
 **Status.** The implementer ran every proof (D1 to D4): each neutralization is a targeted Edit in the shipped file, the red is the single named test node run alone, the restore is the inverse Edit, and the green is the same node. Each red below is the last 40 lines of that run's output (the top of the output, the first lines of the failure header, was cut by the `tail -40` the command ran through; the assertion, the diff and the pytest summary line are all inside what is shown). Each green is the last 10 lines. The harness's `sysmon` and `pgrep` lines are not shown. The absolute `tmp_path` prefixes and the worktree path are as printed. No fixture holds a real secret, so nothing is redacted.
@@ -32,7 +34,7 @@ monkeypatch = <_pytest.monkeypatch.MonkeyPatch object at 0x10ae12d80>
         assert CS.REASON_CHECK_FAILED == "cloud-check-failed"
 >       _refused_for_a_failed_check(repo, store, monkeypatch)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:191: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:191: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 repo = '/private/tmp/claude-501/pytest-of-zwrose/pytest-1297/popen-gw0/test_switch_on_refused_when_th0'
@@ -56,7 +58,7 @@ E         Right contains 1 more item:
 E         {'reason': 'cloud-check-failed'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:175: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:175: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup.py::test_switch_on_refused_when_the_last_check_failed_and_stores_nothing
 1 failed in 5.88s
@@ -88,7 +90,7 @@ FAILED plugins/superheroes/lib/tests/test_cloud_setup.py::test_switch_on_refused
         monkeypatch.setattr(CC, "read_failed_check", _boom)
 >       _refused_for_a_failed_check(repo, store, monkeypatch)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:224: 
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:224: 
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
 
 repo = '/private/tmp/claude-501/pytest-of-zwrose/pytest-1299/popen-gw0/test_switch_on_refused_when_th0'
@@ -112,7 +114,7 @@ E         Right contains 1 more item:
 E         {'reason': 'cloud-check-failed'}
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:175: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_setup.py:175: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_setup.py::test_switch_on_refused_when_the_failed_check_marker_cannot_be_read
 1 failed in 7.74s
@@ -169,7 +171,7 @@ E
 E         - 0f2f3ff9ba1ff036ba06cdd50665cdc4319434c7
 E         + 9efd8a25a8bf870c6593383507b8d76c524642a5
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:370: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_launcher_place.py:370: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_base_ref_that_moves_between_the_cloud_attempt_and_the_fallback_builds_the_first_commit
 1 failed in 7.41s
@@ -193,7 +195,7 @@ FAILED plugins/superheroes/lib/tests/test_launcher_place.py::test_a_base_ref_tha
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_a_failed_version_check_leaves_no_cloud_version_unless_the_cloud_reported_one _
-[gw0] darwin -- Python 3.12.13 /Users/zwrose/.cache/uv/builds-v0/.tmp8x2U46/bin/python
+[gw0] darwin -- Python 3.12.13 /path/to/home/.cache/uv/builds-v0/.tmp8x2U46/bin/python
 
 tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1303/popen-gw0/test_a_failed_version_check_le0')
 
@@ -206,7 +208,7 @@ tmp_path = PosixPath('/private/tmp/claude-501/pytest-of-zwrose/pytest-1303/popen
 >       assert got["cloudVersion"] is None and got["failedCheck"] == ["version"]
 E       AssertionError: assert ('1.2.2' is None)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:461: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-1746-9ec121c90cfeb086/plugins/superheroes/lib/tests/test_cloud_ready.py:461: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_cloud_ready.py::test_a_failed_version_check_leaves_no_cloud_version_unless_the_cloud_reported_one
 1 failed in 4.52s

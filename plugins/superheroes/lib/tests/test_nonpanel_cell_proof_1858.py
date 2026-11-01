@@ -22,8 +22,8 @@ import model_registry  # noqa: E402
 import receipt_disclosures as RDS  # noqa: E402
 import round_driver as RD  # noqa: E402
 
-NONPANEL = (RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED)
-PHASE_IDS = ("dispatch-verifiers", "dispatch-gap-sweep", "dispatch-scoped-finder")
+NONPANEL = (RD.P_VERIFIERS, RD.P_SEAMS, RD.P_SCOPED)
+PHASE_IDS = ("dispatch-verifiers", "dispatch-seams-check", "dispatch-scoped-finder")
 
 
 def _cells(vendor):

@@ -1,5 +1,7 @@
 # Work order B (#2072) bite-proof: a `ci-exact-head` verify stands in for the local verify only when the fetched run backs it
 
+> Note (2026-10-31, #2296): owner-machine paths and the name of a consuming project in this record were replaced with neutral placeholders after capture; nothing else changed.
+
 **Provenance:** claude / sonnet-5.5 (implementer, work order B2), maker family anthropic. Production under proof: `plugins/superheroes/lib/round_phases.py` (`verify_result_fault`, `_ci_verify_shape_fault`), `plugins/superheroes/lib/round_driver.py` (`_ci_verify_run_refusal`, `cmd_submit`, the `verifyVia` record), `plugins/superheroes/lib/round_adapters.py` (`_assemble_verify`), `plugins/superheroes/lib/review_record_session.py` (`_verify_via_checked`). Tests: `plugins/superheroes/lib/tests/test_verify_ci_head_2072.py`.
 
 Declared guarded-element set (from order B): **E1**, **E2a**, **E2b**, **E2c**, **E3**, **E4a**, **E4b**, **E4c**, **E5**, **E6**, **E7**, **E8a**, **E8b**. Each was neutralized by one targeted edit (the Edit tool, exact-text match), only its proving nodes run by exact node id (never `-k`; every parametrized id pytest lists was spelled out), the inverse edit applied, `git diff --stat -- <file>` taken (empty: the file equals the last commit), and the same ids run again. No `git checkout`, `git restore`, `git reset` or `git stash` was used.
@@ -38,7 +40,7 @@ Capture directory (outside the repository; every pytest run below is redirected 
 - The restore receipt is `git diff --stat -- <file>` taken after the inverse edit, printed between `--- git diff --stat` and `--- end diff` markers: in every element it printed nothing, so the file equals its last commit. After E8b and after E4c a `git status --porcelain` over the worktree also printed nothing.
 - The command shape is `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <exact node ids> -q`, redirected to the capture file, followed by `echo "pytest exit: $?"` appended to it. Excerpts below are verbatim lines of the capture (a few lines each, long assertion text cut by omission only at a marked `[...]`); the full output is the capture file.
 - `E5_red.txt` is 36629 bytes, over the 32 KiB per-element ceiling; it lives outside the repository (above), and its first and last lines are quoted here. All other captures are under 32 KiB each.
-- Redaction: none needed; local `/Users/zwrose/...` and `/private/tmp/...` paths are kept as printed, no secret, token or private URL appears.
+- Redaction: none needed; local `/path/to/home/...` and `/private/tmp/...` paths are kept as printed, no secret, token or private URL appears.
 - Not in the declared set: the receipt disclosure line (`receipt_disclosures.py`, the `verify-via-ci` line, tagged with an `# axis:` comment) has tests in the file but no neutralization of its own here, so this record claims no bite-proof for it.
 - E9a, E9b and E9c were added later (order FU3); their disclosures are in the bullets under `## E9a` below, and the E1-E8b bullets above describe E1-E8b only.
 
