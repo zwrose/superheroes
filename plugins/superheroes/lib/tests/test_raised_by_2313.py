@@ -10,6 +10,7 @@ V1 the account validator · H1 content identity · A1 abandoned-session recovery
 
 Bite-proof record: i2313_raised_by
 """
+import json
 import os
 import sys
 
@@ -36,7 +37,7 @@ from test_c4_sweep_recovery import INSIDE, SEAT_1, _account, _hits, _stored  # n
 from test_review_record import account as acct, finding as record_finding, put  # noqa: E402
 from test_review_record import Fake as RecordFake  # noqa: E402
 from test_review_record_abandoned_2137 import REASON  # noqa: E402
-from test_review_record_session import Fake, Session, extras, ledger_row, put_envelope, CODEX  # noqa: E402
+from test_review_record_session import Fake, Session, extras, fix_session, ledger_row, put_envelope, put_extras, send, CODEX  # noqa: E402
 
 RAISED = SC.RAISED_BY_FIELD
 CONSEQUENCE = "a defect stays in the change"
@@ -627,16 +628,48 @@ def test_r2_an_intervening_other_session_record_with_a_malformed_findings_list_i
 @pytest.mark.parametrize("failure", ["none", "non-list", "raises"])
 def test_r2_a_failed_history_read_refuses_with_gh_failed_and_posts_nothing(tmp_path, failure):
     # axis: a comments read that fails is not an absent predecessor: the writer refuses review-record-gh-failed and posts nothing
-    fake = RecordFake()
-    readers = fake.readers()
-    def broken(pr, repo):
-        if failure == "raises":
+    session, runs, body = fix_session(tmp_path)
+    fake = Fake(runs=runs)
+    calls = []
+    inner = fake.readers()["list_comments"]
+
+    def list_comments(pr, repo):
+        calls.append((pr, repo))
+        if len(calls) == 1:  # the latest-record read in `_earlier`
+            return inner(pr, repo)
+        if failure == "raises":  # the history walk in `_other_session_findings`
             raise OSError("gh down")
         return None if failure == "none" else {"not": "a list"}
-    with pytest.raises(rs.Refusal) as e:
-        rs._other_session_findings(_session_account("B", "premortem-reviewer"), {}, str(tmp_path), {**readers, "list_comments": broken})
-    assert e.value.reason == "review-record-gh-failed"
+    out = rs.write_from_session(session, put_extras(tmp_path, extras(ci="green", **body)), str(tmp_path),
+                                {**fake.readers(), "list_comments": list_comments})
+    # the writer's own later read fails the same way, so the outcome alone cannot tell a refusal at the history walk from one further on
+    assert len(calls) == 2, calls
+    assert (out["ok"], out["reason"]) == (False, "review-record-gh-failed"), out
     assert fake.writes == []
+
+
+def test_r2_the_writer_posts_the_rows_current_raiser_when_the_session_rewrites_its_own_record(tmp_path):
+    # axis: the writer takes raisers from another session's record only; a rewrite of this session's own record posts the row's current raiser, not the one its earlier record carried
+    session, runs, body = fix_session(tmp_path)
+    fake = Fake(runs=runs)
+    state_path = os.path.join(session, "loop-state.json")
+
+    def set_raiser(raiser):
+        with open(state_path, encoding="utf-8") as fh:
+            state = json.load(fh)
+        assert state["dispositionLedger"]
+        for row in state["dispositionLedger"]:
+            row[RAISED] = raiser
+        with open(state_path, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+    set_raiser("scoped finder")
+    out = send(tmp_path, session, fake, ci="green", **body)
+    assert out["ok"], out
+    assert rr.read(7, readers=fake.readers())["findings"][0][RAISED] == "scoped finder"
+    set_raiser("code-reviewer")  # the raiser synthesis moved, in the same session
+    out = send(tmp_path, session, fake, ci="green", **body)
+    assert out["ok"], out
+    assert rr.read(7, readers=fake.readers())["findings"][0][RAISED] == "code-reviewer"
 
 
 # ---- V1: the account validator ---------------------------------------------------------------------------------
