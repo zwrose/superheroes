@@ -1511,11 +1511,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** The rail-lane detector: test_ssot_drift.py and the rail-census-v3 pinned set (53
   files). It costs suite mass and drift-pin maintenance whenever a doc↔code mirror moves.
 - **Start date.** 2026-09-15.
-- **Condition.** Citation-based, 45 days: vet, named-edit or incident receipts citing the
-  retention-doctrine bar for rails applied, a rail inventory entry removed only with cannot-bite
-  evidence and owner approval, or a rail held against a removal that lacked them. On zero citations
-  for the full window, a proposal at a gardening pass to enforce the bar. A removal without that
-  evidence is a violation of the bar, which the vet refuses; it is not this condition's signal.
+- **Condition.** Citation-based, 45 days: vet, CI or incident receipts citing a rail
+  (test_ssot_drift.py or a rail-census pin) catching a real doc↔code drift. On zero citations for
+  the full window, a proposal to the owner at a gardening pass. Removing a rail inventory entry
+  without cannot-bite evidence and owner approval breaks the retention-doctrine bar for rails,
+  which the vet refuses; that is not this condition's signal.
 - **Last demonstrated benefit.** The four rails are the suite's recorded foreign-regression provers
   (the assessment record, G2 ruling (a)).
 - **Consumer evidence.** unmeasured.
