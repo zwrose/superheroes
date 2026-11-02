@@ -483,6 +483,25 @@ def test_codex_failed_call_naming_another_file_beside_the_core_is_unknown(calib,
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
 
 
+@pytest.mark.parametrize("command,output,grade", [
+    # a pattern, a sed script or a count is not a file: a failed single-file call stays not-read
+    pytest.param("grep absent <core>", "", "not-read", id="failed-grep-pattern-not-a-file"),
+    pytest.param("sed -n '1,50p' <core>", "", "not-read", id="failed-sed-script-not-a-file"),
+    pytest.param("head -n 5 <core>", "", "not-read", id="failed-head-count-not-a-file"),
+    # a real second file operand still grades unknown
+    pytest.param("cat /tmp/missing.txt <core>", "", "unknown", id="failed-cat-missing-then-core"),
+    # several files for a one-file program: no operand list, so the raw-argument fallback fails closed
+    pytest.param("sed -n '1,5p' <sibling> <core>", "", "unknown", id="failed-sed-sibling-and-core"),
+])
+def test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read(calib, tmp_path, command, output, grade):
+    sibling = str(tmp_path / "store" / "sibling.md")
+    with open(sibling, "w", encoding="utf-8") as fh:
+        fh.write(_CORE_LINE + "\n")
+    command = command.replace("<sibling>", sibling).replace("<core>", calib.core)
+    stdout = _codex_stream(_codex_cmd("a", command, exit_code=1, aggregated_output=output))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
 def _mcp_stream(tool, arguments, **extra):
     item = {"id": "m", "type": "mcp_tool_call", "tool": tool, "arguments": arguments,
             "status": "completed", "error": None, "result": _mcp_result(CORE_TEXT)}

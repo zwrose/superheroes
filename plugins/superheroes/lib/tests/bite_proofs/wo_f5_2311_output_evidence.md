@@ -551,3 +551,61 @@ FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_mcp_read_too
 ..                                                                       [100%]
 2 passed in 0.40s
 ```
+
+## WO-F9 (#2311): a failed single-file call stays not-read when its pattern, script or count is not a file
+
+Detector: `Y` = `test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read` (explicit ids). Declared
+guarded-element set (from the order): F1b. The neutralization is a targeted Edit undone by the inverse Edit; the red
+and the green ran by exact node id under `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/shpyc -m pytest
+<node ids> -q --tb=short`. Captures are the pytest output with the `UV_NATIVE_TLS` warning line dropped; nothing else
+was cut. No credential or private URL; no redaction.
+
+### F1b: file operands, not raw arguments
+
+- Guarded element: `_names_other_file`, the shell branch's `operands = _file_operands(_program(word), args)`. Axis: a
+  failed single-file call whose pattern, sed script or count is not a file stays not-read; only a file operand found
+  by position (or, when none can be found, a raw non-option argument) names another file.
+- Neutralization: `operands = _file_operands(_program(word), args)` became `operands = None` (the shell branch always
+  uses the raw non-option arguments, today's behaviour).
+- Detector nodes: `Y[failed-grep-pattern-not-a-file]`, `Y[failed-sed-script-not-a-file]`,
+  `Y[failed-head-count-not-a-file]`.
+- Raw red:
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read[failed-grep-pattern-not-a-file] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:502: in test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'unknown' == 'not-read'
+E     
+E     - not-read
+E     + unknown
+_ test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read[failed-sed-script-not-a-file] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:502: in test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'unknown' == 'not-read'
+E     
+E     - not-read
+E     + unknown
+_ test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read[failed-head-count-not-a-file] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:502: in test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'unknown' == 'not-read'
+E     
+E     - not-read
+E     + unknown
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read[failed-grep-pattern-not-a-file]
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read[failed-sed-script-not-a-file]
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_failed_single_file_call_with_a_pattern_or_count_stays_not_read[failed-head-count-not-a-file]
+3 failed in 0.47s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n after): `547:        operands = _file_operands(_program(word), args)`
+- Raw green:
+
+```
+...                                                                      [100%]
+3 passed in 5.02s
+```

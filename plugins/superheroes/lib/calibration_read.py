@@ -530,13 +530,24 @@ def _names_other_file(call, targets):
     """True when the call names a path other than the target spellings, beside the target.
 
     A tool call: any string among its ``paths`` and ``named`` values that is not a target spelling. A shell
-    text: the structurally single command's raw non-option arguments (``_simple_command``, whatever
-    ``_file_operands`` returns) hold something other than the target spellings."""
+    text (the structurally single command of ``_simple_command``): when ``_file_operands`` finds the command's
+    file operands by position, the list holds something other than the target spellings (a grep pattern, a sed
+    script or an option value is not a file operand); when it returns None (several files for a one-file
+    program, an unlisted option or program), the raw non-option arguments hold something other than the target
+    spellings, which fails closed."""
+    # axis: a pattern, script or count is not "another file"; only a file operand found by position, or (when
+    # none can be found) a raw non-option argument, counts as naming one
     if any(isinstance(p, str) and p not in targets for p in call["paths"] + call["named"]):
         return True
     for text in call["texts"]:
         parsed = _simple_command(text) if isinstance(text, str) else None
-        if parsed is not None and any(not arg.startswith("-") and arg not in targets for arg in parsed[0][1:]):
+        if parsed is None:
+            continue
+        (word, *args), _joined = parsed
+        operands = _file_operands(_program(word), args)
+        if operands is None:
+            operands = [arg for arg in args if not arg.startswith("-")]
+        if any(operand not in targets for operand in operands):
             return True
     return False
 
