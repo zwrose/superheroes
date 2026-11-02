@@ -9,6 +9,7 @@ import sys
 
 import pytest
 
+from fake_adapters import FakeAdapters
 from test_round_driver import _guard_argv, audit_checks
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -586,67 +587,6 @@ def test_records_path_relative_persisted_absolute_and_submit_from_other_cwd(tmp_
         os.chdir(cwd)
 
 
-class _FakeAdapters(object):
-    ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_SEAMS, RD.P_AUDITS,
-                      RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
-
-    def __init__(self):
-        self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
-                        RD.P_VERIFIERS: [],
-                        RD.P_SYNTHESIS: ["synthesis"],
-                        RD.P_APPLY_FIXES: ["apply-fixes"]}
-        self.roster_reasons = {}
-        self.faults = {}
-        self.assemble_reason = None
-        self.assembled = []
-        self.policies = {}
-
-    def roster_for(self, phase, state, config):
-        if phase in self.roster_reasons:
-            return [], self.roster_reasons[phase]
-        return list(self.rosters.get(phase, [])), None
-
-    def payload_fault(self, phase, payload, seat_key, record_boundary=False):
-        return self.faults.get(seat_key)
-
-    def missing_policy(self, phase):
-        return self.policies.get(phase, "seat-status")
-
-    def is_orchestrator_fulfilled(self, phase):
-        return phase in (RD.P_VERIFY, RD.P_APPLY_FIXES)
-
-    def orchestrator_payload_fault(self, phase, payload):
-        if phase == RD.P_VERIFY:
-            return RD.verify_result_fault(payload)
-        if phase == RD.P_APPLY_FIXES:
-            return RD.payload_contracts.payload_fault(phase, payload, "apply-fixes")
-        return "orchestrator-payload-unknown-phase:%s" % phase
-
-    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
-                 session_dir=None, orders_manifest=None):
-        self.assembled.append({"phase": phase, "envelopes": envelopes,
-                               "dispatch_manifest": dispatch_manifest,
-                               "session_dir": session_dir})
-        if self.assemble_reason is not None:
-            return None, self.assemble_reason
-        if phase == RD.P_PANEL:
-            seats = {}
-            for env in (envelopes or []):
-                if not isinstance(env, dict):
-                    continue
-                seat = env.get("seat")
-                if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
-                    seats[seat] = {"findings": [], "missing": True}
-                else:
-                    seats[seat] = env.get("payload") or {"findings": []}
-            return {"seats": seats}, None
-        if phase == RD.P_VERIFIERS:
-            return {"verdicts": []}, None
-        if phase == RD.P_SYNTHESIS:
-            return {"grouping": None}, None
-        return {}, None
-
-
 def _gitdir(base, name="_gitdir"):
     path = os.path.join(base, name)
     os.makedirs(path, exist_ok=True)
@@ -676,7 +616,7 @@ def _sidecar_path(gitdir):
 def test_cmd_advance_recover_uses_injected_git_seam_for_legacy_sidecar(
         tmp_path, monkeypatch):
     """G1 driver-level: ``cmd_advance``'s injected ``git`` seam reaches legacy sidecar replay."""
-    fake = _FakeAdapters()
+    fake = FakeAdapters()
     monkeypatch.setitem(sys.modules, "round_adapters", fake)
     session_dir = str(tmp_path / "session")
     os.makedirs(session_dir)

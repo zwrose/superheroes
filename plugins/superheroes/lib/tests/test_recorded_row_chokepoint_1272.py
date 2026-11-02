@@ -23,94 +23,13 @@ RD = _load("round_driver")
 RR = _load("round_records")
 RC = _load("round_commit")
 TRI = importlib.import_module("test_round_driver_integration")
+from fake_adapters import FakeAdapters  # noqa: E402
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
 HEAD_SHA = "abc123def4567890abcdef1234567890abcdef12"
 SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5.5", "engine": "claude"}
                       for dim in RD.DIMENSIONS}}
-
-
-class FakeAdapters(object):
-    ADAPTER_PHASES = (RD.P_PANEL, RD.P_VERIFIERS, RD.P_SYNTHESIS, RD.P_SEAMS, RD.P_AUDITS,
-                      RD.P_SCOPED, RD.P_VERIFY, RD.P_APPLY_FIXES)
-
-    def __init__(self):
-        self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
-                        RD.P_VERIFIERS: [],
-                        RD.P_SYNTHESIS: ["synthesis"],
-                        RD.P_APPLY_FIXES: ["apply-fixes"],
-                        RD.P_VERIFY: ["verify"]}
-        self.roster_reasons = {}
-        self.faults = {}
-        self.assemble_reason = None
-        self.assembled = []
-        self.policies = {}
-
-    def roster_for(self, phase, state, config):
-        if phase in self.roster_reasons:
-            return [], self.roster_reasons[phase]
-        return list(self.rosters.get(phase, [])), None
-
-    def payload_fault(self, phase, payload, seat_key, record_boundary=False):
-        return self.faults.get(seat_key)
-
-    def missing_policy(self, phase):
-        return self.policies.get(phase, "seat-status")
-
-    def is_orchestrator_fulfilled(self, phase):
-        return phase in (RD.P_VERIFY, RD.P_APPLY_FIXES)
-
-    def orchestrator_payload_fault(self, phase, payload):
-        if phase == RD.P_VERIFY:
-            return RD.verify_result_fault(payload)
-        if phase == RD.P_APPLY_FIXES:
-            return RD.payload_contracts.payload_fault(phase, payload, "apply-fixes")
-        return "orchestrator-payload-unknown-phase:%s" % phase
-
-    def sweep_seat_key(self, sweep_id, part):
-        return "searcher:%s:%d" % (sweep_id, part)
-
-    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None,
-                 session_dir=None, orders_manifest=None):
-        self.assembled.append({"phase": phase, "envelopes": envelopes,
-                               "dispatch_manifest": dispatch_manifest,
-                               "session_dir": session_dir})
-        if self.assemble_reason is not None:
-            return None, self.assemble_reason
-        if phase == RD.P_PANEL:
-            seats = {}
-            for env in (envelopes or []):
-                if not isinstance(env, dict):
-                    continue
-                seat_key = env.get("seat")
-                if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
-                    seats[seat_key] = {"findings": [], "missing": True}
-                else:
-                    seats[seat_key] = env.get("payload") or {"findings": []}
-            return {"seats": seats}, None
-        if phase == RD.P_VERIFIERS:
-            verdicts = []
-            for env in (envelopes or []):
-                if not isinstance(env, dict):
-                    continue
-                if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
-                    continue
-                payload = env.get("payload")
-                if not isinstance(payload, dict):
-                    continue
-                for verdict in payload.get("verdicts") or []:
-                    if isinstance(verdict, dict):
-                        verdicts.append(dict(verdict))
-            return {"verdicts": verdicts}, None
-        if phase == RD.P_SYNTHESIS:
-            return {"grouping": None}, None
-        if phase == RD.P_VERIFY:
-            for env in (envelopes or []):
-                if isinstance(env, dict) and env.get("schema") != RR.SEAT_MISSING_SCHEMA:
-                    return dict(env.get("payload") or {"result": "pass"}), None
-            return None, "missing-verify"
-        return {}, None
 
 
 @pytest.fixture
