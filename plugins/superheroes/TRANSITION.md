@@ -12,11 +12,11 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.47.0
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.47.0. Each step names the note it comes from.
 
 - **After switching.** **Every review finding now names its kind of mistake and every other place in the change with the same mistake, and the fix auditor fails a fix that leaves a named place unfixed. Reviewers are asked to write a search description on every finding; a finding whose reviewer wrote none (the member is `null`) is still kept, never refused. A caller sees the two new finding members `kindOfMistake` and `searchDescription`, which a codex seat's strict output schema now requires as nullable keys; the audit result's `places` answer, `[{file, line, fixed}]`, optional in the schema, but for a finding that names places an absent answer leaves every named place unanswered, so the finding stays open; and the review record's "kind of mistake" and "also in this PR … (n of m fixed)" parts on a finding. Nothing is owed by a project at once: a custom reviewer that writes its own findings JSON emits both members, as an object or as `null`, and a `null` is never a refusal.** See [Review: a finding names its kind of mistake, and every place with it is fixed](#review-a-finding-names-its-kind-of-mistake-and-every-place-with-it-is-fixed).
 - **After switching.** **A finding fixed in some but not all of the places it names now says so in the review record's summary, as "fixed in n of m places", and its places show the latest authenticated fix audit's answers.** Nothing is owed: the record's per-place shape is unchanged. See [Review: a partly fixed finding says how many places were fixed](#review-a-partly-fixed-finding-says-how-many-places-were-fixed).
@@ -76,6 +76,28 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Nothing is owed: builders are given three field rules — a command refused only for its form may be re-issued once in plain form, a headless lane never ends a turn with work still running, and a delete never rides a compound command.** See [Builders: three field rules](#builders-three-field-rules).
 
 - **After switching.** **A carried finding left undecided by an abandoned review can now be settled as fixed by the driver's carriedChecks entry, under the same conditions as a left-for-owner one. No input or output shape changes: a carriedRechecks row for such a finding now reads fixed or kept where it read unchanged. Nothing is owed.**
+
+- **After switching.** **Nothing is owed at once: an advisor marks a spec delivered at closure, marks a later ruling that changes delivered behavior on the spec instead of amending it, and marks specs delivered before this release when next touched, not all at once.** See [Specs: delivered specs freeze, and later rulings mark them](#specs-delivered-specs-freeze-and-later-rulings-mark-them).
+
+- **After switching.** **Nothing is owed: a new spec now goes where the project's confirmed doc policy says, and an empty work-item folder an earlier run left in the project store can be ignored.** See [Specs: a new spec follows the doc policy](#specs-a-new-spec-follows-the-doc-policy).
+
+- **After switching.** **Nothing is owed at once: the gardening pass reads two revisit checks from its next run, and a false PR claim is logged from the next time an act finds one.** See [Gardening: two revisit checks and a false PR claim count](#gardening-two-revisit-checks-and-a-false-pr-claim-count).
+
+- **After switching.** **Nothing is owed: a launch whose ledger append reports failure is now read back, so a line that did land is no longer treated as lost and a worktree is removed only when no live reservation can name it.** See [Launcher: a reservation whose append reports failure is read back](#launcher-a-reservation-whose-append-reports-failure-is-read-back).
+
+- **After switching.** **Nothing is owed: the review setup's verify-command doctor no longer calls a profile stale over a path its verify command may not run.** See [Verify-command doctor: check 6 fails safe](#verify-command-doctor-check-6-fails-safe).
+
+- **After switching.** **Nothing is owed, except that a consumer that checks `sanitized_view` refusals or reads a successful view's `diffPath` and `diffBytes` must accept the change: `sanitized-view-diff-fully-withheld` is retired, and `diffPath` and `diffBytes` are `null` when there is no review patch.** A change made only of withheld config is now reviewed instead of refused, and a file or symlink named like a config folder is now withheld. See [Review view: a change made only of withheld config is reviewed instead of refused](#review-view-a-change-made-only-of-withheld-config-is-reviewed-instead-of-refused).
+
+- **After switching.** **Nothing is owed, unless a spec package keeps its breakdown bodies outside `children/`, `seams/` and `epic.md`: then move them into that home and re-pin them before its spec PR's sheet is built.** A spec PR now gets a merge sheet without a code review record. See [Spec PRs: a merge sheet without a review record, and a fixed home for breakdown bodies](#spec-prs-a-merge-sheet-without-a-review-record-and-a-fixed-home-for-breakdown-bodies).
+
+- **Before switching.** **Finish or abandon in-flight claude write runs.** A claude write run opened by an older plugin refuses its continuation: the spawn argv check rebuilds the sandbox settings from the current allow rules, and the run's stored settings lack the new assignment-prefixed rules. Open a fresh dispatch. See [Claude write channel: leading NAME=value assignments run](#claude-write-channel-leading-namevalue-assignments-run).
+
+- **After switching.** **Nothing is owed: the advisor stops writing a share sentence at launch and applying a kind label at routing, and a project's stamped `dial` or `budgetN` is ignored. Existing `kind:machinery` and `kind:product` labels may be deleted by hand.** See [Advisor: the forward-share dial and the kind labels are retired](#advisor-the-forward-share-dial-and-the-kind-labels-are-retired).
+
+- **After switching.** **Nothing is owed: an adoption's refusal for an earlier cloud lane now counts only lanes that could still write the adopted branch, and every refusal's `remedy` names a step the advisor runs itself.** See [Launcher: an adoption counts only the lanes that could still write the adopted branch](#launcher-an-adoption-counts-only-the-lanes-that-could-still-write-the-adopted-branch).
+
+- **After switching.** **Nothing is owed: a cloud lane stopped by its account's usage limit is now recovered without the owner, and a cloud builder that wakes after a newer launch took its issue over stops without pushing. A consumer that relied on a bound lane's gone branch needing no session listing must now supply the session read.** See [Recovery: a cloud account at its usage limit recovers without the owner](#recovery-a-cloud-account-at-its-usage-limit-recovers-without-the-owner).
 
 ### Cloud builds: a pass-parked build is recovered by adoption
 
@@ -176,12 +198,6 @@ A finding fixed in some but not all of the places it names used to read "0 of m 
 - **Grades.** Every finding the verifier judges carries `grade`, `{"verdict": "confirmed" | "plausible" | "wrong", "reason": …}`, on the finding, its ledger row and the review record. A grade a reviewer supplies on its own finding is removed when findings are staged.
 - **`shown-wrong`.** The record writer accepts `shown-wrong` only for a finding the verifier closed in the session (a refuted row with the verifier's wrong grade, or one merged into such a row) or one the latest earlier record on the PR already listed as shown wrong. Any other `shown-wrong` in an account is refused `review-account-invalid`, and a refuted ledger row without the wrong grade stays open. A light-lane account writes `left-for-owner` for a finding argued wrong.
 - **The missed-path step.** A verdict may carry `pathReached` for a finding whose break-it test passed. `pathReached: false` holds the finding (listed in the verify record's new `held` list); the driver emits the new phase `dispatch-second-test`, runs the one more test a fresh test-role run writes, and re-dispatches the verifiers over the held findings. The new decision kinds are `second-test-held`, `second-test-unseatable` and `second-test-held-again`; the round record gains `secondTest` and, when no reviewer can be seated, `secondTestUnseatable`. A caller that does not read these sees no change.
-
-- **After switching.** **Nothing is owed: the advisor stops writing a share sentence at launch and applying a kind label at routing, and a project's stamped `dial` or `budgetN` is ignored. Existing `kind:machinery` and `kind:product` labels may be deleted by hand.** See [Advisor: the forward-share dial and the kind labels are retired](#advisor-the-forward-share-dial-and-the-kind-labels-are-retired).
-
-- **After switching.** **Nothing is owed: an adoption's refusal for an earlier cloud lane now counts only lanes that could still write the adopted branch, and every refusal's `remedy` names a step the advisor runs itself.** See [Launcher: an adoption counts only the lanes that could still write the adopted branch](#launcher-an-adoption-counts-only-the-lanes-that-could-still-write-the-adopted-branch).
-
-- **After switching.** **Nothing is owed: a cloud lane stopped by its account's usage limit is now recovered without the owner, and a cloud builder that wakes after a newer launch took its issue over stops without pushing. A consumer that relied on a bound lane's gone branch needing no session listing must now supply the session read.** See [Recovery: a cloud account at its usage limit recovers without the owner](#recovery-a-cloud-account-at-its-usage-limit-recovers-without-the-owner).
 
 ### Review: rounds stop at 4, and nothing waits on the owner mid-review
 
@@ -302,18 +318,6 @@ A finding fixed in some but not all of the places it names used to read "0 of m 
 - **The catch-up.** Once the review loop ends and before the layer hands back, a layer whose lower layer has moved is brought current by a local `--no-ff` merge, verified on the caught-up head, and reviewed as a returning review of what the catch-up changed in its own lines. A catch-up that changed none of them is an empty returning round that carries the earlier review, and any finding still open is re-checked against the caught-up head. See [How a stack stays current](rubric/native-stacks.md#how-a-stack-stays-current).
 - **The handback check.** `python3 -B <plugin root>/lib/vet_slot.py handback --pr <n> --repo <owner/name>` refuses `stack-not-caught-up` while the PR's pushed head is behind its lower branch's current head, and `stack-lower-unreadable` when that head cannot be read. Without `--pr`, `handback --body-file <f>` runs no catch-up check.
 
-## 0.47.0
-
-### Before you upgrade
-
-Check these in a consuming project when it adopts 0.47.0. Each step names the note it comes from.
-
-- **After switching.** **Nothing is owed at once: an advisor marks a spec delivered at closure, marks a later ruling that changes delivered behavior on the spec instead of amending it, and marks specs delivered before this release when next touched, not all at once.** See [Specs: delivered specs freeze, and later rulings mark them](#specs-delivered-specs-freeze-and-later-rulings-mark-them).
-
-- **After switching.** **Nothing is owed: a new spec now goes where the project's confirmed doc policy says, and an empty work-item folder an earlier run left in the project store can be ignored.** See [Specs: a new spec follows the doc policy](#specs-a-new-spec-follows-the-doc-policy).
-
-- **After switching.** **Nothing is owed at once: the gardening pass reads two revisit checks from its next run, and a false PR claim is logged from the next time an act finds one.** See [Gardening: two revisit checks and a false PR claim count](#gardening-two-revisit-checks-and-a-false-pr-claim-count).
-
 ### Gardening: two revisit checks and a false PR claim count
 
 - **A fifth misses-log class.** The misses log gains a fifth class, the [false PR claim](rubric/glossary.md#false-pr-claim). The act that finds one logs it once per claim, in a review escape's entry shape plus two lines: the marker line ``false PR claim: <the claim> — shown false by <what showed it false>`` and a line naming what would have caught it.
@@ -322,16 +326,6 @@ Check these in a consuming project when it adopts 0.47.0. Each step names the no
 - **Two checks at each pass.** Each gardening pass records, for the false-claim check and the seating check, whether it was met and, when it was, that it went to the owner as a calibration proposal. A met check reopens a decision for the owner to rule on. It changes nothing by itself, and no target or gate on rounds, tokens, or minutes is set.
 - **The vet.** The vet now settles findings left open at the round cap, records each cap choice in the receipt, and checks a PR description's claims one by one.
 - **Nothing is owed at once.** A tally caller that does not read `falsePrClaims` is unaffected, and a misses log with no false PR claim counts zero.
-
-- **After switching.** **Nothing is owed: a launch whose ledger append reports failure is now read back, so a line that did land is no longer treated as lost and a worktree is removed only when no live reservation can name it.** See [Launcher: a reservation whose append reports failure is read back](#launcher-a-reservation-whose-append-reports-failure-is-read-back).
-
-- **After switching.** **Nothing is owed: the review setup's verify-command doctor no longer calls a profile stale over a path its verify command may not run.** See [Verify-command doctor: check 6 fails safe](#verify-command-doctor-check-6-fails-safe).
-
-- **After switching.** **Nothing is owed, except that a consumer that checks `sanitized_view` refusals or reads a successful view's `diffPath` and `diffBytes` must accept the change: `sanitized-view-diff-fully-withheld` is retired, and `diffPath` and `diffBytes` are `null` when there is no review patch.** A change made only of withheld config is now reviewed instead of refused, and a file or symlink named like a config folder is now withheld. See [Review view: a change made only of withheld config is reviewed instead of refused](#review-view-a-change-made-only-of-withheld-config-is-reviewed-instead-of-refused).
-
-- **After switching.** **Nothing is owed, unless a spec package keeps its breakdown bodies outside `children/`, `seams/` and `epic.md`: then move them into that home and re-pin them before its spec PR's sheet is built.** A spec PR now gets a merge sheet without a code review record. See [Spec PRs: a merge sheet without a review record, and a fixed home for breakdown bodies](#spec-prs-a-merge-sheet-without-a-review-record-and-a-fixed-home-for-breakdown-bodies).
-
-- **Before switching.** **Finish or abandon in-flight claude write runs.** A claude write run opened by an older plugin refuses its continuation: the spawn argv check rebuilds the sandbox settings from the current allow rules, and the run's stored settings lack the new assignment-prefixed rules. Open a fresh dispatch. See [Claude write channel: leading NAME=value assignments run](#claude-write-channel-leading-namevalue-assignments-run).
 
 ### Verify-command doctor: check 6 fails safe
 

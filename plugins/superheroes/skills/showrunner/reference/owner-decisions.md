@@ -790,7 +790,8 @@ ninth duty.
 - and **the misses-log appends made**, the review escapes among them, the escapes tallied by kind beside the per-seat tally, and the calibration proposals the pass brought.
 
 **What the decisions-asked count counts.** The decisions that needed the owner's word in the window:
-P0 rulings, batched P1 words, launch go-aheads, retirement rulings, and recalibration stamps. **Nothing
+P0 rulings, batched P1 words, launch go-aheads, filing words (the owner's word that a new issue
+files), retirement rulings, and recalibration stamps. **Nothing
 compares it to anything yet.** The window's misses are **not** a second count, because the record's
 misses-log line already lists the entries appended. The escape rate is a different measure recorded
 beside it. **No instrument is built for the count**. It is an advisor's read over board data.
