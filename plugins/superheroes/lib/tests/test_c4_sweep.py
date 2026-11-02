@@ -736,6 +736,108 @@ def test_s5_a_record_write_park_during_the_second_test_pass_keeps_the_held_back_
     assert sorted(f["title"] for f in receipt["findings"]) == ["Held", "Plain"]
 
 
+def _fail_the_record_write(world, monkeypatch):
+    """The real chain for a record-write park: a records path, one ledger record, and a write that raises OSError."""
+    state = world.state
+    state["config"]["recordsPath"] = str(world.session / "round-records.json")
+    state["_records"] = [TRD._seed_record(1)]
+
+    def _raise_oserror(path, data):
+        raise OSError(13, "permission denied")
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", _raise_oserror)
+
+
+def _titles(rows):
+    return sorted(f["title"] for f in rows)
+
+
+def _park_and_read(world, monkeypatch):
+    """Fail the record write, then return the parked `findings` titles and the receipt's, after checking the park."""
+    state = world.state
+    _fail_the_record_write(world, monkeypatch)
+    RD._persist_round_records(state, state["config"])
+    assert state["terminal"] == "cannot-certify" and state["step"] == RD.P_TERMINAL
+    return _titles(state["findings"]), _titles(RD.build_receipt(state)["findings"])
+
+
+def _to_the_search_pass_done(world):
+    """Round 1 with one confirmed finding, a search that found a second site, and the extra verifier pass finished."""
+    _to_sweep(world)
+    _sweep(world, _both(_hit(19, what="second site")))
+    return _verify(world)
+
+
+def test_s5_a_record_write_park_after_the_second_test_pass_finishes_keeps_the_survivors_the_pass_confirmed_beside(
+        world, monkeypatch):
+    # axis: `_verified` is read before a record-write park once the second-test pass has finished, so the receipt keeps
+    # the pass-1 survivor that `_toVerify` (only the extra pass's finding) no longer names (#2312 item 5)
+    # no search description on the raised findings, so no repository search follows the second-test pass
+    _panel(world, code_reviewer=[_finding("Plain", line=2, searchDescription=None),
+                                 _finding("Held", line=3, searchDescription=None)])
+    for staged in world.state["_toVerify"]:
+        if staged["title"] == "Held":
+            staged["breakItRun"] = {"outcome": "passed"}
+    state = _verify(world, {"Held": MISSED_PATH})
+    if state["step"] == RD.P_SECOND_TEST:
+        RD._fold_second_test(state, state["config"], {"findings": []}, session_dir=str(world.session))
+    state = _verify(world)  # the second pass confirms "Held"
+    assert state["step"] == RD.P_SYNTHESIS
+    assert [f["title"] for f in state["_toVerify"]] == ["Held"]
+    assert _titles(state["_verified"]) == ["Held", "Plain"]
+    assert not state.get("findings")
+    parked, receipt = _park_and_read(world, monkeypatch)
+    assert parked == ["Held", "Plain"]
+    assert receipt == ["Held", "Plain"]
+
+
+def test_s5_a_record_write_park_after_the_search_pass_finishes_keeps_the_finding_the_search_started_from(
+        world, monkeypatch):
+    # axis: `_verified` is read before a record-write park once the search's extra verifier pass has finished, so the
+    # receipt keeps the confirmed finding that `_toVerify` (only the hit) no longer names (#2312 item 5)
+    state = _to_the_search_pass_done(world)
+    assert state["step"] == RD.P_SYNTHESIS
+    assert [f["title"] for f in state["_toVerify"]] == ["second site"]
+    assert _titles(state["_verified"]) == ["Retry without a cap", "second site"]
+    assert not state.get("findings")
+    parked, receipt = _park_and_read(world, monkeypatch)
+    assert parked == ["Retry without a cap", "second site"]
+    assert receipt == ["Retry without a cap", "second site"]
+
+
+def test_s5_a_record_write_park_after_synthesis_merged_findings_does_not_bring_back_the_merged_away_member(
+        world, monkeypatch):
+    # axis: `_verified` counts before a record-write park only while synthesis is pending, because synthesis leaves it
+    # holding every merged-away member (#2312 item 5)
+    state = _to_the_search_pass_done(world)
+    assert state["step"] == RD.P_SYNTHESIS
+    ids = [row["id"] for row in state["_verified"]]
+    assert len(ids) == 2
+    # the real synthesis fold, with a grouping that merges the two findings into one
+    RD._fold_synthesis(state, state["config"], {"grouping": [{"group_id": "G-1", "member_ids": ids}]},
+                       session_dir=str(world.session))
+    assert state["step"] != RD.P_SYNTHESIS
+    assert len(state["findings"]) == 1 and len(state["_verified"]) == 2
+    before = _titles(state["findings"])
+    parked, receipt = _park_and_read(world, monkeypatch)
+    assert parked == before and len(parked) == 1
+    assert receipt == before
+
+
+def test_s5_every_carry_list_the_driver_assigns_is_read_before_a_record_write_park():
+    # axis: a future `_<name>Carry` list that holds confirmed findings cannot be left out of the park's reading — every
+    # carry the driver assigns, but the refuted ones, is named by `_PARK_SEED_LISTS` (#2312 item 5)
+    import re
+    with open(RD.__file__, encoding="utf-8") as handle:
+        source = handle.read()
+    carries = set(re.findall(r'state\["(_\w*Carry)"\]\s*=[^=]', source))
+    assert carries, "the census found no carry assignment at all"
+    confirmed = {name for name in carries if "Refuted" not in name}
+    assert confirmed <= set(RD._PARK_SEED_LISTS), sorted(confirmed - set(RD._PARK_SEED_LISTS))
+    for name in ("_verified", "_toVerify", "_panelStaged"):
+        assert name in RD._PARK_SEED_LISTS
+
+
 # ---- S6 a session resumed between steps -----------------------------------------------------------------------
 
 
