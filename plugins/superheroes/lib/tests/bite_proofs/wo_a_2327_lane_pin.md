@@ -147,3 +147,28 @@ FAILED plugins/superheroes/lib/tests/test_lane_plugin_pin_2327.py::test_place_lo
 .....................................                                    [100%]
 37 passed in 2.23s
 ```
+
+## BP4 — a damaged version header is refused, never read as absent (review round 1 fix)
+
+Added by the build session's review fix for the round-1 finding "Malformed version headers fail
+open as unpinned launches". Typed by the orchestrator (maker family claude); no secrets, nothing
+redacted.
+
+- **Guarded element.** In `lane_version_check`, a line that starts with the version label but is
+  not a well-formed `Advisor plugin version: <value>` line sets `malformed = True`, which pins the
+  lane with an unreadable launched version.
+- **Axis line.** `# axis: a damaged version header is refused, never read as an absent one — see bite-proof record wo_a_2327_lane_pin`
+- **Break.** One targeted Edit: `malformed = True` → `malformed = False` in the damaged-header branch.
+- **Red** (`test_lane_plugin_pin_2327.py` alone):
+
+```
+     16 E       assert (True is False)
+      1 18 failed, 37 passed in 2.13s
+```
+
+- **Restore.** The inverse Edit (`malformed = True`).
+- **Green.**
+
+```
+55 passed in 9.72s
+```
