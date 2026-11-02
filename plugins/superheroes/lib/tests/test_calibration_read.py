@@ -23,8 +23,11 @@ import engine_dispatch as ED  # noqa: E402
 import model_registry as MR  # noqa: E402
 import round_driver  # noqa: E402
 
-CORE_TEXT = "# Core\n\nPolicy version: 2026-10-27.942777056682\n\nBody.\n"
-LAYER_TEXT = "# Review crew layer\n\nNo version line here.\n"
+# Each text holds at least one non-trivial line (24+ characters, 12+ letters, not a heading). CORE_TEXT gained
+# the "## Verify" heading so a heading-only output can be told from the file; LAYER_TEXT was widened because its
+# only prose line was 21 characters, which is trivial.
+CORE_TEXT = "# Core\n\nPolicy version: 2026-10-27.942777056682\n\n## Verify\n\nBody.\n"
+LAYER_TEXT = "# Review crew layer\n\nNo version line here, only the layer's own guidance.\n"
 CLAUDE_TEXT = "# Project\n\n- **Policy version:** `v7`\n"
 
 
@@ -81,9 +84,9 @@ def _codex_stream(*items):
 
 def test_codex_successful_read_of_each_file_records_read_with_hash_and_policy(calib):
     stdout = _codex_stream(
-        _codex_cmd("a", "/bin/bash -lc 'cat %s'" % calib.core, exit_code=0),
-        _codex_cmd("b", "/bin/bash -lc 'cat %s'" % calib.layer, exit_code=0),
-        _codex_cmd("c", "/bin/bash -lc 'cat %s'" % calib.claude, exit_code=0),
+        _codex_cmd("a", "/bin/bash -lc 'cat %s'" % calib.core, exit_code=0, aggregated_output=CORE_TEXT),
+        _codex_cmd("b", "/bin/bash -lc 'cat %s'" % calib.layer, exit_code=0, aggregated_output=LAYER_TEXT),
+        _codex_cmd("c", "/bin/bash -lc 'cat %s'" % calib.claude, exit_code=0, aggregated_output=CLAUDE_TEXT),
     )
     result = CR.read_states("codex", stdout, calib.stamp)
     assert result == [
@@ -101,8 +104,8 @@ def test_codex_successful_read_of_each_file_records_read_with_hash_and_policy(ca
 
 def test_codex_nonzero_exit_records_not_read_while_a_sibling_success_records_read(calib):
     stdout = _codex_stream(
-        _codex_cmd("a", "cat %s" % calib.core, exit_code=1),
-        _codex_cmd("b", "cat %s" % calib.layer, exit_code=0),
+        _codex_cmd("a", "cat %s" % calib.core, exit_code=1, aggregated_output=CORE_TEXT),
+        _codex_cmd("b", "cat %s" % calib.layer, exit_code=0, aggregated_output=LAYER_TEXT),
     )
     assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {
         "core": "not-read", "review-crew": "read", "CLAUDE.md": "not-read"}
@@ -138,21 +141,24 @@ def test_unknown_engine_records_unknown(calib):
     "cat {core}.backup", "cat {core}.md",
 ])
 def test_codex_existence_checks_and_other_files_are_not_a_read(calib, command):
-    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] != "read"
 
 
 def test_codex_existence_check_alone_records_not_read_and_unrecognized_program_records_unknown(calib):
-    stdout = _codex_stream(_codex_cmd("a", "test -f %s" % calib.core, exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", "test -f %s" % calib.core, exit_code=0, aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
-    stdout = _codex_stream(_codex_cmd("a", "mytool --load %s" % calib.core, exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", "mytool --load %s" % calib.core, exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
 def test_codex_pipeline_in_a_shell_wrapper_is_unknown_and_a_cd_joined_reader_records_read(calib):
     stdout = _codex_stream(
-        _codex_cmd("a", "/bin/bash -lc \"sed -n '1,40p' %s | head -n 5\"" % calib.core, exit_code=0),
-        _codex_cmd("b", "cd /x; cat %s" % calib.layer, exit_code=0),
+        _codex_cmd("a", "/bin/bash -lc \"sed -n '1,40p' %s | head -n 5\"" % calib.core, exit_code=0,
+                   aggregated_output=CORE_TEXT),
+        _codex_cmd("b", "cd /x; cat %s" % calib.layer, exit_code=0, aggregated_output=LAYER_TEXT),
     )
     assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {
         "core": "unknown", "review-crew": "read", "CLAUDE.md": "not-read"}
@@ -163,7 +169,8 @@ def test_codex_pipeline_in_a_shell_wrapper_is_unknown_and_a_cd_joined_reader_rec
     "(cat {core})", "for f in a; do\ncat {core}\ndone", "true && /bin/sh -c 'cat {core}'",
 ])
 def test_codex_content_reader_that_may_not_have_run_is_unknown(calib, command):
-    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
@@ -172,7 +179,7 @@ def _grep_stream(path, **extra):
         "type": "tool_use", "id": "g", "name": "Grep",
         "input": dict({"pattern": ".", "path": path}, **extra)}]}}
     result = {"type": "user", "message": {"content": [{
-        "type": "tool_result", "tool_use_id": "g", "is_error": False}]}}
+        "type": "tool_result", "tool_use_id": "g", "is_error": False, "content": CORE_TEXT}]}}
     return "\n".join(json.dumps(o) for o in (use, result))
 
 
@@ -190,11 +197,15 @@ def test_claude_grep_without_printed_content_is_unknown(calib, extra):
     assert _reads(CR.read_states("claude", stdout, calib.stamp))["core"] == "unknown"
 
 
+def _mcp_result(text):
+    return {"content": [{"type": "text", "text": text}]}
+
+
 def test_mcp_metadata_tool_naming_the_path_is_unknown_and_read_file_is_read(calib):
     def mcp(tool):
         return _codex_stream({"type": "item.completed", "item": {
             "id": "b", "type": "mcp_tool_call", "tool": tool, "arguments": {"path": calib.core},
-            "status": "completed", "error": None}})
+            "status": "completed", "error": None, "result": _mcp_result(CORE_TEXT)}})
     assert _reads(CR.read_states("codex", mcp("get_file_info"), calib.stamp))["core"] == "unknown"
     assert _reads(CR.read_states("codex", mcp("read_file"), calib.stamp))["core"] == "read"
 
@@ -203,7 +214,7 @@ def test_mcp_read_tool_credits_only_its_path_arguments(calib):
     def mcp(tool, arguments):
         return _codex_stream({"type": "item.completed", "item": {
             "id": "b", "type": "mcp_tool_call", "tool": tool, "arguments": arguments,
-            "status": "completed", "error": None}})
+            "status": "completed", "error": None, "result": _mcp_result(CORE_TEXT)}})
     assert _reads(CR.read_states("codex", mcp("read_file", {"path": calib.core}), calib.stamp))["core"] == "read"
     other = {"path": "/tmp/notes.txt", "note": calib.core}
     assert _reads(CR.read_states("codex", mcp("read_file", other), calib.stamp))["core"] == "unknown"
@@ -211,10 +222,24 @@ def test_mcp_read_tool_credits_only_its_path_arguments(calib):
     assert _reads(CR.read_states("codex", mcp("read_multiple_files", many), calib.stamp))["core"] == "read"
 
 
+def test_mcp_read_file_needs_a_result_that_shows_the_file(calib):
+    def grade(**extra):
+        item = {"id": "b", "type": "mcp_tool_call", "tool": "read_file", "arguments": {"path": calib.core},
+                "status": "completed", "error": None}
+        item.update(extra)
+        stdout = _codex_stream({"type": "item.completed", "item": item})
+        return _reads(CR.read_states("codex", stdout, calib.stamp))["core"]
+    assert grade(result=_mcp_result(CORE_TEXT)) == "read"
+    assert grade() == "unknown"
+    assert grade(result=None) == "unknown"
+    assert grade(result=_mcp_result("")) == "unknown"
+    assert grade(result=_mcp_result("some other file's text, with no line of the stamped one")) == "unknown"
+
+
 def test_unsupported_mcp_tool_naming_the_basename_relatively_is_unknown(calib):
     stdout = _codex_stream({"type": "item.completed", "item": {
         "id": "b", "type": "mcp_tool_call", "tool": "load_file", "arguments": {"path": "./core.md"},
-        "status": "completed", "error": None}})
+        "status": "completed", "error": None, "result": _mcp_result(CORE_TEXT)}})
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
@@ -222,7 +247,7 @@ def test_unsupported_mcp_tool_naming_an_absolute_path_elsewhere_is_not_read(cali
     other = "/elsewhere/" + calib.core.rsplit("/", 1)[-1]
     stdout = _codex_stream({"type": "item.completed", "item": {
         "id": "b", "type": "mcp_tool_call", "tool": "load_file", "arguments": {"path": other},
-        "status": "completed", "error": None}})
+        "status": "completed", "error": None, "result": _mcp_result(CORE_TEXT)}})
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
 
 
@@ -237,7 +262,7 @@ def test_truncated_capture_without_a_positive_read_records_unknown(calib):
 
 
 def test_truncated_capture_keeps_a_positive_read(calib):
-    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core, exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core, exit_code=0, aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp, truncated=True)) == {
         "core": "read", "review-crew": "unknown", "CLAUDE.md": "unknown"}
 
@@ -253,7 +278,8 @@ def test_capture_truncation_helper_prefers_the_stamped_count_then_the_head_marke
 
 
 def test_codex_basename_only_success_records_unknown(calib):
-    stdout = _codex_stream(_codex_cmd("a", "cd /somewhere && cat core.md", exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", "cd /somewhere && cat core.md", exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp)) == {
         "core": "unknown", "review-crew": "not-read", "CLAUDE.md": "not-read"}
 
@@ -263,12 +289,14 @@ def test_codex_basename_only_success_records_unknown(calib):
     "/bin/bash -lc \"git status --short\ncat {core}\"",
 ])
 def test_codex_newline_is_a_command_boundary_so_two_commands_are_unknown(calib, command):
-    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
 def test_codex_quoted_newline_does_not_split_a_command(calib):
-    stdout = _codex_stream(_codex_cmd("a", "echo 'a\nb' {core}".format(core=calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", "echo 'a\nb' {core}".format(core=calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] != "read"
 
 
@@ -276,12 +304,13 @@ def test_codex_quoted_newline_does_not_split_a_command(calib):
     "cd {root} && cat ./core.md", "cat ./core.md", "cat sub/core.md", "bash -c 'cat ./core.md'",
 ])
 def test_codex_relative_path_to_the_basename_records_unknown(calib, command):
-    stdout = _codex_stream(_codex_cmd("a", command.format(root=os.path.dirname(calib.core)), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.format(root=os.path.dirname(calib.core)), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
 def test_codex_absolute_path_elsewhere_with_the_basename_is_not_a_read(calib):
-    stdout = _codex_stream(_codex_cmd("a", "cat /elsewhere/core.md", exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", "cat /elsewhere/core.md", exit_code=0, aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "not-read"
 
 
@@ -292,7 +321,8 @@ def test_codex_absolute_path_elsewhere_with_the_basename_is_not_a_read(calib):
     "echo '\n' cat {core}",
 ])
 def test_codex_unlisted_grep_options_or_quoted_separators_are_never_a_read(calib, command):
-    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
@@ -300,7 +330,8 @@ def test_codex_unlisted_grep_options_or_quoted_separators_are_never_a_read(calib
     "grep x {core}", "grep -n -i x {core}", "rg --line-number --ignore-case x {core}", "grep -inH -e x {core}",
 ])
 def test_codex_listed_grep_options_are_a_read(calib, command):
-    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.format(core=calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "read"
 
 
@@ -321,7 +352,8 @@ def test_codex_listed_grep_options_are_a_read(calib, command):
     ("test -f <core>", "not-read"), ("ls -l <core>", "not-read"),
 ])
 def test_codex_read_is_credited_only_for_a_file_operand_of_a_content_printing_command(calib, command, grade):
-    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
 
 
@@ -339,14 +371,129 @@ def test_codex_read_is_credited_only_for_a_file_operand_of_a_content_printing_co
     ("sed -n 1,5p <core> | head -n 5", "unknown"), ("cat <core> && echo done", "unknown"),
     ("cd /a && cd /b && cat <core>", "unknown"), ("env X=1 cat <core>", "unknown"),
     ("sudo cat <core>", "unknown"), ("bash -c 'bash -c \"cat <core>\"'", "unknown"),
-    ("bash -c 'cat <core>' extra", "unknown"), ("sed -n 0,5p <core>", "unknown"),
+    ("bash -c 'cat <core>' extra", "unknown"), ("bash -n 'cat <core>'", "unknown"),
+    ("sed -n 0,5p <core>", "unknown"),
     ("tail -n +0 <core>", "unknown"), ("awk 'NR<=5 {print}' <core>", "unknown"),
     ("cat <core> a#b > /dev/null", "unknown"), ("X=/bin/cat <core>", "unknown"),
     ("test -f <core>", "not-read"), ("ls -l <core>", "not-read"),
 ])
 def test_codex_read_is_credited_only_for_one_structurally_single_command(calib, command, grade):
-    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
+_CORE_LINE = "Policy version: 2026-10-27.942777056682"
+_RG_HELP = (
+    "ripgrep 14.1.0\n"
+    "\n"
+    "USAGE:\n"
+    "    rg [OPTIONS] PATTERN [PATH ...]\n"
+    "    rg [OPTIONS] -e PATTERN ... [PATH ...]\n"
+    "    rg [OPTIONS] -f PATTERNFILE ... [PATH ...]\n"
+    "    rg [OPTIONS] --files [PATH ...]\n"
+    "\n"
+    "ARGS:\n"
+    "    <PATTERN>    A regular expression used for searching.\n"
+    "    <PATH>...    A file or directory to search.\n"
+    "\n"
+    "OPTIONS:\n"
+    "    -h, --help       Prints help information. Use --help for more details.\n"
+    "    -V, --version    Prints version information.\n")
+_OTHER_FILE_OUTPUT = "".join(
+    "line %d of an unrelated notes file, nothing from the stamped file\n" % n for n in range(1, 51))
+_NO_OUTPUT_KEY = None  # the completion event carries no aggregated_output at all
+
+
+@pytest.mark.parametrize("command,output,grade", [
+    # vet 782: command texts that pass the structural rule yet show the reviewer none of the file
+    pytest.param("rg -h <core>", _RG_HELP, "unknown", id="rg-h-is-help"),
+    pytest.param("rg -nh <core>", _RG_HELP, "unknown", id="rg-nh-is-help"),
+    # `rg -h <core>` is refused by the structural rule alone (rg takes <core> as the PATTERN, so no file operand is
+    # left); the same shapes with a pattern before <core> pass the structural rule and only the output check stops them
+    pytest.param("rg -h Policy <core>", _RG_HELP, "unknown", id="rg-h-with-pattern-is-help"),
+    pytest.param("rg -nh Policy <core>", _RG_HELP, "unknown", id="rg-nh-with-pattern-is-help"),
+    pytest.param("rg -E utf8 <core>", "notes.txt:see <core>\n", "unknown", id="rg-E-is-the-encoding-option"),
+    pytest.param("sed -n '1,50p' /tmp/other.txt <core>", _OTHER_FILE_OUTPUT, "unknown", id="two-files-one-stream"),
+    pytest.param("tail -n +99999 <core>", "", "unknown", id="tail-start-past-the-end"),
+    pytest.param("sed -n '99999p' <core>", "", "unknown", id="sed-line-past-the-end"),
+    pytest.param("cat /dev/null # <core>", "", "unknown", id="shell-comment"),
+    # a plain read whose output does not show the file
+    pytest.param("cat <core>", "", "unknown", id="cat-empty-output"),
+    pytest.param("cat <core>", "## Verify\n\n", "unknown", id="cat-heading-and-blank-only"),
+    pytest.param("cat <core>", _NO_OUTPUT_KEY, "unknown", id="cat-no-aggregated-output-key"),
+    pytest.param("grep -H Policy <core>", "other.md:" + _CORE_LINE + "\n", "unknown", id="grep-H-prefix-names-another-file"),
+    # reads whose output shows the file
+    pytest.param("cat <core>", CORE_TEXT, "read", id="cat-full-text"),
+    pytest.param("/bin/bash -lc \"sed -n '1,300p' <core>\"", CORE_TEXT, "read", id="wrapped-sed-full-text"),
+    pytest.param("grep -n Policy <core>", "3:" + _CORE_LINE + "\n", "read", id="grep-n-line-number-prefix"),
+    pytest.param("grep -nH Policy <core>", "<core>:3:" + _CORE_LINE + "\n", "read", id="grep-nH-path-and-number-prefix"),
+    pytest.param("grep -H Policy <core>", "core.md:" + _CORE_LINE + "\n", "read", id="grep-H-basename-prefix"),
+    pytest.param("sed -n '1,5p' <core>", "".join(line + "\n" for line in CORE_TEXT.splitlines()[:5]), "read",
+                 id="sed-first-five-lines"),
+    pytest.param("nl <core>", "     3\t" + _CORE_LINE + "\n", "read", id="nl-number-and-tab-prefix"),
+])
+def test_codex_read_needs_the_calls_own_output_to_show_the_file(calib, command, output, grade):
+    extra = {} if output is _NO_OUTPUT_KEY else {"aggregated_output": output.replace("<core>", calib.core)}
+    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=0, **extra))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
+def test_a_stamp_entry_without_line_digests_grades_unknown_for_an_otherwise_good_read(calib):
+    old = [{k: v for k, v in entry.items() if k != "lineDigests"} for entry in calib.stamp]
+    assert all("lineDigests" not in entry for entry in old)
+    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core, exit_code=0, aggregated_output=CORE_TEXT))
+    assert _reads(CR.read_states("codex", stdout, old))["core"] == "unknown"
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "read"
+
+
+def test_observation_entry_carries_no_line_digests_and_no_path(calib):
+    assert "lineDigests" in calib.stamp[0] and "path" in calib.stamp[0]
+    observed = CR._observation_entry(calib.stamp[0], "read")
+    assert "lineDigests" not in observed and "path" not in observed
+    assert observed == {"label": "core", "file": "core.md", "sha256": _sha(calib.bytes[calib.core]),
+                        "policyVersion": "2026-10-27.942777056682", "read": "read"}
+
+
+def test_non_trivial_line_boundaries():
+    assert (CR.MIN_LINE_CHARS, CR.MIN_LINE_LETTERS) == (24, 12)
+    assert CR._is_nontrivial("abcdefghijkl" + "0" * 12)          # 24 characters, 12 letters
+    assert not CR._is_nontrivial("abcdefghijkl" + "0" * 11)      # 23 characters
+    assert not CR._is_nontrivial("abcdefghijk" + "0" * 13)       # 24 characters, 11 letters
+    assert not CR._is_nontrivial("#" + "abcdefghijkl" + "0" * 12)  # a heading
+    for trivial in ("## Verify", "None", "---", ""):
+        assert not CR._is_nontrivial(trivial)
+
+
+def test_stamp_line_digests_are_sorted_unique_capped_and_never_hold_line_text(calib):
+    entries = {entry["label"]: entry for entry in calib.stamp}
+    assert entries["core"]["lineDigests"] == [_sha(_CORE_LINE.encode())]
+    assert entries["review-crew"]["lineDigests"] == [
+        _sha(b"No version line here, only the layer's own guidance.")]
+    lines = ["distinct non-trivial line number %04d" % n for n in range(450)]
+    with open(calib.core, "w", encoding="utf-8") as fh:
+        fh.write("# Heading\n\n" + "\n".join(lines) + "\n")
+    digests = {e["label"]: e for e in CR.stamp(calib.root, calib.order)}["core"]["lineDigests"]
+    assert digests == sorted(digests) and len(digests) == 400
+    assert _sha(lines[399].encode()) in digests and _sha(lines[400].encode()) not in digests
+    with open(calib.core, "w", encoding="utf-8") as fh:
+        fh.write("   " + lines[0] + "   \n" + lines[0] + "\n" + lines[1] + "\n")
+    digests = {e["label"]: e for e in CR.stamp(calib.root, calib.order)}["core"]["lineDigests"]
+    assert digests == sorted([_sha(lines[0].encode()), _sha(lines[1].encode())])
+    dumped = json.dumps(calib.stamp)
+    for text in (_CORE_LINE, "layer's own guidance", "Policy version:** `v7"):
+        assert text not in dumped
+
+
+def test_run_opened_stamp_holds_line_digests_but_no_line_text(runner_env, tmp_path, calib):
+    run_dir = _open_run(tmp_path, calib)
+    with open(ED._journal_path(run_dir), encoding="utf-8") as fh:
+        journal = fh.read()
+    records, _ = ED._journal_read(run_dir)
+    opened = [rec for rec in records if rec.get("kind") == "run-opened"][0]
+    assert opened["calibration"][0]["lineDigests"] == [_sha(_CORE_LINE.encode())]
+    for text in (_CORE_LINE, "layer's own guidance"):
+        assert text not in journal
 
 
 def test_vocabulary_has_one_home():
@@ -359,12 +506,12 @@ def test_vocabulary_has_one_home():
 
 
 def test_codex_completed_call_without_exit_code_records_unknown(calib):
-    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core))
+    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core, aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
 def test_codex_boolean_exit_code_is_not_a_success(calib):
-    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core, exit_code=False))
+    stdout = _codex_stream(_codex_cmd("a", "cat %s" % calib.core, exit_code=False, aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
 
 
@@ -376,10 +523,10 @@ def test_codex_started_but_never_completed_records_unknown(calib):
 
 def test_codex_command_list_and_mcp_call_arguments(calib):
     stdout = _codex_stream(
-        _codex_cmd("a", ["cat", calib.core], exit_code=0),
+        _codex_cmd("a", ["cat", calib.core], exit_code=0, aggregated_output=CORE_TEXT),
         {"type": "item.completed", "item": {
             "id": "b", "type": "mcp_tool_call", "tool": "read_file", "arguments": {"path": calib.layer},
-            "status": "completed", "error": None}},
+            "status": "completed", "error": None, "result": _mcp_result(LAYER_TEXT)}},
         {"type": "item.completed", "item": {
             "id": "c", "type": "mcp_tool_call", "tool": "read_file", "arguments": {"path": calib.claude},
             "status": "failed", "error": {"message": "denied"}}},
@@ -395,7 +542,7 @@ def test_codex_realpath_of_a_symlinked_file_counts(calib, tmp_path):
     os.symlink(str(real), str(link))
     stamped = [dict(entry) for entry in calib.stamp]
     stamped[0]["path"] = str(link)
-    stdout = _codex_stream(_codex_cmd("a", "cat %s" % real, exit_code=0))
+    stdout = _codex_stream(_codex_cmd("a", "cat %s" % real, exit_code=0, aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, stamped))["core"] == "read"
 
 
@@ -414,16 +561,17 @@ def _claude_result(tool_id, **extra):
 
 
 def test_claude_read_with_clean_tool_result_records_read(calib):
-    stdout = _lines(_claude_use("t1", "Read", {"file_path": calib.core}), _claude_result("t1"),
+    stdout = _lines(_claude_use("t1", "Read", {"file_path": calib.core}),
+                    _claude_result("t1", content=CORE_TEXT),
                     _claude_use("t2", "Bash", {"command": "cat %s" % calib.layer}),
-                    _claude_result("t2", is_error=False))
+                    _claude_result("t2", is_error=False, content=LAYER_TEXT))
     assert _reads(CR.read_states("claude", stdout, calib.stamp)) == {
         "core": "read", "review-crew": "read", "CLAUDE.md": "not-read"}
 
 
 def test_claude_read_with_error_tool_result_records_not_read(calib):
     stdout = _lines(_claude_use("t1", "Read", {"file_path": calib.core}),
-                    _claude_result("t1", is_error=True))
+                    _claude_result("t1", is_error=True, content=CORE_TEXT))
     assert _reads(CR.read_states("claude", stdout, calib.stamp))["core"] == "not-read"
 
 
@@ -433,8 +581,27 @@ def test_claude_read_without_tool_result_records_unknown(calib):
 
 
 def test_claude_result_before_the_call_does_not_count(calib):
-    stdout = _lines(_claude_result("t1"), _claude_use("t1", "Read", {"file_path": calib.core}))
+    stdout = _lines(_claude_result("t1", content=CORE_TEXT),
+                    _claude_use("t1", "Read", {"file_path": calib.core}))
     assert _reads(CR.read_states("claude", stdout, calib.stamp))["core"] == "unknown"
+
+
+def _numbered(text):
+    """``text`` as the Claude Read tool prints it: a right-aligned line number, a tab, the line."""
+    return "\n".join("%6d\t%s" % (n, line) for n, line in enumerate(text.splitlines(), 1))
+
+
+def test_claude_read_with_numbered_content_reads_and_with_empty_content_is_unknown(calib):
+    def grade(content):
+        stdout = _lines(_claude_use("t1", "Read", {"file_path": calib.core}), _claude_result("t1", content=content))
+        return _reads(CR.read_states("claude", stdout, calib.stamp))["core"]
+    assert _numbered(CORE_TEXT).startswith("     1\t# Core")
+    assert grade(_numbered(CORE_TEXT)) == "read"
+    assert grade([{"type": "text", "text": _numbered(CORE_TEXT)}]) == "read"
+    assert grade("") == "unknown"
+    assert grade([]) == "unknown"
+    assert grade(None) == "unknown"
+    assert grade(_numbered("# Other\n\nA line that belongs to some other file entirely.\n")) == "unknown"
 
 
 def test_claude_plain_text_records_unknown(calib):
@@ -456,14 +623,24 @@ def test_cursor_completed_read_with_success_result_records_read(calib):
     stdout = _lines(
         _cursor_event("started", "1", "readToolCall", {"path": calib.core}),
         _cursor_event("completed", "1", "readToolCall", {"path": calib.core},
-                      {"success": {"content": "x"}}),
+                      {"success": {"content": CORE_TEXT}}),
         _cursor_event("completed", "2", "shellToolCall", {"command": "cat %s" % calib.layer},
-                      {"success": {"exitCode": 0}}),
+                      {"success": {"exitCode": 0, "stdout": LAYER_TEXT}}),
         _cursor_event("completed", "3", "shellToolCall", {"command": "cat %s" % calib.claude},
-                      {"success": {"exitCode": 2}}),
+                      {"success": {"exitCode": 2, "stdout": CLAUDE_TEXT}}),
     )
     assert _reads(CR.read_states("cursor", stdout, calib.stamp)) == {
         "core": "read", "review-crew": "read", "CLAUDE.md": "not-read"}
+
+
+def test_cursor_success_without_the_files_text_records_unknown(calib):
+    stdout = _lines(
+        _cursor_event("completed", "1", "readToolCall", {"path": calib.core}, {"success": {"content": "x"}}),
+        _cursor_event("completed", "2", "shellToolCall", {"command": "cat %s" % calib.layer},
+                      {"success": {"exitCode": 0}}),
+    )
+    assert _reads(CR.read_states("cursor", stdout, calib.stamp)) == {
+        "core": "unknown", "review-crew": "unknown", "CLAUDE.md": "not-read"}
 
 
 def test_cursor_error_result_records_not_read(calib):
@@ -527,7 +704,7 @@ def test_stamp_with_unreadable_file_records_null_hash_and_policy(calib, monkeypa
     monkeypatch.setattr(CR, "resolved_paths", lambda repo_root: (ghost, None, None))
     stamped = CR.stamp(calib.root, "Read %s\n" % ghost)
     assert stamped == [{"label": "core", "file": "ghost.md", "path": ghost,
-                        "sha256": None, "policyVersion": None}]
+                        "sha256": None, "policyVersion": None, "lineDigests": []}]
 
 
 def test_stamp_drops_core_and_layer_when_the_root_refuses(tmp_path, monkeypatch):
@@ -679,8 +856,8 @@ def test_run_execution_record_observation_carries_read_for_a_file_a_codex_stream
         runner_env, tmp_path, calib):
     run_dir = _open_run(tmp_path, calib)
     _complete_attempt(run_dir, _codex_stream(
-        _codex_cmd("a", "/bin/bash -lc 'cat %s'" % calib.core, exit_code=0),
-        _codex_cmd("b", "cat %s" % calib.layer, exit_code=1)))
+        _codex_cmd("a", "/bin/bash -lc 'cat %s'" % calib.core, exit_code=0, aggregated_output=CORE_TEXT),
+        _codex_cmd("b", "cat %s" % calib.layer, exit_code=1, aggregated_output=LAYER_TEXT)))
     record, error = ED.run_execution_record(run_dir)
     assert error is None
     observed = record["observation"]["calibration"]
@@ -690,6 +867,7 @@ def test_run_execution_record_observation_carries_read_for_a_file_a_codex_stream
     dumped = json.dumps(observed)
     for path in (calib.core, calib.layer, calib.claude, calib.root):
         assert path not in dumped
+    assert "lineDigests" not in dumped
 
 
 def test_run_execution_record_observation_has_empty_list_when_order_named_no_file(

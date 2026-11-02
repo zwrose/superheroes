@@ -7,7 +7,8 @@ Stdlib plus the plugin's ``calibration_resolve``, ``core_md`` and ``engine_adapt
   hash and ``Policy version:`` line as they stood at that moment.
 * ``read_states`` runs when the run's engine record is built. It reads the engine's own event
   stream and reports, per stamped file, ``read`` only on positive evidence (a completed, successful
-  tool call naming the file's path), ``not-read`` when the stream is readable and no such call
+  tool call naming the file's path whose own captured output holds a non-trivial line of the file),
+  ``not-read`` when the stream is readable and no such call
   exists, and ``unknown`` whenever the stream cannot tell.
 
 ``resolved_paths`` is the one home of calibration path resolution for the round driver.
@@ -71,25 +72,58 @@ def _policy_version(text):
     return None
 
 
+# Short, blank, heading and rule lines ("## Verify", "None", "---") recur across files and in prompts, so their
+# presence in an output does not show this file was printed; a 24-character line with 12 letters taken verbatim
+# from the file does.
+MIN_LINE_CHARS = 24
+MIN_LINE_LETTERS = 12
+MAX_LINE_DIGESTS = 400  # the first this-many non-trivial lines of a file, in file order
+
+
+def _is_nontrivial(line):
+    """True for a stripped line long enough, letter-rich enough and not a heading to show a file was printed."""
+    return (len(line) >= MIN_LINE_CHARS and not line.startswith("#")
+            and sum(1 for ch in line if ch.isalpha()) >= MIN_LINE_LETTERS)
+
+
+def _line_digest(line):
+    return hashlib.sha256(line.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _line_digests(text):
+    """Sorted, de-duplicated sha256 hex digests of the first 400 non-trivial stripped lines of ``text``.
+
+    Only digests are kept; no line text is ever stored."""
+    lines = (line.strip() for line in text.splitlines())
+    kept = [line for line in lines if _is_nontrivial(line)][:MAX_LINE_DIGESTS]
+    return sorted({_line_digest(line) for line in kept})
+
+
 def _hash_and_policy(path):
-    """(sha256 hex or None, policyVersion or None) from ONE read of ``path``. Never raises."""
+    """(sha256 hex or None, policyVersion or None, line digests) from ONE read of ``path``. Never raises."""
     try:
         with open(path, "rb") as fh:
             data = fh.read()
     except Exception:
-        return None, None
+        return None, None, []
     try:
         digest = hashlib.sha256(data).hexdigest()
     except Exception:
-        return None, None
-    return digest, _policy_version(data.decode("utf-8", errors="replace"))
+        return None, None, []
+    text = data.decode("utf-8", errors="replace")
+    try:
+        digests = _line_digests(text)
+    except Exception:
+        digests = []
+    return digest, _policy_version(text), digests
 
 
 def stamp(repo_root, order_text):
     """Calibration files the order names, with the hash and policy version they have now.
 
-    A list of {"label", "file", "path", "sha256", "policyVersion"} in the fixed order core,
-    review-crew, CLAUDE.md. A file is kept only when its absolute path string occurs in
+    A list of {"label", "file", "path", "sha256", "policyVersion", "lineDigests"} in the fixed order core,
+    review-crew, CLAUDE.md. ``lineDigests`` holds only digests of the file's non-trivial lines (never their
+    text); a call's output must hold one of them for the call to credit a read. A file is kept only when its absolute path string occurs in
     ``order_text``: as resolved from ``repo_root``, with the root replaced by its realpath, or (core and
     review-crew) as the file's own realpath. ``path`` is the spelling the order used. Never raises: any
     failure gives []."""
@@ -117,13 +151,14 @@ def stamp(repo_root, order_text):
             named = next((s for s in spellings if s in order_text), None)
             if named is None:
                 continue
-            digest, policy = _hash_and_policy(path)
+            digest, policy, digests = _hash_and_policy(path)
             out.append({
                 "label": label,
                 "file": os.path.basename(path),
                 "path": named,
                 "sha256": digest,
                 "policyVersion": policy,
+                "lineDigests": digests,
             })
         return out
     except Exception:
@@ -141,10 +176,12 @@ def _exit_outcome(code):
     return _INDETERMINATE
 
 
-def _call(outcome, paths=(), texts=(), named=()):
+def _call(outcome, paths=(), texts=(), named=(), output=None):
     # paths: operands of a tool known to return the file's content; named: values that only name a
-    # path in some other tool call, so what the call did with it cannot be told
-    return {"outcome": outcome, "paths": list(paths), "texts": list(texts), "named": list(named)}
+    # path in some other tool call, so what the call did with it cannot be told; output: the text the
+    # call itself captured (a str), or None when the stream holds none
+    return {"outcome": outcome, "paths": list(paths), "texts": list(texts), "named": list(named),
+            "output": output if isinstance(output, str) else None}
 
 
 def _string_values(value, depth=0):
@@ -175,7 +212,8 @@ def _codex_item_call(item, completed):
         if not isinstance(command, str):
             return None
         outcome = _exit_outcome(item.get("exit_code")) if completed else _INDETERMINATE
-        return _call(outcome, texts=[command])
+        output = item.get("aggregated_output")
+        return _call(outcome, texts=[command], output=output if isinstance(output, str) else None)
     if kind == "mcp_tool_call":
         # an argument value that is exactly a path is a path; a substring of some other value is not
         arguments, paths = item.get("arguments"), []
@@ -196,7 +234,9 @@ def _codex_item_call(item, completed):
                      if isinstance(v, str)]
             for path in paths:
                 values.remove(path)
-        return _call(outcome, paths=paths, named=values)
+        result = item.get("result")
+        output = "\n".join(_string_values(result)) if result is not None else None
+        return _call(outcome, paths=paths, named=values, output=output)
     return None
 
 
@@ -268,7 +308,19 @@ def _claude_calls(stdout):
                 if call is not None:
                     # axis: a claude call is successful only when its tool_result is not an error.
                     call["outcome"] = _FAILED if block.get("is_error") is True else _OK
+                    call["output"] = _claude_result_text(block.get("content"))
     return recognized, calls
+
+
+def _claude_result_text(content):
+    """A tool_result's text: a str content, or the newline-joined ``text`` of its text items; else None."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [item.get("text") for item in content
+                 if isinstance(item, dict) and item.get("type") == "text"]
+        return "\n".join(part for part in parts if isinstance(part, str))
+    return None
 
 
 def _cursor_result_outcome(kind, result):
@@ -298,12 +350,16 @@ def _cursor_event_calls(obj, completed):
         args = body.get("args")
         if not isinstance(args, dict):
             continue
-        outcome = _cursor_result_outcome(kind, body.get("result")) if completed else _INDETERMINATE
+        result = body.get("result")
+        outcome = _cursor_result_outcome(kind, result) if completed else _INDETERMINATE
+        # a shell call carries its stdout in the success, a read call its content
+        output = ("\n".join(_string_values(result.get("success")))
+                  if completed and isinstance(result, dict) and "success" in result else None)
         if kind == "readToolCall":
             paths = [args.get(key) for key in ("path", "file_path", "target_file")]
-            calls.append(_call(outcome, paths=paths))
+            calls.append(_call(outcome, paths=paths, output=output))
         elif kind == "shellToolCall":
-            calls.append(_call(outcome, texts=[args.get("command")]))
+            calls.append(_call(outcome, texts=[args.get("command")], output=output))
     return calls
 
 
@@ -485,15 +541,40 @@ def _names_basename(call, basename):
             or any(isinstance(t, str) and any(names(w) for w in _WORD_RE.findall(t)) for t in call["texts"]))
 
 
-def _file_state(calls, path, truncated=False):
+def _output_candidates(line, basename):
+    """The stripped forms of one output line that may equal a line of the file (see ``_output_shows_file``)."""
+    yield line.strip()
+    yield re.sub(r"^\s*\d+[\t:|\-]\s?", "", line).strip()  # cat -n, nl, grep -n, the Claude Read tool
+    yield re.sub(r"^\S*" + re.escape(basename) + r":(?:\d+:)?", "", line).strip()  # grep -H, multi-file rg/grep
+
+
+def _output_shows_file(output, digests, basename):
+    """True when the call's own output holds at least one non-trivial line of the stamped file.
+
+    ``digests`` is the stamp's ``lineDigests`` set, or None for a stamp without it. No output, no digests
+    and no matching line all give False."""
+    # axis: a read is credited only when the call's output shows the file; a stamp without digests cannot be matched
+    if digests is None or not isinstance(output, str) or not output:
+        return False
+    return any(_line_digest(candidate) in digests
+               for line in output.splitlines() for candidate in _output_candidates(line, basename))
+
+
+def _file_state(calls, path, truncated=False, digests=None):
     """read | not-read | unknown for one file given the normalized calls.
 
     ``truncated`` says the stream lost its head to the capture cap: a positive read still counts, but
-    the absence of one cannot show the file was not read."""
+    the absence of one cannot show the file was not read. ``digests`` is the stamp's ``lineDigests``
+    (None when the stamp lacks it)."""
     targets = {path, os.path.realpath(path)}
     basename = os.path.basename(path)
     hits = [(call, _call_hit(call, targets)) for call in calls]
     hits = [(call, hit) for call, hit in hits if hit is not None]
+    # axis: a successful call the rule reads as a read counts only when its output shows the file; otherwise the
+    # call cannot tell, so it is ambiguous (never a read, never not-read)
+    hits = [(call, _HIT_AMBIGUOUS if hit == _HIT_READ and call["outcome"] == _OK
+             and not _output_shows_file(call["output"], digests, basename) else hit)
+            for call, hit in hits]
     # axis: `read` only on a completed, successful content-reading call naming the whole path;
     # `unknown` whenever the stream cannot tell (an undeterminable outcome, an ambiguous command, a
     # basename-only success, or a truncated capture with no positive read).
@@ -525,7 +606,7 @@ def _observation_entry(entry, state):
 
 
 def read_states(engine, stdout, stamped, truncated=False):
-    """The observation's ``calibration`` list: the stamp minus ``path``, plus ``read``.
+    """The observation's ``calibration`` list: the stamp minus ``path`` and ``lineDigests``, plus ``read``.
 
     ``truncated`` is True when ``stdout`` is only the tail of the engine's output: a file with no
     positive read in the retained events is then ``unknown``, never ``not-read``.
@@ -542,8 +623,10 @@ def read_states(engine, stdout, stamped, truncated=False):
                 if recognized:
                     for entry in entries:
                         path = entry.get("path")
+                        raw = entry.get("lineDigests")
+                        digests = frozenset(d for d in raw if isinstance(d, str)) if isinstance(raw, list) else None
                         states[id(entry)] = (
-                            _file_state(calls, path, truncated is True)
+                            _file_state(calls, path, truncated is True, digests)
                             if isinstance(path, str) and path else UNKNOWN)
         except Exception:
             states = {}
