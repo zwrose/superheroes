@@ -307,7 +307,9 @@ def _assert_seat_key_refused(d, n, artifact, offending_key):
     ({"code-reviewer": {"findings": []}, "architecture-reviewr": {"findings": []}},
      "architecture-reviewr"),
     ({"seats": {"seatMap": {}}}, "seatMap"),
-], ids=["all-stems", "partial-mis-key", "arbitrary-wrong-key", "envelope-in-seats"])
+    ({"code-reviewer": {"findings": []}, "canaryResult": {}}, "canaryResult"),
+], ids=["all-stems", "partial-mis-key", "arbitrary-wrong-key", "envelope-in-seats",
+        "legacy-canary-result"])
 def test_submit_panel_seat_key_refused(tmp_path, artifact, offending_key):
     d = str(tmp_path)
     n = _first_next(d, _cfg())
@@ -319,7 +321,7 @@ def test_submit_panel_seat_key_refused(tmp_path, artifact, offending_key):
     {"seats": {"code-reviewer": {"findings": []}}},
     {"seats": {}},
     {"seats": []},
-    {"seatMap": {}, "ranManifest": {}, "canaryResult": {}},
+    {"seatMap": {}, "ranManifest": {}},
 ], ids=["all-dims", "partial-legitimate", "empty-seats", "non-dict-seats", "metadata-only"])
 def test_submit_panel_seat_key_accepted(tmp_path, artifact):
     d = str(tmp_path)
@@ -406,7 +408,7 @@ def test_panel_seat_keys_explicit_shape():
 
 
 def test_panel_seat_keys_legacy_shape():
-    art = {"code-reviewer": {}, "seatMap": {}, "ranManifest": {}, "canaryResult": {}}
+    art = {"code-reviewer": {}, "seatMap": {}, "ranManifest": {}}
     assert RD.panel_seat_keys(art) == ["code-reviewer"]
 
 

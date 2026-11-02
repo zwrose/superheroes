@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """#1720 — the review loop reads, records and discloses nothing about a planted-defect probe.
 
-`canaryResult` survives only as a tolerated envelope key (an older-shaped panel artifact that
-still carries it is accepted and the key is ignored), and a round record written by an older
+`canaryResult` is no longer tolerated (a legacy-shaped panel artifact carrying it is refused as an
+unknown seat key, D35 retired by #2325), and a round record written by an older
 version that still carries a removed probe channel builds a receipt without raising.
 """
 import os
@@ -67,10 +67,12 @@ def test_panel_fold_records_no_probe_channel():
     assert not [k for k in kinds if k.startswith("canary-")], kinds
 
 
-def test_older_shaped_artifact_with_canary_result_key_is_not_refused():
-    assert round_driver.panel_seat_key_fault(
+def test_legacy_shaped_artifact_with_canary_result_key_is_refused():
+    fault = round_driver.panel_seat_key_fault(
         ["code-reviewer"],
-        {"code-reviewer": {"findings": []}, "canaryResult": {"engine": "codex"}}) is None
+        {"code-reviewer": {"findings": []}, "canaryResult": {"engine": "codex"}})
+    assert isinstance(fault, str)
+    assert "unknown seat key(s): canaryResult" in fault
 
 
 def test_old_round_record_probe_keys_are_dropped_from_the_receipt():
@@ -91,13 +93,12 @@ def test_no_shipped_module_reads_a_probe_result():
         text = _read(path).lower()
         assert "controlprobe" not in text and "control_probe" not in text, path
         if os.path.basename(path) == "round_driver.py":
-            # Only the tolerated envelope-key declaration (and its comment) may name the key.
+            # Only comment lines may name the key; no code line of round_driver.py does.
             text = "\n".join(
                 line for line in text.splitlines()
-                if not (line.lstrip().startswith("#")
-                        or line.startswith("_panel_envelope_keys")))
+                if not line.lstrip().startswith("#"))
         assert "canary" not in text, path
-    assert "canaryResult" in round_driver._PANEL_ENVELOPE_KEYS
+    assert "canaryResult" not in round_driver._PANEL_ENVELOPE_KEYS
 
 
 def _complete_round_two_panel(**extra):
@@ -112,7 +113,9 @@ def _complete_round_two_panel(**extra):
 
 
 def test_complete_panel_certifies_with_or_without_legacy_canary_result():
-    """A complete panel is unaffected by a legacy canaryResult: ignored, not read."""
+    """A complete panel is unaffected by a legacy canaryResult: ignored, not read.
+
+    This is an explicit-shape artifact; a top-level key there is never judged."""
     for extra in ({}, {"canaryResult": [{"engine": "codex", "outcome": "ok"}]}):
         state = _complete_round_two_panel(**extra)
         assert state["fullPanelRan"] is True, extra
