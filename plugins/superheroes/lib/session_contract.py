@@ -50,6 +50,9 @@ __all__ = (
     "MERGED_INTO_FIELD",
     "RAISED_ROUND_FIELD",
     "RAISED_SEQ_FIELD",
+    "RAISED_BY_FIELD",
+    "FIRST_RAISED_ROUND_FIELD",
+    "CARRIED_FIRST_RAISED_ROUND",
     "DISPOSITION_SEQ_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
     "has_disposition_family",
@@ -101,6 +104,14 @@ __all__ = (
 
 RAISED_ROUND_FIELD = "raisedRound"
 RAISED_SEQ_FIELD = "raisedSeq"
+# The name of the run that first raised a finding (a roster seat key, a stage name or a searcher seat key).
+RAISED_BY_FIELD = "raisedBy"
+# The round a finding was first raised in: driver-owned and never rewritten by a re-raise (unlike `raisedRound`).
+FIRST_RAISED_ROUND_FIELD = "firstRaisedRound"
+# The `firstRaisedRound` of a finding carried in from an earlier review session. Review rounds start at 1 in every
+# session, so 0 is before every round of the returning session. Two carried findings from different earlier sessions
+# both rank 0 and tie: the merge then keeps the kept finding's raiser by its tie rule (records keep no cross-session order).
+CARRIED_FIRST_RAISED_ROUND = 0
 DISPOSITION_SEQ_FIELD = "dispositionSeq"
 
 # Fields the loop stamps onto a finding row after a seat reported it — excluded from content hash.
@@ -108,7 +119,7 @@ TRANSIENT_FINDING_FIELDS = frozenset({
     "id", "findingKey", "verdict", "evidence", "challenge", "unverified", "reason",
     "disposition", "dispositionReceipt",
     "dispositionRound", "refutedReason", "outOfScopeReason", "followUp", "mergedInto",
-    RAISED_ROUND_FIELD, RAISED_SEQ_FIELD, DISPOSITION_SEQ_FIELD,
+    RAISED_ROUND_FIELD, RAISED_SEQ_FIELD, RAISED_BY_FIELD, FIRST_RAISED_ROUND_FIELD, DISPOSITION_SEQ_FIELD,
 })
 
 SEAT_TRANSPORT_KEY = "transport"
@@ -611,11 +622,12 @@ def sweep_hit_title(hit, parent):
     return kind.strip() if isinstance(kind, str) and kind.strip() else "repository sweep hit"
 
 
-def sweep_hit_finding(hit, sweep, parent):
+def sweep_hit_finding(hit, sweep, parent, raised_by=None):
     """The finding a repository sweep's hit on a touched line becomes: the parent's severity and consequence, the
     parent's description kind as its kind of mistake (no other places, no description of its own), and the mark of the
     sweep and finding it came from. It carries no `findingKey`, so its identity is the one `finding_identity_key`
-    mints from its content. The one home of the shape for the driver's fold and the abandoned-session writer."""
+    mints from its content. A non-blank string `raised_by` (the searcher seat key) is stamped as `raisedBy`; anything
+    else stamps nothing. The one home of the shape for the driver's fold and the abandoned-session writer."""
     desc = parent.get("searchDescription") if isinstance(parent.get("searchDescription"), dict) else {}
     kind = desc.get("kind").strip() if isinstance(desc.get("kind"), str) else ""
     what = hit.get("what").strip() if isinstance(hit.get("what"), str) else ""
@@ -637,6 +649,8 @@ def sweep_hit_finding(hit, sweep, parent):
     if parent.get("tradeoff"):
         # An owner's-choice parent holds its copies for the owner too: the hold keys on this flag.
         out["tradeoff"] = True
+    if isinstance(raised_by, str) and raised_by.strip():
+        out[RAISED_BY_FIELD] = raised_by
     return out
 
 

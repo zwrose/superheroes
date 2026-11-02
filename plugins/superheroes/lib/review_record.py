@@ -737,6 +737,10 @@ def _validate(a):
         decided_by = session_contract.decided_by_of(f)
         chk(decided_by is None or isinstance(decided_by, dict), f"findings[{i}].decidedBy")
         chk(sn(f.get(rfs.CONSEQUENCE_KEY)), f"findings[{i}].{rfs.CONSEQUENCE_KEY}")
+        # axis: the run that first raised a finding is a non-blank string or absent, never null, empty or another type
+        chk(session_contract.RAISED_BY_FIELD not in f or (isinstance(f[session_contract.RAISED_BY_FIELD], str)
+                                                          and f[session_contract.RAISED_BY_FIELD].strip() != ""),
+            f"findings[{i}].{session_contract.RAISED_BY_FIELD}")
         if "grade" in f:
             fault = _grade_fault(f["grade"])
             # axis: a grade is a verdict from the vocabulary with a reason, never a bare mark — see bite-proof record c1l1_wo_a_record_seam
