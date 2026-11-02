@@ -627,9 +627,10 @@ advisor run together to keep calibration honest.
      it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
      reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
      is left out unread. A catch is
-     credited to every seat whose lens the finding names (a fixed finding in the security lens
-     counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
-     in that seat's lens.
+     credited to the seat whose run raised it (the finding's `raisedBy`), and only when that seat
+     ran on the PR. A catch whose raiser is not a seat that ran counts as unattributed. A catch with
+     no recorded raiser is credited to no seat, and the `caught` count of every seat that ran on its
+     PR reads unmeasured. So the count is the fixes to findings that seat's own runs raised.
    - **Append the review-loop measures row** for the window at every pass, before the walk:
      `python3 -B <plugin root>/lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`.
      Its docstring names the input file's keys and the counting rules. A second run for the same window

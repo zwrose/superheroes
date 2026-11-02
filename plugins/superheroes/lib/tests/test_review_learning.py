@@ -4,6 +4,7 @@ import datetime
 import types
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -24,6 +25,7 @@ import review_round_policy  # noqa: E402
 import review_seats  # noqa: E402
 import risk_areas  # noqa: E402
 import round_driver  # noqa: E402
+import session_contract  # noqa: E402
 
 PAYMENTS = {"name": "Payments", "covers": ["src/payments/*"], "why": "Charges customers.",
             "undo": "Hard: a charge needs a refund."}
@@ -350,10 +352,25 @@ def _row(name, ran="engine-record"):
     return {"name": name, "ran": ran}
 
 
-def _finding(key, reviewer, outcome="fixed", fid=None):
-    f = {"id": fid or key.upper(), "outcome": outcome, "reviewer": reviewer}
+_LENS_SEAT = {"Code": "code-reviewer", "Security": "security-reviewer", "Failure-Mode": "premortem-reviewer",
+              "Test": "test-role", "Architecture": "architecture-reviewer"}
+
+
+def _finding(key, reviewer, outcome="fixed", fid=None, raised_by=None):
+    """`raised_by` stamps the finding's raiser; when omitted, the seat of the finding's first lens (a label naming no lens
+    seat gets a stage name, which is no seat), so a fixture keeps its intent explicit."""
+    first = next(iter(p.strip() for p in re.split(r"[,+]", reviewer) if p.strip()), "") if isinstance(reviewer, str) else ""
+    f = {"id": fid or key.upper(), "outcome": outcome, "reviewer": reviewer,
+         session_contract.RAISED_BY_FIELD: raised_by or _LENS_SEAT.get(first, "scoped finder")}
     if key:
         f["findingKey"] = key
+    return f
+
+
+def _unraised(key, reviewer, outcome="fixed"):
+    """A finding row with no raiser recorded."""
+    f = _finding(key, reviewer, outcome)
+    del f[session_contract.RAISED_BY_FIELD]
     return f
 
 
@@ -382,8 +399,9 @@ def test_tally_truth_table():
     assert (got["measured"], got["reason"], got["since"]) == (True, None, D)
     assert got["window"] == {"from": D, "until": "2026-10-11"}
     # each PR is dated by its record: PR 1 (before adoption) is out, the others count, and a repeated finding key is one catch
-    assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 2}}
-    assert got["unattributedCatches"] == 0
+    # PR 2's "Code, Security" catch was raised by the code seat; PR 3's security-raised catch (one catch for two rows) has no security run on it
+    assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 0}}
+    assert got["unattributedCatches"] == 1
     assert got["escapes"] == {"missed": 1, "seenAndLeft": 1}
     assert got["leftOut"] == {"beforeWindow": 2, "afterWindow": 0, "undated": 0, "malformed": 0}  # PR 1's record and the escape dated before adoption
 
@@ -400,7 +418,7 @@ def test_tally_nothing_before_the_adoption_day_counts():
 
 def test_tally_a_pr_dated_before_adoption_is_out_by_its_record():
     got = RL.tally(_truth_table_records()[:2], [], D, until="2026-10-11")
-    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 0}}
     assert got["unattributedCatches"] == 0 and got["leftOut"]["beforeWindow"] == 1
 
 
@@ -409,6 +427,42 @@ def test_tally_counts_a_slice_seat_as_its_lens_seat():
     got = RL.tally([rec], [], D, until="2026-10-11")
     assert got["seats"]["code-reviewer"] == {"reviews": 1, "caught": 1}
     assert got["seats"]["test-role"]["reviews"] == 1
+
+
+# axis: a catch is credited to the seat that raised it, never to the lens it was filed in
+def test_tally_credits_the_raising_seat_not_the_lens():
+    rec = _record(1, "a", D, [_row("code-reviewer"), _row("premortem-reviewer")],
+                  [_finding("k", "Failure-Mode", raised_by="code-reviewer")])
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "premortem-reviewer": {"reviews": 1, "caught": 0}}
+    assert got["unattributedCatches"] == 0 and got["raiserNotRecorded"] == 0
+
+
+# axis: a catch with no recorded raiser reads unmeasured for every seat that ran on its PR, and for no other seat
+def test_tally_a_catch_with_no_raiser_reads_unmeasured_for_the_seats_that_ran_on_its_pr():
+    unstamped = _record(1, "a", D, [_row("code-reviewer"), _row("premortem-reviewer"), _row("test-role", "not-run")],
+                        [_unraised("k1", "Failure-Mode"), _finding("k2", "Code")])
+    stamped = _record(2, "b", D, [_row("security-reviewer")], [_finding("k3", "Security")])
+    got = RL.tally([unstamped, stamped], [], D, until="2026-10-11")
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": RL.UNMEASURED},
+                            "premortem-reviewer": {"reviews": 1, "caught": RL.UNMEASURED},
+                            "security-reviewer": {"reviews": 1, "caught": 1}}
+    assert got["raiserNotRecorded"] == 1 and got["unattributedCatches"] == 0
+
+
+# axis: a raiser seat that did not run on the PR (no row, or a not-run row) is never credited; the catch is unattributed
+@pytest.mark.parametrize("rows", [[_row("code-reviewer")], [_row("code-reviewer"), _row("premortem-reviewer", "not-run")]])
+def test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited(rows):
+    rec = _record(1, "a", D, rows, [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")])
+    got = RL.tally([rec], [], D, until="2026-10-11")
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}
+    assert got["unattributedCatches"] == 1 and got["raiserNotRecorded"] == 0
+
+
+# axis: an unmeasured tally leaves the raiser-not-recorded count None, as it leaves the unattributed count None
+def test_tally_an_unmeasured_tally_leaves_raiser_not_recorded_none():
+    got = RL.tally([{"pr": 1}], [], D, until="2026-10-11")
+    assert got["unattributedCatches"] is None and got["raiserNotRecorded"] is None
 
 
 # axis: the guarding test for the duplicate-PR rule — a PR supplied twice (a retried record) is incomplete evidence, never a second catch
@@ -446,8 +500,8 @@ def test_tally_window_reaching_before_adoption_is_short_of_window_and_still_coun
 def test_tally_window_inside_the_adoption_period_is_measured_and_excludes_earlier_days():
     got = RL.tally(_truth_table_records(), _escapes(), D, until="2026-10-11", window_days=1)
     assert (got["measured"], got["window"]["from"]) == (True, "2026-10-11")
-    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}, "security-reviewer": {"reviews": 0, "caught": 1}}
-    assert got["unattributedCatches"] == 0
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}  # PR 3's catch was raised by the security seat, which did not run on it
+    assert got["unattributedCatches"] == 1
     assert got["leftOut"]["beforeWindow"] == 5  # the two records before the window, and the three escapes dated D-1 and D
 
 
@@ -550,13 +604,13 @@ def test_tally_damaged_rows_read_incomplete_not_measured_zero():
     assert ok["measured"] is True and ok["unattributedCatches"] == 1
 
 
-def test_tally_merged_plus_label_credits_every_reviewer():
+def test_tally_merged_plus_label_credits_only_the_raiser():
     import panel_tally
     label = panel_tally._merge_dims({"dimension": "Code"}, {"dimension": "Security"})
     assert label == "Code + Security"
     rec = _record(1, "s", D, [_row("code-reviewer"), _row("security-reviewer")], [_finding("k", label)])
     got = RL.tally([rec], [], D, until="2026-10-11")
-    assert got["seats"]["code-reviewer"]["caught"] == 1 and got["seats"]["security-reviewer"]["caught"] == 1
+    assert got["seats"]["code-reviewer"]["caught"] == 1 and got["seats"]["security-reviewer"]["caught"] == 0
 
 
 def test_supersedes_id_grammar_is_canons():
@@ -642,7 +696,7 @@ def test_tally_a_merged_member_is_not_a_second_catch():
     rep = _finding("b", "Code + Security")
     member = dict(_finding("a", "Security"), reason="folded (merged into B)")
     got = RL.tally([_record(1, "s", D, rows, [member, rep])], [], D, until="2026-10-11")
-    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 1}}
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 0}}
 
 
 # --- review C10 round 5 fixes ---
@@ -682,9 +736,10 @@ def test_merged_member_marker_round_trips_through_the_record_writer():
 def test_merged_member_carried_into_a_later_review_still_names_its_representative(monkeypatch):
     import review_record
     import review_record_session as rs
-    member = {"id": "A", "findingKey": "ka", "outcome": "fixed", "reviewer": "Code",
+    member = {"id": "A", "findingKey": "ka", "outcome": "fixed", "reviewer": "Code", session_contract.RAISED_BY_FIELD: "code-reviewer",
               "reason": "fixed and audited" + rs.MERGED_INTO_FORMAT.format("kb")}
-    rep = {"id": "B", "findingKey": "kb", "outcome": "fixed", "reviewer": "Code", "reason": "fixed"}
+    rep = {"id": "B", "findingKey": "kb", "outcome": "fixed", "reviewer": "Code", session_contract.RAISED_BY_FIELD: "code-reviewer",
+           "reason": "fixed"}
     monkeypatch.setattr(review_record, "read", lambda pr, repo, readers: {"ok": True, "findings": [member, rep]})
     account = {"pr": 1, "findings": []}
     carried = rs._carried(account, rs._earlier(account, {"repo": "r"}, "/unused", None))
@@ -750,7 +805,8 @@ def test_tally_each_pr_counts_its_own_catches():
     last = _record(2, "s2", "2026-10-11", rows, [_finding("k2", "Security")])
     for order in ([first, last], [last, first]):
         got = RL.tally(order, [], D, until="2026-10-12")
-        assert got["seats"]["code-reviewer"]["caught"] == 1 and got["seats"]["security-reviewer"]["caught"] == 1
+        assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}}  # PR 2's catch was raised by the security seat, which ran on neither PR
+        assert got["unattributedCatches"] == 1
 
 
 def test_canon_commit_recovery_ignores_an_inherited_git_dir(proj, canon_root, monkeypatch, tmp_path):
