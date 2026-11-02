@@ -1480,16 +1480,18 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   check_conventional_commit): vet, forfeit-dispute, or incident receipts citing real
   catches from the never-fired members (validate_marketplace, validate_hosts, validate_skills,
   check_conventional_commit, check_catalog_membership; check_release_bump excluded because it has a
-  100% incident record). On zero citations for the full window across all never-fired members, a
-  retirement proposal for those members at a gardening pass.
+  100% incident record). On zero citations for the full window from validate_hosts and
+  validate_skills, a retirement proposal for those two at a gardening pass. validate_marketplace,
+  check_catalog_membership and check_conventional_commit are deterrents, so a zero-catch window is
+  expected for them: the window's end is only a re-read of them at a gardening pass, never by itself
+  a retirement proposal.
 - **Last demonstrated benefit.** check_release_bump caught release-please silent version drops
   across three incidents (investigation-record.md / the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — check_release_bump is structural (release-blocking-quiet class); never-fired
-  validators are harness-limit guards on cheap static checks. validate_marketplace,
-  check_catalog_membership and check_conventional_commit are deterrents: never firing is the point,
-  so a zero-catch window is not a retirement signal for them.
+  validators are harness-limit guards on cheap static checks. For the three deterrents, never
+  firing is the point (see the condition).
 - **Retirement — the plugin-root seam.** Retired the fallback form of the plugin-root variable in
   skill and reference prose (every occurrence now reads `${CLAUDE_PLUGIN_ROOT}`), `validate_hosts.py`'s
   ban on the bare variable, and the two seam workaround markers; `validate_hosts.py` keeps its
