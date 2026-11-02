@@ -273,3 +273,191 @@ FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_claude_read_
 .                                                                        [100%]
 1 passed in 3.71s
 ```
+
+## WO-F7 (#2311): a read is credited only when the stamped file is the one file the output can carry
+
+Added by WO-F7. Same capture rules as above: every red ran the detector unedited by exact node id under
+`scripts/pinned-python -B -m pytest <node ids> -q --tb=short`, the `UV_NATIVE_TLS` warning line dropped
+(`grep -v UV_NATIVE_TLS`), nothing else cut; every green is the same node ids after the inverse Edit; no credential
+or private URL, no redaction. Each neutralization is a targeted Edit undone by the inverse Edit; the restore receipt
+is the restored line quoted back by `grep -n`.
+
+Detectors, in `plugins/superheroes/lib/tests/test_calibration_read.py`:
+
+- `S` = `test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry` (explicit ids);
+- `M` = `test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file` (explicit ids);
+- `G` = `test_codex_gate_reads_each_calls_own_output_not_another_calls`.
+
+Disclosed handling:
+
+- Item 1b (grep/egrep/fgrep/rg naming more than one file operand is not a read) is the builder's addition inside the
+  order's seam; B2 guards it.
+- B1 and B2 neutralize the same line (`len(files) > 1` in `_file_operands`) on different programs: B1 drops `sed`
+  from the program tuple, B2 drops the grep family from it. They are separate failure modes (a sed sibling and a grep
+  sibling), each with its own red.
+- The first B3 run used the single multi-assertion form of `M`, where the first assertion failed and hid the
+  two-path assertion behind it. That run is not quoted; `M` was then split into one node per case and the B3 red
+  below is the full one over the three named nodes. This cost one invocation more than the eight the order budgeted.
+- `S[sed-core-alone]`, `S[grep-core-alone]`, `S[cat-sibling-and-core]` and `M[one-path-in-paths]` are the greens that
+  keep the rule from over-refusing; they are green under every neutralization below (they guard no neutralization).
+- Item 3 (the `<spelling>:` / `<spelling>:<n>:` prefix strip) and E2 (a sibling's prefix is not stripped) are
+  detected by `test_codex_prefix_naming_the_stamped_files_own_spelling_is_stripped`,
+  `test_codex_prefix_strip_holds_for_a_path_with_a_space_in_a_directory_name` and `S[sibling-path-prefix-kept]`; the
+  order named no neutralization for them, so no red is claimed for them here.
+
+## B1: sed names one file
+
+- Guarded element: `_file_operands`, `if program in ("sed",) + _GREP_PROGRAMS and len(files) > 1: return None`, the
+  `"sed"` member. Axis: a `sed` naming more than one file operand is not a read.
+- Neutralization: `if program in ("sed",) + _GREP_PROGRAMS and len(files) > 1:` became
+  `if program in _GREP_PROGRAMS and len(files) > 1:` (sed accepts several files).
+- Detector node: `S[sed-sibling-and-core]`.
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[sed-sibling-and-core] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:462: in test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'read' == 'unknown'
+E     
+E     - unknown
+E     + read
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[sed-sibling-and-core]
+1 failed in 0.39s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n after): `466:    if program in ("sed",) + _GREP_PROGRAMS and len(files) > 1:`
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 0.42s
+```
+
+## B2: the grep family names one file
+
+- Guarded element: the same line, the `_GREP_PROGRAMS` member (item 1b). Axis: a `grep`/`egrep`/`fgrep`/`rg` naming
+  more than one file operand is not a read (`-h` prints either file's matches with no prefix).
+- Neutralization: `if program in ("sed",) + _GREP_PROGRAMS and len(files) > 1:` became
+  `if program in ("sed",) and len(files) > 1:` (the grep family accepts several files).
+- Detector nodes: `S[grep-h-sibling-and-core]`, `S[rg-h-sibling-and-core]`.
+- Raw red:
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[grep-h-sibling-and-core] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:462: in test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'read' == 'unknown'
+E     
+E     - unknown
+E     + read
+_ test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[rg-h-sibling-and-core] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:462: in test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'read' == 'unknown'
+E     
+E     - unknown
+E     + read
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[grep-h-sibling-and-core]
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[rg-h-sibling-and-core]
+2 failed in 0.49s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n after): `466:    if program in ("sed",) + _GREP_PROGRAMS and len(files) > 1:`
+- Raw green:
+
+```
+..                                                                       [100%]
+2 passed in 0.28s
+```
+
+## B3: an MCP read tool credits its own path argument, exactly one
+
+- Guarded element: `_codex_item_call`, the `mcp_tool_call` branch, the own-key choice (`paths` for
+  `read_multiple_files`, `path` otherwise) and the `named_total == 1 and len(own) == 1` test. Axis: a read-file tool
+  credits only its own key and only when the call names exactly one file in all.
+- Neutralization: the block from `if tool == "read_multiple_files":` through `values.remove(own[0])` was replaced by
+  the pre-WO-F7 form: `listed = arguments.get("paths")`, `own = [v for v in [arguments.get("path")] + (listed if
+  isinstance(listed, list) else []) if isinstance(v, str)]`, `if own: paths = own; for path in own: values.remove(path)`
+  (every `path`/`paths` string is credited, whatever the key or the count).
+- Detector nodes: `M[read_file-other-path-core-paths]`, `M[two-paths-core-first]`, `M[two-paths-core-second]`.
+- Raw red:
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[read_file-other-path-core-paths] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:501: in test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'read' == 'unknown'
+E     
+E     - unknown
+E     + read
+_ test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[two-paths-core-first] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:501: in test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'read' == 'unknown'
+E     
+E     - unknown
+E     + read
+_ test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[two-paths-core-second] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:501: in test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'read' == 'unknown'
+E     
+E     - unknown
+E     + read
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[read_file-other-path-core-paths]
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[two-paths-core-first]
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[two-paths-core-second]
+3 failed in 0.44s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n after):
+  `240:            named_total = len(_string_values(arguments.get("path"))) + len(_string_values(arguments.get("paths")))` /
+  `242:            if named_total == 1 and len(own) == 1:`
+- Raw green:
+
+```
+...                                                                      [100%]
+3 passed in 0.27s
+```
+
+## B4: each call's own output (test-002)
+
+- Guarded element: `_file_state`, `_output_shows_file(call["output"], digests, basename, spellings)`, the `call["output"]`
+  argument. Axis: the gate reads the call's own output, never another call's.
+- Neutralization: `call["output"]` became `"\n".join(c["output"] for c in calls if isinstance(c["output"], str))`
+  (the gate reads the concatenation of every call's output).
+- Detector node: `G`.
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+________ test_codex_gate_reads_each_calls_own_output_not_another_calls _________
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:510: in test_codex_gate_reads_each_calls_own_output_not_another_calls
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
+E   AssertionError: assert 'read' == 'unknown'
+E     
+E     - unknown
+E     + read
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_gate_reads_each_calls_own_output_not_another_calls
+1 failed in 0.38s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n after): `597:             and not _output_shows_file(call["output"], digests, basename, spellings) else hit)`
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```

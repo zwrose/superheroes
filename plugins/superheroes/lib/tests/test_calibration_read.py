@@ -439,6 +439,108 @@ def test_codex_read_needs_the_calls_own_output_to_show_the_file(calib, command, 
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
 
 
+@pytest.mark.parametrize("command,output,grade", [
+    # sed and the grep family print only some lines, so with a second file operand a line cannot be tied to the core
+    pytest.param("sed -n '1,1p' <sibling> <core>", _CORE_LINE + "\n", "unknown", id="sed-sibling-and-core"),
+    pytest.param("sed -n '1,5p' <core>", "".join(line + "\n" for line in CORE_TEXT.splitlines()[:5]), "read",
+                 id="sed-core-alone"),
+    pytest.param("grep -h Policy <sibling> <core>", _CORE_LINE + "\n", "unknown", id="grep-h-sibling-and-core"),
+    pytest.param("rg -h Policy <sibling> <core>", _CORE_LINE + "\n", "unknown", id="rg-h-sibling-and-core"),
+    pytest.param("grep Policy <core>", _CORE_LINE + "\n", "read", id="grep-core-alone"),
+    # cat prints every file it names, so the core's own text in the output shows it was printed
+    pytest.param("cat <sibling> <core>", _CORE_LINE + "\n" + CORE_TEXT, "read", id="cat-sibling-and-core"),
+    # a sibling's path prefix is never stripped, so its line does not count
+    pytest.param("grep -H Policy <core>", "<sibling>:" + _CORE_LINE + "\n", "unknown", id="sibling-path-prefix-kept"),
+])
+def test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry(calib, tmp_path, command, output, grade):
+    sibling = str(tmp_path / "store" / "sibling.md")
+    with open(sibling, "w", encoding="utf-8") as fh:
+        fh.write(_CORE_LINE + "\n")
+    command = command.replace("<sibling>", sibling).replace("<core>", calib.core)
+    output = output.replace("<sibling>", sibling)
+    stdout = _codex_stream(_codex_cmd("a", command, exit_code=0, aggregated_output=output))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
+def _mcp_stream(tool, arguments, **extra):
+    item = {"id": "m", "type": "mcp_tool_call", "tool": tool, "arguments": arguments,
+            "status": "completed", "error": None, "result": _mcp_result(CORE_TEXT)}
+    item.update(extra)
+    return _codex_stream({"type": "item.completed", "item": item})
+
+
+_OTHER = "/tmp/other.txt"
+_MCP_FAILED = {"status": "failed", "error": {"message": "denied"}, "result": None}
+
+
+@pytest.mark.parametrize("tool,arguments,extra,grade", [
+    pytest.param("read_file", {"path": "<other>", "paths": ["<core>"]}, {}, "unknown", id="read_file-other-path-core-paths"),
+    pytest.param("read_multiple_files", {"paths": ["<core>", "<other>"]}, {}, "unknown", id="two-paths-core-first"),
+    pytest.param("read_multiple_files", {"paths": ["<other>", "<core>"]}, {}, "unknown", id="two-paths-core-second"),
+    pytest.param("read_multiple_files", {"paths": ["<core>"]}, {}, "read", id="one-path-in-paths"),
+    pytest.param("read_file", {"path": "<core>"}, {}, "read", id="read_file-one-path"),
+    pytest.param("read_text_file", {"path": "<core>"}, {}, "read", id="read_text_file-one-path"),
+    # the core under a key that is not the tool's own, or in a shape the tool does not take, is only named
+    pytest.param("read_file", {"paths": ["<core>"]}, {}, "unknown", id="read_file-core-under-paths"),
+    pytest.param("read_multiple_files", {"path": "<core>"}, {}, "unknown", id="read_multiple_files-core-under-path"),
+    pytest.param("read_file", {"path": ["<core>"]}, {}, "unknown", id="read_file-path-is-a-list"),
+    pytest.param("read_multiple_files", {"paths": "<core>"}, {}, "unknown", id="read_multiple_files-paths-is-a-string"),
+    pytest.param("read_file", {"path": "<core>", "paths": ["<other>"]}, {}, "unknown", id="read_file-core-path-other-paths"),
+    # a failed call stays failed
+    pytest.param("read_multiple_files", {"paths": ["<core>", "<other>"]}, _MCP_FAILED, "not-read", id="failed-two-paths"),
+    pytest.param("read_file", {"path": "<core>"}, _MCP_FAILED, "not-read", id="failed-one-path"),
+])
+def test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file(calib, tool, arguments, extra, grade):
+    def fill(value):
+        if isinstance(value, list):
+            return [fill(v) for v in value]
+        if isinstance(value, str):
+            return value.replace("<core>", calib.core).replace("<other>", _OTHER)
+        return value
+    stdout = _mcp_stream(tool, {key: fill(value) for key, value in arguments.items()}, **extra)
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
+def test_codex_gate_reads_each_calls_own_output_not_another_calls(calib):
+    # call A reads some other file whose output holds the core's text; call B reads the core and prints nothing
+    stdout = _codex_stream(
+        _codex_cmd("a", "cat /tmp/other.txt", exit_code=0, aggregated_output=CORE_TEXT),
+        _codex_cmd("b", "cat %s" % calib.core, exit_code=0, aggregated_output=""),
+    )
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == "unknown"
+
+
+def test_codex_prefix_naming_the_stamped_files_own_spelling_is_stripped(calib, tmp_path):
+    # a calibration file reached through a symlink whose basename differs from the real file's
+    real = tmp_path / "real-core.md"
+    real.write_bytes(calib.bytes[calib.core])
+    link = tmp_path / "link-core.md"
+    os.symlink(str(real), str(link))
+    real_path = os.path.realpath(str(link))
+    stamped = [dict(entry) for entry in calib.stamp]
+    stamped[0]["path"] = str(link)
+    stdout = _codex_stream(_codex_cmd("a", "grep -H Policy %s" % real_path, exit_code=0,
+                                      aggregated_output="%s:%s\n" % (real_path, _CORE_LINE)))
+    assert _reads(CR.read_states("codex", stdout, stamped))["core"] == "read"
+    # a prefix naming some other file is not stripped
+    stdout = _codex_stream(_codex_cmd("a", "grep -H Policy %s" % real_path, exit_code=0,
+                                      aggregated_output="%s:%s\n" % (calib.layer, _CORE_LINE)))
+    assert _reads(CR.read_states("codex", stdout, stamped))["core"] == "unknown"
+
+
+def test_codex_prefix_strip_holds_for_a_path_with_a_space_in_a_directory_name(calib, tmp_path):
+    spaced = tmp_path / "spaced dir"
+    spaced.mkdir()
+    core = str(spaced / "core.md")
+    with open(core, "wb") as fh:
+        fh.write(calib.bytes[calib.core])
+    stamped = [dict(entry) for entry in calib.stamp]
+    stamped[0]["path"] = core
+    stdout = _codex_stream(_codex_cmd("a", "grep -H Policy '%s'" % core, exit_code=0,
+                                      aggregated_output="%s:12:%s\n" % (core, _CORE_LINE)))
+    assert _reads(CR.read_states("codex", stdout, stamped))["core"] == "read"
+
+
 def test_a_stamp_entry_without_line_digests_grades_unknown_for_an_otherwise_good_read(calib):
     old = [{k: v for k, v in entry.items() if k != "lineDigests"} for entry in calib.stamp]
     assert all("lineDigests" not in entry for entry in old)

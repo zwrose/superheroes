@@ -226,14 +226,22 @@ def _codex_item_call(item, completed):
             outcome = _FAILED
         else:
             outcome = _INDETERMINATE
-        # axis: only a tool known to return the file's content credits a read, and only for its `path`/`paths`
-        # argument values; every other value merely names the file
-        if item.get("tool") in _READ_FILE_TOOLS and isinstance(arguments, dict):
-            listed = arguments.get("paths")
-            paths = [v for v in [arguments.get("path")] + (listed if isinstance(listed, list) else [])
-                     if isinstance(v, str)]
-            for path in paths:
-                values.remove(path)
+        # axis: only a tool known to return the file's content credits a read, and only for its OWN path argument
+        # (`path` for read_file and read_text_file, `paths` for read_multiple_files), and only when the call names
+        # exactly one file in all (every string under `path` and in `paths` counted); otherwise every value merely
+        # names the file, because the result cannot say which file a line came from
+        tool = item.get("tool")
+        if tool in _READ_FILE_TOOLS and isinstance(arguments, dict):
+            if tool == "read_multiple_files":
+                own = arguments.get("paths")
+                own = own if isinstance(own, list) else []
+            else:
+                own = [arguments.get("path")]
+            named_total = len(_string_values(arguments.get("path"))) + len(_string_values(arguments.get("paths")))
+            own = [v for v in own if isinstance(v, str)]
+            if named_total == 1 and len(own) == 1:
+                paths = own
+                values.remove(own[0])
         result = item.get("result")
         output = "\n".join(_string_values(result)) if result is not None else None
         return _call(outcome, paths=paths, named=values, output=output)
@@ -452,6 +460,11 @@ def _file_operands(program, args):
         return None
     if program in _GREP_PROGRAMS and not values and not any(f.startswith("--regexp=") for f in flags):
         files = files[1:]
+    # axis: a line's text cannot say which file printed it, so a sed or grep-family command naming several files is
+    # not a read (sed prints only the lines it selects, grep only the matches, with -h and no prefix); cat, nl, head,
+    # tail, less, more and awk '{print}' print every file they name and keep accepting several
+    if program in ("sed",) + _GREP_PROGRAMS and len(files) > 1:
+        return None
     return files
 
 
@@ -541,14 +554,21 @@ def _names_basename(call, basename):
             or any(isinstance(t, str) and any(names(w) for w in _WORD_RE.findall(t)) for t in call["texts"]))
 
 
-def _output_candidates(line, basename):
-    """The stripped forms of one output line that may equal a line of the file (see ``_output_shows_file``)."""
+def _output_candidates(line, basename, spellings=()):
+    """The stripped forms of one output line that may equal a line of the file (see ``_output_shows_file``).
+
+    ``spellings`` are the stamped file's own accepted spellings (its stamped path and that path's realpath)."""
     yield line.strip()
     yield re.sub(r"^\s*\d+[\t:|\-→]\s?", "", line).strip()  # cat -n, nl, grep -n, the Claude Read tool (tab or U+2192 arrow)
-    yield re.sub(r"^\S*" + re.escape(basename) + r":(?:\d+:)?", "", line).strip()  # grep -H, multi-file rg/grep
+    yield re.sub(r"^\S*" + re.escape(basename) + r":(?:\d+:)?", "", line).strip()  # grep -H, relative or bare name
+    # axis: only the stamped file's OWN spelling is stripped as a `<spelling>:` or `<spelling>:<n>:` prefix (a path
+    # that holds a space included); another file's path prefix is never removed, so its lines never count
+    for spelling in spellings:
+        if isinstance(spelling, str) and spelling and line.startswith(spelling + ":"):
+            yield re.sub(r"^\d+:", "", line[len(spelling) + 1:]).strip()
 
 
-def _output_shows_file(output, digests, basename):
+def _output_shows_file(output, digests, basename, spellings=()):
     """True when the call's own output holds at least one non-trivial line of the stamped file.
 
     ``digests`` is the stamp's ``lineDigests`` set, or None for a stamp without it. No output, no digests
@@ -557,7 +577,7 @@ def _output_shows_file(output, digests, basename):
     if digests is None or not isinstance(output, str) or not output:
         return False
     return any(_line_digest(candidate) in digests
-               for line in output.splitlines() for candidate in _output_candidates(line, basename))
+               for line in output.splitlines() for candidate in _output_candidates(line, basename, spellings))
 
 
 def _file_state(calls, path, truncated=False, digests=None):
@@ -568,12 +588,13 @@ def _file_state(calls, path, truncated=False, digests=None):
     (None when the stamp lacks it)."""
     targets = {path, os.path.realpath(path)}
     basename = os.path.basename(path)
+    spellings = tuple(sorted(targets))
     hits = [(call, _call_hit(call, targets)) for call in calls]
     hits = [(call, hit) for call, hit in hits if hit is not None]
     # axis: a successful call the rule reads as a read counts only when its output shows the file; otherwise the
     # call cannot tell, so it is ambiguous (never a read, never not-read)
     hits = [(call, _HIT_AMBIGUOUS if hit == _HIT_READ and call["outcome"] == _OK
-             and not _output_shows_file(call["output"], digests, basename) else hit)
+             and not _output_shows_file(call["output"], digests, basename, spellings) else hit)
             for call, hit in hits]
     # axis: `read` only on a completed, successful content-reading call naming the whole path;
     # `unknown` whenever the stream cannot tell (an undeterminable outcome, an ambiguous command, a
