@@ -705,13 +705,41 @@ def _finding_parts(row, older):
     return out
 
 
-def _kind_with_place_results(kind, own, by_key):
+def _latest_audit_place_answers(state):
+    """``{finding key: (round number, the place rows) of that finding's latest authenticated audit entry that answered places}``.
+
+    Rounds are read in order of their integer key (a non-integer key is skipped), the entries of a round's
+    ``audits`` list in list order. An entry counts only when it is a dict whose ``id`` is a non-blank string, whose
+    ``auditor`` is a non-blank string (the collection manifest authenticated the auditor), and whose ``places`` is a
+    list; any other entry is skipped and never erases an earlier entry's answers. Anything not of the expected
+    shape (``rounds`` or a round not a dict, ``audits`` not a list) is skipped, never raised."""
+    rounds = state.get("rounds") if isinstance(state, dict) else None
+    if not isinstance(rounds, dict):
+        return {}
+    numbered = [(int(k), k) for k in rounds if isinstance(k, str) and k.isascii() and k.isdigit()]
+    out = {}
+    for n, k in sorted(numbered, key=lambda nk: nk[0]):
+        audits = rounds[k].get("audits") if isinstance(rounds[k], dict) else None
+        for entry in audits if isinstance(audits, list) else ():
+            if not isinstance(entry, dict):
+                continue
+            ident, auditor, places = entry.get("id"), entry.get("auditor"), entry.get("places")
+            if isinstance(ident, str) and ident.strip() and isinstance(auditor, str) and auditor.strip() \
+                    and isinstance(places, list):
+                out[ident] = (n, places)
+    return out
+
+
+def _kind_with_place_results(kind, own, by_key, audit_answers=None):
     """A copy of the finding's `kindOfMistake` `kind` whose places each read `fixed` from the disposition the
     finding's decision stands on: the ledger row `own`, or the row its `mergedInto` chain ends at.
 
     A place reads `True` when that disposition is `fixed` and its `placeResults` holds a row for the same
-    `(file, line)`, every such row saying so; `False` when the cleared audit answered it unfixed; `None` in
-    every other case (no answer, a disposition that is not `fixed`, a chain that does not resolve, no ledger row).
+    `(file, line)`, every such row saying so; `False` when the cleared audit answered it unfixed. When that
+    disposition is not `fixed`, a place reads the answer of the latest authenticated audit entry with place
+    answers for the representative's finding key (`audit_answers`, from `_latest_audit_place_answers`): the same
+    rule, a place answered twice is fixed only when every row says so. `None` in every other case (no answer, no
+    such audit entry, a chain that does not resolve, no ledger row).
     A merged member's place that is the representative's own `(file, line)` reads fixed when the
     representative's disposition is `fixed`: that location was the audited target. A `kind` without a list of
     places is returned as it is."""
@@ -719,8 +747,20 @@ def _kind_with_place_results(kind, own, by_key):
         return kind
     rep = sc.resolve_merged_into_entry(own, by_key) if isinstance(own, dict) else None
     fixed_rep = isinstance(rep, dict) and rep.get("disposition") == "fixed"
+    if fixed_rep:
+        rows = rep.get("placeResults")
+    elif isinstance(rep, dict) and isinstance(audit_answers, dict):
+        # axis: a finding whose disposition is not fixed reads its places from the latest authenticated audit entry that answered them, so a partly fixed finding shows the places already fixed — see bite-proof record c4_wo1_kind
+        answered = audit_answers.get(sc.finding_identity_key(rep))
+        rows = answered[1] if answered else None
+        raised = rep.get(sc.RAISED_ROUND_FIELD)
+        if answered and isinstance(raised, int) and not isinstance(raised, bool) and answered[0] < raised:
+            # axis: an audit answer that predates the finding's current raise says nothing of the re-raised finding, so a reopened finding never reads fixed from it
+            rows = None
+    else:
+        rows = None
     answers = {}
-    for row in (rep.get("placeResults") if fixed_rep else None) or []:
+    for row in rows if isinstance(rows, list) else ():
         if isinstance(row, dict) and isinstance(row.get("fixed"), bool):
             pair = (row.get("file"), row.get("line"))
             answers[pair] = answers.get(pair, True) and row["fixed"]  # a place answered twice is fixed only when every row says so
@@ -755,6 +795,7 @@ def _findings_and_merges(state):
     if not isinstance(live, list) or not all(isinstance(f, dict) for f in live):
         raise Refusal(UNREADABLE, "findings")
     content = dict(by_key, **{sc.finding_identity_key(f): f for f in live})
+    audit_answers = _latest_audit_place_answers(state)
     out, merged = [], {}
     for key, row in content.items():
         if row.get("summaryEntry"):
@@ -770,7 +811,7 @@ def _findings_and_merges(state):
         held = _finding_parts(row, by_key.get(key))
         if "kindOfMistake" in held:
             # the one place the record finding's kind is built: each place's `fixed` is read from the disposition the decision stands on
-            held["kindOfMistake"] = _kind_with_place_results(held["kindOfMistake"], by_key.get(key), by_key)
+            held["kindOfMistake"] = _kind_with_place_results(held["kindOfMistake"], by_key.get(key), by_key, audit_answers)
         if isinstance(held.get("fixGroup"), dict) and _fix_commit_of(state, key):
             held["fixGroup"] = dict(held["fixGroup"], commit=_fix_commit_of(state, key))
             if _repaired_alone(state, key, held["fixGroup"].get("members")):

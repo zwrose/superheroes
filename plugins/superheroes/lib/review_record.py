@@ -1550,7 +1550,7 @@ def _recheck_decisions(findings, sources):
 
 
 def _recheck_carried(findings, checks, prior, head, is_ancestor):
-    """Re-check each left-for-owner finding a carried check names against the record's final commit `head`.
+    """Re-check each left-for-owner or undecided finding a carried check names against the record's final commit `head`.
     A finding moves to fixed only on a `fixed` entry for a finding carried from `prior`, checked on `head`, whose
     fix commit is in `head`'s history (is_ancestor exactly True); every other case keeps its outcome, with the
     reason saying why. A finding is never removed. Returns the findings and one row per entry."""
@@ -1564,7 +1564,9 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
             continue
         settled, commit, seen, evidence, old = c["settled"], c.get("commit"), c.get("checkedHead"), c["evidence"], f.get("reason")
         shown, result, why, moved = (head or "unknown")[:7], "kept", None, False
-        if f.get("outcome") != _LEFT_FOR_OWNER:
+        undecided = f.get("outcome") is None
+        # axis: an undecided carried finding is re-checked by the same chain as a left-for-owner one, never by anything weaker — see bite-proof record i2321_undecided_carried
+        if f.get("outcome") != _LEFT_FOR_OWNER and not undecided:
             result, why = "unchanged", "not left for the owner"
         elif settled == "applies":
             why = f"the check found it still applies: {evidence}"
@@ -1593,7 +1595,7 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
             on = ("a check on no named commit" if seen is None else "a check" if moved
                   else "a check against the final commit" if seen == head
                   else f"a check on {seen[:7]} (not the final commit {shown})")
-            kept = f"{on} kept it for the owner: {why}"
+            kept = f"{on} kept it {'open' if undecided else 'for the owner'}: {why}"
             out.append(dict(f, reason=f"{old}; {kept}" if old else kept))
         else:
             out.append(f)
@@ -2264,7 +2266,7 @@ def _finding_bullet(f):
         if places:
             fixed = sum(1 for p in places if p.get("fixed") is True)
             bullet += (f" · also in this PR: {', '.join(_place_text(p) for p in places)} "
-                       f"({'all fixed' if fixed == len(places) else f'{fixed} of {len(places)} fixed'})")
+                       f"({'all fixed' if fixed == len(places) else f'fixed in {fixed} of {len(places)} places'})")
     return bullet
 
 

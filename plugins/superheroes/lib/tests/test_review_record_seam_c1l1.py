@@ -313,7 +313,7 @@ def test_dod_an_account_with_every_new_field_renders_each_part():
     at = lines.index("Findings:")
     assert lines[at + 1:at + 4] == [
         "- F-1 Minor · fixed · confirmed: reproduced on the head · kind of mistake: wrong unit"
-        " · also in this PR: a.py:3, b.py (1 of 2 fixed)",
+        " · also in this PR: a.py:3, b.py (fixed in 1 of 2 places)",
         "- F-2 Important · shown wrong · repeat of rr1:01234567 · fix no longer holds"
         " · break-it: 2 run(s) (failed (exit 1), passed) · kind of mistake: wrong unit"
         " · also in this PR: c.py:1 (all fixed)",
