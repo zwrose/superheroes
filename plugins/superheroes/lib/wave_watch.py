@@ -1846,12 +1846,18 @@ def _phase_reads_resumed(phase):
     )
 
 
+# The words that name a lane ending again: handback (handbacks, handbacked), handed (handed back),
+# handover and handoff. A working word that only shares the stem (handling, handler) is not one.
+_HANDED_BACK_WORDS = ("handback", "handed", "handover", "handoff")
+
+
 def _phase_reads_handed_back(phase):
-    """Whether a progress phase has a word beginning hand (handback, handed back) and none beginning resum."""
+    """Whether a progress phase has a word naming a handback (handback, handed back, handover, handoff) and
+    none beginning resum. A word that only begins hand, such as handling, does not count."""
     if not isinstance(phase, str):
         return False
     words = re.findall(r"[a-z]+", phase.lower())
-    return any(word.startswith("hand") for word in words) and not any(
+    return any(word.startswith(_HANDED_BACK_WORDS) for word in words) and not any(
         word.startswith("resum") for word in words
     )
 

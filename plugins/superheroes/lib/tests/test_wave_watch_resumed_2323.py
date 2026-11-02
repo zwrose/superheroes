@@ -141,6 +141,14 @@ def test_row8_a_phase_reading_handed_back_but_resumed_is_activity(repo):
     assert [lane["launchId"] for lane in result["cloudLanes"]] == ["cloud-a"]
 
 
+@pytest.mark.parametrize("phase", ["handling review feedback", "hand testing the fix"])
+def test_row8_a_working_word_that_only_begins_hand_is_activity(repo, phase):
+    _handed_back(repo, start_age=_LONG_AGO)
+    result = _run(repo, [_progress(9, 101, updated_age=-400, created_age=_LONG_AGO, phase=phase)])
+    assert result["event"] == ww.EVENT_LANE_STALE  # active, and its future-dated progress reads stale
+    assert [lane["launchId"] for lane in result["cloudLanes"]] == ["cloud-a"]
+
+
 def test_row9_a_newer_launch_on_the_same_issue_in_another_batch_makes_the_older_lane_not_dormant(repo):
     _handed_back(repo, start_age=_LONG_AGO)
     newer = [_later(7, _ending("handback")), _later(8, secs=40)]
