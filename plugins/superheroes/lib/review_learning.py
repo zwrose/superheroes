@@ -475,7 +475,7 @@ def _merged_member(f):
 
 def _raiser(f):
     """The finding's raiser when it is a non-blank string, else None: the raising run is then not recorded.
-    The twin of `review_measures._raiser`, written here because `review_measures` imports this module."""
+    The one home of the rule; `review_measures` reuses it."""
     v = f.get(session_contract.RAISED_BY_FIELD)
     return v if isinstance(v, str) and v.strip() else None
 

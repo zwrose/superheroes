@@ -133,10 +133,7 @@ def _session_cost(rec):
     return sc if ok else None
 
 
-def _raiser(f):
-    """The finding's `raisedBy` when it is a non-blank string, else None: the raising run is then not recorded."""
-    v = f.get(RAISED_BY)
-    return v if isinstance(v, str) and v.strip() else None
+_raiser = review_learning._raiser  # the one raiser rule lives in review_learning
 
 
 def _ran_seats(rows):

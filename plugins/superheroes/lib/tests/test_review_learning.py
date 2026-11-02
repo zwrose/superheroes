@@ -352,16 +352,12 @@ def _row(name, ran="engine-record"):
     return {"name": name, "ran": ran}
 
 
-_LENS_SEAT = {"Code": "code-reviewer", "Security": "security-reviewer", "Failure-Mode": "premortem-reviewer",
-              "Test": "test-role", "Architecture": "architecture-reviewer"}
-
-
 def _finding(key, reviewer, outcome="fixed", fid=None, raised_by=None):
     """`raised_by` stamps the finding's raiser; when omitted, the seat of the finding's first lens (a label naming no lens
     seat gets a stage name, which is no seat), so a fixture keeps its intent explicit."""
     first = next(iter(p.strip() for p in re.split(r"[,+]", reviewer) if p.strip()), "") if isinstance(reviewer, str) else ""
     f = {"id": fid or key.upper(), "outcome": outcome, "reviewer": reviewer,
-         session_contract.RAISED_BY_FIELD: raised_by or _LENS_SEAT.get(first, "scoped finder")}
+         session_contract.RAISED_BY_FIELD: raised_by or review_seats.DIMENSION_SEAT.get(first.lower(), "scoped finder")}
     if key:
         f["findingKey"] = key
     return f
