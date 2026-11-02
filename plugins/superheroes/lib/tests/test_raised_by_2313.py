@@ -558,6 +558,54 @@ def test_r2_a_finding_this_session_did_not_raise_is_carried_with_its_raiser_and_
     assert one[RAISED] == "code-reviewer" and RAISED not in two
 
 
+def _post(tmp_path, fake, session_id, raiser):
+    row = record_finding(**{RAISED: raiser})
+    out = rr.write(put(tmp_path, acct(sessionId=session_id, findings=[row]), f"{session_id}.json"), str(tmp_path),
+                   fake.readers())
+    assert out["ok"], out
+    return row
+
+
+def _session_account(sid="B", raiser=None):
+    row = record_finding()
+    if raiser:
+        row[RAISED] = raiser
+    return {"pr": 7, "sessionId": sid, "findings": [row]}
+
+
+def test_r2_a_rewrite_of_the_sessions_own_record_keeps_the_raiser_synthesis_reassigned_on_the_row(tmp_path):
+    # axis: the session's own abandoned record is no raiser source; the row's synthesis-reassigned raiser stands
+    fake = RecordFake()
+    _post(tmp_path, fake, "B", "scoped finder")
+    account = _session_account("B", "code-reviewer")
+    other = rs._other_session_findings(account, {}, str(tmp_path), fake.readers())
+    assert other == []
+    rs._fill(account, rs._earlier(account, {}, str(tmp_path), fake.readers()), other)
+    assert account["findings"][0][RAISED] == "code-reviewer"
+
+
+def test_r2_a_finding_an_earlier_other_session_raised_keeps_that_sessions_raiser_on_the_rewrite(tmp_path):
+    # axis: the latest other-session record names the raiser, even when this session's row (and its own posted record) names another
+    fake = RecordFake()
+    _post(tmp_path, fake, "A", "code-reviewer")
+    _post(tmp_path, fake, "B", "premortem-reviewer")
+    account = _session_account("B", "premortem-reviewer")
+    other = rs._other_session_findings(account, {}, str(tmp_path), fake.readers())
+    assert other and other[0][RAISED] == "code-reviewer"
+    rs._fill(account, rs._earlier(account, {}, str(tmp_path), fake.readers()), other)
+    assert account["findings"][0][RAISED] == "code-reviewer"
+
+
+def test_r2_a_record_with_no_other_session_predecessor_keeps_the_rows_raiser(tmp_path):
+    # axis: with no other-session record at all, the row's own raiser stands
+    fake = RecordFake()
+    account = _session_account("B", "premortem-reviewer")
+    other = rs._other_session_findings(account, {}, str(tmp_path), fake.readers())
+    assert other == []
+    rs._fill(account, [], other)
+    assert account["findings"][0][RAISED] == "premortem-reviewer"
+
+
 # ---- V1: the account validator ---------------------------------------------------------------------------------
 
 

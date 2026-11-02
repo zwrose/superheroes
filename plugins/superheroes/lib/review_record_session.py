@@ -1412,12 +1412,28 @@ def _earlier(account, extras, repo_root, readers):
     return earlier
 
 
-def _earlier_is_own(account, extras, repo_root, readers):
-    """True when the latest earlier record was posted by this session (same non-empty `sessionId`)."""
-    repo = extras.get("repo") or review_record._readers(readers)["repo_name"](repo_root)
-    prior = review_record.read(account["pr"], repo, readers)
+def _other_session_findings(account, extras, repo_root, readers):
+    """The findings of the latest review record on the PR posted by a session other than this one, or [] when none.
+
+    Records are walked newest first, unreadable ones skipped; a record is "other" when its `sessionId` differs from the
+    account's non-empty `sessionId`. Anything that fails reads as none: the writer makes its own refusal."""
     sid = account.get("sessionId")
-    return bool(prior.get("ok") and isinstance(sid, str) and sid and prior.get("sessionId") == sid)
+    try:
+        rd = review_record._readers(readers)
+        repo = extras.get("repo") or rd["repo_name"](repo_root)
+        comments = review_record._comments(rd, account["pr"], repo)
+        by_id = {c["id"]: c for c in comments}
+        for comment in reversed(review_record._marker_comments(comments)):
+            rec = review_record._parse_body(comment["body"], by_id)
+            if not isinstance(rec, dict) or rec.get("sessionId") == sid:
+                continue
+            found = rec.get("findings")
+            if isinstance(found, list) and all(isinstance(f, dict) for f in found):
+                return found
+            return []
+    except Exception:  # noqa: BLE001 — fail closed: no readable other-session record means the row's raiser stands
+        return []
+    return []
 
 
 def _carry_review(account, last_reviewed, extras, repo_root, readers):
@@ -1449,34 +1465,33 @@ def _carry_review(account, last_reviewed, extras, repo_root, readers):
         if isinstance(v, dict) and v.get("coversFinalCommit") is True and v.get("ran") in review_record._RAN_STATES]
 
 
-def _fill(account, earlier, same_session=False):
+def _fill(account, earlier, raisers_from=None):
     """Give each account finding the parts the earlier record held for it and the session's row lacks.
 
-    `same_session` is true when the earlier record was posted by this very session (an abandoned record rewritten on
-    resume): the raiser the session's row carries then stands, since synthesis may have reassigned it.
+    The raiser comes from `raisers_from` (the latest record another session posted; `earlier` when None): a finding
+    held there takes that record's raiser, or none when it names none; a finding not held there keeps the row's own.
 
     A `grade`, `repeatOf` or `kindOfMistake` the row lacks is the earlier one; the earlier `breakItRuns` come first,
     followed by each of the row's runs not already among them. The earlier runs come from the posted record, which the
     writer scrubbed, so each of the row's runs is compared in its scrubbed form and appended in that form: a run
     the scrub changes is carried once, as the writer will post it."""
     held = {review_record._key(f): f for f in earlier}
+    raised = {review_record._key(f): f for f in (earlier if raisers_from is None else raisers_from)}
     for f in account["findings"]:
+        # axis: an earlier OTHER session's first raiser wins, and so does its absence; a rewrite of this session's own record keeps the row's raiser (synthesis may have moved a merged member's raiser onto its representative)
+        source = raised.get(review_record._key(f))
+        if source is not None:
+            raiser = source.get(sc.RAISED_BY_FIELD)
+            if isinstance(raiser, str) and raiser.strip():
+                f[sc.RAISED_BY_FIELD] = raiser
+            else:
+                f.pop(sc.RAISED_BY_FIELD, None)
         old = held.get(review_record._key(f))
         if old is None:
             continue
         for part in ("grade", "repeatOf", "kindOfMistake"):
             if part not in f and part in old:
                 f[part] = _stored_repeat(old[part]) if part == "repeatOf" else old[part]
-        # axis: the earlier record's first raiser wins, and so does its absence — a later session never names or changes it
-        # axis: a rewrite of this session's own record keeps the raiser the session's row carries (synthesis may have moved a merged member's raiser onto its representative); the posted one fills only a row naming none
-        own = same_session and isinstance(f.get(sc.RAISED_BY_FIELD), str) and f[sc.RAISED_BY_FIELD].strip()
-        raiser = old.get(sc.RAISED_BY_FIELD)
-        if own:
-            pass
-        elif isinstance(raiser, str) and raiser.strip():
-            f[sc.RAISED_BY_FIELD] = raiser
-        else:
-            f.pop(sc.RAISED_BY_FIELD, None)
         # axis: the earlier record's break-it runs stay ahead of this session's new ones, none twice — see bite-proof record c1l1_wo_b_session_seam
         # a present non-list value is left as supplied, so the writer refuses it as review-account-invalid
         if isinstance(old.get("breakItRuns"), list) and isinstance(f.get("breakItRuns", []), list):
@@ -1520,7 +1535,9 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         earlier = _earlier(account, extras, repo_root, readers)
         # the findings the driver's verifier fold closed as wrong in this session (`_decide` reads shown-wrong on no other ground)
         verifier_closed = {review_record._key(f) for f in account["findings"] if f.get("outcome") == _SHOWN_WRONG}
-        _fill(account, earlier, _earlier_is_own(account, extras, repo_root, readers))
+        sid = account.get("sessionId")
+        raisers = _other_session_findings(account, extras, repo_root, readers) if isinstance(sid, str) and sid else None
+        _fill(account, earlier, raisers)
         account["findings"] += _carried(account, earlier)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
