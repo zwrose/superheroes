@@ -456,6 +456,20 @@ A refused or never-started lane, and a local lane, are never re-opened. A not-re
 goes to a fresh launch instead is passed `--ignore-launch`, or its vet is recorded `ready` or
 `parked-blocker` when done, so the old lane is not watched for an ending that will never come.
 
+A terminal cloud lane you **resumed by any other means** (a same-account message, a park you answered
+after its outcome was recorded, an owner-review fix after vet `ready`) is **watched again from builder
+activity** on its issue. What counts: a builder note, a terminal comment (handback, stop, park), or a
+progress edit to a resumed phase more than five minutes after the basis (a phase that reads parked,
+stopped or handed back is no activity). The basis is the later of the lane's recorded outcome and its
+newest ledger amendment of any kind; nothing from before it is the lane's. The lane's newest unanswered
+ending fires `lane-terminal` and keeps firing until `note-answered` records its comment id or a vet
+amendment moves the basis, so record the vet when you vet the resumed handback (a deduplicated
+`record_outcome` moves nothing). Such a lane shows in `cloudLanes` (with `reopenedBy:
+"builder-activity"`) and can go `lane-stale` only while the builder is active after the basis; a tick
+that made no comments request reads activity from the progress comment alone, so a lane active only
+through a note shows as quiet on that tick. A lane that was relaunched on its issue (a later launch
+there, in any batch) is never resumed, and the watch reads back at most 24 hours before the read.
+
 What you do on each: on a **handback**, vet the PR. On a **stop**, repair it — an Anchor stop is duty
 3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it
 unrepaired. On a **park**, answer it or route it; a parked lane is **never recovered**
