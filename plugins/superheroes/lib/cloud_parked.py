@@ -1,19 +1,25 @@
-"""The advisor's side of a cloud build parked by a lapsed reviewer pass.
+"""The advisor's side of a cloud build parked by a lapsed or rejected reviewer pass.
 
-  cloud_parked.py notice --repo-root D --repo O/N --pr P
-  cloud_parked.py send-back --repo-root D
+  cloud_parked.py notice --repo-root D --repo O/N --pr P (a park is `lapsed`, or `rejected` when a 401 stopped the review)
+  cloud_parked.py send-back --repo-root D [--confirmed] (lists sendBack, adopt and adopting; --confirmed records a renewal)
   cloud_parked.py sent --repo-root D --repo O/N --pr P [--uncertain]
+
+A renewed reviewer pass never reaches a cloud session that is already running, so a renewed park whose
+lane started before the renewal is listed under `adopt` (a fresh session takes the pull request over) and
+is never messaged; only a lane that started after the renewal gets the send-back message.
 
 Stdlib plus plugin imports only. A function that runs a command or reads the environment takes
 `env=None` (a mapping; default the process environment), and one that runs a command also takes
 `run=None` (default `subprocess.run`). Every function returns a plain dict; an expected failure is a
 result with a `reason` token, never a raise. The CLI prints one JSON object and exits 1 on a refusal.
-State is `cloud-parked.json`, beside the launch ledger, written only with `store_core.atomic_write`.
+State is `cloud-parked.json`, beside the launch ledger, written only with `store_core.atomic_write`; so is
+`cloud-pass-confirmed.json` beside it, the time `send-back --confirmed` recorded for each account.
 """
 import argparse
 import datetime
 import importlib
 import json
+import math
 import os
 import re
 import sys
@@ -21,20 +27,29 @@ import time
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 STATE_NAME = "cloud-parked.json"
+CONFIRMED_NAME = "cloud-pass-confirmed.json"  # {account id: epoch seconds} of the last `send-back --confirmed`
 UNCERTAIN = "send-uncertain"  # a send-back whose delivery could not be confirmed; never resent on its own
-OUTCOMES = ("sent-back", UNCERTAIN, "closed", "owner-let-through")
-_RESOLVED = ("closed", "owner-let-through")  # outcomes after which the park needs no renewal advice
+OUTCOMES = ("sent-back", UNCERTAIN, "closed", "owner-let-through", "adopting", "adopted")
+_RESOLVED = ("closed", "owner-let-through", "adopting", "adopted")  # outcomes after which the park needs no renewal advice
 NOTICE_TEXT = ("#%d is parked. The reviewer pass lapsed mid-build, so its review didn't run. "
                "Renew the pass and I'll send it back for review.")
+REJECTED_NOTICE_TEXT = ("#%d is parked. The reviewer's sign-in was rejected mid-build (a 401), so its review "
+                        "didn't run. Renew the sign-in and the pass, and a fresh session will run its review.")
 SEND_BACK_MESSAGE = ("The reviewer pass is renewed. Run this pull request's review now, as your "
                      "review step says, then hand back as usual.")
+ADOPT_MESSAGE = ("A newer launch takes over this pull request's review: a renewed reviewer pass never reaches "
+                 "a running session, so a fresh session adopts your pushed branch. Do not run the review. "
+                 "Run your wake check for a newer launch now, with --launch-id %s, and follow your cloud "
+                 "reference's steps for superseded: true.")
 _ENTRY_KEYS = ("repo", "pr", "parkedOn", "outcome")
 _LAUNCH_KEY = "launchId"  # the lane the park came from; absent on an entry written before it was kept
 _PARK_KEY = "parkId"  # id of the latest park comment seen; absent on an entry written before it was kept
-_OPTIONAL_KEYS = (_LAUNCH_KEY, _PARK_KEY)
+_CAUSE_KEY = "cause"  # "rejected" when a 401 stopped the review; absent (a lapsed pass) on every other entry
+_OPTIONAL_KEYS = (_LAUNCH_KEY, _PARK_KEY, _CAUSE_KEY)
 _LOCK_WAIT_SECONDS = 30
 _NO_RECORD = ("review-record-missing", "review-record-unreadable")
 _TIMESTAMP_RE = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})")
+_401_RE = re.compile(r"(?<!\d)401(?!\d)")
 
 
 def _sib(name):
@@ -86,6 +101,7 @@ def _load(repo_root, env):
             and isinstance(e["repo"], str) and isinstance(e["pr"], int) and e["outcome"] in (None,) + OUTCOMES
             and isinstance(e.get(_LAUNCH_KEY), (str, type(None)))
             and isinstance(e.get(_PARK_KEY), (str, int, type(None))) and cs._date_ok(e["parkedOn"])
+            and (_CAUSE_KEY not in e or e[_CAUSE_KEY] == "rejected")
             for e in entries)):
         return _refusal("parked-state-unreadable"), None
     return path, entries
@@ -98,6 +114,30 @@ def _save(path, entries):
     except Exception:
         return False
     return True
+
+
+def _is_time(value):
+    """A finite epoch-seconds number (a bool is not one)."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _load_confirmed(repo_root, env):
+    """(path of the confirmation file, {account id: epoch seconds}) or a refusal dict. A missing file is
+    `{}`; one that is not a JSON object of account ids to finite times is refused and left alone."""
+    where = _sib("launch_ledger").ledger_path(repo_root, env)
+    if not where["ok"]:
+        return _refusal(where["reason"]), None
+    path = os.path.join(os.path.dirname(where["path"]), CONFIRMED_NAME)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            known = json.load(fh)
+    except FileNotFoundError:
+        return path, {}
+    except (OSError, ValueError):
+        return _refusal("pass-confirmed-unreadable"), None
+    if not (isinstance(known, dict) and all(isinstance(k, str) and _is_time(v) for k, v in known.items())):
+        return _refusal("pass-confirmed-unreadable"), None
+    return path, known
 
 
 def _locked(fn):
@@ -127,13 +167,11 @@ def _locked(fn):
     return wrapper
 
 
-def _lapses(repo_root, env, config_dir=None, environment=None, account_id=None):
-    """The lapse date in the setup record of the account the lane ran on: the lane's own `account_id` when
-    it carries one, else the account its `config_dir` names when that is a non-empty string, else the
-    caller's own. A `config_dir` that is the default root is the default account (no override), as the
-    launcher records it. When `environment` is a non-empty string the record must name that environment.
-    None when the account cannot be resolved or the record is missing, unreadable, for another
-    environment or has no date."""
+def _lane_account(repo_root, env, config_dir=None, account_id=None):
+    """The account the lane ran on: the lane's own `account_id` when it carries one, else the account its
+    `config_dir` names when that is a non-empty string, else the caller's own. A `config_dir` that is the
+    default root is the default account (no override), as the launcher records it. None when it cannot
+    be resolved."""
     cs = _sib("cloud_setup")
     cd = _sib("config_dir")
     if isinstance(config_dir, str) and config_dir:
@@ -145,9 +183,17 @@ def _lapses(repo_root, env, config_dir=None, environment=None, account_id=None):
             env = dict(env, **{cd.CONFIG_DIR_ENV: config_dir})
     # axis: the lane's recorded account id decides, whatever config path the advisor runs under — see bite-proof record c8a_wo4.md
     if isinstance(account_id, str) and account_id:
-        account = account_id
-    else:
-        account = cs.launching_account(env=env, cwd=repo_root)
+        return account_id
+    return cs.launching_account(env=env, cwd=repo_root)
+
+
+def _lapses(repo_root, env, config_dir=None, environment=None, account_id=None):
+    """The lapse date in the setup record of the account the lane ran on (`_lane_account` names it). When
+    `environment` is a non-empty string the record must name that environment. None when the account
+    cannot be resolved, the latest check failed, or the record is missing, unreadable, for another
+    environment or has no date."""
+    cs = _sib("cloud_setup")
+    account = _lane_account(repo_root, env, config_dir, account_id)
     if account and _sib("cloud_check").read_failed_check(repo_root, account) is not None:
         return None  # the latest check failed (or its marker is unreadable): the saved date is stale
     record = cs.read(repo_root, account)["record"] if account else None
@@ -162,6 +208,45 @@ def _renewed(parked_on, current, today):
     """Renewed: the pass now lapses on a date that is not past, and later than the day it was parked."""
     return (_sib("cloud_setup")._date_ok(current) and _sib("cloud_check")._lapses_ok(current, today)
             and current > parked_on)
+
+
+def _renewal_time(repo_root, account, confirmed):
+    """Epoch seconds of the account's latest renewal: the larger of the modification time of its setup
+    record (when the record reads ready) and the time `send-back --confirmed` recorded for it. None when
+    neither exists or the account is unresolved."""
+    if not account:
+        return None
+    times = []
+    if _sib("cloud_setup").read(repo_root, account, persist_backfill=False)["ready"]:
+        try:
+            times.append(os.path.getmtime(_sib("cloud_setup").record_path(repo_root, account)))
+        except OSError:
+            pass
+    if _is_time(confirmed.get(account)):
+        times.append(confirmed[account])
+    return max(times) if times else None
+
+
+def _rejected_renewed(started, current, renewal, today):
+    """A rejected sign-in is renewed when the account's lapse date is valid and not past (it may be the
+    same date as before) and its renewal time is later than the lane's start. An unreadable start or no
+    renewal time is not a renewal."""
+    return (_sib("cloud_setup")._date_ok(current) and _sib("cloud_check")._lapses_ok(current, today)
+            and renewal is not None and _is_time(started) and started < renewal)
+
+
+def _park_cause(body):
+    """`lapsed` for a body opening with the lapsed-pass park text, `rejected` for one whose first line is that
+    text's first line and which names a 401 as a whole number; None for any other comment."""
+    cb = _sib("cloud_builder")
+    text = body.strip()
+    if text.startswith(cb.REVIEW_LAPSED_TEXT.strip()):
+        return "lapsed"
+    first = cb.REVIEW_LAPSED_TEXT.splitlines()[0]
+    # axis: a rejected sign-in is a park only when it opens the park line and names a whole-number 401
+    if text.splitlines()[:1] == [first] and _401_RE.search(text):
+        return "rejected"
+    return None
 
 
 def _park_day(created_at):
@@ -244,7 +329,8 @@ def _lane(repo_root, issues, env, launch_id=None, reserved_by=None):
 
 @_locked
 def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
-    """Is this PR parked by the lapsed pass? Records it when so; says nothing about any other PR."""
+    """Is this PR parked by the lapsed pass or a rejected sign-in? Records it when so (a rejected one with
+    `cause: "rejected"`, the newest park deciding the cause); says nothing about any other PR."""
     env = os.environ if env is None else env
     bad, pr, _ = _check_args(repo, pr, today, need=True)
     if bad:
@@ -255,10 +341,12 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     comments = _comments(repo, pr, env, run)
     if comments is None:
         return _refusal("pr-read-failed")
-    lapsed = _sib("cloud_builder").REVIEW_LAPSED_TEXT.strip()
-    parks = [c for c in comments if isinstance(c.get("body"), str) and c["body"].strip().startswith(lapsed)]
+    found = [(c, _park_cause(c["body"])) for c in comments if isinstance(c.get("body"), str)]
+    found = [(c, cause) for c, cause in found if cause]
+    parks = [c for c, _ in found]
     if not parks:
         return {"ok": True, "kind": "not-lapsed-pass", "pr": pr, "text": None}
+    rejected = found[-1][1] == "rejected"
     known = [e for e in entries if e["repo"] == repo and e["pr"] == pr]
     parked_on = _park_day(parks[-1].get("created_at"))
     park_id = parks[-1].get("id")
@@ -294,31 +382,65 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         if ledger_reason:
             return _refusal(ledger_reason)
         entries[:] = [e for e in entries if e not in known]
-        entries.append({"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None, _LAUNCH_KEY: launch_id,
-                        _PARK_KEY: park_id})
+        entry = {"repo": repo, "pr": pr, "parkedOn": parked_on, "outcome": None, _LAUNCH_KEY: launch_id,
+                 _PARK_KEY: park_id}
+        # axis: the cause is stored only for a rejected sign-in, so every lapsed-pass entry keeps its shape
+        if rejected:
+            entry[_CAUSE_KEY] = "rejected"
+        entries.append(entry)
         if not _save(path, entries):
             return _refusal("parked-state-unwritable")
+    # axis: a rejected sign-in is told apart from a lapsed pass in the result, with its own renewal words
+    if rejected:
+        return {"ok": True, "kind": "lapsed-pass", "pr": pr, "cause": "rejected", "text": REJECTED_NOTICE_TEXT % pr}
     return {"ok": True, "kind": "lapsed-pass", "pr": pr, "text": NOTICE_TEXT % pr}
 
 
+def _adopt_item(e, issue, launch_id, lane, rejected):
+    """One entry of the `adopt` or `adopting` list: the lane to supersede, with the notice to post and the
+    message to give the old session."""
+    return {"pr": e["pr"], "repo": e["repo"], "issue": issue, "launchId": launch_id, _PARK_KEY: e.get(_PARK_KEY),
+            "cloudSessionName": lane.get("cloudSessionName"), "configDir": lane.get("configDir"),
+            _CAUSE_KEY: "rejected" if rejected else "lapsed",
+            "notice": _sib("cloud_builder").superseded_notice_text(launch_id), "message": ADOPT_MESSAGE % launch_id}
+
+
 @_locked
-def send_back(repo_root, today=None, *, env=None, run=None):
-    """The undecided entries due for their review. A closed or let-through entry is decided here; a due
-    one is listed and stays undecided until `sent` records it. An entry whose send could not be confirmed
-    is never listed for sending again, but is listed under `uncertain` every time."""
+def send_back(repo_root, today=None, *, confirmed=False, env=None, run=None, now=None):
+    """The undecided entries due for their review. A closed or let-through entry is decided here. A due
+    entry whose lane started after the account's renewal is listed under `sendBack` and stays undecided
+    until `sent` records it. One whose lane started before the renewal (or has no readable start, or whose
+    renewal time cannot be read) is listed under `adopt` once and becomes `adopting`: a renewed pass never reaches a running session, so a fresh
+    session takes it over; later runs list it under `adopting` until a replacement launch has started
+    (`adopted`) or the PR closes. An entry whose send could not be confirmed is never listed for sending
+    again, but is listed under `uncertain` every time. With `confirmed`, the time `now` (default the
+    clock) is first recorded in `cloud-pass-confirmed.json` for the caller's own account: it is the
+    renewal time of a renewal that left the lapse date unchanged. A confirmation file that cannot be
+    read refuses the whole run, and no confirmation is recorded for an account that cannot be resolved."""
     env = os.environ if env is None else env
+    now = time.time() if now is None else now
     bad, _, day = _check_args(None, None, today)
     if bad:
         return bad
     path, entries = _load(repo_root, env)
     if entries is None:
         return path
-    out = {"ok": True, "sendBack": [], "skipped": [], "unread": [], "notRenewed": [], "noLane": [],
-           "superseded": [],
+    confirmed_path, confirmed_at = _load_confirmed(repo_root, env)
+    if confirmed_at is None:
+        return confirmed_path
+    if confirmed:
+        account = _sib("cloud_setup").launching_account(env=env, cwd=repo_root)
+        if account is None:
+            return _refusal("account-unknown")
+        confirmed_at[account] = now
+        if not _save(confirmed_path, confirmed_at):
+            return _refusal("pass-confirmed-unwritable")
+    out = {"ok": True, "sendBack": [], "adopt": [], "adopting": [], "skipped": [], "unread": [],
+           "notRenewed": [], "noLane": [], "superseded": [],
            "uncertain": [{"pr": e["pr"], "repo": e["repo"], _LAUNCH_KEY: e.get(_LAUNCH_KEY), _PARK_KEY: e.get(_PARK_KEY)}
                          for e in entries if e["outcome"] == UNCERTAIN]}
     changed = False
-    for e in (e for e in entries if e["outcome"] is None):
+    for e in (e for e in entries if e["outcome"] in (None, "adopting")):
         pull = _pull(e["repo"], e["pr"], env, run)
         if pull is None:
             out["unread"].append({"pr": e["pr"], "reason": "pr-read-failed"})
@@ -334,9 +456,30 @@ def send_back(repo_root, today=None, *, env=None, run=None):
             out["unread"].append({"pr": e["pr"], "reason": ledger_reason})
             continue
         issue = lane.get("issue") if lane else (issues[0] if issues else None)
+        rejected = e.get(_CAUSE_KEY) == "rejected"
+        # axis: an adopting entry is listed once as adopt, then only as adopting until a replacement started or the PR closed
+        if e["outcome"] == "adopting":
+            if not lane:
+                out["unread"].append({"pr": e["pr"], "reason": "lane-unknown"})
+            elif _sib("cloud_recover")._replaced(repo_root, launch_id, lane, env):
+                e["outcome"], changed = "adopted", True
+                out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
+            else:
+                out["adopting"].append(_adopt_item(e, issue, launch_id, lane, rejected))
+            continue
+        # axis: a rejected park with no lane to relaunch from is a no-lane PR before any renewal is judged
+        if rejected and not lane.get("cloudSessionName"):
+            out["noLane"].append({"pr": e["pr"], "issue": issue})
+            continue
         lapses = _lapses(repo_root, env, lane.get("configDir"), lane.get("cloudEnvironment"),
                          lane.get("accountId"))
-        if not _renewed(e["parkedOn"], lapses, day):
+        account = _lane_account(repo_root, env, lane.get("configDir"), lane.get("accountId"))
+        renewal = _renewal_time(repo_root, account, confirmed_at)
+        started = lane.get("startedTs")
+        # axis: a rejected sign-in is renewed only by a renewal after the lane started; a lapsed pass keeps the lapse-date test
+        renewed = (_rejected_renewed(started, lapses, renewal, day) if rejected
+                   else _renewed(e["parkedOn"], lapses, day))
+        if not renewed:
             out["notRenewed"].append(e["pr"])
             continue
         through = _let_through(e["repo"], e["pr"], env, run, (pull.get("head") or {}).get("sha"))
@@ -357,6 +500,11 @@ def send_back(repo_root, today=None, *, env=None, run=None):
             continue
         if launch_id in superseded:
             out["superseded"].append({"pr": e["pr"], "launchId": launch_id})
+            continue
+        # axis: a lane that started before the renewal, or has no readable start, or whose renewal time cannot be read, never gets the message; a fresh session adopts it
+        if not _is_time(started) or renewal is None or started < renewal:
+            out["adopt"].append(_adopt_item(e, issue, launch_id, lane, rejected))
+            e["outcome"], changed = "adopting", True
             continue
         out["sendBack"].append({"pr": e["pr"], "repo": e["repo"], "issue": issue, "launchId": launch_id,
                                 _PARK_KEY: e.get(_PARK_KEY),
@@ -391,7 +539,7 @@ def sent(repo_root, repo, pr, *, uncertain=False, park_id=None, env=None):
     entry = found[0]
     if str(entry.get(_PARK_KEY)) != str(park_id):
         return _refusal("park-changed")
-    if entry["outcome"] in ("closed", "owner-let-through"):
+    if entry["outcome"] in ("closed", "owner-let-through", "adopting", "adopted"):
         return _refusal("already-decided")
     outcome = UNCERTAIN if uncertain else "sent-back"
     if entry["outcome"] == outcome or (uncertain and entry["outcome"] == "sent-back"):
@@ -414,6 +562,8 @@ def main(argv=None):
         if name == "sent":
             sub.add_argument("--uncertain", action="store_true")
             sub.add_argument("--park-id")
+        if name == "send-back":
+            sub.add_argument("--confirmed", action="store_true")
     try:
         args = parser.parse_args(sys.argv[1:] if argv is None else list(argv))
     except SystemExit as exc:
@@ -424,7 +574,7 @@ def main(argv=None):
     elif args.verb == "sent":
         result = sent(args.repo_root, args.repo, args.pr, uncertain=args.uncertain, park_id=args.park_id)
     else:
-        result = send_back(args.repo_root)
+        result = send_back(args.repo_root, confirmed=args.confirmed)
     sys.stdout.write(json.dumps(result) + "\n")
     return 1 if result.get("ok") is False else 0
 
