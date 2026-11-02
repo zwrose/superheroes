@@ -544,7 +544,7 @@ def _names_basename(call, basename):
 def _output_candidates(line, basename):
     """The stripped forms of one output line that may equal a line of the file (see ``_output_shows_file``)."""
     yield line.strip()
-    yield re.sub(r"^\s*\d+[\t:|\-]\s?", "", line).strip()  # cat -n, nl, grep -n, the Claude Read tool
+    yield re.sub(r"^\s*\d+[\t:|\-→]\s?", "", line).strip()  # cat -n, nl, grep -n, the Claude Read tool (tab or U+2192 arrow)
     yield re.sub(r"^\S*" + re.escape(basename) + r":(?:\d+:)?", "", line).strip()  # grep -H, multi-file rg/grep
 
 

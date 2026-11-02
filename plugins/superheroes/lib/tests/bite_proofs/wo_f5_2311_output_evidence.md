@@ -236,3 +236,40 @@ FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_read_i
 .                                                                        [100%]
 1 passed in 0.24s
 ```
+
+## A1: the arrow separator
+
+Added by WO-F6 (#2311), after the scoped review of WO-F5 found that the Claude Code Read tool numbers lines as
+`     1→# Core` (U+2192) and `_output_candidates` stripped only a tab, colon, pipe or hyphen. The capture rules
+above hold: the `UV_NATIVE_TLS` warning line dropped, nothing else cut, no credential or private URL, no redaction.
+
+- Guarded element: `_output_candidates`, the line-number prefix pattern `^\s*\d+[\t:|\-→]\s?`, the `→` in the
+  separator class. Axis: a line-number prefix followed by U+2192 (the Claude Code Read tool's own form) is
+  stripped before matching, so a Claude-engine reviewer that read its calibration grades `read`.
+- Neutralization: `[\t:|\-→]` became `[\t:|\-]` (the arrow removed from the class).
+- Detector node: `plugins/superheroes/lib/tests/test_calibration_read.py::test_claude_read_with_numbered_content_reads_and_with_empty_content_is_unknown`
+  (its `grade(_numbered_arrow(CORE_TEXT)) == "read"` assertion).
+- Raw red:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_claude_read_with_numbered_content_reads_and_with_empty_content_is_unknown _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:607: in test_claude_read_with_numbered_content_reads_and_with_empty_content_is_unknown
+    assert grade(_numbered_arrow(CORE_TEXT)) == "read"
+E   AssertionError: assert 'unknown' == 'read'
+E     
+E     - read
+E     + unknown
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_claude_read_with_numbered_content_reads_and_with_empty_content_is_unknown
+1 failed in 0.48s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n after): `547:    yield re.sub(r"^\s*\d+[\t:|\-→]\s?", "", line).strip()  # cat -n, nl, grep -n, the Claude Read tool (tab or U+2192 arrow)`
+- Raw green:
+
+```
+.                                                                        [100%]
+1 passed in 3.71s
+```

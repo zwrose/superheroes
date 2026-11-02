@@ -591,13 +591,21 @@ def _numbered(text):
     return "\n".join("%6d\t%s" % (n, line) for n, line in enumerate(text.splitlines(), 1))
 
 
+def _numbered_arrow(text):
+    """``text`` as the Claude Code Read tool prints it: a right-aligned line number, U+2192, the line."""
+    return "\n".join("%6d→%s" % (n, line) for n, line in enumerate(text.splitlines(), 1))
+
+
 def test_claude_read_with_numbered_content_reads_and_with_empty_content_is_unknown(calib):
     def grade(content):
         stdout = _lines(_claude_use("t1", "Read", {"file_path": calib.core}), _claude_result("t1", content=content))
         return _reads(CR.read_states("claude", stdout, calib.stamp))["core"]
     assert _numbered(CORE_TEXT).startswith("     1\t# Core")
+    assert _numbered_arrow(CORE_TEXT).startswith("     1→# Core")
     assert grade(_numbered(CORE_TEXT)) == "read"
     assert grade([{"type": "text", "text": _numbered(CORE_TEXT)}]) == "read"
+    assert grade(_numbered_arrow(CORE_TEXT)) == "read"
+    assert grade([{"type": "text", "text": _numbered_arrow(CORE_TEXT)}]) == "read"
     assert grade("") == "unknown"
     assert grade([]) == "unknown"
     assert grade(None) == "unknown"
