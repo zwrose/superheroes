@@ -153,6 +153,17 @@ write, not a tracker write, so the rule above is unchanged.
 that issue, and, in a cloud session, only the intake, progress, terminal and builder-note comments
 the cloud reference names, with no issue body edited.
 
+## On a local launch
+
+**Confirm the lane runs its launch's plugin version.** When the launch prompt carries
+`Advisor plugin version:` and does not say `Place: cloud session`, write the launch prompt text to a
+file and run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/launcher.py" lane-version --launch-file <that file>`
+before any diagnosis. A refusal is a stop: post the verb's `comment` on the incident issue and stop.
+A prompt with no such line is admitted.
+
+**Done when:** the version check ran before any diagnosis, or its refusal was posted on the incident
+issue and the lane ended, or the prompt carried no version line and was admitted.
+
 ## In a cloud session
 
 **A cloud start runs the cloud intake first and stops on its refusal.** Disposable copies live only

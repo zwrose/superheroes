@@ -183,10 +183,13 @@ gets discarded, or a dead session's claims get inherited as though someone had c
 
 ### Adopt; do not resume across instances or accounts
 
-Resume (`claude --resume <session-uuid> -p`) reopens the dead session's own context and works
-**only from the same config dir** — the same instance and account it launched on. The UUID must be
-the full one, not a prefix. A resumed session **appends to its original transcript file** rather
-than creating a new one; the transcript you were watching stays the transcript.
+Resume (`claude --resume <session-uuid> --plugin-dir <the lane's recorded plugin root> -p`) reopens
+the dead session's own context and works **only from the same config dir** — the same instance and
+account it launched on. The root is the `--plugin-dir` value in the `argv` of the lane's `reserved`
+ledger record, and a resume without it loads whatever version is installed on the machine at
+resume. The UUID must be the full one, not a prefix. A resumed session **appends to its original
+transcript file** rather than creating a new one; the transcript you were watching stays the
+transcript.
 
 A spawned `claude -p` that reports "OAuth session expired" was started without
 `CLAUDE_CONFIG_DIR`. Pin it on every manual canary, probe or resume, as the launcher already does

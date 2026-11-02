@@ -12,6 +12,27 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+Switching is the advisor seat moving to the new plugin root. A local lane runs the plugin root its
+advisor launched it on until handback, whatever installs meanwhile, so a running lane never
+switches: it moves to a new version only when the advisor relaunches it after adopting. A
+before-switching step therefore binds the advisor's seat and every lane it launches after
+switching, never a lane already running.
+
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **A local lane starts on its advisor's own plugin root (`--plugin-dir`) and its prompt names `Advisor plugin version:`; a local lane whose running version differs from that line stops at intake with `lane-plugin-version-mismatch`, and a local compose on a root with no readable version refuses `compose-plugin-version-unreadable`. Nothing is owed: a lane launched before the switch keeps running as it was.** See [Launcher: a local lane runs its advisor's plugin version](#launcher-a-local-lane-runs-its-advisors-plugin-version).
+
+### Launcher: a local lane runs its advisor's plugin version
+
+- **The pin.** `lib/launcher.py` `compose_launch`, the one launch chokepoint, starts every local lane (workhorse and detective, plain and adopt) with `--plugin-dir <advisor plugin root>`, the directory holding the running `launcher.py`, and puts the line `Advisor plugin version: <version>` in its prompt, the line a cloud launch carries. A root with no readable manifest version refuses `compose-plugin-version-unreadable`, for a local lane as for a cloud one. A local lane runs its advisor's plugin root from launch through handback.
+- **The detector.** A local lane whose prompt carries that line runs `python3 -B "<plugin root>/lib/launcher.py" lane-version --launch-file <file>` at intake, before any spend. Exit 1 with reason `lane-plugin-version-mismatch` is a stop: the lane posts the verb's `comment` on the issue and stops. The comment reads "This lane runs plugin {running}; its launch named plugin {launched}. I built nothing. The advisor relaunches the lane once its seat and this machine agree on the version." A prompt with no such line (typed by hand) is admitted.
+- **A live lane is not moved by an install.** The host's plugin-loading reference ([code.claude.com/docs/en/plugins/loading](https://code.claude.com/docs/en/plugins/loading)) says: "Changes to settings or to disk don't reach this layer until you run `/reload-plugins` or start a new session." It says: "The running session keeps the versions it loaded". And of a replaced version it says: "It removes that directory in a background cleanup 14 days later, so a session that already loaded the old version keeps running." The one in-place reload the host documents is for `command`-source plugins; superheroes is a relative-path marketplace plugin, so it does not apply. A `--plugin-dir` copy loads in place, so a `/reload-plugins` inside the lane reloads the same directory. A lane switches version only when the advisor relaunches it after adopting.
+- **Resume.** The host requires `--plugin-dir` again on `claude --resume`; a resume without it loads whatever version is installed on the machine at resume. The resume command carries `--plugin-dir <the lane's recorded plugin root>`, read from the `argv` in the lane's `reserved` ledger record (`rubric/launch-doctrine.md` § Recovery).
+- **The pin has three limits.** (1) A managed-settings `enabledPlugins` entry for the superheroes id, or a settings entry `"superheroes@inline": false`, makes the host ignore the `--plugin-dir` copy and load the installed one. The intake detector then refuses, but only when the installed copy is this release or later; an installed release older than this one has no detector. (2) A plugin loaded in place from a directory (a local-path marketplace or a development checkout) is pinned to that directory, not to a version: edits to it reach the lane. A copied marketplace install never changes in place (a new version gets a new directory), so for it the directory is the version. (3) A lane that outlives the 14-day cleanup of its old root loses its files (`skills/adopt-version/SKILL.md` step 7 names the risk).
+- **Unchanged.** The cloud pin hook and the auto-update settings take no part in the lane pin and are not touched by it.
+
 ## 0.47.0
 
 ### Before you upgrade

@@ -137,6 +137,13 @@ its reason.
 First list every live process and run still tied to the **old** root: builders launched on
 it, dispatch run directories it opened, watch loops armed from it.
 
+A local lane launched from the old root keeps running that root: the launcher starts it with
+`--plugin-dir <advisor plugin root>`, and an install does not move a live session (the host's
+plugin-loading reference: "The running session keeps the versions it loaded"). The inventory's
+old-root builders therefore stay on the old version until they hand back, and a lane switches
+only when it is relaunched after adoption. A before-switching item that a lane would have to
+honour mid-run is satisfied by not relaunching that lane until the switch, never by touching it.
+
 Then run each item of TRANSITION's "Before you upgrade" and one-time steps for every
 version in range — done, or not applicable with the reason. `plan` lists each "Before you
 upgrade" item in its section's `upgradeSteps` with a `when`: `before-switching` or
@@ -261,7 +268,8 @@ a normal step 7 — then remove its `outstanding:` line and record the inventory
 checklist item done before reporting adoption complete.
 
 While long old-root lanes run, name the cleanup risk: the old version directory may be marked
-`.orphaned_at` and removed under a running builder. For a lane that stops, read
+`.orphaned_at` and removed under a running builder. A resumed old-root lane is resumed with
+`--plugin-dir <its recorded old root>` or it loads the new version. For a lane that stops, read
 `rubric/launch-doctrine.md` § Recovery.
 
 **Output:** one disposition per inventory entry, and the cleanup risk named or `none live`.
