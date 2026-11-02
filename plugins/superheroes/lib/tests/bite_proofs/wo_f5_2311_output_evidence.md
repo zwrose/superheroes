@@ -461,3 +461,93 @@ FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_gate_r
 .                                                                        [100%]
 1 passed in 0.39s
 ```
+
+## WO-F8 (#2311): head and tail naming several files are not reads; a failed multi-file call is unknown
+
+Detectors, in `plugins/superheroes/lib/tests/test_calibration_read.py`:
+
+- `S` = `test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry` (ids `tail-sibling-and-core`,
+  `head-sibling-and-core`);
+- `X` = `test_codex_failed_call_naming_another_file_beside_the_core_is_unknown` (id `failed-cat-missing-then-core`);
+- `M` = `test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file` (id `failed-two-paths`).
+
+Declared guarded-element set (from the order): H1, F1. Each is a targeted Edit undone by the inverse Edit; each red
+ran the detector unedited by exact node id under `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/shpyc -m
+pytest <node ids> -q` (F1 also `--tb=short`); each green is the same node ids after the inverse Edit. Captures are
+the pytest output with the `UV_NATIVE_TLS` warning line dropped. The H1 red below is its tail only (the
+`short test summary info` block and the result line); the failure bodies above it repeat the parametrize table and
+the same `assert 'read' == 'unknown'` for each node, and are elided (about 90 lines). No credential or private URL
+is in them; no redaction was needed.
+
+### H1: head and tail name one file
+
+- Guarded element: `_file_operands`, the program tuple in `if program in ("sed", "head", "tail") + _GREP_PROGRAMS
+  and len(files) > 1:`. Axis: a call naming several files is a read only when its program prints every file it
+  names in full; `head` and `tail` print a slice of each.
+- Neutralization: `("sed", "head", "tail") + _GREP_PROGRAMS` became `("sed",) + _GREP_PROGRAMS`.
+- Detector nodes: `S[tail-sibling-and-core]`, `S[head-sibling-and-core]`.
+- Raw red (tail of the output; failure bodies elided):
+
+```
+E       AssertionError: assert 'read' == 'unknown'
+E         
+E         - unknown
+E         + read
+
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:468: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[tail-sibling-and-core]
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry[head-sibling-and-core]
+2 failed in 0.43s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n after):
+  `466:    if program in ("sed", "head", "tail") + _GREP_PROGRAMS and len(files) > 1:`
+- Raw green:
+
+```
+..                                                                       [100%]
+2 passed in 12.82s
+```
+
+### F1: a failed multi-file call is indeterminate
+
+- Guarded element: `_names_other_file` (called from `_file_state`, the `_FAILED` branch). Axis: a failed call that
+  names the stamped file beside another file grades unknown, not not-read.
+- Neutralization: a `return False` inserted as the first statement of `_names_other_file`'s body, so it always
+  says "names only the target".
+- Detector nodes: `X[failed-cat-missing-then-core]`, `M[failed-two-paths]`.
+- Raw red:
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_codex_failed_call_naming_another_file_beside_the_core_is_unknown[failed-cat-missing-then-core] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:483: in test_codex_failed_call_naming_another_file_beside_the_core_is_unknown
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'not-read' == 'unknown'
+E     
+E     - unknown
+E     + not-read
+_ test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[failed-two-paths] _
+/home/user/sh-2311/plugins/superheroes/lib/tests/test_calibration_read.py:522: in test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+E   AssertionError: assert 'not-read' == 'unknown'
+E     
+E     - unknown
+E     + not-read
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_codex_failed_call_naming_another_file_beside_the_core_is_unknown[failed-cat-missing-then-core]
+FAILED plugins/superheroes/lib/tests/test_calibration_read.py::test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file[failed-two-paths]
+2 failed in 0.61s
+```
+
+- Restore: inverse Edit. Restore receipt (grep -n -A8 after, the body's first lines):
+  `535:    if any(isinstance(p, str) and p not in targets for p in call["paths"] + call["named"]):`
+  `536:        return True`
+- Raw green:
+
+```
+..                                                                       [100%]
+2 passed in 0.40s
+```

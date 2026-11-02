@@ -447,6 +447,12 @@ def test_codex_read_needs_the_calls_own_output_to_show_the_file(calib, command, 
     pytest.param("grep -h Policy <sibling> <core>", _CORE_LINE + "\n", "unknown", id="grep-h-sibling-and-core"),
     pytest.param("rg -h Policy <sibling> <core>", _CORE_LINE + "\n", "unknown", id="rg-h-sibling-and-core"),
     pytest.param("grep Policy <core>", _CORE_LINE + "\n", "read", id="grep-core-alone"),
+    # head and tail print only a slice of each file: the core (7 lines) prints nothing past line 9, so the sibling's
+    # line 10 is what the output shows; the sibling's first line is the shared core line
+    pytest.param("tail -n +9 <sibling> <core>", _CORE_LINE + "\n", "unknown", id="tail-sibling-and-core"),
+    pytest.param("head -n 1 <sibling> <core>", _CORE_LINE + "\n", "unknown", id="head-sibling-and-core"),
+    pytest.param("tail -n 5 <core>", "".join(line + "\n" for line in CORE_TEXT.splitlines()[-5:]), "read",
+                 id="tail-core-alone"),
     # cat prints every file it names, so the core's own text in the output shows it was printed
     pytest.param("cat <sibling> <core>", _CORE_LINE + "\n" + CORE_TEXT, "read", id="cat-sibling-and-core"),
     # a sibling's path prefix is never stripped, so its line does not count
@@ -455,10 +461,25 @@ def test_codex_read_needs_the_calls_own_output_to_show_the_file(calib, command, 
 def test_codex_read_needs_the_stamped_file_to_be_the_one_file_the_output_can_carry(calib, tmp_path, command, output, grade):
     sibling = str(tmp_path / "store" / "sibling.md")
     with open(sibling, "w", encoding="utf-8") as fh:
-        fh.write(_CORE_LINE + "\n")
+        fh.write(_CORE_LINE + "\n" + "".join("filler line %d\n" % n for n in range(2, 10)) + _CORE_LINE + "\n")
     command = command.replace("<sibling>", sibling).replace("<core>", calib.core)
     output = output.replace("<sibling>", sibling)
     stdout = _codex_stream(_codex_cmd("a", command, exit_code=0, aggregated_output=output))
+    assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
+
+
+@pytest.mark.parametrize("command,exit_code,grade", [
+    # a failed call that names another file beside the core may have printed the core first: unknown, not not-read
+    pytest.param("cat /tmp/missing.txt <core>", 1, "unknown", id="failed-cat-missing-then-core"),
+    pytest.param("cat <core> /tmp/missing.txt", 1, "unknown", id="failed-cat-core-then-missing"),
+    # a failed call that names only the core stays not-read
+    pytest.param("cat <core>", 1, "not-read", id="failed-cat-core-alone"),
+    # a successful call is graded by the read rule, not by this one
+    pytest.param("cat /tmp/missing.txt <core>", 0, "read", id="ok-cat-missing-then-core"),
+])
+def test_codex_failed_call_naming_another_file_beside_the_core_is_unknown(calib, command, exit_code, grade):
+    stdout = _codex_stream(_codex_cmd("a", command.replace("<core>", calib.core), exit_code=exit_code,
+                                      aggregated_output=CORE_TEXT))
     assert _reads(CR.read_states("codex", stdout, calib.stamp))["core"] == grade
 
 
@@ -486,8 +507,8 @@ _MCP_FAILED = {"status": "failed", "error": {"message": "denied"}, "result": Non
     pytest.param("read_file", {"path": ["<core>"]}, {}, "unknown", id="read_file-path-is-a-list"),
     pytest.param("read_multiple_files", {"paths": "<core>"}, {}, "unknown", id="read_multiple_files-paths-is-a-string"),
     pytest.param("read_file", {"path": "<core>", "paths": ["<other>"]}, {}, "unknown", id="read_file-core-path-other-paths"),
-    # a failed call stays failed
-    pytest.param("read_multiple_files", {"paths": ["<core>", "<other>"]}, _MCP_FAILED, "not-read", id="failed-two-paths"),
+    # a failed call naming the core alone stays not-read; one naming another path beside it is unknown
+    pytest.param("read_multiple_files", {"paths": ["<core>", "<other>"]}, _MCP_FAILED, "unknown", id="failed-two-paths"),
     pytest.param("read_file", {"path": "<core>"}, _MCP_FAILED, "not-read", id="failed-one-path"),
 ])
 def test_mcp_read_tool_credits_only_its_own_key_and_only_when_it_names_one_file(calib, tool, arguments, extra, grade):

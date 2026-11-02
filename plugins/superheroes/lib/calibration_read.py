@@ -460,10 +460,10 @@ def _file_operands(program, args):
         return None
     if program in _GREP_PROGRAMS and not values and not any(f.startswith("--regexp=") for f in flags):
         files = files[1:]
-    # axis: a line's text cannot say which file printed it, so a sed or grep-family command naming several files is
-    # not a read (sed prints only the lines it selects, grep only the matches, with -h and no prefix); cat, nl, head,
-    # tail, less, more and awk '{print}' print every file they name and keep accepting several
-    if program in ("sed",) + _GREP_PROGRAMS and len(files) > 1:
+    # axis: a line's text cannot say which file printed it, so a call naming several files is a read only when its
+    # program prints every file it names in full: cat, nl, less, more and awk '{print}' do; sed, the grep family,
+    # head and tail print only a selection or a slice of each, so naming several files is not a read
+    if program in ("sed", "head", "tail") + _GREP_PROGRAMS and len(files) > 1:
         return None
     return files
 
@@ -524,6 +524,21 @@ def _command_hit(command, targets):
     if program in _NONREAD_PROGRAMS and not joined and any(arg in targets for arg in args):
         return _HIT_NONREAD
     return _HIT_AMBIGUOUS
+
+
+def _names_other_file(call, targets):
+    """True when the call names a path other than the target spellings, beside the target.
+
+    A tool call: any string among its ``paths`` and ``named`` values that is not a target spelling. A shell
+    text: the structurally single command's raw non-option arguments (``_simple_command``, whatever
+    ``_file_operands`` returns) hold something other than the target spellings."""
+    if any(isinstance(p, str) and p not in targets for p in call["paths"] + call["named"]):
+        return True
+    for text in call["texts"]:
+        parsed = _simple_command(text) if isinstance(text, str) else None
+        if parsed is not None and any(not arg.startswith("-") and arg not in targets for arg in parsed[0][1:]):
+            return True
+    return False
 
 
 def _call_hit(call, targets):
@@ -602,6 +617,11 @@ def _file_state(calls, path, truncated=False, digests=None):
     if any(hit == _HIT_READ and call["outcome"] == _OK for call, hit in hits):
         return READ
     if any(call["outcome"] == _INDETERMINATE and hit != _HIT_NONREAD for call, hit in hits):
+        return UNKNOWN
+    # axis: a failed call naming the stamped file beside another file may have printed the stamped file before it
+    # failed, so it is unknown; a failed call naming only the stamped file stays not-read
+    if any(call["outcome"] == _FAILED and hit != _HIT_NONREAD and _names_other_file(call, targets)
+           for call, hit in hits):
         return UNKNOWN
     if any(call["outcome"] == _OK and hit == _HIT_AMBIGUOUS for call, hit in hits):
         return UNKNOWN
