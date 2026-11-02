@@ -53,13 +53,14 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/wave_watch.py" loop \
   --repo-root "$REPO_ROOT" --batch "$BATCH_ID" \
   --max-seconds 2400 --interval-seconds 60 \
-  --ignore-launch "$UNRECORDABLE_HANDLED_LAUNCH_ID"  # re-arm only, never for a recorded cloud lane — omit on first arm
+  --ignore-launch "$UNRECORDABLE_HANDLED_LAUNCH_ID"  # re-arm only, not for a recorded cloud lane you may resume — omit on first arm
 ```
 
 `$REPO_ROOT` and `$BATCH_ID` are session variables you supply. On a **first arm**, omit
 `--ignore-launch` — there are no handled lanes yet. On **re-arm** after you act on an event, repeat
-`--ignore-launch` only for a launch id already handled whose outcome cannot be recorded; a cloud lane
-whose outcome is recorded is **not** ignored (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
+`--ignore-launch` only for a launch id already handled whose outcome cannot be recorded, or for a
+not-ready lane whose fix went to a fresh launch; any other cloud lane whose outcome is recorded is
+**not** ignored (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
 Add `--ignore-event` pairs for any benign events you want suppressed (see below).
 
 **Before arming**, run a one-off foreground `run` with the same `--repo-root` and `--batch`. It
@@ -177,7 +178,9 @@ carries no sign that it did. So for a cloud lane whose ending you have handled, 
 run `note-answered` on the ending's comment id, instead of carrying `--ignore-launch`. An ending posted
 before the outcome was recorded never re-fires (the watch reads a recorded lane only from its outcome
 on), so carrying the ignore past the outcome buys nothing. Drop any ignore before you resume a lane,
-or the resumed lane is missed.
+or the resumed lane is missed. The one exception is a not-ready lane whose fix went to a fresh launch:
+its fix-order window is still open, so keep its ignore until you record its vet `ready` or
+`parked-blocker`, or the old lane is watched again for an ending that will never come.
 
 ## `--ignore-event` and re-arming
 
