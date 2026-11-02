@@ -399,9 +399,10 @@ def test_tally_truth_table():
     assert (got["measured"], got["reason"], got["since"]) == (True, None, D)
     assert got["window"] == {"from": D, "until": "2026-10-11"}
     # each PR is dated by its record: PR 1 (before adoption) is out, the others count, and a repeated finding key is one catch
-    # PR 2's "Code, Security" catch was raised by the code seat; PR 3's security-raised catch (one catch for two rows) has no security run on it
-    assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": 0}}
-    assert got["unattributedCatches"] == 1
+    # PR 2's "Code, Security" catch was raised by the code seat; PR 3's security-raised catch (one catch for two rows) has no security run
+    # shown on its record, so the security seat's count reads unmeasured
+    assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}, "security-reviewer": {"reviews": 1, "caught": RL.UNMEASURED}}
+    assert got["unattributedCatches"] == 0 and got["raiserRunNotShown"] == 1
     assert got["escapes"] == {"missed": 1, "seenAndLeft": 1}
     assert got["leftOut"] == {"beforeWindow": 2, "afterWindow": 0, "undated": 0, "malformed": 0}  # PR 1's record and the escape dated before adoption
 
@@ -450,19 +451,29 @@ def test_tally_a_catch_with_no_raiser_reads_unmeasured_for_the_seats_that_ran_on
     assert got["raiserNotRecorded"] == 1 and got["unattributedCatches"] == 0
 
 
-# axis: a raiser seat that did not run on the PR (no row, or a not-run row) is never credited; the catch is unattributed
+# axis: a raiser seat the record does not show running (no row, or a not-run row) is never credited and its caught reads unmeasured; the catch is neither unattributed nor moved to another seat
 @pytest.mark.parametrize("rows", [[_row("code-reviewer")], [_row("code-reviewer"), _row("premortem-reviewer", "not-run")]])
 def test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited(rows):
     rec = _record(1, "a", D, rows, [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")])
     got = RL.tally([rec], [], D, until="2026-10-11")
-    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}
-    assert got["unattributedCatches"] == 1 and got["raiserNotRecorded"] == 0
+    assert got["seats"]["premortem-reviewer"]["caught"] == RL.UNMEASURED
+    assert got["seats"]["code-reviewer"] == {"reviews": 1, "caught": 0}
+    assert got["raiserRunNotShown"] == 1 and got["unattributedCatches"] == 0 and got["raiserNotRecorded"] == 0
+
+
+# axis: a fixed finding carried from an earlier session into a later record whose only ran row is another seat leaves the original raiser's caught unmeasured, never 0 and never unattributed
+def test_tally_a_catch_carried_from_an_earlier_session_leaves_its_raiser_unmeasured():
+    later = _record(1, "b", D, [_row("code-reviewer")], [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")])
+    got = RL.tally([later], [], D, until="2026-10-11")
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0},
+                            "premortem-reviewer": {"reviews": 0, "caught": RL.UNMEASURED}}
+    assert got["raiserRunNotShown"] == 1 and got["unattributedCatches"] == 0
 
 
 # axis: an unmeasured tally leaves the raiser-not-recorded count None, as it leaves the unattributed count None
 def test_tally_an_unmeasured_tally_leaves_raiser_not_recorded_none():
     got = RL.tally([{"pr": 1}], [], D, until="2026-10-11")
-    assert got["unattributedCatches"] is None and got["raiserNotRecorded"] is None
+    assert got["unattributedCatches"] is None and got["raiserNotRecorded"] is None and got["raiserRunNotShown"] is None
 
 
 # axis: the guarding test for the duplicate-PR rule — a PR supplied twice (a retried record) is incomplete evidence, never a second catch
@@ -500,8 +511,9 @@ def test_tally_window_reaching_before_adoption_is_short_of_window_and_still_coun
 def test_tally_window_inside_the_adoption_period_is_measured_and_excludes_earlier_days():
     got = RL.tally(_truth_table_records(), _escapes(), D, until="2026-10-11", window_days=1)
     assert (got["measured"], got["window"]["from"]) == (True, "2026-10-11")
-    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}  # PR 3's catch was raised by the security seat, which did not run on it
-    assert got["unattributedCatches"] == 1
+    # PR 3's catch was raised by the security seat, which its record does not show running: that seat reads unmeasured
+    assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}, "security-reviewer": {"reviews": 0, "caught": RL.UNMEASURED}}
+    assert got["unattributedCatches"] == 0 and got["raiserRunNotShown"] == 1
     assert got["leftOut"]["beforeWindow"] == 5  # the two records before the window, and the three escapes dated D-1 and D
 
 
@@ -805,8 +817,9 @@ def test_tally_each_pr_counts_its_own_catches():
     last = _record(2, "s2", "2026-10-11", rows, [_finding("k2", "Security")])
     for order in ([first, last], [last, first]):
         got = RL.tally(order, [], D, until="2026-10-12")
-        assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}}  # PR 2's catch was raised by the security seat, which ran on neither PR
-        assert got["unattributedCatches"] == 1
+        # PR 2's catch was raised by the security seat, which neither record shows running: that seat reads unmeasured
+        assert got["seats"] == {"code-reviewer": {"reviews": 2, "caught": 1}, "security-reviewer": {"reviews": 0, "caught": RL.UNMEASURED}}
+        assert got["unattributedCatches"] == 0 and got["raiserRunNotShown"] == 1
 
 
 def test_canon_commit_recovery_ignores_an_inherited_git_dir(proj, canon_root, monkeypatch, tmp_path):

@@ -1,4 +1,4 @@
-# Bite-proof record — the gardening tally credits a catch to the seat that raised it, only when that seat ran on the PR (#2313)
+# Bite-proof record — the gardening tally credits a catch to the seat that raised it when the record shows that seat ran on the PR, and reads it unmeasured otherwise (#2313)
 
 Detector file: `plugins/superheroes/lib/tests/test_review_learning.py`, unedited between each red and its green. Every entry is a targeted, reversible edit to one line of `plugins/superheroes/lib/review_learning.py` (`tally`), made and undone with the edit tool (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_review_learning.py -q -k "<one test's name fragment>"`. Each capture is the whole output of the run (no filter, no `tail`), and the `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out. No secret, token, URL or personal data appears in any capture, so nothing is redacted. The three guarded elements are the three the order declared; none is grouped.
 
@@ -43,16 +43,16 @@ FAILED plugins/superheroes/lib/tests/test_review_learning.py::test_tally_credits
 1 passed, 217 deselected in 2.82s
 ```
 
-## 2. The ran-on-PR intersection (`lib/review_learning.py:579`, `tally`)
+## 2. A raiser seat the record does not show running reads unmeasured (`lib/review_learning.py:584`, `tally`)
 
-- **Axis:** a raiser seat that did not run on the PR (no row, or a `not-run` row) is never credited; its catch counts in `unattributedCatches`.
-- **Detector:** `test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited` (both parametrized cases are selected).
-- **Neutralization:** `seats = raisers & ran_on_pr` became `seats = raisers`.
+- **Axis:** a raiser seat the latest record does not show running (no row, or a `not-run` row; for example a seat from an earlier review session of the same PR) is never credited and never counted as unattributed; its `caught` reads `unmeasured` and the catch counts in `raiserRunNotShown`.
+- **Detectors:** `test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited` (both parametrized cases) and `test_tally_a_catch_carried_from_an_earlier_session_leaves_its_raiser_unmeasured`, selected together.
+- **Neutralization:** `not_shown = raisers - ran_on_pr` became `not_shown = set()`, so a raiser seat the record does not show running is left out of the tally altogether.
 
 **Raw red** (exit 1):
 
 ```
-FF                                                                       [100%]
+FFF                                                                      [100%]
 =================================== FAILURES ===================================
 ____ test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited[rows0] _____
 
@@ -62,15 +62,11 @@ rows = [{'name': 'code-reviewer', 'ran': 'engine-record'}]
     def test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited(rows):
         rec = _record(1, "a", D, rows, [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")])
         got = RL.tally([rec], [], D, until="2026-10-11")
->       assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}
-E       AssertionError: assert {'code-review... 'caught': 1}} == {'code-review... 'caught': 0}}
-E         
-E         Omitting 1 identical items, use -vv to show
-E         Left contains 1 more item:
-E         {'premortem-reviewer': {'caught': 1, 'reviews': 0}}
-E         Use -v to get more diff
+>       assert got["seats"]["premortem-reviewer"]["caught"] == RL.UNMEASURED
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'premortem-reviewer'
 
-/home/user/wt-2313/plugins/superheroes/lib/tests/test_review_learning.py:458: AssertionError
+/home/user/wt-2313/plugins/superheroes/lib/tests/test_review_learning.py:459: KeyError
 ____ test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited[rows1] _____
 
 rows = [{'name': 'code-reviewer', 'ran': 'engine-record'}, {'name': 'premortem-reviewer', 'ran': 'not-run'}]
@@ -79,29 +75,41 @@ rows = [{'name': 'code-reviewer', 'ran': 'engine-record'}, {'name': 'premortem-r
     def test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited(rows):
         rec = _record(1, "a", D, rows, [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")])
         got = RL.tally([rec], [], D, until="2026-10-11")
->       assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0}}
-E       AssertionError: assert {'code-review... 'caught': 1}} == {'code-review... 'caught': 0}}
+>       assert got["seats"]["premortem-reviewer"]["caught"] == RL.UNMEASURED
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       KeyError: 'premortem-reviewer'
+
+/home/user/wt-2313/plugins/superheroes/lib/tests/test_review_learning.py:459: KeyError
+_ test_tally_a_catch_carried_from_an_earlier_session_leaves_its_raiser_unmeasured _
+
+    def test_tally_a_catch_carried_from_an_earlier_session_leaves_its_raiser_unmeasured():
+        later = _record(1, "b", D, [_row("code-reviewer")], [_finding("k", "Failure-Mode", raised_by="premortem-reviewer")])
+        got = RL.tally([later], [], D, until="2026-10-11")
+>       assert got["seats"] == {"code-reviewer": {"reviews": 1, "caught": 0},
+                                "premortem-reviewer": {"reviews": 0, "caught": RL.UNMEASURED}}
+E       AssertionError: assert {'code-review... 'caught': 0}} == {'code-review...'unmeasured'}}
 E         
 E         Omitting 1 identical items, use -vv to show
-E         Left contains 1 more item:
-E         {'premortem-reviewer': {'caught': 1, 'reviews': 0}}
+E         Right contains 1 more item:
+E         {'premortem-reviewer': {'caught': 'unmeasured', 'reviews': 0}}
 E         Use -v to get more diff
 
-/home/user/wt-2313/plugins/superheroes/lib/tests/test_review_learning.py:458: AssertionError
+/home/user/wt-2313/plugins/superheroes/lib/tests/test_review_learning.py:468: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_review_learning.py::test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited[rows0]
 FAILED plugins/superheroes/lib/tests/test_review_learning.py::test_tally_a_raiser_that_did_not_run_on_the_pr_is_not_credited[rows1]
-2 failed, 216 deselected in 2.25s
+FAILED plugins/superheroes/lib/tests/test_review_learning.py::test_tally_a_catch_carried_from_an_earlier_session_leaves_its_raiser_unmeasured
+3 failed, 216 deselected in 46.11s
 ```
 
-**Restore:** the inverse edit put `raisers & ran_on_pr` back.
-**Restore receipt** (the restored line, quoted by `grep -n "seats = raisers"`): `579:            seats = raisers & ran_on_pr`
+**Restore:** the inverse edit put `raisers - ran_on_pr` back.
+**Restore receipt** (the restored line, quoted by `grep -n "not_shown = "`): `584:            not_shown = raisers - ran_on_pr`
 
 **Raw green** (exit 0):
 
 ```
-..                                                                       [100%]
-2 passed, 216 deselected in 0.59s
+...                                                                      [100%]
+3 passed, 216 deselected in 2.35s
 ```
 
 ## 3. A raiser-less catch reads unmeasured (`lib/review_learning.py:573`, `tally`)

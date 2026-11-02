@@ -627,8 +627,10 @@ advisor run together to keep calibration honest.
      it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
      reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
      is left out unread. A catch is
-     credited to the seat whose run raised it (the finding's `raisedBy`), and only when that seat
-     ran on the PR. A catch whose raiser is not a seat that ran counts as unattributed. A catch with
+     credited to the seat whose run raised it (the finding's `raisedBy`) when the record shows that
+     seat ran on the PR; when it does not (the record shows only its latest review session), that
+     seat's `caught` count reads unmeasured. A catch whose raiser names no seat at all counts as
+     unattributed. A catch with
      no recorded raiser is credited to no seat, and the `caught` count of every seat that ran on its
      PR reads unmeasured. So the count is the fixes to findings that seat's own runs raised.
    - **Append the review-loop measures row** for the window at every pass, before the walk:

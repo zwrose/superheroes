@@ -484,10 +484,12 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     """The input is one review record per PR, the latest, as the record writer reads it (`review_record.py read --pr <n>`);
     a PR is dated by that record's `writtenAt`, and counts when that day is on or after the adoption day and inside the window.
     Its reviews are its seat rows that ran; its catches are its fixed findings, one per finding key, leaving out merged members
-    (the representative carries the catch). A catch is credited to the seats its rows' `raisedBy` names, only those that ran on the PR;
-    a catch whose raiser names no seat that ran counts in `unattributedCatches`. A catch with no recorded raiser is credited to no seat,
-    counts in `raiserNotRecorded`, and reads `caught` as `unmeasured` for every seat that ran on its PR; `raiserNotRecorded` is None
-    wherever `unattributedCatches` is None. A PR supplied more than once reads `incomplete-evidence`.
+    (the representative carries the catch). A catch is credited to the seat whose run raised it (its rows' `raisedBy`) when the record
+    shows that seat ran on the PR; when it does not (the record shows only its latest review session), that seat is never credited and its
+    `caught` reads `unmeasured`, and the catch counts in `raiserRunNotShown`. A catch whose raiser names no lens seat at all (a stage)
+    counts in `unattributedCatches`. A catch with no recorded raiser is credited to no seat,
+    counts in `raiserNotRecorded`, and reads `caught` as `unmeasured` for every seat that ran on its PR; `raiserNotRecorded` and
+    `raiserRunNotShown` are None wherever `unattributedCatches` is None. A PR supplied more than once reads `incomplete-evidence`.
     An escape item marked `"marker": "false-pr-claim"` is counted in `falsePrClaims`, never in `escapes`; `falsePrClaims` is None wherever `escapes` reads None.
     An escape's optional `kind` (one of ESCAPE_KINDS, what would have caught it) is counted in `escapesByKind`; an escape with no
     kind counts there as `unmeasured`, never as `nothing-reachable`, and a kind outside the list reads malformed."""
@@ -495,7 +497,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
            "measured": False, "reason": None, "seats": {}, "unattributedCatches": None, "raiserNotRecorded": None,
-           "escapes": {"missed": None, "seenAndLeft": None}, "escapesByKind": None, "falsePrClaims": None,
+           "raiserRunNotShown": None, "escapes": {"missed": None, "seenAndLeft": None}, "escapesByKind": None, "falsePrClaims": None,
            "leftOut": dict.fromkeys(left)}
     if since is None:
         return dict(out, reason="no-adoption-day")
@@ -515,7 +517,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     reviews, caught = collections.defaultdict(set), collections.Counter()
     seen_prs = set()
     unattributed, not_recorded, incomplete = 0, 0, False  # incomplete: evidence went missing, so no count is a zero
-    unread = set()  # the seats that ran on a PR whose catch names no raiser: their `caught` is unmeasured
+    run_not_shown = 0  # catches with a raiser seat the latest record does not show running (an earlier session's run)
+    unread = set()  # the seats whose `caught` is unmeasured: those that ran on a PR whose catch names no raiser, and raiser seats the record does not show running
     for rec in records if isinstance(records, list) else []:
         day = _day(rec.get("writtenAt"), whole=False) if isinstance(rec, dict) else None
         if not isinstance(rec, dict):
@@ -575,10 +578,12 @@ def tally(records, escapes, since, *, until=None, window_days=None):
                 not_recorded += 1
                 unread |= ran_on_pr
                 continue
-            # axis: a catch is credited to its raiser seats that ran on the PR, never to its lens, and the rest count as unattributed — see bite-proof record i2313_tally
-            seats = raisers & ran_on_pr
-            unattributed += not seats
-            caught.update(seats)
+            # axis: a catch is credited to its raiser seats that the record shows ran, never to its lens; a raiser seat the record does not show running reads unmeasured, and a raiser naming no lens seat is unattributed — see bite-proof record i2313_tally
+            unattributed += not raisers
+            caught.update(raisers & ran_on_pr)
+            not_shown = raisers - ran_on_pr
+            run_not_shown += bool(not_shown)
+            unread |= not_shown
     counts, claims = {"missed": 0, "seenAndLeft": 0}, 0
     by_kind = dict.fromkeys(ESCAPE_KINDS + (UNMEASURED,), 0)
     for esc in escapes if isinstance(escapes, list) else []:
@@ -610,8 +615,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
         # axis: an unmeasured tally leaves the false-claim count None, never zero — see bite-proof record wo_revisit_claims-unmeasured
         return dict(out, measured=False, reason=out["reason"] or "incomplete-evidence", leftOut=left)
     out.update(seats={s: {"reviews": len(reviews[s]), "caught": UNMEASURED if s in unread else caught[s]}
-                      for s in sorted(set(reviews) | set(caught))},
-               unattributedCatches=unattributed, raiserNotRecorded=not_recorded, escapes=counts, escapesByKind=by_kind, falsePrClaims=claims, leftOut=left)
+                      for s in sorted(set(reviews) | set(caught) | unread)},
+               unattributedCatches=unattributed, raiserNotRecorded=not_recorded, raiserRunNotShown=run_not_shown, escapes=counts, escapesByKind=by_kind, falsePrClaims=claims, leftOut=left)
     return out
 
 
