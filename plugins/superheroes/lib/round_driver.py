@@ -397,7 +397,6 @@ P_TERMINAL = round_phases.P_TERMINAL
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
 
-FOLLOWUP_MALFORMED_CAUSE = "follow-up-malformed"
 STAGED_ID_UNRESOLVABLE_CAUSE = "staged-id-unresolvable"
 
 # Named refusal when loop-state carries an unrecognized dispositionLedgerOwner marker value.
@@ -3820,13 +3819,11 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
 
 _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
-# The four artifact-envelope keys of a panel artifact. They are NOT seat keys. `canaryResult` is
-# tolerated and never read: an older-shaped artifact that still carries it is accepted, the key is
-# ignored, and it is never refused as an unknown seat.
+# The three artifact-envelope keys of a panel artifact. They are NOT seat keys.
 # In the legacy shape (no dict-valued `artifact["seats"]`, so the artifact ITSELF is the seats map)
 # these names must be subtracted before judging seat keys; in the explicit `{"seats": {...}}` shape
 # nothing is subtracted, so one of these names appearing INSIDE the seats map is a real mis-key.
-_PANEL_ENVELOPE_KEYS = ("seats", "seatMap", "ranManifest", "canaryResult")
+_PANEL_ENVELOPE_KEYS = ("seats", "seatMap", "ranManifest")
 
 def _fell_open_rows(seat_map, ran_manifest, seat_status):
     """(rows, provenance_missing) for #563 DoD1 (loud fall-open by machinery).
@@ -11720,16 +11717,6 @@ def _next_response(session_dir, state, pending, cmd):
     }
 
 
-def _journal_has_orders_emitted(session_dir, rnd, phase, attempt):
-    for event in read_journal(session_dir):
-        if event.get("outcome") != "orders-emitted":
-            continue
-        if (event.get("round") == rnd and event.get("phase") == phase
-                and event.get("attempt") == attempt):
-            return True
-    return False
-
-
 def _journal_damaged(session_dir):
     """True when the session journal has an unreadable or malformed row — callers must refuse."""
     journal, lossy = read_journal(session_dir, report_lossy=True)
@@ -14600,10 +14587,6 @@ def _fix_batch_canonical_bytes(state):
     return round_records.canonical(_materialized_fix_batch_rows(state)).encode("utf-8")
 
 
-def _fix_batch_sha256_from_state(state):
-    return round_records.sha256_text(_fix_batch_canonical_bytes(state).decode("utf-8"))
-
-
 def _ensure_fix_batch_file(session_dir, rnd, state):
     """Materialize fix-batch.json from state for the apply-fixes step.
 
@@ -15484,15 +15467,6 @@ def _record_result_recovery_cmd(session_dir, seat_key, occurrence, cas_token, at
            "--occurrence %d --attempt %d --supersede --expect-sha256 %s"
            % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
               occurrence, attempt, shlex.quote(cas_token)))
-    return cmd
-
-
-def _record_result_cmd(session_dir, seat_key, occurrence, attempt):
-    """Shell-ready first-ingest `record-result` for one slot (no stored record to supersede yet)."""
-    driver_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "round_driver.py")
-    cmd = ("python3 -B %s record-result --session-dir %s --seat %s --occurrence %d --attempt %d"
-           % (shlex.quote(driver_path), shlex.quote(session_dir), shlex.quote(seat_key),
-              occurrence, attempt))
     return cmd
 
 
