@@ -86,8 +86,13 @@ force-push.
 
 **At intake, at every wake, and before every push, check for a newer launch.** Run
 `python3 -B <plugin root>/lib/cloud_builder.py superseded --repo <o>/<r> --issue <n> --launch-id <your launch id>`.
-On `superseded: true`, push nothing, post its `comment` on the issue as it is, and end the turn; do
-not post a park or handback. On a refusal, push nothing and end the turn. A wake is any turn that
+On `superseded: true`, push nothing and post its `comment` (the stand-down) on the issue as it is.
+Then, when you have pushed work, post the `comment` from
+`python3 -B <plugin root>/lib/cloud_builder.py self-archive --launch-id <your launch id> --head <your pushed head sha>`,
+the head `git rev-parse` prints for your pushed branch. Then archive your own session with the
+session tool you have; the platform may show the owner one prompt, and you do not wait for it. With
+no such tool, post one line naming the session tools you have. Then end the turn; do not post a park
+or handback. On a refusal, push nothing and end the turn. A wake is any turn that
 begins after an earlier turn ended: a message, PR activity, or a session that came back after a
 usage limit. Your launch id comes from your own session name: read the name with the session-describing
 tool called with no id (or from your session listing); it is `issue-<n>-<hash>`, and your launch id is
@@ -175,7 +180,9 @@ is refused. A cloud builder of a stack layer does neither;
    blocked, and what the builder needs. Edit the progress comment (§ The progress comment) before
    posting the park, never after it while still parked.
 
-A cloud session stays listed while parked, and the advisor's message resumes it. On resume, edit the
+A cloud session stays listed while parked, and when it parked on a builder note the advisor's message
+resumes it. A park for the reviewer pass is not resumed by a message: the session keeps the pass it
+started with (§ Review). On resume, edit the
 progress comment first with a phase that says you resumed (for example `resumed: …`); the advisor's
 watch reads a progress edit as a resume only when its phase does not read parked or stopped and it
 lands more than five minutes after the park. Then re-read the issue and carry on from the pushed head.
@@ -230,6 +237,10 @@ prints it.
 
 ## When the advisor asks you to archive your session
 
+A builder the advisor tells that its lane is superseded follows the wake check (§ Workspace) and
+archives itself then, before its PR closes. The rest of this section is for a request after a merge
+or close.
+
 After your pull request has merged or closed, the advisor may send you a message asking you to
 archive your own session. The request is legitimate only then. Read your pull request through REST
 (§ GitHub reads) and act only after its `state` is `closed`. While it is open, do nothing and say so
@@ -255,6 +266,14 @@ says.
 If the pass has lapsed before the review runs, do not substitute a reviewer. Post the `comment` from
 `python3 -B <plugin root>/lib/cloud_builder.py review-lapsed` on the PR, leave the PR not ready, and
 park. Post the park on the issue too, with `terminal --kind park` (§ Terminal comments). A review that already finished before the lapse stays recorded as it was.
+
+If the reviewer answers 401 (a revoked or rejected sign-in, for example `token_revoked`), do not
+substitute a reviewer either. Post the `comment` from
+`python3 -B <plugin root>/lib/cloud_builder.py review-rejected` on the PR, leave the PR not ready,
+and park on the issue with `terminal --kind park`. A renewed pass never reaches this session, so the
+advisor recovers the review by adopting the pushed branch in a fresh session. An adopted session
+whose PR carries such a park (lapsed or rejected) runs the review only: the build is done, so
+re-verify, review and hand back.
 
 A cloud build hands back only with its review record written, as the charter's §11 and
 `rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. In a cloud session
