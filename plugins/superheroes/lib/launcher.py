@@ -1366,9 +1366,14 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     }
 
 
+def plugin_root():
+    """The running plugin's root: the directory that holds the running `launcher.py`'s `lib/`."""
+    return os.path.dirname(_LIB_DIR)
+
+
 def plugin_version():
     """The `version` of the running plugin's manifest, or None. Never raises."""
-    manifest = os.path.join(os.path.dirname(_LIB_DIR), ".claude-plugin", "plugin.json")
+    manifest = os.path.join(plugin_root(), ".claude-plugin", "plugin.json")
     try:
         with open(manifest, encoding="utf-8") as fh:
             data = json.load(fh)
@@ -1413,11 +1418,10 @@ def compose_launch(
         issue_line += "\n%s %s" % (_BUDGET_LABEL, premise["budget"])
     if isinstance(premise, dict) and "adoptsBranch" in premise:
         adopts = adopts_line(premise["adoptsBranch"], premise["adoptsHead"])
-    version = None
+    version = plugin_version()
+    if version is None:
+        return _fail("compose-plugin-version-unreadable")
     if cloud:
-        version = plugin_version()
-        if version is None:
-            return _fail("compose-plugin-version-unreadable")
         base = premise.get("baseCommit") if isinstance(premise, dict) else None
         if not isinstance(base, str) or not base.strip():
             return _fail("premise-missing-field:baseCommit")
@@ -1453,12 +1457,16 @@ def compose_launch(
         if not isinstance(local_base, str) or not local_base.strip():
             return _fail("premise-missing-field:baseCommit")
         # A local adopt launch never reaches cloud intake, so its base keeps the non-empty check.
-        prompt = "%s\n\n%s\n\n%s\n%s\n\n%s" % (
-            cmd, issue_line, adopts, launch_lines.format_line(launch_lines.BASE, local_base),
-            rulings_block,
+        # axis: a local prompt names the advisor's plugin version on its own line — see bite-proof record wo_a_2327_lane_pin
+        version_line = launch_lines.format_line(launch_lines.VERSION, version)
+        base_line = launch_lines.format_line(launch_lines.BASE, local_base)
+        prompt = "%s\n\n%s\n\n%s\n%s\n%s\n\n%s" % (
+            cmd, issue_line, version_line, adopts, base_line, rulings_block,
         )
     else:
-        prompt = "%s\n\n%s\n\n%s" % (cmd, issue_line, rulings_block)
+        # axis: a local prompt names the advisor's plugin version on its own line — see bite-proof record wo_a_2327_lane_pin
+        version_line = launch_lines.format_line(launch_lines.VERSION, version)
+        prompt = "%s\n\n%s\n\n%s\n\n%s" % (cmd, issue_line, version_line, rulings_block)
     if own_line not in prompt:
         return _fail("compose-ruling-zero-absent")
 
@@ -1483,7 +1491,10 @@ def compose_launch(
         # too. That is safe because the only retrying path is spawn-oserror, where
         # Popen raised and no child ever started — every other failure is terminal
         # with no re-spawn.
-        built = engine_adapter.claude_builder_argv(token, session_id, prompt)
+        # axis: a local lane's argv starts the child on the advisor's own plugin root (--plugin-dir) — see bite-proof record wo_a_2327_lane_pin
+        built = engine_adapter.claude_builder_argv(
+            token, session_id, prompt, plugin_dir=plugin_root(),
+        )
     if built.get("reason") is not None:
         if "detail" in built:
             return _fail(built["reason"], detail=built["detail"])
@@ -1508,12 +1519,66 @@ def compose_launch(
         "doctrine": doctrine,
         "charter": charter,
     }
+    composed["pluginVersion"] = version
+    composed["pluginRoot"] = plugin_root()
     if cloud:
         composed["place"] = PLACE_CLOUD
-        composed["pluginVersion"] = version
         composed["cloudEnvironment"] = cloud_environment
         composed["cloudSessionName"] = session_name
     return composed
+
+
+# A running plugin version that cannot be told apart from "unset": `lane_version_check` reads the
+# running version itself when the caller omits it, and an explicit `None` means unreadable.
+_UNSET = object()
+
+LANE_VERSION_REFUSAL_TEXT = (
+    "This lane runs plugin {running}; its launch named plugin {launched}. I built nothing. "
+    "The advisor relaunches the lane once its seat and this machine agree on the version."
+)
+
+
+def lane_version_check(launch_text, running_version=_UNSET):
+    """Admit a lane only when its running plugin version is the version its launch named. Never raises.
+
+    A launch text with no `Advisor plugin version:` line (hand-typed, or composed before the pin)
+    is admitted unpinned; a lane whose launch names a version is refused unless the running
+    version is readable and equal to it.
+    """
+    import launch_lines
+    if running_version is _UNSET:
+        running_version = plugin_version()
+    running = (
+        running_version
+        if isinstance(running_version, str) and running_version.strip() else None
+    )
+    pattern = launch_lines.line_regex(launch_lines.VERSION, ".+")
+    values = []
+    if isinstance(launch_text, str):
+        for line in launch_text.splitlines():
+            found = pattern.match(line.strip())
+            if found:
+                values.append(found.group(1))
+    if not values:
+        return {
+            "ok": True, "pinned": False, "reason": None, "running": running,
+            "launched": None, "comment": None,
+        }
+    launched = values[0] if all(value == values[0] for value in values) else None
+    # axis: a lane whose running plugin version differs from its launch's named version is refused naming both — see bite-proof record wo_a_2327_lane_pin
+    if running is not None and running == launched:
+        return {
+            "ok": True, "pinned": True, "reason": None, "running": running,
+            "launched": launched, "comment": None,
+        }
+    return {
+        "ok": False, "pinned": True, "reason": "lane-plugin-version-mismatch",
+        "running": running, "launched": launched,
+        "comment": LANE_VERSION_REFUSAL_TEXT.format(
+            running=running or "an unreadable version",
+            launched=launched or "an unreadable version",
+        ),
+    }
 
 
 # WORKAROUND: headless builders must survive parent session exit via detached spawn
@@ -4879,6 +4944,18 @@ def _cli_still(args):
     return {"ok": True, "line": got["line"]}
 
 
+def _cli_lane_version(args):
+    try:
+        with open(args.launch_file, encoding="utf-8") as fh:
+            launch_text = fh.read()
+    except (OSError, ValueError):
+        return {
+            "ok": False, "pinned": False, "reason": "lane-version-launch-file-unreadable",
+            "running": None, "launched": None, "comment": None,
+        }
+    return lane_version_check(launch_text)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="launcher")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -5001,6 +5078,10 @@ def main(argv=None):
     cn.add_argument("--repo-root", required=True)
     cn.add_argument("--launch-id", required=True)
     cn.set_defaults(func=_cli_canary)
+
+    lv = sub.add_parser("lane-version")
+    lv.add_argument("--launch-file", required=True)
+    lv.set_defaults(func=_cli_lane_version)
 
     args = parser.parse_args(argv)
     result = args.func(args)

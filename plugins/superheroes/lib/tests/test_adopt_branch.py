@@ -54,8 +54,8 @@ def test_local_prompt_names_branch_and_base_between_the_issue_and_the_rulings(tm
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo, adoptsBranch=BRANCH, adoptsHead=HEAD)
     prompt = _local_prompt(repo, premise)
-    head = "%s\n\nIssue: #656\n\nAdopts branch: %s at %s\nBase commit: %s\n\n" % (
-        L._WORKHORSE_CMD, BRANCH, HEAD, premise["baseCommit"])
+    head = "%s\n\nIssue: #656\n\nAdvisor plugin version: %s\nAdopts branch: %s at %s\nBase commit: %s\n\n" % (
+        L._WORKHORSE_CMD, L.plugin_version(), BRANCH, HEAD, premise["baseCommit"])
     assert prompt.startswith(head)
     assert prompt[len(head):].strip() != ""
 
@@ -65,8 +65,10 @@ def test_prompts_without_the_key_are_byte_identical_to_the_prior_prompts(tmp_pat
     premise = _valid_premise(repo)
     assert "adoptsBranch" not in premise
     local = _local_prompt(repo, premise)
-    assert local == "%s\n\nIssue: #656\n\n%s" % (
-        L._WORKHORSE_CMD, L.compose_launch(repo, 656, premise)["doctrine"]["rulingsBlock"])
+    # the local prompt carries the one added line, `Advisor plugin version:` (#2327)
+    assert local == "%s\n\nIssue: #656\n\nAdvisor plugin version: %s\n\n%s" % (
+        L._WORKHORSE_CMD, L.plugin_version(),
+        L.compose_launch(repo, 656, premise)["doctrine"]["rulingsBlock"])
     assert "Adopts branch" not in local
     cloud = _cloud_prompt({"baseCommit": SHA})
     assert "Adopts branch" not in cloud

@@ -231,7 +231,8 @@ def test_local_adopt_detective_prompt_starts_with_the_command_and_names_the_budg
         repo, charter="detective", budget=BUDGET, adoptsBranch=BRANCH, adoptsHead=HEAD))
     workhorse = _local(repo, _valid_premise(repo, adoptsBranch=BRANCH, adoptsHead=HEAD))
     assert detective["ok"] is True, detective
-    assert detective["prompt"].startswith(DETECTIVE_HEAD % (656, BUDGET) + "Adopts branch: ")
+    assert detective["prompt"].startswith(
+        DETECTIVE_HEAD % (656, BUDGET) + "Advisor plugin version: %s\nAdopts branch: " % L.plugin_version())
     assert _without_command_and_budget(detective["prompt"]) == workhorse["prompt"]
     for sentence in (LD.load()["detectiveCloudLine"], LD.load()["cloudLaunchLine"]):
         assert sentence not in detective["prompt"]
@@ -397,7 +398,8 @@ def test_a_detective_lane_launches_and_takes_every_ledger_door(tmp_path):
         assert reserved[0]["charter"] == "detective"
         assert reserved[0]["premise"]["charter"] == "detective"
         assert reserved[0]["premise"]["budget"] == BUDGET
-        prompt = reserved[0]["argv"][-1]
+        argv = reserved[0]["argv"]
+        prompt = argv[argv.index("-p") + 1]
         assert prompt.startswith(DETECTIVE_HEAD % (656, BUDGET))
         _reap_all(procs)
         launch_id = reserved[0]["launchId"]
