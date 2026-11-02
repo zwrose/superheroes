@@ -53,13 +53,14 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/wave_watch.py" loop \
   --repo-root "$REPO_ROOT" --batch "$BATCH_ID" \
   --max-seconds 2400 --interval-seconds 60 \
-  --ignore-launch "$ALREADY_HANDLED_LAUNCH_ID"  # re-arm only — omit on first arm
+  --ignore-launch "$UNRECORDABLE_HANDLED_LAUNCH_ID"  # re-arm only, never for a recorded cloud lane — omit on first arm
 ```
 
 `$REPO_ROOT` and `$BATCH_ID` are session variables you supply. On a **first arm**, omit
 `--ignore-launch` — there are no handled lanes yet. On **re-arm** after you act on an event, repeat
-`--ignore-launch` for each launch id already handled on that arm, and add `--ignore-event` pairs for
-any benign events you want suppressed (see below).
+`--ignore-launch` only for a launch id already handled whose outcome cannot be recorded; a cloud lane
+whose outcome is recorded is **not** ignored (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
+Add `--ignore-event` pairs for any benign events you want suppressed (see below).
 
 **Before arming**, run a one-off foreground `run` with the same `--repo-root` and `--batch`. It
 returns at once and reports what is due right now, but it cannot tell a mistyped batch id from a quiet
@@ -170,6 +171,13 @@ never reports the window-only degradations `lane-never-stamped` or `pr-signal-ne
 `--ignore-launch` is repeatable, and it excludes a launch id from lane enumeration. Without it, a
 lane you have already handled but cannot terminalize re-fires on every arm and the loop spins on the
 same event.
+
+`--ignore-launch` takes a lane out of every path — live, fix order and resumed — and the result
+carries no sign that it did. So for a cloud lane whose ending you have handled, record its outcome, or
+run `note-answered` on the ending's comment id, instead of carrying `--ignore-launch`. An ending posted
+before the outcome was recorded never re-fires (the watch reads a recorded lane only from its outcome
+on), so carrying the ignore past the outcome buys nothing. Drop any ignore before you resume a lane,
+or the resumed lane is missed.
 
 ## `--ignore-event` and re-arming
 
@@ -469,6 +477,8 @@ amendment moves the basis, so record the vet when you vet the resumed handback (
 that made no comments request reads activity from the progress comment alone, so a lane active only
 through a note shows as quiet on that tick. A lane that was relaunched on its issue (a later launch
 there, in any batch) is never resumed, and the watch reads back at most 24 hours before the read.
+A lane passed `--ignore-launch` is not watched on this path either, with no sign in the result: drop
+the ignore before you resume a lane (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
 
 What you do on each: on a **handback**, vet the PR. On a **stop**, repair it — an Anchor stop is duty
 3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it

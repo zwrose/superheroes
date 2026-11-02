@@ -20,6 +20,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **`vet_slot.py write` refuses a new reason, `body-emptied`, for a PR body that is empty or has lost the builder's owner half; a caller matching on reasons adds it.** Nothing is owed otherwise. See [Vet slot: write refuses a body that lost the owner half](#vet-slot-write-refuses-a-body-that-lost-the-owner-half).
 - **After switching.** **The wave watch keeps a recorded-terminal cloud lane in its watch while it is resumed by builder activity on its issue: its newest unanswered handback, stop or park after its outcome (or its newest ledger amendment) fires `lane-terminal`, and an active resumed lane's `cloudLanes` entry carries `reopenedBy: "builder-activity"`. A caller that reads `reopenedBy` handles the new value.** Nothing is owed otherwise. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
+- **After switching.** **Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded, so a lane you resume is watched; `--ignore-launch` takes a lane out of every path with no sign in the result.** Nothing else is owed. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
 
 ### Vet slot: write refuses a body that lost the owner half
 
@@ -32,6 +33,8 @@ The remedy is to restore the builder's body from the PR's edit history, never to
 A cloud lane recorded terminal no longer leaves the wave watch while builder activity on its issue resumes it. Its newest unanswered handback, stop or park after the recorded outcome (or its newest ledger amendment) fires the `lane-terminal` event, and the `cloudLanes` entry of a lane that is active again carries `reopenedBy: "builder-activity"`.
 
 A caller that reads `reopenedBy` handles the new value; a lane never resumed carries no such member.
+
+Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded: it takes a lane out of every path, the resumed one included, with no sign in the result.
 
 ## 0.47.0
 

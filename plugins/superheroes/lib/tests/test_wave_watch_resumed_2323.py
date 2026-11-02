@@ -189,9 +189,9 @@ def test_row10_a_refused_cloud_lane_is_not_dormant(repo):
 
 
 def test_row11_an_active_dormant_lane_is_listed_with_its_basis_and_goes_stale_on_its_progress(repo):
-    basis = time.time() - _QUIET * 3
     _cloud_lane(repo, "cloud-a", 101, start_age=_LONG_AGO)
     _outcome_at(repo, "cloud-a", _QUIET * 3)
+    basis = _folded(repo)["cloud-a"]["terminalTs"]
     # Resumed (edited well past the grace after the basis) and then quiet past its stated hour.
     result = _run(repo, [_progress(9, 101, updated_age=_QUIET * 2, created_age=_LONG_AGO, phase="resumed: fixing")])
     assert result["event"] == ww.EVENT_LANE_STALE

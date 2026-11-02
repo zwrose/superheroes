@@ -2168,7 +2168,7 @@ def _evaluate_cloud_comments(
         progress_out[0] = observed_progress
     if isinstance(active_out, list) and active_out:
         active_out[0] = _dormant_active_lanes(comments, watched, observed_progress)
-    path =_answered_notes_path(repo_root, env, create=False)
+    path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     # axis: a partial read filters notes and endings by the closes a complete read showed, never by an empty map — see bite-proof record wo_2148_fix_order.md
     close_kinds = _cloud_close_kinds(comments, watched) if state else {}
