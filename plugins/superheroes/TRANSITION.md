@@ -12,6 +12,27 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **`vet_slot.py write` refuses a new reason, `body-emptied`, for a PR body that is empty or has lost the builder's owner half; a caller matching on reasons adds it.** Nothing is owed otherwise. See [Vet slot: write refuses a body that lost the owner half](#vet-slot-write-refuses-a-body-that-lost-the-owner-half).
+- **After switching.** **The wave watch keeps a recorded-terminal cloud lane in its watch while it is resumed by builder activity on its issue: its newest unanswered handback, stop or park after its outcome (or its newest ledger amendment) fires `lane-terminal`, and an active resumed lane's `cloudLanes` entry carries `reopenedBy: "builder-activity"`. A caller that reads `reopenedBy` handles the new value.** Nothing is owed otherwise. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
+
+### Vet slot: write refuses a body that lost the owner half
+
+`vet_slot.py write` now refuses `body-emptied`, before any marker check, when the PR body is empty or whitespace, or when no live `What's changing, and why` heading sits above the advisor-vet marker (anywhere in the body when that marker is absent). A heading inside a code fence, an HTML comment or the slot span does not count. A truncated `gh` redirect can leave a body like this, and a re-stamped marker would otherwise let the write put the slot into it.
+
+The remedy is to restore the builder's body from the PR's edit history, never to re-stamp the marker into it. `check` and `handback` are unchanged and keep `read-failed` and `markers-invalid` on such a body.
+
+### Wave watch: a resumed cloud lane stays in the watch
+
+A cloud lane recorded terminal no longer leaves the wave watch while builder activity on its issue resumes it. Its newest unanswered handback, stop or park after the recorded outcome (or its newest ledger amendment) fires the `lane-terminal` event, and the `cloudLanes` entry of a lane that is active again carries `reopenedBy: "builder-activity"`.
+
+A caller that reads `reopenedBy` handles the new value; a lane never resumed carries no such member.
+
 ## 0.47.0
 
 ### Before you upgrade
