@@ -242,6 +242,31 @@ owner's machine.
 What the owner says at a launch to name where one build runs, "this one local" or the cloud. It
 overrides the project's cloud builds setting for that build.
 
+### Cloud environment
+
+The place on the cloud platform where the owner pastes the [setup text](#setup-text) and the
+[reviewer pass](#reviewer-pass).
+
+### Cloud setup
+
+A project's [cloud environment](#cloud-environment) after a [check session](#check-session) has
+passed. It belongs to the Claude account it was made on.
+
+### Setup text
+
+The block the plugin writes for the owner to paste into the [cloud environment](#cloud-environment).
+It holds no secret. A project that commits the plugin pin hook gets a plugin release in its cloud
+builds by a new pin commit, without a paste.
+
+### Reviewer pass
+
+The sign-in the owner places in the [cloud environment](#cloud-environment) so the independent
+reviewer can run there.
+
+### Check session
+
+The one short cloud session that proves a [cloud setup](#cloud-setup).
+
 ## Backlog fold-in
 
 ### Fold-in rules
@@ -456,30 +481,3 @@ The class a finding belongs to, in a few plain words, such as "a retry with no c
 ### Search description
 
 What the independent reviewer that raised a finding writes so the mistake can be found elsewhere in the repository: the kind of mistake, what it looks like in code, and short examples. It is never written by the build session. It is used for one repository-wide search when the finding is confirmed as Important or Critical. The rule is in [the base rubric](review-base.md) (Findings output format). The repository-wide search runs once per such finding, by cheap searchers over the whole repository; a hit on a touched line goes to the verifier before any fix, and a hit elsewhere goes on the outside list under that search's own entry.
-
-## Cloud builds
-
-### Cloud environment
-
-The place on the cloud platform where the owner pastes the [setup text](#setup-text) and the
-[reviewer pass](#reviewer-pass).
-
-### Cloud setup
-
-A project's [cloud environment](#cloud-environment) after a [check session](#check-session) has
-passed. It belongs to the Claude account it was made on.
-
-### Setup text
-
-The block the plugin writes for the owner to paste into the [cloud environment](#cloud-environment).
-It holds no secret. A project that commits the plugin pin hook gets a plugin release in its cloud
-builds by a new pin commit, without a paste.
-
-### Reviewer pass
-
-The sign-in the owner places in the [cloud environment](#cloud-environment) so the independent
-reviewer can run there.
-
-### Check session
-
-The one short cloud session that proves a [cloud setup](#cloud-setup).

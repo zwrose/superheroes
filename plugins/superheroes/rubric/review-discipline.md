@@ -54,8 +54,7 @@ scales with rigour here — bite-proofs, truth tables, censuses, drift tests —
 line that counted it would push a builder toward fewer tests to stay in-lane, which is
 the wrong pressure. Test volume that signals a *design* problem is the third-rework
 tripwire's and the vet's to catch, not the lane line's. Estimates carry both numbers
-(behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled
-2026-08-16).
+(behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled).
 
 **Whole deleted files are reported, not counted.** A non-test file the diff deletes outright — numstat shows no additions and the file is gone at the head — is left out of the tripwire's count and listed in the build record with its line count. A deletion inside a file that stays still counts, so unplanned scope still shows. The common package-manager lockfiles (`lib/size_count.py` holds the list, its one home) are likewise left out of both counts and listed with their line counts, while the manifest beside one still counts. A project can list path globs in its calibration (`sizeExclude`, set through configure) that are left out of both counts and listed the same way; a project setting nothing counts as before. The two bars below are unchanged; they already leave pure deletions out. `size_count.py count --base <sha>` (in the plugin's `lib` directory) returns the tripwire count, the bar count and the deleted-file list. Each regenerated artifact in the diff is passed with `--bar-exclude <path>` so it stays out of the bar count (it still counts toward the tripwire).
 
@@ -242,8 +241,8 @@ cannot be told apart from something forgotten
 (`skills/showrunner/reference/vet-receipt.md`). The **micro** lane has no vet at all — see the lane
 table above and *Micro — owner authorization*.
 
-**Post-handback merges carry a review expectation only when they author content** (owner-ruled
-2026-08-21). A **content-neutral freshening** of the branch — an update-from-main that resolves no
+**Post-handback merges carry a review expectation only when they author content** (owner-ruled).
+A **content-neutral freshening** of the branch — an update-from-main that resolves no
 conflicts and authors nothing — carries **no** review expectation; re-panelling it is a race the
 branch cannot win. A post-handback commit that **authors content** — a conflict resolution, an
 advisor integration fold — keeps the union-fix **micro floor** in
@@ -406,7 +405,7 @@ absence of a set of pinned literals — is what a cardinality floor floors; that
 "those censuses" names. An **extractor whose only job is bounding one of those pins to its home
 block is part of the pin, not a separate class** — it stays, and it is disclosed as such. The same
 holds on the **source side**: a derivation whose only output is the literal set a cross-doc pin
-agrees on is the pin's **source half**, in class (owner-ruled 2026-08-23). What is
+agrees on is the pin's **source half**, in class (owner-ruled). What is
 out of class is an extractor that parses document structure or judges what prose means. **Structural
 parsers**, **table checks**, and **message/meaning guards** are **out of class** — permanently.
 Prose *meaning* and *structure* are review's job, not CI's.

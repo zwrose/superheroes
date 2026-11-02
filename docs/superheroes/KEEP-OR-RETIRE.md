@@ -281,7 +281,8 @@ The list's units are the census rows, and each entry is keyed to its census id.
 - **Condition.** Usage-based, 60 days: unattended launch batches that reach a stamped ledger outcome
   via launcher verbs. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.2 reported that a cloud takeover needed a
+  session listing (collector item 445 on #695, 2026-10-31); a duplicate of the fixed #2254, struck.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — load-bearing spine for declare-batch, launch, record-outcome, and amend;
   wave_watch and heartbeat read the ledger it writes.
@@ -452,7 +453,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Closed the #949 outer-envelope fail-open class where empty or
   control-wrapped findings could certify clean (`engine_adapter.py` gate, #1145 hardening).
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.0 lost a complete native run to a
+  `native-result-invalid` refusal over a refusal entry that carried a route (#1914, 2026-10-25;
+  collector item 383 on #695; fixed by #2167).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — the contract guards transport gradeability independent of seat honesty.
 
@@ -473,7 +476,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Last demonstrated benefit.** The ten containment fixtures still fire after the shrink, and a
   live review seat read a stripped `CLAUDE.md` change from the review-only file and cited it by
   name (the sanitized-view shrink's build record).
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.2 reported that the sanitized copy strips the
+  project's own instruction and calibration files from a seat's working directory, by design
+  (collector items 451, 457, 458 on #695, 2026-10-31 to 2026-11-01; #2303, #2311). Cost evidence,
+  not a catch.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — keeping one project's agent configuration from becoming another session's
   instructions is a boundary no model strength removes; the retired defenses assumed an untrusted
@@ -488,7 +494,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Condition.** Citation-based, 45 days: vet, dispatch, or configure receipts citing a
   `sandbox-access-*` refusal. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown (new).
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.0 reported its restricted claude fixer unable
+  to read its own fix order: 6 of 16 restricted fixer dispatches were refused (collector item 387 on
+  #695, 2026-10-25 to 2026-10-26).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — a fail-closed gate's zero count may mean it works, and an option that
   silently does nothing is a property of the system, not a model quirk.
@@ -548,7 +556,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Measured ~1% same-family conformance violations from the review
   corpus; fix-#787-inside-the-guard is the one queued item (the assessment record).
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.0 reported a liveness false negative from a
+  probe that capped at 120 s (collector item 384 on #695, 2026-10-25; fixed by #2168).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — deterministic composition from `model_registry` guards a build property,
   not a single vendor.
@@ -750,7 +759,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   `evidence-result-mismatch` or a digest/kind binding refusal as the thing that caught a re-paired
   payload or blocked a forged landing. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — it ships with this change.
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** The same report as D13 (collector item 387 on #695, 2026-10-26) reached the
+  order-bound channel; no report names this binding's `evidence-result-mismatch`, so it is
+  unmeasured for the binding itself.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — digesting the parse rather than the grade keeps the vacuity forfeit
   decision from becoming load-bearing for evidence stamping; digesting result-kind content rather
@@ -1128,7 +1139,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
     alerting: any stamped landing observed at a vet whose evidence does not bind to its order counts
     as a firing.
 - **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.0 reported `evidence-order-mismatch` after a
+  copy workaround for the unreadable fix order, with `advance` still going on to the next round
+  (collector item 387 on #695, 2026-10-26). One report, read as an observation; whether its final
+  record still certifies is unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — it exists because a dispatched seat cannot presently be trusted to
   report its own engagement, and a host that recorded tool calls natively and verifiably would
@@ -1343,7 +1357,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Condition.** Usage-based, 60 days: build, review, and advisor sessions that load the charter and
   doctrine prose. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project reported three builder cases where a refusal named no
+  route, so the stop rule needed a plain-form re-issue exception (collector item 459 on #695,
+  2026-11-01; #2314).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — covenant hard lines are structural; charter mass size is capability-gap (Change
   6 meter baseline, 3,826 loaded lines per CP2).
@@ -1359,7 +1375,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   gardening pass.
 - **Last demonstrated benefit.** Shipped per-seat order rendering from templates with
   refuse-on-unfilled-placeholder (#723).
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project reported build and review orders going out without the
+  TEST LENS line five times between 2026-10-26 and 2026-11-01 (collector item 460 on #695; #2311),
+  and the three builder cases above (item 459; #2314).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** structural — load-bearing dispatch text substrate wired through `round_driver`.
 
@@ -1457,17 +1475,23 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   They cost a few CI seconds each run. check_release_bump is best-evidenced; validate_marketplace
   and the other never-fired members are keep-cheap with attached conditions.
 - **Start date.** 2026-09-15.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing real
+- **Condition.** Citation-based, 90 days from 2026-11-02 (re-armed at gardening pass 6, where the
+  owner ruled keep for validate_marketplace, check_catalog_membership and
+  check_conventional_commit): vet, forfeit-dispute, or incident receipts citing real
   catches from the never-fired members (validate_marketplace, validate_hosts, validate_skills,
   check_conventional_commit, check_catalog_membership; check_release_bump excluded because it has a
-  100% incident record). On zero citations for the full window across all never-fired members, a
-  retirement proposal for those members at a gardening pass.
+  100% incident record). On zero citations for the full window from validate_hosts and
+  validate_skills, a retirement proposal for those two at a gardening pass. validate_marketplace,
+  check_catalog_membership and check_conventional_commit are deterrents, so a zero-catch window is
+  expected for them: the window's end is only a re-read of them at a gardening pass, never by itself
+  a retirement proposal.
 - **Last demonstrated benefit.** check_release_bump caught release-please silent version drops
   across three incidents (investigation-record.md / the assessment record).
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — check_release_bump is structural (release-blocking-quiet class); never-fired
-  validators are harness-limit guards on cheap static checks.
+  validators are harness-limit guards on cheap static checks. For the three deterrents, never
+  firing is the point (see the condition).
 - **Retirement — the plugin-root seam.** Retired the fallback form of the plugin-root variable in
   skill and reference prose (every occurrence now reads `${CLAUDE_PLUGIN_ROOT}`), `validate_hosts.py`'s
   ban on the bare variable, and the two seam workaround markers; `validate_hosts.py` keeps its
@@ -1489,9 +1513,11 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Component.** The rail-lane detector: test_ssot_drift.py and the rail-census-v3 pinned set (53
   files). It costs suite mass and drift-pin maintenance whenever a doc↔code mirror moves.
 - **Start date.** 2026-09-15.
-- **Condition.** Citation-based, 45 days: a named-edit record removing a rail inventory entry
-  without cannot-bite evidence and owner approval (the retention-doctrine bar for rails). On firing,
-  a proposal to enforce the bar at a gardening pass; zero violations means the rails are holding.
+- **Condition.** Citation-based, 45 days: vet, CI or incident receipts citing a rail
+  (test_ssot_drift.py or a rail-census pin) catching a real doc↔code drift. On zero citations for
+  the full window, a proposal to the owner at a gardening pass. Removing a rail inventory entry
+  without cannot-bite evidence and owner approval breaks the retention-doctrine bar for rails,
+  which the vet refuses; that is not this condition's signal.
 - **Last demonstrated benefit.** The four rails are the suite's recorded foreign-regression provers
   (the assessment record, G2 ruling (a)).
 - **Consumer evidence.** unmeasured.
@@ -1570,9 +1596,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   discovery, detective, and checkpoint skills plus supporting lib hooks (audit-debt retired
   2026-10-07, #1664 — covered by the guardian). It costs loaded prose mass across the skill tree.
 - **Start date.** 2026-09-15.
-- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing a
-  specific other-hero skill dispatch failure (routing, charter drift, missing reference). On firing,
-  a proposal to the owner at a gardening pass; zero citations means the heroes are holding.
+- **Condition.** Citation-based, 45 days: vet, forfeit-dispute, or incident receipts citing this
+  machinery catching or preventing a specific other-hero skill dispatch failure (routing, charter
+  drift, missing reference). On zero citations for the full window, a proposal to the owner at a
+  gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
 - **Decision.** keep-until-condition-fires.
@@ -1614,7 +1641,9 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-10-13.
 - **Condition.** Catch-based, 45 days: the findings fixed (outcome `fixed`) in this seat's lens, read from review records dated on or after the project's adoption day, as `lib/review_learning.py tally` counts them. A window that starts before the adoption day reads unmeasured, so no seat is judged on reviews from before adoption. On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown — counting starts at the adoption day.
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.2 reported the test-role seat never reading
+  calibration in its cloud builds, and the plugin writing no test-lens record (collector items 451,
+  457, 458 on #695, 2026-10-31 to 2026-11-01; #2303, #2311).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — the seat's lens is structural, but its yield depends on the model running it, which is capability-gap; the engine family the panel runs is codex. The test role took the test reviewer's seat. D10 (Review lens agents) now covers only the lens agents' shared spine docs (ruling 122 b).
 
@@ -1698,8 +1727,11 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
   or retire the family.
 - **Last demonstrated benefit.** 89 cloud launches between 2026-10-17 and 2026-10-25 (gardening
   record 5, sweep A).
-- **Consumer evidence.** A consuming project reports on the consumer-report issue (#1914), unmapped
-  per report until a pass maps them.
+- **Consumer evidence.** A consuming project reports on the consumer-report issue (#1914) and the
+  collector (#695), mapped at gardening pass 6: a cloud takeover that needed a session listing (item
+  445, 2026-10-31; a duplicate of the fixed #2254, struck); the test-role seat reading no
+  calibration in cloud builds (items 451, 457, 458, 2026-10-31 to 2026-11-01; #2303, #2311); three
+  builder rules from field cases (item 459, 2026-11-01; #2314).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** mixed — the setup, check and placement rules are structural (builds run where the owner
   is not); the relay and the hand-renewed reviewer pass are harness-limit (the host offers no
@@ -1729,7 +1761,9 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
   to the owner at a gardening pass.
 - **Last demonstrated benefit.** The native stack numbered 2156 on GitHub merged whole on
   2026-10-25.
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project's native-stacks conversation (collector item 429 on
+  #695, 2026-10-30, plugin 0.46.x) is an observation; its field report is pending until the stack
+  merges.
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — it works around a cloud session's proxy refusing GitHub's GraphQL API
   (`stack_check.py` falls back to REST on that refusal); a host that lets cloud sessions reach stacks
@@ -1744,7 +1778,8 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
   record ties to a break-it test) over the window. On firing (no catch), a proposal to the owner at a
   gardening pass.
 - **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.2 reported the break-it probe's
+  `authorization:` line redacted for Codex seats (collector item 432 on #695, 2026-10-30).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** capability-gap — it compensates for tests a model writes that would pass whether or not
   the code is right; evidence observed on the codex review seats.
@@ -2379,7 +2414,9 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
 - **Last demonstrated benefit.** A live claude write run (Claude Code 2.1.284) ran `-X
   pycache_prefix` pytest and `$?` shapes with no refusal, with network, outside-root writes and
   git-hooks writes still denied (#1569 PR build record).
-- **Consumer evidence.** unmeasured.
+- **Consumer evidence.** A consuming project on 0.46.2 had its implementer sandbox refuse an
+  environment-prefixed test command, the gap this entry's condition names (collector item 433 on
+  #695, 2026-10-30; folded into #2275).
 - **Decision.** keep-until-condition-fires.
 - **Notes.** harness-limit — the auto-allow gap is Claude Code 2.1.284 behaviour; observed on the
   anthropic family's sandboxed implementer.
