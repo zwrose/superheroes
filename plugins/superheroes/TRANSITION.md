@@ -12,6 +12,21 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **Advisors run a review on a dependency bump, or any PR no builder made, before vetting it: one independent reviewer, its review record written on the PR, then the vet and a merge sheet like any other PR. The path where such a PR got no review, no merge sheet and the owner's own merge click is retired.** Nothing else is owed. See [Showrunner: every PR gets a review before its vet](#showrunner-every-pr-gets-a-review-before-its-vet).
+
+### Showrunner: every PR gets a review before its vet
+
+- Duty 6 of the showrunner charter (`skills/showrunner/SKILL.md`, the merge policy's one home) now says no PR reaches a vet or a merge without a posted review record in which at least one reviewer ran, and that an owner's go-ahead covers a planned reviewer that did not run, never the last one. It replaces the 0.46.1 rule that a PR with no review run gets no merge sheet and the owner merges it with their own click (Canon 2026-11-02-11b52ffd-2 supersedes 2026-10-23-8039e31c-1).
+- A PR no builder made (a dependency bump, a bot's PR) gets its review from the advisor: one reviewer dispatched as the light lane does, and the review record written on the PR naming the PR's author as its maker. The advisor fixes nothing under that review; a finding that needs a change, or a lane floor that reads full, routes the PR as a build. `owner-decisions.md` § Delivery mechanics, `theme/review-template.md`, `vet-receipt.md` and `rubric/review-discipline.md` point to duty 6.
+- A spec PR's review is its spec checks; its sheet is still built in `pr_sheet.py build`'s spec-PR mode.
+- No command, result key or file shape changes: `vet_slot.py write` already refuses a READY slot with no readable review record, and `pr_sheet.py build` already needs `--record` outside spec-PR mode.
+
 ## 0.47.0
 
 ### Before you upgrade
@@ -488,7 +503,7 @@ Check these in a consuming project when it adopts 0.46.1. Each step names the no
 
 - **After switching.** **An advisor launching an adoption (a premise with `adoptsBranch`) on an issue with an earlier cloud lane that started a session passes the builders' account's session listing with `--cloud-sessions-file`; without it the launch refuses `adopt-original-session-unread`, unless every such lane ended as a refusal or was recorded stopped on a handover. Nothing else is owed.** See [Launcher: an adoption onto a live original cloud builder is refused](#launcher-an-adoption-onto-a-live-original-cloud-builder-is-refused).
 - **After switching.** **An advisor building a PR or stack sheet for an open PR whose body lists a `[costly]` or unlabelled deviation with no line under What we're accepting gets a refusal naming each one; the PR's builder labels it or carries its text into What we're accepting, then the sheet builds.** A harmless build deviation stays in the PR body's build record and no longer gets its own merge-sheet card; a costly one keeps its card until its fix lands, and doubt sorts costly. See [Build deviations: only costly ones are accepted on the merge sheet](#build-deviations-only-costly-ones-are-accepted-on-the-merge-sheet).
-- **After switching.** **Advisors stop hand-building review records to get a merge sheet for a PR that had no review run.** Such a PR, typically an advisor-vetted dependency bump, gets no merge sheet: the advisor posts its vet receipt and owner half on the PR, and the owner merges it with their own click. See [Showrunner: a PR with no review run gets no merge sheet](#showrunner-a-pr-with-no-review-run-gets-no-merge-sheet).
+- **After switching.** **Advisors stop hand-building review records to get a merge sheet for a PR that had no review run.** Such a PR, typically an advisor-vetted dependency bump, gets no merge sheet: the advisor posts its vet receipt and owner half on the PR, and the owner merges it with their own click. See [Showrunner: a PR with no review run gets no merge sheet](#showrunner-a-pr-with-no-review-run-gets-no-merge-sheet). **Superseded in the next release:** every PR now gets a review before its vet; see [Showrunner: every PR gets a review before its vet](#showrunner-every-pr-gets-a-review-before-its-vet).
 - **After switching.** **An advisor answering a cloud builder on another account prints the whole composed `relayMessage` and sends exactly that text; nothing else is owed.** A changed answer is composed again, and `cloud_relay.py check`'s `say` sentence for `relay-text-mismatch` no longer says the relay changed the text. See [Relay: the advisor sends exactly the text it was shown](#relay-the-advisor-sends-exactly-the-text-it-was-shown).
 - **After switching.** **Nothing is owed, except that a consumer that reads a review record's `status` with a closed set of values must accept `awaits-owner` and treat it as `not-reviewed`.** See [Review record: `awaits-owner` when only owner calls are left](#review-record-awaits-owner-when-only-owner-calls-are-left).
 - **After switching.** **Nothing is owed.** A cloud build's implementers and review seats are now told that credential-like text is redacted in a cloud session, and a review record flags a recorded field that arrived redacted. See [Cloud builds: credential-like text is redacted, and the review record says so](#cloud-builds-credential-like-text-is-redacted-and-the-review-record-says-so).
@@ -537,6 +552,7 @@ A deviation is costly when a promised check did not run, or work bypassed its ow
 - Duty 6 of the showrunner charter (`skills/showrunner/SKILL.md`, the merge policy's one home) gains one rule: a PR that had no review run, typically a dependency bump the advisor vets directly in place of a review-crew run where the project allows that, gets no merge sheet, and the advisor never hand-builds a review record to make one. The advisor posts its vet receipt and owner half on the PR and tells the owner the PR is theirs to merge with their own click; it executes no merge for such a PR on a chat word. `skills/showrunner/reference/owner-decisions.md` § Delivery mechanics (batch 3) and `theme/review-template.md` (beside `pr_sheet.py build`'s `--record` requirement) point to it.
 - Review discipline is unchanged: whether a project's dependency PRs may skip review-crew stays that project's owner's call, and a review record the driver mandate owes for a disclosed skip is still written.
 - No command, result key or file shape changes.
+- **Superseded in the next release.** The rule above is retired: see [Showrunner: every PR gets a review before its vet](#showrunner-every-pr-gets-a-review-before-its-vet).
 
 ### Relay: the advisor sends exactly the text it was shown
 
