@@ -143,6 +143,9 @@
     "sessionDisagreements": [],
     "sessionId": "s1",
     "status": "not-reviewed",
+    "testLens": {
+      "listed": false
+    },
     "unreadFiles": [],
     "whatIsMissing": [
       "security-reviewer did not run"

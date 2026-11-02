@@ -120,6 +120,9 @@
     "sessionDisagreements": [],
     "sessionId": "s1",
     "status": "not-reviewed",
+    "testLens": {
+      "listed": false
+    },
     "unreadFiles": [],
     "whatIsMissing": [
       "CI is none on aaaaaaa (no CI workflow declared; no GitHub Actions run on this commit)"

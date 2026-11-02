@@ -120,6 +120,9 @@
     "sessionDisagreements": [],
     "sessionId": "s1",
     "status": "reviewed",
+    "testLens": {
+      "listed": false
+    },
     "unreadFiles": [],
     "whatIsMissing": [],
     "withheldFromReviewers": null,

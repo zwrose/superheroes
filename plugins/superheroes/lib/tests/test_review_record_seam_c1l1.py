@@ -308,7 +308,7 @@ def test_dod_an_account_with_every_new_field_renders_each_part():
              "round 3 `make test`: timed out then did not start")
     assert rerun in lines
     assert "Reviewers: code · verifier · synthesis" in lines
-    assert any(l.startswith("- code-reviewer: ran in round 1 (engine record);") and l.endswith("; read 2 files, 21 lines")
+    assert any(l.startswith("- code-reviewer: ran in round 1 (engine record);") and l.endswith("; read 2 files, 21 lines; calibration read: unmeasured")
                for l in lines)
     at = lines.index("Findings:")
     assert lines[at + 1:at + 4] == [
@@ -430,9 +430,12 @@ def test_e9_read_parts_say_how_much_was_read_and_an_empty_list_says_nothing_was(
             reviewer("x-seat", readParts=[parts(lines=[[1, 10], [20, 29]]), parts(file="b.py", lines=[[5, 5]])]),
             reviewer("test-role (round 1)")]
     lines = lines_of(summary_of(account(reviewers=rows)))
-    assert "- code-reviewer: ran in round 1 (engine record); findings: reported by the session; read nothing" in lines
-    assert "- x-seat: ran (engine record); findings: reported by the session; read 2 files, 21 lines" in lines
-    assert "- test-role: ran in round 1 (engine record); findings: reported by the session" in lines
+    assert ("- code-reviewer: ran in round 1 (engine record); findings: reported by the session; read nothing; "
+            "calibration read: unmeasured") in lines
+    assert ("- x-seat: ran (engine record); findings: reported by the session; read 2 files, 21 lines; "
+            "calibration read: unmeasured") in lines
+    assert ("- test-role: ran in round 1 (engine record); findings: reported by the session; "
+            "calibration read: unmeasured") in lines
 
 
 # --- cost: E10-E13 ---

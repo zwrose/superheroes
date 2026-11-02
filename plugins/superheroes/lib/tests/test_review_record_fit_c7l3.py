@@ -374,9 +374,12 @@ def test_one_bullet_per_seat_and_a_row_without_a_round_keeps_its_own(tmp_path):
     assert lines == [
         "- code-reviewer: ran in rounds 1, 2, 4 (engine record); ran in round 3 (reported by the session); "
         "did not run in round 5; not independent of the makers in round 2 (owner's word: PR comment); "
-        "findings: reported by the session",
-        "- design-reviewer: ran in round 1 (engine record); findings: reported by the session",
-        "- auditor: ran (engine record); findings: reported by the session"]
+        "findings: reported by the session; round 1: calibration read: unmeasured; "
+        "round 2: calibration read: unmeasured; round 3: calibration read: not shown (no engine record); "
+        "round 4: calibration read: unmeasured",
+        "- design-reviewer: ran in round 1 (engine record); findings: reported by the session; "
+        "calibration read: unmeasured",
+        "- auditor: ran (engine record); findings: reported by the session; calibration read: unmeasured"]
     assert len(rec["reviewers"]) == 7
 
 
@@ -385,7 +388,8 @@ def test_a_seat_whose_rounds_report_different_coverage_lists_each_round():
     rec = build(account(reviewers=[reviewer("a (round 1)"), reviewer("a (round 2)")]), Fake())
     rec["reviewers"][1]["findingsCoverage"] = "all of them"
     line = [l for l in rr.render(rec).split("\n") if l.startswith("- a:")][0]
-    assert line.endswith("findings: round 1: reported by the session; round 2: all of them")
+    assert line.endswith("findings: round 1: reported by the session; round 2: all of them; "
+                         "calibration read: unmeasured")
 
 
 def test_the_reviewers_line_falls_back_to_a_count_when_the_seats_alone_overflow():
