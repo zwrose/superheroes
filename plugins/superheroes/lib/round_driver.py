@@ -3312,26 +3312,30 @@ def _park_finding_key(finding):
         return None
 
 
+# Every state list a confirmed (non-refuted) finding can sit in between folds: every list a confirmed finding can sit in
+# is read before a record-write park. Refuted carries and `_secondTestHeld` are deliberately absent. `_verified` counts
+# only while synthesis is still pending (`step == P_SYNTHESIS`): synthesis does not clear it, so after synthesis it still
+# holds every merged-away member and reading it then would resurrect them. The order puts `_verified` last, so a finding
+# already seeded from another list keeps that copy and `_verified` only adds the ones missing.
+_PARK_SEED_LISTS = ("_secondTestCarry", "_sweepCarry", "_sliceCarry", "_panelStaged", "_toVerify", "_verified")
+
+
 def _seed_findings_before_record_park(state):
     # A park between a fold and synthesis leaves that round's compiled candidates in _toVerify
     # only. On round 1 `findings` is empty and this is a copy; on a DELTA or SEAMS-CHECK fold
     # `findings` already carries the prior round's open findings while `_toVerify` holds this
     # round's FRESH candidates — so this merges rather than assigns, or the halted receipt
-    # under-reports exactly the candidates the round just gathered.
-    fresh = state.get("_toVerify")
-    held = state.get("_panelStaged")
-    if isinstance(held, list) and held:  # the panel's candidates held at the seams-check step
-        fresh = list(held) + (fresh if isinstance(fresh, list) else [])
-    carry = state.get("_sliceCarry")  # the findings of unread waves already folded, held until the last wave
-    if isinstance(carry, list) and carry:
-        fresh = list(carry) + (fresh if isinstance(fresh, list) else [])
-    sweep_carry = state.get("_sweepCarry")  # the round's confirmed findings, held while the sweep's extra verifier pass runs
-    if isinstance(sweep_carry, list) and sweep_carry:
-        fresh = list(sweep_carry) + (fresh if isinstance(fresh, list) else [])
-    second_test_carry = state.get("_secondTestCarry")  # the pass-1 survivors, held while the verifiers' second-test pass runs
-    if isinstance(second_test_carry, list) and second_test_carry:
-        fresh = list(second_test_carry) + (fresh if isinstance(fresh, list) else [])
-    if not isinstance(fresh, list) or not fresh:
+    # under-reports exactly the candidates the round just gathered. The candidates are gathered
+    # from every list in `_PARK_SEED_LISTS` (the carries held while an extra verifier pass runs,
+    # the panel's and slices' held candidates, `_toVerify`, and `_verified` while synthesis is pending).
+    fresh = []
+    for name in _PARK_SEED_LISTS:
+        if name == "_verified" and state.get("step") != P_SYNTHESIS:
+            continue
+        held = state.get(name)
+        if isinstance(held, list) and held:
+            fresh.extend(held)
+    if not fresh:
         return
     existing = state.get("findings") or []
     seen = set()
