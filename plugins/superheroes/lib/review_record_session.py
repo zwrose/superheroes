@@ -819,6 +819,10 @@ def _findings_and_merges(state):
         if outcome == _SHOWN_WRONG and "grade" in rep:  # a kept repeat may hold no grade: it keeps the one it has
             # axis: a finding closed as wrong carries the closing representative's wrong grade, never a merged member's own — see bite-proof record c1l7_wo_a_verifier_grade
             held["grade"] = rep["grade"]
+        # the run that first raised the finding, as the ledger row holds it (else the live row's); a blank or non-string value is no raiser
+        raiser = (by_key[key] if key in by_key else row).get(sc.RAISED_BY_FIELD)
+        if isinstance(raiser, str) and raiser.strip():
+            held[sc.RAISED_BY_FIELD] = raiser
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
@@ -1122,10 +1126,13 @@ def _unfolded(session_dir, rows, rounds, findings, settled_rounds=None, settled_
                 continue
             listed.add(fkey)
             fid = f.get("id")
-            out.append({"id": fid if isinstance(fid, str) and fid.strip() else fkey, "findingKey": fkey, "title": f["title"],
-                        "severity": f.get("severity"), "file": f.get("file"), "line": f.get("line"),
-                        "consequence": f.get("consequence"), "body": f.get("body", f.get("detail")), "reviewer": seat,
-                        "outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None})
+            row = {"id": fid if isinstance(fid, str) and fid.strip() else fkey, "findingKey": fkey, "title": f["title"],
+                   "severity": f.get("severity"), "file": f.get("file"), "line": f.get("line"),
+                   "consequence": f.get("consequence"), "body": f.get("body", f.get("detail")), "reviewer": seat,
+                   "outcome": None, "reason": UNFOLDED_OPEN, "decidedBy": None}
+            if isinstance(source, str) and source.strip():  # the run whose report this is: the stage name, else the seat key
+                row[sc.RAISED_BY_FIELD] = source
+            out.append(row)
     return out
 
 
@@ -1178,15 +1185,18 @@ def _unswept(session_dir, rows, state, findings):
             hits, parent, lambda hit: scope is not None and _outside_the_round(hit, scope) is None)
         outside += [(sweep["sweepId"], h["file"], h["line"], sc.sweep_hit_title(h, parent)) for h in sorted_hits["outside"]]
         for hit in sorted_hits["inside"]:
-            finding = sc.sweep_hit_finding(hit, sweep, parent)
+            finding = sc.sweep_hit_finding(hit, sweep, parent, raised_by=seat_of.get(id(hit)))
             fkey = sc.finding_identity_key(finding)
             if fkey in listed:
                 continue
             listed.add(fkey)
-            inside.append({"id": fkey, "findingKey": fkey, "title": finding["title"], "severity": finding.get("severity"),
-                           "file": finding["file"], "line": finding["line"], "consequence": finding.get("consequence"),
-                           "body": finding["body"], "reviewer": seat_of.get(id(hit)), "outcome": None,
-                           "reason": SWEEP_UNFOLDED_OPEN, "decidedBy": None})
+            recovered_row = {"id": fkey, "findingKey": fkey, "title": finding["title"], "severity": finding.get("severity"),
+                             "file": finding["file"], "line": finding["line"], "consequence": finding.get("consequence"),
+                             "body": finding["body"], "reviewer": seat_of.get(id(hit)), "outcome": None,
+                             "reason": SWEEP_UNFOLDED_OPEN, "decidedBy": None}
+            if sc.RAISED_BY_FIELD in finding:  # the searcher seat key, stamped by `sweep_hit_finding`
+                recovered_row[sc.RAISED_BY_FIELD] = finding[sc.RAISED_BY_FIELD]
+            inside.append(recovered_row)
     return outside, inside
 
 
@@ -1402,6 +1412,40 @@ def _earlier(account, extras, repo_root, readers):
     return earlier
 
 
+def _other_session_findings(account, extras, repo_root, readers):
+    """The findings of the latest review record on the PR posted by a session other than this one, or [] when none.
+
+    Records are walked newest first; a record that does not parse, or whose findings list is malformed, is skipped (as
+    `review_record` treats it: unreadable), and a record is "other" when its `sessionId` differs from the account's
+    non-empty `sessionId`. [] only when the walk completes with no readable other-session record. A failed read of the
+    PR's comments is not an absent predecessor: it raises the writer's `review-record-gh-failed` refusal, so nothing is
+    posted."""
+    sid = account.get("sessionId")
+    try:
+        rd = review_record._readers(readers)
+        repo = extras.get("repo") or rd["repo_name"](repo_root)
+        comments = review_record._comments(rd, account["pr"], repo)
+        if not isinstance(comments, list):
+            raise TypeError("comments")
+        by_id = {c["id"]: c for c in comments}
+        marked = review_record._marker_comments(comments)
+    except Refusal:
+        raise
+    except Exception:  # noqa: BLE001 — a failed history read must refuse, never read as an absent predecessor
+        raise Refusal("review-record-gh-failed", "the PR comments could not be listed")
+    for comment in reversed(marked):
+        try:
+            rec = review_record._parse_body(comment["body"], by_id)
+        except Exception:  # noqa: BLE001 — an unparseable record is skipped
+            continue
+        if not isinstance(rec, dict) or rec.get("sessionId") == sid:
+            continue
+        found = rec.get("findings")
+        if isinstance(found, list) and all(isinstance(f, dict) for f in found):
+            return found
+    return []
+
+
 def _carry_review(account, last_reviewed, extras, repo_root, readers):
     """Give an empty returning round's account the earlier record's covering reviewers, marked carried, or refuse.
 
@@ -1431,15 +1475,27 @@ def _carry_review(account, last_reviewed, extras, repo_root, readers):
         if isinstance(v, dict) and v.get("coversFinalCommit") is True and v.get("ran") in review_record._RAN_STATES]
 
 
-def _fill(account, earlier):
+def _fill(account, earlier, raisers_from=None):
     """Give each account finding the parts the earlier record held for it and the session's row lacks.
+
+    The raiser comes from `raisers_from` (the latest record another session posted; `earlier` when None): a finding
+    held there takes that record's raiser, or none when it names none; a finding not held there keeps the row's own.
 
     A `grade`, `repeatOf` or `kindOfMistake` the row lacks is the earlier one; the earlier `breakItRuns` come first,
     followed by each of the row's runs not already among them. The earlier runs come from the posted record, which the
     writer scrubbed, so each of the row's runs is compared in its scrubbed form and appended in that form: a run
     the scrub changes is carried once, as the writer will post it."""
     held = {review_record._key(f): f for f in earlier}
+    raised = {review_record._key(f): f for f in (earlier if raisers_from is None else raisers_from)}
     for f in account["findings"]:
+        # axis: an earlier OTHER session's first raiser wins, and so does its absence; a rewrite of this session's own record keeps the row's raiser (synthesis may have moved a merged member's raiser onto its representative)
+        source = raised.get(review_record._key(f))
+        if source is not None:
+            raiser = source.get(sc.RAISED_BY_FIELD)
+            if isinstance(raiser, str) and raiser.strip():
+                f[sc.RAISED_BY_FIELD] = raiser
+            else:
+                f.pop(sc.RAISED_BY_FIELD, None)
         old = held.get(review_record._key(f))
         if old is None:
             continue
@@ -1489,7 +1545,9 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         earlier = _earlier(account, extras, repo_root, readers)
         # the findings the driver's verifier fold closed as wrong in this session (`_decide` reads shown-wrong on no other ground)
         verifier_closed = {review_record._key(f) for f in account["findings"] if f.get("outcome") == _SHOWN_WRONG}
-        _fill(account, earlier)
+        sid = account.get("sessionId")
+        raisers = _other_session_findings(account, extras, repo_root, readers) if isinstance(sid, str) and sid else None
+        _fill(account, earlier, raisers)
         account["findings"] += _carried(account, earlier)
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:

@@ -627,9 +627,12 @@ advisor run together to keep calibration honest.
      it cannot count and which `measured` and `reason` values it returns, and the advisor respects them,
      reading an unmeasured tally as unmeasured rather than as nothing. A record dated outside the range
      is left out unread. A catch is
-     credited to every seat whose lens the finding names (a fixed finding in the security lens
-     counts toward the security seat, whichever dispatch raised it), so the count is findings fixed
-     in that seat's lens.
+     credited to the seat whose run raised it (the finding's `raisedBy`) when the record shows that
+     seat ran on the PR; when it does not (the record shows only its latest review session), that
+     seat's `caught` count reads unmeasured. A catch whose raiser names no seat at all counts as
+     unattributed. A catch with
+     no recorded raiser is credited to no seat, and the `caught` count of every seat that ran on its
+     PR reads unmeasured. So the count is the fixes to findings that seat's own runs raised.
    - **Append the review-loop measures row** for the window at every pass, before the walk:
      `python3 -B <plugin root>/lib/review_measures.py row --input <file> --from <day> --until <day> --cwd <root>`.
      Its docstring names the input file's keys and the counting rules. A second run for the same window
@@ -735,7 +738,11 @@ ninth duty.
 - **The seating check.** The advisor judges whether the security and premortem reviewers still
   look expensive for what they find. It is met when that judgment says they do. A met check
   **reopens their seating** in the calibration. Beside the judgment, the record lists the numbers
-  it read: each seat's finding outcomes by outcome, its tokens, and its minutes. They come from
+  it read: each seat's finding outcomes by outcome, its tokens, and its minutes. A seat's findings
+  are counted for the seat whose run raised them, never the lens they name. A finding from a record
+  that does not name its raiser leaves the outcomes of the seats that ran on that PR unmeasured.
+  A seat's tokens and minutes are a number only when every session that ran it recorded a complete
+  cost naming it. They come from
   `python3 -B <plugin root>/lib/review_learning.py seating --row <file>`. The row file is the
   `seatingRow` of the window's review-loop measures row (duty 3). A number the measures do not
   give is left out of the row, so the helper shows it as unmeasured. **An unmeasured number is
