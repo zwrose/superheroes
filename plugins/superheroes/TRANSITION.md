@@ -71,6 +71,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **Nothing is owed: builders are given three field rules — a command refused only for its form may be re-issued once in plain form, a headless lane never ends a turn with work still running, and a delete never rides a compound command.** See [Builders: three field rules](#builders-three-field-rules).
 
+- **After switching.** **A carried finding left undecided by an abandoned review can now be settled as fixed by the driver's carriedChecks entry, under the same conditions as a left-for-owner one. No input or output shape changes: a carriedRechecks row for such a finding now reads fixed or kept where it read unchanged. Nothing is owed.**
+
 ### Cloud builds: a pass-parked build is recovered by adoption
 
 - **Why.** A cloud session gets the reviewer pass only when it starts, so a renewed pass never reaches a session that is already parked. A message could not make it run its review.

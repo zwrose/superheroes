@@ -93,7 +93,6 @@ def test_t3_no_entry_leaves_an_undecided_finding_as_it_was():
 
 def test_t7_an_undecided_finding_not_carried_from_an_earlier_record_stays_undecided():
     # axis: a not-carried undecided finding never settles, even on a fixed entry at the final head
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2321_undecided_carried.md
     rec = build_u([entry()], {"findings": []})
     f = the_one(rec)
     assert f["outcome"] is None
@@ -125,7 +124,6 @@ def test_t5_a_fixed_check_still_settles_a_left_for_owner_finding_with_the_existi
 @pytest.mark.parametrize("outcome", ["fixed", "craft"])
 def test_t5_a_finding_with_another_outcome_is_still_unchanged(outcome):
     # axis: every outcome other than left-for-owner and undecided stays result unchanged, not left for the owner
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2321_undecided_carried.md
     rec = rr.build_record(account([entry()], [dict(X, outcome=outcome, reason="done")]), readers(), prior=PRIOR)
     assert the_one(rec)["outcome"] == outcome and the_one(rec)["reason"] == "done"
     assert [(r["result"], r["why"]) for r in rec["carriedRechecks"]] == [("unchanged", "not left for the owner")]
@@ -162,10 +160,9 @@ def _check(held, **over):
 
 def test_t2_a_fixed_check_settles_the_finding_an_abandoned_review_left_open_and_the_record_reads_reviewed(tmp_path):
     # axis: end to end, the carried undecided finding moves to fixed on a driver check and the record reads reviewed
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2321_undecided_carried.md
-    fake, body, (held,) = _setup(tmp_path, [LIVE_FINDING])
+    fake, session, body, (held,) = _setup(tmp_path, [LIVE_FINDING])
     assert held["outcome"] is None
-    out, rd = _later(tmp_path, fake, body, [_check(held)])
+    out, rd = _later(tmp_path, fake, session, body, [_check(held)])
     assert out["ok"], out
     assert out["status"] == "reviewed", out
     assert out["whatIsMissing"] == []
@@ -176,9 +173,8 @@ def test_t2_a_fixed_check_settles_the_finding_an_abandoned_review_left_open_and_
 
 def test_t4_a_check_on_an_older_head_leaves_the_finding_undecided_and_the_record_not_reviewed(tmp_path):
     # axis: end to end, a check not made on the final commit settles nothing and the record names the undecided finding
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2321_undecided_carried.md
-    fake, body, (held,) = _setup(tmp_path, [LIVE_FINDING])
-    out, rd = _later(tmp_path, fake, body, [_check(held, checkedHead=THIRD)])
+    fake, session, body, (held,) = _setup(tmp_path, [LIVE_FINDING])
+    out, rd = _later(tmp_path, fake, session, body, [_check(held, checkedHead=THIRD)])
     assert out["ok"], out
     assert out["status"] == "not-reviewed", out
     (line,) = out["whatIsMissing"]
@@ -189,10 +185,9 @@ def test_t4_a_check_on_an_older_head_leaves_the_finding_undecided_and_the_record
 
 def test_t6_settling_one_of_two_undecided_findings_leaves_the_other_open(tmp_path):
     # axis: end to end, a check settles only the finding it names; the other keeps the record not reviewed
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2321_undecided_carried.md
-    fake, body, held = _setup(tmp_path, [LIVE_FINDING, SECOND])
+    fake, session, body, held = _setup(tmp_path, [LIVE_FINDING, SECOND])
     first = next(h for h in held if h["id"] == "f-1")
-    out, rd = _later(tmp_path, fake, body, [_check(first)])
+    out, rd = _later(tmp_path, fake, session, body, [_check(first)])
     assert out["ok"], out
     assert out["status"] == "not-reviewed", out
     by_id = {f["id"]: f for f in rr.read(7, readers=rd)["findings"]}
