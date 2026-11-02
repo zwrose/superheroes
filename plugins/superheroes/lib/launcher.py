@@ -1541,9 +1541,12 @@ LANE_VERSION_REFUSAL_TEXT = (
 def lane_version_check(launch_text, running_version=_UNSET):
     """Admit a lane only when its running plugin version is the version its launch named. Never raises.
 
-    A launch text with no `Advisor plugin version:` line (hand-typed, or composed before the pin)
-    is admitted unpinned; a lane whose launch names a version is refused unless the running
-    version is readable and equal to it.
+    A launch text with no line starting with the version label (hand-typed, or composed before the
+    pin) is admitted unpinned. A line that starts with the label but is not a well-formed
+    `Advisor plugin version: <value>` line (an empty value, a missing space) is a damaged header,
+    never an absent one: it pins the lane with an unreadable launched version, so it is refused.
+    A lane whose launch names a version is refused unless the running version is readable and
+    equal to it.
     """
     import launch_lines
     if running_version is _UNSET:
@@ -1553,18 +1556,29 @@ def lane_version_check(launch_text, running_version=_UNSET):
         if isinstance(running_version, str) and running_version.strip() else None
     )
     pattern = launch_lines.line_regex(launch_lines.VERSION, ".+")
+    label = launch_lines.VERSION.rstrip(":")
     values = []
+    malformed = False
     if isinstance(launch_text, str):
         for line in launch_text.splitlines():
-            found = pattern.match(line.strip())
-            if found:
+            stripped = line.strip()
+            if not stripped.startswith(label):
+                continue
+            found = pattern.match(stripped)
+            if found and found.group(1).strip():
                 values.append(found.group(1))
-    if not values:
+            else:
+                # axis: a damaged version header is refused, never read as an absent one — see bite-proof record wo_a_2327_lane_pin
+                malformed = True
+    if not values and not malformed:
         return {
             "ok": True, "pinned": False, "reason": None, "running": running,
             "launched": None, "comment": None,
         }
-    launched = values[0] if all(value == values[0] for value in values) else None
+    launched = (
+        values[0] if values and not malformed and all(value == values[0] for value in values)
+        else None
+    )
     # axis: a lane whose running plugin version differs from its launch's named version is refused naming both — see bite-proof record wo_a_2327_lane_pin
     if running is not None and running == launched:
         return {

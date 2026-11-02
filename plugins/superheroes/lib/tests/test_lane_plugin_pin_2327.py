@@ -221,6 +221,25 @@ def test_two_disagreeing_version_lines_are_refused_with_no_launched_version():
         running="9.2.0", launched="an unreadable version")
 
 
+@pytest.mark.parametrize("text", [
+    "Advisor plugin version:",
+    "Advisor plugin version:   ",
+    "Advisor plugin version:9.1.0",
+    "Advisor plugin version  9.1.0",
+    "Advisor plugin version 9.1.0",
+    "Advisor plugin version: 9.1.0\nAdvisor plugin version:",
+])
+@pytest.mark.parametrize("running", ["9.1.0", "9.2.0", None])
+def test_a_damaged_version_header_is_refused_never_admitted_unpinned(text, running):
+    # axis: a line that starts with the version label but is not a well-formed header pins the lane with an unreadable launched version
+    got = L.lane_version_check("/superheroes:workhorse\n\nIssue: #1\n\n" + text + "\n", running_version=running)
+    assert got["ok"] is False and got["pinned"] is True
+    assert got["reason"] == "lane-plugin-version-mismatch"
+    assert got["launched"] is None
+    assert got["comment"] == L.LANE_VERSION_REFUSAL_TEXT.format(
+        running=running or "an unreadable version", launched="an unreadable version")
+
+
 def test_two_agreeing_version_lines_are_admitted_when_the_running_version_matches():
     # axis: duplicate version lines that agree name one version
     text = "Advisor plugin version: 9.1.0\nAdvisor plugin version: 9.1.0\n"
