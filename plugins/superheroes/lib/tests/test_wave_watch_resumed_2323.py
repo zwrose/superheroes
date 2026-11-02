@@ -17,7 +17,7 @@ import pytest
 import launch_ledger as ll
 import wave_watch as ww
 from test_wave_watch_builder_note import _BATCH, _NoteGh, _cloud_lane, _note_answered  # noqa: F401
-from test_wave_watch_cloud import _QUIET, _add_local_lane, _iso, _reserved, repo  # noqa: F401
+from test_wave_watch_cloud import _QUIET, _add_local_lane, _iso, _reserved, clock, repo  # noqa: F401
 from test_wave_watch_cloud_progress import _LONG_AGO, _ProgressGh, _progress  # noqa: F401
 from test_wave_watch_fix_order import _amend_at, _ending, _handed_back, _later, _only_launch  # noqa: F401
 
