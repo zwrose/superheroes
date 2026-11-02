@@ -1415,24 +1415,34 @@ def _earlier(account, extras, repo_root, readers):
 def _other_session_findings(account, extras, repo_root, readers):
     """The findings of the latest review record on the PR posted by a session other than this one, or [] when none.
 
-    Records are walked newest first, unreadable ones skipped; a record is "other" when its `sessionId` differs from the
-    account's non-empty `sessionId`. Anything that fails reads as none: the writer makes its own refusal."""
+    Records are walked newest first; a record that does not parse, or whose findings list is malformed, is skipped (as
+    `review_record` treats it: unreadable), and a record is "other" when its `sessionId` differs from the account's
+    non-empty `sessionId`. [] only when the walk completes with no readable other-session record. A failed read of the
+    PR's comments is not an absent predecessor: it raises the writer's `review-record-gh-failed` refusal, so nothing is
+    posted."""
     sid = account.get("sessionId")
     try:
         rd = review_record._readers(readers)
         repo = extras.get("repo") or rd["repo_name"](repo_root)
         comments = review_record._comments(rd, account["pr"], repo)
+        if not isinstance(comments, list):
+            raise TypeError("comments")
         by_id = {c["id"]: c for c in comments}
-        for comment in reversed(review_record._marker_comments(comments)):
+        marked = review_record._marker_comments(comments)
+    except Refusal:
+        raise
+    except Exception:  # noqa: BLE001 — a failed history read must refuse, never read as an absent predecessor
+        raise Refusal("review-record-gh-failed", "the PR comments could not be listed")
+    for comment in reversed(marked):
+        try:
             rec = review_record._parse_body(comment["body"], by_id)
-            if not isinstance(rec, dict) or rec.get("sessionId") == sid:
-                continue
-            found = rec.get("findings")
-            if isinstance(found, list) and all(isinstance(f, dict) for f in found):
-                return found
-            return []
-    except Exception:  # noqa: BLE001 — fail closed: no readable other-session record means the row's raiser stands
-        return []
+        except Exception:  # noqa: BLE001 — an unparseable record is skipped
+            continue
+        if not isinstance(rec, dict) or rec.get("sessionId") == sid:
+            continue
+        found = rec.get("findings")
+        if isinstance(found, list) and all(isinstance(f, dict) for f in found):
+            return found
     return []
 
 

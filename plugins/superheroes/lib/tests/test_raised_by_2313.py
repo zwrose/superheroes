@@ -606,6 +606,39 @@ def test_r2_a_record_with_no_other_session_predecessor_keeps_the_rows_raiser(tmp
     assert account["findings"][0][RAISED] == "premortem-reviewer"
 
 
+def test_r2_an_intervening_other_session_record_with_a_malformed_findings_list_is_skipped_not_the_end_of_the_walk(tmp_path):
+    # axis: history A (other, code-reviewer), C (other, malformed findings list), B (this session): the rewrite keeps code-reviewer
+    fake = RecordFake()
+    _post(tmp_path, fake, "A", "code-reviewer")
+    _post(tmp_path, fake, "C", "scoped finder")
+    c = fake.comments[-1]
+    head, block = c["body"].rsplit("```json\n", 1)
+    rec = rr.json.loads(block[:block.rindex("\n```\n</details>")])
+    rec["findings"] = None
+    c["body"] = head + "```json\n" + rr.json.dumps(rec) + "\n```\n</details>"
+    _post(tmp_path, fake, "B", "premortem-reviewer")
+    account = _session_account("B", "premortem-reviewer")
+    other = rs._other_session_findings(account, {}, str(tmp_path), fake.readers())
+    assert other and other[0][RAISED] == "code-reviewer"
+    rs._fill(account, rs._earlier(account, {}, str(tmp_path), fake.readers()), other)
+    assert account["findings"][0][RAISED] == "code-reviewer"
+
+
+@pytest.mark.parametrize("failure", ["none", "non-list", "raises"])
+def test_r2_a_failed_history_read_refuses_with_gh_failed_and_posts_nothing(tmp_path, failure):
+    # axis: a comments read that fails is not an absent predecessor: the writer refuses review-record-gh-failed and posts nothing
+    fake = RecordFake()
+    readers = fake.readers()
+    def broken(pr, repo):
+        if failure == "raises":
+            raise OSError("gh down")
+        return None if failure == "none" else {"not": "a list"}
+    with pytest.raises(rs.Refusal) as e:
+        rs._other_session_findings(_session_account("B", "premortem-reviewer"), {}, str(tmp_path), {**readers, "list_comments": broken})
+    assert e.value.reason == "review-record-gh-failed"
+    assert fake.writes == []
+
+
 # ---- V1: the account validator ---------------------------------------------------------------------------------
 
 
