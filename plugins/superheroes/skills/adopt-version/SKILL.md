@@ -268,9 +268,10 @@ a normal step 7 — then remove its `outstanding:` line and record the inventory
 checklist item done before reporting adoption complete.
 
 While long old-root lanes run, name the cleanup risk: the old version directory may be marked
-`.orphaned_at` and removed under a running builder. A resumed old-root lane is resumed with
-`--plugin-dir <its recorded old root>` or it loads the new version. For a lane that stops, read
-`rubric/launch-doctrine.md` § Recovery.
+`.orphaned_at` and removed under a running builder. An old-root lane is resumed only
+after `lane-version` passes against its recorded old root, and when that root is gone or the check
+fails it is adopted instead, because a missing `--plugin-dir` path loads the new version. For a lane
+that stops, read `rubric/launch-doctrine.md` § Recovery, which has the command.
 
 **Output:** one disposition per inventory entry, and the cleanup risk named or `none live`.
 

@@ -1536,6 +1536,10 @@ LANE_VERSION_REFUSAL_TEXT = (
     "This lane runs plugin {running}; its launch named plugin {launched}. I built nothing. "
     "The advisor relaunches the lane once its seat and this machine agree on the version."
 )
+LANE_VERSION_UNREADABLE_TEXT = (
+    "This lane could not read its launch prompt file, so it could not check its plugin version. "
+    "I built nothing. The advisor relaunches the lane."
+)
 
 
 def lane_version_check(launch_text, running_version=_UNSET):
@@ -4963,9 +4967,10 @@ def _cli_lane_version(args):
         with open(args.launch_file, encoding="utf-8") as fh:
             launch_text = fh.read()
     except (OSError, ValueError):
+        # axis: an unreadable launch file is refused with a stop comment a lane can post — see bite-proof record wo_a_2327_lane_pin
         return {
             "ok": False, "pinned": False, "reason": "lane-version-launch-file-unreadable",
-            "running": None, "launched": None, "comment": None,
+            "running": None, "launched": None, "comment": LANE_VERSION_UNREADABLE_TEXT,
         }
     return lane_version_check(launch_text)
 

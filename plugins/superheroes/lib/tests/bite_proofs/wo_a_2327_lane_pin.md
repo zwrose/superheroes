@@ -172,3 +172,68 @@ redacted.
 ```
 55 passed in 9.72s
 ```
+
+## BP5 — an unreadable launch file is refused with a stop comment a lane can post (WO-C fix)
+
+Added by the vet fix order WO-C. Run by the implementer (maker family claude); both captures are the
+pytest runs of `test_lane_plugin_pin_2327.py` alone; the red is shortened as marked below, the green
+is complete, and the `UV_NATIVE_TLS` deprecation warning is omitted. No secrets; nothing redacted.
+
+- **Guarded element.** `launcher.py` `_cli_lane_version`, the unreadable-file return: its `comment`
+  is `LANE_VERSION_UNREADABLE_TEXT`.
+- **Axis line.** `# axis: an unreadable launch file is refused with a stop comment a lane can post — see bite-proof record wo_a_2327_lane_pin`
+- **Break.** One targeted Edit: `"comment": LANE_VERSION_UNREADABLE_TEXT,` → `"comment": None,` in that return.
+- **Detector.** `test_the_lane_version_verb_refuses_a_missing_launch_file` and
+  `test_the_lane_version_verb_refuses_a_launch_file_that_is_not_utf8`.
+- **Red:**
+
+```
+...............................................FF........                [100%]
+E         Differing items:
+E         {'comment': None} != {'comment': 'This lane could not read its launch prompt file, so it could not check its plugin version. I built nothing. The advisor relaunches the lane.'}
+E       AssertionError: assert None == 'This lane could not read its launch prompt file, so it could not check its plugin version. I built nothing. The advisor relaunches the lane.'
+FAILED plugins/superheroes/lib/tests/test_lane_plugin_pin_2327.py::test_the_lane_version_verb_refuses_a_missing_launch_file
+FAILED plugins/superheroes/lib/tests/test_lane_plugin_pin_2327.py::test_the_lane_version_verb_refuses_a_launch_file_that_is_not_utf8
+2 failed, 55 passed in 15.26s
+```
+
+(The four lines between the progress line and the `FAILED` lines are the decisive `E` lines of the
+two tracebacks; the rest of the tracebacks is elided.)
+
+- **Restore.** The inverse Edit. Quoted from `launcher.py:4973`: `            "running": None, "launched": None, "comment": LANE_VERSION_UNREADABLE_TEXT,`
+- **Green:**
+
+```
+.........................................................                [100%]
+57 passed in 14.45s
+```
+
+## BP6 — the argv handed to the spawn keeps `--plugin-dir <plugin_root()>` (WO-C fix)
+
+Added by the vet fix order WO-C. Run by the implementer (maker family claude); no secrets; nothing
+redacted. The spawn is a stand-in (`_make_spawn_fn("sleep")`) that records the argv it receives and
+is killed by pid in a `finally`; the real `claude` binary is never run.
+
+- **Guarded element.** `launcher.py` `_spawn_attempt`, the line `proc = spawn(argv, cwd, out_fh, err_fh, child_env)`
+  (`launcher.py:2288`): the argv the launcher hands to the spawn ends with `--plugin-dir <plugin_root()>`.
+  Axis: the pin survives from `compose_launch` to the process the launcher starts, not only in the composed result.
+- **Break.** One targeted Edit at that line: `spawn(argv, cwd, out_fh, err_fh, child_env)` → `spawn(argv[:-2], cwd, out_fh, err_fh, child_env)`.
+- **Detector.** `test_launch_build_spawns_the_child_with_the_plugin_dir_pin`.
+- **Red:**
+
+```
+..................................................F......                [100%]
+>       assert argv[-2:] == ["--plugin-dir", L.plugin_root()]
+E       AssertionError: assert ['-p', '/supe...s forbidden.'] == ['--plugin-di.../superheroes']
+E         At index 0 diff: '-p' != '--plugin-dir'
+FAILED plugins/superheroes/lib/tests/test_lane_plugin_pin_2327.py::test_launch_build_spawns_the_child_with_the_plugin_dir_pin
+1 failed, 56 passed in 2.87s
+```
+
+- **Restore.** The inverse Edit. Quoted from `launcher.py:2288`: `        proc = spawn(argv, cwd, out_fh, err_fh, child_env)`
+- **Green:**
+
+```
+.........................................................                [100%]
+57 passed in 2.74s
+```

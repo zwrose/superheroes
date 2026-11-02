@@ -6,13 +6,17 @@ Nothing here touches the network. The roots and manifests are built under tmp_pa
 """
 import json
 import os
+import signal
 
 import pytest
 
 import engine_adapter
 import launch_lines
 from test_cloud_builder import ENV_ID, SHA
-from test_launcher import L, _init_repo, _valid_premise
+# The two autouse fixtures imported here isolate the ledger and the seat config for launch_build.
+from test_launcher import (  # noqa: F401
+    L, _all_checks, _autouse_isolated_ledger_root, _autouse_seat_config_matches_spawn,
+    _init_repo, _make_spawn_fn, _valid_premise)
 
 VERSION_LABEL = launch_lines.VERSION
 BRANCH = "feature/adopted-1"
@@ -304,7 +308,7 @@ def test_the_lane_version_verb_refuses_a_missing_launch_file(tmp_path, capsys):
     printed = json.loads(capsys.readouterr().out)
     assert printed == {
         "ok": False, "pinned": False, "reason": "lane-version-launch-file-unreadable",
-        "running": None, "launched": None, "comment": None,
+        "running": None, "launched": None, "comment": L.LANE_VERSION_UNREADABLE_TEXT,
     }
 
 
@@ -313,7 +317,48 @@ def test_the_lane_version_verb_refuses_a_launch_file_that_is_not_utf8(tmp_path, 
     path = tmp_path / "binary.txt"
     path.write_bytes(b"\xff\xfe\x00bad")
     assert L.main(["lane-version", "--launch-file", str(path)]) == 1
-    assert json.loads(capsys.readouterr().out)["reason"] == "lane-version-launch-file-unreadable"
+    printed = json.loads(capsys.readouterr().out)
+    assert printed["reason"] == "lane-version-launch-file-unreadable"
+    assert printed["comment"] == L.LANE_VERSION_UNREADABLE_TEXT
+
+
+def test_the_unreadable_text_is_the_contract_text():
+    # axis: the unreadable-launch-file stop comment is the shared contract text, verbatim
+    assert L.LANE_VERSION_UNREADABLE_TEXT == (
+        "This lane could not read its launch prompt file, so it could not check its plugin version. "
+        "I built nothing. The advisor relaunches the lane.")
+
+
+# ---------------------------------------------------------------- the spawn argv
+
+
+def test_launch_build_spawns_the_child_with_the_plugin_dir_pin(tmp_path, monkeypatch):
+    # axis: the argv handed to the spawn ends with --plugin-dir <plugin_root()> and its -p prompt names the version
+    repo = _init_repo(tmp_path / "repo")
+    log_dir = str(tmp_path / "logs")
+    seen = {"argv": None, "pid": None}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        seen["argv"] = list(argv)
+        proc = _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+        seen["pid"] = proc.pid
+        return proc
+
+    try:
+        result = L.launch_build(
+            repo, 656, _valid_premise(repo), _all_checks(), log_dir,
+            spawn_fn=capture_spawn, settle_seconds=0.1)
+    finally:
+        if seen["pid"] is not None:
+            try:
+                os.kill(seen["pid"], signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+    assert seen["argv"] is not None, result
+    argv = seen["argv"]
+    assert argv[-2:] == ["--plugin-dir", L.plugin_root()]
+    prompt = argv[argv.index("-p") + 1]
+    assert "Advisor plugin version: " + L.plugin_version() in prompt.splitlines()
 
 
 # ---------------------------------------------------------------- the argv builder

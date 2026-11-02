@@ -158,7 +158,7 @@ the cloud reference names, with no issue body edited.
 **Confirm the lane runs its launch's plugin version.** When the launch prompt carries
 `Advisor plugin version:` and does not say `Place: cloud session`, write the launch prompt text to a
 file and run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/launcher.py" lane-version --launch-file <that file>`
-before any diagnosis. A refusal is a stop: post the verb's `comment` on the incident issue and stop.
+before any diagnosis. Any refusal is a stop: post the verb's `comment` on the incident issue and stop.
 A prompt with no such line is admitted.
 
 **Done when:** the version check ran before any diagnosis, or its refusal was posted on the incident
