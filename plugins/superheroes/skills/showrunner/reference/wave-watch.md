@@ -482,8 +482,9 @@ through a note shows as quiet on that tick. A lane that was relaunched on its is
 there, in any batch) is never resumed. For a resumed lane the shared comments read reaches back at most
 24 hours; a resumed lane whose basis is older is read from its own issue from its basis, one issue-scoped
 read per lane per tick, paginated up to ten pages inside the tick's deadline, so its handback is seen
-however old the basis is. A per-lane read that is skipped, failed or incomplete reports
-`builder-note-unavailable` and names that lane in `unreadIssues`.
+however old the basis is. A failed or incomplete per-lane read names that lane in `unreadIssues`; a
+read skipped for budget names it only when the tick made a comments request; a tick that made no
+request names no lane; `builder-note-unavailable` is recorded in every case.
 A lane passed `--ignore-launch` is not watched on this path either, with no sign in the result: drop
 the ignore before you resume a lane (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
 

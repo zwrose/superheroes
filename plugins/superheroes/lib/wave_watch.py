@@ -136,8 +136,10 @@ Contract:
   the basis, but no dormant lane pulls the shared repository-wide comments read further back than
   DORMANT_LOOKBACK_SECONDS (24 hours) before the read. A dormant lane whose basis is older than that is read
   from its own issue from its basis (one issue-scoped read per tick, paginated to the same page cap), and
-  its comments are merged by id keeping the newest revision; a per-lane read that is skipped, failed or
-  partial records builder-note-unavailable and names that lane alone in unreadIssues. A dormant lane
+  its comments are merged by id keeping the newest revision. A failed or incomplete per-lane read names
+  that lane alone in unreadIssues; a read skipped for budget names it only when the tick made a comments
+  request; a tick that made no request names no lane; builder-note-unavailable is recorded in every
+  case. A dormant lane
   is active when its newest activity at or after the basis is newer than its newest ending at or after
   the basis, or it has activity and no ending. Activity is a builder note (answered or not), or its
   progress comment updated more than PARK_SUPERSESSION_GRACE_SECONDS after the basis whose phase reads
@@ -2199,8 +2201,10 @@ def _evaluate_cloud_comments(
 
     A dormant lane whose basis is older than DORMANT_LOOKBACK_SECONDS is not in the shared read: it gets one
     issue-scoped read of its own per tick, from its basis, in launch-id order after the shared read. Its
-    comments are merged with the shared ones by id (newest revision kept); a per-lane read that was skipped,
-    failed or partial records builder-note-unavailable and names that lane alone in `unread_out`.
+    comments are merged with the shared ones by id (newest revision kept). A failed or incomplete per-lane
+    read names that lane alone in `unread_out`; a read skipped for budget names it only when the tick made a
+    comments request; a tick that made no request names no lane. builder-note-unavailable is recorded in
+    every case.
 
     `active_out` is a one-slot list: when a request was made (complete or partial) its slot is set to the
     set of dormant lanes `_dormant_active` finds active in what was observed, possibly empty; on every
@@ -2273,9 +2277,9 @@ def _evaluate_cloud_comments(
         )
         requested = requested or lane_state is not None
         if lane_state is not True:
-            # axis: a per-lane read that was skipped, failed or partial is disclosed for that lane alone, never read as quiet — see bite-proof record i2333_old_resumed_lane.md
             degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-            if unread_out is not None:
+            # axis: a failed or partial per-lane read, or one skipped for budget after this tick made a request, names its lane; a tick that made no request names none (the disclosure is kept either way) — see bite-proof record i2333_old_resumed_lane.md
+            if unread_out is not None and (lane_state is False or requested):
                 unread_out[lid] = info["issue"]
         lane_reads.append(lane_comments)
     comments = _merge_comments(comments, lane_reads)
@@ -2314,7 +2318,7 @@ def _evaluate_cloud_comments(
 
 
 def _record_unread(unread_out, watched):
-    # axis: a comments read that did not complete names every watched issue it may have left unread — see bite-proof record wo_2148_fix_order.md
+    # axis: a comments read that did not complete, and the shared-`since` failure that makes no read at all (no per-lane read follows it), names every watched issue it may have left unread — see bite-proof records wo_2148_fix_order.md and i2333_old_resumed_lane.md
     if unread_out is not None:
         unread_out.update({lid: info["issue"] for lid, info in watched.items()})
 
