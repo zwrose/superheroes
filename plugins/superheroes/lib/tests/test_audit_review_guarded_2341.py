@@ -445,3 +445,19 @@ def test_t13_edges_a_pure_rename_a_left_alone_rename_a_left_out_header_and_empty
     assert RD._attempt_fixer_delta(None, None) == []
     assert RD._attempt_fixer_delta("", "") == []
     assert RD._attempt_fixer_delta(head_diff, "") != []
+
+
+def test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta(tmp_path):
+    # axis: G12 — `leave_out` is honoured for a git-quoted header, so a proven copy never enters the delta
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    quoted = "pkg/café.py"
+
+    def fix(repo):
+        _write(repo, quoted, "def cafe():\n    return 1\n")
+        _reword_guide(repo)
+
+    reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix)
+    delta = RD._attempt_fixer_delta(reviewed_diff, head_diff, leave_out=(quoted,))
+    assert _headers(delta) == ["diff --git a/%s b/%s" % (GUIDE, GUIDE)]
+    outcome = _fold([_guarded()], _target(fixerDelta=delta))
+    assert outcome["discharged"] == ["t0"] and outcome["reviewGuarded"] == ["t0"]
