@@ -724,8 +724,12 @@ def build_argv_result(seat, role_kind, opts):
     return _refuse("unknown-engine", detail=_unknown_engine_detail(vendor))
 
 
-def claude_builder_argv(token, session_id, prompt):
-    """Build the print-mode claude argv for a builder session. Never raises."""
+def claude_builder_argv(token, session_id, prompt, plugin_dir=None):
+    """Build the print-mode claude argv for a builder session. Never raises.
+
+    A non-empty string `plugin_dir` appends `--plugin-dir <plugin_dir>` at the end, which starts the
+    child on that plugin root; any other value appends nothing. The caller guarantees the value
+    (`launcher.compose_launch` passes `plugin_root()`, absolute by construction)."""
     if not isinstance(token, str) or token not in model_registry.claude_dispatch_tokens():
         return _refuse("unknown-claude-tier", detail=_unknown_claude_tier_detail(token))
     if not isinstance(session_id, str):
@@ -750,6 +754,8 @@ def claude_builder_argv(token, session_id, prompt):
     argv = [
         CLAUDE_EXECUTABLE, "--model", token, "--session-id", session_id, "-p", prompt,
     ]
+    if isinstance(plugin_dir, str) and plugin_dir:
+        argv += ["--plugin-dir", plugin_dir]
     return _ok(argv)
 
 

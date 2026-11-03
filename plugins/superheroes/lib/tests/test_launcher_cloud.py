@@ -347,7 +347,11 @@ def test_compose_cloud_prompt_differs_from_local_by_the_four_place_lines_and_the
     permission = _cloud_line() + "\n\n"
     assert lines in cloud["prompt"]
     assert permission in cloud["prompt"]
-    assert cloud["prompt"].replace(lines, "", 1).replace(permission, "", 1) == local["prompt"]
+    # the local prompt names the version on its own paragraph (#2327); the cloud prompt names it
+    # inside `lines`, so the local one is compared without that paragraph
+    local_without_version = local["prompt"].replace("Advisor plugin version: %s\n\n" % version, "", 1)
+    assert local_without_version != local["prompt"]
+    assert cloud["prompt"].replace(lines, "", 1).replace(permission, "", 1) == local_without_version
     rulings = local["doctrine"]["rulingsBlock"]
     assert rulings
     assert cloud["doctrine"]["rulingsBlock"] == rulings
