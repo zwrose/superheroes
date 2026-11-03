@@ -1447,7 +1447,8 @@ class Spawner:
 
 
 def _start(local, spawner, **kw):
-    args = dict(environment=ENV_ID, env=local.env, spawn_fn=spawner, nonce=NONCE)
+    args = dict(environment=ENV_ID, env=local.env, spawn_fn=spawner, nonce=NONCE, issue=1745,
+                issue_reader=lambda root, n: True)
     args.update(kw)
     return CC.start(local.cwd, **args)
 
@@ -1605,7 +1606,8 @@ def test_start_spawns_in_the_repository_root_with_a_copy_of_the_environment(tmp_
     assert call["env"] == expected and call["env"] is not env and call["timeout"] == 7
     assert os.path.isdir(os.path.dirname(call["log_path"]))
     spawner2 = Spawner()
-    CC.start(sub, environment=ENV_ID, env=env, spawn_fn=spawner2, nonce=NONCE)
+    CC.start(sub, environment=ENV_ID, env=env, spawn_fn=spawner2, nonce=NONCE, issue=1745,
+             issue_reader=lambda root, n: True)
     assert os.path.realpath(spawner2.calls[0]["cwd"]) == os.path.realpath(local.cwd)
 
 
@@ -1670,15 +1672,12 @@ def test_start_fallback_line_judges_as_failed_not_passed(tmp_path):
     assert _record_state(local) == "none"
 
 
-def test_start_posts_to_an_issue_only_when_one_is_named(tmp_path):
+def test_start_always_posts_to_the_named_issue(tmp_path):
     local = _build(tmp_path)
-    without, with_issue = Spawner(), Spawner()
-    _start(local, without)
-    _start(local, with_issue, issue=1745)
-    assert "issue #" not in _prompt(without) and _prompt(without) == _expected_prompt()
-    assert _prompt(with_issue) == _expected_prompt(1745)
-    assert _prompt(with_issue).endswith("as one comment on issue #1745 of this repository.")
-    assert _prompt(with_issue).startswith(_prompt(without))
+    spawner = Spawner()
+    _start(local, spawner)
+    assert _prompt(spawner) == _expected_prompt(1745)
+    assert _prompt(spawner).endswith("as one comment on issue #1745 of this repository.")
 
 
 def test_setup_sitting_names_the_id_and_never_the_default(tmp_path, composing):
