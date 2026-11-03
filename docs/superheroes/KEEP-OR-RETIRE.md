@@ -873,12 +873,18 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   opened before 0.43.0 restarts at upgrade (`session-from-earlier-version`), so nothing a newer
   version runs writes the key. The window is the version fact, not a day count, because an ignored
   key leaves no record to count. On firing, a retirement proposal to the owner at a gardening pass,
-  landing in the first minor release after it.
+  landing in the first minor release after it. **Retired — condition met.**
 - **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Consumer evidence.** every consuming project runs 0.43.0 or later (gardening pass 6,
+  2026-11-02).
+- **Decision.** retired — issue #2325 (owner ruling 2026-11-02, gardening pass 6), landing in 0.48.0.
 - **Notes.** structural — upgrade compatibility for panel artifacts written before 0.43.0, retired
   by its version condition rather than by model strength.
+- **Retirement — the tolerance.** `_PANEL_ENVELOPE_KEYS` no longer names `canaryResult`, so a
+  panel artifact in the legacy shape (the artifact itself is the seats map) that carries the key is
+  refused as an unknown seat key (`seat-key-mismatch`). In the explicit `{"seats": {...}}` shape a
+  top-level key other than `seats` is not a seat key and is not judged, as before. Receipt: issue
+  #2325.
 
 #### D19 — `check_unrun_review`
 

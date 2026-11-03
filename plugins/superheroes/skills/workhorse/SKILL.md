@@ -187,6 +187,12 @@ Intake is the last owner-interactive step. You set up the workspace and run the 
 §3) while the owner is still here. Everything after that runs autonomously, with no further prompt
 until a consequential flag or handback.
 
+**Confirm the lane runs its launch's plugin version.** When the launch prompt carries
+`Advisor plugin version:` and does not say `Place: cloud session`, write the launch prompt text to a
+file and run `python3 -B "<plugin root>/lib/launcher.py" lane-version --launch-file <that file>`
+before any spend. Any refusal is a stop report on the issue with the verb's `comment`, and you stop.
+A prompt with no such line is admitted. (Cloud intake checks the version itself.)
+
 **Read `skills/workhorse/reference/cloud.md` § Intake when the launch prompt says `Place: cloud session`.**
 
 **Done when:** the route is `build-ready`, the Anchor resolves, any register-check passed with its

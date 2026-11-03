@@ -97,6 +97,8 @@ posted or left behind is a finding you clear before you vet.
 
 Spend vet time on the adversarial probes the suite does not contain: does the guard actually fire when its target breaks? does the test assert what its name claims? does the behavior actually behave?
 
+A review seat's claim about what the code does when it runs is a hand trace until it is executed: a lead, not a receipt. The vet treats it as proven only when a run shows it: the builder's re-run, the vet's own probe, or a break-it test the test role wrote and the orchestrator ran.
+
 ## Grading the third-rework tripwire
 
 This is the vet-time grading of the third-rework tripwire; the ruling is [review-discipline.md § The third-rework tripwire](../../../rubric/review-discipline.md#the-third-rework-tripwire).
@@ -360,6 +362,10 @@ visibly-working code are invisible at routing and obvious at vet.
 - the stated reasoning does not hold against the diff;
 - the tests look thin for the size;
 - it moved a line the issue implied it would sit inside.
+
+A quiet failure found at a light-lane vet sends that PR's fix leg to the full lane. The vet records the
+lane as moved up, never "light holds", because the lane rule in `rubric/review-discipline.md` sends a
+quiet-failure path to the full lane at any size.
 
 **Proportionality:** where the doubt is narrow, dispatch **one independent reviewer given the
 doubt** rather than a full panel: a reviewer from outside every maker's family, with the doubt stated

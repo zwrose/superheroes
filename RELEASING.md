@@ -40,6 +40,13 @@ release, whatever its type.
   it. A release PR left behind `main` runs CI on a tree that will not ship.
 - **Post-merge green means both the `CI` and the `Release Please` workflows passed on `main`,
   read per commit.**
+- **A workflow re-run does not pick up a moved base.** Re-running a pull request's workflow
+  replays the event it first ran on, so it tests the same stale merge ref (and the same title). To
+  test the PR against the current `main`, bring the branch current (update the branch, or push a
+  new commit), which fires a new event.
+- **A PR body or title edit re-runs only the title check.** `ci.yml` leaves out the `edited`
+  event, so a body edit starts no code checks; only `pr-title.yml` runs again. A body edit never
+  stands in for a CI run on a new head.
 - **After the release is installed on the owner's machine, move each project's cloud builds to
   it.** A project with cloud builds and the plugin pin hook commits a new pin
   (`cloud_plugin_pin.py write`) instead of pasting setup text, unless its cloud check or readiness
