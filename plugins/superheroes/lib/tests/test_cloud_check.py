@@ -1587,8 +1587,8 @@ def test_start_reports_started_when_a_timed_out_launch_printed_its_receipt(tmp_p
     assert result == {"action": "started", "reason": None, "environment": ENV_ID, "nonce": NONCE,
                       "sessionName": "cloud-check-abcd1234", "sessionId": "session_01ABCdef",
                       "sessionUrl": "https://claude.ai/code/session_01ABCdef", "issue": 1745,
-                      "message": "The check session is running. I'll read its result in about a "
-                                 "minute."}
+                      "message": "The check session is running. It posts its result line on "
+                                 "issue #1745; I'll read it there in about a minute."}
 
 
 def test_start_spawns_in_the_repository_root_with_a_copy_of_the_environment(tmp_path):
@@ -1646,7 +1646,7 @@ def test_start_prompt_carries_the_nonce_the_report_command_and_the_fallback_line
     local = _build(tmp_path)
     spawner = Spawner()
     _start(local, spawner)
-    assert _prompt(spawner) == _expected_prompt()
+    assert _prompt(spawner) == _expected_prompt(1745)
     assert "/opt/superheroes/plugin/lib/cloud_check.py report --nonce " + NONCE in _prompt(spawner)
 
 
