@@ -18,7 +18,9 @@ T12 a header that is not `a/<f> b/<f>` for one non-empty `<f>` still refuses as 
 T13 a fix that renames a code file (and edits it) while editing a Markdown file is refused, the driver's own
     builder naming the renamed file under a `diff --git` line;
 T14 positive control: a fix that edits only wording in a Markdown file clears, through the same builder;
-T15 a fix that adds a code file whose name git quotes, plus a Markdown edit, is refused.
+T15 a fix that adds a code file whose name git quotes, plus a Markdown edit, is refused;
+T16 a left-out proven copy with a quoted name stays out of the delta;
+T17 a left-out copy never hides a changed file whose name differs from it in one invalid UTF-8 byte.
 
 Bite-proof record: audit_review_guarded_2341
 """
@@ -461,3 +463,32 @@ def test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta(tm
     assert _headers(delta) == ["diff --git a/%s b/%s" % (GUIDE, GUIDE)]
     outcome = _fold([_guarded()], _target(fixerDelta=delta))
     assert outcome["discharged"] == ["t0"] and outcome["reviewGuarded"] == ["t0"]
+
+
+def test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte(tmp_path):
+    # axis: G13 — `leave_out` compares the exact destination, so two names that differ in one invalid byte stay distinct
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    left_out_bytes, changed_bytes = b"pkg/bad\xff.py", b"pkg/bad\xfe.py"
+    left_out, changed = os.fsdecode(left_out_bytes), os.fsdecode(changed_bytes)
+
+    def fix(repo):
+        for name in (left_out_bytes, changed_bytes):
+            path = os.fsencode(str(repo)) + b"/" + name
+            with open(path, "wb") as handle:
+                handle.write(b"def f():\n    return 1\n")
+        _reword_guide(repo)
+
+    reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix)
+    header_left_out = [h for h in _headers(head_diff.splitlines()) if "\\377" in h]
+    header_changed = [h for h in _headers(head_diff.splitlines()) if "\\376" in h]
+    assert len(header_left_out) == 1 and len(header_changed) == 1, head_diff
+    delta = RD._attempt_fixer_delta(reviewed_diff, head_diff, leave_out=(left_out,))
+    assert header_changed[0] in delta
+    assert header_left_out[0] not in delta
+    assert "diff --git a/%s b/%s" % (GUIDE, GUIDE) in delta
+    assert left_out != changed
+    target = _target(fixerDelta=delta)
+    assert audits.prose_only_delta(target) == (False, [])
+    outcome = _fold([_guarded()], target)
+    assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
+    assert outcome["reviewGuardRefused"] == ["t0"] and outcome["reviewGuarded"] == []

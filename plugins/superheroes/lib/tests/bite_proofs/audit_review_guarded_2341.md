@@ -1,6 +1,6 @@
 # Bite-proof record — a prose-only fix clears its audit on a `review-guarded` answer (#2341)
 
-Detector file: `plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py`), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest '<exact node id>' -q -n 0`, one test node each (G4, G5 and G6 name the test function, so its parametrized cases run together), output captured whole, followed by the `exit=` line the command printed. The `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. The eleven guarded elements are the ones the orders declared (G1-G7, then G8 and G9 from the #2345 fix order, then G10 and G11 from the vet 806 fix order, whose neutralizations are in `round_driver.py`); none is grouped. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture; nothing was redacted.
+Detector file: `plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py`), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest '<exact node id>' -q -n 0`, one test node each (G4, G5 and G6 name the test function, so its parametrized cases run together), output captured whole, followed by the `exit=` line the command printed. The `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. The thirteen guarded elements are the ones the orders declared (G1-G7, then G8 and G9 from the #2345 fix order, then G10 and G11 from the vet 806 fix order, then G12 and G13 from the #2341 seam fix, whose neutralizations are in `round_driver.py`); none is grouped. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture; nothing was redacted.
 
 The detectors are the tests that carry a `# bite-proof:` line.
 
@@ -674,21 +674,21 @@ exit=1
 exit=0
 ```
 
-## G12. The leave-out check for a git-quoted header (`round_driver._attempt_fixer_delta`, `_header_dest_path`)
+## G12. The leave-out check for a header's destination (`round_driver._attempt_fixer_delta`, `_diff_header_sides`)
 
-- **Axis:** a left-out proven copy stays out of the fixer delta whatever its header's form; a git-quoted destination is decoded before the check (review-code session 5 finding, applied by the build session).
+- **Axis:** a left-out proven copy stays out of the fixer delta whatever its header's form; the destination comes from the one canonical reader (`_diff_header_sides`, git C-quoting undone), which the driver delegates to rather than carrying its own decoder (#2341 seam ruling).
 - **Detector:** `test_audit_review_guarded_2341.py::test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta`.
-- **Neutralization:** in a detached probe worktree at `418d4a51`, `if _header_dest_path(header) in leave_out:` became `if False:`, so no two-path or quoted header is ever left out.
-- **Note:** G10 and G11 above quote the neutralizations against the WO-4 form (`named = re.match(...)`); this fix replaced that line with `_header_dest_path`, and the build session re-ran G10 and G11 against the WO-4 head `a9484d69` before it.
+- **Neutralization:** in `_attempt_fixer_delta`, `if sides is not None and sides[1] in leave_out:` became `if False:`, so no two-path or quoted header is ever left out. The `sides = _diff_header_sides(header)` line above it stayed.
+- **Note:** G10 and G11 above quote the neutralizations against the WO-4 form (`named = re.match(...)`), which no longer exists; their detectors (T13, T15) still pass on the current head (neighbour run, 161 passed) but were not re-neutralized in this dispatch.
 
-**Raw red** (exit 1):
+**Raw red** (exit 1; run from `/home/user/wt-2341`, `UV_NATIVE_TLS` warning left out):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 __ test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta ___
 
-tmp_path = PosixPath('/tmp/pytest-of-root/pytest-27/test_t16_a_left_out_proven_cop0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-34/test_t16_a_left_out_proven_cop0')
 
     def test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta(tmp_path):
         # axis: G12 — `leave_out` is honoured for a git-quoted header, so a proven copy never enters the delta
@@ -707,21 +707,86 @@ E
 E         Left contains one more item: 'diff --git "a/pkg/caf\\303\\251.py" "b/pkg/caf\\303\\251.py"'
 E         Use -v to get more diff
 
-/home/user/wt-2341-probe/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:461: AssertionError
+/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:463: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta
-1 failed in 0.33s
+1 failed in 1.54s
 exit=1
 ```
 
-- **Restore:** inverse edit (`if False:` back to `if _header_dest_path(header) in leave_out:`).
-- **Restore receipt:** `git status --porcelain` printed nothing; `grep -n` read back `8527:        if _header_dest_path(header) in leave_out:`.
+- **Restore:** inverse edit (`if False:` back to `if sides is not None and sides[1] in leave_out:`).
+- **Restore receipt** (Grep, `sides = _diff_header_sides\(header\)|in leave_out`; the original two lines, no `if False:` left):
+
+```
+8487:        sides = _diff_header_sides(header)
+8488:        if sides is not None and sides[1] in leave_out:
+```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 31.46s
+1 passed in 0.34s
+exit=0
+```
+
+## G13. The exact-bytes comparison at the leave-out check (`round_driver._attempt_fixer_delta`)
+
+- **Axis:** two destinations whose names differ only in one invalid UTF-8 byte stay distinct keys, so a left-out proven copy never hides a different changed code file (audit-001 on the #2341 fix; `_diff_header_sides` keeps an invalid byte as a surrogate escape, so `leave_out` names compare exactly).
+- **Detector:** `test_audit_review_guarded_2341.py::test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte` (the fix adds `pkg/bad<0xff>.py` and `pkg/bad<0xfe>.py`; `leave_out` names the first).
+- **Neutralization:** `if sides is not None and sides[1] in leave_out:` became a check that decodes both the destination and each `leave_out` name lossily, the old `errors="replace"` behaviour: `if sides is not None and sides[1].encode("utf-8", "surrogateescape").decode("utf-8", "replace") in tuple(os.fsdecode(os.fsencode(p)).encode("utf-8", "surrogateescape").decode("utf-8", "replace") for p in leave_out):`. Both sides are made lossy because a lossy destination against an exact `leave_out` name would simply leave nothing out; the collision the audit found needs both keys lossy.
+
+**Raw red** (exit 1; `UV_NATIVE_TLS` warning left out):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_t17_a_left_out_copy_never0')
+
+    def test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte(tmp_path):
+        # axis: G13 — `leave_out` compares the exact destination, so two names that differ in one invalid byte stay distinct
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+        left_out_bytes, changed_bytes = b"pkg/bad\xff.py", b"pkg/bad\xfe.py"
+        left_out, changed = os.fsdecode(left_out_bytes), os.fsdecode(changed_bytes)
+    
+        def fix(repo):
+            for name in (left_out_bytes, changed_bytes):
+                path = os.fsencode(str(repo)) + b"/" + name
+                with open(path, "wb") as handle:
+                    handle.write(b"def f():\n    return 1\n")
+            _reword_guide(repo)
+    
+        reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix)
+        header_left_out = [h for h in _headers(head_diff.splitlines()) if "\\377" in h]
+        header_changed = [h for h in _headers(head_diff.splitlines()) if "\\376" in h]
+        assert len(header_left_out) == 1 and len(header_changed) == 1, head_diff
+        delta = RD._attempt_fixer_delta(reviewed_diff, head_diff, leave_out=(left_out,))
+>       assert header_changed[0] in delta
+E       assert 'diff --git "a/pkg/bad\\376.py" "b/pkg/bad\\376.py"' in ['diff --git a/docs/guide.md b/docs/guide.md', '@@ -1,0 +1,9 @@', '+diff --git a/docs/guide.md b/docs/guide.md', '+index 4a3fa27..ce0a2f8 100644', '+--- a/docs/guide.md', '++++ b/docs/guide.md', ...]
+
+/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:486: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte
+1 failed in 0.49s
+exit=1
+```
+
+- **Restore:** inverse edit (the lossy line back to `if sides is not None and sides[1] in leave_out:`).
+- **Restore receipt** (Grep, `sides = _diff_header_sides\(header\)|in leave_out|replace"` over `round_driver.py`; lines 8487 and 8488 are the restored pair, the other matches are unrelated `decode(..., "replace")` calls elsewhere in the file):
+
+```
+8479:            if file in leave_out:
+8487:        sides = _diff_header_sides(header)
+8488:        if sides is not None and sides[1] in leave_out:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.36s
 exit=0
 ```
 

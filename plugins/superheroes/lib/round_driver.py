@@ -8434,46 +8434,6 @@ def _one_path_header(header):
     return path if rest == "a/" + path + " b/" + path else None
 
 
-_GIT_QUOTE_ESCAPES = {"a": 7, "b": 8, "t": 9, "n": 10, "v": 11, "f": 12, "r": 13, '"': 34, "\\": 92}
-
-
-def _git_unquote(token):
-    """The path a git-quoted header token (``"b/caf\\303\\251.py"``) names: C-style escapes and octal
-    bytes decoded, read as UTF-8. None when the token is not a well-formed quoted string."""
-    if len(token) < 2 or not (token.startswith('"') and token.endswith('"')):
-        return None
-    out, i, body = bytearray(), 0, token[1:-1]
-    while i < len(body):
-        ch = body[i]
-        if ch != "\\":
-            out.extend(ch.encode("utf-8"))
-            i += 1
-            continue
-        nxt = body[i + 1:i + 2]
-        if len(body[i + 1:i + 4]) == 3 and all(c in "01234567" for c in body[i + 1:i + 4]):
-            out.append(int(body[i + 1:i + 4], 8))
-            i += 4
-        elif nxt in _GIT_QUOTE_ESCAPES:
-            out.append(_GIT_QUOTE_ESCAPES[nxt])
-            i += 2
-        else:
-            return None
-    return out.decode("utf-8", errors="replace")
-
-
-def _header_dest_path(header):
-    """The destination path (the ``b/`` side, without the prefix) a ``diff --git`` header names, a git-quoted
-    one decoded; None when it cannot be read."""
-    rest = header[len(_DIFF_GIT_PREFIX):]
-    if rest.endswith('"'):
-        cut = rest.rfind(' "b/')
-        dest = _git_unquote(rest[cut + 1:]) if cut >= 0 else None
-    else:
-        named = re.match(r'(?:a/.+|"(?:[^"\\]|\\.)*") (b/.+)$', rest)
-        dest = named.group(1) if named else None
-    return dest[2:] if dest and dest.startswith("b/") and len(dest) > 2 else None
-
-
 def _header_section(diff_text, header):
     """The lines of every section of a unified diff opened by exactly ``header``: the header line through
     the line before the next ``diff --git`` header."""
@@ -8524,7 +8484,8 @@ def _attempt_fixer_delta(reviewed_diff, head_diff, leave_out=()):
                 delta.extend(lines)
             continue
         # axis: a left-out proven copy stays out of the delta whatever its header's form, a git-quoted one included
-        if _header_dest_path(header) in leave_out:
+        sides = _diff_header_sides(header)
+        if sides is not None and sides[1] in leave_out:
             continue
         before, after = _header_section(reviewed_diff, header), _header_section(head_diff, header)
         if before == after:
