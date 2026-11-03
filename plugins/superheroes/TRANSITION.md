@@ -26,6 +26,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 
 - **After switching.** **A local lane starts on its advisor's own plugin root (`--plugin-dir`) and its prompt names `Advisor plugin version:`; a local lane whose running version differs from that line stops at intake with `lane-plugin-version-mismatch`, a launch file the verb cannot read stops the lane with `lane-version-launch-file-unreadable`, and a local compose on a root with no readable version refuses `compose-plugin-version-unreadable`. Nothing is owed: a lane launched before the switch keeps running as it was.** See [Launcher: a local lane runs its advisor's plugin version](#launcher-a-local-lane-runs-its-advisors-plugin-version).
 
+- **After switching.** **A carried finding this session's verifier graded shown wrong now reads fixed when the driver's fixed check proves it, and the `Test lens:` line now counts only the findings raised in the record's own rounds and says how many were carried over from an earlier review; `testLens.findings` no longer includes carried findings and `testLens.carriedFindings` is new.** Nothing is owed: records written before this release render as they did. See [Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings](#review-a-fixed-carried-finding-reads-fixed-and-the-test-lens-line-counts-this-rounds-findings).
+
 ### Launcher: a local lane runs its advisor's plugin version
 
 - **The pin.** `lib/launcher.py` `compose_launch`, the one launch chokepoint, starts every local lane (workhorse and detective, plain and adopt) with `--plugin-dir <advisor plugin root>`, the directory holding the running `launcher.py`, and puts the line `Advisor plugin version: <version>` in its prompt, the line a cloud launch carries. A root with no readable manifest version refuses `compose-plugin-version-unreadable`, for a local lane as for a cloud one. A local lane runs its advisor's plugin root from launch through handback.
@@ -35,6 +37,12 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **The pin has three limits.** (1) A managed-settings `enabledPlugins` entry for the superheroes id, or a settings entry `"superheroes@inline": false`, makes the host ignore the `--plugin-dir` copy and load the installed one. The intake detector then refuses, but only when the installed copy is this release or later; an installed release older than this one has no detector. (2) A plugin loaded in place from a directory (a local-path marketplace or a development checkout) is pinned to that directory, not to a version: edits to it reach the lane. A copied marketplace install never changes in place (a new version gets a new directory), so for it the directory is the version. (3) A lane that outlives the 14-day cleanup of its old root loses its files (`skills/adopt-version/SKILL.md` step 7 names the risk); when the old root is gone a resume would silently load the installed copy, which is why the resume check above adopts instead.
 - **Unchanged.** The cloud pin hook and the auto-update settings take no part in the lane pin and are not touched by it.
 
+### Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings
+
+- **A fixed carried finding reads fixed.** A carried finding this session's verifier graded shown wrong used to stay shown wrong even when the driver's `carriedChecks` entry proved it fixed. Now the entry reaches it under the same chain as a left-for-owner finding: a `fixed` entry checked on the final commit, whose fix commit is in that commit's history. Its reason says the verifier graded it shown wrong and the fixed check overrules that grade. A shown-wrong finding with no wrong grade of its own, or one the earlier record of another session already lists shown wrong, keeps its outcome.
+- **The `Test lens:` line counts this round.** `testLens.findings` used to count every test-lens finding on the record, carried ones included, so a round that raised nothing could read "2 findings raised". It now counts only the findings raised in the record's own rounds, and the line reads `; 0 findings raised in this round, 2 findings carried over from an earlier review.` The "no test-role reviewer was listed" and "did not run" lines add the carried count the same way.
+- **A new key.** `testLens.carriedFindings` counts the test-lens findings carried from the earlier record of another session; it is present only when above 0. A caller that read `testLens.findings` as every test-lens finding on the record adds `carriedFindings` to it, or reads the finding list. A record with nothing carried renders exactly as before.
+
 ## 0.48.0
 
 ### Before you upgrade
@@ -43,19 +51,11 @@ Check these in a consuming project when it adopts 0.48.0. Each step names the no
 
 - **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
 
-- **After switching.** **A carried finding this session's verifier graded shown wrong now reads fixed when the driver's fixed check proves it, and the `Test lens:` line now counts only the findings raised in the record's own rounds and says how many were carried over from an earlier review; `testLens.findings` no longer includes carried findings and `testLens.carriedFindings` is new.** Nothing is owed: records written before this release render as they did. See [Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings](#review-a-fixed-carried-finding-reads-fixed-and-the-test-lens-line-counts-this-rounds-findings).
-
 ### Review: the panel artifact's `canaryResult` tolerance is retired
 
 - **Why.** The seat canaries retired in 0.43.0, and the driver kept accepting and ignoring a `canaryResult` key on a panel artifact for artifacts shaped before then. Every consuming project now runs 0.43.0 or later, so the tolerance is gone (keep-or-retire D35).
 - **What changes.** `round_driver.py submit` on a panel phase refuses a legacy-shaped artifact that carries `canaryResult`, naming it among the unknown seat keys. An artifact in the explicit `{"seats": {...}}` shape is unchanged: its top-level keys other than `seats` are not judged.
 - **Replacement.** None: drop the key.
-
-### Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings
-
-- **A fixed carried finding reads fixed.** A carried finding this session's verifier graded shown wrong used to stay shown wrong even when the driver's `carriedChecks` entry proved it fixed. Now the entry reaches it under the same chain as a left-for-owner finding: a `fixed` entry checked on the final commit, whose fix commit is in that commit's history. Its reason says the verifier graded it shown wrong and the fixed check overrules that grade. A shown-wrong finding with no wrong grade of its own, or one the earlier record of another session already lists shown wrong, keeps its outcome.
-- **The `Test lens:` line counts this round.** `testLens.findings` used to count every test-lens finding on the record, carried ones included, so a round that raised nothing could read "2 findings raised". It now counts only the findings raised in the record's own rounds, and the line reads `; 0 findings raised in this round, 2 findings carried over from an earlier review.` The "no test-role reviewer was listed" and "did not run" lines add the carried count the same way.
-- **A new key.** `testLens.carriedFindings` counts the test-lens findings carried from the earlier record of another session; it is present only when above 0. A caller that read `testLens.findings` as every test-lens finding on the record adds `carriedFindings` to it, or reads the finding list. A record with nothing carried renders exactly as before.
 
 ## 0.47.0
 
