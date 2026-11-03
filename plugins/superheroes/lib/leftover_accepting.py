@@ -219,5 +219,5 @@ def fixed_above(record, body):
 def describe(gaps):
     """The refusal detail naming each missing leftover with its title."""
     named = ["%s (%s)" % (g["id"], g["title"]) if g["title"] else g["id"] for g in gaps]
-    return ("What we're accepting does not name these findings left for the owner, each by its record id byte for byte"
-            " with its title in one line: " + "; ".join(named))
+    return ("What we're accepting does not name these findings left for the owner, each by its record id and its title"
+            " in one line, matched as lib/leftover_accepting.py states: " + "; ".join(named))
