@@ -172,3 +172,19 @@ def test_the_waiting_line_of_a_fixed_above_finding_is_neither_counted_nor_incomp
     records[0]["whatIsMissing"] = ["finding f-2 waits for the owner's decision"]
     history = make(records, stack_input(), fixed_bodies())["prSheet"]["history"]
     assert not any(h.startswith("#10") and ("left for you below" in h or "incomplete" in h) for h in history), history
+
+
+def test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixed_above():
+    # Bites on: a carried sheet that lets a finding the earlier sheet showed as decided for you move into caught as fixed
+    # above, keeping the earlier sheet's answers and Merge over a disposition the owner never saw.
+    # Axis: E5: on a carry, a fixed-above finding that was a decided-for-you entry on the earlier sheet is a named refusal.
+    from test_pr_sheet import carry_input, determination, sheet_bytes
+    plain = {10: NONE_BODY, 11: NONE_BODY}
+    earlier = make(stack_records(), stack_input(craftDeterminations={"10:f-2": determination()}), plain)
+    assert [e["finding"] for e in earlier["prSheet"]["decidedForYou"]] == ["10:balance/f-2"]
+    advisor = carry_input(stack_input(), {"10": "a" * 40, "11": "b" * 40})
+    with pytest.raises(pr_sheet.Refusal) as caught:
+        pr_sheet.build(copy.deepcopy(stack_records()), advisor, WORDS, previous=sheet_bytes(earlier), bodies=fixed_bodies())
+    assert any("was a decided-for-you entry on the earlier sheet" in p and "#11" in p
+               and "a carried sheet cannot move a decided-for-you entry; republish unsigned" in p
+               for p in caught.value.problems), caught.value.problems
