@@ -1,7 +1,12 @@
-"""The one home of the leftover-acceptance rule (#2280): every finding the latest review record leaves for the owner
-(its ``leftForOwner`` list) is named in the PR body's ``## What we're accepting`` section by its record id, byte for
-byte, together with its title, in one acceptance. A paraphrase that drops the id, or an id with no title, does not name
-it.
+"""The one home of the leftover-acceptance rule (#2280, #2332): every finding the latest review record leaves for the
+owner (its ``leftForOwner`` list) is named in the PR body's ``## What we're accepting`` section by its record id,
+together with its title, in one acceptance. A paraphrase that drops the id, or an id with no title, does not name it.
+The id is compared under one normalisation (NFKC, case-folded, every Unicode dash read as ``-``) as a whole token after
+the punctuation around it is stripped, so ``F-1`` and ``f-1`` name one id but ``f-1`` is never inside ``f-1-b``; two ids
+of one record that share a normal form are each matched byte for byte, so neither satisfies the other. The title is
+compared by its words, case and punctuation aside (quotes, backticks, a hyphen written as a space). An acceptance that
+carries ``fixed-above #<PR> <7-40 hex commit>`` resolves the leftovers it names as fixed by that higher layer
+(``fixed_above``); whether the named PR is a higher member of this PR's stack is the caller's check, not this module's.
 
 Two callers, no second copy of the rule: ``vet_slot.py handback --pr`` (the builder's check before the ready mark) and
 ``vet_slot.py write`` (the advisor's slot write, for a READY verdict only). ``missing`` takes the latest record exactly as
@@ -10,6 +15,7 @@ raises ``Unreadable`` for a record it cannot read, which a caller reports as unr
 import os
 import re
 import sys
+import unicodedata
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -20,6 +26,10 @@ import pr_sheet  # noqa: E402
 import review_record  # noqa: E402
 
 _ID_CHAR = "A-Za-z0-9_-"
+_DASHES = re.compile("[‐‑‒–—―−﹘﹣－]")
+_LEAD = "\"'`([{<*_~“‘«"
+_TRAIL = "\"'`)]}>.,;:!?*_~”’»"
+_QUOTES = {ord(c): None for c in "“”„‟‘’‚‛«»"}
 
 
 class Unreadable(Exception):
@@ -109,10 +119,62 @@ def _visible(body):
     return "".join(out)
 
 
-def _names(item, ident, title):
-    """Whether one acceptance names the id as a whole token and carries the title, both byte for byte."""
-    token = re.search("(?<![%s])%s(?![%s])" % (_ID_CHAR, re.escape(ident), _ID_CHAR), item)
-    return token is not None and (title is None or title in item)
+def normalise_id(text):
+    """The one normal form two spellings of a record id are compared in: NFKC, case-folded, every Unicode dash as ``-``."""
+    return _DASHES.sub("-", unicodedata.normalize("NFKC", text).casefold())
+
+
+def _tokens(text):
+    """The whitespace-separated pieces of ``text``, each without the punctuation that wraps or ends it; empty ones dropped."""
+    pieces = (piece.lstrip(_LEAD).rstrip(_TRAIL) for piece in text.split())
+    return [piece for piece in pieces if piece]
+
+
+def _title_key(text):
+    """A title or an acceptance reduced to its words: NFKC, case-folded, dashes as ``-``, typographic quotes dropped, every
+    other run of non-word characters one space."""
+    folded = _DASHES.sub("-", unicodedata.normalize("NFKC", text).casefold())
+    return re.sub(r"[^\w]+", " ", folded.translate(_QUOTES)).strip()
+
+
+def _id_named(item, ident, exact):
+    """Whether the id's tokens appear as a consecutive run of the item's tokens (normalised, or byte for byte when
+    ``exact``)."""
+    want, have = _tokens(ident), _tokens(item)
+    # axis: an id with no token left after stripping its punctuation is matched as a whole token by the old character rule
+    if not want:
+        return re.search("(?<![%s])%s(?![%s])" % (_ID_CHAR, re.escape(ident), _ID_CHAR), item) is not None
+    if not exact:
+        want, have = [normalise_id(t) for t in want], [normalise_id(t) for t in have]
+    n = len(want)
+    # axis: whole-token equality, never a substring, so f-1 is not inside f-1-b and F/1 is not inside F.1.2
+    return any(have[i:i + n] == want for i in range(len(have) - n + 1))
+
+
+def _names(item, ident, title, exact=False):
+    """Whether one acceptance names the id as a whole token run (``_id_named``) and carries the title (its words, case
+    and punctuation aside). A title that reduces to no words is carried only byte for byte."""
+    if not _id_named(item, ident, exact):
+        return False
+    if title is None:
+        return True
+    key = _title_key(title)
+    # axis: a title of punctuation only has no words to compare, so it is carried byte for byte
+    if not key:
+        return title in item
+    return " " + key + " " in " " + _title_key(item) + " "
+
+
+def _collisions(leftovers):
+    """The ids that share a normal form with a different leftover id: those are matched byte for byte."""
+    forms = {}
+    for ident, _title in leftovers:
+        forms.setdefault(tuple(normalise_id(t) for t in _tokens(ident)), set()).add(ident)
+    return {ident for ids in forms.values() if len(ids) > 1 for ident in ids}
+
+
+def _accepting_items(body):
+    return pr_sheet.accepting_listed(_visible(body if isinstance(body, str) else ""))
 
 
 def missing(record, body):
@@ -120,9 +182,36 @@ def missing(record, body):
     one is named, or the record leaves none). ``record`` is ``review_record.read``'s result; Unreadable when it cannot be
     read. Only text that renders counts (``_visible``). A leftover whose finding carries no title is checked by its id
     alone."""
-    items = pr_sheet.accepting_listed(_visible(body if isinstance(body, str) else ""))
-    return [{"id": ident, "title": title} for ident, title in _leftovers(record)
-            if not any(_names(item, ident, title) for item in items)]
+    items = _accepting_items(body)
+    leftovers = _leftovers(record)
+    colliding = _collisions(leftovers)
+    # axis: two ids of one record that share a normal form are each matched byte for byte, so neither satisfies the other
+    return [{"id": ident, "title": title} for ident, title in leftovers
+            if not any(_names(item, ident, title, exact=ident in colliding) for item in items)]
+
+
+FIXED_ABOVE_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])fixed-above\s+#([1-9][0-9]*)\s+`?([0-9a-f]{7,40})`?(?![0-9A-Za-z])")
+
+
+def fixed_above(record, body):
+    """The leftovers an acceptance resolves as fixed by a higher layer (#2332), as [{"id", "title", "layer", "commit"}] in
+    record order. A leftover is resolved by the first acceptance that names it (as ``missing`` reads it) and carries
+    ``fixed-above #<PR> <7-40 hex commit>``; one named by no such acceptance is not listed. Only the full form counts: the
+    word alone or a malformed form is plain text. Unreadable exactly where ``missing`` raises it. Whether the named PR is a
+    higher member of this PR's stack is the caller's to check."""
+    items = _accepting_items(body)
+    leftovers = _leftovers(record)
+    colliding = _collisions(leftovers)
+    claims = []
+    for ident, title in leftovers:
+        for item in items:
+            found = FIXED_ABOVE_RE.search(item)
+            # axis: the first acceptance that names the leftover and carries the disposition decides it
+            if found and _names(item, ident, title, exact=ident in colliding):
+                claims.append({"id": ident, "title": title, "layer": int(found.group(1)), "commit": found.group(2)})
+                break
+    return claims
 
 
 def describe(gaps):
