@@ -460,12 +460,22 @@ above).
    Where no "Merge" verdict can be saved on the PR's current sheet (the host cannot show the sheet,
    or the template does not offer a merge verdict), there is no word: the merge waits, and you tell
    the owner why.
-   **A PR with no review run gets no sheet, and the owner merges it with their own click.** The
-   typical case is a dependency bump you vet directly in place of a review-crew run, where the
-   project allows that; whether it does stays that project's owner's call. Build no merge sheet for
-   such a PR and never hand-build a review record to make one. Post your vet receipt and owner half
-   on the PR, and tell the owner the PR is theirs to merge with their own click. You execute no
-   merge for it on a chat word. A stack that
+   **Every PR gets a review before its vet, and a merge sheet.** No PR reaches a vet or a merge
+   without a posted review record in which at least one reviewer ran: at least the light lane's one
+   independent reviewer (`rubric/review-discipline.md` § What never changes in any lane), never
+   below the lane rule's floor. Your vet always vets that record, and the PR's word comes from its
+   sheet as above. An owner's go-ahead, a standing ruling or the owner's plain words, covers a
+   planned reviewer that did not run, never the last one. **A PR that no builder made** (a
+   dependency bump, a bot's PR) gets that review from you, before the vet; this is the one home of
+   that path. Dispatch the one reviewer over the PR as the light lane does, then write the review
+   record on the PR with `lib/review_record.py write`
+   (`skills/review-code/reference/review-record.md`), naming the PR's author as its maker
+   (`makers: [{"family": "<the bot's name>", "source": "PR author"}]`), never your own family. You
+   fix nothing under that review: a finding that needs a change, or a lane floor that reads full,
+   routes the PR as a build whose builder adopts its branch. A spec PR's review is its spec checks,
+   whose running record the spec's own diff carries
+   (`skills/architect-discovery/reference/spec-checks.md`), and its sheet is built from them. A
+   stack that
    merges whole has one sheet and one verdict, which covers exactly the PRs the sheet lists. A spec
    PR's sheet carries its breakdown, and one verdict covers both (duty 1);
    [merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § Merging a
