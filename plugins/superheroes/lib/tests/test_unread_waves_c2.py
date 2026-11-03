@@ -259,7 +259,8 @@ def test_full_panel_ran_is_true_only_when_every_waves_seats_ran(tmp_path):
     _wave(early, reads={"test-role:s2": []}, omit=("code-reviewer:s3",))
     assert early["fullPanelRan"] is False
     _wave(early)
-    assert early["fullPanelRan"] is False and early["_incompletePanel"] is True
+    assert early["fullPanelRan"] is False and early["_incompletePanel"] is False
+    assert early["sliceRecoveries"][0]["seat"] == "code-reviewer:s3"
     assert early["rounds"]["1"]["seatStatus"]["code-reviewer:s3"] == "missing"
     assert early["rounds"]["1"]["lensCoverage"]["floor"] is True
     sub = tmp_path / "b"
