@@ -28,7 +28,15 @@ named, by record id and title, under What we're accepting, or that record cannot
 ``leftover_accepting.py``)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
-on ok, 1 on refusal."""
+on ok, 1 on refusal.
+
+A PR no builder made (a dependency bump, a bot's PR) has no build record. ``write`` and ``check`` read such a body as
+having no follow-ups and need no build-record or followups marker: ``write`` puts the slot under the advisor-vet marker
+to the end of the body, or appends a ``## Advisor vet`` heading, the marker and the slot when the marker is absent. The
+body takes this path only if ``no_build_record`` finds it non-blank and showing no builder sign anywhere (a superheroes
+marker other than advisor-vet, the ``Build record`` wrapper, or a builder section heading); every other body takes
+the build-record path described before this paragraph, unchanged. ``handback`` is unchanged: it is the builder's
+verb, and a builder body keeps needing its build record."""
 import argparse
 import json
 import os
@@ -80,6 +88,14 @@ _DATABASE_TOOL_RE = re.compile(
 _FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
 _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6} (.*)$")
+# no_build_record's own patterns: wider than the module's on purpose (over-matching reads as builder-shaped)
+_SUPERHEROES_OPEN_RE = re.compile(r"<!--\s*superheroes:")
+_BUILD_RECORD_WRAPPER_RE = re.compile(r"<summary[^>]*>\s*build\s+record", re.IGNORECASE)
+_ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
+_ACCEPTING_KEY = "what were accepting"
+_BUILDER_HEADING_KEYS = ("whats changing", _ACCEPTING_KEY, "how to see it", "build record", "build brief",
+                         "dispatch provenance", "disclosed degradations", "followups for the advisor",
+                         "definition of done", "dod disposition", "size tripwire", "biteproof records")
 
 
 class _Refusal(Exception):
@@ -156,12 +172,12 @@ def _find_live_standalone_markers(body, marker):
     return found
 
 
-def _live_heading_offsets(body):
-    """Offsets of the live ATX headings of ``body``, each with its text (marks and closing hashes included).
+def _comment_scan(body):
+    """Yield ``(offset, line, dead, starts_in_comment)`` for every line of ``body``.
 
-    Live is outside a code fence (``md_fence``) and outside an HTML comment span: ``<!--`` through the next
-    ``-->``, across lines, a comment never closed running to the end of the body. A ``<!--`` on a fenced line
-    opens no comment; a ``-->`` closes one wherever it sits."""
+    ``dead`` is inside a code fence (``md_fence``); ``starts_in_comment`` is inside an HTML comment span: ``<!--``
+    through the next ``-->``, across lines, a comment never closed running to the end of the body. A ``<!--`` on a
+    fenced line opens no comment; a ``-->`` closes one wherever it sits."""
     raw = body.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
@@ -185,10 +201,18 @@ def _live_heading_offsets(body):
                     break
                 pos = at + 4
                 in_comment = True
+        yield offset, line, dead, starts_in_comment
+        offset += len(whole)
+
+
+def _live_heading_offsets(body):
+    """Offsets of the live ATX headings of ``body``, each with its text (marks and closing hashes included).
+
+    Live is outside a code fence and outside an HTML comment span (``_comment_scan``)."""
+    for offset, line, dead, starts_in_comment in _comment_scan(body):
         heading = _ATX_HEADING_RE.match(line)
         if heading and not dead and not starts_in_comment:
             yield offset, heading.group(1)
-        offset += len(whole)
 
 
 def _heading_key(text):
@@ -219,6 +243,108 @@ def check_not_emptied(body):
     if not held:
         raise _Refusal("body-emptied", 'PR body has no "What\'s changing, and why" heading%s%s'
                        % (" above the advisor-vet marker" if markers else "", remedy))
+
+
+def no_build_record(body):
+    """Whether ``body`` is a PR no builder made: non-blank, and showing no builder sign anywhere.
+
+    The one place the decision is made (``evaluate`` and ``_run_verb``, for ``write`` and ``check``; never
+    ``handback``). The scan is of the raw text, code fences and HTML comments included (not ``_live_lines``): doubt
+    reads as builder-shaped, so the allowance only ever turns a refusal into a write for a body with no builder sign.
+    A builder sign is any of: a ``<!-- superheroes:`` other than a line that is exactly the advisor-vet marker; the
+    ``<summary>Build record`` wrapper; an ATX heading (in a quote or list too) whose key starts with a builder
+    section's. A ``What we're accepting`` heading below the live advisor-vet marker is the advisor's slot and does not
+    count; with no live marker it counts."""
+    # axis: a blank or non-string body is never no-build-record, so write refuses it body-emptied — see bite-proof record i2342_vet_slot_no_build_record.md
+    if not isinstance(body, str) or not body.strip():
+        return False
+    # axis: the Build record wrapper is a builder sign, split across lines or not — see bite-proof record i2342_vet_slot_no_build_record.md
+    if _BUILD_RECORD_WRAPPER_RE.search(body):
+        return False
+    marker = pr_body_regions.REGION_MARKERS["advisor-vet"]
+    markers = _find_live_standalone_markers(body, marker)
+    marker_at = min(markers) if markers else None
+    offset = 0
+    for whole in body.splitlines(keepends=True):
+        line = whole.rstrip("\r\n")
+        # axis: a superheroes marker other than the advisor-vet line is a builder sign, fenced or commented too — see bite-proof record i2342_vet_slot_no_build_record.md
+        if _SUPERHEROES_OPEN_RE.search(line) and line.strip() != marker:
+            return False
+        # axis: headings below the advisor-vet marker are scanned too — see bite-proof record i2342_vet_slot_no_build_record.md
+        heading = _ANY_HEADING_RE.match(line)
+        if heading:
+            key = _heading_key(heading.group(1))
+            # axis: a builder-section heading is a builder sign, in a quote, list, fence or comment too — see bite-proof record i2342_vet_slot_no_build_record.md
+            if key.startswith(_BUILDER_HEADING_KEYS):
+                # axis: What we're accepting below the live advisor-vet marker is the advisor's slot, not a builder sign — see bite-proof record i2342_vet_slot_no_build_record.md
+                exempt = key.startswith(_ACCEPTING_KEY) and marker_at is not None and offset > marker_at
+                if not exempt:
+                    return False
+        offset += len(whole)
+    return True
+
+
+def analyze_no_build_record(body):
+    """The no-build-record twin of ``analyze_body``: return the advisor-vet marker's offset, or None when absent.
+
+    A body with the marker twice refuses ``markers-invalid``. The blank-body arm is defensive only: ``write`` and
+    ``check`` never route a blank body here (``no_build_record`` is False for it)."""
+    if not isinstance(body, str) or not body.strip():
+        raise _Refusal("read-failed", "PR body is empty" if isinstance(body, str) else
+                       "PR body is not a string")
+    found = _find_live_standalone_markers(body, pr_body_regions.REGION_MARKERS["advisor-vet"])
+    if len(found) > 1:
+        raise _Refusal("markers-invalid", "advisor-vet marker appears %d times" % len(found))
+    return found[0] if found else None
+
+
+def _compose_no_build_record(body, advisor_at, slot_text):
+    """The new body of a no-build-record ``write``; a ``write-failed`` refusal when it would not hold.
+
+    Marker present: the slot runs from the line after the marker to the end of the body. Marker absent: a
+    ``## Advisor vet`` heading, the marker and the slot are appended."""
+    marker = pr_body_regions.REGION_MARKERS["advisor-vet"]
+    slot = slot_text.strip("\n")
+    heading_at = None
+    if advisor_at is None:
+        prefix = body.rstrip("\r\n")
+        new_body = prefix + "\n\n## Advisor vet\n" + marker + "\n\n" + slot + "\n"
+        heading_at = len(prefix) + 2
+        marker_at = heading_at + len("## Advisor vet\n")
+    else:
+        newline = body.find("\n", advisor_at)
+        if newline >= 0:
+            prefix = body[:newline + 1]
+            new_body = prefix + "\n" + slot + "\n"
+        else:  # the marker is the last line, with no newline after it
+            prefix = body
+            new_body = body + "\n\n" + slot + "\n"
+        marker_at = advisor_at
+    if not new_body.startswith(prefix):
+        raise _Refusal("write-failed", "span invariant violated")
+    # axis: a slot text that carries a builder heading or the Build record wrapper makes the composed body builder-shaped, refused write-failed — see bite-proof record i2342_vet_slot_no_build_record.md
+    if not no_build_record(new_body):
+        raise _Refusal("write-failed", "the slot text carries a builder heading or build-record wrapper; the composed"
+                       " body would read as a builder body")
+    problem = _unrendered_slot(new_body, marker_at, heading_at)
+    # axis: a composed body whose advisor-vet marker sits in an HTML comment, or whose appended heading is inside an unclosed fence or comment, refuses write-failed — see bite-proof record i2342_vet_slot_no_build_record.md
+    if problem:
+        raise _Refusal("write-failed", problem)
+    if _find_live_standalone_markers(new_body, marker) != [marker_at]:
+        raise _Refusal("write-failed", "composed body moved or shadowed slot markers")
+    return new_body
+
+
+def _unrendered_slot(new_body, marker_at, heading_at):
+    """Why the composed slot would not render, or None: the advisor-vet marker line starts inside an HTML comment,
+    or (marker absent) the appended ``## Advisor vet`` heading is not among the live headings."""
+    for offset, _line, _dead, in_comment in _comment_scan(new_body):
+        if offset == marker_at and in_comment:
+            return "the advisor-vet marker sits inside an unclosed HTML comment, so the slot would not render"
+    if heading_at is not None and heading_at not in [at for at, _text in _live_heading_offsets(new_body)]:
+        return ("the appended Advisor vet heading sits inside an unclosed code fence or HTML comment,"
+                " so the slot would not render")
+    return None
 
 
 def analyze_body(body):
@@ -481,10 +607,15 @@ def _select_receipt(comments, advisor_login):
 def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
     """The chokepoint: every check, then the result (with ``newBody`` for write)."""
     try:
-        # axis: the evaluate chokepoint refuses an emptied body on write before analyze_body — see bite-proof record i2323_vet_slot_emptied.md
-        if verb == "write":
-            check_not_emptied(body)
-        advisor_at, build_at, ids = analyze_body(body)
+        # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md
+        bare = no_build_record(body)
+        if bare:
+            advisor_at, ids = analyze_no_build_record(body), None
+        else:
+            # axis: the evaluate chokepoint refuses an emptied body on write before analyze_body — see bite-proof record i2323_vet_slot_emptied.md
+            if verb == "write":
+                check_not_emptied(body)
+            advisor_at, build_at, ids = analyze_body(body)
         if verb == "write":
             check_slot_text(slot_text)
         if not isinstance(advisor_login, str) or not advisor_login.strip():
@@ -513,6 +644,12 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
               "receipt": receipt.get("html_url") or receipt.get("id")}
     if verb == "check":
         result["receiptPresent"] = True
+        return result
+    if bare:
+        try:
+            result["newBody"] = _compose_no_build_record(body, advisor_at, slot_text)
+        except _Refusal as exc:
+            return _refusal(exc.reason, exc.detail)
         return result
     a = body.index("\n", advisor_at) + 1
     b = body.rfind("\n", 0, build_at) + 1
@@ -690,9 +827,13 @@ def _run_verb(verb, pr, repo, slot_file, run):
             check_leftovers(pr, repo, body, _read_comments(run, pr, repo))
         return result
     body = _body_of(payload)
-    if verb == "write":
-        check_not_emptied(body)
-    analyze_body(body)
+    # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md
+    if no_build_record(body):
+        analyze_no_build_record(body)
+    else:
+        if verb == "write":
+            check_not_emptied(body)
+        analyze_body(body)
     slot_text = None
     if verb == "write":
         try:
