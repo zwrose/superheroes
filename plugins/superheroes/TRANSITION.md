@@ -24,9 +24,25 @@ switching, never a lane already running.
 
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
+- **After switching.** **`vet_slot.py write` refuses a new reason, `body-emptied`, for a PR body that is empty or has lost the builder's owner half; a caller matching on reasons adds it.** Nothing is owed otherwise. See [Vet slot: write refuses a body that lost the owner half](#vet-slot-write-refuses-a-body-that-lost-the-owner-half).
+- **After switching.** **The wave watch keeps a recorded-terminal cloud lane in its watch while it is resumed by builder activity on its issue: its newest unanswered handback, stop or park after its outcome (or its newest ledger amendment) fires `lane-terminal`, and an active resumed lane's `cloudLanes` entry carries `reopenedBy: "builder-activity"`. A caller that reads `reopenedBy` handles the new value.** Nothing is owed otherwise. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
+- **After switching.** **Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded, so a lane you resume is watched; `--ignore-launch` takes a lane out of every path with no sign in the result. Keep it only for a not-ready lane whose fix went to a fresh launch, until its vet is recorded `ready` or `parked-blocker`.** Nothing else is owed. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
 - **After switching.** **A local lane starts on its advisor's own plugin root (`--plugin-dir`) and its prompt names `Advisor plugin version:`; a local lane whose running version differs from that line stops at intake with `lane-plugin-version-mismatch`, a launch file the verb cannot read stops the lane with `lane-version-launch-file-unreadable`, and a local compose on a root with no readable version refuses `compose-plugin-version-unreadable`. Nothing is owed: a lane launched before the switch keeps running as it was.** See [Launcher: a local lane runs its advisor's plugin version](#launcher-a-local-lane-runs-its-advisors-plugin-version).
-
 - **After switching.** **A carried finding this session's verifier graded shown wrong now reads fixed when the driver's fixed check proves it, and the `Test lens:` line now counts only the findings raised in the record's own rounds and says how many were carried over from an earlier review; `testLens.findings` no longer includes carried findings and `testLens.carriedFindings` is new.** Nothing is owed. The `Test lens:` count also takes in a test-role finding whose reviewer names another round's test-role seat, so a count can differ from the earlier release's even with nothing carried. See [Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings](#review-a-fixed-carried-finding-reads-fixed-and-the-test-lens-line-counts-this-rounds-findings).
+
+### Vet slot: write refuses a body that lost the owner half
+
+`vet_slot.py write` now refuses `body-emptied`, before any marker check, when the PR body is empty or whitespace, or when no live `What's changing, and why` heading sits above the advisor-vet marker (anywhere in the body when that marker is absent). A heading inside a code fence, an HTML comment or the slot span does not count. A truncated `gh` redirect can leave a body like this, and a re-stamped marker would otherwise let the write put the slot into it.
+
+The remedy is to restore the builder's body from the PR's edit history, never to re-stamp the marker into it. `check` and `handback` are unchanged and keep `read-failed` and `markers-invalid` on such a body.
+
+### Wave watch: a resumed cloud lane stays in the watch
+
+A cloud lane recorded terminal no longer leaves the wave watch while builder activity on its issue resumes it. Its newest unanswered handback, stop or park after the recorded outcome (or its newest ledger amendment) fires the `lane-terminal` event, and the `cloudLanes` entry of a lane that is active again carries `reopenedBy: "builder-activity"`.
+
+A caller that reads `reopenedBy` handles the new value; a lane never resumed carries no such member.
+
+Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded: it takes a lane out of every path, the resumed one included, with no sign in the result. The exception is a not-ready lane whose fix went to a fresh launch, whose ignore stays until its vet is recorded `ready` or `parked-blocker`.
 
 ### Launcher: a local lane runs its advisor's plugin version
 

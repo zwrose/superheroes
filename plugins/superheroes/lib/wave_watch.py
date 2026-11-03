@@ -126,6 +126,22 @@ Contract:
   so the lane stays watched. Staleness floors at reopenedAt. Cloud lanes only, never a refused or
   never-started lane, and a lane in ignore-launch is not re-added. An unreadable relay state records
   fix-order-unavailable and only the ledger's openers count.
+- Resumed lanes: a started, outcome-terminal cloud lane that was not relaunched is a dormant lane, and
+  the watch keeps it (issue #2323). Not relaunched: no launch in the ledger, in any batch, was reserved
+  later on the same issue. A fix-order-reopened lane keeps the path above. Its basis (`dormantSince`) is
+  the latest of its recorded outcome time and the time of each of its amendments (any kind); a time that
+  is not a finite number is ignored, and an outcome time that is not finite makes the lane not dormant.
+  A dormant lane reports its newest unanswered ending (handback, stop, park) and its unanswered builder
+  notes created at or after the basis, and no comment from before it; it has no close. It is read from
+  the basis, but never from more than DORMANT_LOOKBACK_SECONDS (24 hours) before the read. A dormant lane
+  is active when its newest activity at or after the basis is newer than its newest ending at or after
+  the basis, or it has activity and no ending. Activity is a builder note (answered or not), or its
+  progress comment updated more than PARK_SUPERSESSION_GRACE_SECONDS after the basis whose phase reads
+  resumed and has no word beginning hand unless one begins resum. Only an active dormant lane counts for
+  staleness (its progress age floored at the basis), account limits and `cloudLanes` (where it carries
+  `reopenedAt`, the basis, and `reopenedBy: "builder-activity"`); no dormant lane is in the activity
+  read. A tick that made no comments request, and the deadline timer, decide active from the stored
+  progress snapshot alone, so a lane active only through a note reads inactive there.
 - Cloud endings: the same comments read surfaces, per live started cloud lane, the newest
   comment opening with a `cloud_builder.TERMINAL_HEADERS` header (handback, stop, park),
   created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
@@ -191,6 +207,11 @@ _CLOUD_ACTIVITY_QUERY_TAIL = "} }"
 # A builder edits its progress comment seconds after posting a park; only an edit later than this
 # many seconds after the park, whose phase reads resumed, shows the lane resumed.
 PARK_SUPERSESSION_GRACE_SECONDS = 300
+
+# A dormant lane (a terminal cloud lane the watch keeps after its recorded outcome) is read from its basis,
+# but never from further back than this many seconds before the read: GitHub's `since` filters by
+# `updated_at`, so a progress comment edited inside the bound is in the read however old it was created.
+DORMANT_LOOKBACK_SECONDS = 86400
 
 BUILDER_NOTES_ANSWERED_NAME = "builder-notes-answered.json"
 _NOTE_COMMENTS_MAX_PAGES = 10
@@ -604,7 +625,37 @@ def _derive_batch_lanes(
         )
         if reopened is not None:
             live_lanes[lid] = {**info, "reopenedAt": reopened[0], "reopenedBy": reopened[1]}
+            continue
+        basis = _dormant_basis(lid, info, folded["launches"])
+        if basis is not None:
+            # axis: a started, outcome-terminal cloud lane that was not relaunched stays in the watch set as a dormant lane — see bite-proof record i2323_resumed_lane.md
+            live_lanes[lid] = {**info, "dormantSince": basis}
     return all_lanes, live_lanes, True
+
+
+def _dormant_basis(lid, info, launches):
+    """The `dormantSince` epoch of a started, outcome-terminal cloud lane the watch keeps after its outcome, else None.
+
+    The basis is the later of the lane's recorded outcome time and the time of each of its amendments
+    (any kind) that is a finite number. A lane is not dormant when its outcome time or its own reserve
+    time is not a finite number, or when any launch in the ledger, in any batch, was reserved later on
+    the same issue (a relaunch is a new lane). The caller has already ruled out a fix-order reopening.
+    """
+    if not (info.get("place") == ll.PLACE_CLOUD and info.get("started") and info.get("terminal")
+            and info.get("terminalKind") == "outcome"):
+        return None
+    basis, reserved = info.get("terminalTs"), info.get("reservedTs")
+    if not (_finite_number(basis) and _finite_number(reserved)):
+        return None
+    # axis: a lane relaunched on its issue, in any batch, is never resumed — the newer launch is the one watched — see bite-proof record i2323_resumed_lane.md
+    for other_id, other in launches.items():
+        if (other_id != lid and other.get("issue") == info.get("issue")
+                and _finite_number(other.get("reservedTs")) and other["reservedTs"] > reserved):
+            return None
+    for amendment in info.get("amendments") or ():
+        if isinstance(amendment, dict) and _finite_number(amendment.get("ts")):
+            basis = max(basis, amendment["ts"])
+    return basis
 
 
 def _is_cloud_lane(info):
@@ -1676,13 +1727,22 @@ def _note_cutoff(info):
 
 
 def _read_cutoff(info):
-    """The earliest comment the read needs for a lane: a reopened lane's fix order, else its note cutoff."""
-    return info["reopenedAt"] if "reopenedAt" in info else _note_cutoff(info)
+    """The earliest comment the read needs for a lane: a reopened lane's fix order, a dormant lane's basis
+    (never more than DORMANT_LOOKBACK_SECONDS back), else its note cutoff."""
+    if "reopenedAt" in info:
+        return info["reopenedAt"]
+    if "dormantSince" in info:
+        return max(info["dormantSince"], time.time() - DORMANT_LOOKBACK_SECONDS)
+    return _note_cutoff(info)
 
 
 def _in_window(info, key, close):
     """Whether a comment keyed `key` (created epoch, comment id) is in the lane's window: at or after a
-    reopened lane's reopenedAt, and not after its close key (None when the lane has none)."""
+    reopened lane's reopenedAt or a dormant lane's dormantSince, and not after its close key (None when
+    the lane has none)."""
+    # axis: a dormant lane's comments from before its basis are not its own, so an old handback or note never re-fires — see bite-proof record i2323_resumed_lane.md
+    if "dormantSince" in info and key[0] < info["dormantSince"]:
+        return False
     # axis: a reopened lane's comments from before its fix order are not its own, so an old note or ending never re-fires — see bite-proof record wo_2148_fix_order.md
     if "reopenedAt" in info and key[0] < info["reopenedAt"]:
         return False
@@ -1784,6 +1844,73 @@ def _phase_reads_resumed(phase):
     return not any(word.startswith(("park", "stop")) for word in words) or any(
         word.startswith("resum") for word in words
     )
+
+
+# The words that name a lane ending again: handback (handbacks, handbacked), handed (handed back),
+# handover and handoff. A working word that only shares the stem (handling, handler) is not one.
+_HANDED_BACK_WORDS = ("handback", "handed", "handover", "handoff")
+
+
+def _phase_reads_handed_back(phase):
+    """Whether a progress phase has a word naming a handback (handback, handed back, handover, handoff) and
+    none beginning resum. A word that only begins hand, such as handling, does not count."""
+    if not isinstance(phase, str):
+        return False
+    words = re.findall(r"[a-z]+", phase.lower())
+    return any(word.startswith(_HANDED_BACK_WORDS) for word in words) and not any(
+        word.startswith("resum") for word in words
+    )
+
+
+def _dormant_active(info, progress_entry, note_time, ending_time):
+    """Whether a dormant lane (`info` carries `dormantSince`) is active: its newest builder activity at or after
+    its basis is newer than its newest ending at or after the basis, or it has activity and no such ending.
+
+    Activity is a builder note created at or after the basis (answered or not; `note_time` is the lane's newest
+    note's created epoch, else None), or the lane's progress comment (`progress_entry`, else None) updated more
+    than PARK_SUPERSESSION_GRACE_SECONDS after the basis whose phase reads resumed and has no word beginning
+    hand unless one begins resum. `ending_time` is the created epoch of the lane's newest ending comment, else
+    None. A progress edit inside the grace, or one that reads parked, stopped or handed back, is no activity.
+    """
+    basis = info["dormantSince"]
+    activity = None
+    if _finite_number(note_time) and note_time >= basis:
+        activity = note_time
+    if (isinstance(progress_entry, dict) and _finite_number(progress_entry.get("updatedEpoch"))
+            and progress_entry["updatedEpoch"] - basis > PARK_SUPERSESSION_GRACE_SECONDS
+            and _phase_reads_resumed(progress_entry.get("phase"))
+            # axis: a progress edit whose phase reads handed back is the lane ending again, not working again, so it does not make a dormant lane active — see bite-proof record i2323_resumed_lane.md
+            and not _phase_reads_handed_back(progress_entry.get("phase"))):
+        activity = max(activity, progress_entry["updatedEpoch"]) if activity is not None else progress_entry["updatedEpoch"]
+    if activity is None:
+        return False
+    return not (_finite_number(ending_time) and ending_time >= basis) or activity > ending_time
+
+
+def _dormant_active_lanes(comments, watched, progress):
+    """The launch ids of the dormant lanes among `watched` that `_dormant_active` finds active in one comments read."""
+    dormant = {lid for lid, info in watched.items() if "dormantSince" in info}
+    if not dormant:
+        return set()
+    note_times = _cloud_note_times(comments, watched)
+    ending_times = {}
+    for lid, _number, created, _comment, _kind in _cloud_endings(comments, watched):
+        if lid in dormant and created > ending_times.get(lid, float("-inf")):
+            ending_times[lid] = created
+    return {
+        lid for lid in dormant
+        if _dormant_active(watched[lid], progress.get(lid), note_times.get(lid), ending_times.get(lid))
+    }
+
+
+def _dormant_active_from_snapshot(live_lanes, progress):
+    """The launch ids of the dormant lanes in `live_lanes` that `_dormant_active` finds active from the stored
+    progress snapshot alone (a tick that read no comments knows no note or ending)."""
+    progress = progress if isinstance(progress, dict) else {}
+    return {
+        lid for lid, info in live_lanes.items()
+        if "dormantSince" in info and _dormant_active(info, progress.get(lid), None, None)
+    }
 
 
 def _park_superseded(lid, parked_at, progress, note_times):
@@ -1943,18 +2070,21 @@ def _cloud_progress(comments, watched):
     return {lid: entry for lid, (_key, entry) in newest.items()}
 
 
-def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now):
+def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now, active_dormant=frozenset()):
     """The stale cloud lanes after progress comments decide for the lanes that have one.
 
     A lane with a progress comment loses its activity entry and is stale only by the comment's
-    age; every other lane's entry stays. Sorted by launch id.
+    age; every other lane's entry stays. A dormant lane (`dormantSince`) is stale only while it is in
+    `active_dormant`, its progress age floored at its basis. Sorted by launch id.
     """
     # bite-axis: PROGRESS — a lane with a progress comment is stale by that comment alone: a
     # builder inside its stated step is not stale however quiet its GitHub activity, and one past
     # it is stale however fresh the activity.
+    # axis: a dormant lane that is not active is never stale, whatever its old progress comment says — see bite-proof record i2323_resumed_lane.md
     decided = {
         lid: live_lanes[lid] for lid in progress
         if lid in live_lanes and _is_cloud_lane(live_lanes[lid]) and live_lanes[lid].get("started")
+        and ("dormantSince" not in live_lanes[lid] or lid in active_dormant)
     }
     stale = [entry for entry in stale_cloud_launches if entry["launchId"] not in decided]
     for lid in sorted(decided):
@@ -1963,6 +2093,8 @@ def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now):
         # axis: a reopened lane's progress comment ages from its fix order, not from its last edit before it — see bite-proof record wo_2148_fix_order.md
         if _finite_number(decided[lid].get("reopenedAt")):
             updated = max(updated, decided[lid]["reopenedAt"])
+        elif _finite_number(decided[lid].get("dormantSince")):
+            updated = max(updated, decided[lid]["dormantSince"])
         age = now - updated
         if age < 0 or age > entry["expectedSeconds"] + LIVENESS_QUIET_WINDOW_SECONDS:
             stale.append({
@@ -1982,9 +2114,13 @@ def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now):
 def _evaluate_cloud_comments(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
     note_state, known_slug=None, slug_cell=None, progress_out=None, closed_out=None, unread_out=None,
-    known_closes=None,
+    known_closes=None, active_out=None,
 ):
     """(notes, cloud_terminals) on live started cloud lanes' issues, from one comments read.
+
+    `active_out` is a one-slot list: when a request was made (complete or partial) its slot is set to the
+    set of dormant lanes `_dormant_active` finds active in what was observed, possibly empty; on every
+    return where no request was made the slot is left as the caller set it.
 
     Notes are unanswered builder notes by comment id; terminals are the lanes whose newest
     ending comment is a handback, stop or park not recorded answered. `progress_out` is a one-slot
@@ -2027,8 +2163,11 @@ def _evaluate_cloud_comments(
         degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
         # axis: only a request that came back partial names the issues it left unread, never a tick that made none — see bite-proof record wo_2148_fix_order.md
         _record_unread(unread_out, watched)
+    observed_progress = _cloud_progress(comments, watched)
     if isinstance(progress_out, list) and progress_out:
-        progress_out[0] = _cloud_progress(comments, watched)
+        progress_out[0] = observed_progress
+    if isinstance(active_out, list) and active_out:
+        active_out[0] = _dormant_active_lanes(comments, watched, observed_progress)
     path = _answered_notes_path(repo_root, env, create=False)
     answered =_load_answered_notes(path)[0] if path is not None else set()
     # axis: a partial read filters notes and endings by the closes a complete read showed, never by an empty map — see bite-proof record wo_2148_fix_order.md
@@ -2108,8 +2247,11 @@ def note_answered(repo_root, comment_id, *, env=None):
         }
 
 
-def _cloud_lanes_payload(live_lanes, cloud_state=None, progress_state=None):
+def _cloud_lanes_payload(live_lanes, cloud_state=None, progress_state=None, active_dormant=frozenset()):
     """The `cloudLanes` result key for a batch's live cloud lanes; {} when there are none.
+
+    A dormant lane (`dormantSince`) is listed only while it is in `active_dormant`; its entry carries
+    `reopenedAt` (its basis, UTC ISO) and `reopenedBy: "builder-activity"`.
 
     A lane whose activity was read carries `activityAgeSeconds`; a failed read leaves it out. A
     started lane with a progress comment carries `phase`, `progressAgeSeconds` and
@@ -2123,19 +2265,26 @@ def _cloud_lanes_payload(live_lanes, cloud_state=None, progress_state=None):
     for lid, info in sorted(live_lanes.items()):
         if not _is_cloud_lane(info):
             continue
+        dormant = "dormantSince" in info
+        if dormant and lid not in active_dormant:
+            continue
         entry = {
             "launchId": lid,
             "issue": info.get("issue"),
             "cloudSessionName": info.get("cloudSessionName"),
             "cloudSessionId": info.get("cloudSessionId"),
         }
-        if _finite_number(info.get("reopenedAt")):
+        if dormant:
+            reopened_at, reopened_by = info["dormantSince"], "builder-activity"
+        else:
+            reopened_at, reopened_by = info.get("reopenedAt"), info.get("reopenedBy")
+        if _finite_number(reopened_at):
             try:
                 entry["reopenedAt"] = datetime.fromtimestamp(
-                    info["reopenedAt"], tz=timezone.utc).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
+                    reopened_at, tz=timezone.utc).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
             except (ValueError, OverflowError, OSError):
                 pass
-            entry["reopenedBy"] = info.get("reopenedBy")
+            entry["reopenedBy"] = reopened_by
         activity_time = (
             cached.get(info.get("issue")) if _valid_issue_number(info.get("issue")) else None
         )
@@ -2915,6 +3064,11 @@ def _evaluate_tick(
     # The read is local and cheap, so it runs on every tick, whether or not a higher lane event is due.
     limited_accounts = _limited_accounts(repo_root, live_lanes, env)
     limited_lanes = {lid for account in limited_accounts for lid in account["launchIds"]}
+    # Which dormant lanes are active: the stored progress snapshot decides, until a comments read that
+    # made a request decides from what it observed.
+    active_dormant = _dormant_active_from_snapshot(
+        live_lanes, progress_state[0] if progress_state is not None else None,
+    )
 
     lane_event_due = _higher_precedence_lane_event_due(
         terminal_launches,
@@ -2981,8 +3135,10 @@ def _evaluate_tick(
             activity_deadline = cloud_now + max(
                 (cloud_deadline - cloud_now) / 2, _MIN_PR_POLL_SECONDS,
             )
+        # A dormant lane's notes, endings and progress come only from the comments read below.
         stale_cloud_launches = _evaluate_cloud_activity(
-            repo_root, live_lanes, deadline=activity_deadline, env=env, gh_run=gh_run,
+            repo_root, {lid: info for lid, info in live_lanes.items() if "dormantSince" not in info},
+            deadline=activity_deadline, env=env, gh_run=gh_run,
             monotonic=monotonic, degraded=degraded, cloud_state=cloud_state,
             known_slug=repo_slug, slug_cell=slug_cell,
         )
@@ -2996,6 +3152,7 @@ def _evaluate_tick(
             )
         progress_out = [None]
         closed_out = [None]
+        active_out = [None]
         # Stored closes ({launch id: (the reopenedAt it was closed at, its close epoch, its ending kind)})
         # hold only for the reopening they were read at: a newer fix order starts a new window.
         stored_closes = closed_state[0] if closed_state is not None else None
@@ -3010,7 +3167,10 @@ def _evaluate_tick(
             monotonic=monotonic, degraded=degraded, note_state=note_state,
             known_slug=repo_slug, slug_cell=slug_cell, progress_out=progress_out,
             closed_out=closed_out, unread_out=unread_out, known_closes=known_closes,
+            active_out=active_out,
         )
+        if active_out[0] is not None:
+            active_dormant = active_out[0]
         # bite-axis: NOTE IGNORE — a note named by launch id and comment id is dropped here, before
         # the event context is built; every other note, and every other event, is untouched.
         if ignore_notes:
@@ -3030,7 +3190,7 @@ def _evaluate_tick(
         # bite-axis: PROGRESS — the progress comments the same read observed replace the activity
         # verdict for their lanes before the stale set joins the tick's.
         stale_cloud_launches = _apply_cloud_progress(
-            stale_cloud_launches, live_lanes, progress, time.time(),
+            stale_cloud_launches, live_lanes, progress, time.time(), active_dormant,
         )
         # A complete read replaces the stored closes ({launch id: (the reopenedAt it was closed at, the
         # close's created epoch, its ending kind)}); a tick without one keeps those whose lane has not
@@ -3070,7 +3230,18 @@ def _evaluate_tick(
         # set before the event is built, so it is reported and seen by alsoObserved.
         terminal_launches.extend(cloud_terminals)
 
-    cloud_payload = _cloud_lanes_payload(live_lanes, cloud_state, progress_state)
+    # A dormant lane that is not active is not watched: no account reports it limited, on a tick that
+    # read the comments or one that did not.
+    limited_accounts = [
+        dict(account, launchIds=kept)
+        for account in limited_accounts
+        for kept in ([
+            lid for lid in account["launchIds"]
+            if "dormantSince" not in live_lanes[lid] or lid in active_dormant
+        ],)
+        if kept
+    ]
+    cloud_payload = _cloud_lanes_payload(live_lanes, cloud_state, progress_state, active_dormant)
     if cloud_payload_out is not None:
         cloud_payload_out.update(cloud_payload)
 
@@ -3137,7 +3308,10 @@ def _timer_at_deadline(
             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
     return _event_result(
         EVENT_TIMER, batch_id, degraded,
-        **_cloud_lanes_payload(live_lanes, cloud_state, progress_state),
+        **_cloud_lanes_payload(
+            live_lanes, cloud_state, progress_state,
+            _dormant_active_from_snapshot(live_lanes, progress_state[0] if progress_state is not None else None),
+        ),
         **_unread_payload(unread or {}),
     )
 

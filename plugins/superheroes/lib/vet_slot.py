@@ -14,7 +14,10 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of thirteen reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of fourteen reasons (``bad-argument``, ``read-failed``,
+``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
+``What's changing, and why`` heading sits above the advisor-vet marker, so the builder's owner half is lost and
+the body is restored from the PR's edit history rather than re-stamped),
 ``markers-invalid``, ``slot-span-foreign-content`` (another ``superheroes:`` marker line
 inside the slot span, which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
 ``disposition-unknown``, ``none-over-list``, ``write-failed``,
@@ -52,6 +55,7 @@ RECEIPT_MARKER = "<!-- superheroes:vet-receipt -->"
 PENDING_MARKER = "<!-- superheroes:pending-proposals -->"
 REASON_STACK_NOT_CAUGHT_UP = "stack-not-caught-up"
 REASON_STACK_LOWER_UNREADABLE = "stack-lower-unreadable"
+REASON_BODY_EMPTIED = "body-emptied"
 FOLLOWUPS_MARKER_NAME = "followups"
 DISPOSITIONS_MARKER_NAME = "dispositions"
 VERBS = ("write", "check", "handback")
@@ -75,6 +79,7 @@ _DATABASE_TOOL_RE = re.compile(
     % "|".join(re.escape(tool) for tool in sorted(DATABASE_TOOLS, key=len, reverse=True)))
 _FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
+_ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6} (.*)$")
 
 
 class _Refusal(Exception):
@@ -149,6 +154,71 @@ def _find_live_standalone_markers(body, marker):
             leading = len(line) - len(line.lstrip())
             found.append(offset + leading)
     return found
+
+
+def _live_heading_offsets(body):
+    """Offsets of the live ATX headings of ``body``, each with its text (marks and closing hashes included).
+
+    Live is outside a code fence (``md_fence``) and outside an HTML comment span: ``<!--`` through the next
+    ``-->``, across lines, a comment never closed running to the end of the body. A ``<!--`` on a fenced line
+    opens no comment; a ``-->`` closes one wherever it sits."""
+    raw = body.splitlines(keepends=True)
+    bare = [line.rstrip("\r\n") for line in raw]
+    inert = md_fence.scan_contexts(bare).inert
+    in_comment = False
+    offset = 0
+    for line, dead, whole in zip(bare, inert, raw):
+        starts_in_comment = in_comment
+        pos = 0
+        while True:
+            if in_comment:
+                at = line.find("-->", pos)
+                if at < 0:
+                    break
+                pos = at + 3
+                in_comment = False
+            else:
+                if dead:
+                    break
+                at = line.find("<!--", pos)
+                if at < 0:
+                    break
+                pos = at + 4
+                in_comment = True
+        heading = _ATX_HEADING_RE.match(line)
+        if heading and not dead and not starts_in_comment:
+            yield offset, heading.group(1)
+        offset += len(whole)
+
+
+def _heading_key(text):
+    """A heading's text lower-cased, U+2019 as ``'``, reduced to letters, digits and single spaces."""
+    kept = "".join(ch for ch in text.lower().replace("’", "'") if ch.isalnum() or ch == " ")
+    return " ".join(kept.split())
+
+
+def check_not_emptied(body):
+    """Refuse ``body-emptied`` when ``body`` is empty or whitespace, or has lost the owner half: no live
+    ``What's changing, and why`` heading sits above the advisor-vet marker (anywhere, when that marker is absent).
+
+    The single chokepoint of the ``write`` path, called before any marker check. A non-string body is left to
+    ``analyze_body``, which refuses it ``read-failed``."""
+    if not isinstance(body, str):
+        return
+    remedy = "; restore the builder's body from the PR's edit history before writing the slot"
+    # axis: an empty or whitespace body refuses body-emptied, not read-failed — see bite-proof record i2323_vet_slot_emptied.md
+    if not body.strip():
+        raise _Refusal("body-emptied", "PR body is empty" + remedy)
+    markers = _find_live_standalone_markers(body, pr_body_regions.REGION_MARKERS["advisor-vet"])
+    limit = min(markers) if markers else len(body) + 1
+    # axis: a heading inside an HTML comment span does not count — see bite-proof record i2323_vet_slot_emptied.md
+    # axis: a heading not above the advisor-vet marker does not count — see bite-proof record i2323_vet_slot_emptied.md
+    held = [at for at, text in _live_heading_offsets(body)
+            if at < limit and _heading_key(text).startswith("whats changing")]
+    # axis: a body with no live owner-half heading above the marker refuses body-emptied, before any marker check — see bite-proof record i2323_vet_slot_emptied.md
+    if not held:
+        raise _Refusal("body-emptied", 'PR body has no "What\'s changing, and why" heading%s%s'
+                       % (" above the advisor-vet marker" if markers else "", remedy))
 
 
 def analyze_body(body):
@@ -411,6 +481,9 @@ def _select_receipt(comments, advisor_login):
 def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
     """The chokepoint: every check, then the result (with ``newBody`` for write)."""
     try:
+        # axis: the evaluate chokepoint refuses an emptied body on write before analyze_body — see bite-proof record i2323_vet_slot_emptied.md
+        if verb == "write":
+            check_not_emptied(body)
         advisor_at, build_at, ids = analyze_body(body)
         if verb == "write":
             check_slot_text(slot_text)
@@ -617,6 +690,8 @@ def _run_verb(verb, pr, repo, slot_file, run):
             check_leftovers(pr, repo, body, _read_comments(run, pr, repo))
         return result
     body = _body_of(payload)
+    if verb == "write":
+        check_not_emptied(body)
     analyze_body(body)
     slot_text = None
     if verb == "write":
