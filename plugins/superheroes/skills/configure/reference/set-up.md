@@ -629,7 +629,10 @@ launching machine's.
 4. **Walk the reviewer sign-in, and confirm it is done.** Run `sign-in`. When `signedIn` is false,
    say its `message`, wait for the owner, and run it again until `signedIn` is true; then say its
    `message`, which confirms the sign-in is in place. The sign-in is done once per machine the pass
-   command runs on, and it comes before the pass command, which cannot work without it.
+   command runs on, and it comes before the pass command, which cannot work without it. Signing in
+   again revokes the token any other project's pass was made from, so renew that project's pass too.
+   A pass reaches only cloud sessions that start after it is pasted; for what that means for a parked
+   lane, see `skills/showrunner/reference/orchestration.md` § Lapsed-pass parks and the send-back.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"

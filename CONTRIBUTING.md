@@ -99,12 +99,40 @@ Skills must work on both Claude Code and Codex. A few hard rules:
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
   ```
-  Then use `$ROOT_DIR` for all bundled-helper paths. Both hosts set the variable for plugin
+  Then use `${ROOT_DIR}` for all bundled-helper paths. Both hosts set the variable for plugin
   hooks (Codex as a compatibility alias of `PLUGIN_ROOT`); in skill text the model resolves it
   (CONVENTIONS §7.4), and in Bash commands it does not expand — that layer is tracked in
   [#93](https://github.com/zwrose/superheroes/issues/93).
 - **Both `hosts/` maps must stay byte-identical to the repo-root canonical** —
   see RELEASING.md for the release checklist.
+
+## Writing skill text
+
+- **Brace every shell variable.** Write `${VAR}`, never `$VAR`. zsh reads a modifier such
+  as `:h` or `:r` right after an unbraced name (`$VAR:h`) and silently changes the value.
+- **Plain step numbers.** The rule lives in [CONVENTIONS.md](CONVENTIONS.md), in its intro
+  ("Number steps with plain digits").
+- **Markdown that renders.** Put no bare `<word>` outside backticks: the renderer swallows
+  it as an HTML tag, so write `` `<word>` ``. Put no paragraph inside a nested list item: it
+  renders as a code block or breaks the list, so use a sub-bullet or close the list.
+- **Adding a skill: the gate checklist.** CI checks these on a skill
+  (`.github/scripts/validate_skills.py` and `.github/scripts/validate_hosts.py`):
+  1. The frontmatter is strict YAML.
+  2. A skill listed in `eval/skills/registry.json` `bodyCeilings` stays under its body line
+     ceiling, and its description carries the phrases listed in its `requiredPhrases`.
+  3. Every `${CLAUDE_PLUGIN_ROOT}/<path>` citation resolves, and a cited file cites no
+     further file (one hop).
+  4. Every `CONVENTIONS §N` citation names a real section.
+  5. A `reference/*.md` file over 100 lines opens with a Contents heading.
+  6. The combined description size stays below the recorded baseline,
+     `combinedDescriptionChars` in `eval/skills/baseline.json`. That file also carries the
+     known-red set.
+  7. The host-map pointer line is present, and the neutral-language ban from
+     [Multi-host rules](#multi-host-rules) holds (`validate_hosts.py`).
+- **What gates an edit to an existing skill.** A body-only edit is gated by exactly those
+  structural checks, plus any prose-pin test under `plugins/superheroes/lib/tests/` that
+  reads the file. A description or fixture change also owes the activation re-record; see
+  `eval/skills/README.md` § When to run.
 
 ## Be decent
 

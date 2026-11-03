@@ -35,6 +35,20 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **The pin has three limits.** (1) A managed-settings `enabledPlugins` entry for the superheroes id, or a settings entry `"superheroes@inline": false`, makes the host ignore the `--plugin-dir` copy and load the installed one. The intake detector then refuses, but only when the installed copy is this release or later; an installed release older than this one has no detector. (2) A plugin loaded in place from a directory (a local-path marketplace or a development checkout) is pinned to that directory, not to a version: edits to it reach the lane. A copied marketplace install never changes in place (a new version gets a new directory), so for it the directory is the version. (3) A lane that outlives the 14-day cleanup of its old root loses its files (`skills/adopt-version/SKILL.md` step 7 names the risk); when the old root is gone a resume would silently load the installed copy, which is why the resume check above adopts instead.
 - **Unchanged.** The cloud pin hook and the auto-update settings take no part in the lane pin and are not touched by it.
 
+## 0.48.0
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.48.0. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
+
+### Review: the panel artifact's `canaryResult` tolerance is retired
+
+- **Why.** The seat canaries retired in 0.43.0, and the driver kept accepting and ignoring a `canaryResult` key on a panel artifact for artifacts shaped before then. Every consuming project now runs 0.43.0 or later, so the tolerance is gone (keep-or-retire D35).
+- **What changes.** `round_driver.py submit` on a panel phase refuses a legacy-shaped artifact that carries `canaryResult`, naming it among the unknown seat keys. An artifact in the explicit `{"seats": {...}}` shape is unchanged: its top-level keys other than `seats` are not judged.
+- **Replacement.** None: drop the key.
+
 ## 0.47.0
 
 ### Before you upgrade
