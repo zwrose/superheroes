@@ -674,6 +674,57 @@ exit=1
 exit=0
 ```
 
+## G12. The leave-out check for a git-quoted header (`round_driver._attempt_fixer_delta`, `_header_dest_path`)
+
+- **Axis:** a left-out proven copy stays out of the fixer delta whatever its header's form; a git-quoted destination is decoded before the check (review-code session 5 finding, applied by the build session).
+- **Detector:** `test_audit_review_guarded_2341.py::test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta`.
+- **Neutralization:** in a detached probe worktree at `418d4a51`, `if _header_dest_path(header) in leave_out:` became `if False:`, so no two-path or quoted header is ever left out.
+- **Note:** G10 and G11 above quote the neutralizations against the WO-4 form (`named = re.match(...)`); this fix replaced that line with `_header_dest_path`, and the build session re-ran G10 and G11 against the WO-4 head `a9484d69` before it.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta ___
+
+tmp_path = PosixPath('/tmp/pytest-of-root/pytest-27/test_t16_a_left_out_proven_cop0')
+
+    def test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta(tmp_path):
+        # axis: G12 — `leave_out` is honoured for a git-quoted header, so a proven copy never enters the delta
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+        quoted = "pkg/café.py"
+    
+        def fix(repo):
+            _write(repo, quoted, "def cafe():\n    return 1\n")
+            _reword_guide(repo)
+    
+        reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix)
+        delta = RD._attempt_fixer_delta(reviewed_diff, head_diff, leave_out=(quoted,))
+>       assert _headers(delta) == ["diff --git a/%s b/%s" % (GUIDE, GUIDE)]
+E       assert ['diff --git ...303\\251.py"'] == ['diff --git ...ocs/guide.md']
+E         
+E         Left contains one more item: 'diff --git "a/pkg/caf\\303\\251.py" "b/pkg/caf\\303\\251.py"'
+E         Use -v to get more diff
+
+/home/user/wt-2341-probe/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:461: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t16_a_left_out_proven_copy_with_a_quoted_name_stays_out_of_the_delta
+1 failed in 0.33s
+exit=1
+```
+
+- **Restore:** inverse edit (`if False:` back to `if _header_dest_path(header) in leave_out:`).
+- **Restore receipt:** `git status --porcelain` printed nothing; `grep -n` read back `8527:        if _header_dest_path(header) in leave_out:`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 31.46s
+exit=0
+```
+
 ## Not proven
 
 Elements outside the declared set have tests with `# axis:` lines or plain asserts but no neutralization and no red recorded here, so their protection is **unverified by a bite-proof**: the `span <= 0 or span % 2` length guard in `_delta_files` (E-1, E-2, E-4; asserted by `test_t5_an_unreadable_delta_is_never_prose_only` and the `empty-path` case of `test_t12_...`, neither neutralized); the `no`-wins ordering over `review-guarded` (E-i, `test_t6_a_no_on_another_check_wins_over_review_guarded`); the case-insensitive component match; the schema enum (T8); the order's answer token (T9); `yes` answers staying untouched by the new arm (T7).
