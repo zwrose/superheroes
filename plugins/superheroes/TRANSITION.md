@@ -12,13 +12,21 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
-## Unreleased
+## 0.48.0
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.48.0. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
 
 - **After switching.** **A carried finding this session's verifier graded shown wrong now reads fixed when the driver's fixed check proves it, and the `Test lens:` line now counts only the findings raised in the record's own rounds and says how many were carried over from an earlier review; `testLens.findings` no longer includes carried findings and `testLens.carriedFindings` is new.** Nothing is owed: records written before this release render as they did. See [Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings](#review-a-fixed-carried-finding-reads-fixed-and-the-test-lens-line-counts-this-rounds-findings).
+
+### Review: the panel artifact's `canaryResult` tolerance is retired
+
+- **Why.** The seat canaries retired in 0.43.0, and the driver kept accepting and ignoring a `canaryResult` key on a panel artifact for artifacts shaped before then. Every consuming project now runs 0.43.0 or later, so the tolerance is gone (keep-or-retire D35).
+- **What changes.** `round_driver.py submit` on a panel phase refuses a legacy-shaped artifact that carries `canaryResult`, naming it among the unknown seat keys. An artifact in the explicit `{"seats": {...}}` shape is unchanged: its top-level keys other than `seats` are not judged.
+- **Replacement.** None: drop the key.
 
 ### Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings
 

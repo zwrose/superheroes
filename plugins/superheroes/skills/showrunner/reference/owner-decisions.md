@@ -487,6 +487,13 @@ marked ordinal stands in for the proposing vet's ordinal everywhere this contrac
 age stays a subtraction over ordinals and no phantom vet is minted; before
 appending, the session checks the collector for an existing entry covering the same residual and
 **updates that entry in place** rather than adding a second.
+
+GitHub accepts an issue-body edit over 262,144 characters with a 200 answer and saves nothing. So
+after every collector body edit, re-read the issue and check that `updated_at` moved and the body
+holds the edit. When the body nears the limit, archive struck entries first: copy them verbatim
+(number, ordinal, strike line) into a dated archive comment on the collector, confirm the comment
+saved, and only then remove them from the body.
+
 On a project with no vet yet, the append carries ordinal 0, marked non-vet — the first real vet is
 ordinal 1 and the age subtraction proceeds unchanged.
 

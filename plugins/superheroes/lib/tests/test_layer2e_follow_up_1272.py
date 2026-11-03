@@ -29,12 +29,6 @@ def _state_bytes(session_dir):
         return fh.read()
 
 
-def _load_state(session_dir):
-    ok, state = RD.load_state(session_dir)
-    assert ok, state
-    return state
-
-
 def _ledger_by_key(state):
     return {SC.finding_identity_key(e): e
             for e in (state.get("dispositionLedger") or []) if isinstance(e, dict)}
