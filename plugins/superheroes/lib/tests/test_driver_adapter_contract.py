@@ -58,8 +58,12 @@ def _driver_adapters_seam_members():
 
 
 def _discover_fake_adapters_doubles():
-    """Return (module_filename, FakeAdapters instance) for every adapters double in this directory."""
-    doubles = []
+    """Return (module_filename, FakeAdapters instance) for every adapters double in this directory.
+
+    Always includes the shared helper ``fake_adapters.py`` (the one double the driver-layer tests
+    import), and still scans ``test_*.py`` for any local ``class FakeAdapters`` so a future copy is
+    checked too."""
+    doubles = [("fake_adapters.py", _load_test_module("fake_adapters.py").FakeAdapters())]
     for filename in sorted(os.listdir(_HERE)):
         if not filename.startswith("test_") or not filename.endswith(".py"):
             continue

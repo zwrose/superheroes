@@ -12,6 +12,12 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+Switching is the advisor seat moving to the new plugin root. A local lane runs the plugin root its
+advisor launched it on until handback, whatever installs meanwhile, so a running lane never
+switches: it moves to a new version only when the advisor relaunches it after adopting. A
+before-switching step therefore binds the advisor's seat and every lane it launches after
+switching, never a lane already running.
+
 ## Unreleased
 
 ### Before you upgrade
@@ -21,6 +27,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **`vet_slot.py write` refuses a new reason, `body-emptied`, for a PR body that is empty or has lost the builder's owner half; a caller matching on reasons adds it.** Nothing is owed otherwise. See [Vet slot: write refuses a body that lost the owner half](#vet-slot-write-refuses-a-body-that-lost-the-owner-half).
 - **After switching.** **The wave watch keeps a recorded-terminal cloud lane in its watch while it is resumed by builder activity on its issue: its newest unanswered handback, stop or park after its outcome (or its newest ledger amendment) fires `lane-terminal`, and an active resumed lane's `cloudLanes` entry carries `reopenedBy: "builder-activity"`. A caller that reads `reopenedBy` handles the new value.** Nothing is owed otherwise. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
 - **After switching.** **Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded, so a lane you resume is watched; `--ignore-launch` takes a lane out of every path with no sign in the result. Keep it only for a not-ready lane whose fix went to a fresh launch, until its vet is recorded `ready` or `parked-blocker`.** Nothing else is owed. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
+- **After switching.** **A local lane starts on its advisor's own plugin root (`--plugin-dir`) and its prompt names `Advisor plugin version:`; a local lane whose running version differs from that line stops at intake with `lane-plugin-version-mismatch`, a launch file the verb cannot read stops the lane with `lane-version-launch-file-unreadable`, and a local compose on a root with no readable version refuses `compose-plugin-version-unreadable`. Nothing is owed: a lane launched before the switch keeps running as it was.** See [Launcher: a local lane runs its advisor's plugin version](#launcher-a-local-lane-runs-its-advisors-plugin-version).
 
 ### Vet slot: write refuses a body that lost the owner half
 
@@ -35,6 +42,29 @@ A cloud lane recorded terminal no longer leaves the wave watch while builder act
 A caller that reads `reopenedBy` handles the new value; a lane never resumed carries no such member.
 
 Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded: it takes a lane out of every path, the resumed one included, with no sign in the result. The exception is a not-ready lane whose fix went to a fresh launch, whose ignore stays until its vet is recorded `ready` or `parked-blocker`.
+
+### Launcher: a local lane runs its advisor's plugin version
+
+- **The pin.** `lib/launcher.py` `compose_launch`, the one launch chokepoint, starts every local lane (workhorse and detective, plain and adopt) with `--plugin-dir <advisor plugin root>`, the directory holding the running `launcher.py`, and puts the line `Advisor plugin version: <version>` in its prompt, the line a cloud launch carries. A root with no readable manifest version refuses `compose-plugin-version-unreadable`, for a local lane as for a cloud one. A local lane runs its advisor's plugin root from launch through handback.
+- **The detector.** A local lane whose prompt carries that line runs `python3 -B "<plugin root>/lib/launcher.py" lane-version --launch-file <file>` at intake, before any spend. Exit 1 with reason `lane-plugin-version-mismatch` is a stop: the lane posts the verb's `comment` on the issue and stops. The comment reads "This lane runs plugin {running}; its launch named plugin {launched}. I built nothing. The advisor relaunches the lane once its seat and this machine agree on the version." A launch file the verb cannot read (missing, or not UTF-8) exits 1 with reason `lane-version-launch-file-unreadable` and its own `comment`, which the lane posts the same way: "This lane could not read its launch prompt file, so it could not check its plugin version. I built nothing. The advisor relaunches the lane." A prompt with no such line (typed by hand) is admitted.
+- **A live lane is not moved by an install.** The host's plugin-loading reference ([code.claude.com/docs/en/plugins/loading](https://code.claude.com/docs/en/plugins/loading)) says: "Changes to settings or to disk don't reach this layer until you run `/reload-plugins` or start a new session." It says: "The running session keeps the versions it loaded". And of a replaced version it says: "It removes that directory in a background cleanup 14 days later, so a session that already loaded the old version keeps running." The one in-place reload the host documents is for `command`-source plugins; superheroes is a relative-path marketplace plugin, so it does not apply. A `--plugin-dir` copy loads in place, so a `/reload-plugins` inside the lane reloads the same directory. A lane switches version only when the advisor relaunches it after adopting.
+- **Resume.** The host requires `--plugin-dir` again on `claude --resume`; a resume without it loads whatever version is installed on the machine at resume. The resume command carries `--plugin-dir <the lane's recorded plugin root>`, read from the `argv` in the lane's `reserved` ledger record (`rubric/launch-doctrine.md` § Recovery). Check before every resume: run `python3 -B "<the lane's recorded plugin root>/lib/launcher.py" lane-version --launch-file <a file holding the lane's launch prompt>`, the launch prompt being the `-p` value in that same `argv`. When the recorded root is missing, the file cannot be read, or the verb exits 1, adopt (a fresh launch) instead of resuming. Claude Code skips a `--plugin-dir` path that does not exist, with a warning, and loads the installed copy, and a resumed lane never re-runs intake, so nothing else would catch the swap.
+- **The pin has three limits.** (1) A managed-settings `enabledPlugins` entry for the superheroes id, or a settings entry `"superheroes@inline": false`, makes the host ignore the `--plugin-dir` copy and load the installed one. The intake detector then refuses, but only when the installed copy is this release or later; an installed release older than this one has no detector. (2) A plugin loaded in place from a directory (a local-path marketplace or a development checkout) is pinned to that directory, not to a version: edits to it reach the lane. A copied marketplace install never changes in place (a new version gets a new directory), so for it the directory is the version. (3) A lane that outlives the 14-day cleanup of its old root loses its files (`skills/adopt-version/SKILL.md` step 7 names the risk); when the old root is gone a resume would silently load the installed copy, which is why the resume check above adopts instead.
+- **Unchanged.** The cloud pin hook and the auto-update settings take no part in the lane pin and are not touched by it.
+
+## 0.48.0
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.48.0. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
+
+### Review: the panel artifact's `canaryResult` tolerance is retired
+
+- **Why.** The seat canaries retired in 0.43.0, and the driver kept accepting and ignoring a `canaryResult` key on a panel artifact for artifacts shaped before then. Every consuming project now runs 0.43.0 or later, so the tolerance is gone (keep-or-retire D35).
+- **What changes.** `round_driver.py submit` on a panel phase refuses a legacy-shaped artifact that carries `canaryResult`, naming it among the unknown seat keys. An artifact in the explicit `{"seats": {...}}` shape is unchanged: its top-level keys other than `seats` are not judged.
+- **Replacement.** None: drop the key.
 
 ## 0.47.0
 

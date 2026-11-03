@@ -165,7 +165,9 @@ command still runs the interpreters it names. **Provisioning (once per
 machine):** install `uv`, then run `uv python install` from the repo root (it reads
 `.python-version`). Never name an interpreter by path or version in a gate command or an
 order — `validate_python_pin.py` fails CI when an in-repo home does. Run the suite with
-`-n auto` exactly as CI does; the serial run is many times slower. Keep the
+`-n auto` exactly as CI does; the serial run is many times slower. The lib test tree does not
+finish inside one foreground command's time limit even with `-n auto`, so run it
+harness-backgrounded and poll it in the same turn. Keep the
 `-B -X pycache_prefix=…` flags: a same-size, same-second edit — the shape of every
 bite-proof and probe — can otherwise run stale bytecode; the prefix redirects reads and
 writes to a scratch tree. The full suite is CI's receipt; the calibrated local verify
