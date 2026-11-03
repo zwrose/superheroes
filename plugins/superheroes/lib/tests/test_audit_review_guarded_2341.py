@@ -99,7 +99,7 @@ def test_t1_a_prose_only_delta_clears_on_a_review_guarded_answer():
     assert outcome["discharged"] == ["t0"] and outcome["notDischarged"] == []
     assert outcome["reviewGuarded"] == ["t0"] and outcome["reviewGuardRefused"] == []
     assert entry["ruling"] == "discharged"
-    assert entry["reviewGuarded"] == {"answer": "review-guarded", "why": "checked: testWouldFail"}
+    assert entry["reviewGuarded"] == {"answer": audits.REVIEW_GUARDED, "why": "checked: testWouldFail"}
 
 
 def test_t1_a_new_issue_ruling_clears_on_the_same_answer_and_keeps_its_new_issue():
@@ -202,7 +202,7 @@ def test_t6_review_guarded_is_a_fault_on_any_check_but_test_would_fail(name):
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
     result = _guarded(checks=_checks(**{name: audits.REVIEW_GUARDED}))
     fault = audits.audit_checks_fault(result)
-    assert fault is not None and "checks.%s" % name in fault and "review-guarded" in fault, fault
+    assert fault is not None and "checks.%s" % name in fault and audits.REVIEW_GUARDED in fault, fault
     outcome = _fold([result], _target(RUBRIC_MD))
     assert outcome["malformed"] == ["t0"] and outcome["notDischarged"] == ["t0"]
     assert outcome["discharged"] == [] and outcome["reviewGuarded"] == []
@@ -241,10 +241,11 @@ def test_t7_a_yes_answer_clears_whatever_the_delta_touches(files):
 def test_t8_the_strict_schema_lists_the_answer_for_test_would_fail_only():
     schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="ruling")
     checks = schema["properties"]["result"]["properties"]["checks"]["properties"]
-    assert "review-guarded" in checks["testWouldFail"]["properties"]["answer"]["enum"]
-    assert "review-guarded" not in checks["right"]["properties"]["answer"]["enum"]
-    assert "review-guarded" not in checks["brokeNothing"]["properties"]["answer"]["enum"]
-    assert checks["right"]["properties"]["answer"]["enum"] == list(audits.CHECK_ANSWERS)
+    for name in audits.CHECK_NAMES:
+        assert checks[name]["properties"]["answer"]["enum"] == list(audits.check_answers(name))
+    assert audits.REVIEW_GUARDED in checks["testWouldFail"]["properties"]["answer"]["enum"]
+    assert audits.REVIEW_GUARDED not in checks["right"]["properties"]["answer"]["enum"]
+    assert audits.REVIEW_GUARDED not in checks["brokeNothing"]["properties"]["answer"]["enum"]
 
 
 # --- T9 -----------------------------------------------------------------------------------------------------------
