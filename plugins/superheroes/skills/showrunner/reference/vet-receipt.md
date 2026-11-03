@@ -275,8 +275,9 @@ mine" on this PR, so an entry for either holds the PR.
 **`status` is not the test.** A record whose only open lines are leftovers shown to the owner reads `awaits-owner`, and one with a go-ahead for a review that did not run reads `not-reviewed`; either can still be returned as ready. A record that reads `awaits-owner` is read exactly as `not-reviewed`: it says only that every open line is a finding left for the owner, and it clears nothing. A
 record whose finding with a real consequence was decided as craft reads `reviewed` and is held. Read
 the fields the rows name. Any line of `whatIsMissing` that the four rows do not account for is a vet
-finding. The line saying no planned reviewer ran is accounted for when every planned review that did
-not run carries a go-ahead. The line saying CI was pending or none on the final commit is accounted
+finding. The line saying no planned reviewer ran is never accounted for: at least one reviewer runs on
+every PR, and a go-ahead covers a planned reviewer that did not run, never the last one
+(`skills/showrunner/SKILL.md` duty 6). The line saying CI was pending or none on the final commit is accounted
 for once CI is green on that commit now, or, when the final-commit row's receipts-only exception
 lets the record count, once CI is green on the PR's head now. The line saying a finding waits for the owner's decision is
 accounted for when the third row finds that finding shown to the owner. Any other line of
@@ -506,10 +507,13 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/vet_slot.py" write --pr <n> --repo <owner/name> --slot-file <path>
 ```
 
-The command reads the body and the latest vet receipt and checks the read, a non-empty body, both
-the `advisor-vet` and `build-record` markers, the build record's followups marker, and the
-receipt's dispositions marker. It re-reads the body before the push, writes only between the two
-slot markers, and reads the result back. A refusal names its reason (for example
+The command reads the body and the latest vet receipt and checks the read, a non-empty body that
+still holds the builder's owner half (a live `What's changing, and why` heading above the
+`advisor-vet` marker), both the `advisor-vet` and `build-record` markers, the build record's
+followups marker, and the receipt's dispositions marker. It re-reads the body before the push,
+writes only between the two slot markers, and reads the result back. A refusal names its reason
+(for example `body-emptied` (the body is empty or lost the builder's owner half: restore it from
+the PR's edit history, never re-stamp into it),
 `followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`,
 `slot-span-foreign-content` (another `superheroes:` marker, such as the DoD table, sits in the slot
 span and the write would delete it), or `read-failed`) with a detail

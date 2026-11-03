@@ -232,6 +232,8 @@ fast-follow):
 - **The loop stops at 4 rounds, with no ceiling above them, and hands back what is open.** It has
   no stall menu and puts nothing to the owner mid-review. A PR handed back with an open blocker is
   resolved at the vet — a leftover or a send-back — never quietly merged.
+- **A PR no builder made** (a dependency bump, a bot's PR) is reviewed too: the advisor runs its
+  review before the vet, as `skills/showrunner/SKILL.md` duty 6 says.
 
 **And one independent read *after* handback: the advisor's vet.** Review-before-handback checks the
 **code**; the vet checks the **PR** — the last independent read before the owner's one irreversible
@@ -278,7 +280,9 @@ where one exists, and marks a run "reported by the session" where only the sessi
 mixed panel — different seats on different vendors by design — is normal. A planned reviewer that
 did not run is a review that did not run: the PR stays parked until it runs, unless a standing
 ruling of the owner covers the missing review or the owner says in plain words to go ahead without
-it, and the record carries that word.
+it, and the record carries that word. Either go-ahead, a standing ruling or the owner's plain
+words, covers a planned reviewer that did not run, never the last one: at least one reviewer runs
+on every PR (`skills/showrunner/SKILL.md` duty 6).
 
 **The valve.** When the driver cannot continue, the only valve is driver-or-park — never
 driver-or-improvise: park citing the blocker, and never hand-drive the remainder of a loop the
