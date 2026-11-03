@@ -61,6 +61,7 @@ DECISION_KINDS = (
     "second-test-held-again",
     "second-test-unseatable",
     "self-recovery",
+    "slice-seat-recovered",
     "spawned-audit-not-discharged",
     "stall-choice",
     "stall-menu",

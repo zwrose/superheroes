@@ -109,7 +109,7 @@ RUN_STATUSES = ("ran", "timed-out", "not-started")
 RERUN_DECISIONS = ("went-on", "head-moved", "tree-changed", "failed")
 SOURCE_KINDS = ("reviewer", "sweep")
 # The optional account keys the record carries whole, when the account has them.
-_ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare", "provenCopies")
+_ROUND_PARTS = ("rerunChecks", "synthesisRounds", "outsideThisPR", "unreadShare", "sliceRecoveries", "provenCopies")
 
 
 class Refusal(Exception):
@@ -617,6 +617,24 @@ def _unread_fault(u):
     return None if fault is None else f".parts{fault}"
 
 
+def _recovery_fault(x):
+    """Where one slice-seat recovery is malformed, as a path suffix, else None: exactly a seat (a slice seat key), the round and wave
+    it forfeited in, a later wave that re-ran its slice, the later seats of the same lens that were given part of its slice, and the head (a full sha or null)."""
+    if not isinstance(x, dict) or set(x) != {"seat", "round", "wave", "recoveredInWave", "recoveredBy", "commit"}:
+        return ""
+    if not (_nb(x["seat"]) and ":" in x["seat"]):
+        return ".seat"
+    for k in ("round", "wave"):
+        if not (_is_int(x[k]) and x[k] >= 1):
+            return f".{k}"
+    if not (_is_int(x["recoveredInWave"]) and x["recoveredInWave"] > x["wave"]):
+        return ".recoveredInWave"
+    by = x["recoveredBy"]
+    if not (isinstance(by, list) and by and all(_nb(s) for s in by)):
+        return ".recoveredBy"
+    return None if x["commit"] is None or _full_sha(x["commit"]) else ".commit"
+
+
 def _proven_copies_fault(v):
     """Where the proven-copies list is malformed, as a path suffix, else None: a non-empty list of entries with
     exactly a file, a source and a 64-hex sha256, no file twice."""
@@ -828,6 +846,11 @@ def _validate(a):
         fault = _unread_fault(a["unreadShare"])
         # axis: the unread lines are part of the countable lines, and every range is a real span — see bite-proof record c1l1_wo_a_record_seam
         chk(fault is None, f"unreadShare{fault}")
+    if "sliceRecoveries" in a:
+        sv = a["sliceRecoveries"]
+        fault = ".items" if not (isinstance(sv, list) and sv) else _items_fault(sv, _recovery_fault)
+        # axis: a recovery names a slice seat that forfeited, a strictly later wave that re-read it, and who read it — see bite-proof record i2334_slice_recovery
+        chk(fault is None, f"sliceRecoveries{fault}")
     if "provenCopies" in a:
         fault = _proven_copies_fault(a["provenCopies"])
         # axis: a proven copy names its file, its source and a 64-hex checksum the vet can check, each file once — see bite-proof record c1l5b_wo_d_proven_copies
@@ -2372,6 +2395,15 @@ def _unread_line(share):
             + (f" ({100 * unread / countable:.1f}%)" if countable > 0 else "") + ".")
 
 
+def _recovery_line(entries):
+    if not isinstance(entries, list) or not entries:
+        return None
+    return "; ".join(
+        f"Recovered by an unread-part wave: {e['seat']} (round {e['round']}) forfeited in wave {e['wave']}; "
+        f"wave {e['recoveredInWave']} re-ran its slice ({', '.join(e['recoveredBy'])}) on "
+        f"{_short(e['commit']) if e['commit'] else 'an unrecorded commit'}" for e in entries) + "."
+
+
 def _not_checked_line(entries, compact):
     if compact:
         return (f"{_plural(len(entries), 'earlier record', 'earlier records')} could not be checked by code "
@@ -2500,6 +2532,7 @@ def _summary(r, level):
     outside_lines = _outside_lines(r.get("outsideThisPR"), compact)
     proven_lines = _proven_copies_lines(r.get("provenCopies"), compact)
     unread_line = _unread_line(r.get("unreadShare"))
+    recovery_line = _recovery_line(r.get("sliceRecoveries"))
     # the lines that carry reviewer or session text, left out of the claim check by the line objects built here
     quoted_lines = [*findings_lines, *outside_lines, *proven_lines, *([roles_line] if roles_line else [])]
     refused = r.get("refused") or []
@@ -2532,7 +2565,8 @@ def _summary(r, level):
         *findings_lines,
         *outside_lines,
         *proven_lines,
-        *([unread_line] if unread_line else [])]
+        *([unread_line] if unread_line else []),
+        *([recovery_line] if recovery_line else [])]
     # The Risk floor line is the one place the lane basis's literal data (area names, sampled changed paths)
     # appears, so it alone is left out of the claim check (the line itself, never a string match), as the JSON
     # block is. Every other line is still checked.

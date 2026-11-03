@@ -59,11 +59,20 @@ Check these in a consuming project when it adopts 0.48.0. Each step names the no
 
 - **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
 
+- **After switching.** **Nothing is owed: a sliced review whose forfeited slice seat a later unread-part wave re-read now certifies instead of ending cannot-certify, and its review record names the recovery in a new optional sliceRecoveries part.** See [Review: a forfeited slice seat re-read by an unread-part wave counts as recovered](#review-a-forfeited-slice-seat-re-read-by-an-unread-part-wave-counts-as-recovered).
+
 ### Review: the panel artifact's `canaryResult` tolerance is retired
 
 - **Why.** The seat canaries retired in 0.43.0, and the driver kept accepting and ignoring a `canaryResult` key on a panel artifact for artifacts shaped before then. Every consuming project now runs 0.43.0 or later, so the tolerance is gone (keep-or-retire D35).
 - **What changes.** `round_driver.py submit` on a panel phase refuses a legacy-shaped artifact that carries `canaryResult`, naming it among the unknown seat keys. An artifact in the explicit `{"seats": {...}}` shape is unchanged: its top-level keys other than `seats` are not judged.
 - **Replacement.** None: drop the key.
+
+### Review: a forfeited slice seat re-read by an unread-part wave counts as recovered
+
+- **Outcome.** In a sliced round 1, a slice seat (for example `code-reviewer:s2`) that forfeited and whose whole slice a later unread-part wave gave to seats of the same lens, and those seats read by their own well-formed read lists, no longer leaves the panel incomplete. A session that ended `cannot-certify` for that reason now converges, with certification shape `audited-chain` (not `full-panel-confirmed`: the forfeit stays in the history, in `seatStatus` and `missingSeats`). A forfeit in the last wave, a whole-change seat's forfeit (including `premortem-reviewer:w2`), a wave whose seat of the lens returned a malformed read list, and a wave with no read evidence on record are never recovered.
+- **New decision kind.** `slice-seat-recovered`, recorded once when the last wave folds, naming each recovered seat, its wave and the later seats of the same lens that were given part of its slice. The session state carries the entries as `sliceRecoveries`.
+- **Review record.** A new optional part, `sliceRecoveries` (`[{seat, round, wave, recoveredInWave, recoveredBy, commit}]`), shows exactly when the account carries it, and the summary gains one `Recovered by an unread-part wave:` line. The recovered seat is no longer listed as a review that did not run (`missingReviews`).
+- **Older records.** A record without the part reads as before, and a saved session without the new read evidence gets no recovery.
 
 ## 0.47.0
 
