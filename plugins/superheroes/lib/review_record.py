@@ -1330,13 +1330,32 @@ def _is_test_lens_row(v):
         and round_phases.seat_lens(seat) == "test-role"
 
 
-def _test_lens(reviewers, findings, final_sha):
+def _test_lens(reviewers, findings, final_sha, other=None):
     """The record's test-lens part: whether a test-role reviewer was listed, whether one ran, on which commit, whether
-    that covers the final commit, what calibration it read, and how many findings the test lens raised. The chosen row
+    that covers the final commit, what calibration it read, and how many findings the test lens raised in this
+    record's own rounds. A test-lens finding whose key the earlier record of another session (``other``) lists is
+    carried: it is counted in `carriedFindings` (present only when positive) and never in `findings`. The chosen row
     is the last ran test-lens row that covers the final commit, else the last ran one, else none."""
     rows = [v for v in reviewers if _is_test_lens_row(v)]
+    carried_keys = {_key(i) for i in _record_findings(other)}
+    # axis: the test-lens identities are the lens's own, never only the current rows' names, so a carried finding raised in another round still counts — see bite-proof record i2338_carried_record
+    lens_label = review_seats.dimension_label("test-role")
+
+    def test_lens_finding(f, identities):
+        reviewer = f.get("reviewer")
+        parts = [p.strip() for p in reviewer.split(",")] if isinstance(reviewer, str) else []
+        return _raised_by(reviewer, identities) or any(p == lens_label or _is_test_lens_row({"name": p}) for p in parts)
+
+    def split(identities):
+        mine = [f for f in findings if test_lens_finding(f, identities)]
+        key = session_contract.FINDING_KEY_FIELD
+        carried = [f for f in mine if f.get(key) is not None and f.get(key) in carried_keys]
+        return len(mine) - len(carried), len(carried)
+
     if not rows:
-        return {"listed": False}
+        # axis: a carried count rides the not-listed part too, so the line can say it — see bite-proof record i2338_carried_record
+        carried = split(set())[1]
+        return {"listed": False, **({"carriedFindings": carried} if carried else {})}
     ran = [v for v in rows if v["ran"] != "not-run"]
     covering = [v for v in ran if v["coversFinalCommit"] is True]
     # axis: the chosen row is the last one covering the final commit, not the first row that ran — see bite-proof record wo_b_2311_record_calibration
@@ -1348,13 +1367,17 @@ def _test_lens(reviewers, findings, final_sha):
         lens = round_phases.seat_lens(seat)
         identities.update((v["name"], seat, lens, review_seats.dimension_label(lens)))
     identities.discard(None)
+    own, carried = split(identities)
     part = {"listed": True, "ran": bool(ran),
             "ranFrom": chosen["ran"] if chosen else None,
             "row": chosen["name"] if chosen else None,
             "commit": (chosen["commit"] or final_sha) if chosen else None,
             "coversFinalCommit": bool(chosen and chosen["coversFinalCommit"]),
             "calibrationRead": [dict(e) for e in chosen["calibrationRead"]] if chosen and "calibrationRead" in chosen else None,
-            "findings": sum(1 for f in findings if _raised_by(f.get("reviewer"), identities))}
+            # axis: the own count leaves out every carried finding, so a round that raised nothing reads zero — see bite-proof record i2338_carried_record
+            "findings": own}
+    if carried:
+        part["carriedFindings"] = carried
     # a carried row covers the final commit without having run on it: the part says so, and the line reads "carried from"
     if chosen and isinstance(chosen.get("carried"), dict):
         part["carried"] = {"commit": chosen["carried"].get("commit")}
@@ -1576,13 +1599,34 @@ def _recheck_decisions(findings, sources):
     return out, changes
 
 
-def _recheck_carried(findings, checks, prior, head, is_ancestor):
-    """Re-check each left-for-owner or undecided finding a carried check names against the record's final commit `head`.
-    A finding moves to fixed only on a `fixed` entry for a finding carried from `prior`, checked on `head`, whose
-    fix commit is in `head`'s history (is_ancestor exactly True); every other case keeps its outcome, with the
-    reason saying why. A finding is never removed. Returns the findings and one row per entry."""
-    earlier = prior.get("findings") if isinstance(prior, dict) else None
-    stored = {_key(i) for i in earlier if isinstance(i, dict)} if isinstance(earlier, list) else set()
+def _earlier_session_record(prior, history, session_id):
+    """The record of another session that the carried facts are read against: the first of `prior`, then `history`
+    newest first, that is a record whose `sessionId` differs from ``session_id``; None when there is none. A rewrite of
+    this session's own record therefore looks past it to the record that session carried from."""
+    for rec in (prior, *reversed(list(history or ()))):
+        # axis: the earlier record is the latest one of ANOTHER session, so a same-session rewrite looks past its own record — see bite-proof record i2338_carried_record
+        if isinstance(rec, dict) and rec.get("sessionId") != session_id:
+            return rec
+    return None
+
+
+def _record_findings(rec):
+    """The finding objects of a record; a record whose `findings` is not a list holds none."""
+    found = rec.get("findings") if isinstance(rec, dict) else None
+    return [i for i in found if isinstance(i, dict)] if isinstance(found, list) else []
+
+
+def _recheck_carried(findings, checks, prior, head, is_ancestor, other=None):
+    """Re-check each left-for-owner, undecided or shown-wrong finding a carried check names against the record's final
+    commit `head`. A finding moves to fixed only on a `fixed` entry for a finding carried from `prior`, checked on
+    `head`, whose fix commit is in `head`'s history (is_ancestor exactly True); a shown-wrong finding also needs its
+    own verifier wrong grade, must be listed by ``other`` (the earlier record of another session; its own session's
+    record never makes it carried) and must not be listed shown-wrong there.
+    Every other case keeps its outcome, with the reason saying why. A finding is never removed. Returns the findings
+    and one row per entry."""
+    stored = {_key(i) for i in _record_findings(prior)}
+    shown_before = {_key(i) for i in _record_findings(other) if i.get("outcome") == _SHOWN_WRONG}
+    other_keys = {_key(i) for i in _record_findings(other)}
     out, rows = [], []
     for f in findings:
         c = next((c for c in checks if c["key"] in (f.get(session_contract.FINDING_KEY_FIELD), f.get("id"))), None)
@@ -1592,15 +1636,25 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
         settled, commit, seen, evidence, old = c["settled"], c.get("commit"), c.get("checkedHead"), c["evidence"], f.get("reason")
         shown, result, why, moved = (head or "unknown")[:7], "kept", None, False
         undecided = f.get("outcome") is None
+        # axis: a shown-wrong carried finding enters the same chain as a left-for-owner one, so a fixed check can overrule the grade — see bite-proof record i2338_carried_record
+        shown_wrong = f.get("outcome") == _SHOWN_WRONG
+        grade = f.get("grade")
         # axis: an undecided carried finding is re-checked by the same chain as a left-for-owner one, never by anything weaker — see bite-proof record i2321_undecided_carried
-        if f.get("outcome") != _LEFT_FOR_OWNER and not undecided:
+        if f.get("outcome") != _LEFT_FOR_OWNER and not undecided and not shown_wrong:
             result, why = "unchanged", "not left for the owner"
+        # axis: a shown-wrong finding moves only with this session's own verifier wrong grade, never one inherited by repeat or graded otherwise — see bite-proof record i2338_carried_record
+        elif shown_wrong and not (isinstance(grade, dict) and grade.get("verdict") == "wrong"):
+            result, why = "unchanged", "shown wrong without this session's verifier grade"
+        # axis: a finding the earlier record of another session already lists shown-wrong is never moved — see bite-proof record i2338_carried_record
+        elif shown_wrong and _key(f) in shown_before:
+            result, why = "unchanged", "shown wrong in the earlier record"
         elif settled == "applies":
             why = f"the check found it still applies: {evidence}"
         elif settled == "unsettled":
             why = f"the check could not settle it: {evidence}"
         # axis: a finding is marked fixed only if it was carried from the earlier record — see bite-proof record wo_b_1933_carried-recheck
-        elif _key(f) not in stored:
+        # axis: a shown-wrong finding counts as carried only when the earlier record of another session lists it, never on this session's own record — see bite-proof record i2338_carried_record
+        elif _key(f) not in (other_keys if shown_wrong else stored):
             why = "not carried from an earlier record"
         # axis: a check counts only for the commit the record names as final, so a head that moved after it keeps the finding — see bite-proof record wo_b_1933_carried-recheck
         elif seen != head:
@@ -1616,13 +1670,15 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor):
             result = "fixed"
             reason = (f"fixed after its review at {commit[:7]}: {evidence} "
                       f"(checked against the final commit {shown} when this record was written)")
+            if shown_wrong:
+                reason += "; this session's verifier graded it shown wrong, and the fixed check overrules that grade"
             out.append(dict(f, outcome="fixed", reason=f"{reason}; earlier: {old}" if old else reason))
         elif result == "kept":
             # axis: a kept reason never claims the final commit unless the check ran on it
             on = ("a check on no named commit" if seen is None else "a check" if moved
                   else "a check against the final commit" if seen == head
                   else f"a check on {seen[:7]} (not the final commit {shown})")
-            kept = f"{on} kept it {'open' if undecided else 'for the owner'}: {why}"
+            kept = f"{on} kept it {'open' if undecided else 'shown wrong' if shown_wrong else 'for the owner'}: {why}"
             out.append(dict(f, reason=f"{old}; {kept}" if old else kept))
         else:
             out.append(f)
@@ -1711,8 +1767,10 @@ def build_record(account, readers, prior=None, history=()):
             missing.append({"name": v["name"], "goAhead": good})
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
     findings, rechecks = _recheck_decisions(findings, sources)
+    earlier_other = _earlier_session_record(prior, history, a["sessionId"])
     findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], prior, fc["sha"],
-                                              lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head))
+                                              lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head),
+                                              earlier_other)
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
@@ -1739,7 +1797,7 @@ def build_record(account, readers, prior=None, history=()):
         **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
         "ci": ci, "reviewers": reviewers,
         # axis: the test-lens part is computed from the credited reviewer rows and the record's findings, never from the account's own claim — see bite-proof record wo_b_2311_record_calibration
-        "testLens": _test_lens(reviewers, findings, fc["sha"]),
+        "testLens": _test_lens(reviewers, findings, fc["sha"], earlier_other),
         "findings": findings, "decisionRechecks": rechecks,
         "carriedRechecks": carried_rows,
         "refused": a["refused"], **({"commandRefusals": a["commandRefusals"]} if a["commandRefusals"] else {}),
@@ -2390,10 +2448,14 @@ def _test_lens_line(r):
     # axis: a record written before the test-lens part reads unmeasured, never "did not run" — see bite-proof record wo_b_2311_record_calibration
     if not isinstance(part, dict):
         return "Test lens: unmeasured (the record predates the test-lens part)."
+    carried_n = part.get("carriedFindings")
+    carried_n = carried_n if isinstance(carried_n, int) and not isinstance(carried_n, bool) and carried_n > 0 else 0
+    # axis: the carried clause is worded apart from a carried row ("carried from the earlier review of <sha>") and rides every branch — see bite-proof record i2338_carried_record
+    tail = f"; {_plural(carried_n, 'finding', 'findings')} carried over from an earlier review" if carried_n else ""
     if part.get("listed") is not True:
-        return "Test lens: no test-role reviewer was listed."
+        return f"Test lens: no test-role reviewer was listed{tail}."
     if part.get("ran") is not True:
-        return "Test lens: did not run."
+        return f"Test lens: did not run{tail}."
     # the calibration words are the chosen row's own, so the source label and the words describe the same row
     row = next((v for v in reversed(r["reviewers"]) if v["name"] == part.get("row") and v["ran"] != "not-run"),
                {"ran": part.get("ranFrom"), "calibrationRead": part.get("calibrationRead")})
@@ -2411,8 +2473,10 @@ def _test_lens_line(r):
                 + (", the final commit" if part.get("coversFinalCommit") is True else ", not the final commit"))
     return (head
             + f"; {_calibration_words(row) or 'calibration read: unmeasured'}"
-            + (f"; {_plural(findings, 'finding', 'findings')} raised" if isinstance(findings, int)
-               and not isinstance(findings, bool) else "")
+            + (f"; {_plural(findings, 'finding', 'findings')} raised"
+               + (f" in this round, {_plural(carried_n, 'finding', 'findings')} carried over from an earlier review"
+                  if carried_n else "")
+               if isinstance(findings, int) and not isinstance(findings, bool) else "")
             + ".")
 
 
