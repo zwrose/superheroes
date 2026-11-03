@@ -336,6 +336,10 @@ that is already parked, and a message cannot make that session run its review. T
 fresh session that adopts the pushed branch. Only a session that started after the renewal gets the
 message.
 
+Signing the codex reviewer in again for one project revokes the token another project's pass carries.
+So a re-sign for one project is a renewal owed for every other project on that account. The other
+project's next cloud review answers 401 (`token_revoked`) until its pass is renewed too.
+
 **Tell the owner.** Run `python3 -B <plugin root>/lib/cloud_parked.py notice --repo-root <root> --repo
 <owner/name> --pr <n>` when a cloud lane ends parked, and whenever you read a cloud build's PR (a vet,
 a sweep, a builder's comment) and see the park. Running it once records the PR; running it again is
