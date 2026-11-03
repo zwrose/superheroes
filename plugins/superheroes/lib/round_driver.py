@@ -83,6 +83,7 @@ import panel_tally  # noqa: E402
 import payload_contracts  # noqa: E402
 import review_base_guard  # noqa: E402
 import review_diff_bytes  # noqa: E402
+import review_record  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import risk_areas  # noqa: E402
@@ -5532,6 +5533,82 @@ def _open_unread_wave(state, config, unread, wave, this_wave):
     return True
 
 
+def _check_slice_reads(state, roster, seats, seat_status, wave):
+    """Record, for wave ``wave``, which slice seats that ran returned a malformed read list (judged whole, by the record's own
+    check) and which a well-formed empty one."""
+    malformed, empty = [], []
+    for seat in roster:
+        if not round_phases.is_slice_seat(seat) or seat_status.get(seat) != "run":
+            continue
+        payload = seats.get(seat) if isinstance(seats, dict) else None
+        reads = payload.get("readParts") if isinstance(payload, dict) else None
+        if review_record._items_fault(reads, review_record._part_fault) is not None:
+            malformed.append(seat)
+        elif not reads:
+            empty.append(seat)
+    held = state.get("_sliceReadsChecked")
+    state["_sliceReadsChecked"] = (held if isinstance(held, list) else []) + [
+        {"wave": wave, "malformed": sorted(malformed), "empty": sorted(empty)}]
+
+
+def _slice_recoveries(state, residual):
+    """The slice seats of a sliced round 1 that forfeited and were recovered: every lens obligation of each later wave was handed to
+    that lens's slice seats and read by their own lists, no seat of the lens returned a malformed list, the evidence of each later
+    wave is on record, and the last wave leaves nothing of the lens unread. Decided from state alone; a whole-change seat is never one."""
+    rnd = state["rounds"].get("1")
+    status = rnd.get("seatStatus") if isinstance(rnd, dict) else None
+    plan = state.get("slicePlan")
+    slices = plan.get("slices") if isinstance(plan, dict) else None
+    by_id = {s["id"]: s for s in slices if isinstance(s, dict) and isinstance(s.get("id"), str)} if isinstance(slices, list) else {}
+    checks, waves = state.get("_sliceReadsChecked"), state.get("_sliceWaves")
+    if not isinstance(status, dict) or not isinstance(checks, list) or not all(isinstance(c, dict) for c in checks):
+        return []
+    records = {r.get("wave"): r for r in waves if isinstance(r, dict)} if isinstance(waves, list) else {}
+    last = _slice_wave(state)
+
+    def wave_of(seat):
+        sl = by_id.get(seat.partition(":")[2])
+        wave = sl.get("wave", 1) if sl else None
+        return wave if _is_plain_int(wave) and wave >= 1 else None
+
+    def lens_seats(lens, entries):
+        return [s for s in entries if isinstance(s, str) and round_phases.seat_lens(s) == lens]
+
+    slice_seats = sorted(k for k in status if isinstance(k, str) and round_phases.is_slice_seat(k))
+    out = []
+    for seat in (k for k in slice_seats if status[k] == "missing"):
+        lens, w = round_phases.seat_lens(seat), wave_of(seat)
+        # axis: a forfeit in the last wave, or a lens the last wave still leaves unread, is never recovered — see bite-proof record i2334_slice_recovery
+        if w is None or w >= last or lens_seats(lens, [e.get("seat") for e in residual if isinstance(e, dict)]):
+            continue
+        top, seen = 0, {}
+        for v in range(w + 1, last + 1):
+            seen[v] = [c for c in checks if c.get("wave") == v]
+            rec = records.get(v)
+            unread = rec.get("unread") if isinstance(rec, dict) else None
+            # axis: a later wave with no evidence on record, or whose lens seat returned a malformed list, is never trusted — see bite-proof record i2334_slice_recovery
+            if not seen[v] or not isinstance(unread, list) or any(
+                    not isinstance(c.get("malformed"), list) or lens_seats(lens, c["malformed"]) for c in seen[v]):
+                break
+            owed = slicing.merge_parts([e for e in unread if isinstance(e, dict) and lens_seats(lens, [e.get("seat")])])
+            given = [p for sid, sl in by_id.items() if sl.get("wave", 1) == v and lens + ":" + sid in status
+                     for p in sl.get("parts") or []]
+            # axis: the lens's obligations of each later wave are all inside the parts its slice seats were given — see bite-proof record i2334_slice_recovery
+            if slicing.unread_obligations({"o": owed}, {"o": given}):
+                break
+            top = v if owed else top
+        else:
+            mine = (by_id.get(seat.partition(":")[2]) or {}).get("parts")
+            bare = slicing.unread_obligations({"o": mine}, {"o": []})
+            # axis: only the later seats of the lens given part of the forfeited slice are named — see bite-proof record i2334_slice_recovery
+            by = sorted(k for k in lens_seats(lens, slice_seats) if status[k] == "run" and w < (wave_of(k) or 0) <= top
+                        and not any(k in (c.get("empty") if isinstance(c.get("empty"), list) else []) for c in seen[wave_of(k)])
+                        and slicing.unread_obligations({"o": mine}, {"o": by_id[k.partition(":")[2]].get("parts")}) != bare)
+            if top and by:
+                out.append({"seat": seat, "round": 1, "wave": w, "recoveredInWave": max(wave_of(k) for k in by), "recoveredBy": by})
+    return out
+
+
 def _after_panel_wave(state, config, roster, seats, seat_status, this_wave):
     """Where one panel wave's findings go. On a sliced round 1 whatever the wave's slice seats left unread is cut into slices and
     reviewed in a next wave, up to ``UNREAD_WAVE_BOUND`` waves; what is still unread then, or cannot be cut into a slice, is
@@ -5541,6 +5618,7 @@ def _after_panel_wave(state, config, roster, seats, seat_status, this_wave):
         return
     wave = _slice_wave(state)
     unread = _unread_of_wave(state, roster, seats, seat_status)
+    _check_slice_reads(state, roster, seats, seat_status, wave)
     # axis: the bound stops the waves; one past it would review without end
     if unread and wave < UNREAD_WAVE_BOUND and _open_unread_wave(state, config, unread, wave, this_wave):
         return
@@ -5553,6 +5631,15 @@ def _after_panel_wave(state, config, roster, seats, seat_status, this_wave):
         _decision(state, "unread-after-waves",
                   "%d countable line(s) in %d file(s) of the change were left unread by the slice reviewers after %d panel wave(s)"
                   % (share["unreadLines"], len(share["parts"]), wave))
+    recoveries = _slice_recoveries(state, residual)
+    if recoveries:
+        state["sliceRecoveries"] = recoveries
+        _decision(state, "slice-seat-recovered",
+                  "; ".join("%s forfeited in wave %d and was re-read in wave %d by %s"
+                            % (r["seat"], r["wave"], r["recoveredInWave"], ", ".join(r["recoveredBy"])) for r in recoveries))
+        # axis: the panel stops being incomplete only when every seat it missed is a recovered slice seat — see bite-proof record i2334_slice_recovery
+        if all(m in {r["seat"] for r in recoveries} for m in state["rounds"]["1"].get("missingSeats") or []):
+            state["_incompletePanel"] = False
     state.pop("_sliceWave", None)
     state.pop("_sliceWaveRoster", None)
     # each wave compiles on its own, so a finding two waves both report is merged by its per-location anchor
