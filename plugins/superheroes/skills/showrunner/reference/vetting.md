@@ -200,6 +200,9 @@ comment, your canonical copy, not merely whether the marker is there. A rewrite 
 Re-write your text when any of those holds, and **re-stamp the marker only when it is actually
 gone**. Hand edits before `vet_slot.py write` — re-stamping, pre-contract slot creation, legacy
 follow-up keying — are ruled in the register in `skills/showrunner/reference/vet-receipt.md`.
+Re-stamp a marker only into a body that still holds the builder's sections; a body that lost them
+(the shape a truncated `gh` redirect pushes) is restored from the PR's edit history first, and
+`write` refuses it as `body-emptied`.
 
 ## A gate needs its unlock citation
 

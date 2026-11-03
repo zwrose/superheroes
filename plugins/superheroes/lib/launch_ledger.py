@@ -1328,6 +1328,7 @@ def fold(records):
                 "outcome": None,
                 "terminalKind": None,
                 "terminalIndex": None,
+                "terminalTs": None,
                 "reservedTs": rec["ts"],
                 "reservedIndex": idx,
                 "attempts": 0,
@@ -1501,6 +1502,8 @@ def fold(records):
                 info["terminalKind"] = "outcome"
                 info["outcome"] = rec["outcome"]
                 info["terminalIndex"] = idx
+                # axis: the outcome record's time, which the wave watch takes as the start of a dormant lane's window — see bite-proof record i2323_resumed_lane.md
+                info["terminalTs"] = rec["ts"]
 
     return {"ok": True, "reason": None, "launches": launches,
             "batchDeclarations": batch_declarations}
