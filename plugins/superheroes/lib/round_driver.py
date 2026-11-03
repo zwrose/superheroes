@@ -7625,7 +7625,8 @@ def _audit_result_entry_fault(entry, index, target_ids, targets_by_id=None):
     checks_fault = audits.audit_checks_fault(entry, (targets_by_id or {}).get(rid))
     if checks_fault is not None:
         return ("%s is refused: %s; expected `checks` with `right`, `brokeNothing` and `testWouldFail`, "
-                "each {\"answer\": \"yes\" or \"no\", \"why\": <reason>}" % (where, checks_fault))
+                "each {\"answer\": \"yes\" or \"no\" (`testWouldFail` may also be \"review-guarded\"), "
+                "\"why\": <reason>}" % (where, checks_fault))
     # axis: the optional `places` answer is a list of {file, line, fixed} rows — `audits.place_answers_fault`, the fold's own judge
     places_fault = audits.place_answers_fault(entry)
     if places_fault is not None:

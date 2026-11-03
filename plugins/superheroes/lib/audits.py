@@ -12,6 +12,7 @@ uncertain / malformed / missing ruling collapses to `not-discharged` and is disc
 """
 
 from finding_identity import finding_identity, place_pair as _place_key
+from size_count import is_test_path as _is_test_path
 
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
 
@@ -63,6 +64,76 @@ CHECK_NAMES = ("right", "brokeNothing", "testWouldFail")
 CHECK_ANSWERS = ("yes", "no")
 TEST_MATCH_ANSWERS = ("matches", "weakened")
 
+# The third answer `testWouldFail` may take (#2341): the fix's whole delta is doctrine prose, which
+# the pin rule (rubric/review-discipline.md) forbids pinning with a test, so no test can be asked for.
+REVIEW_GUARDED = "review-guarded"
+
+
+def check_answers(name):
+    """The answers check `name` accepts. The one home of the per-check answer set: the shape judge
+    (`audit_checks_fault`) and the strict-mode schema (`engine_result_channel`) both read it. Only
+    `testWouldFail` may answer `review-guarded`."""
+    if name == "testWouldFail":
+        return CHECK_ANSWERS + (REVIEW_GUARDED,)
+    return CHECK_ANSWERS
+
+
+# Path components that are never doctrine prose, even for a Markdown file: eval graders are scored
+# checks, and fixture or golden files pin rendered text. Compared case-insensitively.
+NON_PROSE_DIR_NAMES = frozenset({
+    "eval", "evals", "graders", "fixtures", "fixture", "golden", "goldens", "snapshots",
+    "__snapshots__", "testdata",
+})
+
+_DIFF_HEADER = "diff --git "
+
+
+def _delta_files(target):
+    """The files the target's driver-built `fixerDelta` names, in order, or None when the delta is
+    absent, not a list, or carries a header that does not read `diff --git a/<f> b/<f>` with the same
+    `<f>` on both sides (fail closed: an unreadable delta is never prose-only)."""
+    delta = target.get("fixerDelta") if isinstance(target, dict) else None
+    if not isinstance(delta, list):
+        return None
+    files = []
+    for line in delta:
+        if not isinstance(line, str) or not line.startswith(_DIFF_HEADER):
+            continue
+        parts = line[len(_DIFF_HEADER):].split(" ")
+        if len(parts) != 2 or not parts[0].startswith("a/") or not parts[1].startswith("b/"):
+            return None
+        if parts[0][2:] != parts[1][2:] or not parts[0][2:]:
+            return None
+        if parts[0][2:] not in files:
+            files.append(parts[0][2:])
+    return files
+
+
+def _is_prose_path(path):
+    normalized = path.replace("\\", "/")
+    # axis: only a Markdown file is prose — see bite-proof record audit_review_guarded_2341
+    if not normalized.lower().endswith(".md"):
+        return False
+    # axis: a Markdown file under a test tree is test material, not doctrine — see bite-proof record audit_review_guarded_2341
+    if _is_test_path(normalized):
+        return False
+    # axis: a Markdown file under an eval, fixture or golden tree is a scored or pinned artifact, not doctrine — see bite-proof record audit_review_guarded_2341
+    return not any(c.lower() in NON_PROSE_DIR_NAMES for c in normalized.split("/")[:-1])
+
+
+def prose_only_delta(target):
+    """`(ok, files)`: `ok` is True only when the target's driver-built `fixerDelta` names at least one
+    file and every file it names is doctrine prose (a Markdown file outside the test trees and the
+    `NON_PROSE_DIR_NAMES` trees); `files` lists the files that are not prose, empty when `ok` and
+    also empty when the delta is absent, unreadable or names no file. The judgment reads the target the
+    driver built, never anything the auditor wrote."""
+    files = _delta_files(target)
+    # axis: an absent, unreadable or empty delta is never prose-only — see bite-proof record audit_review_guarded_2341
+    if not files:
+        return False, []
+    other = [f for f in files if not _is_prose_path(f)]
+    return not other, other
+
 MATCH_SAME = "same"
 MATCH_CHANGED_EXPLAINED = "changed-explained"
 MATCH_CHANGED_UNEXPLAINED = "changed-unexplained"
@@ -96,7 +167,8 @@ def _answered(entry, allowed):
 
 def audit_checks_fault(result, target=None):
     """None when an audit result answers the fix auditor's three checks (`checks.right`,
-    `checks.brokeNothing`, `checks.testWouldFail`, each `{"answer": "yes"|"no", "why": <reason>}`) and,
+    `checks.brokeNothing`, `checks.testWouldFail`, each `{"answer": "yes"|"no", "why": <reason>}`; only
+    `testWouldFail` may also answer `review-guarded`, per `check_answers`) and,
     where `target` carries a `breakIt` whose match is `changed-explained`, the test comparison
     (`testMatch`: `{"answer": "matches"|"weakened", "why": <reason>}`); otherwise a short reason. With
     no target in hand only the `checks` shape is judged. The ONE judge of this shape: the payload
@@ -108,7 +180,8 @@ def audit_checks_fault(result, target=None):
     for name in CHECK_NAMES:
         if name not in checks:
             return "`checks.%s` is missing" % name
-        why = _answered(checks[name], CHECK_ANSWERS)
+        # axis: only `testWouldFail` accepts `review-guarded`; `right` and `brokeNothing` answer yes or no — see bite-proof record audit_review_guarded_2341
+        why = _answered(checks[name], check_answers(name))
         if why is not None:
             return "`checks.%s` %s" % (name, why)
     if break_it_match(target) == MATCH_CHANGED_EXPLAINED:
@@ -315,14 +388,19 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                  an `unnamedChange` records it on its entry as `reportedUnnamedChange`.
 
     Every result answers the three checks (`audit_checks_fault`); one that does not is malformed and
-    not-discharged. A clearing ruling stands only on three `yes` answers. A target carrying `breakIt`
+    not-discharged. A clearing ruling stands only on three `yes` answers, or on `yes` for `right` and
+    `brokeNothing` with `review-guarded` for `testWouldFail` when the target's driver-built `fixerDelta`
+    shows the fix attempt's whole delta is prose (`prose_only_delta`); with any other delta it is
+    not-discharged and listed in `reviewGuardRefused`, and a cleared one is listed in `reviewGuarded`
+    and its entry records `reviewGuarded: {answer, why}`. A target carrying `breakIt`
     is blocked (not-discharged, listed in `testMismatch`) when its `match` is `missing` or
     `changed-unexplained`, or is `changed-explained` and the result's `testMatch` says `weakened`; each
     of its `audits` entries records `testMatch: {match, answer, blocking}`. Only a target that has a
     result is listed in `testMismatch`.
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
-    unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange, testMismatch}. Each `audits` entry
+    unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange, testMismatch,
+    placesUnfixed, placesIgnored, reviewGuarded, reviewGuardRefused}. Each `audits` entry
     carries the EFFECTIVE (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
     are subsets of notDischarged that name WHY the finding could not be certified discharged;
     `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the
@@ -377,6 +455,8 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     test_mismatch = []
     places_unfixed = []
     places_ignored = []
+    review_guarded = []
+    review_guard_refused = []
     allowed_ids = set(i for i in (change_allowed_ids or ()) if isinstance(i, str))
     matched_ids = set()
 
@@ -627,6 +707,27 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                         reason="audit check failed: %s: %s" % failed)
             audits.append(base)
             continue
+        # A clearing ruling whose `testWouldFail` answers `review-guarded` stands only when the fix attempt's
+        # whole delta is doctrine prose, judged from the driver-built `fixerDelta` on the target — never from
+        # anything the auditor wrote. The answer is recorded only once the entry ends cleared.
+        guarded = None
+        if ruling in _CLEARS and r["checks"]["testWouldFail"]["answer"] == REVIEW_GUARDED:
+            prose, others = prose_only_delta(f)
+            # axis: review-guarded clears only a prose-only delta; any other delta folds not-discharged — see bite-proof record audit_review_guarded_2341
+            if not prose:
+                if fid is not None:
+                    not_discharged.append(fid)
+                    review_guard_refused.append(fid)
+                candidates = (_valid_new_issues(r.get("newIssues"), fid)
+                              if ruling == "discharged-but-new-issue" else [])
+                new_issues.extend(candidates)
+                base.update(ruling="not-discharged",
+                            reason=("audit check failed: testWouldFail: review-guarded clears only a fix "
+                                    "whose whole delta is prose; this fix's delta touches %s"
+                                    % (", ".join(others) if others else "no recorded delta")))
+                audits.append(base)
+                continue
+            guarded = {"answer": REVIEW_GUARDED, "why": r["checks"]["testWouldFail"]["why"].strip()}
 
         # A clearing result that names behaviour its finding does not name is accepted only when the
         # finding's ruling allows the change. Provenance (above) keeps its precedence.
@@ -689,6 +790,11 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 audits.append(base)
                 if fid is not None:
                     discharged.append(fid)
+                    # axis: a review-guarded id is listed only once its entry ends cleared — see bite-proof record audit_review_guarded_2341
+                    if guarded is not None:
+                        review_guarded.append(fid)
+                if guarded is not None:
+                    base["reviewGuarded"] = guarded
                 continue
             # reasonless `discharged` is unusable — a bare "fixed" is exactly the unproven claim
             # this fold exists to reject.
@@ -719,6 +825,10 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
                 new_issues.extend(candidates)
                 if fid is not None:
                     discharged.append(fid)
+                    if guarded is not None:
+                        review_guarded.append(fid)
+                if guarded is not None:
+                    base["reviewGuarded"] = guarded
                 continue
             # a discharged-but-new-issue with no usable candidate is an unusable claim.
             if fid is not None:
@@ -774,4 +884,6 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         "testMismatch": test_mismatch,
         "placesUnfixed": places_unfixed,
         "placesIgnored": places_ignored,
+        "reviewGuarded": review_guarded,
+        "reviewGuardRefused": review_guard_refused,
     }

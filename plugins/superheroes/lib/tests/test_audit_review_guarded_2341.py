@@ -1,0 +1,269 @@
+"""#2341: a fix whose whole delta is doctrine prose clears its audit on a `review-guarded` answer.
+
+Pins, each at the place the rule is enforced:
+
+T1  a prose-only delta (Markdown outside the test, eval and fixture trees) clears on `testWouldFail: review-guarded`
+    and is listed in `reviewGuarded`;
+T2  a delta that also touches code folds `not-discharged`, listed in `reviewGuardRefused`, naming the file;
+T3  a Markdown file under a test tree is not prose;
+T4  a Markdown file under an eval grader tree or a fixtures tree is not prose;
+T5  an absent or empty delta is never prose-only;
+T6  `review-guarded` is a fault on `right` and on `brokeNothing`;
+T7  a `yes` answer clears whatever the delta touches (the new arm never reads a `yes`);
+T8  the strict-mode schema lists the answer for `testWouldFail` only;
+T9  the rendered fix-auditor order names the answer token (structure only; no sentence is pinned);
+T10 an id later refused in the same pass is never listed in `reviewGuarded`.
+
+Bite-proof record: audit_review_guarded_2341
+"""
+import os
+import sys
+
+import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.dirname(_HERE)
+for _p in (_HERE, _LIB):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import audits  # noqa: E402
+import engine_result_channel as ERC  # noqa: E402
+import test_round_orders as TRO  # noqa: E402
+
+RUBRIC_MD = "plugins/superheroes/rubric/some-doctrine-2341.md"
+ROOT_MD = "CLAUDE.md"
+LIB_PY = "plugins/superheroes/lib/some_module_2341.py"
+TEST_TREE_MD = "plugins/superheroes/lib/tests/bite_proofs/some_record_2341.md"
+GRADER_MD = "plugins/superheroes/evals/s9-some-scenario/graders/some-grader.md"
+FIXTURE_MD = "plugins/superheroes/lib/fixtures/orders/some-fixture-2341.md"
+
+
+def _delta(*files):
+    """A driver-built `fixerDelta`: per file one `diff --git a/<f> b/<f>` header, then that file's lines."""
+    out = []
+    for name in files:
+        out.append("diff --git a/%s b/%s" % (name, name))
+        out.extend(["--- a/%s" % name, "+++ b/%s" % name, "@@ -1 +1 @@", "-old", "+new"])
+    return out
+
+
+def _checks(**answers):
+    return {name: {"answer": answers.get(name, "yes"), "why": "checked: %s" % name}
+            for name in audits.CHECK_NAMES}
+
+
+def _guarded(**extra):
+    return dict({"id": "t0", "ruling": "discharged", "reason": "the fix resolves it",
+                 "checks": _checks(testWouldFail=audits.REVIEW_GUARDED)}, **extra)
+
+
+def _target(*files, **extra):
+    target = {"id": "t0", "title": "T", "file": "f.py", "line": 1, "auditorVendor": "codex"}
+    if files:
+        target["fixerDelta"] = _delta(*files)
+    target.update(extra)
+    return target
+
+
+def _fold(results, target):
+    return audits.apply_audit_results([target], results, collection_manifest={"t0": "codex"})
+
+
+def _only(outcome):
+    (entry,) = outcome["audits"]
+    return entry
+
+
+def _refused(outcome):
+    entry = _only(outcome)
+    assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
+    assert outcome["reviewGuardRefused"] == ["t0"] and outcome["reviewGuarded"] == []
+    assert entry["ruling"] == "not-discharged" and "reviewGuarded" not in entry
+    assert entry["reason"].startswith(
+        "audit check failed: testWouldFail: review-guarded clears only a fix whose whole delta is prose; "
+        "this fix's delta touches "), entry["reason"]
+    return entry["reason"]
+
+
+# --- T1 -----------------------------------------------------------------------------------------------------------
+
+def test_t1_a_prose_only_delta_clears_on_a_review_guarded_answer():
+    # axis: G1 — the clear arm for a prose-only `review-guarded` result
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    outcome = _fold([_guarded()], _target(RUBRIC_MD, ROOT_MD))
+    entry = _only(outcome)
+    assert outcome["discharged"] == ["t0"] and outcome["notDischarged"] == []
+    assert outcome["reviewGuarded"] == ["t0"] and outcome["reviewGuardRefused"] == []
+    assert entry["ruling"] == "discharged"
+    assert entry["reviewGuarded"] == {"answer": "review-guarded", "why": "checked: testWouldFail"}
+
+
+def test_t1_a_new_issue_ruling_clears_on_the_same_answer_and_keeps_its_new_issue():
+    result = _guarded(ruling="discharged-but-new-issue", newIssues=[{"title": "leak", "file": "f.md", "line": 2}])
+    outcome = _fold([result], _target(RUBRIC_MD))
+    assert outcome["discharged"] == ["t0"] and outcome["reviewGuarded"] == ["t0"]
+    assert _only(outcome)["ruling"] == "discharged-but-new-issue"
+    assert [i["title"] for i in outcome["newIssues"]] == ["leak"]
+
+
+def test_t1_the_why_is_stripped_on_the_entry():
+    result = _guarded()
+    result["checks"]["testWouldFail"]["why"] = "  only prose changed  "
+    outcome = _fold([result], _target(RUBRIC_MD))
+    assert _only(outcome)["reviewGuarded"]["why"] == "only prose changed"
+
+
+def test_t1_a_not_discharged_ruling_with_the_answer_is_accepted_as_is():
+    outcome = _fold([_guarded(ruling="not-discharged", reason="still wrong")], _target(LIB_PY))
+    assert audits.audit_checks_fault(_guarded(ruling="not-discharged")) is None
+    assert outcome["notDischarged"] == ["t0"] and outcome["malformed"] == []
+    assert outcome["reviewGuardRefused"] == [] and outcome["reviewGuarded"] == []
+    assert _only(outcome)["reason"] == "still wrong"
+
+
+# --- T2 -----------------------------------------------------------------------------------------------------------
+
+def test_t2_a_delta_that_touches_code_is_refused_naming_the_file():
+    # axis: G2 — the `.md` extension test
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    reason = _refused(_fold([_guarded()], _target(RUBRIC_MD, LIB_PY)))
+    assert LIB_PY in reason and RUBRIC_MD not in reason
+
+
+def test_t2_a_refused_new_issue_ruling_keeps_its_new_issue():
+    result = _guarded(ruling="discharged-but-new-issue", newIssues=[{"title": "leak"}])
+    outcome = _fold([result], _target(LIB_PY))
+    _refused(outcome)
+    assert [i["title"] for i in outcome["newIssues"]] == ["leak"]
+
+
+# --- T3 -----------------------------------------------------------------------------------------------------------
+
+def test_t3_a_markdown_file_under_a_test_tree_is_not_prose():
+    # axis: G3 — the test-tree test
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    reason = _refused(_fold([_guarded()], _target(TEST_TREE_MD)))
+    assert TEST_TREE_MD in reason
+
+
+# --- T4 -----------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", [GRADER_MD, FIXTURE_MD], ids=["eval-grader", "fixtures"])
+def test_t4_a_markdown_file_under_a_non_prose_tree_is_not_prose(path):
+    # axis: G4 — the non-prose component set
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    assert path.endswith(".md") and not audits._is_test_path(path)
+    reason = _refused(_fold([_guarded()], _target(path)))
+    assert path in reason
+
+
+def test_t4_the_component_match_ignores_case():
+    assert audits.prose_only_delta(_target("plugins/superheroes/Evals/x/Graders/g.MD")) == (
+        False, ["plugins/superheroes/Evals/x/Graders/g.MD"])
+
+
+# --- T5 -----------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("target", [
+    pytest.param(_target(), id="no-fixerDelta-key"),
+    pytest.param(_target(fixerDelta=[]), id="empty-list"),
+    pytest.param(_target(fixerDelta=["+ a line with no header"]), id="no-header-lines"),
+])
+def test_t5_an_absent_or_empty_delta_is_refused_as_no_recorded_delta(target):
+    # axis: G6 — the empty/absent delta refusal
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    reason = _refused(_fold([_guarded()], target))
+    assert reason.endswith("this fix's delta touches no recorded delta")
+
+
+@pytest.mark.parametrize("target", [
+    pytest.param("not a target", id="target-not-a-dict"),
+    pytest.param(None, id="target-none"),
+    pytest.param(_target(fixerDelta="diff --git a/x.md b/x.md"), id="delta-not-a-list"),
+    pytest.param(_target(fixerDelta=["diff --git a/x.md b/y.md"]), id="paths-differ"),
+    pytest.param(_target(fixerDelta=["diff --git x.md x.md"]), id="no-a-b-prefix"),
+    pytest.param(_target(fixerDelta=["diff --git a/x.md b/x.md extra"]), id="extra-token"),
+    pytest.param(_target(fixerDelta=["diff --git a/ b/"]), id="empty-path"),
+    pytest.param(_target(fixerDelta=_delta(RUBRIC_MD) + ["diff --git a/x.md b/z.md"]), id="one-bad-header"),
+])
+def test_t5_an_unreadable_delta_is_never_prose_only(target):
+    assert audits.prose_only_delta(target) == (False, [])
+
+
+# --- T6 -----------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("name", ["right", "brokeNothing"])
+def test_t6_review_guarded_is_a_fault_on_any_check_but_test_would_fail(name):
+    # axis: G5 — the per-check answer set
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    result = _guarded(checks=_checks(**{name: audits.REVIEW_GUARDED}))
+    fault = audits.audit_checks_fault(result)
+    assert fault is not None and "checks.%s" % name in fault and "review-guarded" in fault, fault
+    outcome = _fold([result], _target(RUBRIC_MD))
+    assert outcome["malformed"] == ["t0"] and outcome["notDischarged"] == ["t0"]
+    assert outcome["discharged"] == [] and outcome["reviewGuarded"] == []
+    assert _only(outcome)["reason"] == "audit refused: %s" % fault
+
+
+def test_t6_each_check_has_its_own_answer_set():
+    assert audits.check_answers("right") == audits.CHECK_ANSWERS
+    assert audits.check_answers("brokeNothing") == audits.CHECK_ANSWERS
+    assert audits.check_answers("testWouldFail") == audits.CHECK_ANSWERS + (audits.REVIEW_GUARDED,)
+    assert audits.audit_checks_fault(_guarded()) is None
+
+
+def test_t6_a_no_on_another_check_wins_over_review_guarded():
+    outcome = _fold([_guarded(checks=_checks(right="no", testWouldFail=audits.REVIEW_GUARDED))],
+                    _target(RUBRIC_MD))
+    assert outcome["notDischarged"] == ["t0"] and outcome["reviewGuarded"] == []
+    assert outcome["reviewGuardRefused"] == []
+    assert _only(outcome)["reason"] == "audit check failed: right: checked: right"
+
+
+# --- T7 -----------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("files", [(RUBRIC_MD,), (LIB_PY,), (TEST_TREE_MD,), ()],
+                         ids=["prose-only", "code", "test-tree", "no-delta"])
+def test_t7_a_yes_answer_clears_whatever_the_delta_touches(files):
+    result = _guarded(checks=_checks())
+    outcome = _fold([result], _target(*files))
+    assert outcome["discharged"] == ["t0"] and outcome["notDischarged"] == []
+    assert outcome["reviewGuarded"] == [] and outcome["reviewGuardRefused"] == []
+    assert "reviewGuarded" not in _only(outcome)
+
+
+# --- T8 -----------------------------------------------------------------------------------------------------------
+
+def test_t8_the_strict_schema_lists_the_answer_for_test_would_fail_only():
+    schema = ERC.declared_schema("codex", ERC.RUN_KIND_REVIEW, expected_result_kind="ruling")
+    checks = schema["properties"]["result"]["properties"]["checks"]["properties"]
+    assert "review-guarded" in checks["testWouldFail"]["properties"]["answer"]["enum"]
+    assert "review-guarded" not in checks["right"]["properties"]["answer"]["enum"]
+    assert "review-guarded" not in checks["brokeNothing"]["properties"]["answer"]["enum"]
+    assert checks["right"]["properties"]["answer"]["enum"] == list(audits.CHECK_ANSWERS)
+
+
+# --- T9 -----------------------------------------------------------------------------------------------------------
+
+def test_t9_the_rendered_fix_auditor_order_names_the_answer_token():
+    rendered = TRO._render_golden("dispatch-audits")
+    assert "`%s`" % audits.REVIEW_GUARDED in rendered
+
+
+# --- T10 ----------------------------------------------------------------------------------------------------------
+
+def test_t10_an_id_refused_later_in_the_same_pass_is_not_listed_as_review_guarded():
+    # axis: G7 — the `reviewGuarded` listing only on a final clear
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    outcome = _fold([_guarded(unnamedChange="also reworks the retry policy")], _target(RUBRIC_MD))
+    entry = _only(outcome)
+    assert outcome["unnamedChange"] == ["t0"] and outcome["notDischarged"] == ["t0"]
+    assert outcome["discharged"] == [] and outcome["reviewGuarded"] == []
+    assert entry["ruling"] == "not-discharged" and "reviewGuarded" not in entry
+
+
+def test_t10_a_malformed_field_after_the_gate_leaves_no_listing():
+    outcome = _fold([_guarded(unnamedChange=7)], _target(RUBRIC_MD))
+    assert outcome["malformed"] == ["t0"] and outcome["reviewGuarded"] == []
+    assert "reviewGuarded" not in _only(outcome)
