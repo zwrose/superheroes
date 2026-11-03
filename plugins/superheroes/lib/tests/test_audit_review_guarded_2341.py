@@ -12,7 +12,9 @@ T6  `review-guarded` is a fault on `right` and on `brokeNothing`;
 T7  a `yes` answer clears whatever the delta touches (the new arm never reads a `yes`);
 T8  the strict-mode schema lists the answer for `testWouldFail` only;
 T9  the rendered fix-auditor order names the answer token (structure only; no sentence is pinned);
-T10 an id later refused in the same pass is never listed in `reviewGuarded`.
+T10 an id later refused in the same pass is never listed in `reviewGuarded`;
+T11 a header for a Markdown path that contains a space is read, so the fix clears;
+T12 a header that is not `a/<f> b/<f>` for one non-empty `<f>` still refuses as no readable delta.
 
 Bite-proof record: audit_review_guarded_2341
 """
@@ -29,6 +31,7 @@ for _p in (_HERE, _LIB):
 
 import audits  # noqa: E402
 import engine_result_channel as ERC  # noqa: E402
+import size_count  # noqa: E402
 import test_round_orders as TRO  # noqa: E402
 
 RUBRIC_MD = "plugins/superheroes/rubric/some-doctrine-2341.md"
@@ -153,7 +156,7 @@ def test_t3_a_markdown_file_under_a_test_tree_is_not_prose():
 def test_t4_a_markdown_file_under_a_non_prose_tree_is_not_prose(path):
     # axis: G4 — the non-prose component set
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
-    assert path.endswith(".md") and not audits._is_test_path(path)
+    assert path.endswith(".md") and not size_count.is_test_path(path)
     reason = _refused(_fold([_guarded()], _target(path)))
     assert path in reason
 
@@ -267,3 +270,37 @@ def test_t10_a_malformed_field_after_the_gate_leaves_no_listing():
     outcome = _fold([_guarded(unnamedChange=7)], _target(RUBRIC_MD))
     assert outcome["malformed"] == ["t0"] and outcome["reviewGuarded"] == []
     assert "reviewGuarded" not in _only(outcome)
+
+
+# --- T11 ----------------------------------------------------------------------------------------------------------
+
+SPACED_MD = "plugins/superheroes/rubric/Design Notes 2341.md"
+
+
+def test_t11_a_header_for_a_markdown_path_with_a_space_is_read_and_clears():
+    # axis: G8 — the space-preserving header read
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    target = _target(SPACED_MD)
+    assert target["fixerDelta"][0] == "diff --git a/%s b/%s" % (SPACED_MD, SPACED_MD)
+    outcome = _fold([_guarded()], target)
+    entry = _only(outcome)
+    assert outcome["discharged"] == ["t0"] and outcome["notDischarged"] == []
+    assert outcome["reviewGuarded"] == ["t0"]
+    assert entry["ruling"] == "discharged" and entry["reviewGuarded"] is not None
+
+
+# --- T12 ----------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("header", [
+    pytest.param("diff --git a/my doc.md b/my dox.md", id="different-paths-both-with-spaces"),
+    pytest.param("diff --git a/my doc.md b/my_doc.md", id="space-on-one-side-only"),
+    pytest.param("diff --git a/my doc.md c/my doc.md", id="b-separator-missing"),
+    pytest.param("diff --git a/ b/", id="empty-path"),
+])
+def test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta(header):
+    # axis: G9 — the whole-string equality check
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    target = _target(fixerDelta=[header])
+    assert audits.prose_only_delta(target) == (False, [])
+    reason = _refused(_fold([_guarded()], target))
+    assert reason.endswith("this fix's delta touches no recorded delta")

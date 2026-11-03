@@ -1,6 +1,6 @@
 # Bite-proof record — a prose-only fix clears its audit on a `review-guarded` answer (#2341)
 
-Detector file: `plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py`), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest '<exact node id>' -q -n 0`, one test node each (G4, G5 and G6 name the test function, so its parametrized cases run together), output captured whole, followed by the `exit=` line the command printed. The `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. The seven guarded elements are the seven the order declared; none is grouped. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture; nothing was redacted.
+Detector file: `plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py`), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest '<exact node id>' -q -n 0`, one test node each (G4, G5 and G6 name the test function, so its parametrized cases run together), output captured whole, followed by the `exit=` line the command printed. The `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. The nine guarded elements are the ones the orders declared (G1-G7, then G8 and G9 from the #2345 fix order); none is grouped. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture; nothing was redacted.
 
 The detectors are the tests that carry a `# bite-proof:` line.
 
@@ -451,6 +451,120 @@ exit=1
 exit=0
 ```
 
+## G8. The space-preserving header read (`audits._delta_files`)
+
+- **Axis:** a `diff --git a/<f> b/<f>` header whose Markdown path `<f>` contains a space is read as the one file `<f>`, so a prose-only fix to such a file still clears (code-001 on PR #2345).
+- **Detector:** `test_audit_review_guarded_2341.py::test_t11_a_header_for_a_markdown_path_with_a_space_is_read_and_clears`.
+- **Neutralization:** the length-based read in `_delta_files` (`rest = line[len(_DIFF_HEADER):]` through `files.append(path)`) was put back to the base split-on-space form: `parts = line[len(_DIFF_HEADER):].split(" ")` with its two-token check, the `a/`/`b/` prefix check, the equal-and-non-empty check and `files.append(parts[0][2:])`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_t11_a_header_for_a_markdown_path_with_a_space_is_read_and_clears _____
+
+    def test_t11_a_header_for_a_markdown_path_with_a_space_is_read_and_clears():
+        # axis: G8 — the space-preserving header read
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+        target = _target(SPACED_MD)
+        assert target["fixerDelta"][0] == "diff --git a/%s b/%s" % (SPACED_MD, SPACED_MD)
+        outcome = _fold([_guarded()], target)
+        entry = _only(outcome)
+>       assert outcome["discharged"] == ["t0"] and outcome["notDischarged"] == []
+E       AssertionError: assert ([] == ['t0']
+E         
+E         Right contains one more item: 't0'
+E         Use -v to get more diff)
+
+/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:287: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t11_a_header_for_a_markdown_path_with_a_space_is_read_and_clears
+1 failed in 0.58s
+exit=1
+```
+
+- **Restore:** inverse edit (the split-on-space block replaced by the length-based read again).
+- **Restore receipt** (Grep, `rest = |span|path = rest|rest != |split\(" "\)`; the length-based lines are back, no `split(" ")` left):
+
+```
+101:        rest = line[len(_DIFF_HEADER):]
+104:        span = len(rest) - 5
+105:        if span <= 0 or span % 2:
+107:        path = rest[2:2 + span // 2]
+108:        if rest != "a/" + path + " b/" + path:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.90s
+exit=0
+```
+
+## G9. The whole-string equality check (`audits._delta_files`)
+
+- **Axis:** a header is read only when the whole text after `diff --git ` equals `"a/" + <f> + " b/" + <f>`; any other header makes the delta unreadable (fail closed).
+- **Detector:** `test_audit_review_guarded_2341.py::test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta` (four cases).
+- **Neutralization:** `if rest != "a/" + path + " b/" + path:` became `if False:`, so any header of the right length whose first half parses is accepted.
+- **Cases that go red:** `different-paths-both-with-spaces`, `space-on-one-side-only`, `b-separator-missing`. **`empty-path` stays green** under this neutralization: `diff --git a/ b/` leaves five characters, so the earlier `span <= 0` test (E-4) refuses it before the comparison runs. That case is guarded by the `span <= 0` line, which this entry does not neutralize.
+
+**Raw red** (exit 1; the three failure bodies differ only in the header, so the first is quoted whole and the other two are cut to their header and assertion lines, about 1.5 KiB elided):
+
+```
+FFF.                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta[different-paths-both-with-spaces] _
+
+header = 'diff --git a/my doc.md b/my dox.md'
+
+    @pytest.mark.parametrize("header", [
+        pytest.param("diff --git a/my doc.md b/my dox.md", id="different-paths-both-with-spaces"),
+        pytest.param("diff --git a/my doc.md b/my_doc.md", id="space-on-one-side-only"),
+        pytest.param("diff --git a/my doc.md c/my doc.md", id="b-separator-missing"),
+        pytest.param("diff --git a/ b/", id="empty-path"),
+    ])
+    def test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta(header):
+        # axis: G9 — the whole-string equality check
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+        target = _target(fixerDelta=[header])
+>       assert audits.prose_only_delta(target) == (False, [])
+E       assert (True, []) == (False, [])
+E         
+E         At index 0 diff: True != False
+E         Use -v to get more diff
+
+/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:304: AssertionError
+_ ...[space-on-one-side-only] _   header = 'diff --git a/my doc.md b/my_doc.md'
+>       assert audits.prose_only_delta(target) == (False, [])
+E       assert (True, []) == (False, [])
+_ ...[b-separator-missing] _   header = 'diff --git a/my doc.md c/my doc.md'
+>       assert audits.prose_only_delta(target) == (False, [])
+E       assert (True, []) == (False, [])
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta[different-paths-both-with-spaces]
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta[space-on-one-side-only]
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta[b-separator-missing]
+3 failed, 1 passed in 0.24s
+exit=1
+```
+
+- **Restore:** inverse edit (`if False:` back to `if rest != "a/" + path + " b/" + path:`).
+- **Restore receipt** (Grep, `if False:|rest != `; the one match, no `if False:` left):
+
+```
+108:        if rest != "a/" + path + " b/" + path:
+```
+
+**Raw green** (exit 0):
+
+```
+....                                                                     [100%]
+4 passed in 0.23s
+exit=0
+```
+
 ## Not proven
 
-Elements outside the declared set have tests with `# axis:` lines or plain asserts but no neutralization and no red recorded here, so their protection is **unverified by a bite-proof**: the unreadable-header rejection in `_delta_files` (E-d, asserted by `test_t5_an_unreadable_delta_is_never_prose_only`); the `no`-wins ordering over `review-guarded` (E-i, `test_t6_a_no_on_another_check_wins_over_review_guarded`); the case-insensitive component match; the schema enum (T8); the order's answer token (T9); `yes` answers staying untouched by the new arm (T7).
+Elements outside the declared set have tests with `# axis:` lines or plain asserts but no neutralization and no red recorded here, so their protection is **unverified by a bite-proof**: the `span <= 0 or span % 2` length guard in `_delta_files` (E-1, E-2, E-4; asserted by `test_t5_an_unreadable_delta_is_never_prose_only` and the `empty-path` case of `test_t12_...`, neither neutralized); the `no`-wins ordering over `review-guarded` (E-i, `test_t6_a_no_on_another_check_wins_over_review_guarded`); the case-insensitive component match; the schema enum (T8); the order's answer token (T9); `yes` answers staying untouched by the new arm (T7).

@@ -12,7 +12,6 @@ uncertain / malformed / missing ruling collapses to `not-discharged` and is disc
 """
 
 from finding_identity import finding_identity, place_pair as _place_key
-from size_count import is_test_path as _is_test_path
 
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
 
@@ -99,17 +98,22 @@ def _delta_files(target):
     for line in delta:
         if not isinstance(line, str) or not line.startswith(_DIFF_HEADER):
             continue
-        parts = line[len(_DIFF_HEADER):].split(" ")
-        if len(parts) != 2 or not parts[0].startswith("a/") or not parts[1].startswith("b/"):
+        rest = line[len(_DIFF_HEADER):]
+        # The form is `a/<f> b/<f>`: five fixed characters plus `<f>` twice, so `<f>` (which may hold
+        # spaces) is read off by length and the whole header compared; never split on spaces.
+        span = len(rest) - 5
+        if span <= 0 or span % 2:
             return None
-        if parts[0][2:] != parts[1][2:] or not parts[0][2:]:
+        path = rest[2:2 + span // 2]
+        if rest != "a/" + path + " b/" + path:
             return None
-        if parts[0][2:] not in files:
-            files.append(parts[0][2:])
+        if path not in files:
+            files.append(path)
     return files
 
 
 def _is_prose_path(path):
+    from size_count import is_test_path as _is_test_path  # noqa: E402 — lazy: the closure of this module stays unchanged
     normalized = path.replace("\\", "/")
     # axis: only a Markdown file is prose — see bite-proof record audit_review_guarded_2341
     if not normalized.lower().endswith(".md"):
