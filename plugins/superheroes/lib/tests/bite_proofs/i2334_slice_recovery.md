@@ -1,7 +1,7 @@
 # Bite-proof record: a forfeited slice seat re-run by an unread-part wave counts as recovered (#2334)
 
-Detector: `plugins/superheroes/lib/tests/test_slice_recovery_2334.py`. Guarded code: `_check_slice_reads`, `_slice_recoveries` and the
-last-wave branch of `_after_panel_wave` in `plugins/superheroes/lib/round_driver.py`; `_recovered_seats`, `_stamped_recoveries` and the
+Detector: `plugins/superheroes/lib/tests/test_slice_recovery_2334.py`. Guarded code: `_check_slice_reads`, `_slice_recoveries`, `_unread_of_wave`
+and the last-wave branch of `_after_panel_wave` in `plugins/superheroes/lib/round_driver.py`; `_recovered_seats`, `_stamped_recoveries` and the
 two row skips in `plugins/superheroes/lib/review_record_session.py`; `_recovery_fault` in `plugins/superheroes/lib/review_record.py`.
 
 Guarded elements, declared up front by the order (E1 to E10), each with one neutralization applied as a targeted `Edit` and reverted by
@@ -492,6 +492,121 @@ FAILED lib/tests/test_slice_recovery_2334.py::test_a_malformed_slice_recovery_pa
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 ..........                                                               [100%]
 10 passed, 26 deselected in 1.50s
+```
+
+## E11: `recoveredBy` names only the later seats given part of the forfeited slice (vet 798, V798-1)
+
+Fix leg (WO-2). Runs of this element and E12 use `-X pycache_prefix=/tmp/claude-0/shpyc-wo2`; the `git diff --stat` after each is relative to
+the WO-1 head `16e53d13`, so it lists the WO-2 edits (5 tracked files) and is not the 8-file stat above.
+
+- Guarded element: `_slice_recoveries`, the `slicing.unread_obligations({"o": mine}, {"o": ...parts}) != bare` leg of the `by` comprehension.
+  Axis: a later seat of the lens that ran but was handed no part of the forfeited slice is never named in `recoveredBy` (and so is not counted
+  in `recoveredInWave`, the highest wave among the seats named).
+- Neutralization: drop the overlap condition, replacing the two lines
+  `and not any(k in (c.get("empty") ...) for c in seen[wave_of(k)])` / `and slicing.unread_obligations({"o": mine}, {"o": by_id[k.partition(":")[2]].get("parts")}) != bare)`
+  with the first line closed by `)` and the second removed.
+- Detector: `test_a_recovery_names_only_the_wave_two_seat_given_the_forfeited_part_not_the_other_slice_of_the_lens` (`-k test_a_recovery_names_only_the_wave_two_seat`).
+  Its fixture is the vet's P1: `code-reviewer:s1` reads `[]`, `code-reviewer:s2` forfeits, so wave 2 cuts two code slices (`w2u1` holds s1's
+  parts, `w2u2` holds s2's), which the test asserts before the second fold.
+- Raw red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_recovery_names_only_the_wave_two_seat_given_the_forfeited_part_not_the_other_slice_of_the_lens _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-31/test_a_recovery_names_only_the0')
+
+    def test_a_recovery_names_only_the_wave_two_seat_given_the_forfeited_part_not_the_other_slice_of_the_lens(tmp_path):
+        state = _state(_repo(tmp_path), _three_thousand())
+        s1_parts, s2_parts = copy.deepcopy(_slice(state, "s1")["parts"]), copy.deepcopy(_slice(state, "s2")["parts"])
+        _run(state, reads={S1: []}, forfeit=(S2,))
+        assert state["step"] == RD.P_PANEL and state["_sliceWave"] == 2
+        code = _wave_two_code_seats(state)
+        assert len(code) == 2
+        held_s1 = [k for k in code if _slice(state, k.partition(":")[2])["parts"] == s1_parts]
+        held_s2 = [k for k in code if _slice(state, k.partition(":")[2])["parts"] == s2_parts]
+        assert len(held_s1) == 1 and len(held_s2) == 1 and held_s1 != held_s2
+        (other,), (given,) = held_s1, held_s2
+        _run(state)
+        assert state["_incompletePanel"] is False
+        (entry,) = state["sliceRecoveries"]
+>       assert entry == {"seat": S2, "round": 1, "wave": 1, "recoveredInWave": 2, "recoveredBy": [given]}
+E       AssertionError: assert {'seat': 'cod...Wave': 2, ...} == {'seat': 'cod...Wave': 2, ...}
+E         
+E         Omitting 4 identical items, use -vv to show
+E         Differing items:
+E         {'recoveredBy': ['code-reviewer:w2u1', 'code-reviewer:w2u2']} != {'recoveredBy': ['code-reviewer:w2u2']}
+E         Use -v to get more diff
+
+/home/user/wt-2334/plugins/superheroes/lib/tests/test_slice_recovery_2334.py:231: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_slice_recovery_2334.py::test_a_recovery_names_only_the_wave_two_seat_given_the_forfeited_part_not_the_other_slice_of_the_lens
+1 failed, 37 deselected in 0.62s
+```
+
+  The same test also fails on the unchanged `16e53d13` code with the same `recoveredBy` difference (run 1 of this leg, before the fix).
+- Restore: the inverse `Edit`. Restored lines:
+  `                        and not any(k in (c.get("empty") if isinstance(c.get("empty"), list) else []) for c in seen[wave_of(k)])`
+  then
+  `                        and slicing.unread_obligations({"o": mine}, {"o": by_id[k.partition(":")[2]].get("parts")}) != bare)`
+- Raw green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 37 deselected in 0.94s
+```
+
+## E12: only a seat that ran has a read list (`_unread_of_wave`, vet 798, V798-2)
+
+- Guarded element: `_unread_of_wave`, the `seat_status.get(seat) == "run" and` leg of `if seat_status.get(seat) == "run" and isinstance(payload, dict):`.
+  Axis: a seat that forfeited has no read list, whatever its payload carries, so its slice is owed by the next wave and the recovery rule
+  (which counts only slices a later seat was given) cannot record it as recovered without a later seat reading it. A pre-existing guard
+  that the recovery rule now depends on.
+- Neutralization: replace `        if seat_status.get(seat) == "run" and isinstance(payload, dict):` with `        if isinstance(payload, dict):`.
+- Detector: `test_a_forfeited_seats_own_complete_read_list_counts_for_nothing_so_its_slice_is_still_handed_on_and_read_by_a_later_seat`
+  (`-k own_complete_read_list`). Its fixture is the vet's P6: `code-reviewer:s2` forfeits with a complete `readParts`, `code-reviewer:s1`
+  reads only lines 1 to 10 of `pkg/f0.py`.
+- Raw red:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_forfeited_seats_own_complete_read_list_counts_for_nothing_so_its_slice_is_still_handed_on_and_read_by_a_later_seat _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-33/test_a_forfeited_seats_own_com0')
+
+    def test_a_forfeited_seats_own_complete_read_list_counts_for_nothing_so_its_slice_is_still_handed_on_and_read_by_a_later_seat(tmp_path):
+        state = _state(_repo(tmp_path), _three_thousand())
+        whole = copy.deepcopy(_slice(state, "s2")["parts"])
+        partial = [{"file": FIRST, "lines": [[1, 10]]}]
+        _run(state, reads={S1: partial}, payloads={S2: dict(FORFEIT, readParts=copy.deepcopy(whole))})
+        assert state["rounds"]["1"]["seatStatus"][S2] == "missing"
+        assert state["step"] == RD.P_PANEL and state["_sliceWave"] == 2
+        code = _wave_two_code_seats(state)
+        handed = [p for k in code for p in _slice(state, k.partition(":")[2])["parts"]]
+>       assert slicing.unread_obligations({"o": whole}, {"o": handed}) == []
+E       AssertionError: assert [{'seat': 'o'... [[1, 1000]]}] == []
+E         
+E         Left contains one more item: {'seat': 'o', 'file': 'pkg/f1.py', 'lines': [[1, 1000]]}
+E         Use -v to get more diff
+
+/home/user/wt-2334/plugins/superheroes/lib/tests/test_slice_recovery_2334.py:252: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_slice_recovery_2334.py::test_a_forfeited_seats_own_complete_read_list_counts_for_nothing_so_its_slice_is_still_handed_on_and_read_by_a_later_seat
+1 failed, 37 deselected in 0.70s
+```
+
+- Restore: the inverse `Edit`. Restored line: `        if seat_status.get(seat) == "run" and isinstance(payload, dict):`
+- Raw green:
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed, 37 deselected in 0.51s
 ```
 
 ## Unproven and not-bitten

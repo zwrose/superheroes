@@ -25,20 +25,26 @@ import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
 import round_driver as RD  # noqa: E402
 import round_phases as RP  # noqa: E402
+import slicing  # noqa: E402
 from test_review_record_session import EARLIER, Fake, Session, extras, put_envelope  # noqa: E402
 from test_sliced_panel_c2 import RISK_AREAS, _core_md, _pin_git, _repo, _state, _three_thousand  # noqa: E402,F401
-from test_unread_waves_c2 import _slice  # noqa: E402
+from test_unread_waves_c2 import FIRST, _slice  # noqa: E402
 
 FORFEIT = {"findings": [], "receiptMissing": True}
+S1 = "code-reviewer:s1"
 S2 = "code-reviewer:s2"
 
 
-def _run(state, reads=None, forfeit=(), omit=()):
+def _run(state, reads=None, forfeit=(), omit=(), payloads=None):
     """Fold one panel wave over the state's current roster and return the payloads submitted. A slice seat reads its whole slice
-    unless ``reads`` names a read list for it; a seat in ``forfeit`` submits a did-not-run payload; one in ``omit`` is left out."""
+    unless ``reads`` names a read list for it; a seat in ``forfeit`` submits a did-not-run payload; one in ``omit`` is left out;
+    one in ``payloads`` submits exactly that payload."""
     seats = {}
     for key in RP.panel_roster(state, state["config"]):
         if key in omit:
+            continue
+        if key in (payloads or {}):
+            seats[key] = copy.deepcopy(payloads[key])
             continue
         if key in forfeit:
             seats[key] = dict(FORFEIT)
@@ -194,6 +200,61 @@ def test_a_read_list_that_is_absent_not_a_list_or_has_one_bad_entry_is_malformed
         _run(state)
     assert "code-reviewer:w2u1" in state["_sliceReadsChecked"][1]["malformed"]
     _not_recovered(state)
+
+
+# --- who is named: only the seats handed part of the forfeited slice (V798-1, V798-2) -------------------------------------
+
+def _wave_two_code_seats(state):
+    return [k for k in RP.panel_roster(state, state["config"]) if k.startswith("code-reviewer:w2u")]
+
+
+def _given_part_of(state, parts, seats):
+    """The seats among ``seats`` whose slice overlaps ``parts``, by the same predicate the recovery uses."""
+    none = slicing.unread_obligations({"o": parts}, {"o": []})
+    return [k for k in seats if slicing.unread_obligations({"o": parts}, {"o": _slice(state, k.partition(":")[2])["parts"]}) != none]
+
+
+def test_a_recovery_names_only_the_wave_two_seat_given_the_forfeited_part_not_the_other_slice_of_the_lens(tmp_path):
+    state = _state(_repo(tmp_path), _three_thousand())
+    s1_parts, s2_parts = copy.deepcopy(_slice(state, "s1")["parts"]), copy.deepcopy(_slice(state, "s2")["parts"])
+    _run(state, reads={S1: []}, forfeit=(S2,))
+    assert state["step"] == RD.P_PANEL and state["_sliceWave"] == 2
+    code = _wave_two_code_seats(state)
+    assert len(code) == 2
+    held_s1 = [k for k in code if _slice(state, k.partition(":")[2])["parts"] == s1_parts]
+    held_s2 = [k for k in code if _slice(state, k.partition(":")[2])["parts"] == s2_parts]
+    assert len(held_s1) == 1 and len(held_s2) == 1 and held_s1 != held_s2
+    (other,), (given,) = held_s1, held_s2
+    _run(state)
+    assert state["_incompletePanel"] is False
+    (entry,) = state["sliceRecoveries"]
+    assert entry == {"seat": S2, "round": 1, "wave": 1, "recoveredInWave": 2, "recoveredBy": [given]}
+    (decision,) = [d for d in state["decisions"] if d["kind"] == "slice-seat-recovered"]
+    assert given in decision["detail"] and other not in decision["detail"]
+    session = Session(tmp_path / "rec", rounds=state["rounds"], unreadShare=state["unreadShare"], sliceRecoveries=state["sliceRecoveries"])
+    account = rs.account_from_session(session.save(), extras(), Fake().readers())
+    text = rr.render(rr.build_record(account, Fake().readers()))
+    assert ("Recovered by an unread-part wave: code-reviewer:s2 (round 1) forfeited in wave 1; "
+            "wave 2 re-ran its slice (%s) on aaaaaaa." % given) in text
+    (line,) = [ln for ln in text.splitlines() if "Recovered by an unread-part wave" in ln]
+    assert other not in line
+
+
+def test_a_forfeited_seats_own_complete_read_list_counts_for_nothing_so_its_slice_is_still_handed_on_and_read_by_a_later_seat(tmp_path):
+    state = _state(_repo(tmp_path), _three_thousand())
+    whole = copy.deepcopy(_slice(state, "s2")["parts"])
+    partial = [{"file": FIRST, "lines": [[1, 10]]}]
+    _run(state, reads={S1: partial}, payloads={S2: dict(FORFEIT, readParts=copy.deepcopy(whole))})
+    assert state["rounds"]["1"]["seatStatus"][S2] == "missing"
+    assert state["step"] == RD.P_PANEL and state["_sliceWave"] == 2
+    code = _wave_two_code_seats(state)
+    handed = [p for k in code for p in _slice(state, k.partition(":")[2])["parts"]]
+    assert slicing.unread_obligations({"o": whole}, {"o": handed}) == []
+    (given,) = _given_part_of(state, whole, code)
+    _run(state)
+    assert state["_incompletePanel"] is False
+    (entry,) = state["sliceRecoveries"]
+    assert entry["seat"] == S2 and entry["recoveredBy"] == [given]
 
 
 # --- fail-closed edges ----------------------------------------------------------------------------------------------

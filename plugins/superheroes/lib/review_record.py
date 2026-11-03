@@ -619,7 +619,7 @@ def _unread_fault(u):
 
 def _recovery_fault(x):
     """Where one slice-seat recovery is malformed, as a path suffix, else None: exactly a seat (a slice seat key), the round and wave
-    it forfeited in, a later wave that re-ran its slice, the seats that read it, and the head (a full sha or null)."""
+    it forfeited in, a later wave that re-ran its slice, the later seats of the same lens that were given part of its slice, and the head (a full sha or null)."""
     if not isinstance(x, dict) or set(x) != {"seat", "round", "wave", "recoveredInWave", "recoveredBy", "commit"}:
         return ""
     if not (_nb(x["seat"]) and ":" in x["seat"]):

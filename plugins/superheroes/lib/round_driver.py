@@ -5601,10 +5601,14 @@ def _slice_recoveries(state, residual):
                 break
             top = v if owed else top
         else:
+            mine = (by_id.get(seat.partition(":")[2]) or {}).get("parts")
+            bare = slicing.unread_obligations({"o": mine}, {"o": []})
+            # axis: only the later seats of the lens given part of the forfeited slice are named — see bite-proof record i2334_slice_recovery
             by = sorted(k for k in lens_seats(lens, slice_seats) if status[k] == "run" and w < (wave_of(k) or 0) <= top
-                        and not any(k in (c.get("empty") if isinstance(c.get("empty"), list) else []) for c in seen[wave_of(k)]))
+                        and not any(k in (c.get("empty") if isinstance(c.get("empty"), list) else []) for c in seen[wave_of(k)])
+                        and slicing.unread_obligations({"o": mine}, {"o": by_id[k.partition(":")[2]].get("parts")}) != bare)
             if top and by:
-                out.append({"seat": seat, "round": 1, "wave": w, "recoveredInWave": top, "recoveredBy": by})
+                out.append({"seat": seat, "round": 1, "wave": w, "recoveredInWave": max(wave_of(k) for k in by), "recoveredBy": by})
     return out
 
 
