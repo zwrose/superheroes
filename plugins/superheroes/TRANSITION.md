@@ -12,6 +12,20 @@ when the adopting seat must finish it before it switches to the new version, or
 `**After switching.**` when it is owed once the seat runs the new version. adopt-version holds the
 switch only on before-switching steps, and a bullet with no marker counts as before switching.
 
+## Unreleased
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+
+- **After switching.** **A carried finding this session's verifier graded shown wrong now reads fixed when the driver's fixed check proves it, and the `Test lens:` line now counts only the findings raised in the record's own rounds and says how many were carried over from an earlier review; `testLens.findings` no longer includes carried findings and `testLens.carriedFindings` is new.** Nothing is owed: records written before this release render as they did. See [Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings](#review-a-fixed-carried-finding-reads-fixed-and-the-test-lens-line-counts-this-rounds-findings).
+
+### Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings
+
+- **A fixed carried finding reads fixed.** A carried finding this session's verifier graded shown wrong used to stay shown wrong even when the driver's `carriedChecks` entry proved it fixed. Now the entry reaches it under the same chain as a left-for-owner finding: a `fixed` entry checked on the final commit, whose fix commit is in that commit's history. Its reason says the verifier graded it shown wrong and the fixed check overrules that grade. A shown-wrong finding with no wrong grade of its own, or one the earlier record of another session already lists shown wrong, keeps its outcome.
+- **The `Test lens:` line counts this round.** `testLens.findings` used to count every test-lens finding on the record, carried ones included, so a round that raised nothing could read "2 findings raised". It now counts only the findings raised in the record's own rounds, and the line reads `; 0 findings raised in this round, 2 findings carried over from an earlier review.` The "no test-role reviewer was listed" and "did not run" lines add the carried count the same way.
+- **A new key.** `testLens.carriedFindings` counts the test-lens findings carried from the earlier record of another session; it is present only when above 0. A caller that read `testLens.findings` as every test-lens finding on the record adds `carriedFindings` to it, or reads the finding list. A record with nothing carried renders exactly as before.
+
 ## 0.47.0
 
 ### Before you upgrade
