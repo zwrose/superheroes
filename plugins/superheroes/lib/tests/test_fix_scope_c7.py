@@ -31,6 +31,7 @@ import engine_result_channel as ERC  # noqa: E402
 import payload_contracts as PC  # noqa: E402
 import session_contract as SC  # noqa: E402
 import test_round_driver as TRD  # noqa: E402
+import test_round_orders as TRO  # noqa: E402
 from test_layer2e_follow_up_1272 import _WELL_FORMED  # noqa: E402
 
 RD = TRD.RD  # run_loop runs on test_round_driver's own load of the module
@@ -485,9 +486,7 @@ def test_t5_the_audit_order_asks_for_unnamed_change():
         text = " ".join(fh.read().split())
     assert "say so in plain words" in text and "behaviour the finding does not name" in text
     assert "`fixHunks`" in text
-    with open(os.path.join(_HERE, "fixtures", "orders", "golden", "dispatch-audits.txt"),
-              encoding="utf-8") as fh:
-        rendered = fh.read()
+    rendered = TRO._render_golden(RD.P_AUDITS)
     assert "Optional keys: " in rendered
     optional = [line for line in rendered.splitlines() if line.startswith("Optional keys: ")][0]
     assert "unnamedChange" in optional.split(": ", 1)[1].split(", ")
