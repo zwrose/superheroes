@@ -209,7 +209,7 @@ The rule is not here. One merge word covers a spec and its breakdown, and the ap
 merge word: that is duty 1 and duty 6 of `skills/showrunner/SKILL.md`.
 
 The word you execute under is the owner's saved Merge verdict on the spec PR's sheet, then "done". Build
-that sheet with `lib/pr_sheet.py build` in its spec-PR mode, with no review record
+that sheet with `lib/pr_sheet.py build` in its spec-PR mode, with no code review record (its review is its spec checks, duty 6)
 (`theme/review-template.md` § A PR sheet and a stack sheet). Its breakdown card lists every issue body the
 filing creates, so accepting it and saving Merge covers the spec and its breakdown together. The build
 refuses a pin that no longer hashes to its pinned value, which is item 2 below, checked again when the

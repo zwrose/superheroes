@@ -217,10 +217,10 @@ python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_sheet.py" build --record <file> [--reco
 
 Each `--pr-body` file holds one covered PR's body, read with `gh api repos/<o>/<r>/pulls/<n> --jq .body`.
 
-A PR that had no review run gets no sheet; never hand-build a review record to make one. The owner merges it with their own click, as the showrunner charter's duty 6 says
+Every PR gets a sheet: a PR no builder made gets its review first, and a review record is never written without the review it records, as the showrunner charter's duty 6 says
 ([`skills/showrunner/SKILL.md`](../skills/showrunner/SKILL.md)).
 
-**A spec PR's sheet.** A spec PR has no review record, and it still gets a sheet, so that one Merge verdict
+**A spec PR's sheet.** A spec PR has no code review record: its review is its spec checks, as duty 6 says. It gets a sheet built from them, so that one Merge verdict
 plus "done" covers the spec and its breakdown, as duty 6 says. The input names `spec` (the work-item
 folder, every spec-vet record posted on the PR, and the PR's CI) and the build takes no `--record`:
 
