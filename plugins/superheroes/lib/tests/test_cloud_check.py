@@ -1716,7 +1716,8 @@ def test_setup_sitting_names_the_id_and_never_the_default(tmp_path, composing):
     assert record["environment"] == ENV_ID
 
 
-def test_cli_start_exit_codes(tmp_path, capsys):
+def test_cli_start_exit_codes(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(CC, "_issue_resolves", lambda root, number: True)
     local = _build(tmp_path)
     spawner = Spawner()
     code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID, "--issue", "1745"],
@@ -1729,7 +1730,7 @@ def test_cli_start_exit_codes(tmp_path, capsys):
     printed = json.loads(capsys.readouterr().out)
     assert code == 1 and printed["reason"] == "check-environment-invalid"
     assert refused_spawner.calls == []
-    code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID],
+    code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID, "--issue", "1745"],
                    spawn_fn=Spawner(output=""))
     assert code == 1 and json.loads(capsys.readouterr().out)["reason"] == "check-session-unconfirmed"
 
