@@ -446,17 +446,16 @@ def _check_fixed_above(pr, repo, claims, run, membership_reader):
                        " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr,
                                                          type(exc).__name__, exc))
     reason = read.get("reason") if isinstance(read, dict) else None
-    # axis: a PR in no stack, or a read that is not an object, cannot have a higher layer: refuses fixed-above-not-in-stack
-    if not isinstance(read, dict) or (read.get("ok") is not True and reason == stack_check.REASON_NOT_LINKED):
-        why = ("PR #%d is in no stack" % pr) if isinstance(read, dict) else (
-            "the stack membership read of PR #%d was not an object" % pr)
+    # axis: a read that succeeded in saying this PR is in no stack (not-linked) cannot have a higher layer: refuses
+    # fixed-above-not-in-stack
+    if isinstance(read, dict) and read.get("ok") is not True and reason == stack_check.REASON_NOT_LINKED:
         raise _Refusal("fixed-above-not-in-stack", "; ".join(
-            "%s names #%d, but %s" % (_claim_name(c), c["layer"], why) for c in claims))
-    # axis: a membership read that did not succeed refuses fixed-above-unverified, never passes
-    if read.get("ok") is not True:
-        raise _Refusal("fixed-above-unverified", "%s: the stack membership of PR %d could not be read (%s: %s); the"
-                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr, reason,
-                                                         read.get("detail")))
+            "%s names #%d, but PR #%d is in no stack" % (_claim_name(c), c["layer"], pr) for c in claims))
+    # axis: a read that is not an object (membership unknown) or did not succeed refuses fixed-above-unverified, never passes
+    if not isinstance(read, dict) or read.get("ok") is not True:
+        cause = ("%s: %s" % (reason, read.get("detail"))) if isinstance(read, dict) else "the read was not an object"
+        raise _Refusal("fixed-above-unverified", "%s: the stack membership of PR %d could not be read (%s); the"
+                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr, cause))
     members = read.get("members")
     members = [m for m in members if isinstance(m, dict)] if isinstance(members, list) else []
     position = {m.get("number"): m.get("position") for m in members}

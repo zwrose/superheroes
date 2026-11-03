@@ -212,20 +212,21 @@ def test_ok_check_reports_receipt_present():
 
 # --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
 
-FOURTEEN_TOKENS = {
+SIXTEEN_TOKENS = {
     "bad-argument", "read-failed", "body-emptied", "markers-invalid", "slot-span-foreign-content",
     "receipt-missing", "followup-undispositioned", "disposition-unknown", "none-over-list",
     "write-failed", "write-unconfirmed", "owner-command-in-body",
     "leftover-not-accepted", "review-record-unreadable",
+    "fixed-above-not-in-stack", "fixed-above-unverified",
 }
 
 
-def test_module_emits_exactly_fourteen_tokens():
+def test_module_emits_exactly_sixteen_tokens():
     source = inspect.getsource(vs)
     emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'reason="([a-z-]+)"', source))
-    assert emitted == FOURTEEN_TOKENS
+    assert emitted == SIXTEEN_TOKENS
     for retired in ("followups-malformed", "dispositions-malformed"):
         assert retired not in source, retired
 

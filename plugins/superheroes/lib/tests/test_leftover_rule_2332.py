@@ -40,6 +40,14 @@ def test_g2a_a_title_is_compared_by_its_words(title, written):
     assert gaps(rec(("f-1", title)), "- f-1 %s: merging accepts it.\n" % written) == []
 
 
+def test_g2a_an_apostrophe_is_dropped_whether_straight_or_curly():
+    record = rec(("f-1", "the cache doesn't expire"))
+    assert gaps(record, "- f-1 the cache doesn’t expire: accepted.\n") == []
+    assert gaps(record, "- f-1 the cache doesnt expire: accepted.\n") == []
+    assert la._title_key("don't") == la._title_key("don’t") == la._title_key("dont") == "dont"
+    assert la._title_key('say "hi"') == la._title_key("say “hi”") == "say hi"
+
+
 def test_g2a_a_title_with_other_words_is_still_missing():
     assert gaps(rec(("f-1", "the retry loop never backs off")), "- f-1 the retry loop backs off: accepted.\n") == ["f-1"]
 
@@ -81,6 +89,10 @@ def test_e2_a_title_of_punctuation_only_is_carried_byte_for_byte():
     record = rec(("f-1", "?!"))
     assert gaps(record, "- f-1 ?! accepted.\n") == []
     assert gaps(record, "- f-1 accepted.\n") == ["f-1"]
+    quoted = rec(("f-1", "'\""))
+    assert la._title_key("'\"") == ""
+    assert gaps(quoted, "- f-1 '\" accepted.\n") == []
+    assert gaps(quoted, "- f-1 accepted.\n") == ["f-1"]
 
 
 def test_e3_a_leftover_with_no_title_is_checked_by_id_alone():
@@ -218,7 +230,7 @@ def test_g3c_every_failing_claim_is_named(monkeypatch):
 
 @pytest.mark.parametrize("read, reason", [
     ({"ok": False, "reason": "not-linked", "detail": "PR is in no stack"}, "fixed-above-not-in-stack"),
-    ("not a dict", "fixed-above-not-in-stack"),
+    ("not a dict", "fixed-above-unverified"),  # membership is unknown, not "in no stack"
     ({"ok": False, "reason": "stack-unreadable", "detail": "gh failed"}, "fixed-above-unverified"),
     (stack(41, 43), "fixed-above-unverified"),  # this PR is absent from the members
     ({"ok": True, "members": "x"}, "fixed-above-unverified"),

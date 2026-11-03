@@ -4,7 +4,8 @@ together with its title, in one acceptance. A paraphrase that drops the id, or a
 The id is compared under one normalisation (NFKC, case-folded, every Unicode dash read as ``-``) as a whole token after
 the punctuation around it is stripped, so ``F-1`` and ``f-1`` name one id but ``f-1`` is never inside ``f-1-b``; two ids
 of one record that share a normal form are each matched byte for byte, so neither satisfies the other. The title is
-compared by its words, case and punctuation aside (quotes, backticks, a hyphen written as a space). An acceptance that
+compared by its words, case and punctuation aside (quotes and apostrophes are dropped, so ``don't`` and ``don’t`` agree;
+backticks and a hyphen written as a space are read as spaces). An acceptance that
 carries ``fixed-above #<PR> <7-40 hex commit>`` resolves the leftovers it names as fixed by that higher layer
 (``fixed_above``); whether the named PR is a higher member of this PR's stack is the caller's check, not this module's.
 
@@ -29,7 +30,7 @@ _ID_CHAR = "A-Za-z0-9_-"
 _DASHES = re.compile("[‐‑‒–—―−﹘﹣－]")
 _LEAD = "\"'`([{<*_~“‘«"
 _TRAIL = "\"'`)]}>.,;:!?*_~”’»"
-_QUOTES = {ord(c): None for c in "“”„‟‘’‚‛«»"}
+_QUOTES = {ord(c): None for c in "\"'“”„‟‘’‚‛«»"}
 
 
 class Unreadable(Exception):
@@ -131,8 +132,9 @@ def _tokens(text):
 
 
 def _title_key(text):
-    """A title or an acceptance reduced to its words: NFKC, case-folded, dashes as ``-``, typographic quotes dropped, every
-    other run of non-word characters one space."""
+    """A title or an acceptance reduced to its words: NFKC, case-folded, dashes as ``-``, quotes and apostrophes dropped
+    (straight and typographic alike, so ``don't``, ``don’t`` and ``dont`` agree), every other run of non-word characters
+    one space."""
     folded = _DASHES.sub("-", unicodedata.normalize("NFKC", text).casefold())
     return re.sub(r"[^\w]+", " ", folded.translate(_QUOTES)).strip()
 
