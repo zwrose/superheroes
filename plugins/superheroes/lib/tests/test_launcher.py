@@ -617,7 +617,7 @@ def test_compose_argv_shape(tmp_path):
     assert result["ok"] is True
     assert result["argv"] == [
         "claude", "--model", "sonnet", "--session-id", result["sessionId"],
-        "-p", result["prompt"],
+        "-p", result["prompt"], "--plugin-dir", L.plugin_root(),
     ]
 
 
@@ -652,7 +652,8 @@ def test_compose_launch_argv_is_the_adapter_argv(tmp_path):
     assert r["ok"] is True
     import engine_adapter as _ea
 
-    expected = _ea.claude_builder_argv(r["model"], r["sessionId"], r["prompt"])
+    expected = _ea.claude_builder_argv(
+        r["model"], r["sessionId"], r["prompt"], plugin_dir=L.plugin_root())
     assert r["argv"] == expected["argv"]
     assert r["argv"][:2] == ["claude", "--model"]
     assert r["argv"][3:6] == ["--session-id", r["sessionId"], "-p"]
@@ -662,7 +663,7 @@ def test_compose_launch_propagates_adapter_refusal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
 
-    def _refuse_builder(token, session_id, prompt):
+    def _refuse_builder(token, session_id, prompt, plugin_dir=None):
         return {
             "argv": [],
             "reason": "builder-session-id-invalid",
@@ -680,7 +681,7 @@ def test_compose_launch_refusal_without_detail_carries_no_detail(tmp_path, monke
     repo = _init_repo(tmp_path / "repo")
     premise = _valid_premise(repo)
 
-    def _refuse_builder(token, session_id, prompt):
+    def _refuse_builder(token, session_id, prompt, plugin_dir=None):
         return {"argv": [], "reason": "unknown-claude-tier"}
 
     monkeypatch.setattr(L.engine_adapter, "claude_builder_argv", _refuse_builder)
