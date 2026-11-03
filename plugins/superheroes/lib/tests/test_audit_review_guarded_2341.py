@@ -349,14 +349,30 @@ def _write(repo, name, body):
     path.write_text(body, encoding="utf-8")
 
 
-def _commit(repo, message):
-    _git(repo, "add", "-A")
+def _commit(repo, message, stage=True):
+    if stage:
+        _git(repo, "add", "-A")
     _git(repo, *(_ID + ["commit", "-q", "-m", message]))
 
 
-def _built_delta(tmp_path, fix):
+def _index_only_files(repo, names):
+    """Put `names` (raw bytes, possibly not valid UTF-8) into git's index as blobs, never on the filesystem
+    (macOS APFS refuses such names)."""
+    entries = b""
+    for name in names:
+        hashed = subprocess.run(["git", "-C", str(repo), "hash-object", "-w", "--stdin"],
+                                input=b"def f():\n    return 1\n", capture_output=True)
+        assert hashed.returncode == 0, hashed.stderr
+        entries += b"100644 " + hashed.stdout.strip() + b"\t" + name + b"\n"
+    updated = subprocess.run(["git", "-C", str(repo), "update-index", "--add", "--index-info"],
+                             input=entries, capture_output=True)
+    assert updated.returncode == 0, updated.stderr
+
+
+def _built_delta(tmp_path, fix, stage=True):
     """Commit `base` (MOD, GUIDE, OTHER), `reviewed` (the PR's change: OTHER only) and `fixed` (what `fix(repo)`
-    does on top of it); return `(reviewed_diff, head_diff, delta)` with the delta built by the driver."""
+    does on top of it); return `(reviewed_diff, head_diff, delta)` with the delta built by the driver.
+    `stage=False` leaves staging to `fix` (no `git add -A` before the `fixed` commit)."""
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "base")
@@ -369,7 +385,7 @@ def _built_delta(tmp_path, fix):
     _commit(repo, "reviewed")
     _git(repo, "checkout", "-q", "-b", "fixed")
     fix(repo)
-    _commit(repo, "fixed")
+    _commit(repo, "fixed", stage=stage)
     diffs = [_git(repo, "diff", "-M", "--src-prefix=a/", "--dst-prefix=b/", "base...%s" % tip)
              for tip in ("reviewed", "fixed")]
     return diffs[0], diffs[1], RD._attempt_fixer_delta(diffs[0], diffs[1])
@@ -472,13 +488,12 @@ def test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_on
     left_out, changed = os.fsdecode(left_out_bytes), os.fsdecode(changed_bytes)
 
     def fix(repo):
-        for name in (left_out_bytes, changed_bytes):
-            path = os.fsencode(str(repo)) + b"/" + name
-            with open(path, "wb") as handle:
-                handle.write(b"def f():\n    return 1\n")
+        # the two names exist only as git index entries: filesystems such as macOS APFS refuse them on disk
+        _index_only_files(repo, (left_out_bytes, changed_bytes))
         _reword_guide(repo)
+        _git(repo, "add", GUIDE)
 
-    reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix)
+    reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix, stage=False)
     header_left_out = [h for h in _headers(head_diff.splitlines()) if "\\377" in h]
     header_changed = [h for h in _headers(head_diff.splitlines()) if "\\376" in h]
     assert len(header_left_out) == 1 and len(header_changed) == 1, head_diff

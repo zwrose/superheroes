@@ -736,14 +736,16 @@ exit=0
 - **Detector:** `test_audit_review_guarded_2341.py::test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte` (the fix adds `pkg/bad<0xff>.py` and `pkg/bad<0xfe>.py`; `leave_out` names the first).
 - **Neutralization:** `if sides is not None and sides[1] in leave_out:` became a check that decodes both the destination and each `leave_out` name lossily, the old `errors="replace"` behaviour: `if sides is not None and sides[1].encode("utf-8", "surrogateescape").decode("utf-8", "replace") in tuple(os.fsdecode(os.fsencode(p)).encode("utf-8", "surrogateescape").decode("utf-8", "replace") for p in leave_out):`. Both sides are made lossy because a lossy destination against an exact `leave_out` name would simply leave nothing out; the collision the audit found needs both keys lossy.
 
-**Raw red** (exit 1; `UV_NATIVE_TLS` warning left out):
+- **Fixture:** the fixture now builds the two names in git's index (`git hash-object -w` plus `git update-index --add --index-info`, via `_built_delta(..., stage=False)`), never on disk, so the detector runs on filesystems that refuse such names (macOS APFS).
+
+**Raw red** (exit 1; `UV_NATIVE_TLS` warning left out; re-run on the index-only fixture, same neutralization):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte _
 
-tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_t17_a_left_out_copy_never0')
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-40/test_t17_a_left_out_copy_never0')
 
     def test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte(tmp_path):
         # axis: G13 — `leave_out` compares the exact destination, so two names that differ in one invalid byte stay distinct
@@ -752,13 +754,12 @@ tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_t17_a_left_out
         left_out, changed = os.fsdecode(left_out_bytes), os.fsdecode(changed_bytes)
     
         def fix(repo):
-            for name in (left_out_bytes, changed_bytes):
-                path = os.fsencode(str(repo)) + b"/" + name
-                with open(path, "wb") as handle:
-                    handle.write(b"def f():\n    return 1\n")
+            # the two names exist only as git index entries: filesystems such as macOS APFS refuse them on disk
+            _index_only_files(repo, (left_out_bytes, changed_bytes))
             _reword_guide(repo)
+            _git(repo, "add", GUIDE)
     
-        reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix)
+        reviewed_diff, head_diff, _ = _built_delta(tmp_path, fix, stage=False)
         header_left_out = [h for h in _headers(head_diff.splitlines()) if "\\377" in h]
         header_changed = [h for h in _headers(head_diff.splitlines()) if "\\376" in h]
         assert len(header_left_out) == 1 and len(header_changed) == 1, head_diff
@@ -766,15 +767,14 @@ tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-36/test_t17_a_left_out
 >       assert header_changed[0] in delta
 E       assert 'diff --git "a/pkg/bad\\376.py" "b/pkg/bad\\376.py"' in ['diff --git a/docs/guide.md b/docs/guide.md', '@@ -1,0 +1,9 @@', '+diff --git a/docs/guide.md b/docs/guide.md', '+index 4a3fa27..ce0a2f8 100644', '+--- a/docs/guide.md', '++++ b/docs/guide.md', ...]
 
-/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:486: AssertionError
+/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:501: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t17_a_left_out_copy_never_hides_a_changed_file_whose_name_differs_in_one_invalid_byte
-1 failed in 0.49s
-exit=1
+1 failed in 0.38s
 ```
 
 - **Restore:** inverse edit (the lossy line back to `if sides is not None and sides[1] in leave_out:`).
-- **Restore receipt** (Grep, `sides = _diff_header_sides\(header\)|in leave_out|replace"` over `round_driver.py`; lines 8487 and 8488 are the restored pair, the other matches are unrelated `decode(..., "replace")` calls elsewhere in the file):
+- **Restore receipt** (Grep, `sides = _diff_header_sides\(header\)|in leave_out|replace"` over `round_driver.py`; lines 8487 and 8488 are the restored pair, the other matches are unrelated `decode(..., "replace")` calls elsewhere in the file; `git diff --stat -- plugins/superheroes/lib/round_driver.py` is empty):
 
 ```
 8479:            if file in leave_out:
@@ -782,12 +782,11 @@ exit=1
 8488:        if sides is not None and sides[1] in leave_out:
 ```
 
-**Raw green** (exit 0):
+**Raw green** (exit 0; `UV_NATIVE_TLS` warning left out):
 
 ```
 .                                                                        [100%]
-1 passed in 0.36s
-exit=0
+1 passed in 0.78s
 ```
 
 ## Not proven
