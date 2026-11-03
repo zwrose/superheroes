@@ -3,7 +3,9 @@
 A `vet not-ready` amendment, or a recorded relay of a fix order to the lane's session, re-opens a lane
 whose handback or park is recorded; the watch then reads it exactly like a live cloud lane over the
 window [reopenedAt, close), the close being its first non-superseded ending comment. A comments read
-that did not complete names the issues it could not read under `unreadIssues`.
+that did not complete names the issues it could not read under `unreadIssues`. A terminal lane no fix
+order reopened is still watched as a resumed lane (#2323), so these rows assert the opener through
+`reopenedBy`.
 
 Amendment timestamps are wall-clock `time.time()`, so a comment "after the fix order" is created in
 the future (`age` negative) and one "before" it in the past.
@@ -219,30 +221,35 @@ def test_row2_a_partial_read_drops_a_cached_park_close_that_a_note_it_shows_supe
     assert [n["commentId"] for n in result["notes"]] == [6]
 
 
-def test_row2_a_later_reoutcome_closes_the_fix_order_and_the_lane_is_not_watched(repo):
+def test_row2_a_later_reoutcome_closes_the_fix_order_and_the_lane_is_watched_only_as_resumed(repo):
     _reopened(repo)
     assert ll.amend(repo, "cloud-a", "reoutcome", "handback", "re-handed back")["ok"] is True
-    gh = _NoteGh([_later(7)])
-    assert _arm(repo, gh)["event"] == ww.EVENT_TIMER
-    assert gh.note_calls() == []
+    result = _arm(repo, _NoteGh([_later(7)]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [lane] = result["cloudLanes"]
+    assert lane["reopenedBy"] == "builder-activity"
 
 
-def test_row2_a_vet_ready_or_parked_blocker_after_the_fix_order_closes_it(repo):
+def test_row2_a_vet_ready_or_parked_blocker_after_the_fix_order_closes_it_leaving_a_resumed_lane(repo):
     for n, ruling in enumerate(("ready", "parked-blocker")):
         lane, issue = "cloud-%d" % n, 300 + n
         _reopened(repo, lane, issue)
         assert ll.amend(repo, lane, "vet", ruling, "settled")["ok"] is True
-        gh = _NoteGh([_later(7, issue=issue)])
-        assert _arm(repo, gh)["event"] == ww.EVENT_TIMER
-        assert gh.note_calls() == []
+        result = _arm(repo, _NoteGh([_later(7, issue=issue)]))
+        assert result["event"] == ww.EVENT_BUILDER_NOTE
+        assert [note["commentId"] for note in result["notes"]] == [7]
+        [entry] = [e for e in result["cloudLanes"] if e["launchId"] == lane]
+        assert entry["reopenedBy"] == "builder-activity"
 
 
-def test_row3_a_handed_back_lane_with_no_fix_order_stays_unwatched(repo):
+def test_row3_a_handed_back_lane_with_no_fix_order_is_watched_only_as_resumed(repo):
     _handed_back(repo)
-    gh = _NoteGh([_later(7)])
-    result = _arm(repo, gh)
-    assert result["event"] == ww.EVENT_TIMER
-    assert gh.note_calls() == [] and "cloudLanes" not in result
+    result = _arm(repo, _NoteGh([_later(7)]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [lane] = result["cloudLanes"]
+    assert lane["reopenedBy"] == "builder-activity"
 
 
 # --- row 4: nothing from before the fix order re-fires -----------------------------------
@@ -324,38 +331,57 @@ def test_row7_a_relay_that_may_hold_the_text_re_opens_the_lane(repo):
     assert _arm(repo, _NoteGh([_later(7)]))["event"] == ww.EVENT_BUILDER_NOTE
 
 
-def test_row7_an_undecided_draft_does_not_re_open_the_lane(repo):
+def test_row7_an_undecided_draft_does_not_re_open_the_lane_by_fix_order(repo):
     _handed_back(repo)
     _relay(repo, {"msgId": "m1", "fixOrder": True, "decision": None})
-    assert _arm(repo, _NoteGh([_later(7)]))["event"] == ww.EVENT_TIMER
+    result = _arm(repo, _NoteGh([_later(7)]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [lane] = result["cloudLanes"]
+    assert lane["reopenedBy"] == "builder-activity"
 
 
-def test_row7_a_send_failed_relay_does_not_re_open_the_lane(repo):
+def test_row7_a_send_failed_relay_does_not_re_open_the_lane_by_fix_order(repo):
     _handed_back(repo)
     _relay(repo, {"msgId": "m1", "fixOrder": True,
                   "decision": {"delivered": False, "reason": "relay-send-failed", "at": _relay_stamp()}})
-    assert _arm(repo, _NoteGh([_later(7)]))["event"] == ww.EVENT_TIMER
+    result = _arm(repo, _NoteGh([_later(7)]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [lane] = result["cloudLanes"]
+    assert lane["reopenedBy"] == "builder-activity"
 
 
-def test_row7_a_delivered_relay_without_the_fix_order_flag_does_not_re_open_the_lane(repo):
+def test_row7_a_delivered_relay_without_the_fix_order_flag_does_not_re_open_the_lane_by_fix_order(repo):
     _handed_back(repo)
     plain = _delivered()
     del plain["fixOrder"]
     _relay(repo, plain)
-    assert _arm(repo, _NoteGh([_later(7)]))["event"] == ww.EVENT_TIMER
+    result = _arm(repo, _NoteGh([_later(7)]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [lane] = result["cloudLanes"]
+    assert lane["reopenedBy"] == "builder-activity"
 
 
-def test_row7_a_relay_to_another_session_does_not_re_open_the_lane(repo):
+def test_row7_a_relay_to_another_session_does_not_re_open_the_lane_by_fix_order(repo):
     _handed_back(repo)
     _relay(repo, _delivered(session="cloud-999"))
-    assert _arm(repo, _NoteGh([_later(7)]))["event"] == ww.EVENT_TIMER
+    result = _arm(repo, _NoteGh([_later(7)]))
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [lane] = result["cloudLanes"]
+    assert lane["reopenedBy"] == "builder-activity"
 
 
-def test_row7_a_relay_stamp_that_cannot_be_read_is_skipped(repo):
+def test_row7_a_relay_stamp_that_cannot_be_read_is_skipped_by_the_fix_order_opener(repo):
     _handed_back(repo)
     _relay(repo, _delivered(sentAfter="yesterday"))
     result = _arm(repo, _NoteGh([_later(7)]))
-    assert result["event"] == ww.EVENT_TIMER
+    assert result["event"] == ww.EVENT_BUILDER_NOTE
+    assert [note["commentId"] for note in result["notes"]] == [7]
+    [lane] = result["cloudLanes"]
+    assert lane["reopenedBy"] == "builder-activity"
     assert ww.DEGRADATION_FIX_ORDER_UNAVAILABLE not in result["degraded"]
 
 

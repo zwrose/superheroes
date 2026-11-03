@@ -20,7 +20,11 @@ FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", 
 FU_MARKER = "<!-- superheroes:followups FU1 FU2 -->"
 DISP_MARKER = "<!-- superheroes:dispositions FU1 FU2 -->"
 
-BODY = """## Advisor vet
+BODY = """## What's changing, and why
+
+The builder's owner half.
+
+## Advisor vet
 <!-- superheroes:advisor-vet -->
 old slot text
 
@@ -208,20 +212,20 @@ def test_ok_check_reports_receipt_present():
 
 # --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
 
-THIRTEEN_TOKENS = {
-    "bad-argument", "read-failed", "markers-invalid", "slot-span-foreign-content",
+FOURTEEN_TOKENS = {
+    "bad-argument", "read-failed", "body-emptied", "markers-invalid", "slot-span-foreign-content",
     "receipt-missing", "followup-undispositioned", "disposition-unknown", "none-over-list",
     "write-failed", "write-unconfirmed", "owner-command-in-body",
     "leftover-not-accepted", "review-record-unreadable",
 }
 
 
-def test_module_emits_exactly_thirteen_tokens():
+def test_module_emits_exactly_fourteen_tokens():
     source = inspect.getsource(vs)
     emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'reason="([a-z-]+)"', source))
-    assert emitted == THIRTEEN_TOKENS
+    assert emitted == FOURTEEN_TOKENS
     for retired in ("followups-malformed", "dispositions-malformed"):
         assert retired not in source, retired
 
@@ -236,6 +240,9 @@ def _receipt_marker(line):
     assert RECEIPT.count(DISP_MARKER + "\n") == 1
     return RECEIPT.replace(DISP_MARKER + "\n", line)
 
+
+# the one row whose write refusal differs from check and handback: a whitespace body is emptied for write alone
+WRITE_TOKEN_OVERRIDE = {"   \n\t\n": "body-emptied"}
 
 BODY_CASES = [
     ("read-failed", "empty", "   \n\t\n"),
@@ -253,7 +260,8 @@ BODY_CASES = [
     ("markers-invalid", "build-record marker appears 2 times",
      BODY.replace("trailer", "<!-- superheroes:build-record -->")),
     ("markers-invalid", "advisor-vet marker is not above",
-     "<!-- superheroes:build-record -->\nx\n<!-- superheroes:advisor-vet -->\n" + FU_MARKER + "\n"),
+     "## What's changing, and why\n<!-- superheroes:build-record -->\nx\n<!-- superheroes:advisor-vet -->\n"
+     + FU_MARKER + "\n"),
     # the followups marker: exactly one, below the build-record marker, well formed, unique ids
     ("markers-invalid", "followups marker appears 0 times", _body_marker("")),
     ("markers-invalid", "followups marker appears 2 times",
@@ -292,7 +300,7 @@ def test_body_refusals_make_no_edit(token, detail, body, verb, slot_file):
     fake = _ok_fake(body=body)
     result = vs.run_verb(verb, PR, REPO, slot_file=slot_file if verb == "write" else None, run=fake)
     assert result["ok"] is False
-    assert result["reason"] == token
+    assert result["reason"] == (WRITE_TOKEN_OVERRIDE.get(body, token) if verb == "write" else token)
     assert detail.rstrip("\n") in result["detail"]
     assert set(result) == {"ok", "reason", "detail"}
     assert fake.edit_calls() == []
@@ -335,18 +343,18 @@ def test_dod_table_below_the_build_record_still_writes(slot_file):
     assert DOD_BLOCK in fake.edited[0]
 
 
-def test_empty_read_refuses_read_failed(slot_file):
+def test_empty_read_refuses_body_emptied(slot_file):
     fake = FakeGh([""], _pages([_comment(RECEIPT)]))
     result = _write(fake, slot_file)
-    assert result["reason"] == "read-failed"
+    assert result["reason"] == "body-emptied"
     assert "empty" in result["detail"]
     assert fake.edit_calls() == []
 
 
-def test_null_rest_body_reads_as_empty(slot_file):
+def test_null_rest_body_reads_as_empty_and_refuses_body_emptied(slot_file):
     fake = FakeGh([BODY], _pages([_comment(RECEIPT)]), view_raw=json.dumps({"body": None}))
     result = _write(fake, slot_file)
-    assert result["reason"] == "read-failed"
+    assert result["reason"] == "body-emptied"
     assert "empty" in result["detail"]
     assert fake.edit_calls() == []
 

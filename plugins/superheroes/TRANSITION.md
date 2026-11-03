@@ -25,6 +25,9 @@ switching, never a lane already running.
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **Advisors run a review on a dependency bump, or any PR no builder made, before vetting it: one independent reviewer, its review record written on the PR, then the vet and a merge sheet like any other PR. The path where such a PR got no review, no merge sheet and the owner's own merge click is retired.** Nothing else is owed. See [Showrunner: every PR gets a review before its vet](#showrunner-every-pr-gets-a-review-before-its-vet).
+- **After switching.** **`vet_slot.py write` refuses a new reason, `body-emptied`, for a PR body that is empty or has lost the builder's owner half; a caller matching on reasons adds it.** Nothing is owed otherwise. See [Vet slot: write refuses a body that lost the owner half](#vet-slot-write-refuses-a-body-that-lost-the-owner-half).
+- **After switching.** **The wave watch keeps a recorded-terminal cloud lane in its watch while it is resumed by builder activity on its issue: its newest unanswered handback, stop or park after its outcome (or its newest ledger amendment) fires `lane-terminal`, and an active resumed lane's `cloudLanes` entry carries `reopenedBy: "builder-activity"`. A caller that reads `reopenedBy` handles the new value.** Nothing is owed otherwise. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
+- **After switching.** **Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded, so a lane you resume is watched; `--ignore-launch` takes a lane out of every path with no sign in the result. Keep it only for a not-ready lane whose fix went to a fresh launch, until its vet is recorded `ready` or `parked-blocker`.** Nothing else is owed. See [Wave watch: a resumed cloud lane stays in the watch](#wave-watch-a-resumed-cloud-lane-stays-in-the-watch).
 - **After switching.** **A local lane starts on its advisor's own plugin root (`--plugin-dir`) and its prompt names `Advisor plugin version:`; a local lane whose running version differs from that line stops at intake with `lane-plugin-version-mismatch`, a launch file the verb cannot read stops the lane with `lane-version-launch-file-unreadable`, and a local compose on a root with no readable version refuses `compose-plugin-version-unreadable`. Nothing is owed: a lane launched before the switch keeps running as it was.** See [Launcher: a local lane runs its advisor's plugin version](#launcher-a-local-lane-runs-its-advisors-plugin-version).
 - **After switching.** **A carried finding this session's verifier graded shown wrong now reads fixed when the driver's fixed check proves it, and the `Test lens:` line now counts only the findings raised in the record's own rounds and says how many were carried over from an earlier review; `testLens.findings` no longer includes carried findings and `testLens.carriedFindings` is new.** Nothing is owed. The `Test lens:` count also takes in a test-role finding whose reviewer names another round's test-role seat, so a count can differ from the earlier release's even with nothing carried. See [Review: a fixed carried finding reads fixed, and the test-lens line counts this round's findings](#review-a-fixed-carried-finding-reads-fixed-and-the-test-lens-line-counts-this-rounds-findings).
 
@@ -34,6 +37,20 @@ Check these in a consuming project when it adopts this release. Each step names 
 - A PR no builder made (a dependency bump, a bot's PR) gets its review from the advisor: one reviewer dispatched as the light lane does, and the review record written on the PR naming the PR's author as its maker. The advisor fixes nothing under that review; a finding that needs a change, or a lane floor that reads full, routes the PR as a build. `owner-decisions.md` § Delivery mechanics, `theme/review-template.md`, `vet-receipt.md` and `rubric/review-discipline.md` point to duty 6.
 - A spec PR's review is its spec checks; its sheet is still built in `pr_sheet.py build`'s spec-PR mode.
 - No command, result key or file shape changes: `vet_slot.py write` already refuses a READY slot with no readable review record, and `pr_sheet.py build` already needs `--record` outside spec-PR mode.
+
+### Vet slot: write refuses a body that lost the owner half
+
+`vet_slot.py write` now refuses `body-emptied`, before any marker check, when the PR body is empty or whitespace, or when no live `What's changing, and why` heading sits above the advisor-vet marker (anywhere in the body when that marker is absent). A heading inside a code fence, an HTML comment or the slot span does not count. A truncated `gh` redirect can leave a body like this, and a re-stamped marker would otherwise let the write put the slot into it.
+
+The remedy is to restore the builder's body from the PR's edit history, never to re-stamp the marker into it. `check` and `handback` are unchanged and keep `read-failed` and `markers-invalid` on such a body.
+
+### Wave watch: a resumed cloud lane stays in the watch
+
+A cloud lane recorded terminal no longer leaves the wave watch while builder activity on its issue resumes it. Its newest unanswered handback, stop or park after the recorded outcome (or its newest ledger amendment) fires the `lane-terminal` event, and the `cloudLanes` entry of a lane that is active again carries `reopenedBy: "builder-activity"`.
+
+A caller that reads `reopenedBy` handles the new value; a lane never resumed carries no such member.
+
+Drop any `--ignore-launch` you carry for a cloud lane whose outcome is recorded: it takes a lane out of every path, the resumed one included, with no sign in the result. The exception is a not-ready lane whose fix went to a fresh launch, whose ignore stays until its vet is recorded `ready` or `parked-blocker`.
 
 ### Launcher: a local lane runs its advisor's plugin version
 
@@ -58,11 +75,20 @@ Check these in a consuming project when it adopts 0.48.0. Each step names the no
 
 - **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
 
+- **After switching.** **Nothing is owed: a sliced review whose forfeited slice seat a later unread-part wave re-read now certifies instead of ending cannot-certify, and its review record names the recovery in a new optional sliceRecoveries part.** See [Review: a forfeited slice seat re-read by an unread-part wave counts as recovered](#review-a-forfeited-slice-seat-re-read-by-an-unread-part-wave-counts-as-recovered).
+
 ### Review: the panel artifact's `canaryResult` tolerance is retired
 
 - **Why.** The seat canaries retired in 0.43.0, and the driver kept accepting and ignoring a `canaryResult` key on a panel artifact for artifacts shaped before then. Every consuming project now runs 0.43.0 or later, so the tolerance is gone (keep-or-retire D35).
 - **What changes.** `round_driver.py submit` on a panel phase refuses a legacy-shaped artifact that carries `canaryResult`, naming it among the unknown seat keys. An artifact in the explicit `{"seats": {...}}` shape is unchanged: its top-level keys other than `seats` are not judged.
 - **Replacement.** None: drop the key.
+
+### Review: a forfeited slice seat re-read by an unread-part wave counts as recovered
+
+- **Outcome.** In a sliced round 1, a slice seat (for example `code-reviewer:s2`) that forfeited and whose whole slice a later unread-part wave gave to seats of the same lens, and those seats read by their own well-formed read lists, no longer leaves the panel incomplete. A session that ended `cannot-certify` for that reason now converges, with certification shape `audited-chain` (not `full-panel-confirmed`: the forfeit stays in the history, in `seatStatus` and `missingSeats`). A forfeit in the last wave, a whole-change seat's forfeit (including `premortem-reviewer:w2`), a wave whose seat of the lens returned a malformed read list, and a wave with no read evidence on record are never recovered.
+- **New decision kind.** `slice-seat-recovered`, recorded once when the last wave folds, naming each recovered seat, its wave and the later seats of the same lens that were given part of its slice. The session state carries the entries as `sliceRecoveries`.
+- **Review record.** A new optional part, `sliceRecoveries` (`[{seat, round, wave, recoveredInWave, recoveredBy, commit}]`), shows exactly when the account carries it, and the summary gains one `Recovered by an unread-part wave:` line. The recovered seat is no longer listed as a review that did not run (`missingReviews`).
+- **Older records.** A record without the part reads as before, and a saved session without the new read evidence gets no recovery.
 
 ## 0.47.0
 

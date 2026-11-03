@@ -338,7 +338,8 @@ def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
 
 def test_ready_write_checks_the_body_it_will_publish(tmp_path):
     """code-008: an id named only in the old slot text, which the write replaces, does not count."""
-    shaped = ("Closes #1.\n\n## What we're accepting\n\nNone\n\n<!-- superheroes:advisor-vet -->\n"
+    shaped = ("Closes #1.\n\n## What's changing, and why\n\nA change.\n\n## What we're accepting\n\nNone\n\n"
+              "<!-- superheroes:advisor-vet -->\n"
               "- f-1 the retry loop never backs off: merging accepts it.\n\n<!-- superheroes:build-record -->\n"
               "<details><summary>Build record</summary>\n\n<!-- superheroes:followups none -->\n</details>\n")
     result, fake = write(shaped, [RECEIPT, record_comment([F1])], tmp_path)

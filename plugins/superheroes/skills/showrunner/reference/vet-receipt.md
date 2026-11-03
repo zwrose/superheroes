@@ -507,10 +507,13 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 python3 -B "$ROOT_DIR/lib/vet_slot.py" write --pr <n> --repo <owner/name> --slot-file <path>
 ```
 
-The command reads the body and the latest vet receipt and checks the read, a non-empty body, both
-the `advisor-vet` and `build-record` markers, the build record's followups marker, and the
-receipt's dispositions marker. It re-reads the body before the push, writes only between the two
-slot markers, and reads the result back. A refusal names its reason (for example
+The command reads the body and the latest vet receipt and checks the read, a non-empty body that
+still holds the builder's owner half (a live `What's changing, and why` heading above the
+`advisor-vet` marker), both the `advisor-vet` and `build-record` markers, the build record's
+followups marker, and the receipt's dispositions marker. It re-reads the body before the push,
+writes only between the two slot markers, and reads the result back. A refusal names its reason
+(for example `body-emptied` (the body is empty or lost the builder's owner half: restore it from
+the PR's edit history, never re-stamp into it),
 `followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`,
 `slot-span-foreign-content` (another `superheroes:` marker, such as the DoD table, sits in the slot
 span and the write would delete it), or `read-failed`) with a detail

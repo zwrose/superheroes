@@ -367,6 +367,23 @@ def _nothing_to_verify(state, rnd):
         and not (_int(p.get("held")) and p["held"] > 0) for p in passes)
 
 
+def _recovered_seats(state, rnd):
+    """The seats of round ``rnd`` a later unread-part wave re-read (the driver's `sliceRecoveries`); empty when none is recorded."""
+    held = state.get("sliceRecoveries")
+    return {e["seat"] for e in held if isinstance(e, dict) and isinstance(e.get("seat"), str) and e.get("round") == rnd} \
+        if isinstance(held, list) else set()
+
+
+def _stamped_recoveries(state, meta):
+    """The state's `sliceRecoveries` with each entry stamped with the head its round's panel ran at; any value that is not a
+    non-empty list is carried unchanged, for the record's shape check to refuse."""
+    held = state["sliceRecoveries"]
+    if not isinstance(held, list):
+        return held
+    return [dict(e, commit=_panel_head(state, e["round"], meta.get("headSha")) if _int(e.get("round")) and e["round"] >= 1 else None)
+            if isinstance(e, dict) else e for e in held]
+
+
 def _status_reviewers(state, setup=None, rows=()):
     """Reviewer rows for a session driven by hand submit, which journals no seat: each panel round's seat
     status says which seats ran, and the reviewers' raw outputs were not stored."""
@@ -388,6 +405,9 @@ def _status_reviewers(state, setup=None, rows=()):
                          and f.get("seat") == seat and isinstance(f.get("ran"), str) and f["ran"]), None) if ran else None
             if not ran and any(r > rnd for r in ran_in.get(seat, ())):
                 continue  # a later round ran this seat: the earlier miss is recovered
+            # axis: a seat a later unread-part wave re-read is not listed as a review that did not run — see bite-proof record i2334_slice_recovery
+            if not ran and seat in _recovered_seats(state, rnd):
+                continue
             if ran and not fell and seat in ((state["rounds"].get(str(rnd)) or {}).get("fellOpenProvenanceMissing") or ()):
                 fell = "unknown"  # the session could not establish which vendor ran: never credit the configured one
             out.append(_reviewer(state, rnd, seat, "", ran, {"vendor": fell, "model": "unknown"} if fell else None,
@@ -480,6 +500,9 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
             raw.append(_payload_file(raw_dir, phase, rnd, seat, body, raw))  # findings from a missing seat stay retrievable
         if key not in ran and any(k[0] == phase and k[2] == seat and k[1] > rnd for k in ran):
             continue  # a later round ran this seat: the earlier miss is recovered
+        # axis: a seat a later unread-part wave re-read is not listed as a review that did not run — see bite-proof record i2334_slice_recovery
+        if phase == sc.PANEL_PHASE and key not in ran and seat in _recovered_seats(state, rnd):
+            continue
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
         row = _reviewer(state, rnd, seat, stem, key in ran, env,
                         r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
@@ -1345,6 +1368,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                        **({"extraAudit": {"why": extra.get("why")}} if isinstance(extra, dict) else {})},
             **({"rerunChecks": rerun} if rerun else {}), **({"synthesisRounds": synthesis} if synthesis else {}),
             **{k: state[k] for k in ("outsideThisPR", "unreadShare") if k in state},
+            **({"sliceRecoveries": _stamped_recoveries(state, meta)} if "sliceRecoveries" in state else {}),
             **({"outsideThisPR": _with_recovered_outside(state.get("outsideThisPR"), recovered_outside, swept_outside)}
                if recovered_outside or swept_outside else {}),
             **({"provenCopies": proven_copies} if proven_copies else {}),
