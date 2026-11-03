@@ -1,6 +1,6 @@
 # Bite-proof record — a prose-only fix clears its audit on a `review-guarded` answer (#2341)
 
-Detector file: `plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py`), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest '<exact node id>' -q -n 0`, one test node each (G4, G5 and G6 name the test function, so its parametrized cases run together), output captured whole, followed by the `exit=` line the command printed. The `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. The nine guarded elements are the ones the orders declared (G1-G7, then G8 and G9 from the #2345 fix order); none is grouped. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture; nothing was redacted.
+Detector file: `plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py`), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/pyc -m pytest '<exact node id>' -q -n 0`, one test node each (G4, G5 and G6 name the test function, so its parametrized cases run together), output captured whole, followed by the `exit=` line the command printed. The `UV_NATIVE_TLS` deprecation warning that `uv` prints first is the only line left out of each capture. The eleven guarded elements are the ones the orders declared (G1-G7, then G8 and G9 from the #2345 fix order, then G10 and G11 from the vet 806 fix order, whose neutralizations are in `round_driver.py`); none is grouped. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture; nothing was redacted.
 
 The detectors are the tests that carry a `# bite-proof:` line.
 
@@ -562,6 +562,115 @@ exit=1
 ```
 ....                                                                     [100%]
 4 passed in 0.23s
+exit=0
+```
+
+## G10. Two-path (rename) section emission (`round_driver._attempt_fixer_delta`)
+
+- **Axis:** a section whose header names two paths (what `git diff -M` writes for a rename) is emitted under its own `diff --git` header line, so `audits._delta_files` refuses the delta and a code rename beside a Markdown edit never clears on `review-guarded`.
+- **Detector:** `test_audit_review_guarded_2341.py::test_t13_a_fix_that_renames_a_code_file_is_refused_though_it_also_edits_a_guide`. T14 (`test_t14_...`) is the positive control, not a guarded element.
+- **Neutralization:** two lines inserted in `_attempt_fixer_delta` right before `if named and named.group(2) in leave_out:`: `if named:` / `            continue`, so a header that parses as `a/… b/…` but is not one path is skipped. Production file: `plugins/superheroes/lib/round_driver.py`. Run as above (`-q -n 0`, one node, `exit=` line appended), `UV_NATIVE_TLS` warning left out.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t13_a_fix_that_renames_a_code_file_is_refused_though_it_also_edits_a_guide _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-27/test_t13_a_fix_that_renames_a_0')
+
+    def test_t13_a_fix_that_renames_a_code_file_is_refused_though_it_also_edits_a_guide(tmp_path):
+        # axis: G10 — a two-path (rename) section is emitted under its own header
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+        def fix(repo):
+            _git(repo, "mv", MOD, RENAMED)
+            _write(repo, RENAMED, MOD_BODY.replace("return 3", "return 33"))
+            _reword_guide(repo)
+    
+        reviewed_diff, head_diff, delta = _built_delta(tmp_path, fix)
+        assert "rename from %s" % MOD in head_diff and "rename to %s" % RENAMED in head_diff
+        renamed = [h for h in _headers(delta) if RENAMED in h]
+>       assert renamed == ["diff --git a/%s b/%s" % (MOD, RENAMED)]
+E       AssertionError: assert [] == ['diff --git ...e_renamed.py']
+E         
+E         Right contains one more item: 'diff --git a/pkg/module.py b/pkg/module_renamed.py'
+E         Use -v to get more diff
+
+/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:395: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t13_a_fix_that_renames_a_code_file_is_refused_though_it_also_edits_a_guide
+1 failed in 0.42s
+exit=1
+```
+
+- **Restore:** inverse edit (the two inserted lines removed).
+- **Restore receipt** (Grep, `^        (named = re|if not named|if named)`; the two original lines, no inserted `if named:` / `if not named:` left):
+
+```
+8486:        named = re.match(r"diff --git a/(.+) b/(.+)$", header)
+8487:        if named and named.group(2) in leave_out:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.36s
+exit=0
+```
+
+## G11. Quoted-header section emission (`round_driver._attempt_fixer_delta`)
+
+- **Axis:** a section whose header does not parse as `a/… b/…` at all (git quotes a path with a non-ASCII or control character: `diff --git "a/…" "b/…"`) is emitted under its own header line, so the delta is refused and the auditor sees the file. G10 and G11 do not share one neutralization: they are the two sides of the `named` test, so each has its own.
+- **Detector:** `test_audit_review_guarded_2341.py::test_t15_a_fix_that_adds_a_code_file_with_a_quoted_name_is_refused`. The fixture's git quoted the name as observed (`diff --git "a/pkg/caf\303\251.py" "b/pkg/caf\303\251.py"`), so the quoted-header case is the one under test.
+- **Neutralization:** two lines inserted in `_attempt_fixer_delta` right before `if named and named.group(2) in leave_out:`: `if not named:` / `            continue`, so a header that does not parse is skipped.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_t15_a_fix_that_adds_a_code_file_with_a_quoted_name_is_refused ______
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-29/test_t15_a_fix_that_adds_a_cod0')
+
+    def test_t15_a_fix_that_adds_a_code_file_with_a_quoted_name_is_refused(tmp_path):
+        # axis: G11 — a header that does not read `a/<f> b/<f>` (git-quoted path) is emitted under its own header
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+        quoted = "pkg/café.py"
+    
+        def fix(repo):
+            _write(repo, quoted, "def cafe():\n    return 1\n")
+            _reword_guide(repo)
+    
+        _, head_diff, delta = _built_delta(tmp_path, fix)
+        observed = [h for h in _headers(head_diff.splitlines()) if "caf" in h]
+        assert len(observed) == 1, head_diff
+        assert '"' in observed[0], observed  # git quotes the non-ASCII name under the default core.quotePath
+>       assert observed[0] in delta
+E       assert 'diff --git "a/pkg/caf\\303\\251.py" "b/pkg/caf\\303\\251.py"' in ['diff --git a/docs/guide.md b/docs/guide.md', '@@ -1,0 +1,9 @@', '+diff --git a/docs/guide.md b/docs/guide.md', '+index 4a3fa27..ce0a2f8 100644', '+--- a/docs/guide.md', '++++ b/docs/guide.md', ...]
+
+/home/user/wt-2341/plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py:427: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_review_guarded_2341.py::test_t15_a_fix_that_adds_a_code_file_with_a_quoted_name_is_refused
+1 failed in 0.38s
+exit=1
+```
+
+- **Restore:** inverse edit (the two inserted lines removed).
+- **Restore receipt** (Grep, same pattern; the two original lines, no inserted line left):
+
+```
+8486:        named = re.match(r"diff --git a/(.+) b/(.+)$", header)
+8487:        if named and named.group(2) in leave_out:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.28s
 exit=0
 ```
 

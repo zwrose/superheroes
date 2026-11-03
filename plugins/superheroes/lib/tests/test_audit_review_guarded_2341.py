@@ -14,11 +14,16 @@ T8  the strict-mode schema lists the answer for `testWouldFail` only;
 T9  the rendered fix-auditor order names the answer token (structure only; no sentence is pinned);
 T10 an id later refused in the same pass is never listed in `reviewGuarded`;
 T11 a header for a Markdown path that contains a space is read, so the fix clears;
-T12 a header that is not `a/<f> b/<f>` for one non-empty `<f>` still refuses as no readable delta.
+T12 a header that is not `a/<f> b/<f>` for one non-empty `<f>` still refuses as no readable delta;
+T13 a fix that renames a code file (and edits it) while editing a Markdown file is refused, the driver's own
+    builder naming the renamed file under a `diff --git` line;
+T14 positive control: a fix that edits only wording in a Markdown file clears, through the same builder;
+T15 a fix that adds a code file whose name git quotes, plus a Markdown edit, is refused.
 
 Bite-proof record: audit_review_guarded_2341
 """
 import os
+import subprocess
 import sys
 
 import pytest
@@ -31,6 +36,7 @@ for _p in (_HERE, _LIB):
 
 import audits  # noqa: E402
 import engine_result_channel as ERC  # noqa: E402
+import round_driver as RD  # noqa: E402
 import size_count  # noqa: E402
 import test_round_orders as TRO  # noqa: E402
 
@@ -305,3 +311,137 @@ def test_t12_a_header_that_is_not_one_path_twice_refuses_as_no_readable_delta(he
     assert audits.prose_only_delta(target) == (False, [])
     reason = _refused(_fold([_guarded()], target))
     assert reason.endswith("this fix's delta touches no recorded delta")
+
+
+# --- T13-T15: the delta the driver's own builder writes from real `git diff -M` text ------------------------------
+
+# The throwaway fixture repo's commits carry an inline identity; nothing is signed.
+_ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
+MOD = "pkg/module.py"
+RENAMED = "pkg/module_renamed.py"
+GUIDE = "docs/guide.md"
+OTHER = "other.txt"
+MOD_BODY = "".join("def f%d():\n    return %d\n" % (n, n) for n in range(6))
+GUIDE_BODY = "# Guide\n\nUse the tool carefully.\n"
+
+
+@pytest.fixture(autouse=True)
+def _pinned_git_config(monkeypatch, tmp_path):
+    for name in ("home", "xdg-config"):
+        (tmp_path / name).mkdir()
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+
+
+def _git(repo, *args):
+    done = subprocess.run(["git", "-C", str(repo)] + list(args), capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _write(repo, name, body):
+    path = repo / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+
+
+def _commit(repo, message):
+    _git(repo, "add", "-A")
+    _git(repo, *(_ID + ["commit", "-q", "-m", message]))
+
+
+def _built_delta(tmp_path, fix):
+    """Commit `base` (MOD, GUIDE, OTHER), `reviewed` (the PR's change: OTHER only) and `fixed` (what `fix(repo)`
+    does on top of it); return `(reviewed_diff, head_diff, delta)` with the delta built by the driver."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "base")
+    _write(repo, MOD, MOD_BODY)
+    _write(repo, GUIDE, GUIDE_BODY)
+    _write(repo, OTHER, "one\n")
+    _commit(repo, "base")
+    _git(repo, "checkout", "-q", "-b", "reviewed")
+    _write(repo, OTHER, "one\ntwo\n")
+    _commit(repo, "reviewed")
+    _git(repo, "checkout", "-q", "-b", "fixed")
+    fix(repo)
+    _commit(repo, "fixed")
+    diffs = [_git(repo, "diff", "-M", "--src-prefix=a/", "--dst-prefix=b/", "base...%s" % tip)
+             for tip in ("reviewed", "fixed")]
+    return diffs[0], diffs[1], RD._attempt_fixer_delta(diffs[0], diffs[1])
+
+
+def _reword_guide(repo):
+    _write(repo, GUIDE, "# Guide\n\nUse the tool with care.\n")
+
+
+def _headers(delta):
+    return [ln for ln in delta if ln.startswith("diff --git ")]
+
+
+def test_t13_a_fix_that_renames_a_code_file_is_refused_though_it_also_edits_a_guide(tmp_path):
+    # axis: G10 — a two-path (rename) section is emitted under its own header
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    def fix(repo):
+        _git(repo, "mv", MOD, RENAMED)
+        _write(repo, RENAMED, MOD_BODY.replace("return 3", "return 33"))
+        _reword_guide(repo)
+
+    reviewed_diff, head_diff, delta = _built_delta(tmp_path, fix)
+    assert "rename from %s" % MOD in head_diff and "rename to %s" % RENAMED in head_diff
+    renamed = [h for h in _headers(delta) if RENAMED in h]
+    assert renamed == ["diff --git a/%s b/%s" % (MOD, RENAMED)]
+    assert "diff --git a/%s b/%s" % (GUIDE, GUIDE) in delta
+    target = _target(fixerDelta=delta)
+    assert audits.prose_only_delta(target) == (False, [])
+    outcome = _fold([_guarded()], target)
+    assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
+    assert outcome["reviewGuardRefused"] == ["t0"] and outcome["reviewGuarded"] == []
+    assert _only(outcome)["ruling"] == "not-discharged"
+
+
+def test_t14_a_fix_that_only_rewords_a_guide_clears_through_the_same_builder(tmp_path):
+    # positive control for T13 and T15: the same fixture, a prose-only fix
+    _, _, delta = _built_delta(tmp_path, _reword_guide)
+    assert _headers(delta) == ["diff --git a/%s b/%s" % (GUIDE, GUIDE)]
+    outcome = _fold([_guarded()], _target(fixerDelta=delta))
+    assert outcome["discharged"] == ["t0"] and outcome["notDischarged"] == []
+    assert outcome["reviewGuarded"] == ["t0"] and outcome["reviewGuardRefused"] == []
+
+
+def test_t15_a_fix_that_adds_a_code_file_with_a_quoted_name_is_refused(tmp_path):
+    # axis: G11 — a header that does not read `a/<f> b/<f>` (git-quoted path) is emitted under its own header
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_review_guarded_2341.md
+    quoted = "pkg/café.py"
+
+    def fix(repo):
+        _write(repo, quoted, "def cafe():\n    return 1\n")
+        _reword_guide(repo)
+
+    _, head_diff, delta = _built_delta(tmp_path, fix)
+    observed = [h for h in _headers(head_diff.splitlines()) if "caf" in h]
+    assert len(observed) == 1, head_diff
+    assert '"' in observed[0], observed  # git quotes the non-ASCII name under the default core.quotePath
+    assert observed[0] in delta
+    assert "diff --git a/%s b/%s" % (GUIDE, GUIDE) in delta
+    target = _target(fixerDelta=delta)
+    assert audits.prose_only_delta(target) == (False, [])
+    outcome = _fold([_guarded()], target)
+    assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
+    assert outcome["reviewGuardRefused"] == ["t0"] and outcome["reviewGuarded"] == []
+
+
+def test_t13_edges_a_pure_rename_a_left_alone_rename_a_left_out_header_and_empty_diffs(tmp_path):
+    def pure_rename(repo):
+        _git(repo, "mv", MOD, RENAMED)
+
+    reviewed_diff, head_diff, delta = _built_delta(tmp_path, pure_rename)
+    assert "similarity index 100%" in head_diff and "@@" not in head_diff.split("diff --git")[-1]
+    assert _headers(delta) == ["diff --git a/%s b/%s" % (MOD, RENAMED)]
+    assert RD._attempt_fixer_delta(reviewed_diff, head_diff, leave_out=(RENAMED,)) == []
+    assert RD._attempt_fixer_delta(head_diff, head_diff) == []
+    assert RD._attempt_fixer_delta(None, None) == []
+    assert RD._attempt_fixer_delta("", "") == []
+    assert RD._attempt_fixer_delta(head_diff, "") != []
