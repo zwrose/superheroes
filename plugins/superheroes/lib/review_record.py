@@ -1593,15 +1593,15 @@ def _record_findings(rec):
     return [i for i in found if isinstance(i, dict)] if isinstance(found, list) else []
 
 
-def _recheck_carried(findings, checks, prior, head, is_ancestor, other=None):
+def _recheck_carried(findings, checks, head, is_ancestor, other=None):
     """Re-check each left-for-owner, undecided or shown-wrong finding a carried check names against the record's final
-    commit `head`. A finding moves to fixed only on a `fixed` entry for a finding carried from `prior`, checked on
-    `head`, whose fix commit is in `head`'s history (is_ancestor exactly True); a shown-wrong finding also needs its
-    own verifier wrong grade, must be listed by ``other`` (the earlier record of another session; its own session's
-    record never makes it carried) and must not be listed shown-wrong there.
+    commit `head`. A finding is carried, for all three outcomes, only when ``other`` (the earlier record of another
+    session) lists it; this session's own earlier record never makes it carried. A finding moves to fixed only on a
+    `fixed` entry for a carried finding, checked on `head`, whose fix commit is in `head`'s history (is_ancestor
+    exactly True); a shown-wrong finding also needs its own verifier wrong grade and must not be listed shown-wrong
+    in ``other``.
     Every other case keeps its outcome, with the reason saying why. A finding is never removed. Returns the findings
     and one row per entry."""
-    stored = {_key(i) for i in _record_findings(prior)}
     shown_before = {_key(i) for i in _record_findings(other) if i.get("outcome") == _SHOWN_WRONG}
     other_keys = {_key(i) for i in _record_findings(other)}
     out, rows = [], []
@@ -1629,9 +1629,8 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor, other=None):
             why = f"the check found it still applies: {evidence}"
         elif settled == "unsettled":
             why = f"the check could not settle it: {evidence}"
-        # axis: a finding is marked fixed only if it was carried from the earlier record — see bite-proof record wo_b_1933_carried-recheck
-        # axis: a shown-wrong finding counts as carried only when the earlier record of another session lists it, never on this session's own record — see bite-proof record i2338_carried_record
-        elif _key(f) not in (other_keys if shown_wrong else stored):
+        # axis: a finding counts as carried only when the earlier record of another session lists it, for every outcome, never on this session's own record — see bite-proof record i2343_never_carried
+        elif _key(f) not in other_keys:
             why = "not carried from an earlier record"
         # axis: a check counts only for the commit the record names as final, so a head that moved after it keeps the finding — see bite-proof record wo_b_1933_carried-recheck
         elif seen != head:
@@ -1745,7 +1744,7 @@ def build_record(account, readers, prior=None, history=()):
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
     findings, rechecks = _recheck_decisions(findings, sources)
     earlier_other = _earlier_session_record(prior, history, a["sessionId"])
-    findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], prior, fc["sha"],
+    findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], fc["sha"],
                                               lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head),
                                               earlier_other)
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]

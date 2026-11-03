@@ -25,8 +25,8 @@ def entry(**over):
     return {"key": X_KEY, "settled": "fixed", "commit": FIX, "checkedHead": HEAD, "evidence": "ran the test; it passes", **over}
 
 
-def account(checks, findings=None):
-    return {"schema": rr.ACCOUNT_SCHEMA, "pr": 7, "repo": "o/r", "sessionId": "s-1", "lane": "light", "laneReason": None,
+def account(checks, findings=None, session="s-1"):
+    return {"schema": rr.ACCOUNT_SCHEMA, "pr": 7, "repo": "o/r", "sessionId": session, "lane": "light", "laneReason": None,
             "finalCommit": HEAD, "ci": "green", "reviewers": [{"name": "r1", "vendor": "codex", "model": CODEX,
                                                                    "planned": True, "ran": True, "runDir": None}],
             "findings": copy.deepcopy([X] if findings is None else findings), "rawFindingsFiles": [],
@@ -211,7 +211,7 @@ def test_a_direct_write_rechecks_a_finding_carried_from_the_earlier_record(tmp_p
     path.write_text(json.dumps(account([])))
     assert rr.write(str(path), str(tmp_path), rd)["ok"]
     assert rr.read(7, readers=rd)["findings"][0]["outcome"] == "left-for-owner"
-    path.write_text(json.dumps(account([entry()])))
+    path.write_text(json.dumps(account([entry()], session="s-2")))  # a later session: another session's record carries it
     assert rr.write(str(path), str(tmp_path), rd)["ok"]
     rec = rr.read(7, readers=rd)
     assert the_finding(rec)["outcome"] == "fixed" and rec["leftForOwner"] == []
@@ -229,7 +229,7 @@ def test_extras_carried_checks_reach_the_record_through_the_session_adapter(tmp_
     extras = tmp_path / "extras.json"
     extras.write_text(json.dumps({"schema": rs.EXTRAS_SCHEMA, "pr": 7,
                                   "carriedChecks": [entry(key=before["findingKey"], checkedHead=HEAD)]}))
-    out = rs.write_from_session(_second_session(tmp_path), str(extras), str(tmp_path), rd)
+    out = rs.write_from_session(_second_session(tmp_path, session_id="s-2"), str(extras), str(tmp_path), rd)
     assert out["ok"], out
     rec = rr.read(7, readers=rd)
     assert the_finding(rec)["outcome"] == "fixed" and [r["result"] for r in rec["carriedRechecks"]] == ["fixed"]
