@@ -281,8 +281,9 @@ vet's to follow.
 **`status` is not the test.** A record whose only open lines are leftovers shown to the owner reads `awaits-owner`, and one with a go-ahead for a review that did not run reads `not-reviewed`; either can still be returned as ready. A record that reads `awaits-owner` is read exactly as `not-reviewed`: it says only that every open line is a finding left for the owner, and it clears nothing. A
 record whose finding with a real consequence was decided as craft reads `reviewed` and is held. Read
 the fields the rows name. Any line of `whatIsMissing` that the four rows do not account for is a vet
-finding. The line saying no planned reviewer ran is accounted for when every planned review that did
-not run carries a go-ahead. The line saying CI was pending or none on the final commit is accounted
+finding. The line saying no planned reviewer ran is never accounted for: at least one reviewer runs on
+every PR, and a go-ahead covers a planned reviewer that did not run, never the last one
+(`skills/showrunner/SKILL.md` duty 6). The line saying CI was pending or none on the final commit is accounted
 for once CI is green on that commit now, or, when the final-commit row's receipts-only exception
 lets the record count, once CI is green on the PR's head now. The line saying a finding waits for the owner's decision is
 accounted for when the third row finds that finding shown to the owner, or shown as fixed above. Any other line of
