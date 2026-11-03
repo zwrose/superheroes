@@ -1333,7 +1333,7 @@ def _test_lens(reviewers, findings, final_sha, other=None):
         # axis: a carried count rides the not-listed part too, so the line can say it — see bite-proof record i2338_carried_record
         carried = split(set())[1]
         return {"listed": False, **({"carriedFindings": carried} if carried else {})}
-    ran =[v for v in rows if v["ran"] != "not-run"]
+    ran = [v for v in rows if v["ran"] != "not-run"]
     covering = [v for v in ran if v["coversFinalCommit"] is True]
     # axis: the chosen row is the last one covering the final commit, not the first row that ran — see bite-proof record wo_b_2311_record_calibration
     chosen = (covering or ran)[-1] if ran else None
@@ -1597,11 +1597,13 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor, other=None):
     """Re-check each left-for-owner, undecided or shown-wrong finding a carried check names against the record's final
     commit `head`. A finding moves to fixed only on a `fixed` entry for a finding carried from `prior`, checked on
     `head`, whose fix commit is in `head`'s history (is_ancestor exactly True); a shown-wrong finding also needs its
-    own verifier wrong grade and must not be listed shown-wrong by ``other`` (the earlier record of another session).
+    own verifier wrong grade, must be listed by ``other`` (the earlier record of another session; its own session's
+    record never makes it carried) and must not be listed shown-wrong there.
     Every other case keeps its outcome, with the reason saying why. A finding is never removed. Returns the findings
     and one row per entry."""
     stored = {_key(i) for i in _record_findings(prior)}
     shown_before = {_key(i) for i in _record_findings(other) if i.get("outcome") == _SHOWN_WRONG}
+    other_keys = {_key(i) for i in _record_findings(other)}
     out, rows = [], []
     for f in findings:
         c = next((c for c in checks if c["key"] in (f.get(session_contract.FINDING_KEY_FIELD), f.get("id"))), None)
@@ -1628,7 +1630,8 @@ def _recheck_carried(findings, checks, prior, head, is_ancestor, other=None):
         elif settled == "unsettled":
             why = f"the check could not settle it: {evidence}"
         # axis: a finding is marked fixed only if it was carried from the earlier record — see bite-proof record wo_b_1933_carried-recheck
-        elif _key(f) not in stored:
+        # axis: a shown-wrong finding counts as carried only when the earlier record of another session lists it, never on this session's own record — see bite-proof record i2338_carried_record
+        elif _key(f) not in (other_keys if shown_wrong else stored):
             why = "not carried from an earlier record"
         # axis: a check counts only for the commit the record names as final, so a head that moved after it keeps the finding — see bite-proof record wo_b_1933_carried-recheck
         elif seen != head:

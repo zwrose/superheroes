@@ -119,6 +119,36 @@ def test_t4_a_same_session_rewrite_looks_past_its_own_record_to_the_other_sessio
     assert [(r["result"], r["why"]) for r in held["carriedRechecks"]] == [("unchanged", "shown wrong in the earlier record")]
 
 
+def test_t15_a_same_session_rewrite_never_moves_a_shown_wrong_finding_no_earlier_session_carried():
+    # axis: a shown-wrong finding counts as carried only when the earlier record of another session lists it, never on this session's own record
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2338_carried_record.md
+    own = record("s-1", U)
+    rec = build_w([entry()], prior=own, history=[])
+    f = the_one(rec)
+    assert f["outcome"] == "shown-wrong"
+    assert "not carried from an earlier record" in f["reason"] and "overrules" not in f["reason"]
+    (row,) = rec["carriedRechecks"]
+    assert (row["result"], row["why"]) == ("kept", "not carried from an earlier record")
+    assert row["result"] != "fixed"
+    # no earlier record at all and an earlier record whose findings are not a list move nothing either
+    for other in (None, {"sessionId": "s-0", "findings": "none"}):
+        held = build_w([entry()], prior=own, history=[] if other is None else [other])
+        assert the_one(held)["outcome"] == "shown-wrong"
+
+
+def test_t16_a_same_session_rewrite_with_another_sessions_record_that_never_listed_it_keeps_shown_wrong():
+    # axis: the other session's record does not list the finding, so a finding only this session's own record lists is not carried
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2338_carried_record.md
+    unrelated = dict(X, id="f-9", title="Another finding", line=3)
+    assert rr._key(unrelated) != X_KEY
+    rec = build_w([entry()], prior=record("s-1", U), history=[record("s-0", unrelated)])
+    f = the_one(rec)
+    assert f["outcome"] == "shown-wrong"
+    assert "not carried from an earlier record" in f["reason"] and "overrules" not in f["reason"]
+    (row,) = rec["carriedRechecks"]
+    assert (row["result"], row["why"]) == ("kept", "not carried from an earlier record")
+
+
 @pytest.mark.parametrize("finding", [
     pytest.param({**{k: v for k, v in W.items() if k != "grade"},
                   "repeatOf": {"findingKey": X_KEY, "id": "f-0", "fixHolds": True}}, id="repeat-with-no-grade"),

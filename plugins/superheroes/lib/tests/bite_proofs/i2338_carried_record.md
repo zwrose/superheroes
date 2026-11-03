@@ -429,6 +429,47 @@ FAILED plugins/superheroes/lib/tests/test_review_record_carried_2338.py::test_t1
 1 passed in 0.37s
 ```
 
+## 9. A shown-wrong finding is carried only by the earlier record of another session (`_recheck_carried`, the not-carried test)
+
+- **Axis:** a shown-wrong finding counts as carried only when the earlier record of another session lists it; a session's own earlier record never makes it carried.
+- **Detector:** `test_review_record_carried_2338.py::test_t15_a_same_session_rewrite_never_moves_a_shown_wrong_finding_no_earlier_session_carried`. Run with `-X pycache_prefix=/tmp/superheroes-pyc-2338b`; the `UV_NATIVE_TLS` warning is the only line left out of each capture, and nothing else needed redaction (no secret, token, URL or personal data appears).
+- **Neutralization:** `        elif _key(f) not in (other_keys if shown_wrong else stored):` became `        elif _key(f) not in stored:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_t15_a_same_session_rewrite_never_moves_a_shown_wrong_finding_no_earlier_session_carried _
+
+    def test_t15_a_same_session_rewrite_never_moves_a_shown_wrong_finding_no_earlier_session_carried():
+        # axis: a shown-wrong finding counts as carried only when the earlier record of another session lists it, never on this session's own record
+        # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2338_carried_record.md
+        own = record("s-1", U)
+        rec = build_w([entry()], prior=own, history=[])
+        f = the_one(rec)
+>       assert f["outcome"] == "shown-wrong"
+E       AssertionError: assert 'fixed' == 'shown-wrong'
+E         
+E         - shown-wrong
+E         + fixed
+
+/home/user/wt-2338/plugins/superheroes/lib/tests/test_review_record_carried_2338.py:128: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_carried_2338.py::test_t15_a_same_session_rewrite_never_moves_a_shown_wrong_finding_no_earlier_session_carried
+1 failed in 0.41s
+```
+
+**Restore:** the inverse edit put `(other_keys if shown_wrong else stored)` back.
+**Restore receipt** (quoted from `review_record.py:1634`): `        elif _key(f) not in (other_keys if shown_wrong else stored):`
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```
+
 ## Not proven
 
 - The `Code, Test` label case and the `Testing` non-match inside T11 are asserted but not neutralized one by one; entry 8 neutralizes the whole lens-level clause.
