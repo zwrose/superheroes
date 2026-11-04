@@ -448,7 +448,13 @@ def test_template_body_does_not_restate_payload_contract(phase):
 # --- golden fixtures -----------------------------------------------------------
 
 
-@pytest.mark.parametrize("phase", list(_GOLDEN_CONTEXTS))
+# A golden whose phase's order is doctrine prose that changed is retired, never refreshed: the pin rule
+# (rubric/review-discipline.md § One home per rule, and the pin rule). Structure stays asserted on the
+# rendered order by the tests that read it.
+_RETIRED_GOLDENS = frozenset({RP.P_AUDITS})
+
+
+@pytest.mark.parametrize("phase", [p for p in _GOLDEN_CONTEXTS if p not in _RETIRED_GOLDENS])
 def test_golden_render_matches_fixture(phase):
     golden_path = os.path.join(_GOLDEN_DIR, phase + ".txt")
     rendered = _render_golden(phase)
