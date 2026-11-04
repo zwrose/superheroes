@@ -351,7 +351,7 @@ def test_c14_a_double_spaced_quote_prefix_body_refuses_write_failed(tmp_path):
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
 
 
-def test_c14_a_line_of_ascii_spaces_and_tabs_still_ends_a_raw_run():
+def test_c14_a_line_of_ascii_spaces_and_tabs_in_an_html_block_body_leaves_the_quoted_opener_a_comment():
     # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main)
     assert [row[3] for row in vs._comment_scan("<div>\n \t \n`<!--`\nnext\n")] == [False, False, False, True]
 

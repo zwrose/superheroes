@@ -570,3 +570,18 @@ test_vet_slot.py test_vet_slot_emptied_2323.py test_vet_slot_leftovers_2280.py t
 
 None: G1 to G6 each have their own neutralization and red. The `dead` (fenced line) guard and K1–K4's other branches are
 pre-existing and not re-proved here beyond K1–K4 above.
+
+## Test renames (vet 817)
+
+The captures above keep the names the tests had when they ran (seven of the eight earlier names appear in them).
+
+| Earlier name | Current name |
+| --- | --- |
+| `test_c2_run_verb_does_not_refuse_body_emptied_for_an_inline_code_opener_above_the_heading` | `test_c2_run_verb_refuses_body_emptied_for_an_inline_code_opener_above_the_heading` |
+| `test_c2_evaluate_does_not_refuse_body_emptied` | `test_c2_evaluate_refuses_body_emptied` |
+| `test_c11_a_blank_line_ends_the_raw_block_so_a_later_quoted_opener_is_text_again` | `test_c11_a_blank_line_after_the_raw_block_still_refuses_write_failed_for_a_later_quoted_opener` |
+| `test_c12_a_tag_inside_a_comment_starts_no_raw_run` | `test_c12_a_tag_inside_a_comment_still_refuses_write_failed_for_the_quoted_opener` |
+| `test_c12_a_quoted_blank_line_ends_a_quoted_raw_run` | `test_c12_a_quoted_blank_line_raw_run_body_refuses_write_failed` |
+| `test_c14_a_list_item_quoted_raw_run_ends_at_its_quoted_blank_so_the_bot_body_writes` | `test_c14_a_list_item_quoted_raw_run_body_refuses_write_failed` |
+| `test_c14_a_double_spaced_quote_prefix_ends_at_its_quoted_blank_so_the_bot_body_writes` | `test_c14_a_double_spaced_quote_prefix_body_refuses_write_failed` |
+| `test_c14_a_line_of_ascii_spaces_and_tabs_still_ends_a_raw_run` | `test_c14_a_line_of_ascii_spaces_and_tabs_in_an_html_block_body_leaves_the_quoted_opener_a_comment` |
