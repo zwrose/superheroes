@@ -7,8 +7,10 @@ reserve and spawn. Never raises to callers."""
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import ctypes.util
+import fcntl
 import functools
 import json
 import os
@@ -1892,9 +1894,13 @@ def _append_started(repo_root, record, env):
 
 def _run_cloud_spawn(
     repo_root, launch_id, argv, session_name, log_path, err_path, child_env, timeout,
-    spawn_fn, evidence, env, post_reserve_fail, success_base,
+    spawn_fn, evidence, env, post_reserve_fail, success_base, cwd=None,
 ):
     """Run the cloud launch command once, record the lane's `started`, and shape the result.
+
+    The command runs with ``cwd`` as its working folder: the launcher's own cloud-launch folder,
+    which the platform reads the branch and commit from. ``repo_root`` is still where the ledger
+    and the lane's records live.
 
     Exactly one outcome applies, in this order: the command never ran (terminalized); a coherent
     creation receipt was read (started, success); no coherent receipt (started with the
@@ -1903,6 +1909,8 @@ def _run_cloud_spawn(
     command that ran.
     """
     spawn = spawn_fn or default_cloud_spawn
+    if cwd is None:
+        cwd = repo_root
     try:
         with open(err_path, "ab"):
             pass
@@ -1911,7 +1919,8 @@ def _run_cloud_spawn(
         return post_reserve_fail(_terminalization_reason(term, "log-open-failed"))
 
     try:
-        spawned = spawn(argv, repo_root, log_path, child_env, timeout)
+        # axis: the cloud command runs in the launcher's own folder, never the primary checkout — see bite-proof record i2353_cloud_launch_folder
+        spawned = spawn(argv, cwd, log_path, child_env, timeout)
     except OSError:
         term = _terminalize(repo_root, launch_id, False, "spawn-oserror", stage="spawn", env=env)
         return post_reserve_fail(_terminalization_reason(term, "spawn-oserror"))
@@ -2795,9 +2804,11 @@ _now_fn = time.time
 def _cloud_base_refusal(repo_root, stamped, env):
     """The refusal reason when the base commit the launch names is not on the remote, else None.
 
-    The cloud command takes no revision, and the platform starts the session from the launching
-    checkout's commit, not from the prompt's ``Base commit:`` line. So the base must be on the
-    remote (this function) and the checkout must be on the base (``_cloud_checkout_refusal``).
+    The cloud command takes no revision, and the platform starts the session from the commit of
+    the folder the command runs in (the launcher's own cloud-launch folder, which the launcher
+    repairs non-destructively; the primary checkout is only read), not from the prompt's
+    ``Base commit:`` line. So the base must be on the remote (this function) and that folder must
+    be on the base (``_cloud_checkout_refusal``).
     Run before reservation and again right before the cloud command: reservation can wait on the
     ledger lock. The check fails closed: a remote that could not be asked refuses.
     """
@@ -2885,13 +2896,15 @@ def _read_checkout(repo_root, env):
 
 
 def _cloud_checkout_refusal(repo_root, base, env):
-    """None when the launching checkout is on a named branch whose local HEAD and whose tip on
-    ``origin`` are both ``base``; else ``(reason, detail)``. It only reads the checkout.
+    """None when the folder the cloud command runs in (the launcher's own cloud-launch folder, not
+    the primary checkout) is on a named branch whose local HEAD and whose tip on ``origin`` are
+    both ``base``; else ``(reason, detail)``. It only reads that folder.
 
-    The platform starts the session from the checkout's commit, and we cannot tell whether it
+    The platform starts the session from the folder's commit, and we cannot tell whether it
     reads the local commit or the branch's tip on the remote, so both must be the base. Anything
-    that cannot be read refuses. The checkout is read again after the remote answers, because the
-    owner may switch while the lookup is pending.
+    that cannot be read refuses. The folder is read again after the remote answers, because
+    something may switch it while the lookup is pending. The launcher repairs the folder
+    non-destructively before this check (``_prepare_cloud_launch_folder``); this check never does.
     """
     branch, head = _read_checkout(repo_root, env)
     detail = {
@@ -2929,53 +2942,16 @@ def _cloud_checkout_refusal(repo_root, base, env):
     return None
 
 
-def _cloud_start_refusal(repo_root, stamped, env):
-    """None, or ``(reason, extra)``: why a cloud launch must not run the cloud command now.
-
-    The base-on-remote refusals come first, with their tokens and their local fallback
-    unchanged; then the checkout check, whose refusals carry the checkout's facts in ``extra``.
-    An adoption (``adoptsBranch`` with an ``adoptsHead`` that is a full sha) launches from a
-    checkout at its adopted head or at its ``baseCommit`` (the base is an ancestor of that head);
-    any other launch needs a checkout at its ``baseCommit``. ``extra`` keeps ``baseCommit`` and
-    says which it was checked against; an adoption refused at both carries the adopted head's
-    reason and detail.
-    """
-    reason = _cloud_base_refusal(repo_root, stamped, env)
-    if reason is not None:
-        return reason, {}
-    head = stamped.get("adoptsHead")
-    base = stamped["baseCommit"]
-    # axis: an adoption passes from a checkout at its adopted head or at its base, each checked whole, and refuses with the adopted head's reason only when both refuse; every other launch is checked against its base alone — see bite-proof record i2272_launcher
-    adopting = "adoptsBranch" in stamped and isinstance(head, str) and bool(_HEX40.match(head))
-    if not adopting:
-        refusal = _cloud_checkout_refusal(repo_root, base, env)
-        if refusal is None:
-            return None
-        refusal_reason, detail = refusal
-        detail["baseCommit"] = base
-        detail["checkedAgainst"] = "baseCommit"
-        return refusal_reason, detail
-    refusal = _cloud_checkout_refusal(repo_root, head, env)
-    if refusal is None:
-        return None
-    if head != base and _cloud_checkout_refusal(repo_root, base, env) is None:
-        return None
-    refusal_reason, detail = refusal
-    detail["baseCommit"] = base
-    detail["checkedAgainst"] = "adoptsHead and baseCommit"
-    return refusal_reason, detail
-
-
 # --- the launcher's own cloud-launch folder (#2353) -----------------------------------------------
 #
 # A cloud start reads its working folder's current branch and the platform clones that branch's
-# remote tip. So a cloud launch is to start from a folder the launcher owns: one separate clone
-# per repository, under the managed-worktree root, so the primary checkout is never moved for a
-# launch. The primary checkout is only ever read. This part makes the folder and validates it; no
-# launch uses it yet.
+# remote tip. So the folder the command runs in must sit on a named branch whose local head and
+# whose tip on ``origin`` are both the launch's target commit. The launcher owns a clone for that
+# (one per repository, under the managed-worktree root) and repairs it non-destructively; the
+# primary checkout is only ever read.
 
 _CLOUD_FOLDER_MARKER = "superheroes-cloud-launch-folder"
-# A clone moves objects, so it may outlast the short per-step read bound.
+# A clone or a fetch moves objects, so it may outlast the short per-step read bound.
 _CLOUD_FOLDER_TRANSFER_TIMEOUT = 600
 
 
@@ -3143,6 +3119,274 @@ def ensure_cloud_launch_folder(repo_root, env=None):
     if _validate_cloud_launch_folder(repo_root, path, env) is not None:
         return _create_failed()
     return {"ok": True, "folder": path, "created": True, "reason": None}
+
+
+_CLOUD_FOLDER_LOCK_WAIT_SECONDS = 600
+_CLOUD_FOLDER_LOCK_POLL_SECONDS = 0.1
+_CLOUD_FOLDER_UNSAFE_BRANCH = re.compile(r"[\x00-\x20\x7f]")
+
+
+def _choose_cloud_launch_branch(folder, stamped, env):
+    """``(branch, target, None)`` or ``(None, None, "unchecked" | "no-branch-at-base")``.
+
+    One ``ls-remote --symref origin`` read of the folder's remote. A premise that adopts a branch
+    whose tip on the remote is its adopted head targets that branch and head. Otherwise the target
+    is the base commit, on a branch whose tip is that commit: the remote's default branch when it
+    is one of them, else the lexically first. Anything that cannot be asked or read is unchecked.
+    """
+    ask_env = dict(os.environ if env is None else env)
+    ask_env["GIT_TERMINAL_PROMPT"] = "0"
+    asked = _git_scrubbed(
+        folder, "ls-remote", "--symref", "origin", env=ask_env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if asked is None or asked.returncode != 0:
+        return None, None, "unchecked"
+    prefix = "refs/heads/"
+    default = None
+    tips = {}
+    lines = (asked.stdout or "").splitlines()
+    if not lines:
+        return None, None, "unchecked"
+    for line in lines:
+        if line.startswith("ref: "):
+            said, tab, named = line[len("ref: "):].partition("\t")
+            if tab == "\t" and named == "HEAD" and said.startswith(prefix):
+                default = said[len(prefix):]
+            continue
+        sha, tab, named = line.partition("\t")
+        if tab != "\t" or not _HEX40.match(sha):
+            return None, None, "unchecked"
+        if (named.startswith(prefix) and len(named) > len(prefix)
+                and not named[len(prefix):].startswith("-")
+                and not _CLOUD_FOLDER_UNSAFE_BRANCH.search(named)):
+            tips[named[len(prefix):]] = sha.lower()
+    base = stamped.get("baseCommit")
+    base = base.lower() if isinstance(base, str) else None
+    head = stamped.get("adoptsHead")
+    adopted = stamped.get("adoptsBranch")
+    if (
+        "adoptsBranch" in stamped and isinstance(adopted, str)
+        and isinstance(head, str) and _HEX40.match(head)
+        and tips.get(adopted) == head.lower()
+    ):
+        return adopted, head.lower(), None
+    at_base = sorted(name for name, tip in tips.items() if base is not None and tip == base)
+    if not at_base:
+        return None, None, "no-branch-at-base"
+    if default in at_base:
+        return default, base, None
+    return at_base[0], base, None
+
+
+# Where the launcher's own folder is; tests replace it. Every folder lookup in a launch goes through
+# this, never through ``cloud_launch_folder_path`` directly.
+_cloud_launch_folder_path_fn = cloud_launch_folder_path
+
+
+def _prepare_cloud_launch_folder(repo_root, stamped, env):
+    """``(folder, [target], None)`` when the folder is on a branch at the target, repaired
+    non-destructively when it was not; else ``(folder_or_None, None, (reason, detail))``.
+
+    Never creates the folder (an untrusted new folder hangs the CLI's trust prompt: the setup
+    verb makes it). Never discards anything: a dirty tree, a local branch holding commits the
+    target lacks, an ignored file the checkout would overwrite, all refuse.
+    """
+    base = stamped["baseCommit"]
+    folder = _cloud_launch_folder_path_fn(repo_root, env)
+
+    def checkout_refusal(reason, repair):
+        return folder, None, (reason, {
+            "launchFolder": folder,
+            "folderRepair": repair,
+            "checkout": folder,
+            "baseCommit": base,
+        })
+
+    def missing():
+        return folder, None, ("launch-cloud-folder-missing", {
+            "launchFolder": folder, "baseCommit": base,
+        })
+
+    if folder is None:
+        return missing()
+    # axis: a folder the setup verb has not made refuses, and the launch never creates it — see bite-proof record i2353_cloud_launch_folder
+    found = _validate_cloud_launch_folder(repo_root, folder, env)
+    if found == "missing":
+        return missing()
+    if found is not None:
+        return checkout_refusal("launch-cloud-checkout-unreadable", "not-launcher-owned")
+    status = _git_scrubbed(
+        folder, "status", "--porcelain", "--untracked-files=all",
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if status is None or status.returncode != 0:
+        return checkout_refusal("launch-cloud-checkout-unreadable", "not-launcher-owned")
+    # axis: a folder with uncommitted changes refuses, so the repair never discards or carries them — see bite-proof record i2353_cloud_launch_folder
+    if (status.stdout or "").strip():
+        return checkout_refusal("launch-cloud-checkout-off-base", "uncommitted-changes")
+    branch, target, why = _choose_cloud_launch_branch(folder, stamped, env)
+    if why == "unchecked":
+        return checkout_refusal("launch-cloud-checkout-remote-unchecked", "fetch-failed")
+    # axis: a base that no remote branch tip equals refuses, since a start reads a branch's tip — see bite-proof record i2353_cloud_launch_folder
+    if why == "no-branch-at-base":
+        return checkout_refusal("launch-cloud-checkout-off-base", "no-branch-at-base")
+    ask_env = dict(os.environ if env is None else env)
+    ask_env["GIT_TERMINAL_PROMPT"] = "0"
+    tracking = "refs/remotes/origin/%s" % branch
+    fetched = _git_scrubbed(
+        folder, "fetch", "--quiet", "origin", "+refs/heads/%s:%s" % (branch, tracking),
+        env=ask_env, timeout=_CLOUD_FOLDER_TRANSFER_TIMEOUT,
+    )
+    if fetched is None or fetched.returncode != 0:
+        return checkout_refusal("launch-cloud-checkout-remote-unchecked", "fetch-failed")
+    tip = _git_stdout(folder, "rev-parse", "--verify", "%s^{commit}" % tracking, env=env)
+    if tip is None:
+        return checkout_refusal("launch-cloud-checkout-remote-unchecked", "fetch-failed")
+    if tip.lower() != target:
+        return checkout_refusal("launch-cloud-checkout-off-base", "remote-moved")
+    local = _git_scrubbed(
+        folder, "rev-parse", "--verify", "--quiet", "refs/heads/%s^{commit}" % branch,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if local is None or local.returncode not in (0, 1):
+        return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
+    if local.returncode == 0 and (local.stdout or "").strip().lower() != target:
+        ahead = _git_scrubbed(
+            folder, "merge-base", "--is-ancestor", "refs/heads/%s" % branch, target,
+            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        # axis: a local branch holding commits the target lacks refuses, so the repair is only ever a fast-forward — see bite-proof record i2353_cloud_launch_folder
+        if ahead is None or ahead.returncode != 0:
+            return checkout_refusal("launch-cloud-checkout-off-base", "local-commits")
+    now_branch, now_head = _read_checkout(folder, env)
+    if now_branch == branch and now_head == target:
+        return folder, [target], None
+    # axis: --no-overwrite-ignore makes an ignored file the target tracks refuse the switch instead of being overwritten — see bite-proof record i2353_cloud_launch_folder
+    switched = _git_scrubbed(
+        folder, "checkout", "--quiet", "--no-overwrite-ignore", "-B", branch, target,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if switched is None or switched.returncode != 0:
+        return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
+    tracked = _git_scrubbed(
+        folder, "branch", "--quiet", "--set-upstream-to=origin/%s" % branch, branch,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if tracked is None or tracked.returncode != 0:
+        return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
+    return folder, [target], None
+
+
+# The step that makes the folder ready and names the targets to check; tests replace it.
+_cloud_launch_folder_fn = _prepare_cloud_launch_folder
+
+
+@contextlib.contextmanager
+def _cloud_launch_folder_lock(folder, wait):
+    """Hold an exclusive lock on the folder's sibling lock file; yield None once held, else a
+    refusal ``(reason, detail)``.
+
+    Polls for up to ``wait`` seconds. A folder of None, or one that does not exist, yields None
+    without opening anything: the lock never creates a path, and the folder check that follows
+    refuses it. Always unlocks and closes on exit.
+    """
+    if folder is None or not os.path.lexists(folder):
+        yield None
+        return
+    try:
+        fd = os.open(folder + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        # axis: a lock file that cannot be opened refuses, so a launch never runs unguarded — see bite-proof record i2353_cloud_launch_folder
+        yield "launch-cloud-checkout-unreadable", {
+            "launchFolder": folder, "folderRepair": "lock-failed", "checkout": folder,
+        }
+        return
+    try:
+        deadline = time.monotonic() + wait
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except BlockingIOError:
+                # axis: a folder another launch holds refuses after the wait, so two launches never move one folder at once — see bite-proof record i2353_cloud_launch_folder
+                if time.monotonic() >= deadline:
+                    yield "launch-cloud-folder-busy", {"launchFolder": folder}
+                    return
+                time.sleep(_CLOUD_FOLDER_LOCK_POLL_SECONDS)
+            except OSError:
+                yield "launch-cloud-checkout-unreadable", {
+                    "launchFolder": folder, "folderRepair": "lock-failed", "checkout": folder,
+                }
+                return
+        try:
+            yield None
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def _lock_refusal(held, stamped):
+    """A folder-lock refusal shaped like every other start refusal: it names the base too."""
+    reason, detail = held
+    detail = dict(detail)
+    detail["baseCommit"] = stamped["baseCommit"]
+    return reason, detail
+
+
+def _cloud_start_check(repo_root, stamped, env):
+    """``(folder, None)`` or ``(folder_or_None, (reason, extra))``: the one check both call sites run.
+
+    The base-on-remote refusals come first, with their tokens and their local fallback
+    unchanged; then the launcher's own folder is made ready (``_cloud_launch_folder_fn``) and each
+    target it names is checked by the unchanged ``_cloud_checkout_refusal`` against that folder
+    (never the primary checkout). The first target that passes passes; refused at all, the first
+    target's reason and detail come back, with ``baseCommit``, ``launchFolder`` and
+    ``checkedAgainst`` in ``extra``. The caller holds the folder lock around this call.
+    """
+    reason = _cloud_base_refusal(repo_root, stamped, env)
+    if reason is not None:
+        return None, (reason, {})
+    base = stamped["baseCommit"]
+    folder, targets, refusal = _cloud_launch_folder_fn(repo_root, stamped, env)
+    if refusal is not None:
+        return folder, refusal
+    if folder is None or not targets:
+        return folder, ("launch-cloud-folder-missing", {"launchFolder": folder, "baseCommit": base})
+    first = None
+    for target in targets:
+        checked = _cloud_checkout_refusal(folder, target, env)
+        if checked is None:
+            return folder, None
+        if first is None:
+            first = checked
+    refusal_reason, detail = first
+    detail["baseCommit"] = base
+    detail["launchFolder"] = folder
+    if len(targets) > 1:
+        detail["checkedAgainst"] = "adoptsHead and baseCommit"
+    elif "adoptsBranch" in stamped and targets[0] == stamped.get("adoptsHead"):
+        detail["checkedAgainst"] = "adoptsHead"
+    else:
+        detail["checkedAgainst"] = "baseCommit"
+    return folder, (refusal_reason, detail)
+
+
+def _cloud_start_refusal(repo_root, stamped, env):
+    """None, or ``(reason, extra)``: why a cloud launch must not run the cloud command now.
+
+    ``_cloud_start_check`` under the launcher's own folder lock. An adoption (``adoptsBranch``
+    with an ``adoptsHead`` that is a full sha) launches from the adopted head or from its
+    ``baseCommit`` (the base is an ancestor of that head); any other launch needs its
+    ``baseCommit``. ``extra`` keeps ``baseCommit`` and says which it was checked against. The
+    primary checkout is only read; the folder the command runs in is the launcher's own.
+    """
+    folder = _cloud_launch_folder_path_fn(repo_root, env)
+    with _cloud_launch_folder_lock(folder, _CLOUD_FOLDER_LOCK_WAIT_SECONDS) as held:
+        if held is not None:
+            return _lock_refusal(held, stamped)
+        return _cloud_start_check(repo_root, stamped, env)[1]
 
 
 _ADOPT_HEAD_NOT_ON_BASE = "premise-adopts-head-not-on-base"
@@ -3930,9 +4174,10 @@ def _check_premises(
         iphone_types = resolved_models["types"]
 
     if cloud:
-        # The cloud command takes no revision and the platform starts the session from the
-        # launching checkout's commit, so the remote must have the base and the checkout must be
-        # on it. The launcher pushes nothing and never changes the checkout to make it so.
+        # The cloud command takes no revision and the platform starts the session from the commit
+        # of the folder the command runs in, so the remote must have the base and that folder must
+        # be on it. The folder is the launcher's own, which it repairs non-destructively; it
+        # pushes nothing and only reads the primary checkout.
         refusal = _cloud_start_refusal(repo_root, stamped, env)
         if refusal is not None:
             refusal_reason, refusal_extra = refusal
@@ -4464,36 +4709,50 @@ def launch_build(
         # axis: reservation may have waited on the ledger lock, so the base is re-checked
         # right before the command; a base the remote lost terminalizes the unstarted lane.
         # The checkout is the last read before the command, after the slow original-session lookup, so a checkout that moved during that lookup is seen — see bite-proof record i2272_launcher
-        drift = _cloud_start_refusal(repo_root, stamped, env)
-        if drift is not None:
-            drift_reason, drift_extra = drift
-            term = _terminalize(
-                repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
+        # The folder lock is held from before the check through the whole command, so no other
+        # launch can move the folder between the check and the platform reading it.
+        folder_path = _cloud_launch_folder_path_fn(repo_root, env)
+        with _cloud_launch_folder_lock(folder_path, _CLOUD_FOLDER_LOCK_WAIT_SECONDS) as held:
+            # axis: a folder lock that is not held terminalizes the unstarted lane like any drift refusal, and the command does not run — see bite-proof record i2353_cloud_launch_folder
+            if held is not None:
+                held_reason, held_extra = _lock_refusal(held, stamped)
+                term = _terminalize(
+                    repo_root, launch_id, False, held_reason, stage="cloud-base", env=env,
+                )
+                return _post_reserve_fail(_terminalization_reason(term, held_reason), **held_extra)
+            folder, drift = _cloud_start_check(repo_root, stamped, env)
+            if drift is not None:
+                drift_reason, drift_extra = drift
+                term = _terminalize(
+                    repo_root, launch_id, False, drift_reason, stage="cloud-base", env=env,
+                )
+                return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
+            # axis: the limit the check relied on is compared with the clock right before the cloud command, with no remote read, since the remote lookups above can outlive it — see bite-proof record i2272_launcher
+            expired = _limit_expired_refusal(limit_reads, repo_root, env)
+            if expired is not None:
+                expired_reason, expired_detail = expired
+                term = _terminalize(
+                    repo_root, launch_id, False, expired_reason, stage="original-session", env=env,
+                )
+                return _post_reserve_fail(
+                    _terminalization_reason(term, expired_reason), **expired_detail,
+                )
+            cloud_result = _run_cloud_spawn(
+                repo_root,
+                launch_id,
+                argv,
+                cloud_session_name,
+                log_path,
+                err_path,
+                cloud_env,
+                _CLOUD_SPAWN_TIMEOUT_SECONDS if cloud_spawn_timeout is None else cloud_spawn_timeout,
+                cloud_spawn_fn,
+                overlap_evidence,
+                env,
+                _post_reserve_fail,
+                success_base,
+                cwd=folder,
             )
-            return _post_reserve_fail(_terminalization_reason(term, drift_reason), **drift_extra)
-        # axis: the limit the check relied on is compared with the clock right before the cloud command, with no remote read, since the remote lookups above can outlive it — see bite-proof record i2272_launcher
-        expired = _limit_expired_refusal(limit_reads, repo_root, env)
-        if expired is not None:
-            expired_reason, expired_detail = expired
-            term = _terminalize(
-                repo_root, launch_id, False, expired_reason, stage="original-session", env=env,
-            )
-            return _post_reserve_fail(_terminalization_reason(term, expired_reason), **expired_detail)
-        cloud_result = _run_cloud_spawn(
-            repo_root,
-            launch_id,
-            argv,
-            cloud_session_name,
-            log_path,
-            err_path,
-            cloud_env,
-            _CLOUD_SPAWN_TIMEOUT_SECONDS if cloud_spawn_timeout is None else cloud_spawn_timeout,
-            cloud_spawn_fn,
-            overlap_evidence,
-            env,
-            _post_reserve_fail,
-            success_base,
-        )
         if cloud_result.get("ok"):
             _attach_gates(cloud_result, stack_gate, dependency_gate)
         return cloud_result
