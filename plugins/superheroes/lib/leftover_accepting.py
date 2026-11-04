@@ -6,7 +6,11 @@ case-folded, every Unicode dash read as ``-``) as a whole token after the punctu
 and ``f-1`` name one id but ``f-1`` is never inside ``f-1-b``. Two or more ids of one record that share a normal form
 are each compared on their exact bytes: nothing is stripped, the acceptance is not split on whitespace, and an
 occurrence of one inside an occurrence of a longer id of the same group does not count, so one acceptance never names
-two of them. The title is compared by its words, ignoring case, quotes, punctuation and Markdown underscore emphasis
+two of them. The punctuation around an id is classified after NFKC, so a full-width wrapper (``（Ｆ－１）``,
+``Ｆ－１：``) is stripped like its ASCII form, and a zero-width character (U+200B, U+200C, U+200D, U+2060, U+FEFF) touching
+an id reads as outside it. One acceptance counts for at most one leftover: the leftovers and the acceptances are paired
+one to one by a maximum matching (``_assign``, deterministic: leftovers in record order, acceptances in body order), and
+a leftover with no acceptance of its own is missing. The title is compared by its words, ignoring case, quotes, punctuation and Markdown underscore emphasis
 (quotes and apostrophes are dropped, so ``don't`` and ``don’t`` agree; backticks, a hyphen written as a space and
 underscores that wrap a word, as in ``_slow retry_``, are read as spaces; an underscore inside a word is kept). An
 acceptance that
@@ -129,9 +133,15 @@ def normalise_id(text):
     return _DASHES.sub("-", unicodedata.normalize("NFKC", text).casefold())
 
 
+_ZERO_WIDTH = re.compile("[​‌‍⁠﻿]")
+
+
 def _tokens(text):
-    """The whitespace-separated pieces of ``text``, each without the punctuation that wraps or ends it; empty ones dropped."""
-    pieces = (piece.lstrip(_LEAD).rstrip(_TRAIL) for piece in text.split())
+    """The whitespace-separated pieces of ``text``, each without the punctuation that wraps or ends it; empty ones dropped.
+    A zero-width character (U+200B, U+200C, U+200D, U+2060, U+FEFF) separates tokens like a space, so one touching an id
+    reads as outside it."""
+    # axis: a zero-width character is a token separator, never part of an id
+    pieces = (piece.lstrip(_LEAD).rstrip(_TRAIL) for piece in _ZERO_WIDTH.sub(" ", text).split())
     return [piece for piece in pieces if piece]
 
 
@@ -147,12 +157,14 @@ def _title_key(text):
 
 
 def _id_named(item, ident):
-    """Whether the id's tokens appear as a consecutive run of the item's tokens, both under ``normalise_id``."""
-    want, have = _tokens(ident), _tokens(item)
+    """Whether the id's tokens appear as a consecutive run of the item's tokens, both under ``normalise_id``. The text is
+    normalised (NFKC, case-folded, dashes) before its punctuation is stripped, so a full-width wrapper is stripped like
+    its ASCII form."""
+    # axis: NFKC comes before the punctuation around an id is classified, so （Ｆ－１） and Ｆ－１： read as (f-1) and f-1:
+    want, have = _tokens(normalise_id(ident)), _tokens(normalise_id(item))
     # axis: an id with no token left after stripping its punctuation is matched as a whole token by the old character rule
     if not want:
         return re.search("(?<![%s])%s(?![%s])" % (_ID_CHAR, re.escape(ident), _ID_CHAR), item) is not None
-    want, have = [normalise_id(t) for t in want], [normalise_id(t) for t in have]
     n = len(want)
     # axis: whole-token equality, never a substring, so f-1 is not inside f-1-b and F/1 is not inside F.1.2
     return any(have[i:i + n] == want for i in range(len(have) - n + 1))
@@ -195,7 +207,8 @@ def _collisions(leftovers):
     ids are matched on their exact bytes. An id sharing its form with none is absent."""
     forms = {}
     for ident, _title in leftovers:
-        forms.setdefault(tuple(normalise_id(t) for t in _tokens(ident)), set()).add(ident)
+        # axis: the normal form is taken after NFKC, as _id_named reads an id
+        forms.setdefault(tuple(_tokens(normalise_id(ident))), set()).add(ident)
     return {ident: frozenset(ids) for ids in forms.values() if len(ids) > 1 for ident in ids}
 
 
@@ -203,18 +216,43 @@ def _accepting_items(body):
     return pr_sheet.accepting_listed(_visible(body if isinstance(body, str) else ""))
 
 
+def _assign(leftovers, items, colliding):
+    """{leftover index: item index}: each acceptance is given to at most one leftover and each leftover takes at most one
+    acceptance, by a maximum bipartite matching over the pairs ``_names`` holds true (Kuhn's augmenting paths; leftovers
+    taken in record order, each one's items in body order, so the same input always gives the same assignment). A
+    leftover absent from the result has no acceptance of its own."""
+    naming = [[j for j, item in enumerate(items) if _names(item, ident, title, colliding.get(ident))]
+              for ident, title in leftovers]
+    holder = {}  # item index -> the leftover index that holds it
+
+    def place(i, seen):
+        for j in naming[i]:
+            if j in seen:
+                continue
+            seen.add(j)
+            # axis: a held acceptance moves to another leftover only when that one has an acceptance of its own to take
+            if j not in holder or place(holder[j], seen):
+                holder[j] = i
+                return True
+        return False
+
+    for i in range(len(leftovers)):
+        place(i, set())
+    return dict(sorted((i, j) for j, i in holder.items()))
+
+
 def missing(record, body):
     """The leftovers ``body``'s What we're accepting does not name, as [{"id", "title"}] in record order ([] when every
     one is named, or the record leaves none). ``record`` is ``review_record.read``'s result; Unreadable when it cannot be
     read. Only text that renders counts (``_visible``). A leftover whose finding carries no title is checked by its id
-    alone."""
+    alone. One acceptance counts for at most one leftover (``_assign``): a leftover with no acceptance of its own is
+    missing, however many acceptances name it or however many leftovers one acceptance names."""
     items = _accepting_items(body)
     leftovers = _leftovers(record)
-    colliding = _collisions(leftovers)
-    # axis: two ids of one record that share a normal form are each matched on their exact bytes, so neither satisfies
-    # the other
-    return [{"id": ident, "title": title} for ident, title in leftovers
-            if not any(_names(item, ident, title, colliding.get(ident)) for item in items)]
+    given = _assign(leftovers, items, _collisions(leftovers))
+    # axis: two ids of one record that share a normal form are each matched on their exact bytes, and one acceptance is
+    # given to one leftover, so neither satisfies the other
+    return [{"id": ident, "title": title} for n, (ident, title) in enumerate(leftovers) if n not in given]
 
 
 FIXED_ABOVE_RE = re.compile(
@@ -223,21 +261,20 @@ FIXED_ABOVE_RE = re.compile(
 
 def fixed_above(record, body):
     """The leftovers an acceptance resolves as fixed by a higher layer (#2332), as [{"id", "title", "layer", "commit"}] in
-    record order. A leftover is resolved by the first acceptance that names it (as ``missing`` reads it) and carries
-    ``fixed-above #<PR> <7-40 hex commit>``; one named by no such acceptance is not listed. Only the full form counts: the
-    word alone or a malformed form is plain text. Unreadable exactly where ``missing`` raises it. Whether the named PR is a
-    higher member of this PR's stack is the caller's to check."""
+    record order. A leftover is resolved by the acceptance it is assigned (``_assign``, the one-to-one rule ``missing``
+    reads) when that acceptance carries ``fixed-above #<PR> <7-40 hex commit>``; a leftover with no acceptance of its own,
+    or one whose acceptance carries no such form, is not listed. Only the full form counts: the word alone or a malformed
+    form is plain text. Unreadable exactly where ``missing`` raises it. Whether the named PR is a higher member of this PR's
+    stack is the caller's to check."""
     items = _accepting_items(body)
     leftovers = _leftovers(record)
-    colliding = _collisions(leftovers)
+    given = _assign(leftovers, items, _collisions(leftovers))
     claims = []
-    for ident, title in leftovers:
-        for item in items:
-            found = FIXED_ABOVE_RE.search(item)
-            # axis: the first acceptance that names the leftover and carries the disposition decides it
-            if found and _names(item, ident, title, colliding.get(ident)):
-                claims.append({"id": ident, "title": title, "layer": int(found.group(1)), "commit": found.group(2)})
-                break
+    for n, (ident, title) in enumerate(leftovers):
+        found = FIXED_ABOVE_RE.search(items[given[n]]) if n in given else None
+        # axis: only the acceptance a leftover is assigned can resolve it, so one line is never a claim for two leftovers
+        if found:
+            claims.append({"id": ident, "title": title, "layer": int(found.group(1)), "commit": found.group(2)})
     return claims
 
 

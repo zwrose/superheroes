@@ -140,18 +140,22 @@ def test_d_a_a_fixed_above_line_claims_only_the_colliding_id_it_names(first, sec
     assert [c["id"] for c in claims] == [first] and claims[0]["layer"] == 43
 
 
-def test_d_a_edges_a_colliding_id_not_carried_is_missing_and_two_written_ids_are_both_named():
+def test_d_a_edges_a_colliding_id_not_carried_is_missing_and_one_line_naming_two_ids_counts_for_one():
+    # Order E (vet 810) changed F3 and the second F4 assertion: one acceptance that writes both colliding ids names both
+    # but counts for one leftover, so exactly one of them is missing; two lines name both.
     record = rec(("f-1", SHARED_TITLE), ("f-1.", SHARED_TITLE))
     # F1: neither id in the acceptance
     assert gaps(record, "- f-9 %s: accepted.\n" % SHARED_TITLE) == ["f-1", "f-1."]
     # F2: the only occurrence of f-1 sits inside f-1.
     assert gaps(record, "- f-1. %s: accepted.\n" % SHARED_TITLE) == ["f-1"]
-    # F3: both written, each with its own occurrence
-    assert gaps(record, "- f-1 and f-1. %s: accepted.\n" % SHARED_TITLE) == []
+    # F3: both written on one line, each with its own occurrence: the line counts for one of them
+    assert len(gaps(record, "- f-1 and f-1. %s: accepted.\n" % SHARED_TITLE)) == 1
+    assert gaps(record, "- f-1 %s: ok.\n- f-1. %s: ok.\n" % (SHARED_TITLE, SHARED_TITLE)) == []
     # F4: regex metacharacters are escaped
     record = rec(("(f-1)", SHARED_TITLE), ("f-1", SHARED_TITLE))
     assert gaps(record, "- (f-1) %s: accepted.\n" % SHARED_TITLE) == ["f-1"]
-    assert gaps(record, "- (f-1) and f-1 %s: accepted.\n" % SHARED_TITLE) == []
+    assert len(gaps(record, "- (f-1) and f-1 %s: accepted.\n" % SHARED_TITLE)) == 1
+    assert gaps(record, "- (f-1) %s: ok.\n- f-1 %s: ok.\n" % (SHARED_TITLE, SHARED_TITLE)) == []
 
 
 @pytest.mark.parametrize("written", ["- (F-1): slow retry, accepted.\n", "- `f-1`: slow retry\n"])
@@ -181,6 +185,91 @@ def test_d_c_a_title_of_underscores_only_is_carried_byte_for_byte():
     record = rec(("f-1", "___"))
     assert gaps(record, "- f-1 ___ accepted.\n") == []
     assert gaps(record, "- f-1 accepted.\n") == ["f-1"]
+
+
+# --- vet 810 item 2: one acceptance counts for at most one leftover (E-a, E-b, E-c) -------------------
+
+ONE_LINE = [
+    # (ids, shared title, the one line written, how many leftovers it leaves missing)
+    (("F-1", "f-1 b"), "slow retry", "- f-1 b slow retry: accepted.", 1),
+    (("f-1", "f-1_ b"), "slow retry", "- f-1_ b slow retry: accepted.", 1),
+    (("f–1", "f-1 b"), "slow retry", "- f-1 b slow retry: accepted.", 1),
+    (("c1", "test-s1-002"), "Fix C1 refusal", "- test-s1-002 Fix C1 refusal: accepted.", 1),
+    (("f-1", "f-1.", "f-1．"), "slow retry", "- f-1． slow retry: accepted.", 2),
+]
+
+
+@pytest.mark.parametrize("ids, title, line, left", ONE_LINE)
+def test_e_a_one_line_satisfies_one_leftover_not_two(ids, title, line, left):
+    # Bites on: a leftover counted satisfied by any acceptance that names it, one line counting for every leftover it names.
+    # Axis: I-ONE: each acceptance is assigned to at most one leftover, by a maximum matching.
+    record = rec(*[(ident, title) for ident in ids])
+    absent = gaps(record, line + "\n")
+    assert len(absent) == left and set(absent) < set(ids)
+    if ids[-1] == "f-1．":
+        assert "f-1．" not in absent  # the one id this line writes exactly is the one it counts for
+
+
+@pytest.mark.parametrize("ids, title, line, left", ONE_LINE)
+def test_e_a_one_fixed_above_line_claims_one_leftover_not_two(ids, title, line, left):
+    # Bites on: fixed_above claiming from any naming acceptance, so one line resolves two leftovers.
+    # Axis: I-ONE for fixed_above, which reads the same assignment.
+    record = rec(*[(ident, title) for ident in ids])
+    claims = la.fixed_above(record, body(line + " fixed-above #43 1a2b3c4\n"))
+    assert len(claims) == 1 and claims[0]["layer"] == 43 and claims[0]["id"] in ids
+
+
+def test_e_b_two_leftovers_on_two_lines_are_both_named():
+    record = rec(("f-1", "slow retry"), ("f-2", "stale cache"))
+    assert gaps(record, "- f-1 slow retry: ok.\n- f-2 stale cache: ok.\n") == []
+    # the order of the lines does not matter, and a spare line changes nothing
+    assert gaps(record, "- f-2 stale cache: ok.\n- other thing\n- f-1 slow retry: ok.\n") == []
+
+
+def test_e_b_a_line_taken_by_one_leftover_is_not_reused_but_an_alternative_frees_it():
+    # G3: two lines that each name both leftovers give one line to each. G4: the one line two leftovers need is missing for one.
+    two = rec(("f-1", "slow retry"), ("f-1 b", "slow retry"))
+    assert gaps(two, "- f-1 b slow retry: ok.\n- f-1 b slow retry: again.\n") == []
+    assert len(gaps(two, "- f-1 b slow retry: ok.\n")) == 1
+    # an augmenting path: f-1 first takes the line that only it can't spare; f-1 b needs that line, f-1 moves to the other
+    assert gaps(two, "- f-1 b slow retry: ok.\n- f-1 slow retry: ok.\n") == []
+    # G1: an item naming no leftover is unassigned and changes nothing
+    assert gaps(rec(("f-1", "slow retry")), "- f-9 other: ok.\n") == ["f-1"]
+
+
+def test_e_b_the_field_case_is_named():
+    record = rec(("F-1", 'the "retry" loop never backs off.'))
+    assert gaps(record, "- F-1 — the retry loop never backs off: merging accepts slower recovery.\n") == []
+
+
+@pytest.mark.parametrize("written", ["（Ｆ－１） slow retry", "Ｆ－１： slow retry", "f-1​ slow retry",
+                                      "​f-1 slow retry", "f-1⁠ slow retry", "（f-1﻿） slow retry"])
+def test_e_c_a_full_width_wrapper_or_a_zero_width_character_around_an_id_is_outside_it(written):
+    # Bites on: punctuation classified before NFKC (a full-width wrapper kept), and a zero-width character kept inside the id token.
+    # Axis: I-NFKC.
+    record = rec(("f-1", "slow retry"))
+    assert gaps(record, "- %s: accepted.\n" % written) == []
+    claims = la.fixed_above(record, body("- %s fixed-above #43 1a2b3c4\n" % written))
+    assert [c["id"] for c in claims] == ["f-1"]
+
+
+def test_e_c_a_zero_width_character_between_two_id_pieces_does_not_join_them():
+    # The zero-width character separates tokens, so f-1​b is the tokens f-1 and b, never the id f-1b.
+    assert la._tokens("f-1​b") == ["f-1", "b"]
+    assert gaps(rec(("f-1b", "slow retry")), "- f-1​b slow retry: accepted.\n") == ["f-1b"]
+
+
+def test_e_c_full_width_ids_that_collide_are_grouped_after_nfkc():
+    # _collisions reads the normal form after NFKC: f-1 and f-1． (full-width stop) share it and go the exact path.
+    record = rec(("f-1", "slow retry"), ("f-1．", "slow retry"))
+    assert set(la._collisions(la._leftovers(record))) == {"f-1", "f-1．"}
+
+
+def test_e_g6_an_id_of_punctuation_only_keeps_the_character_rule():
+    # G6: an id that is all punctuation after NFKC has no token, so the character rule decides, as before.
+    record = rec(("(.)", "slow retry"))
+    assert gaps(record, "- (.) slow retry: ok.\n") == []
+    assert gaps(record, "- slow retry: ok.\n") == ["(.)"]
 
 
 # --- gap 3: the fixed-above disposition, parsed ----------------------------------------------------
