@@ -70,7 +70,7 @@ _STRICT_MODE_REFINEMENTS = {
                 "additionalProperties": False,
                 "required": ["answer", "why"],
                 "properties": {
-                    "answer": {"type": "string", "enum": list(audits.CHECK_ANSWERS)},
+                    "answer": {"type": "string", "enum": list(audits.check_answers(name))},
                     "why": {"type": "string"},
                 },
             }
