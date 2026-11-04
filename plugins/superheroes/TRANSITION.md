@@ -42,7 +42,8 @@ Check these in a consuming project when it adopts this release. Each step names 
 - Every other check still runs: the receipt, a READY verdict's review record and leftover check, the re-read before the push, and the readback.
 - A body with any builder section keeps every earlier rule, so a builder body that lost its build record or its owner half is still refused (`markers-invalid` or `body-emptied`).
 - `check` reads such a body as having no follow-ups. `handback` is unchanged. No refusal token or result key is added.
-- A `<!--` inside an inline code span or after a backslash escape no longer opens an HTML comment for the slot-visibility check or the `body-emptied` guard when the description has no line that could open an HTML block (a line beginning, after any quote or list marks, with `<` and a letter, `/`, `?` or `!`, other than a comment opener or an autolink); in a description that has one, every `<!--` outside a fenced code block opens a comment, as before.
+- A `<!--` inside an inline code span or after a backslash escape no longer opens an HTML comment for the slot-visibility check or the `body-emptied` guard when the description has no line that could open an HTML block (a line beginning, after any quote or list marks, with `<` and a letter, `/`, `?` or `!`, other than a comment opener or an autolink); in a description that has one, every `<!--` outside a fenced code block opens a comment, as before. On a line where a comment closes, the rest of that line is read the same way, and an email autolink line (`<user@example.com>`) still counts as a line that could open an HTML block.
+- A slot written into a body whose advisor-vet marker line ends in a lone carriage return or a Unicode line separator starts on the line after the marker, and the write refuses `write-failed` unless the region's first line, as the merge train reads it, is the new verdict.
 
 ### Review: a prose-only fix clears its audit on a review-guarded answer
 

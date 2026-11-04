@@ -83,7 +83,7 @@ def test_c1_evaluate_composes_the_same_body():
 
 # --- C2: a builder description quoting the opener above its heading is not body-emptied ----------------------------
 
-def test_c2_run_verb_does_not_refuse_body_emptied_for_an_inline_code_opener_above_the_heading(tmp_path):
+def test_c2_run_verb_refuses_body_emptied_for_an_inline_code_opener_above_the_heading(tmp_path):
     # vet 816: BODY carries the <details><summary>Build record line, which could open an HTML block, so the exemption
     # is off and the quoted opener opens a comment over the owner half: body-emptied, as on main
     body = NOTE_LINE + BODY
@@ -91,7 +91,7 @@ def test_c2_run_verb_does_not_refuse_body_emptied_for_an_inline_code_opener_abov
     _refused(_write(fake, tmp_path), fake, "body-emptied")
 
 
-def test_c2_evaluate_does_not_refuse_body_emptied():
+def test_c2_evaluate_refuses_body_emptied():
     # vet 816: the body has a line that could open an HTML block, so the exemption is off, as on main
     body = NOTE_LINE + BODY
     result = vs.evaluate("write", body, [_comment(RECEIPT)], SLOT, advisor_login="advisor")
@@ -221,7 +221,7 @@ def test_c11_a_bot_body_with_a_quoted_opener_inside_a_raw_div_refuses_write_fail
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
 
 
-def test_c11_a_blank_line_ends_the_raw_block_so_a_later_quoted_opener_is_text_again(tmp_path):
+def test_c11_a_blank_line_after_the_raw_block_still_refuses_write_failed_for_a_later_quoted_opener(tmp_path):
     # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
     body = "Bumps x.\n\n<div>\nsee notes\n</div>\n\n" + CODE_SPAN_LINE
     fake = _fake(body)
@@ -264,7 +264,7 @@ def test_c12_an_autolink_line_is_not_raw_html_so_a_later_quoted_opener_is_text(t
     assert fake.edited == [_appended(body, SLOT)]
 
 
-def test_c12_a_tag_inside_a_comment_starts_no_raw_run(tmp_path):
+def test_c12_a_tag_inside_a_comment_still_refuses_write_failed_for_the_quoted_opener(tmp_path):
     # vet 816: the gate reads every line, a tag line inside a comment included: the body has a line that could open an
     # HTML block, so the exemption is off (as on main) and the quoted opener opens a comment
     body = "<!-- note\n<div>\n-->\n" + CODE_SPAN_LINE
@@ -272,7 +272,7 @@ def test_c12_a_tag_inside_a_comment_starts_no_raw_run(tmp_path):
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
 
 
-def test_c12_a_quoted_blank_line_ends_a_quoted_raw_run(tmp_path):
+def test_c12_a_quoted_blank_line_raw_run_body_refuses_write_failed(tmp_path):
     # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
     body = "> <div>\n> </div>\n>\n> Handles `<!--` literally.\n"
     fake = _fake(body)
@@ -337,14 +337,14 @@ def test_c14_evaluate_also_refuses_body_emptied_for_a_non_breaking_space_line_in
     assert vs.evaluate("write", body, [_comment(RECEIPT)], SLOT, advisor_login="advisor")["reason"] == "body-emptied"
 
 
-def test_c14_a_list_item_quoted_raw_run_ends_at_its_quoted_blank_so_the_bot_body_writes(tmp_path):
+def test_c14_a_list_item_quoted_raw_run_body_refuses_write_failed(tmp_path):
     # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
     body = "Bumps x.\n\n- > <div>\n  > </div>\n  >\n  > Handles `<!--` literally.\n"
     fake = _fake(body)
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
 
 
-def test_c14_a_double_spaced_quote_prefix_ends_at_its_quoted_blank_so_the_bot_body_writes(tmp_path):
+def test_c14_a_double_spaced_quote_prefix_body_refuses_write_failed(tmp_path):
     # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
     body = "Bumps x.\n\n>  > <div>\n>  > </div>\n>  >\n>  > Handles `<!--` literally.\n"
     fake = _fake(body)

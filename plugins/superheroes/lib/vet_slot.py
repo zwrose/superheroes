@@ -369,11 +369,20 @@ def _compose_no_build_record(body, advisor_at, slot_text):
         heading_at = len(prefix) + 2
         marker_at = heading_at + len("## Advisor vet\n")
     else:
-        newline = body.find("\n", advisor_at)
-        if newline >= 0:
-            prefix = body[:newline + 1]
+        # axis: the slot starts after the marker's own str.splitlines() line, the line the readers split, so a marker line ended by a lone CR, U+2028 or any other splitlines separator cannot keep an old verdict line first in the region — see bite-proof record i2342_vet_slot_no_build_record.md
+        line_end = None  # None: no line holds the marker; -1: the marker's line has no terminator
+        line_start = 0
+        for whole in body.splitlines(keepends=True):
+            if line_start <= advisor_at < line_start + len(whole):
+                line_end = line_start + len(whole) if whole.splitlines()[0] != whole else -1
+                break
+            line_start += len(whole)
+        if line_end is None:
+            raise _Refusal("write-failed", "the advisor-vet marker offset is not on any line of the body")
+        if line_end >= 0:
+            prefix = body[:line_end]
             new_body = prefix + "\n" + slot + "\n"
-        else:  # the marker is the last line, with no newline after it
+        else:  # the marker is the last line, with no terminator after it
             prefix = body
             new_body = body + "\n\n" + slot + "\n"
         marker_at = advisor_at
@@ -389,6 +398,15 @@ def _compose_no_build_record(body, advisor_at, slot_text):
         raise _Refusal("write-failed", problem)
     if _find_live_standalone_markers(new_body, marker) != [marker_at]:
         raise _Refusal("write-failed", "composed body moved or shadowed slot markers")
+    region, region_refusal = pr_body_regions.read_region(new_body, "advisor-vet")
+    first_written = stack_check._first_nonempty_line(slot_text)
+    first_read = stack_check._first_nonempty_line(region) if region is not None else None
+    # axis: the region the merge train reads must open with the slot's own first line, else the write refuses write-failed and pushes nothing — see bite-proof record i2342_vet_slot_no_build_record.md
+    if region_refusal is not None or region is None or first_read != first_written:
+        raise _Refusal("write-failed", "the advisor-vet region's first line as the merge train reads it is %r, not the"
+                       " new verdict line %r%s" % (first_read, first_written,
+                                                   "; region read refused: %s" % region_refusal
+                                                   if region_refusal is not None else ""))
     return new_body
 
 

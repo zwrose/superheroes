@@ -274,3 +274,112 @@ FAILED test_e12_check_on_a_bot_body[with-marker]
 ...                                                                      [100%]
 3 passed, 101 deselected in 0.44s
 ```
+
+## Vet-817: the slot starts after the marker's own line (H1–H2)
+
+Detector under proof: the `F` section of `plugins/superheroes/lib/tests/test_vet_slot_no_build_record_2342.py`
+(`test_f1_f2_*`, `test_f1_every_splitlines_separator_*`, `test_f3_*`, `test_f5_*`).
+Guarded code: `_compose_no_build_record` in `plugins/superheroes/lib/vet_slot.py`, at base `519e2e7c`. Every
+neutralization was a targeted Edit, undone by the inverse Edit. No `git checkout`, `restore`, `reset` or `stash` was used.
+Command for every run below (worktree root): `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_vet_slot_no_build_record_2342.py -q -p no:cacheprovider --tb=short -k "test_f1 or test_f3 or test_f5"`
+unless a different `-k` or `--tb` is named. Nothing was redacted; each capture is under 32 KiB. Disclosures:
+the red captures are condensed by hand (the `where`/repr lines, the long `FAILED` node ids shortened to the test name
+plus its parameter id, and uv's deprecation warning line dropped); every line shown is the runner's text and the counts
+are exact. A first H1+H2 run was cut in the middle by the tool display (5179 characters lost), so it is not quoted:
+the H1+H2 red below is a second, narrowed run (`-k test_f1_f2`) made after the two verdict assertions were moved ahead
+of the exact-body assertions, so the red names the READY read directly.
+
+### Pre-change receipt (before any edit, head `519e2e7c`)
+
+The vet 817 reproduction (`evaluate("write", ...)` of a NOT-READY slot with a `dispositions none` receipt, then
+`stack_check.read_vet_verdict(body, HEAD)`), `HEAD = a1b2c3d4e5f60718293a4b5c6d7e8f9012345678`:
+
+```
+F1-cr before: READY
+F1-cr write ok; after: READY
+F2-u2028 before: READY
+F2-u2028 write ok; after: READY
+```
+
+The write succeeded and the merge train still read READY: the inversion.
+
+### H1. the slot starts after the marker's own `str.splitlines()` line
+
+- **Axis:** the first line of the composed advisor-vet region is the slot's, whatever separator ended the marker line.
+- **Neutralization:** one line inserted before the `if line_end is None:` check:
+  `line_end = (body.find("\n", advisor_at) + 1) or -1  # H1-NEUTRALIZED` (the pre-change `body.find("\n", advisor_at)`
+  rule; `-1` is the no-terminator case). H2 left in place.
+- **Raw red** (H1 only, the same command):
+
+```
+FFFFFFFFFFFFF..........                                                  [100%]
+E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': "the advisor-vet region's first line as the merge train reads it is ...3a4b5c6d7e8f9012345678', not the new verdict line '**Verdict: NOT-READY** · a1b2c3d4e5f60718293a4b5c6d7e8f9012345678'"}   (x13, one per failed test below)
+FAILED test_f1_f2_..._through_evaluate[f1-cr-only]
+FAILED test_f1_f2_..._through_evaluate[f2-u2028]
+FAILED test_f1_f2_..._through_run_verb[f1-cr-only]
+FAILED test_f1_f2_..._through_run_verb[f2-u2028]
+FAILED test_f3_..._through_evaluate_and_run_verb[f1-cr-only]
+FAILED test_f3_..._through_evaluate_and_run_verb[f2-u2028]
+FAILED test_f1_every_splitlines_separator_after_the_marker_writes_cleanly[\r]
+FAILED test_f1_every_splitlines_separator_after_the_marker_writes_cleanly[ ]
+FAILED test_f1_every_splitlines_separator_after_the_marker_writes_cleanly[ ]
+FAILED test_f1_every_splitlines_separator_after_the_marker_writes_cleanly[\x85]
+FAILED test_f1_every_splitlines_separator_after_the_marker_writes_cleanly[\x0b]
+FAILED test_f1_every_splitlines_separator_after_the_marker_writes_cleanly[\x0c]
+FAILED test_f1_every_splitlines_separator_after_the_marker_writes_cleanly[\x1c]
+13 failed, 10 passed, 104 deselected in 0.77s
+```
+
+With H2 in place, H1 alone turns the F1/F2 write into a `write-failed` refusal (the old READY line stays first in the
+region, H2 sees it), not into a READY read; the tests that expect a clean write go red on `ok is True`. The
+`\r\n` and `\n` separator cases stay green (`body.find("\n")` already ends those lines).
+
+### H2. the invariant check
+
+- **Axis:** the first non-empty line of the composed region, read as `read_vet_verdict` reads it, is the slot's, else
+  the write refuses `write-failed` and pushes nothing.
+- **Neutralization (a), H1 also neutralized:** the guard `if region_refusal is not None or region is None or first_read != first_written:`
+  became `if False and (...):  # H2-NEUTRALIZED`, with the H1 line above still in place.
+- **Raw red (a)** (`-k test_f1_f2`, the narrowed run):
+
+```
+FFFF                                                                     [100%]
+E   AssertionError: assert 'READY' == 'NOT-READY'
+E     - NOT-READY
+E     + READY
+FAILED test_f1_f2_..._through_evaluate[f1-cr-only]      (:478  assert _vet(new_body) == VERDICT_NOT_READY)
+FAILED test_f1_f2_..._through_evaluate[f2-u2028]        (:478)
+FAILED test_f1_f2_..._through_run_verb[f1-cr-only]      (:494  assert _vet(pushed) == VERDICT_NOT_READY)
+FAILED test_f1_f2_..._through_run_verb[f2-u2028]        (:494)
+4 failed, 123 deselected in 0.43s
+```
+
+  This is the vet 817 inversion: both checks off, the NOT-READY write is pushed and the merge train reads READY.
+- **Neutralization (b), H2 alone:** H1 restored (the inverse Edit removed the inserted line), H2 still `if False and (...)`.
+- **Raw red (b)** (`--tb=line`):
+
+```
+...............FFFFFFFF                                                  [100%]
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+    assert (True is False)   (x8, test_vet_slot_no_build_record_2342.py:532)
+FAILED test_f5_..._[marker-present-first-line-is-the-old-verdict]
+FAILED test_f5_..._[marker-present-no-region]
+FAILED test_f5_..._[marker-present-region-refusal]
+FAILED test_f5_..._[marker-present-blank-region]
+FAILED test_f5_..._[marker-absent-first-line-is-the-old-verdict]
+FAILED test_f5_..._[marker-absent-no-region]
+FAILED test_f5_..._[marker-absent-region-refusal]
+FAILED test_f5_..._[marker-absent-blank-region]
+8 failed, 15 passed, 104 deselected in 0.45s
+```
+
+  F1 to F3 stay green under H2 alone (15 passed): with H1 in place the check never fires on those bodies, so only F5 bites H2.
+- **Restore:** inverse Edit, `if False and (region_refusal ...):  # H2-NEUTRALIZED` back to the unguarded `if`.
+- **Restore receipt:** the restored line reads
+  `    if region_refusal is not None or region is None or first_read != first_written:`; `grep -n NEUTRALIZED plugins/superheroes/lib/vet_slot.py` matched nothing after both restores.
+- **Raw green** (same command as the top, after both restores):
+
+```
+.......................                                                  [100%]
+23 passed, 104 deselected in 0.49s
+```
