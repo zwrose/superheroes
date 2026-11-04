@@ -31,7 +31,9 @@ from test_launcher_cloud import (  # noqa: E402
     _fake_spawn,
     _git,
     _launch,
+    _lanes as _lanes_of,
     _local_remote_has,
+    _records,
 )
 
 OFF_BASE = "launch-cloud-checkout-off-base"
@@ -164,8 +166,18 @@ def test_row2_a_folder_at_an_old_tip_is_moved_forward_to_the_new_tip(tmp_path):
     # axis: a folder behind the remote's tip is fast-forwarded to the target before the command runs, and the primary is not touched
     repo, folder = _world(tmp_path)
     main = _head_sha(repo)
-    branch = _symbolic(folder)
-    assert _head_sha(folder) == main
+    branch = _symbolic(repo)
+    # The folder starts detached with no local branch; a first launch at the old tip creates the
+    # branch there, so the folder is at an old tip on the branch when the remote moves on.
+    assert _symbolic(folder) is None
+    first_calls = []
+    first = _launch(
+        repo, tmp_path, _spy(first_calls), issue=657,
+        premise=_valid_premise(repo, issue=657, baseCommit=main),
+    )
+    assert first["ok"] is True, first
+    assert len(first_calls) == 1
+    assert (_symbolic(folder), _head_sha(folder)) == (branch, main)
     newer = _remote_commit(tmp_path, repo, [branch], "newer.txt", start=main)
     before = _snap(repo)
     calls = []
@@ -203,7 +215,7 @@ def test_row4_a_base_no_remote_branch_tip_equals_refuses_and_the_folder_is_uncha
     # axis: a base the remote holds but no branch tip equals refuses, because a cloud start reads a branch's tip — see bite-proof record i2353_cloud_launch_folder
     repo, folder = _world(tmp_path)
     base = _head_sha(repo)
-    branch = _symbolic(folder)
+    branch = _symbolic(repo)
     _remote_commit(tmp_path, repo, [branch, "main"], "beyond.txt", start=base)
     primary_before = _snap(repo)
     folder_before = _snap(folder)
@@ -237,7 +249,18 @@ def test_row5_a_base_the_remote_does_not_hold_refuses_on_the_existing_path(tmp_p
 def test_row6_local_commits_on_the_folders_branch_refuse_and_the_branch_is_not_reset(tmp_path):
     # axis: a local branch holding commits the target lacks refuses, so the repair is only ever a fast-forward — see bite-proof record i2353_cloud_launch_folder
     repo, folder = _world(tmp_path)
+    base = _head_sha(repo)
+    # The folder starts detached with no local branch; a first launch creates the branch at the
+    # target, and the local commit is then made on that branch inside the folder.
+    first_calls = []
+    first = _launch(
+        repo, tmp_path, _spy(first_calls), issue=657,
+        premise=_valid_premise(repo, issue=657, baseCommit=base),
+    )
+    assert first["ok"] is True, first
+    assert _symbolic(folder) == _symbolic(repo)
     mine = _commit(folder, "local-work.txt")
+    assert mine != base
     primary_before = _snap(repo)
     folder_before = _snap(folder)
     calls = []
@@ -391,6 +414,63 @@ def test_row11_a_folder_another_launch_holds_refuses_busy_after_the_wait(tmp_pat
     assert _snap(folder) == folder_before
 
 
+def test_a_lock_file_that_cannot_be_opened_refuses_lock_failed_and_nothing_runs(tmp_path):
+    # axis: a lock file that cannot be opened refuses, so a launch never runs unguarded — see bite-proof record i2353_cloud_launch_folder
+    repo, folder = _world(tmp_path)
+    os.mkdir(folder + ".lock")
+    primary_before = _snap(repo)
+    folder_before = _snap(folder)
+    calls = []
+    result = _launch(repo, tmp_path, _spy(calls))
+    _refused(repo, result, UNREADABLE, "lock-failed", folder, calls, primary_before)
+    assert _snap(folder) == folder_before
+    assert os.path.isdir(folder + ".lock")
+
+
+def test_a_lock_the_final_check_cannot_take_terminalizes_the_lane_and_nothing_runs(
+    tmp_path, monkeypatch,
+):
+    # axis: a folder lock that is not held terminalizes the unstarted lane like any drift refusal, and the command does not run — see bite-proof record i2353_cloud_launch_folder
+    repo, folder = _world(tmp_path)
+    monkeypatch.setattr(L, "_CLOUD_FOLDER_LOCK_WAIT_SECONDS", 0.3)
+    real = L._cloud_start_refusal
+    seen = []
+    held = []
+
+    def wrapper(*args, **kwargs):
+        got = real(*args, **kwargs)
+        seen.append(kwargs.get("lock_held", False))
+        if len(seen) == 1:
+            # The pre-reservation check has passed and released the lock; another launch takes it
+            # now and keeps it, so only the final site finds it busy.
+            fd = os.open(folder + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            held.append(fd)
+        return got
+
+    monkeypatch.setattr(L, "_cloud_start_refusal", wrapper)
+    primary_before = _snap(repo)
+    calls = []
+    try:
+        result = _launch(repo, tmp_path, _spy(calls))
+    finally:
+        for fd in held:
+            os.close(fd)
+    assert held, "the pre-reservation check never ran"
+    # The refusal came from the final site: the pre-reservation call is the only one that ran
+    # the check, and by then the lane was reserved.
+    assert seen == [False]
+    assert len(_records(repo, result["launchId"], "reserved")) == 1
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-folder-busy", "cloud-base")
+    lane = _lanes_of(repo)[result["launchId"]]
+    assert lane["terminal"] is True and lane["started"] is False
+    assert calls == []
+    assert result["launchFolder"] == folder
+    assert _snap(repo) == primary_before
+    # The pre-reservation check had already put the folder on its branch at the base.
+    assert (_symbolic(folder), _head_sha(folder)) == (_symbolic(repo), _head_sha(repo))
+
+
 # --- row 12: two launches with different bases ---------------------------------------------------
 
 
@@ -437,7 +517,14 @@ def test_row13_the_setup_verb_makes_the_folder_once_and_never_overwrites_a_stran
     with open(os.path.join(folder, ".git", MARKER)) as fh:
         assert json.load(fh) == {"schema": 1, "repoId": ll.repo_identity(repo)}
     assert _git(folder, "remote", "get-url", "origin") == _git(repo, "remote", "get-url", "origin")
-    assert _symbolic(folder) == _symbolic(repo)
+    # The new clone is detached with no local branch: the first launch's repair creates the
+    # branch at the target.
+    head_named = subprocess.run(
+        ["git", "-C", folder, "symbolic-ref", "-q", "HEAD"], capture_output=True, text=True,
+    )
+    assert head_named.returncode != 0
+    assert _symbolic(folder) is None
+    assert _git(folder, "for-each-ref", "--format=%(refname)", "refs/heads/") == ""
     assert _snap(repo) == primary_before
     second = L.ensure_cloud_launch_folder(repo)
     assert second == {"ok": True, "folder": folder, "created": False, "reason": None}
@@ -519,7 +606,9 @@ def test_the_branch_choice_prefers_the_default_branch_then_the_lexically_first(t
     # axis: among branches whose tip is the base, the remote's default branch wins, else the lexically first
     repo, folder = _world(tmp_path)
     base = _head_sha(repo)
-    default = _symbolic(folder)
+    # The setup verb leaves the folder detached; the remote's default branch is the primary's.
+    assert _symbolic(folder) is None
+    default = _symbolic(repo)
     env = dict(os.environ)
     assert default != "main"
     assert L._choose_cloud_launch_branch(folder, {"baseCommit": base}, env) == (

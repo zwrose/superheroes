@@ -146,7 +146,7 @@ lane's `started` record, and returns once the session exists. It does not wait f
   question in a folder it has not seen and the launch would wait on it. A folder that does not exist
   refuses `launch-cloud-folder-missing`. A folder another launch holds locked past the wait refuses
   `launch-cloud-folder-busy`. The checkout refusals, `launch-cloud-checkout-unreadable`,
-  `launch-cloud-checkout-off-base` and `launch-cloud-checkout-remote-unchecked`, now apply to the
+  `launch-cloud-checkout-off-base` and `launch-cloud-checkout-remote-unchecked`, apply to the
   folder. They name it as `launchFolder` and carry a `folderRepair` reason when the repair stopped
   them: `not-launcher-owned` (the path is not the launcher's own clone), `uncommitted-changes` (the
   folder has changes), `no-branch-at-base` (no branch on the remote has the base as its tip),

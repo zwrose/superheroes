@@ -3373,15 +3373,19 @@ def _cloud_start_check(repo_root, stamped, env):
     return folder, (refusal_reason, detail)
 
 
-def _cloud_start_refusal(repo_root, stamped, env):
+def _cloud_start_refusal(repo_root, stamped, env, lock_held=False):
     """None, or ``(reason, extra)``: why a cloud launch must not run the cloud command now.
 
-    ``_cloud_start_check`` under the launcher's own folder lock. An adoption (``adoptsBranch``
+    ``_cloud_start_check`` under the launcher's own folder lock (the caller already holds it
+    when ``lock_held`` is true, so it is not taken again). An adoption (``adoptsBranch``
     with an ``adoptsHead`` that is a full sha) launches from the adopted head or from its
     ``baseCommit`` (the base is an ancestor of that head); any other launch needs its
     ``baseCommit``. ``extra`` keeps ``baseCommit`` and says which it was checked against. The
     primary checkout is only read; the folder the command runs in is the launcher's own.
     """
+    if lock_held:
+        # axis: the final check runs under the lock the caller already holds, through the one refusal entry point — see bite-proof record i2353_cloud_launch_folder
+        return _cloud_start_check(repo_root, stamped, env)[1]
     folder = _cloud_launch_folder_path_fn(repo_root, env)
     with _cloud_launch_folder_lock(folder, _CLOUD_FOLDER_LOCK_WAIT_SECONDS) as held:
         if held is not None:
@@ -4711,8 +4715,8 @@ def launch_build(
         # The checkout is the last read before the command, after the slow original-session lookup, so a checkout that moved during that lookup is seen — see bite-proof record i2272_launcher
         # The folder lock is held from before the check through the whole command, so no other
         # launch can move the folder between the check and the platform reading it.
-        folder_path = _cloud_launch_folder_path_fn(repo_root, env)
-        with _cloud_launch_folder_lock(folder_path, _CLOUD_FOLDER_LOCK_WAIT_SECONDS) as held:
+        folder = _cloud_launch_folder_path_fn(repo_root, env)
+        with _cloud_launch_folder_lock(folder, _CLOUD_FOLDER_LOCK_WAIT_SECONDS) as held:
             # axis: a folder lock that is not held terminalizes the unstarted lane like any drift refusal, and the command does not run — see bite-proof record i2353_cloud_launch_folder
             if held is not None:
                 held_reason, held_extra = _lock_refusal(held, stamped)
@@ -4720,7 +4724,7 @@ def launch_build(
                     repo_root, launch_id, False, held_reason, stage="cloud-base", env=env,
                 )
                 return _post_reserve_fail(_terminalization_reason(term, held_reason), **held_extra)
-            folder, drift = _cloud_start_check(repo_root, stamped, env)
+            drift = _cloud_start_refusal(repo_root, stamped, env, lock_held=True)
             if drift is not None:
                 drift_reason, drift_extra = drift
                 term = _terminalize(
