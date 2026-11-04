@@ -479,7 +479,12 @@ amendment moves the basis, so record the vet when you vet the resumed handback (
 "builder-activity"`) and can go `lane-stale` only while the builder is active after the basis; a tick
 that made no comments request reads activity from the progress comment alone, so a lane active only
 through a note shows as quiet on that tick. A lane that was relaunched on its issue (a later launch
-there, in any batch) is never resumed, and the watch reads back at most 24 hours before the read.
+there, in any batch) is never resumed. For a resumed lane the shared comments read reaches back at most
+24 hours; a resumed lane whose basis is older is read from its own issue from its basis, one issue-scoped
+read per lane per tick, paginated up to ten pages inside the tick's deadline, so its handback is seen
+however old the basis is. A failed or incomplete per-lane read names that lane in `unreadIssues`; a
+read skipped for budget names it only when the tick made a comments request; a tick that made no
+request names no lane; `builder-note-unavailable` is recorded in every case.
 A lane passed `--ignore-launch` is not watched on this path either, with no sign in the result: drop
 the ignore before you resume a lane (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
 
