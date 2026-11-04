@@ -291,3 +291,29 @@ def test_c12_a_quoted_blank_line_ends_a_quoted_raw_run(tmp_path):
 ], ids=["autolink", "tag-with-attribute", "self-closing", "closing-tag", "tag-in-comment", "quoted-blank"])
 def test_c12_comment_scan_raw_run_boundaries(body, expected):
     assert [row[3] for row in vs._comment_scan(body)] == expected
+
+
+# --- C13: a raw run ends only at a line blank inside the blockquote depth it started in ------------------------------
+
+def test_c13_a_literal_gt_line_inside_an_unquoted_div_keeps_the_owner_half_hidden_body_emptied(tmp_path):
+    # the finding's example: ">" is raw HTML content at depth 0, so the following opener is a real comment
+    body = "<div>\n>\n`<!--`\n\n" + BODY
+    fake = _fake(body, receipt=RECEIPT)
+    _refused(_write(fake, tmp_path), fake, "body-emptied")
+    assert vs.evaluate("write", body, [_comment(RECEIPT)], SLOT, advisor_login="advisor")["reason"] == "body-emptied"
+
+
+def test_c13_a_literal_gt_line_inside_an_unquoted_div_still_refuses_a_bot_write(tmp_path):
+    body = "Bumps x.\n\n<div>\n>\n`<!--` notes\n"
+    fake = _fake(body)
+    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("<div>\n>\n`<!--`\nnext\n", [False, False, False, True]),
+    ("<div>\n> <p>\n>\n`<!--`\nnext\n", [False, False, False, False, True]),
+    ("> <div>\n> >\n> `<!--`\nnext\n", [False, False, False, True]),
+    ("> <div>\n>\n> `<!--`\nnext\n", [False, False, False, False]),
+], ids=["gt-in-unquoted-div", "nested-tag-keeps-depth", "deeper-gt-in-quoted-div", "quoted-blank-ends"])
+def test_c13_comment_scan_raw_run_depth(body, expected):
+    assert [row[3] for row in vs._comment_scan(body)] == expected
