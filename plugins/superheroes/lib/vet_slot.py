@@ -222,8 +222,11 @@ def _live_heading_offsets(body):
 
 
 def _heading_key(text):
-    """A heading's text lower-cased, U+2019 as ``'``, reduced to letters, digits and single spaces."""
-    kept = "".join(ch for ch in text.lower().replace("’", "'") if ch.isalnum() or ch == " ")
+    """A heading's text lower-cased, U+2019 as ``'``, reduced to letters, digits and single spaces.
+
+    Any whitespace (a tab included) separates words, so ``Build<TAB>record`` keys as ``build record``."""
+    # axis: a tab inside a heading separates its words, so a tab-separated builder heading is still a builder sign — see bite-proof record i2352_vet_slot_builder_text.md
+    kept = "".join(ch for ch in text.lower().replace("’", "'") if ch.isalnum() or ch.isspace())
     return " ".join(kept.split())
 
 

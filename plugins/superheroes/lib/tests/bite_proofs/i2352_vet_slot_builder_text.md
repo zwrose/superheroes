@@ -314,3 +314,34 @@ FAILED ...::test_e12_text_after_a_reminders_closing_marker_refuses
 .                                                                        [100%]
 1 passed, 59 deselected in 0.39s
 ```
+
+## 12. G12: a tab inside a heading separates its words (`_heading_key`, review fix)
+
+Added at the review's `apply-fixes` step (finding `normalize internal tabs before classifying builder headings`,
+raised by the code reviewer and confirmed by the verifier). Detector: the two new tests in
+`plugins/superheroes/lib/tests/test_vet_slot_no_build_record_2342.py`. Run by the build session, same command prefix
+with that file and `--tb=line`.
+
+- **Axis:** a tab between the words of a builder heading (`## Build<TAB>record`) keys as `build record`, so the body
+  is builder-shaped and the write refuses `body-emptied` instead of writing over the section on the no-build-record path.
+- **Neutralization:** in `_heading_key`, `if ch.isalnum() or ch.isspace())` became `if ch.isalnum() or ch == " ")`
+  (the pre-fix line).
+- **Raw red** (`-k "tab_inside or tab_in_its_heading"`, condensed by hand: introspection lines dropped):
+
+```
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1'}
+FAILED ...::test_a_tab_inside_a_builder_heading_separates_its_words[Build\trecord]
+FAILED ...::test_a_tab_inside_a_builder_heading_separates_its_words[Definition\tof Done]
+FAILED ...::test_a_tab_inside_a_builder_heading_separates_its_words[Size\t\ttripwire]
+FAILED ...::test_a_tab_inside_a_builder_heading_separates_its_words[What's\tchanging, and why]
+FAILED ...::test_a_builder_section_with_a_tab_in_its_heading_below_the_marker_is_never_written_over
+5 failed, 104 deselected in 2.26s
+```
+
+- **Restore:** inverse Edit, back to `if ch.isalnum() or ch.isspace())`.
+- **Raw green:**
+
+```
+.....                                                                    [100%]
+5 passed, 104 deselected in 1.76s
+```

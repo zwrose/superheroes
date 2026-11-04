@@ -94,6 +94,18 @@ def test_headings_in_tabs_quotes_and_lists_are_builder_signs(line):
     assert vs.no_build_record(BOT_BODY + "\n" + line + "\n") is False
 
 
+@pytest.mark.parametrize("title", ["Build\trecord", "Definition\tof Done", "Size\t\ttripwire", "What's\tchanging, and why"])
+def test_a_tab_inside_a_builder_heading_separates_its_words(title):
+    assert vs.no_build_record(BOT_BODY + "\n## " + title + "\n") is False
+
+
+def test_a_builder_section_with_a_tab_in_its_heading_below_the_marker_is_never_written_over(tmp_path):
+    body = "Bumps x.\n\n" + MARKER + "\n\n## Build\trecord\n\nKeep this.\n"
+    fake = _fake(body)
+    _refused(_write(fake, tmp_path), fake, "body-emptied")
+    assert fake.calls == [list(VIEW)]
+
+
 def test_the_accepting_exemption_is_below_a_live_marker_only():
     below = BOT_BODY + "\n## Advisor vet\n" + MARKER + "\n\nslot\n" + ACCEPTING
     above = BOT_BODY + ACCEPTING + "\n## Advisor vet\n" + MARKER + "\n"
