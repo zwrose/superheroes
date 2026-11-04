@@ -600,8 +600,8 @@ def test_row14_an_adoption_starts_on_the_branch_at_its_base_when_one_exists(tmp_
     assert _snap(repo) == before
 
 
-def test_row14b_an_adoption_falls_back_to_its_adopted_branch_when_no_branch_sits_at_the_base(tmp_path):
-    # axis: only when no remote branch tip is the base does an adoption whose adopted branch's tip is its adopted head start on that branch and head
+def test_row14b_an_adoption_with_no_branch_at_its_base_refuses_and_never_starts_on_the_adopted_tree(tmp_path):
+    # axis: with no remote branch tip at the base, even an adoption whose adopted branch's tip is its adopted head refuses no-branch-at-base, so a session never starts on a tree readiness did not check
     repo = _cloud_repo(tmp_path)
     base = _head_sha(repo)
     default = _symbolic(repo)
@@ -615,17 +615,18 @@ def test_row14b_an_adoption_falls_back_to_its_adopted_branch_when_no_branch_sits
     ensured = L.ensure_cloud_launch_folder(repo)
     assert ensured["ok"] is True, ensured
     folder = ensured["folder"]
+    folder_before = (_symbolic(folder), _head_sha(folder))
     before = _snap(repo)
     calls = []
     result = _launch(
         repo, tmp_path, _spy(calls),
         premise=_valid_premise(repo, baseCommit=base, adoptsBranch="feature", adoptsHead=head),
     )
-    assert result["ok"] is True, result
-    assert len(calls) == 1
-    assert calls[0]["cwd"] == folder
-    assert calls[0]["branch"] == "feature"
-    assert calls[0]["head"] == head
+    assert result["ok"] is False, result
+    assert result["reason"] == "launch-cloud-checkout-off-base", result
+    assert result["folderRepair"] == "no-branch-at-base", result
+    assert calls == []
+    assert (_symbolic(folder), _head_sha(folder)) == folder_before
     assert _snap(repo) == before
 
 

@@ -3138,11 +3138,12 @@ _CLOUD_FOLDER_UNSAFE_BRANCH = re.compile(r"[\x00-\x20\x7f]")
 def _choose_cloud_launch_branch(folder, stamped, env):
     """``(branch, target, None)`` or ``(None, None, "unchecked" | "no-branch-at-base")``.
 
-    One ``ls-remote --symref origin`` read of the folder's remote. The target is the base commit, on
-    a branch whose tip is that commit: the remote's default branch when it is one of them, else the
-    lexically first. Only when no branch sits at the base does a premise that adopts a branch whose
-    tip on the remote is its adopted head target that branch and head. Anything that cannot be asked
-    or read is unchecked.
+    One ``ls-remote --symref origin`` read of the folder's remote. The target is always the base
+    commit, on a branch whose tip is that commit: the remote's default branch when it is one of
+    them, else the lexically first. An adoption is no exception: readiness checks the base, so the
+    session starts on the base and its intake checks the adopted head out afterwards. With no branch
+    at the base the answer is ``no-branch-at-base`` (an adoption whose base has moved sets its
+    ``baseCommit`` to the adopted head). Anything that cannot be asked or read is unchecked.
     """
     ask_env = dict(os.environ if env is None else env)
     ask_env["GIT_TERMINAL_PROMPT"] = "0"
@@ -3172,21 +3173,13 @@ def _choose_cloud_launch_branch(folder, stamped, env):
             tips[named[len(prefix):]] = sha.lower()
     base = stamped.get("baseCommit")
     base = base.lower() if isinstance(base, str) else None
-    head = stamped.get("adoptsHead")
-    adopted = stamped.get("adoptsBranch")
     at_base = sorted(name for name, tip in tips.items() if base is not None and tip == base)
-    # axis: a branch at the base commit wins over an adopted branch, so the session starts (and runs its start-of-session hooks) on the tree the readiness check validated; an adoption's intake checks the adopted head out after that — see bite-proof record i2353_cloud_launch_folder
-    if at_base:
-        if default in at_base:
-            return default, base, None
-        return at_base[0], base, None
-    if (
-        "adoptsBranch" in stamped and isinstance(adopted, str)
-        and isinstance(head, str) and _HEX40.match(head)
-        and tips.get(adopted) == head.lower()
-    ):
-        return adopted, head.lower(), None
-    return None, None, "no-branch-at-base"
+    # axis: the start is always a branch whose tip is the base commit, never an adopted branch at another commit, so the session starts (and runs its start-of-session hooks) on the tree the readiness check validated; an adoption's intake checks the adopted head out after that — see bite-proof record i2353_cloud_launch_folder
+    if not at_base:
+        return None, None, "no-branch-at-base"
+    if default in at_base:
+        return default, base, None
+    return at_base[0], base, None
 
 
 # Where the launcher's own folder is; tests replace it. Every folder lookup in a launch goes through
@@ -3385,12 +3378,9 @@ def _cloud_start_check(repo_root, stamped, env):
     refusal_reason, detail = first
     detail["baseCommit"] = base
     detail["launchFolder"] = folder
-    if len(targets) > 1:
-        detail["checkedAgainst"] = "adoptsHead and baseCommit"
-    elif "adoptsBranch" in stamped and targets[0] == stamped.get("adoptsHead"):
-        detail["checkedAgainst"] = "adoptsHead"
-    else:
-        detail["checkedAgainst"] = "baseCommit"
+    # The launcher's own folder step names the base alone; a test stub that stands the fixture
+    # repository in for the folder may name an adoption's head and base, the checkout's old either-or.
+    detail["checkedAgainst"] = "adoptsHead and baseCommit" if len(targets) > 1 else "baseCommit"
     return folder, (refusal_reason, detail)
 
 
@@ -3398,10 +3388,9 @@ def _cloud_start_refusal(repo_root, stamped, env, lock_held=False):
     """None, or ``(reason, extra)``: why a cloud launch must not run the cloud command now.
 
     ``_cloud_start_check`` under the launcher's own folder lock (the caller already holds it
-    when ``lock_held`` is true, so it is not taken again). An adoption (``adoptsBranch``
-    with an ``adoptsHead`` that is a full sha) launches from the adopted head or from its
-    ``baseCommit`` (the base is an ancestor of that head); any other launch needs its
-    ``baseCommit``. ``extra`` keeps ``baseCommit`` and says which it was checked against. The
+    when ``lock_held`` is true, so it is not taken again). Every launch, an adoption included,
+    starts from its ``baseCommit``, the commit readiness checked; an adoption's intake checks its
+    adopted head out afterwards. ``extra`` keeps ``baseCommit`` and says which it was checked against. The
     primary checkout is only read; the folder the command runs in is the launcher's own.
     """
     if lock_held:

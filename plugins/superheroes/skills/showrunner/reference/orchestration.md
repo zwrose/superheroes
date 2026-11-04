@@ -135,11 +135,12 @@ lane's `started` record, and returns once the session exists. It does not wait f
   primary checkout for a cloud launch.
 - Under a lock on the folder, held from the repair through the cloud command, the launcher puts the
   folder on the base. It checks that the folder is its own clone. It refuses if the folder has
-  uncommitted changes. It picks the remote branch whose tip is the base: the adopted branch when its
-  tip is the adopted head, otherwise the remote's default branch when its tip is the base, otherwise
-  the first such branch by name. It fetches that branch, refuses if the folder's own branch has
-  commits the target lacks, and checks the branch out at the target without overwriting ignored
-  files. Then it runs the checkout check against the folder: the local head and the branch's tip on
+  uncommitted changes. It picks a remote branch whose tip is the base: the remote's default branch
+  when its tip is the base, otherwise the first such branch by name. An adoption also starts on the
+  base, the commit readiness checked, and its intake checks the adopted head out afterwards. It
+  fetches that branch, refuses if the folder's own branch has commits the target lacks or the
+  folder sits detached at a commit no branch holds, and checks the branch out at the target without
+  overwriting ignored files. Then it runs the checkout check against the folder: the local head and the branch's tip on
   the remote must both be the base. Only then does it run the command in the folder. The launcher
   never pushes.
 - The launcher never creates the folder at launch, because the platform's command line asks a trust
@@ -151,7 +152,7 @@ lane's `started` record, and returns once the session exists. It does not wait f
   them: `not-launcher-owned` (the path is not the launcher's own clone), `uncommitted-changes` (the
   folder has changes), `no-branch-at-base` (no branch on the remote has the base as its tip),
   `fetch-failed` (the fetch failed), `remote-moved` (the branch moved during the launch),
-  `local-commits` (the folder's branch has commits the target lacks), `checkout-failed` (the
+  `local-commits` (the folder's branch, or the commit its detached head sits at, holds work the target lacks), `checkout-failed` (the
   checkout would overwrite a file) and `lock-failed` (the lock file could not be reached). None of
   these falls back to the owner's machine.
 - The advisor answers each refusal this way:
@@ -161,7 +162,8 @@ lane's `started` record, and returns once the session exists. It does not wait f
     should write there, so each change is a surprise worth understanding before anything is removed.
   - `checkout-failed`: the checkout would overwrite a file in the folder, an ignored file included.
     The owner looks at the folder as for uncommitted changes.
-  - `no-branch-at-base`: push the base to a branch, or launch again on a current base.
+  - `no-branch-at-base`: push the base to a branch, or launch again on a current base. An adoption
+    whose base has moved sets its `baseCommit` to the adopted head.
   - `launch-cloud-folder-busy`: launch again after the other launch returns.
   - `not-launcher-owned`: the path is not the launcher's own clone (it may be a symlink, a linked
     worktree, or a foreign or unmarked folder). The owner moves it aside and the setup step runs
