@@ -919,7 +919,7 @@ def _fixed_above(recs, bodies, kind, allowed, problems):
                                       and not review_record.repeat_held_elsewhere(f, r["findings"])]
         # axis: a record the rule cannot read is a problem naming the PR, never a pass
         try:
-            claims = leftover_accepting.fixed_above(record, body)
+            claims = leftover_accepting.assigned_fixed_above(record, body)
         except leftover_accepting.Unreadable as err:
             problems.append(f"PR #{r['pr']}'s review record cannot be read for its fixed-above dispositions: {err}")
             continue
@@ -941,10 +941,11 @@ def _fixed_above(recs, bodies, kind, allowed, problems):
                                     "a fixed-above disposition needs a stack sheet that covers the fixing layer above the finding's PR")
             if held and higher:
                 valid.append(claim)
+        assigned = {claim["acceptance"] for claim in valid}
         for bullet, text in (listed_bullets(r["pr"], body) if valid else []):
-            # Each acceptance is read alone by the same rule, so the one the claim came from (and any other that says the same) is found.
-            alone = leftover_accepting.fixed_above(record, "## What we're accepting\n\n" + text)
-            if any(claim in valid for claim in alone):
+            # axis: a bullet is accounted by itself only when it is the acceptance the whole-body assignment gave a valid claim
+            # (compared as the rule reads it, comments cut); a bullet is never matched alone again, so it cannot move leftover
+            if any(seen in assigned for seen in leftover_accepting._accepting_items("## What we're accepting\n\n" + text)):
                 auto.add(bullet)
     return fixed, auto
 

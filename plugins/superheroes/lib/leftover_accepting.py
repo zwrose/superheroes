@@ -277,6 +277,13 @@ def fixed_above(record, body):
     or one whose acceptance carries no such form, is not listed. Only the full form counts: the word alone or a malformed
     form is plain text. Unreadable exactly where ``missing`` raises it. Whether the named PR is a higher member of this PR's
     stack is the caller's to check."""
+    return [{k: v for k, v in claim.items() if k != "acceptance"} for claim in assigned_fixed_above(record, body)]
+
+
+def assigned_fixed_above(record, body):
+    """``fixed_above``'s claims, each with ``acceptance``: the visible text of the acceptance the whole-body assignment
+    gave its leftover, so a caller that maps a claim back to its acceptance reads the one assignment and never matches an
+    acceptance alone again."""
     items = _accepting_items(body)
     leftovers = _leftovers(record)
     given = _assign(leftovers, items, _collisions(leftovers))
@@ -285,7 +292,8 @@ def fixed_above(record, body):
         found = FIXED_ABOVE_RE.search(items[given[n]]) if n in given else None
         # axis: only the acceptance a leftover is assigned can resolve it, so one line is never a claim for two leftovers
         if found:
-            claims.append({"id": ident, "title": title, "layer": int(found.group(1)), "commit": found.group(2)})
+            claims.append({"id": ident, "title": title, "layer": int(found.group(1)), "commit": found.group(2),
+                           "acceptance": items[given[n]]})
     return claims
 
 
