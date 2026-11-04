@@ -47,6 +47,7 @@ import model_registry  # noqa: E402
 import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
 import stack_check  # noqa: E402
+import store_core  # noqa: E402
 
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 # The iPhone check is R1-R4 of the iPhone-check register: a launch that asks for it gets one
@@ -2989,15 +2990,13 @@ def _git_stdout(path, *args, env=None):
 
 
 def _git_common_realpath(path, env):
-    """The realpath of ``path``'s git common dir, or None when it cannot be read."""
-    common = _git_stdout(path, "rev-parse", "--git-common-dir", env=env)
-    if common is None:
-        return None
-    if not os.path.isabs(common):
-        common = os.path.join(path, common)
+    """The realpath of ``path``'s git common dir, or None when it cannot be read.
+
+    Read through ``store_core``'s sanctioned resolver; any failure of it, of any kind, is None.
+    """
     try:
-        return os.path.realpath(common)
-    except OSError:
+        return store_core.get_gitdir(path)
+    except Exception:
         return None
 
 
@@ -3023,8 +3022,9 @@ def _origin_url(path, env):
 
 
 def _cloud_folder_marker_path(folder, env):
-    gitdir = _git_stdout(folder, "rev-parse", "--absolute-git-dir", env=env)
-    if gitdir is None:
+    try:
+        gitdir = store_core.get_worktree_gitdir(folder)
+    except Exception:
         return None
     return os.path.join(gitdir, _CLOUD_FOLDER_MARKER)
 
@@ -3041,7 +3041,10 @@ def _validate_cloud_launch_folder(repo_root, folder, env):
     identity = ll.repo_identity(repo_root)
     if identity is None:
         return "not-launcher-owned"
-    top = _git_stdout(folder, "rev-parse", "--show-toplevel", env=env)
+    try:
+        top = store_core.repo_root(folder, env=env)
+    except Exception:
+        return "not-launcher-owned"
     if top is None or os.path.realpath(top) != os.path.realpath(folder):
         return "not-launcher-owned"
     common = _git_common_realpath(folder, env)
