@@ -662,6 +662,82 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 ---
 
+## F - the advisor's fix order (V819-1, V819-2) and its returning review
+
+Run in a detached probe worktree pinned to the commit under test (F1 to F3 at the fix order's
+commit, F4 and F5 at the returning review's fix commit, which moved the exemption into
+`_primary_keeps_commit_refusal`). Each element was neutralized by one edit, its node run red, the
+edit inverted, the node run green, and the probe tree read back clean. Each run is
+`scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest <node> -q -p no:cacheprovider`;
+the excerpts are the raw failure lines.
+
+**F1 - a spawn with no folder (`_run_cloud_spawn`).** Axis: a missing working folder terminalizes
+the unstarted lane before any spawn, and the primary checkout is never the fallback. Node:
+`test_a_spawn_with_no_folder_terminalizes_the_unstarted_lane_and_never_runs`. Neutralization:
+`if cwd is None:` -> `if False:`. Red (the spawn ran, with no folder):
+```
+E       assert [None] == []
+E         Left contains one more item: None
+1 failed
+```
+Restored by the inverse edit; green: `1 passed`.
+
+**F2 - a final lookup that finds no folder (`launch_build`, final cloud site).** Axis: a final lookup
+that finds no folder terminalizes the unstarted lane like a drift refusal before any lock or spawn.
+Node: `test_a_final_lookup_that_finds_no_folder_terminalizes_the_lane_and_nothing_runs`. This guard
+is backed up twice, so it is proven in two steps. Neutralizing the final site's `if folder is None:`
+alone (-> `if False and folder is None:`) stays green (`1 passed`): the locked check's own
+`if folder is None:` in `_cloud_start_refusal` refuses the same reason at the same stage.
+Neutralizing that one as well goes red:
+```
+E       AssertionError: assert ['_cloud_star...aunch_folder'] == ['_cloud_star...launch_build']
+E         Left contains one more item: '_prepare_cloud_launch_folder'
+1 failed
+```
+The red is the lookup order: with both guards gone the check runs a fourth lookup and the
+check/lock mismatch guard (F3) is what refuses. Both edits inverted; green: `1 passed`.
+
+**F3 - the checked folder differs from the locked one (`_cloud_start_check`).** Axis: the check
+refuses a folder other than the one its caller locked and will run in (None differs from
+anything). Node: `test_the_check_refuses_a_folder_other_than_the_one_the_caller_locked`.
+Neutralization: `if folder is not None and (` -> `if False and folder is not None and (`. Red (no
+refusal came back):
+```
+E       TypeError: cannot unpack non-iterable NoneType object
+1 failed
+```
+Restored by the inverse edit; green: `1 passed`.
+
+**F4 - a commit the primary keeps was inherited from setup (`_prepare_cloud_launch_folder`).** Axis:
+a commit the primary checkout keeps never blocks a launch. Node:
+`test_a_launch_at_the_remote_tip_succeeds_when_the_primary_holds_unpushed_commits`. Neutralization:
+the exemption always refuses (`if refusal is not None:` -> `if True or refusal is not None:`). Red:
+```
+E       AssertionError: {'ok': False, 'reason': 'launch-cloud-checkout-off-base', ...}
+E       assert False is True
+1 failed
+```
+Restored by the inverse edit; green: `1 passed`. The test role's break-it test
+(`test_break_it_i2353_detached_launch_folder.py`) stays green with the exemption in place.
+
+**F5 - a commit the primary holds only in its reflog (`_primary_keeps_commit_refusal`).** Axis: an
+object only the primary's reflog holds is not kept there, so the folder's detached HEAD is its last
+protection and the switch refuses. Node:
+`test_a_commit_the_primary_holds_only_in_its_reflog_still_refuses_local_commits`. Neutralization:
+`return None if under_head.returncode == 0 else "local-commits"` -> `return None`. Red (the launch
+moved the folder off the commit and ran):
+```
+E       AssertionError: {'ok': True, 'reason': None, 'launchId': 'launch-...', 'place': 'cloud', ...}
+E       assert True is False
+1 failed
+```
+Restored by the inverse edit; green: `1 passed`.
+
+The line numbers in the restore receipt below were read before the fix order and have since
+moved; the elements are unchanged.
+
+---
+
 ## Restore receipt (restored lines read back from `launcher.py` after the last restore)
 
 ```
