@@ -8302,14 +8302,16 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
         _hand_back_unknown_fix_surface(
             state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
         return
+    # axis: a section the reviewed and head diffs hold byte-for-byte never reaches the hunk parser, so an untouched binary or rename cannot hand the PR back, while a changed one still does — see bite-proof record delta_round_unchanged_sections_2349
+    cut_reviewed, cut_head = _changed_sections_only(reviewed, state.get("headDiff"))
     split = delta_surface.split_fix_surface(
-        reviewed, state.get("headDiff"), state.get("fixBatch") or [])
+        cut_reviewed, cut_head, state.get("fixBatch") or [])
     if split.get("unknown"):
         _hand_back_unknown_fix_surface(state, "delta surface unknown")
         return
     # The scoped finder reads the fixes' own diff and nothing else of the change; a delta that cannot
     # be worked out for some file leaves the whole round's surface unknown, never silently empty.
-    fix_delta = _fix_delta_surface(state, reviewed, state.get("headDiff"))
+    fix_delta = _fix_delta_surface(state, cut_reviewed, cut_head)
     if fix_delta is None:
         _hand_back_unknown_fix_surface(state, "the fixes' own diff could not be computed for every file")
         return
