@@ -317,3 +317,50 @@ def test_c13_a_literal_gt_line_inside_an_unquoted_div_still_refuses_a_bot_write(
 ], ids=["gt-in-unquoted-div", "nested-tag-keeps-depth", "deeper-gt-in-quoted-div", "quoted-blank-ends"])
 def test_c13_comment_scan_raw_run_depth(body, expected):
     assert [row[3] for row in vs._comment_scan(body)] == expected
+
+
+# --- C14: a blank line is ASCII spaces and tabs only; a run's quote depth counts list markers and extra spaces -------
+
+NBSP = chr(0xA0)  # built at runtime: str.strip() strips it, a Markdown blank line does not
+
+
+def test_c14_a_non_breaking_space_line_does_not_end_a_raw_run_body_emptied(tmp_path):
+    # the NBSP line is raw HTML text, so the opener after it is a real comment hiding the owner half
+    body = "<div>\n" + NBSP + "\n`<!--`\n\n" + BODY
+    fake = _fake(body, receipt=RECEIPT)
+    _refused(_write(fake, tmp_path), fake, "body-emptied")
+
+
+def test_c14_evaluate_also_refuses_body_emptied_for_a_non_breaking_space_line_in_a_raw_run():
+    body = "<div>\n" + NBSP + "\n`<!--`\n\n" + BODY
+    assert vs.evaluate("write", body, [_comment(RECEIPT)], SLOT, advisor_login="advisor")["reason"] == "body-emptied"
+
+
+def test_c14_a_list_item_quoted_raw_run_ends_at_its_quoted_blank_so_the_bot_body_writes(tmp_path):
+    body = "Bumps x.\n\n- > <div>\n  > </div>\n  >\n  > Handles `<!--` literally.\n"
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
+
+
+def test_c14_a_double_spaced_quote_prefix_ends_at_its_quoted_blank_so_the_bot_body_writes(tmp_path):
+    body = "Bumps x.\n\n>  > <div>\n>  > </div>\n>  >\n>  > Handles `<!--` literally.\n"
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
+
+
+def test_c14_a_line_of_ascii_spaces_and_tabs_still_ends_a_raw_run():
+    assert [row[3] for row in vs._comment_scan("<div>\n \t \n`<!--`\nnext\n")] == [False, False, False, False]
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("<div>\n" + NBSP + "\n`<!--`\nnext\n", [False, False, False, True]),
+    ("- > <div>\n  > </div>\n  >\n  > `<!--`\nnext\n", [False, False, False, False, False]),
+    (">  > <div>\n>  > </div>\n>  >\n>  > `<!--`\nnext\n", [False, False, False, False, False]),
+    ("- > <div>\n- >\n- > `<!--`\nnext\n", [False, False, False, False]),
+], ids=["nbsp-is-not-blank", "list-marker-quote-depth", "double-space-quote-depth", "list-marker-quoted-blank"])
+def test_c14_comment_scan_raw_run_blankness_and_depth(body, expected):
+    assert [row[3] for row in vs._comment_scan(body)] == expected

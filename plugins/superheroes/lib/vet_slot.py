@@ -96,8 +96,10 @@ _ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
 # or the line's end, a closing tag, or "<?". An autolink (<https://…>) is not a tag. A comment opener is left to the
 # comment state, which hides through its closer already.
 _RAW_HTML_START_RE = re.compile(r"^[ \t>*+\-0-9.)]*<(?:[A-Za-z][A-Za-z0-9-]*(?=[ \t/>]|$)|/[A-Za-z]|\?)")
-_QUOTE_PREFIX_RE = re.compile(r"^[ \t]*((?:>[ \t]?)*)")
-_ONE_QUOTE_MARK_RE = re.compile(r"^[ \t]*>[ \t]?")
+# axis: the start line's quote depth counts every ">" in its container prefix (the prefix _RAW_HTML_START_RE accepts), through list markers and extra spaces — see bite-proof record i2342_comment_scan_inline_code.md
+_QUOTE_PREFIX_RE = re.compile(r"^([ \t>*+\-0-9.)]*)")
+# axis: removing one quote mark takes the indentation and list markers before the next ">" with it, so "  >" and "- >" both lose their mark — see bite-proof record i2342_comment_scan_inline_code.md
+_ONE_QUOTE_MARK_RE = re.compile(r"^[ \t*+\-0-9.)]*>[ \t]?")
 
 
 def _strip_quote_marks(line, depth):
@@ -205,7 +207,8 @@ def _comment_scan(body):
         starts_in_comment = in_comment
         # axis: a raw HTML run starts at a line opening with a tag and ends at the next blank line — see bite-proof record i2342_comment_scan_inline_code.md
         # axis: the run ends at a line blank inside the blockquote depth it started in, so a literal ">" in an unquoted block stays raw — see bite-proof record i2342_comment_scan_inline_code.md
-        if not _strip_quote_marks(line, raw_depth if raw_html else 0).strip():
+        # axis: a blank line is only ASCII spaces and tabs, so a non-breaking-space line stays raw HTML — see bite-proof record i2342_comment_scan_inline_code.md
+        if not _strip_quote_marks(line, raw_depth if raw_html else 0).strip(" \t"):
             raw_html = False
         # axis: a tag inside a comment is comment text and starts no raw run — see bite-proof record i2342_comment_scan_inline_code.md
         # axis: a tag line inside a running raw block keeps the depth the block started at — see bite-proof record i2342_comment_scan_inline_code.md

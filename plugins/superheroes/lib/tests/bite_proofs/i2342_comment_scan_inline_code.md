@@ -238,3 +238,98 @@ depth, K12 a tag line inside a running block keeps that depth.
 - **Neutralization:** `elif not raw_html and not dead and …` lost `not raw_html and`.
 - **Red:** `1 failed, 23 passed, 20 deselected` — `test_c13_comment_scan_raw_run_depth[nested-tag-keeps-depth]`.
 - **Restore:** inverse Edit. **Green:** `44 passed` (the whole file).
+
+## Fix round: ASCII blank lines and list-aware quote depth (K13–K14)
+
+Added for the two confirmed defects left at the round cap (PR #2347): a non-breaking-space line ended a raw run
+(fail-open: `body-emptied` not raised) and the run's quote depth missed list markers and extra spaces (false
+`write-failed`). Method: Edit-tool neutralizations in the build worktree at `162a826b` plus this fix, inverse-Edit
+restores, command prefix `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest
+plugins/superheroes/lib/tests/test_vet_slot_comment_scan_inline_code_2342.py -q -p no:cacheprovider --tb=short`,
+selector `-k c14`. The captures are the runner's output with the `UV_NATIVE_TLS` warning line and the traceback bodies
+cut; nothing redacted. The pre-fix run (before any guard edit) was `6 failed, 1 passed, 44 deselected`: E1 (both
+callers merged in one test then), E2, E3 and the three rows.
+
+The guarded-element set declared before the probes: K13 the ASCII-only blank test, K14 the list-aware quote depth (two
+lines: K14a the start line's depth count, K14b the one-mark remover).
+
+### K13: a blank line is only ASCII spaces and tabs
+
+- **Guarded element / axis:** `_comment_scan`'s run-end test `.strip(" \t")` (`vet_slot.py:211`); a U+00A0 line is
+  raw HTML text, not a Markdown blank line.
+- **Neutralization:** `.strip(" \t")` became `.strip()`.
+- **Raw red** (`-k c14`):
+
+```
+FF...F..                                                                 [100%]
+FAILED ...::test_c14_a_non_breaking_space_line_does_not_end_a_raw_run_body_emptied
+  E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1'}
+FAILED ...::test_c14_evaluate_also_refuses_body_emptied_for_a_non_breaking_space_line_in_a_raw_run
+  E   KeyError: 'reason'
+FAILED ...::test_c14_comment_scan_raw_run_blankness_and_depth[nbsp-is-not-blank]
+  E   assert [False, False, False, False] == [False, False, False, True]
+3 failed, 5 passed, 44 deselected in 0.38s
+```
+
+- **Restore:** inverse Edit.
+- **Restore receipt:** `vet_slot.py:211` reads `        if not _strip_quote_marks(line, raw_depth if raw_html else 0).strip(" \t"):`.
+- **Raw green:**
+
+```
+........                                                                 [100%]
+8 passed, 44 deselected in 0.41s
+```
+
+### K14a: the start line's depth counts the whole container prefix
+
+- **Guarded element / axis:** `_QUOTE_PREFIX_RE` (`vet_slot.py:100`); the depth counts every `>` in the prefix
+  `_RAW_HTML_START_RE` accepts, through list markers and extra spaces.
+- **Neutralization:** `_QUOTE_PREFIX_RE` back to `^[ \t]*((?:>[ \t]?)*)`.
+- **Raw red** (`-k c14`):
+
+```
+..FF..FF                                                                 [100%]
+FAILED ...::test_c14_a_list_item_quoted_raw_run_ends_at_its_quoted_blank_so_the_bot_body_writes
+  E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker sits inside an unclosed HTML comment, so the slot would not render'}
+FAILED ...::test_c14_a_double_spaced_quote_prefix_ends_at_its_quoted_blank_so_the_bot_body_writes
+  E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker sits inside an unclosed HTML comment, so the slot would not render'}
+FAILED ...::test_c14_comment_scan_raw_run_blankness_and_depth[list-marker-quote-depth]
+FAILED ...::test_c14_comment_scan_raw_run_blankness_and_depth[double-space-quote-depth]
+4 failed, 4 passed, 44 deselected in 0.49s
+```
+
+- **Restore:** inverse Edit.
+- **Restore receipt:** `vet_slot.py:100` reads `_QUOTE_PREFIX_RE = re.compile(r"^([ \t>*+\-0-9.)]*)")`.
+- **Raw green:**
+
+```
+........                                                                 [100%]
+8 passed, 44 deselected in 0.47s
+```
+
+### K14b: removing one mark takes indentation and list markers with it
+
+- **Guarded element / axis:** `_ONE_QUOTE_MARK_RE` (`vet_slot.py:102`); a continuation line `  >` and a list line
+  `- >` both lose their mark.
+- **Neutralization:** `_ONE_QUOTE_MARK_RE` back to `^[ \t]*>[ \t]?`.
+- **First red run, honest note:** with only the first eight C14 tests the neutralization did **not** bite
+  (`8 passed, 44 deselected`): E2 and E3 use `  >` continuation lines, which the old
+  remover also strips. The row `list-marker-quoted-blank` (`"- > <div>\n- >\n- > `<!--`\nnext\n"`) was added to
+  the C14 rows test, and the neutralization re-run:
+- **Raw red** (`-k c14`, with the added row):
+
+```
+........F                                                                [100%]
+FAILED ...::test_c14_comment_scan_raw_run_blankness_and_depth[list-marker-quoted-blank]
+  E   assert [False, False, False, True] == [False, False, False, False]
+1 failed, 8 passed, 44 deselected in 0.47s
+```
+
+- **Restore:** inverse Edit.
+- **Restore receipt:** `vet_slot.py:102` reads `_ONE_QUOTE_MARK_RE = re.compile(r"^[ \t*+\-0-9.)]*>[ \t]?")`.
+- **Raw green** (the whole file):
+
+```
+.....................................................                    [100%]
+53 passed in 0.54s
+```
