@@ -3093,13 +3093,19 @@ def ensure_cloud_launch_folder(repo_root, env=None):
         os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     except OSError:
         return _fail("launch-cloud-folder-create-failed", folder=path)
-    # This call made the path only if it was absent before the clone began (checked above).
-    created_here = not os.path.lexists(path)
+    # axis: this call owns the path only when its own mkdir creates it, an atomic claim, so a path another process made after the check above is never treated as this call's and never removed — see bite-proof record i2353_l1_cloud_launch_folder
+    try:
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        if _validate_cloud_launch_folder(repo_root, path, env) is None:
+            return {"ok": True, "folder": path, "created": False, "reason": None}
+        return _fail("launch-cloud-folder-not-launcher-owned", folder=path)
+    except OSError:
+        return _fail("launch-cloud-folder-create-failed", folder=path)
 
     def _create_failed():
-        # axis: a failure after the clone began removes the path this call created, and only that path, so no half-made folder is left to refuse launcher-owned on every later attempt — see bite-proof record i2353_l1_cloud_launch_folder
-        if created_here:
-            shutil.rmtree(path, ignore_errors=True)
+        # axis: a failure after this call claimed the path removes that path, and only that path, so no half-made folder is left to refuse launcher-owned on every later attempt — see bite-proof record i2353_l1_cloud_launch_folder
+        shutil.rmtree(path, ignore_errors=True)
         return _fail("launch-cloud-folder-create-failed", folder=path)
 
     cloned = _git_scrubbed(
