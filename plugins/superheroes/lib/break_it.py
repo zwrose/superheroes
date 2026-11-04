@@ -1418,7 +1418,7 @@ def _scratch_folder(root, scratch):
         return None, "scratch-unresolved"
     try:
         # axis: git answers under the C locale, so its "not a git repository" diagnostic is English whatever the caller's locale — see bite-proof record wo_a_2351_break_it_system_temp
-        done = _git_env(base, ("rev-parse", "--show-toplevel"), _clean_env({"LC_ALL": "C", "LANGUAGE": "C"}))
+        done = _git_env(base, ("rev-parse", "--is-inside-work-tree"), _clean_env({"LC_ALL": "C", "LANGUAGE": "C"}))
     except (OSError, subprocess.TimeoutExpired):
         return None, "scratch-unresolved"
     # axis: the system temp folder is used only when git proves it lies outside every repository (a pytest run there refuses a base temp git does not answer "not a git repository" for) — see bite-proof record wo_a_2351_break_it_system_temp

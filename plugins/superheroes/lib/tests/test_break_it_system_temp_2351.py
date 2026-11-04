@@ -2,7 +2,7 @@
 
 T-DoD: a kept check in a linked worktree whose repository refuses an in-repository base temp certifies (the real defect).
 T-sibling: an explicit `scratch` is still honoured: the per-run folder is its child, and is gone afterwards.
-T-inrepo: a system temp folder inside a work tree reads not-run `scratch-unresolved`, and nothing is written.
+T-inrepo: a system temp folder inside a work tree reads not-run `scratch-unresolved`, and the runner writes nothing.
 T-unresolvable: a system temp folder that cannot be resolved reads not-run `scratch-unresolved`.
 T-mode: the default per-run folder is private (0700); a caller-given session folder's per-run folder is today's mkdir.
 The remaining tests pin the other fail-closed edges: git's other answers, git that cannot start, and a bad `scratch`.
@@ -115,7 +115,7 @@ def _fail_git_on_the_temp_probe(monkeypatch, exc):
     real = break_it._git_env
 
     def failing(root, args, env):
-        if tuple(args[:2]) == ("rev-parse", "--show-toplevel"):
+        if tuple(args[:2]) == ("rev-parse", "--is-inside-work-tree"):
             raise exc
         return real(root, args, env)
 

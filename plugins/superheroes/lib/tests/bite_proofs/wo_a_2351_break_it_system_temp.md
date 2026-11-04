@@ -500,3 +500,53 @@ pytest exit: 1
 1 passed in 1.15s
 pytest exit: 0
 ```
+
+## Work order B: the probe asks a question that resolves no root
+
+**Change.** `_scratch_folder` in `plugins/superheroes/lib/break_it.py` now asks `git -C <base> rev-parse --is-inside-work-tree` instead of `--show-toplevel`. The acceptance rule is unchanged: the system temp folder is used only on `returncode != 0 and "not a git repository" in stderr`, under the C locale; every other answer reads `scratch-unresolved`. Measured: outside every repository git prints "fatal: not a git repository (or any of the parent directories): .git", rc=128; inside a git directory or a linked worktree's git directory it prints `false`, rc=0; inside a work tree it prints `true`, rc=0. The test helper `_fail_git_on_the_temp_probe` matches the new argument tuple. The TRANSITION.md fail-closed bullet is narrowed to "the runner writes nothing there (Python's own lookup of the system temp folder may create and remove a probe file before the check runs)".
+
+**The census red it answers** (CI run 41843958994, `test_repo_root_census.py::test_lib_repo_root_census_no_unallowlisted_violations`):
+
+```
+E       AssertionError: unsanctioned repo-root resolution outside store_core:
+E           break_it.py:1415 git-arg-literal call includes --show-toplevel
+```
+
+**E2 re-proved on the new probe** (guarded element: the outside-every-repository acceptance condition in `_scratch_folder`; axis: the system temp folder is used only when git answers "not a git repository").
+
+**neutralization:** the acceptance line `if done.returncode != 0 and "not a git repository" in (done.stderr or b"").decode("utf-8", errors="replace"):` replaced by `if True:`.
+
+**raw red** (the two E2 proving nodes, exit 1; the `UV_NATIVE_TLS` warning line and the long traceback `command` echo are elided from the middle of each assertion line only where the tool itself truncated it):
+
+```
+FF                                                                       [100%]
+E       AssertionError: {'schema': 'break-it-run/1', 'role': 'test-role', 'path': 'tests/test_t.py', 'command': '/root/.cache/uv/builds-v0/.tmpLskWga/bin/python tests/test_t.py', ...}
+E       assert ('passed', None) == ('not-run', '...h-unresolved')
+E         At index 0 diff: 'passed' != 'not-run'
+E       AssertionError: {'schema': 'break-it-run/1', 'role': 'test-role', 'path': 'tests/test_t.py', 'command': '/root/.cache/uv/builds-v0/.tmpLskWga/bin/python tests/test_t.py', ...}
+E       assert ('passed', None) == ('not-run', '...h-unresolved')
+E         At index 0 diff: 'passed' != 'not-run'
+FAILED plugins/superheroes/lib/tests/test_break_it_system_temp_2351.py::test_inrepo_a_system_temp_folder_inside_the_work_tree_is_not_run_scratch_unresolved
+FAILED plugins/superheroes/lib/tests/test_break_it_system_temp_2351.py::test_a_system_temp_folder_inside_a_git_directory_is_not_run_scratch_unresolved
+2 failed in 0.89s
+```
+
+**restore:** the inverse edit (`if True:` back to the acceptance line above).
+
+**restore receipt:** `git diff -- plugins/superheroes/lib/break_it.py` after the restore shows exactly one changed line:
+
+```
+-        done = _git_env(base, ("rev-parse", "--show-toplevel"), _clean_env({"LC_ALL": "C", "LANGUAGE": "C"}))
++        done = _git_env(base, ("rev-parse", "--is-inside-work-tree"), _clean_env({"LC_ALL": "C", "LANGUAGE": "C"}))
+```
+
+**raw green** (the same two nodes, exit 0):
+
+```
+..                                                                       [100%]
+2 passed in 0.31s
+```
+
+**Scoped suite** (`test_repo_root_census.py`, `test_break_it_system_temp_2351.py`, `test_break_it_review_round2_2210.py`, `test_break_it_working_copy_2210.py`, `test_break_it.py`, `test_payload_contracts_layering.py`, `-n auto`): `130 passed, 10 skipped`. The 10 skips are the `claude write sandbox:` and `ps` skips in `test_break_it_review_round2_2210.py` and `test_break_it.py`; they run in full in the orchestrator's shell and CI.
+
+**Redaction:** none needed; the captures hold no secrets, tokens or private URLs.
