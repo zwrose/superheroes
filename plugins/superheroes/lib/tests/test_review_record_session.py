@@ -765,10 +765,11 @@ def test_the_cli_prints_the_result_and_exits_nonzero_on_refusal(tmp_path, monkey
     assert json.loads(capsys.readouterr().out) == {"ok": True, "action": "created"}
 
 
-def _second_session(tmp_path, ledger=()):
+def _second_session(tmp_path, ledger=(), session_id="s-1"):
     root = tmp_path / "later"
     root.mkdir()
     s = Session(root, dispositionLedger=list(ledger))
+    s.meta["sessionId"] = session_id
     s.seat("code-reviewer")
     return s.save()
 
@@ -814,11 +815,12 @@ def test_a_finding_the_later_session_raises_again_appears_once_with_its_outcome(
     assert only["outcome"] == "left-for-owner" and "carried" not in (only["reason"] or "")
 
 
-def _reviewed_second_session(tmp_path):
+def _reviewed_second_session(tmp_path, session_id="s-1"):
     """A later session that on its own reads reviewed: a maker, a reviewer run on the final commit, green CI."""
     root = tmp_path / "later"
     root.mkdir()
     s = Session(root, seatMapReceipts=[{"round": "1", "map": {"seats": {}, "makerFamilies": ["xai"]}}])
+    s.meta["sessionId"] = session_id
     s.seat("code-reviewer", head=HEAD, nonce="n1")
     runs = {"/run/n1": (dict(GOOD_RUN, runnerNonce="n1", viewHeadSha=HEAD), None)}
     return s.save(), runs, {"ci": "green", "runDirs": ["/run/n1"]}
