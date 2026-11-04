@@ -543,8 +543,13 @@ def _record(head, block, outcome, reason=None, exit_code=None, output="", interp
 
 def _git(repo_root, *args):
     """Run git in its own session, so a timeout kills the whole group (filter and hook helpers too)."""
+    return _git_env(repo_root, args, _clean_env())
+
+
+def _git_env(repo_root, args, env):
+    """``_git`` with the environment given: git runs in its own session, and a timeout kills the whole group."""
     cmd = ["git", "-C", repo_root] + list(args)
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_clean_env(),
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
                             start_new_session=True)
     try:
         out, err = proc.communicate(timeout=_GIT_TIMEOUT)
@@ -1412,7 +1417,8 @@ def _scratch_folder(root, scratch):
     except (OSError, ValueError):
         return None, "scratch-unresolved"
     try:
-        done = _git(base, "rev-parse", "--show-toplevel")
+        # axis: git answers under the C locale, so its "not a git repository" diagnostic is English whatever the caller's locale — see bite-proof record wo_a_2351_break_it_system_temp
+        done = _git_env(base, ("rev-parse", "--show-toplevel"), _clean_env({"LC_ALL": "C", "LANGUAGE": "C"}))
     except (OSError, subprocess.TimeoutExpired):
         return None, "scratch-unresolved"
     # axis: the system temp folder is used only when git proves it lies outside every repository (a pytest run there refuses a base temp git does not answer "not a git repository" for) — see bite-proof record wo_a_2351_break_it_system_temp

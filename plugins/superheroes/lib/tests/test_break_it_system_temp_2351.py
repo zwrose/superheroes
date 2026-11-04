@@ -112,14 +112,14 @@ def _printed(record, key):
 
 def _fail_git_on_the_temp_probe(monkeypatch, exc):
     """Make the one git call `_scratch_folder` makes raise `exc`; every other git call is the real one."""
-    real = break_it._git
+    real = break_it._git_env
 
-    def failing(root, *args):
-        if args[:2] == ("rev-parse", "--show-toplevel"):
+    def failing(root, args, env):
+        if tuple(args[:2]) == ("rev-parse", "--show-toplevel"):
             raise exc
-        return real(root, *args)
+        return real(root, args, env)
 
-    monkeypatch.setattr(break_it, "_git", failing)
+    monkeypatch.setattr(break_it, "_git_env", failing)
 
 
 # ---- T-DoD: the converge-time kept check certifies in a linked worktree ----------------------------------
@@ -232,3 +232,30 @@ def test_mode_the_default_per_run_folder_is_private_and_a_given_scratch_folder_k
     assert _printed(default, "MODE") == "700"
     assert int(_printed(given, "MODE"), 8) == 0o777 & ~0o022
     assert not os.path.exists(_printed(default, "TMPDIR")) and not os.path.exists(_printed(given, "TMPDIR"))
+
+
+# ---- T-locale: git's answer is read under the C locale ---------------------------------------------------
+
+FAKE_LOCALIZED_GIT = """#!/bin/sh
+# Answers like a translated git: English only under the C locale.
+if [ "$LC_ALL" = "C" ]; then
+  echo "fatal: not a git repository (or any of the parent directories): .git" >&2
+else
+  echo "fatal: kein Git-Repository (oder irgendeines der Elternverzeichnisse): .git" >&2
+fi
+exit 128
+"""
+
+
+def test_locale_a_translated_git_still_proves_the_system_temp_folder_outside_every_repository(repo, tmp_path, systmp,
+                                                                                               monkeypatch):
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_git = fake_bin / "git"
+    fake_git.write_text(FAKE_LOCALIZED_GIT)
+    fake_git.chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake_bin) + os.pathsep + os.environ.get("PATH", ""))
+    monkeypatch.setenv("LC_ALL", "de_DE.UTF-8")
+    monkeypatch.setenv("LANGUAGE", "de")
+    base, reason = break_it._scratch_folder(str(repo), None)
+    assert (base, reason) == (os.path.abspath(str(systmp)), None)

@@ -13,6 +13,7 @@ Declared guarded-element set (from the order): **E1**, **E2**, **E3**, **E4**, *
 | E3 | `gettempdir()` raising, `_scratch_folder` (`try`/`except (OSError, ValueError)` around it) | an unresolvable system temp folder reads not-run `scratch-unresolved`, never a `run-error` | `test_break_it_system_temp_2351.py::test_unresolvable_a_system_temp_folder_that_cannot_be_resolved_is_not_run_scratch_unresolved` |
 | E4 | the default per-run folder's mode, `_run_in_working_copy` (`mode=0o700 if scratch is None else None`) | the default per-run folder is `0700` | `test_break_it_system_temp_2351.py::test_mode_the_default_per_run_folder_is_private_and_a_given_scratch_folder_keeps_the_plain_mkdir` |
 | E5 | the caller-given `scratch` is honoured, `_scratch_folder` (`if scratch is not None:`) | a given session folder holds the per-run folder | `test_break_it_system_temp_2351.py::test_sibling_an_explicit_scratch_holds_the_per_run_folder_and_it_is_gone_afterwards` |
+| E6 | the C-locale pin on the outside-every-repository probe, `_scratch_folder` (`_clean_env({"LC_ALL": "C", "LANGUAGE": "C"})`) | a git that translates its diagnostics still proves an outside-every-repository system temp folder | `test_break_it_system_temp_2351.py::test_locale_a_translated_git_still_proves_the_system_temp_folder_outside_every_repository` |
 
 ## Disclosures
 
@@ -22,7 +23,7 @@ Declared guarded-element set (from the order): **E1**, **E2**, **E3**, **E4**, *
 - The E1 neutralization is the old default body restored in front of the new one: `import store_core` and `return os.path.join(store_core.get_worktree_gitdir(root, run=lambda cwd, *a: store_core.run_git_result(cwd, *a, env=_clean_env())), "superheroes"), None`. The nested pytest in the T-DoD red ends `1 error in 0.02s`, an error at setup, which is the fixture guard refusing a base temp inside the linked worktree's git directory. The record's `outcome` there is `failing` (the order's name for it is `kept-failing`).
 - The E4 test fixes the umask to `0o022` for the two runs and restores it, so a plain `mkdir` (`0755`) differs from the private mode; the given-`scratch` folder is asserted `0o777 & ~0o022`.
 - **Guarded edges with no neutralization (not in the declared set), listed unproven:** (a) git that cannot start (`OSError`) or times out (`subprocess.TimeoutExpired`) in the system temp folder (`::test_git_that_cannot_start_or_times_out_in_the_system_temp_folder_is_not_run_scratch_unresolved`, two parametrizations); (b) a `scratch` that is not an existing directory (`::test_a_scratch_that_is_not_an_existing_directory_is_not_run_scratch_unresolved`, behaviour unchanged from before); (c) the ignored `GIT_DIR` (`test_break_it_review_round2_2210.py::test_g1_the_resolution_ignores_a_git_dir_routed_through_the_environment`, carried by `_git`'s `_clean_env`); (d) the `errors="replace"` decode of git's stderr. These tests pass; none was shown to go red.
-- Limit: git's message is matched as English text (`not a git repository`). Under a localized git the check cannot match and fails closed to `scratch-unresolved`; the order routes the call through `_git`, which does not set `LC_ALL`.
+- Limit, since closed by E6: git's message is matched as English text (`not a git repository`). As the order first routed the call through `_git`, which does not set `LC_ALL`, a localized git could never match and failed closed to `scratch-unresolved`. The review's round-1 finding "Pin Git's locale before matching its English diagnostic" was fixed by running that one git call under `LC_ALL=C` / `LANGUAGE=C` (`_git_env`), proven as E6 below.
 - Redaction: none needed; local paths are kept as printed, no secret, token or private URL appears. Each capture is under 32 KiB and all together under 128 KiB, so none is written off-repo. The `UV_NATIVE_TLS` deprecation warning line that `scripts/pinned-python` prints is not shown; everything else is verbatim (default `--tb`, no filter).
 - The command shape is `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest <exact node ids> -q`, followed by `echo "pytest exit: $?"`.
 
@@ -466,5 +467,36 @@ restored lines (`grep -n 'if scratch is not None:'`; the second hit, line 1584, 
 ```
 .                                                                        [100%]
 1 passed in 0.51s
+pytest exit: 0
+```
+
+---
+
+## E6: the C-locale pin on the outside-every-repository probe
+
+**Provenance:** orchestrator-typed at the review loop's apply-fixes step (round 1), maker family anthropic; the neutralization, red, restore and green were run by the build session itself.
+
+- **axis:** a git that translates its diagnostics still proves an outside-every-repository system temp folder
+- **proving node:** `test_break_it_system_temp_2351.py::test_locale_a_translated_git_still_proves_the_system_temp_folder_outside_every_repository` (a fake `git` first on `PATH` that answers in English only under `LC_ALL=C`; ambient `LC_ALL=de_DE.UTF-8`, `LANGUAGE=de`)
+
+**neutralization** (`plugins/superheroes/lib/break_it.py`, `_scratch_folder`): `_clean_env({"LC_ALL": "C", "LANGUAGE": "C"})` → `_clean_env()` in the `_git_env` call.
+
+**raw red** (exit 1):
+
+```
+E       AssertionError: assert (None, 'scratch-unresolved') == ('/tmp/pytest...systmp', None)
+E         
+E         At index 0 diff: None != '/tmp/pytest-of-root/pytest-13/test_locale_a_translated_git_s0/systmp'
+E         Use -v to get more diff
+1 failed in 1.20s
+pytest exit: 1
+```
+
+**restore:** the inverse edit; `git diff --stat -- plugins/superheroes/lib/break_it.py` against the round-1 start head then read `1 file changed, 8 insertions(+), 2 deletions(-)`, the fix as committed.
+
+**raw green** (exit 0):
+
+```
+1 passed in 1.15s
 pytest exit: 0
 ```
