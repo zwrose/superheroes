@@ -279,7 +279,7 @@ def test_k3_the_strict_ruling_schema_is_closed_and_valid():
     for name in audits.CHECK_NAMES:
         entry = checks["properties"][name]
         assert entry["additionalProperties"] is False and entry["required"] == ["answer", "why"]
-        assert entry["properties"]["answer"]["enum"] == ["yes", "no"]
+        assert entry["properties"]["answer"]["enum"] == list(audits.check_answers(name))
         assert entry["properties"]["why"] == {"type": "string"}
     match = ruling["properties"]["testMatch"]
     assert match["type"] == ["object", "null"] and match["additionalProperties"] is False
