@@ -142,3 +142,38 @@ FAILED test_c8_a_backtick_quoted_closer_inside_a_comment_closes_it_so_the_headin
 .                                                                        [100%]
 1 passed, 19 deselected in 0.42s
 ```
+
+## Review fix round: raw HTML (K5–K7)
+
+Added at review-code's `apply-fixes` step for the scoped finder's finding "Raw HTML comments now bypass the
+owner-half guard" (a `<!--` quoted in inline code inside a raw `<div>` block is a real comment: the HTML block is
+not Markdown). The build session wrote the fix and these tests, so it produced and ran this part of the record itself,
+in a detached probe worktree at `3bcd84c7`, with Edit-tool neutralizations and inverse-Edit restores; `git status
+--porcelain` was empty after the last restore. Command prefix as above, `--tb=no`, selector `-k c11`. The captures are
+the runner's result lines; the per-test FAILED lines are listed, nothing else was cut, nothing redacted.
+
+The guarded-element set declared before the probes: K5 the raw-HTML branch, K6 the blank line that ends a raw run, K7
+a comment-opener line that does not start a raw run.
+
+### K5: the raw-HTML branch (both callers)
+
+- **Neutralization:** `if raw_html:` became `if False and raw_html:`.
+- **Red:** `5 failed, 4 passed, 20 deselected` — `test_c11_the_findings_example_a_div_then_a_quoted_opener_hides_the_owner_half_body_emptied`
+  (the `body-emptied` guard), `test_c11_a_bot_body_with_a_quoted_opener_inside_a_raw_div_refuses_write_failed` (the
+  slot path), `test_c11_a_raw_block_under_a_blockquote_is_raw_too`, `test_c11_comment_scan_reads_raw_html_runs[div-run]`,
+  `test_c11_comment_scan_reads_raw_html_runs[quoted-container-escape]`.
+- **Restore:** inverse Edit. **Green:** `9 passed, 20 deselected`.
+
+### K6: a blank line ends the raw run
+
+- **Neutralization:** `if not line.strip():` (the raw-run reset) became `if False and not line.strip():`.
+- **Red:** `2 failed, 7 passed, 20 deselected` — `test_c11_a_blank_line_ends_the_raw_block_so_a_later_quoted_opener_is_text_again`,
+  `test_c11_comment_scan_reads_raw_html_runs[blank-ends-run]`.
+- **Restore:** inverse Edit. **Green:** `9 passed, 20 deselected`.
+
+### K7: a comment-opener line does not start a raw run
+
+- **Neutralization:** `_RAW_HTML_START_RE`'s class `[A-Za-z/?]` became `[A-Za-z/?!]`.
+- **Red:** `2 failed, 7 passed, 20 deselected` — `test_c11_a_comment_line_does_not_make_the_next_line_raw`,
+  `test_c11_comment_scan_reads_raw_html_runs[comment-line-not-raw]`.
+- **Restore:** inverse Edit. **Green:** `29 passed` (the whole file).
