@@ -17,6 +17,7 @@ import pty
 import re
 import secrets
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -2965,6 +2966,185 @@ def _cloud_start_refusal(repo_root, stamped, env):
     return refusal_reason, detail
 
 
+# --- the launcher's own cloud-launch folder (#2353) -----------------------------------------------
+#
+# A cloud start reads its working folder's current branch and the platform clones that branch's
+# remote tip. So a cloud launch is to start from a folder the launcher owns: one separate clone
+# per repository, under the managed-worktree root, so the primary checkout is never moved for a
+# launch. The primary checkout is only ever read. This part makes the folder and validates it; no
+# launch uses it yet.
+
+_CLOUD_FOLDER_MARKER = "superheroes-cloud-launch-folder"
+# A clone moves objects, so it may outlast the short per-step read bound.
+_CLOUD_FOLDER_TRANSFER_TIMEOUT = 600
+
+
+def _git_stdout(path, *args, env=None):
+    """The stripped stdout of a git read in ``path``, or None when git failed, timed out or said nothing."""
+    got = _git_scrubbed(path, *args, env=env, timeout=_WORKTREE_GIT_TIMEOUT)
+    if got is None or got.returncode != 0:
+        return None
+    said = (got.stdout or "").strip()
+    return said or None
+
+
+def _git_common_realpath(path, env):
+    """The realpath of ``path``'s git common dir, or None when it cannot be read."""
+    common = _git_stdout(path, "rev-parse", "--git-common-dir", env=env)
+    if common is None:
+        return None
+    if not os.path.isabs(common):
+        common = os.path.join(path, common)
+    try:
+        return os.path.realpath(common)
+    except OSError:
+        return None
+
+
+def cloud_launch_folder_path(repo_root, env=None):
+    """Where the launcher's own cloud-launch folder for ``repo_root``'s repository lives, or None.
+
+    Everything is derived from the repository's git common dir and identity, never from
+    ``repo_root``'s own basename, so the primary checkout, a linked worktree of it and a symlink
+    alias of it all resolve the same folder.
+    """
+    identity = ll.repo_identity(repo_root)
+    common = _git_common_realpath(repo_root, env)
+    root = worktree_root(env)
+    if identity is None or common is None or root is None:
+        return None
+    # axis: the path comes from the common dir and the repository identity, so every checkout of one repository names one folder — see bite-proof record i2353_l1_cloud_launch_folder
+    tag = _WORKTREE_TAG_UNSAFE.sub("-", os.path.basename(os.path.dirname(common))).strip("-") or "repo"
+    return os.path.join(root, tag, "cloud-launch-" + identity[:12])
+
+
+def _origin_url(path, env):
+    return _git_stdout(path, "remote", "get-url", "origin", env=env)
+
+
+def _cloud_folder_marker_path(folder, env):
+    gitdir = _git_stdout(folder, "rev-parse", "--absolute-git-dir", env=env)
+    if gitdir is None:
+        return None
+    return os.path.join(gitdir, _CLOUD_FOLDER_MARKER)
+
+
+def _validate_cloud_launch_folder(repo_root, folder, env):
+    """None when ``folder`` is a launcher-owned clone of ``repo_root``'s repository; ``"missing"``
+    when nothing is at the path; else ``"not-launcher-owned"``. Any git call that fails refuses.
+    """
+    if not os.path.lexists(folder):
+        return "missing"
+    # axis: a folder path that is a symlink is not the launcher's own folder, whatever it points at — see bite-proof record i2353_l1_cloud_launch_folder
+    if os.path.islink(folder):
+        return "not-launcher-owned"
+    identity = ll.repo_identity(repo_root)
+    if identity is None:
+        return "not-launcher-owned"
+    top = _git_stdout(folder, "rev-parse", "--show-toplevel", env=env)
+    if top is None or os.path.realpath(top) != os.path.realpath(folder):
+        return "not-launcher-owned"
+    common = _git_common_realpath(folder, env)
+    primary_common = _git_common_realpath(repo_root, env)
+    if common is None or primary_common is None:
+        return "not-launcher-owned"
+    # axis: the folder keeps its own object store and git dir, independent of the primary's (a linked worktree or an alias shares it) — see bite-proof record i2353_l1_cloud_launch_folder
+    if common != os.path.realpath(os.path.join(folder, ".git")) or common == primary_common:
+        return "not-launcher-owned"
+    marker = _cloud_folder_marker_path(folder, env)
+    # axis: only a folder carrying the launcher's marker for this repository is its own — see bite-proof record i2353_l1_cloud_launch_folder
+    if marker is None or os.path.islink(marker) or not os.path.isfile(marker):
+        return "not-launcher-owned"
+    try:
+        with open(marker, "r", encoding="utf-8") as fh:
+            said = json.load(fh)
+    except (OSError, ValueError):
+        return "not-launcher-owned"
+    if not isinstance(said, dict) or said.get("repoId") != identity:
+        return "not-launcher-owned"
+    mine = _origin_url(folder, env)
+    theirs = _origin_url(repo_root, env)
+    if mine is None or theirs is None or mine != theirs:
+        return "not-launcher-owned"
+    return None
+
+
+def ensure_cloud_launch_folder(repo_root, env=None):
+    """The setup verb: make the launcher's cloud-launch folder if it is absent.
+
+    ``{"ok": True, "folder", "created", "reason": None}`` or a ``_fail`` carrying ``folder``.
+    An existing path is validated and never written; an absent one is a local clone of the primary
+    (which is only read) whose origin is then set to the primary's origin URL, left detached with
+    no local branch, plus the marker. A failure after the clone began removes the path this call
+    created.
+    """
+    path = cloud_launch_folder_path(repo_root, env)
+    if path is None:
+        return _fail("launch-cloud-folder-unresolvable", folder=None)
+    if os.path.lexists(path):
+        if _validate_cloud_launch_folder(repo_root, path, env) is None:
+            return {"ok": True, "folder": path, "created": False, "reason": None}
+        return _fail("launch-cloud-folder-not-launcher-owned", folder=path)
+    origin = _origin_url(repo_root, env)
+    if origin is None:
+        return _fail("launch-cloud-folder-origin-unreadable", folder=path)
+    identity = ll.repo_identity(repo_root)
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    except OSError:
+        return _fail("launch-cloud-folder-create-failed", folder=path)
+    # This call made the path only if it was absent before the clone began (checked above).
+    created_here = not os.path.lexists(path)
+
+    def _create_failed():
+        # axis: a failure after the clone began removes the path this call created, and only that path, so no half-made folder is left to refuse launcher-owned on every later attempt — see bite-proof record i2353_l1_cloud_launch_folder
+        if created_here:
+            shutil.rmtree(path, ignore_errors=True)
+        return _fail("launch-cloud-folder-create-failed", folder=path)
+
+    cloned = _git_scrubbed(
+        os.path.dirname(path), "clone", "--quiet", os.path.abspath(repo_root), path,
+        env=env, timeout=_CLOUD_FOLDER_TRANSFER_TIMEOUT,
+    )
+    if cloned is None or cloned.returncode != 0:
+        return _create_failed()
+    pointed = _git_scrubbed(
+        path, "remote", "set-url", "origin", origin, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if pointed is None or pointed.returncode != 0:
+        return _create_failed()
+    # axis: a local clone copies the primary's checked-out branch, so the new folder is detached and every local branch is dropped; otherwise a primary with unpushed commits would make the first launch's repair refuse local-commits — see bite-proof record i2353_l1_cloud_launch_folder
+    detached = _git_scrubbed(
+        path, "checkout", "--quiet", "--detach", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if detached is None or detached.returncode != 0:
+        return _create_failed()
+    heads = _git_scrubbed(
+        path, "for-each-ref", "--format=%(refname)", "refs/heads/",
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if heads is None or heads.returncode != 0:
+        return _create_failed()
+    for ref in (heads.stdout or "").split():
+        short = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+        dropped = _git_scrubbed(
+            path, "branch", "--quiet", "-D", short, env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if dropped is None or dropped.returncode != 0:
+            return _create_failed()
+    marker = _cloud_folder_marker_path(path, env)
+    if marker is None or identity is None:
+        return _create_failed()
+    try:
+        with open(marker, "w", encoding="utf-8") as fh:
+            json.dump({"schema": 1, "repoId": identity}, fh)
+    except OSError:
+        return _create_failed()
+    if _validate_cloud_launch_folder(repo_root, path, env) is not None:
+        return _create_failed()
+    return {"ok": True, "folder": path, "created": True, "reason": None}
+
+
 _ADOPT_HEAD_NOT_ON_BASE = "premise-adopts-head-not-on-base"
 _ADOPT_REMEDY_UNDECIDABLE = (
     "Ancestry could not be decided in the launching checkout: fetch the adopted branch so its "
@@ -4962,6 +5142,10 @@ def _cli_still(args):
     return {"ok": True, "line": got["line"]}
 
 
+def _cli_cloud_launch_folder(args):
+    return ensure_cloud_launch_folder(args.repo_root)
+
+
 def _cli_lane_version(args):
     try:
         with open(args.launch_file, encoding="utf-8") as fh:
@@ -5101,6 +5285,10 @@ def main(argv=None):
     lv = sub.add_parser("lane-version")
     lv.add_argument("--launch-file", required=True)
     lv.set_defaults(func=_cli_lane_version)
+
+    cf = sub.add_parser("cloud-launch-folder")
+    cf.add_argument("--repo-root", required=True)
+    cf.set_defaults(func=_cli_cloud_launch_folder)
 
     args = parser.parse_args(argv)
     result = args.func(args)
