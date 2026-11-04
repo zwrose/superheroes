@@ -92,6 +92,9 @@ _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6} (.*)$")
 _SUPERHEROES_OPEN_RE = re.compile(r"<!--\s*superheroes:")
 _BUILD_RECORD_WRAPPER_RE = re.compile(r"<summary[^>]*>\s*build\s+record", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
+# a line opening raw HTML (an HTML block) with a tag, under any container marks; over-matching keeps more of the body
+# raw. A comment opener is left to the comment state, which hides through its closer already.
+_RAW_HTML_START_RE = re.compile(r"^[ \t>*+\-0-9.)]*<[A-Za-z/?]")
 _ACCEPTING_KEY = "what were accepting"
 _BUILDER_HEADING_KEYS = ("whats changing", _ACCEPTING_KEY, "how to see it", "build record", "build brief",
                          "dispatch provenance", "disclosed degradations", "followups for the advisor",
@@ -179,14 +182,21 @@ def _comment_scan(body):
     through the next ``-->``, across lines, a comment never closed running to the end of the body. Outside a comment
     on an unfenced line, a ``<!--`` after a backslash escape or inside an inline code span (``leftover_accepting``'s
     ``_code_span_end``) opens nothing, and a fenced line opens none; inside a comment the first ``-->`` closes it
-    wherever it sits, backticks there being plain characters."""
+    wherever it sits, backticks there being plain characters. Raw HTML is not Markdown either: from a line that opens
+    with an HTML tag through the next blank line, no escape or code span is read, so a ``<!--`` there opens a comment."""
     raw = body.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
     in_comment = False
+    raw_html = False
     offset = 0
     for line, dead, whole in zip(bare, inert, raw):
         starts_in_comment = in_comment
+        # axis: a raw HTML run starts at a line opening with a tag and ends at the next blank line — see bite-proof record i2342_comment_scan_inline_code.md
+        if not line.strip():
+            raw_html = False
+        elif not dead and _RAW_HTML_START_RE.match(line):
+            raw_html = True
         pos = 0
         while True:
             if in_comment:
@@ -199,7 +209,14 @@ def _comment_scan(body):
             else:
                 if dead or pos >= len(line):
                     break
-                if line[pos] == "\\" and pos + 1 < len(line):
+                if raw_html:
+                    # axis: inside raw HTML a backtick or backslash is literal, so an opener there opens a comment — see bite-proof record i2342_comment_scan_inline_code.md
+                    at = line.find("<!--", pos)
+                    if at < 0:
+                        break
+                    pos = at + 4
+                    in_comment = True
+                elif line[pos] == "\\" and pos + 1 < len(line):
                     # axis: a backslash-escaped character is literal, so an escaped opener opens no comment — see bite-proof record i2342_comment_scan_inline_code.md
                     pos += 2
                 elif line[pos] == "`":

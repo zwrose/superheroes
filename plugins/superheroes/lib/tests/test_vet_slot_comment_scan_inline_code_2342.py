@@ -201,3 +201,55 @@ def test_comment_scan_starts_in_comment_per_line(body, expected):
     rows = list(vs._comment_scan(body))
     assert [row[3] for row in rows] == expected
     assert all(len(row) == 4 for row in rows)
+
+
+# --- C11: raw HTML is not Markdown: no escape or code span is read inside it (review finding, scoped finder) ---------
+
+RAW_DIV_OPENER = "<div>\n`<!--`\n\n"
+
+
+def test_c11_the_findings_example_a_div_then_a_quoted_opener_hides_the_owner_half_body_emptied(tmp_path):
+    # the comment opened inside the raw <div> block hides the owner half until the advisor-vet marker closes it
+    body = RAW_DIV_OPENER + BODY
+    fake = _fake(body, receipt=RECEIPT)
+    _refused(_write(fake, tmp_path), fake, "body-emptied")
+    assert vs.evaluate("write", body, [_comment(RECEIPT)], SLOT, advisor_login="advisor")["reason"] == "body-emptied"
+
+
+def test_c11_a_bot_body_with_a_quoted_opener_inside_a_raw_div_refuses_write_failed(tmp_path):
+    body = "Bumps x.\n\n<div>\n`<!--` release notes\n"
+    fake = _fake(body)
+    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+
+
+def test_c11_a_blank_line_ends_the_raw_block_so_a_later_quoted_opener_is_text_again(tmp_path):
+    body = "Bumps x.\n\n<div>\nsee notes\n</div>\n\n" + CODE_SPAN_LINE
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
+
+
+def test_c11_a_raw_block_under_a_blockquote_is_raw_too(tmp_path):
+    body = "Bumps x.\n\n> <details>\n> `<!--` notes\n"
+    fake = _fake(body)
+    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+
+
+def test_c11_a_comment_line_does_not_make_the_next_line_raw(tmp_path):
+    # a line opening with <!-- is left to the comment state: once it closes, the next line's code span is text
+    body = "<!-- dependabot note -->\n" + CODE_SPAN_LINE
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("<div>\n`<!--`\nnext\n", [False, False, True]),
+    ("<div>\n\n`<!--`\nnext\n", [False, False, False, False]),
+    ("> <details>\n> \\<!-- x\nnext\n", [False, False, True]),
+    ("<!-- a -->\n`<!--`\nnext\n", [False, False, False]),
+], ids=["div-run", "blank-ends-run", "quoted-container-escape", "comment-line-not-raw"])
+def test_c11_comment_scan_reads_raw_html_runs(body, expected):
+    assert [row[3] for row in vs._comment_scan(body)] == expected
