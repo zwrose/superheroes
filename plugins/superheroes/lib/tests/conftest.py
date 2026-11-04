@@ -181,16 +181,32 @@ def _launcher_instances():
 
 
 @pytest.fixture(autouse=True)
-def _cloud_launch_folder_is_the_fixture_repo(monkeypatch):
+def _cloud_launch_folder_is_the_fixture_repo():
     """Existing cloud-launch tests use their fixture repository as the cloud-launch folder, so
     their checkout-semantics assertions keep testing ``_cloud_checkout_refusal`` on it (its lock
     file is ``<fixture repo>.lock``, inside the test's tmp dir). The real folder path (its
     ownership checks, its repair, its lock) is tested in ``test_launcher_cloud_launch_folder.py``,
-    which puts the real functions back."""
-    for module in _launcher_instances():
-        monkeypatch.setattr(module, "_cloud_launch_folder_fn", _fixture_repo_is_the_folder)
-        monkeypatch.setattr(
-            module, "_cloud_launch_folder_path_fn", lambda repo_root, env=None: repo_root)
+    which puts the real functions back (with ``monkeypatch.setattr``, which wins for its own
+    duration).
+
+    This fixture requests no other fixture, so it changes no other fixture's setup or teardown
+    order (requesting ``monkeypatch`` here set it up before fixtures whose teardown opens files,
+    so a test's ``builtins.open`` patch was still in place when they tore down). It saves the two
+    launcher attributes, sets them, and puts the saved values back in a ``finally``; a module
+    without either attribute raises ``AttributeError`` rather than gaining one."""
+    saved = []
+    try:
+        for module in _launcher_instances():
+            saved.append((module,
+                          getattr(module, "_cloud_launch_folder_fn"),
+                          getattr(module, "_cloud_launch_folder_path_fn")))
+            module._cloud_launch_folder_fn = _fixture_repo_is_the_folder
+            module._cloud_launch_folder_path_fn = lambda repo_root, env=None: repo_root
+        yield
+    finally:
+        for module, folder_fn, folder_path_fn in reversed(saved):
+            module._cloud_launch_folder_fn = folder_fn
+            module._cloud_launch_folder_path_fn = folder_path_fn
 
 
 def _neutral_git(cwd, *args):
