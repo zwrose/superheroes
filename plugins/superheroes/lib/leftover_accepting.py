@@ -9,8 +9,9 @@ occurrence of one inside an occurrence of a longer id of the same group does not
 two of them. The punctuation around an id is classified after NFKC, so a full-width wrapper (``（Ｆ－１）``,
 ``Ｆ－１：``) is stripped like its ASCII form, and a zero-width character (U+200B, U+200C, U+200D, U+2060, U+FEFF) touching
 an id reads as outside it. One acceptance counts for at most one leftover: the leftovers and the acceptances are paired
-one to one by a maximum matching (``_assign``, deterministic: leftovers in record order, acceptances in body order), and
-a leftover with no acceptance of its own is missing. The title is compared by its words, ignoring case, quotes, punctuation and Markdown underscore emphasis
+one to one by a maximum matching (``_assign``, deterministic: leftovers in record order, each one's acceptances that carry
+``fixed-above`` tried first, then the others, each in body order), and a leftover with no acceptance of its own is
+missing. The title is compared by its words, ignoring case, quotes, punctuation and Markdown underscore emphasis
 (quotes and apostrophes are dropped, so ``don't`` and ``don’t`` agree; backticks, a hyphen written as a space and
 underscores that wrap a word, as in ``_slow retry_``, are read as spaces; an underscore inside a word is kept). An
 acceptance that
@@ -216,22 +217,36 @@ def _accepting_items(body):
     return pr_sheet.accepting_listed(_visible(body if isinstance(body, str) else ""))
 
 
+FIXED_ABOVE_RE = re.compile(
+    r"(?<![A-Za-z0-9_-])fixed-above\s+#([1-9][0-9]*)\s+`?([0-9a-f]{7,40})`?(?![0-9A-Za-z])")
+
+
 def _assign(leftovers, items, colliding):
     """{leftover index: item index}: each acceptance is given to at most one leftover and each leftover takes at most one
     acceptance, by a maximum bipartite matching over the pairs ``_names`` holds true (Kuhn's augmenting paths; leftovers
-    taken in record order, each one's items in body order, so the same input always gives the same assignment). A
-    leftover absent from the result has no acceptance of its own."""
+    taken in record order). Each leftover tries the acceptances naming it that carry ``fixed-above #<PR> <commit>`` first
+    (in body order), then the others (in body order), and an acceptance no leftover holds yet before one that is held, so
+    the same input always gives the same assignment and the disposition line goes to the first leftover (in record order)
+    that names it. A leftover absent from the result has no acceptance of its own."""
+    carries = [FIXED_ABOVE_RE.search(item) is not None for item in items]
     naming = [[j for j, item in enumerate(items) if _names(item, ident, title, colliding.get(ident))]
               for ident, title in leftovers]
+    # axis: the acceptances carrying the disposition are tried first (a stable sort keeps body order within each kind), so the
+    # first acceptance carrying it decides for a leftover that several name
+    naming = [sorted(names, key=lambda j: not carries[j]) for names in naming]
     holder = {}  # item index -> the leftover index that holds it
 
     def place(i, seen):
+        for j in naming[i]:
+            if j not in holder and j not in seen:
+                holder[j] = i
+                return True
         for j in naming[i]:
             if j in seen:
                 continue
             seen.add(j)
             # axis: a held acceptance moves to another leftover only when that one has an acceptance of its own to take
-            if j not in holder or place(holder[j], seen):
+            if place(holder[j], seen):
                 holder[j] = i
                 return True
         return False
@@ -253,10 +268,6 @@ def missing(record, body):
     # axis: two ids of one record that share a normal form are each matched on their exact bytes, and one acceptance is
     # given to one leftover, so neither satisfies the other
     return [{"id": ident, "title": title} for n, (ident, title) in enumerate(leftovers) if n not in given]
-
-
-FIXED_ABOVE_RE = re.compile(
-    r"(?<![A-Za-z0-9_-])fixed-above\s+#([1-9][0-9]*)\s+`?([0-9a-f]{7,40})`?(?![0-9A-Za-z])")
 
 
 def fixed_above(record, body):

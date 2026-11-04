@@ -2,6 +2,9 @@
 wrapped id, a differently cased or dashed id, a title with other quotes or punctuation), and an acceptance that carries
 ``fixed-above #<PR> <commit>`` passes only when that PR is a higher member of this PR's own stack. One rule
 (leftover_accepting), two callers (vet_slot handback --pr and vet_slot write). No real gh: every call is faked."""
+import json
+import pathlib
+
 import pytest
 
 import leftover_accepting as la
@@ -240,6 +243,16 @@ def test_e_b_a_line_taken_by_one_leftover_is_not_reused_but_an_alternative_frees
 def test_e_b_the_field_case_is_named():
     record = rec(("F-1", 'the "retry" loop never backs off.'))
     assert gaps(record, "- F-1 — the retry loop never backs off: merging accepts slower recovery.\n") == []
+
+
+def test_e_b_a_real_body_and_record_name_every_leftover_and_claim_none():
+    # A snapshot of PR #2348's body and review record (byte copies, staged in fixtures/): the one-to-one rule leaves nothing
+    # missing and no fixed-above claim. A fixture that cannot be read errors the test; there is no skip.
+    fixtures = pathlib.Path(__file__).parent / "fixtures"
+    pr_body = (fixtures / "i2332_pr2348_body.md").read_text(encoding="utf-8")
+    record = json.loads((fixtures / "i2332_pr2348_record.json").read_text(encoding="utf-8"))
+    assert la.missing(record, pr_body) == []
+    assert la.fixed_above(record, pr_body) == []
 
 
 @pytest.mark.parametrize("written", ["（Ｆ－１） slow retry", "Ｆ－１： slow retry", "f-1​ slow retry",

@@ -68,6 +68,10 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 ## B2 — the collision fallback (`missing`)
 
+**Note (vet 810, order E2):** B2's target, the `exact=ident in colliding` call in `missing`, was replaced at `cc6fa575`
+(order D), which moved the colliding-id decision into `_names(item, ident, title, group)`. The live proof for that
+element is D1 in `i2332_vet809.md`; this entry is kept as the record of the earlier shape.
+
 **Guarded element:** `leftover_accepting.py:192` `_names(item, ident, title, exact=ident in colliding)` in `missing`.
 **Axis:** two ids of one record that share a normal form are each matched byte for byte, so neither satisfies the other.
 

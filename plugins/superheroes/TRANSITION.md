@@ -82,6 +82,8 @@ The rule that every finding a review record leaves for the owner is named under 
 
 The title is compared by its words, ignoring case, quotes, punctuation and Markdown underscore emphasis: quotes and apostrophes are dropped (so `don't` and `don’t` agree), and backticks, a hyphen written as a space and underscores that wrap a word (`_slow retry_`, `__slow retry__`) are read as spaces; an underscore inside a word (`foo_bar`) is kept. A title that reduces to no words is carried only byte for byte.
 
+One acceptance counts for at most one leftover. The leftovers and the acceptances are paired one to one by a maximum matching, so a line that names two findings satisfies one of them and a leftover with no acceptance of its own is missing, however many lines name it. Acceptances that carry `fixed-above #<PR> <commit>` are tried first, in body order, then the others, so the first line carrying the disposition decides for a leftover. The punctuation around an id is classified after NFKC, so a full-width wrapper such as `（Ｆ－１）` is stripped like `(F-1)`, and a zero-width character (U+200B, U+200C, U+200D, U+2060, U+FEFF) outside an id reads as a separator, never as part of it.
+
 Nothing is owed: the refusals are the same (`leftover-not-accepted` and `review-record-unreadable`).
 
 ### Leftover rule: the fixed-above disposition

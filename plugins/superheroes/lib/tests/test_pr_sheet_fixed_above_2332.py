@@ -163,7 +163,14 @@ def test_a_claim_naming_no_left_for_owner_finding_is_ignored():
     # Axis: E3: a disposition for an id the record's left-for-owner findings do not hold changes nothing; the leftover is still checked.
     body = ACCEPTING + "- f-9 Some other finding — fixed-above #11 1a2b3c4\n"
     problems = refused(stack_records(), stack_input(), {10: body, 11: NONE_BODY})
-    assert any("has no leftovers entry" in p for p in problems), problems
+    # The complete list: the f-2 leftover is still checked, and the f-9 line is an ordinary acceptance that needs accounting. No
+    # problem names fixed-above, #11 as a layer, or f-9 as a finding: the claim is ignored without a word.
+    assert problems == [
+        "left-for-owner finding 'The old balance is rounded twice' on PR #10 has no leftovers entry (key '10:balance/f-2'); "
+        "give it why, context and options, or a craft determination",
+        'PR #10\'s acceptance 10:210485cfa6 ("f-9 Some other finding — fixed-above #11 1a2b3c4") is not accounted for: '
+        'give accounting "10:210485cfa6" one of item, fold with line, leftover, or canon',
+    ], problems
 
 
 def test_the_waiting_line_of_a_fixed_above_finding_is_neither_counted_nor_incomplete():
