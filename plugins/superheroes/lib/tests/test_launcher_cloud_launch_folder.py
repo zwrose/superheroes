@@ -779,6 +779,49 @@ def test_a_launch_at_the_remote_tip_succeeds_when_the_primary_holds_unpushed_com
     assert _snap(repo) == before
 
 
+def _setup_while_detached_at_unpushed_commit(tmp_path):
+    repo = _cloud_repo(tmp_path)
+    base = _head_sha(repo)
+    default = _symbolic(repo)
+    _git(repo, "checkout", "-q", "--detach")
+    unpushed = _commit(repo, "detached-work.txt")
+    ensured = L.ensure_cloud_launch_folder(repo)
+    assert ensured["ok"] is True and ensured["created"] is True, ensured
+    folder = ensured["folder"]
+    assert (_symbolic(folder), _head_sha(folder)) == (None, unpushed)
+    return repo, folder, base, default, unpushed
+
+
+def test_a_commit_the_primary_holds_only_in_its_reflog_still_refuses_local_commits(tmp_path):
+    # axis: a commit the primary holds only as an object (its reflog, not a ref or its HEAD) is not kept there, so the folder's detached HEAD is its last protection and the switch refuses — see bite-proof record i2353_cloud_launch_folder
+    repo, folder, base, default, unpushed = _setup_while_detached_at_unpushed_commit(tmp_path)
+    # The primary switches away; its unpushed detached commit is now held by no ref and not its HEAD.
+    _git(repo, "checkout", "-q", default)
+    assert _head_sha(repo) == base
+    before = _snap(repo)
+    calls = []
+    result = _launch(repo, tmp_path, _spy(calls), premise=_valid_premise(repo, baseCommit=base))
+    assert result["ok"] is False, result
+    assert result["reason"] == "launch-cloud-checkout-off-base", result
+    assert result["folderRepair"] == "local-commits", result
+    assert calls == []
+    assert (_symbolic(folder), _head_sha(folder)) == (None, unpushed)
+    assert _snap(repo) == before
+
+
+def test_a_commit_the_primary_keeps_at_its_detached_head_does_not_block_a_launch(tmp_path):
+    # axis: a commit the primary keeps at its HEAD was inherited from setup, is not folder work, and never blocks a launch — see bite-proof record i2353_cloud_launch_folder
+    repo, folder, base, default, unpushed = _setup_while_detached_at_unpushed_commit(tmp_path)
+    assert (_symbolic(repo), _head_sha(repo)) == (None, unpushed)
+    before = _snap(repo)
+    calls = []
+    result = _launch(repo, tmp_path, _spy(calls), premise=_valid_premise(repo, baseCommit=base))
+    assert result["ok"] is True, result
+    assert len(calls) == 1
+    assert (calls[0]["cwd"], calls[0]["branch"], calls[0]["head"]) == (folder, default, base)
+    assert _snap(repo) == before
+
+
 # --- the branch choice, read directly ------------------------------------------------------------
 
 

@@ -139,7 +139,8 @@ lane's `started` record, and returns once the session exists. It does not wait f
   when its tip is the base, otherwise the first such branch by name. An adoption also starts on the
   base, the commit readiness checked, and its intake checks the adopted head out afterwards. It
   fetches that branch, refuses if the folder's own branch has commits the target lacks or the
-  folder sits detached at a commit no branch holds, and checks the branch out at the target without
+  folder sits detached at a commit no ref in the folder holds and the primary checkout does not
+  keep under a ref or its HEAD (a commit the primary keeps came from setup), and checks the branch out at the target without
   overwriting ignored files. Then it runs the checkout check against the folder: the local head and the branch's tip on
   the remote must both be the base. Only then does it run the command in the folder. The launcher
   never pushes.

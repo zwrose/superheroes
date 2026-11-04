@@ -3197,6 +3197,39 @@ def _choose_cloud_launch_branch(folder, stamped, env):
 _cloud_launch_folder_path_fn = cloud_launch_folder_path
 
 
+def _primary_keeps_commit_refusal(repo_root, commit, env):
+    """Whether the primary checkout's repository keeps ``commit``: None when it does, else the repair reason.
+
+    Keeping means reachable from one of the primary's refs or from its HEAD, not merely present as
+    an object, since an object only a reflog holds is not kept. This only reads the primary.
+    ``local-commits`` when the primary does not keep the commit; ``checkout-failed`` when git could
+    not answer.
+    """
+    present = _git_scrubbed(
+        repo_root, "cat-file", "-e", commit + "^{commit}", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if present is None:
+        return "checkout-failed"
+    if present.returncode != 0:
+        return "local-commits"
+    # axis: a commit the primary keeps under a ref was inherited from setup, is not folder work, and never blocks a launch — see bite-proof record i2353_cloud_launch_folder
+    held = _git_scrubbed(
+        repo_root, "for-each-ref", "--count=1", "--format=%(refname)", "--contains", commit,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if held is None or held.returncode != 0:
+        return "checkout-failed"
+    if (held.stdout or "").strip():
+        return None
+    under_head = _git_scrubbed(
+        repo_root, "merge-base", "--is-ancestor", commit, "HEAD", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if under_head is None or under_head.returncode not in (0, 1):
+        return "checkout-failed"
+    # axis: a commit the primary holds only as an object (its reflog, not a ref or its HEAD) is not kept there, so the folder's detached HEAD is its last protection and the switch refuses — see bite-proof record i2353_cloud_launch_folder
+    return None if under_head.returncode == 0 else "local-commits"
+
+
 def _prepare_cloud_launch_folder(repo_root, stamped, env):
     """``(folder, [target], None)`` when the folder is on a branch at the target, repaired
     non-destructively when it was not; else ``(folder_or_None, None, (reason, detail))``.
@@ -3282,17 +3315,11 @@ def _prepare_cloud_launch_folder(repo_root, stamped, env):
         )
         if held is None or held.returncode != 0:
             return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
-        # axis: a detached HEAD holding a commit no ref contains and the primary does not hold refuses, so the switch never strands work made on the folder's detached HEAD — see bite-proof record i2353_cloud_launch_folder
+        # axis: a detached HEAD holding a commit no ref contains and the primary does not keep refuses, so the switch never strands work made on the folder's detached HEAD — see bite-proof record i2353_cloud_launch_folder
         if not (held.stdout or "").strip():
-            # axis: a commit the primary checkout's repository also holds was inherited from setup, is not folder work, and never blocks a launch; this only reads the primary — see bite-proof record i2353_cloud_launch_folder
-            inherited = _git_scrubbed(
-                repo_root, "cat-file", "-e", now_head + "^{commit}",
-                env=env, timeout=_WORKTREE_GIT_TIMEOUT,
-            )
-            if inherited is None:
-                return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
-            if inherited.returncode != 0:
-                return checkout_refusal("launch-cloud-checkout-off-base", "local-commits")
+            refusal = _primary_keeps_commit_refusal(repo_root, now_head, env)
+            if refusal is not None:
+                return checkout_refusal("launch-cloud-checkout-off-base", refusal)
     # axis: --no-overwrite-ignore makes an ignored file the target tracks refuse the switch instead of being overwritten — see bite-proof record i2353_cloud_launch_folder
     switched = _git_scrubbed(
         folder, "checkout", "--quiet", "--no-overwrite-ignore", "-B", branch, target,
