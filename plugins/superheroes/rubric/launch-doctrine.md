@@ -38,6 +38,11 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `grant-state` (conditional) — Grant state
 <!-- launch-doctrine:preflight:end -->
 
+A cloud launch runs the platform's command in the launcher's own launch folder, a separate clone the
+launcher owns, never in the primary checkout. No launch moves, switches or pushes the primary
+checkout. The repair the launcher makes to that folder, and the refusals when it cannot, are in
+`skills/showrunner/reference/orchestration.md`.
+
 **Cloud launch permission (parsed).** The block below holds one sentence.
 `lib/launch_doctrine.py` parses it as one line that must carry the never-a-force-push and
 never-`main` limits, and `compose_launch` carries it in every builder cloud launch prompt and in no local one. A cloud session pushes only to its own designated branch unless
