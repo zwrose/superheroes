@@ -176,8 +176,10 @@ def _comment_scan(body):
     """Yield ``(offset, line, dead, starts_in_comment)`` for every line of ``body``.
 
     ``dead`` is inside a code fence (``md_fence``); ``starts_in_comment`` is inside an HTML comment span: ``<!--``
-    through the next ``-->``, across lines, a comment never closed running to the end of the body. A ``<!--`` on a
-    fenced line opens no comment; a ``-->`` closes one wherever it sits."""
+    through the next ``-->``, across lines, a comment never closed running to the end of the body. Outside a comment
+    on an unfenced line, a ``<!--`` after a backslash escape or inside an inline code span (``leftover_accepting``'s
+    ``_code_span_end``) opens nothing, and a fenced line opens none; inside a comment the first ``-->`` closes it
+    wherever it sits, backticks there being plain characters."""
     raw = body.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
@@ -188,19 +190,28 @@ def _comment_scan(body):
         pos = 0
         while True:
             if in_comment:
+                # axis: a closer inside backticks still closes a comment, comment text not being Markdown — see bite-proof record i2342_comment_scan_inline_code.md
                 at = line.find("-->", pos)
                 if at < 0:
                     break
                 pos = at + 3
                 in_comment = False
             else:
-                if dead:
+                if dead or pos >= len(line):
                     break
-                at = line.find("<!--", pos)
-                if at < 0:
-                    break
-                pos = at + 4
-                in_comment = True
+                if line[pos] == "\\" and pos + 1 < len(line):
+                    # axis: a backslash-escaped character is literal, so an escaped opener opens no comment — see bite-proof record i2342_comment_scan_inline_code.md
+                    pos += 2
+                elif line[pos] == "`":
+                    # axis: an inline code span (a run closed by a run of its own length) hides an opener inside it — see bite-proof record i2342_comment_scan_inline_code.md
+                    end = leftover_accepting._code_span_end(line, pos)
+                    # axis: a backtick run with no closing run is literal backticks, scanning continues after it — see bite-proof record i2342_comment_scan_inline_code.md
+                    pos = end if end is not None else leftover_accepting._TICKS.match(line, pos).end()
+                elif line.startswith("<!--", pos):
+                    pos += 4
+                    in_comment = True
+                else:
+                    pos += 1
         yield offset, line, dead, starts_in_comment
         offset += len(whole)
 
