@@ -3138,10 +3138,11 @@ _CLOUD_FOLDER_UNSAFE_BRANCH = re.compile(r"[\x00-\x20\x7f]")
 def _choose_cloud_launch_branch(folder, stamped, env):
     """``(branch, target, None)`` or ``(None, None, "unchecked" | "no-branch-at-base")``.
 
-    One ``ls-remote --symref origin`` read of the folder's remote. A premise that adopts a branch
-    whose tip on the remote is its adopted head targets that branch and head. Otherwise the target
-    is the base commit, on a branch whose tip is that commit: the remote's default branch when it
-    is one of them, else the lexically first. Anything that cannot be asked or read is unchecked.
+    One ``ls-remote --symref origin`` read of the folder's remote. The target is the base commit, on
+    a branch whose tip is that commit: the remote's default branch when it is one of them, else the
+    lexically first. Only when no branch sits at the base does a premise that adopts a branch whose
+    tip on the remote is its adopted head target that branch and head. Anything that cannot be asked
+    or read is unchecked.
     """
     ask_env = dict(os.environ if env is None else env)
     ask_env["GIT_TERMINAL_PROMPT"] = "0"
@@ -3173,18 +3174,19 @@ def _choose_cloud_launch_branch(folder, stamped, env):
     base = base.lower() if isinstance(base, str) else None
     head = stamped.get("adoptsHead")
     adopted = stamped.get("adoptsBranch")
+    at_base = sorted(name for name, tip in tips.items() if base is not None and tip == base)
+    # axis: a branch at the base commit wins over an adopted branch, so the session starts (and runs its start-of-session hooks) on the tree the readiness check validated; an adoption's intake checks the adopted head out after that — see bite-proof record i2353_cloud_launch_folder
+    if at_base:
+        if default in at_base:
+            return default, base, None
+        return at_base[0], base, None
     if (
         "adoptsBranch" in stamped and isinstance(adopted, str)
         and isinstance(head, str) and _HEX40.match(head)
         and tips.get(adopted) == head.lower()
     ):
         return adopted, head.lower(), None
-    at_base = sorted(name for name, tip in tips.items() if base is not None and tip == base)
-    if not at_base:
-        return None, None, "no-branch-at-base"
-    if default in at_base:
-        return default, base, None
-    return at_base[0], base, None
+    return None, None, "no-branch-at-base"
 
 
 # Where the launcher's own folder is; tests replace it. Every folder lookup in a launch goes through
@@ -3270,6 +3272,16 @@ def _prepare_cloud_launch_folder(repo_root, stamped, env):
     now_branch, now_head = _read_checkout(folder, env)
     if now_branch == branch and now_head == target:
         return folder, [target], None
+    if now_branch is None and now_head is not None and now_head != target:
+        held = _git_scrubbed(
+            folder, "for-each-ref", "--count=1", "--format=%(refname)", "--contains", now_head,
+            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if held is None or held.returncode != 0:
+            return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
+        # axis: a detached HEAD holding a commit no ref contains refuses, so the switch never strands work made on the folder's detached HEAD — see bite-proof record i2353_cloud_launch_folder
+        if not (held.stdout or "").strip():
+            return checkout_refusal("launch-cloud-checkout-off-base", "local-commits")
     # axis: --no-overwrite-ignore makes an ignored file the target tracks refuse the switch instead of being overwritten — see bite-proof record i2353_cloud_launch_folder
     switched = _git_scrubbed(
         folder, "checkout", "--quiet", "--no-overwrite-ignore", "-B", branch, target,

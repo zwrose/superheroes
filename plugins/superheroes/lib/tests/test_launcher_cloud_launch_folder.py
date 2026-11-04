@@ -575,13 +575,43 @@ def test_row13_the_cli_verb_prints_the_result_and_exits_by_it(tmp_path):
 # --- row 14: an adoption -------------------------------------------------------------------------
 
 
-def test_row14_an_adoption_launches_from_the_folder_on_the_adopted_branch_at_its_head(tmp_path):
-    # axis: an adoption whose adopted branch's remote tip is its adopted head targets that branch and head, not the base
+def test_row14_an_adoption_starts_on_the_branch_at_its_base_when_one_exists(tmp_path):
+    # axis: a branch at the base commit wins over the adopted branch, so the start (and its start-of-session hooks) is the tree the readiness check validated; intake checks the adopted head out afterwards
     repo = _cloud_repo(tmp_path)
     base = _head_sha(repo)
+    default = _symbolic(repo)
     head = _commit(repo, "adopted.txt")
     _git(repo, "push", "-q", "origin", "HEAD:refs/heads/feature")
     _git(repo, "reset", "-q", "--hard", base)
+    ensured = L.ensure_cloud_launch_folder(repo)
+    assert ensured["ok"] is True, ensured
+    folder = ensured["folder"]
+    before = _snap(repo)
+    calls = []
+    result = _launch(
+        repo, tmp_path, _spy(calls),
+        premise=_valid_premise(repo, baseCommit=base, adoptsBranch="feature", adoptsHead=head),
+    )
+    assert result["ok"] is True, result
+    assert len(calls) == 1
+    assert calls[0]["cwd"] == folder
+    assert calls[0]["branch"] == default
+    assert calls[0]["head"] == base
+    assert _snap(repo) == before
+
+
+def test_row14b_an_adoption_falls_back_to_its_adopted_branch_when_no_branch_sits_at_the_base(tmp_path):
+    # axis: only when no remote branch tip is the base does an adoption whose adopted branch's tip is its adopted head start on that branch and head
+    repo = _cloud_repo(tmp_path)
+    base = _head_sha(repo)
+    default = _symbolic(repo)
+    head = _commit(repo, "adopted.txt")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/feature")
+    _git(repo, "reset", "-q", "--hard", base)
+    moved = _commit(repo, "moved-on.txt")
+    _git(repo, "push", "-q", "origin", "HEAD:refs/heads/main", "HEAD:refs/heads/%s" % default)
+    _git(repo, "reset", "-q", "--hard", base)
+    assert moved != base
     ensured = L.ensure_cloud_launch_folder(repo)
     assert ensured["ok"] is True, ensured
     folder = ensured["folder"]
