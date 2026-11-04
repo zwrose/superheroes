@@ -2992,10 +2992,12 @@ def _git_stdout(path, *args, env=None):
 def _git_common_realpath(path, env):
     """The realpath of ``path``'s git common dir, or None when it cannot be read.
 
-    Read through ``store_core``'s sanctioned resolver; any failure of it, of any kind, is None.
+    Read through ``store_core``'s sanctioned resolver, under the same scrubbed git environment the
+    launcher's own git calls use; any failure of it, of any kind, is None.
     """
+    # axis: every read of the launch folder's git dirs runs with repository-routing variables scrubbed, as its clone and checkout do, so an inherited GIT_DIR or GIT_WORK_TREE never redirects a read or the marker write into another repository — see bite-proof record i2353_l1_cloud_launch_folder
     try:
-        return store_core.get_gitdir(path)
+        return store_core.get_gitdir(path, env=ll.scrub_env(env))
     except Exception:
         return None
 
@@ -3023,7 +3025,9 @@ def _origin_url(path, env):
 
 def _cloud_folder_marker_path(folder, env):
     try:
-        gitdir = store_core.get_worktree_gitdir(folder)
+        scrubbed = ll.scrub_env(env)
+        gitdir = store_core.get_worktree_gitdir(
+            folder, run=lambda cwd, *args: store_core.run_git_result(cwd, *args, env=scrubbed))
     except Exception:
         return None
     return os.path.join(gitdir, _CLOUD_FOLDER_MARKER)
@@ -3042,7 +3046,7 @@ def _validate_cloud_launch_folder(repo_root, folder, env):
     if identity is None:
         return "not-launcher-owned"
     try:
-        top = store_core.repo_root(folder, env=env)
+        top = store_core.repo_root(folder, env=ll.scrub_env(env))
     except Exception:
         return "not-launcher-owned"
     if top is None or os.path.realpath(top) != os.path.realpath(folder):
