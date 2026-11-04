@@ -333,3 +333,240 @@ FAILED ...::test_c14_comment_scan_raw_run_blankness_and_depth[list-marker-quoted
 .....................................................                    [100%]
 53 passed in 0.54s
 ```
+
+## Vet-816 redesign: the body-level gate (G-gate)
+
+Vet 816 of PR #2347 found fail-opens in the raw-run tracking: an HTML tag line ending in U+2028, U+0085 or a form feed,
+and declaration, CDATA and processing-instruction blocks, hid the owner half in a comment the line scanner could not
+see. A line scanner cannot track CommonMark's HTML blocks, so the design was replaced: `_comment_scan` exempts a
+`<!--` inside an inline code span or after a backslash escape only in a body with no line that could open an HTML
+block (`_could_open_html_block`); in every other body every `<!--` outside a fenced code block opens a comment, as on
+`main`. On a line where a comment closes, the rest of that line is matched plainly even in an exempt body.
+
+**K5–K14's guarded code was removed**: `_RAW_HTML_START_RE`, `_QUOTE_PREFIX_RE`, `_ONE_QUOTE_MARK_RE`,
+`_strip_quote_marks`, the `raw_html` / `raw_depth` state and the `if raw_html:` branch, with their `# axis:` comments.
+The K5–K14 entries above are history of that code and prove nothing on the current head; the surviving elements are K1
+to K4 (code-span skip, escape skip, unclosed-run rule, in-comment closer) and G1 to G6 below. The tests that asserted a
+write through the raw-run tracking or through the exemption in a body with an HTML-block line were rewritten to the
+refusal they now give (V7), each with a one-line comment; none was deleted.
+
+Method: Edit-tool neutralizations, inverse-Edit restores; no `git checkout`, `restore`, `reset` or `stash`. Command
+prefix as above (`--tb=short`). The captures below are the runner's lines with the `UV_NATIVE_TLS` warning line, the
+traceback bodies and the repeated `E` lines cut by hand; counts and `FAILED` node ids are exact. Nothing was redacted;
+each capture is far under 32 KiB. Guarded-element set (declared by the order): G1 to G6.
+
+### Pre-change red receipts of V1–V3, V5, V6 (head `117c1037`, before any `vet_slot.py` edit)
+
+The C15 tests were written first and run on the unchanged head, `-k "c15 and not could_open_html_block"`.
+
+A first run used `"<div> " + SEP + "`<!--`…"` with the separator inline: the u2028, u0085 and form-feed cases passed
+there (`12 failed, 15 passed`), because the old scan split the line at the separator and kept the raw run going. The
+shape that matches the orchestrator's measured fail-open is the separator **followed by a real newline** (the old scan
+then saw a blank line and ended the raw run; CommonMark sees one tag line that carries on). The C15 openers use that
+shape (the inline form stays as the `u2028-inline` row).
+
+Second run, openers `"<div> " + SEP + "\n"`, `<!DOCTYPE html>\n`, `<![CDATA[ x ]]>\n`, `<?xml x?>\n`:
+
+```
+FFFFF.FFFFF.FFF.FFF.FF.FFF..                                             [100%]
+FAILED ...::test_c15_a_builder_body_...refuses_body_emptied[u2028]
+FAILED ...::test_c15_a_builder_body_...refuses_body_emptied[u0085]
+FAILED ...::test_c15_a_builder_body_...refuses_body_emptied[formfeed]
+FAILED ...::test_c15_a_builder_body_...refuses_body_emptied[doctype]
+FAILED ...::test_c15_a_builder_body_...refuses_body_emptied[cdata]
+FAILED ...::test_c15_a_bot_body_...refuses_write_failed[u2028]
+FAILED ...::test_c15_a_bot_body_...refuses_write_failed[u0085]
+FAILED ...::test_c15_a_bot_body_...refuses_write_failed[formfeed]
+FAILED ...::test_c15_a_bot_body_...refuses_write_failed[doctype]
+FAILED ...::test_c15_a_bot_body_...refuses_write_failed[cdata]
+FAILED ...::test_c15_a_comment_closing_mid_line_then_a_quoted_opener_refuses_write_failed
+FAILED ...::test_c15_a_format_character_before_a_tag_still_gates_the_body[bom]
+FAILED ...::test_c15_a_format_character_before_a_tag_still_gates_the_body[zwsp]
+FAILED ...::test_c15_comment_scan_gate_rows[u2028] [u0085] [formfeed] [doctype] [cdata] [bom] [zwsp] [comment-tail]
+21 failed, 7 passed, 70 deselected in 0.77s
+```
+
+Each red is a write where a refusal is owed (`assert result["ok"] is False` met `{'ok': True, 'verb': 'write', ...}`),
+or a `starts_in_comment` row reading `False` where `True` is owed. The two `[pi]` cases (builder and bot) **passed** on
+the old head, as the orchestrator measured (the raw-run start pattern caught `<?`); they must still refuse, and do. The
+V1 u2028, u0085, form-feed, V2 doctype, cdata, V3 (five openers), V5 and V6 (bom, zwsp) cases were red: the measured
+`True None` rows reproduced. (The first run's `V5` red also reproduced: `[False, False] == [False, True]` on the
+comment-tail row.)
+
+### G1: the gate
+
+- **Guarded element / axis:** `exempt = not _could_open_html_block(body)` (`vet_slot.py:223`); a body with a line that
+  could open an HTML block gets no escape or code-span exemption (V1, V2, V3, both callers).
+- **Neutralization:** `exempt = not _could_open_html_block(body)` became `exempt = True`.
+- **Raw red** (`-k "test_c15_a_builder or test_c15_a_bot"`):
+
+```
+FFFFFFFFFFFF                                                             [100%]
+FAILED ...::test_c15_a_builder_body_...refuses_body_emptied[u2028] [u0085] [formfeed] [doctype] [cdata] [pi]
+FAILED ...::test_c15_a_bot_body_...refuses_write_failed[u2028] [u0085] [formfeed] [doctype] [cdata] [pi]
+  E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1'}
+  E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1'}
+12 failed, 86 deselected in 0.55s
+```
+
+- **Restore:** inverse Edit.
+- **Restore receipt:** `vet_slot.py:223` reads `    exempt = not _could_open_html_block(body)`.
+- **Raw green** (same selector):
+
+```
+............                                                             [100%]
+12 passed, 86 deselected in 0.54s
+```
+
+### G2: the comment-opener exclusion
+
+- **Guarded element / axis:** `if text.startswith("<!--"): continue` (`vet_slot.py:199`); a comment-opener line is left
+  to the comment state and does not gate the body (V4 comment-line test).
+- **Neutralization:** `if text.startswith("<!--"):` became `if False and text.startswith("<!--"):`.
+- **Raw red** (`-k "test_c11_a_comment_line or test_c15_could_open_html_block"`):
+
+```
+F.......FF........                                                       [100%]
+FAILED ...::test_c11_a_comment_line_does_not_make_the_next_line_raw
+  E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker sits inside an unclosed HTML comment, so the slot would not render'}
+FAILED ...::test_c15_could_open_html_block[comment]
+FAILED ...::test_c15_could_open_html_block[quoted-comment]
+3 failed, 15 passed, 80 deselected in 0.62s
+```
+
+- **Restore:** inverse Edit.
+- **Restore receipt:** `vet_slot.py:199` reads `        if text.startswith("<!--"):`.
+- **Raw green** (same selector):
+
+```
+..................                                                       [100%]
+18 passed, 80 deselected in 0.47s
+```
+
+### G3: the autolink exclusion
+
+- **Guarded element / axis:** `if _AUTOLINK_RE.match(text): continue` (`vet_slot.py:202`); an autolink line is not an
+  HTML-block line (V4 autolink test).
+- **Neutralization:** `if _AUTOLINK_RE.match(text):` became `if False and _AUTOLINK_RE.match(text):`.
+- **Raw red** (`-k "test_c12_an_autolink or test_c15_could_open_html_block"`):
+
+```
+F.........FF......                                                       [100%]
+FAILED ...::test_c12_an_autolink_line_is_not_raw_html_so_a_later_quoted_opener_is_text
+  E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker sits inside an unclosed HTML comment, so the slot would not render'}
+FAILED ...::test_c15_could_open_html_block[autolink]
+FAILED ...::test_c15_could_open_html_block[mailto-autolink]
+3 failed, 15 passed, 80 deselected in 0.45s
+```
+
+- **Restore:** inverse Edit.
+- **Restore receipt:** `vet_slot.py:202` reads `        if _AUTOLINK_RE.match(text):`.
+- **Raw green** (same selector):
+
+```
+..................                                                       [100%]
+18 passed, 80 deselected in 0.46s
+```
+
+### G4: the Unicode strip
+
+- **Guarded element / axis:** `line[start].isspace() or unicodedata.category(line[start]) == "Cf"`
+  (`vet_slot.py:193`); a byte-order mark, a zero-width space or other whitespace before the tag is skipped, so the line
+  still gates the body (V6).
+- **Neutralization:** the loop condition became `while start < len(line) and (line[start] in _BLOCK_LEAD_ASCII):`
+  (the ASCII set only).
+- **Raw red** (`-k "format_character or gate_rows or could_open_html_block"`):
+
+```
+FF.......FF................FFF.                                          [100%]
+FAILED ...::test_c15_a_format_character_before_a_tag_still_gates_the_body[bom]
+FAILED ...::test_c15_a_format_character_before_a_tag_still_gates_the_body[zwsp]
+  E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1'}
+FAILED ...::test_c15_comment_scan_gate_rows[bom]
+FAILED ...::test_c15_comment_scan_gate_rows[zwsp]
+  E   assert [False, False, False] == [False, False, True]
+FAILED ...::test_c15_could_open_html_block[nbsp]
+FAILED ...::test_c15_could_open_html_block[bom]
+FAILED ...::test_c15_could_open_html_block[zwsp]
+7 failed, 24 passed, 67 deselected in 0.60s
+```
+
+- **Restore:** inverse Edit (the two-line condition put back).
+- **Restore receipt:** `vet_slot.py:192-193` read `        while start < len(line) and (line[start] in _BLOCK_LEAD_ASCII` /
+  `                                     or line[start].isspace() or unicodedata.category(line[start]) == "Cf"):`.
+  (`:193` was confirmed by a later grep.)
+- **Raw green** (same selector):
+
+```
+...............................                                          [100%]
+31 passed, 67 deselected in 0.49s
+```
+
+### G5: the comment-tail rule
+
+- **Guarded element / axis:** `plain = True` after a comment closes (`vet_slot.py:238`); the rest of a line on which a
+  comment closes is matched plainly even in an exempt body (V5).
+- **Neutralization:** `plain = True` became `plain = plain`.
+- **Raw red** (`-k "comment_closing_mid_line or gate_rows"`):
+
+```
+F.........F..                                                            [100%]
+FAILED ...::test_c15_a_comment_closing_mid_line_then_a_quoted_opener_refuses_write_failed
+  E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1'}
+FAILED ...::test_c15_comment_scan_gate_rows[comment-tail]
+  E   assert [False, False] == [False, True]
+2 failed, 11 passed, 85 deselected in 0.49s
+```
+
+- **Restore:** inverse Edit.
+- **Restore receipt:** `vet_slot.py:238` reads `                plain = True`.
+- **Raw green** (same selector):
+
+```
+.............                                                            [100%]
+13 passed, 85 deselected in 0.45s
+```
+
+### G6: the exemption itself (the code-span branch, K1's element)
+
+- **Guarded element / axis:** `elif line[pos] == "`":` (the branch after the backslash branch, `vet_slot.py:251` by
+  position); an inline code span hides an opener in an exempt body (V4 C1 test).
+- **Neutralization:** `elif line[pos] == "`":` became `elif False and line[pos] == "`":`.
+- **Raw red** (`-k "test_c1_"`):
+
+```
+FF                                                                       [100%]
+FAILED ...::test_c1_run_verb_writes_a_bot_body_that_quotes_the_opener_in_inline_code
+FAILED ...::test_c1_evaluate_composes_the_same_body
+  E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker sits inside an unclosed HTML comment, so the slot would not render'}
+2 failed, 96 deselected in 0.40s
+```
+
+- **Restore:** inverse Edit (`elif False and line[pos] == "`":` back to `elif line[pos] == "`":`).
+- **Restore receipt:** disclosed gap: the confirming `grep -n 'elif line\[pos\] == "`"' …vet_slot.py` was **refused**
+  twice (once inside a compound, once in plain form: "This command requires approval") and was not retried; the
+  restored line is therefore not quoted from the file. The restore is evidenced by the inverse Edit's success report and
+  the green run below, which fails on the neutralized line.
+- **Raw green** (`-k "test_c1_"`):
+
+```
+..                                                                       [100%]
+2 passed, 96 deselected in 0.38s
+```
+
+### Whole-file and neighbouring-suite runs after the last restore
+
+```
+plugins/superheroes/lib/tests/test_vet_slot_comment_scan_inline_code_2342.py
+98 passed in 0.67s
+```
+
+```
+test_vet_slot.py test_vet_slot_emptied_2323.py test_vet_slot_leftovers_2280.py test_vet_slot_owner_commands.py test_vet_slot_no_build_record_2342.py
+495 passed in 3.09s
+```
+
+### Elements in no class
+
+None: G1 to G6 each have their own neutralization and red. The `dead` (fenced line) guard and K1–K4's other branches are
+pre-existing and not re-proved here beyond K1–K4 above.

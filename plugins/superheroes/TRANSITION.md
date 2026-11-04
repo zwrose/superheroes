@@ -42,7 +42,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - Every other check still runs: the receipt, a READY verdict's review record and leftover check, the re-read before the push, and the readback.
 - A body with any builder section keeps every earlier rule, so a builder body that lost its build record or its owner half is still refused (`markers-invalid` or `body-emptied`).
 - `check` reads such a body as having no follow-ups. `handback` is unchanged. No refusal token or result key is added.
-- A `<!--` inside an inline code span or after a backslash escape no longer opens an HTML comment for the slot-visibility check or the `body-emptied` guard, so a description that quotes the opener in inline code is written, not refused; inside raw HTML (from a line that opens with a tag to the next blank line) the opener still opens a comment, and a real comment that hides the slot or the owner half still refuses as before.
+- A `<!--` inside an inline code span or after a backslash escape no longer opens an HTML comment for the slot-visibility check or the `body-emptied` guard when the description has no line that could open an HTML block (a line beginning, after any quote or list marks, with `<` and a letter, `/`, `?` or `!`, other than a comment opener or an autolink); in a description that has one, every `<!--` outside a fenced code block opens a comment, as before.
 
 ### Review: a prose-only fix clears its audit on a review-guarded answer
 

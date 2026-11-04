@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import urllib.parse
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -92,21 +93,12 @@ _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6} (.*)$")
 _SUPERHEROES_OPEN_RE = re.compile(r"<!--\s*superheroes:")
 _BUILD_RECORD_WRAPPER_RE = re.compile(r"<summary[^>]*>\s*build\s+record", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
-# a line opening raw HTML (an HTML block) with a tag, under any container marks: a tag name ended by space, "/", ">"
-# or the line's end, a closing tag, or "<?". An autolink (<https://…>) is not a tag. A comment opener is left to the
-# comment state, which hides through its closer already.
-_RAW_HTML_START_RE = re.compile(r"^[ \t>*+\-0-9.)]*<(?:[A-Za-z][A-Za-z0-9-]*(?=[ \t/>]|$)|/[A-Za-z]|\?)")
-# axis: the start line's quote depth counts every ">" in its container prefix (the prefix _RAW_HTML_START_RE accepts), through list markers and extra spaces — see bite-proof record i2342_comment_scan_inline_code.md
-_QUOTE_PREFIX_RE = re.compile(r"^([ \t>*+\-0-9.)]*)")
-# axis: removing one quote mark takes the indentation and list markers before the next ">" with it, so "  >" and "- >" both lose their mark — see bite-proof record i2342_comment_scan_inline_code.md
-_ONE_QUOTE_MARK_RE = re.compile(r"^[ \t*+\-0-9.)]*>[ \t]?")
-
-
-def _strip_quote_marks(line, depth):
-    """``line`` with at most ``depth`` leading blockquote marks removed (a line's own deeper marks stay text)."""
-    for _ in range(depth):
-        line = _ONE_QUOTE_MARK_RE.sub("", line, count=1)
-    return line
+# _could_open_html_block: the characters a line may start with (container marks and indentation) before its first
+# real character, and what that character may begin: "<" then a letter, "/", "?" or "!" (a tag, a closing tag, a
+# processing instruction, a declaration, CDATA, a comment). An autolink (<https://…>) is not a block start.
+_BLOCK_LEAD_ASCII = " \t>*+-0123456789.)"
+_BLOCK_START_RE = re.compile(r"<[A-Za-z/?!]")
+_AUTOLINK_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.\-]{1,31}:[^\s<>]*>")
 _ACCEPTING_KEY = "what were accepting"
 _BUILDER_HEADING_KEYS = ("whats changing", _ACCEPTING_KEY, "how to see it", "build record", "build brief",
                          "dispatch provenance", "disclosed degradations", "followups for the advisor",
@@ -187,34 +179,52 @@ def _find_live_standalone_markers(body, marker):
     return found
 
 
+def _could_open_html_block(body):
+    """True when any line of ``body`` could open a CommonMark HTML block (doubt reads as yes: over-match refuses more).
+
+    Such a line, after a leading run of spaces, tabs, quote and list marks, digits, any whitespace character and any
+    format character (a byte-order mark, a zero-width space), starts with ``<`` and an ASCII letter, ``/``, ``?`` or
+    ``!``. A comment opener is left to the comment state and an autolink (``<https://example.com>``) is not a tag.
+    Lines are ``str.splitlines()`` lines, a superset of Markdown's, so a tag after any line break counts."""
+    for line in body.splitlines():
+        start = 0
+        # axis: a byte-order mark, a zero-width space or any other whitespace before the tag is skipped, so the line still counts — see bite-proof record i2342_comment_scan_inline_code.md
+        while start < len(line) and (line[start] in _BLOCK_LEAD_ASCII
+                                     or line[start].isspace() or unicodedata.category(line[start]) == "Cf"):
+            start += 1
+        text = line[start:]
+        if not _BLOCK_START_RE.match(text):
+            continue
+        # axis: a comment-opener line is left to the comment state and is not an HTML-block line — see bite-proof record i2342_comment_scan_inline_code.md
+        if text.startswith("<!--"):
+            continue
+        # axis: an autolink line is not an HTML-block line — see bite-proof record i2342_comment_scan_inline_code.md
+        if _AUTOLINK_RE.match(text):
+            continue
+        return True
+    return False
+
+
 def _comment_scan(body):
     """Yield ``(offset, line, dead, starts_in_comment)`` for every line of ``body``.
 
     ``dead`` is inside a code fence (``md_fence``); ``starts_in_comment`` is inside an HTML comment span: ``<!--``
-    through the next ``-->``, across lines, a comment never closed running to the end of the body. Outside a comment
-    on an unfenced line, a ``<!--`` after a backslash escape or inside an inline code span (``leftover_accepting``'s
-    ``_code_span_end``) opens nothing, and a fenced line opens none; inside a comment the first ``-->`` closes it
-    wherever it sits, backticks there being plain characters. Raw HTML is not Markdown either: from a line that opens
-    with an HTML tag through the next blank line, no escape or code span is read, so a ``<!--`` there opens a comment."""
+    through the next ``-->``, across lines, a comment never closed running to the end of the body; inside a comment the
+    first ``-->`` closes it wherever it sits, backticks there being plain characters. Outside a comment on an unfenced
+    line, a ``<!--`` after a backslash escape or inside an inline code span (``leftover_accepting``'s
+    ``_code_span_end``) opens nothing, but only in a body with no line that could open an HTML block
+    (``_could_open_html_block``). In every other body, and in the rest of any line on which a comment closes (raw HTML
+    may follow it), each ``<!--`` outside a fenced code block opens a comment, as a plain search finds it."""
     raw = body.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
     in_comment = False
-    raw_html = False
-    raw_depth = 0
+    # axis: a body with a line that could open an HTML block gets no escape or code-span exemption — see bite-proof record i2342_comment_scan_inline_code.md
+    exempt = not _could_open_html_block(body)
     offset = 0
     for line, dead, whole in zip(bare, inert, raw):
         starts_in_comment = in_comment
-        # axis: a raw HTML run starts at a line opening with a tag and ends at the next blank line — see bite-proof record i2342_comment_scan_inline_code.md
-        # axis: the run ends at a line blank inside the blockquote depth it started in, so a literal ">" in an unquoted block stays raw — see bite-proof record i2342_comment_scan_inline_code.md
-        # axis: a blank line is only ASCII spaces and tabs, so a non-breaking-space line stays raw HTML — see bite-proof record i2342_comment_scan_inline_code.md
-        if not _strip_quote_marks(line, raw_depth if raw_html else 0).strip(" \t"):
-            raw_html = False
-        # axis: a tag inside a comment is comment text and starts no raw run — see bite-proof record i2342_comment_scan_inline_code.md
-        # axis: a tag line inside a running raw block keeps the depth the block started at — see bite-proof record i2342_comment_scan_inline_code.md
-        elif not raw_html and not dead and not starts_in_comment and _RAW_HTML_START_RE.match(line):
-            raw_html = True
-            raw_depth = _QUOTE_PREFIX_RE.match(line).group(1).count(">")
+        plain = not exempt
         pos = 0
         while True:
             if in_comment:
@@ -224,11 +234,12 @@ def _comment_scan(body):
                     break
                 pos = at + 3
                 in_comment = False
+                # axis: after a comment closes, the rest of its line is matched plainly, raw HTML possibly following it — see bite-proof record i2342_comment_scan_inline_code.md
+                plain = True
             else:
                 if dead or pos >= len(line):
                     break
-                if raw_html:
-                    # axis: inside raw HTML a backtick or backslash is literal, so an opener there opens a comment — see bite-proof record i2342_comment_scan_inline_code.md
+                if plain:
                     at = line.find("<!--", pos)
                     if at < 0:
                         break
