@@ -1895,13 +1895,15 @@ def _append_started(repo_root, record, env):
 
 def _run_cloud_spawn(
     repo_root, launch_id, argv, session_name, log_path, err_path, child_env, timeout,
-    spawn_fn, evidence, env, post_reserve_fail, success_base, cwd=None,
+    spawn_fn, evidence, env, post_reserve_fail, success_base, *, cwd,
 ):
     """Run the cloud launch command once, record the lane's `started`, and shape the result.
 
     The command runs with ``cwd`` as its working folder: the launcher's own cloud-launch folder,
-    which the platform reads the branch and commit from. ``repo_root`` is still where the ledger
-    and the lane's records live.
+    which the platform reads the branch and commit from. ``cwd`` is required and has no default,
+    and a ``cwd`` of None terminalizes the unstarted lane without running anything: the working
+    folder is never taken to be ``repo_root``, which is only where the ledger and the lane's
+    records live.
 
     Exactly one outcome applies, in this order: the command never ran (terminalized); a coherent
     creation receipt was read (started, success); no coherent receipt (started with the
@@ -1910,8 +1912,12 @@ def _run_cloud_spawn(
     command that ran.
     """
     spawn = spawn_fn or default_cloud_spawn
+    # axis: a missing working folder terminalizes the unstarted lane before any spawn, and the primary checkout is never the fallback — see bite-proof record i2353_cloud_launch_folder
     if cwd is None:
-        cwd = repo_root
+        term = _terminalize(
+            repo_root, launch_id, False, "launch-cloud-folder-missing", stage="spawn", env=env,
+        )
+        return post_reserve_fail(_terminalization_reason(term, "launch-cloud-folder-missing"))
     try:
         with open(err_path, "ab"):
             pass
@@ -3276,9 +3282,17 @@ def _prepare_cloud_launch_folder(repo_root, stamped, env):
         )
         if held is None or held.returncode != 0:
             return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
-        # axis: a detached HEAD holding a commit no ref contains refuses, so the switch never strands work made on the folder's detached HEAD — see bite-proof record i2353_cloud_launch_folder
+        # axis: a detached HEAD holding a commit no ref contains and the primary does not hold refuses, so the switch never strands work made on the folder's detached HEAD — see bite-proof record i2353_cloud_launch_folder
         if not (held.stdout or "").strip():
-            return checkout_refusal("launch-cloud-checkout-off-base", "local-commits")
+            # axis: a commit the primary checkout's repository also holds was inherited from setup, is not folder work, and never blocks a launch; this only reads the primary — see bite-proof record i2353_cloud_launch_folder
+            inherited = _git_scrubbed(
+                repo_root, "cat-file", "-e", now_head + "^{commit}",
+                env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+            )
+            if inherited is None:
+                return checkout_refusal("launch-cloud-checkout-off-base", "checkout-failed")
+            if inherited.returncode != 0:
+                return checkout_refusal("launch-cloud-checkout-off-base", "local-commits")
     # axis: --no-overwrite-ignore makes an ignored file the target tracks refuse the switch instead of being overwritten — see bite-proof record i2353_cloud_launch_folder
     switched = _git_scrubbed(
         folder, "checkout", "--quiet", "--no-overwrite-ignore", "-B", branch, target,
@@ -3353,7 +3367,7 @@ def _lock_refusal(held, stamped):
     return reason, detail
 
 
-def _cloud_start_check(repo_root, stamped, env):
+def _cloud_start_check(repo_root, stamped, env, folder=None):
     """``(folder, None)`` or ``(folder_or_None, (reason, extra))``: the one check both call sites run.
 
     The base-on-remote refusals come first, with their tokens and their local fallback
@@ -3362,12 +3376,26 @@ def _cloud_start_check(repo_root, stamped, env):
     (never the primary checkout). The first target that passes passes; refused at all, the first
     target's reason and detail come back, with ``baseCommit``, ``launchFolder`` and
     ``checkedAgainst`` in ``extra``. The caller holds the folder lock around this call.
+
+    ``folder`` is the folder the caller locked. When it is given, the folder the folder step
+    returns must be that same path (compared by ``os.path.realpath``; None differs from anything),
+    or the check refuses ``launch-cloud-folder-missing`` naming both: what the caller locked and
+    ran in is then not what was checked.
     """
     reason = _cloud_base_refusal(repo_root, stamped, env)
     if reason is not None:
         return None, (reason, {})
     base = stamped["baseCommit"]
-    folder, targets, refusal = _cloud_launch_folder_fn(repo_root, stamped, env)
+    checked_folder, targets, refusal = _cloud_launch_folder_fn(repo_root, stamped, env)
+    # axis: the folder the check validated must be the folder the caller locked and will run in, so a lookup that differs refuses and nothing runs in an unchecked folder — see bite-proof record i2353_cloud_launch_folder
+    if folder is not None and (
+        checked_folder is None
+        or os.path.realpath(checked_folder) != os.path.realpath(folder)
+    ):
+        return checked_folder, ("launch-cloud-folder-missing", {
+            "launchFolder": folder, "checkedFolder": checked_folder, "baseCommit": base,
+        })
+    folder = checked_folder
     if refusal is not None:
         return folder, refusal
     if folder is None or not targets:
@@ -3388,23 +3416,36 @@ def _cloud_start_check(repo_root, stamped, env):
     return folder, (refusal_reason, detail)
 
 
-def _cloud_start_refusal(repo_root, stamped, env, lock_held=False):
+def _cloud_start_refusal(repo_root, stamped, env, lock_held=False, folder=None):
     """None, or ``(reason, extra)``: why a cloud launch must not run the cloud command now.
 
-    ``_cloud_start_check`` under the launcher's own folder lock (the caller already holds it
-    when ``lock_held`` is true, so it is not taken again). Every launch, an adoption included,
-    starts from its ``baseCommit``, the commit readiness checked; an adoption's intake checks its
-    adopted head out afterwards. ``extra`` keeps ``baseCommit`` and says which it was checked against. The
-    primary checkout is only read; the folder the command runs in is the launcher's own.
+    ``_cloud_start_check`` under the launcher's own folder lock. With ``lock_held`` true the
+    caller already holds the lock on ``folder`` and must pass that ``folder``, which the check
+    must find to be the folder it validated (a missing ``folder`` refuses
+    ``launch-cloud-folder-missing``). Without it, the folder is looked up once here, a None
+    answer refuses ``launch-cloud-folder-missing`` without locking, and otherwise that same
+    folder is locked and handed to the check. Every launch, an adoption included, starts from its
+    ``baseCommit``, the commit readiness checked; an adoption's intake checks its adopted head out
+    afterwards. ``extra`` keeps ``baseCommit`` and says which it was checked against. The primary
+    checkout is only read; the folder the command runs in is the launcher's own.
     """
     if lock_held:
-        # axis: the final check runs under the lock the caller already holds, through the one refusal entry point — see bite-proof record i2353_cloud_launch_folder
-        return _cloud_start_check(repo_root, stamped, env)[1]
+        if folder is None:
+            return "launch-cloud-folder-missing", {
+                "launchFolder": None, "baseCommit": stamped["baseCommit"],
+            }
+        # axis: the final check runs under the lock the caller already holds, through the one refusal entry point, and validates the very folder that lock covers — see bite-proof record i2353_cloud_launch_folder
+        return _cloud_start_check(repo_root, stamped, env, folder=folder)[1]
     folder = _cloud_launch_folder_path_fn(repo_root, env)
+    # axis: a pre-reservation lookup that finds no folder refuses without locking, so the check never locks one path and repairs another — see bite-proof record i2353_cloud_launch_folder
+    if folder is None:
+        return "launch-cloud-folder-missing", {
+            "launchFolder": None, "baseCommit": stamped["baseCommit"],
+        }
     with _cloud_launch_folder_lock(folder, _CLOUD_FOLDER_LOCK_WAIT_SECONDS) as held:
         if held is not None:
             return _lock_refusal(held, stamped)
-        return _cloud_start_check(repo_root, stamped, env)[1]
+        return _cloud_start_check(repo_root, stamped, env, folder=folder)[1]
 
 
 _ADOPT_HEAD_NOT_ON_BASE = "premise-adopts-head-not-on-base"
@@ -4729,7 +4770,19 @@ def launch_build(
         # The checkout is the last read before the command, after the slow original-session lookup, so a checkout that moved during that lookup is seen — see bite-proof record i2272_launcher
         # The folder lock is held from before the check through the whole command, so no other
         # launch can move the folder between the check and the platform reading it.
+        # The folder is looked up once here: the same value is locked, validated by the check
+        # (which refuses any other) and handed to the command as its working folder.
         folder = _cloud_launch_folder_path_fn(repo_root, env)
+        # axis: a final lookup that finds no folder terminalizes the unstarted lane like a drift refusal before any lock or spawn, so the command never falls back to the primary checkout — see bite-proof record i2353_cloud_launch_folder
+        if folder is None:
+            term = _terminalize(
+                repo_root, launch_id, False, "launch-cloud-folder-missing", stage="cloud-base",
+                env=env,
+            )
+            return _post_reserve_fail(
+                _terminalization_reason(term, "launch-cloud-folder-missing"),
+                launchFolder=None, baseCommit=stamped["baseCommit"],
+            )
         with _cloud_launch_folder_lock(folder, _CLOUD_FOLDER_LOCK_WAIT_SECONDS) as held:
             # axis: a folder lock that is not held terminalizes the unstarted lane like any drift refusal, and the command does not run — see bite-proof record i2353_cloud_launch_folder
             if held is not None:
@@ -4738,7 +4791,7 @@ def launch_build(
                     repo_root, launch_id, False, held_reason, stage="cloud-base", env=env,
                 )
                 return _post_reserve_fail(_terminalization_reason(term, held_reason), **held_extra)
-            drift = _cloud_start_refusal(repo_root, stamped, env, lock_held=True)
+            drift = _cloud_start_refusal(repo_root, stamped, env, lock_held=True, folder=folder)
             if drift is not None:
                 drift_reason, drift_extra = drift
                 term = _terminalize(

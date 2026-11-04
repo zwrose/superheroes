@@ -630,6 +630,155 @@ def test_row14b_an_adoption_with_no_branch_at_its_base_refuses_and_never_starts_
     assert _snap(repo) == before
 
 
+# --- the command runs only in the folder the final check validated (V819-1) ----------------------
+
+
+def test_a_final_lookup_that_finds_no_folder_terminalizes_the_lane_and_nothing_runs(
+    tmp_path, monkeypatch,
+):
+    # axis: a final lookup that finds no folder terminalizes the unstarted lane like a drift refusal before any lock or spawn, and the command never falls back to the primary checkout — see bite-proof record i2353_cloud_launch_folder
+    repo, folder = _world(tmp_path)
+    real = L.cloud_launch_folder_path
+    seen = []
+
+    def wrapper(repo_root, env=None):
+        seen.append(sys._getframe(1).f_code.co_name)
+        # Every lookup answers the real folder except the third, which is the final site's.
+        if len(seen) == 3:
+            return None
+        return real(repo_root, env)
+
+    monkeypatch.setattr(L, "_cloud_launch_folder_path_fn", wrapper)
+    primary_before = _snap(repo)
+    calls = []
+    result = _launch(repo, tmp_path, _spy(calls))
+    # The order of lookups: the pre-reservation check's own, the folder step it runs, then the
+    # final site in `launch_build`, which is the one that answered None.
+    assert seen == ["_cloud_start_refusal", "_prepare_cloud_launch_folder", "launch_build"]
+    assert len(_records(repo, result["launchId"], "reserved")) == 1
+    _assert_refused_cloud_lane(repo, result, "launch-cloud-folder-missing", "cloud-base")
+    lane = _lanes_of(repo)[result["launchId"]]
+    assert lane["terminal"] is True and lane["started"] is False
+    assert calls == []
+    assert result["launchFolder"] is None
+    assert _snap(repo) == primary_before
+    # The pre-reservation check had already put the folder on its branch at the base.
+    assert (_symbolic(folder), _head_sha(folder)) == (_symbolic(repo), _head_sha(repo))
+
+
+def test_a_spawn_with_no_folder_terminalizes_the_unstarted_lane_and_never_runs(tmp_path, monkeypatch):
+    # axis: a missing working folder terminalizes the unstarted lane before any spawn, and the primary checkout is never the fallback — see bite-proof record i2353_cloud_launch_folder
+    terminalized = []
+
+    def recorder(*args, **kwargs):
+        terminalized.append((args, kwargs))
+        return {"ok": True, "reason": None}
+
+    monkeypatch.setattr(L, "_terminalize", recorder)
+    ran = []
+
+    def spawn(argv, cwd, log_path, child_env, timeout):
+        ran.append(cwd)
+        return {"pid": 1, "rc": 0, "timedOut": False, "output": ""}
+
+    (tmp_path / "err").mkdir()
+    result = L._run_cloud_spawn(
+        str(tmp_path), "launch-nofolder", ["claude", "--cloud", "p", "-n", "n"], "n",
+        str(tmp_path / "launch.stdout"), str(tmp_path / "err" / "launch.stderr"), {}, 5, spawn,
+        None, {}, lambda reason, **extra: dict(extra, ok=False, reason=reason),
+        {"ok": True, "reason": None},
+        cwd=None,
+    )
+    assert ran == []
+    assert result == {"ok": False, "reason": "launch-cloud-folder-missing"}
+    assert len(terminalized) == 1
+    args, kwargs = terminalized[0]
+    assert args[:4] == (str(tmp_path), "launch-nofolder", False, "launch-cloud-folder-missing")
+    assert kwargs["stage"] == "spawn"
+
+
+def test_the_check_refuses_a_folder_other_than_the_one_the_caller_locked(tmp_path):
+    # axis: the folder the check validated must be the folder the caller locked and will run in, so a different folder, or none, refuses launch-cloud-folder-missing naming both — see bite-proof record i2353_cloud_launch_folder
+    repo, folder = _world(tmp_path)
+    base = _head_sha(repo)
+    env = dict(os.environ)
+    other = str(tmp_path / "some-other-folder")
+    os.mkdir(other)
+    got, refusal = L._cloud_start_check(repo, {"baseCommit": base}, env, folder=other)
+    reason, detail = refusal
+    assert reason == "launch-cloud-folder-missing"
+    assert got == folder
+    assert detail == {"launchFolder": other, "checkedFolder": folder, "baseCommit": base}
+    # The same folder reached through a symlink is the same folder.
+    alias = str(tmp_path / "alias-of-folder")
+    os.symlink(folder, alias)
+    assert L._cloud_start_check(repo, {"baseCommit": base}, env, folder=alias)[1] is None
+    # With no folder given the check is as it was.
+    assert L._cloud_start_check(repo, {"baseCommit": base}, env)[1] is None
+
+
+def test_the_check_refuses_when_its_own_lookup_finds_no_folder_for_a_given_one(
+    tmp_path, monkeypatch,
+):
+    # axis: a checked folder of None differs from any folder the caller locked, so the check refuses launch-cloud-folder-missing with checkedFolder None — see bite-proof record i2353_cloud_launch_folder
+    repo, folder = _world(tmp_path)
+    base = _head_sha(repo)
+    monkeypatch.setattr(L, "_cloud_launch_folder_fn", lambda root, stamped, env: (None, None, None))
+    got, refusal = L._cloud_start_check(repo, {"baseCommit": base}, dict(os.environ), folder=folder)
+    assert got is None
+    assert refusal == ("launch-cloud-folder-missing", {
+        "launchFolder": folder, "checkedFolder": None, "baseCommit": base,
+    })
+
+
+def test_the_pre_reservation_check_with_no_folder_refuses_without_locking(tmp_path, monkeypatch):
+    # axis: a pre-reservation lookup that finds no folder refuses launch-cloud-folder-missing without locking, so the check never locks one path and repairs another — see bite-proof record i2353_cloud_launch_folder
+    repo, folder = _world(tmp_path)
+    base = _head_sha(repo)
+    monkeypatch.setattr(L, "_cloud_launch_folder_path_fn", lambda root, env=None: None)
+    locked = []
+    real_lock = L._cloud_launch_folder_lock
+
+    def spy_lock(path, wait):
+        locked.append(path)
+        return real_lock(path, wait)
+
+    monkeypatch.setattr(L, "_cloud_launch_folder_lock", spy_lock)
+    assert L._cloud_start_refusal(repo, {"baseCommit": base}, dict(os.environ)) == (
+        "launch-cloud-folder-missing", {"launchFolder": None, "baseCommit": base},
+    )
+    assert L._cloud_start_refusal(
+        repo, {"baseCommit": base}, dict(os.environ), lock_held=True, folder=None,
+    ) == ("launch-cloud-folder-missing", {"launchFolder": None, "baseCommit": base})
+    assert locked == []
+
+
+# --- a commit the setup verb left on the folder's detached HEAD is not folder work (V819-2) ------
+
+
+def test_a_launch_at_the_remote_tip_succeeds_when_the_primary_holds_unpushed_commits(tmp_path):
+    # axis: a detached HEAD holding a commit that only the primary checkout's repository also holds was inherited from setup, is not folder work, and never blocks a launch — see bite-proof record i2353_cloud_launch_folder
+    repo = _cloud_repo(tmp_path)
+    base = _head_sha(repo)
+    default = _symbolic(repo)
+    unpushed = _commit(repo, "unpushed.txt")
+    assert unpushed != base
+    ensured = L.ensure_cloud_launch_folder(repo)
+    assert ensured["ok"] is True and ensured["created"] is True, ensured
+    folder = ensured["folder"]
+    # Setup left the folder detached at the primary's unpushed commit, with no local branch.
+    assert (_symbolic(folder), _head_sha(folder)) == (None, unpushed)
+    before = _snap(repo)
+    calls = []
+    result = _launch(repo, tmp_path, _spy(calls), premise=_valid_premise(repo, baseCommit=base))
+    assert result["ok"] is True, result
+    assert len(calls) == 1
+    assert calls[0]["cwd"] == folder
+    assert calls[0]["branch"] == default
+    assert calls[0]["head"] == base
+    assert _snap(repo) == before
+
+
 # --- the branch choice, read directly ------------------------------------------------------------
 
 

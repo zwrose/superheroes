@@ -2050,6 +2050,7 @@ def _drive_cloud_spawn(tmp_path, monkeypatch, *, spawned=None, raises=None, appe
         str(tmp_path / "launch.stdout"), err_path, {}, 5, spawn, None, {},
         lambda reason, **extra: dict(extra, ok=False, reason=reason),
         {"ok": True, "reason": None},
+        cwd=str(tmp_path),
     )
     return result, terminalized
 

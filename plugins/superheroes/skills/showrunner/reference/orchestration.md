@@ -660,9 +660,9 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   issue that names the lane's launch id (post `cloud_builder.py superseded-notice --launch-id <lane>`'s
   comment first), so the original builder stands down when it wakes. A lane launched before the stand-down check
   existed (its reserved premise lacks the launcher's `standDown` stamp) still needs the session
-  read, limit or not. An adoption's cloud launch runs from a checkout at
-  its adopted head (`adoptsHead`), so no pointer branch at the premise's `baseCommit` is needed; a
-  launch that is not an adoption keeps the base rule. Every read the launcher makes for this fails
+  read, limit or not. Every cloud launch, an adoption
+  included, starts on a branch whose tip is its `baseCommit`, and an adoption whose base has moved
+  sets its `baseCommit` to the adopted head. Every read the launcher makes for this fails
   closed:
   one that fails or is ambiguous keeps the lane in the check.
   `adopt-original-session-live` means a lane that could still write the branch has a session still
