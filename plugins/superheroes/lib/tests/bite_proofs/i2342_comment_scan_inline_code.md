@@ -177,3 +177,37 @@ a comment-opener line that does not start a raw run.
 - **Red:** `2 failed, 7 passed, 20 deselected` — `test_c11_a_comment_line_does_not_make_the_next_line_raw`,
   `test_c11_comment_scan_reads_raw_html_runs[comment-line-not-raw]`.
 - **Restore:** inverse Edit. **Green:** `29 passed` (the whole file).
+
+K7's guard is now the narrower pattern below (K8); a `<!` line still starts no raw run, and the K7 tests stay green.
+
+## Review fix round 2: raw-run boundaries (K8–K10)
+
+Added at the second `apply-fixes` step for the round-2 findings "Do not classify Markdown autolinks as raw HTML",
+"Do not start raw HTML from text inside a comment" and "Recognize blank lines inside Markdown containers" (each a
+false refusal of a valid description). Same method as above, in the probe worktree at `1dd13b60`, selector
+`-k "c11 or c12"`, `git status --porcelain` empty after the last restore; nothing cut or redacted.
+
+The guarded-element set declared before the probes: K8 the tag-only start pattern, K9 no start inside a comment, K10 a
+quoted blank line ends the run.
+
+### K8: an autolink is not a tag
+
+- **Neutralization:** `_RAW_HTML_START_RE` back to `^[ \t>*+\-0-9.)]*<[A-Za-z/?]`.
+- **Red:** `2 failed, 16 passed, 20 deselected` — `test_c12_an_autolink_line_is_not_raw_html_so_a_later_quoted_opener_is_text`,
+  `test_c12_comment_scan_raw_run_boundaries[autolink]`.
+- **Restore:** inverse Edit; the autolink tests pass in K9's run and in the green below.
+
+### K9: a tag inside a comment starts no run
+
+- **Neutralization:** `elif not dead and not starts_in_comment and _RAW_HTML_START_RE.match(line):` lost
+  `not starts_in_comment and`.
+- **Red:** `2 failed, 16 passed, 20 deselected` — `test_c12_a_tag_inside_a_comment_starts_no_raw_run`,
+  `test_c12_comment_scan_raw_run_boundaries[tag-in-comment]`.
+- **Restore:** inverse Edit. **Green:** `18 passed, 20 deselected`.
+
+### K10: a quoted blank line ends the run
+
+- **Neutralization:** `if not line.strip(" \t>"):` became `if not line.strip():`.
+- **Red:** `2 failed, 16 passed, 20 deselected` — `test_c12_a_quoted_blank_line_ends_a_quoted_raw_run`,
+  `test_c12_comment_scan_raw_run_boundaries[quoted-blank]`.
+- **Restore:** inverse Edit. **Green:** `38 passed` (the whole file).
