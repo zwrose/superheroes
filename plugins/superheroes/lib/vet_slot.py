@@ -14,12 +14,15 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of fourteen reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of fifteen reasons (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
 ``What's changing, and why`` heading sits above the advisor-vet marker, so the builder's owner half is lost and
 the body is restored from the PR's edit history rather than re-stamped),
 ``markers-invalid``, ``slot-span-foreign-content`` (another ``superheroes:`` marker line
-inside the slot span, which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
+inside the slot span, which the write would delete),
+``slot-span-builder-text`` (``write`` only, builder body: the slot span holds text other than the builder's reminder
+and the advisor's own earlier verdict - a builder section, prose above the verdict line, or any other HTML
+comment - which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
 ``disposition-unknown``, ``none-over-list``, ``write-failed``,
 ``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
 names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
@@ -88,6 +91,9 @@ _DATABASE_TOOL_RE = re.compile(
 _FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
 _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6} (.*)$")
+# the slot-span guard's own heading pattern: a space or a tab after the hashes, or a bare hash run (_ATX_HEADING_RE stays as is)
+_SLOT_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+_REMINDER_OPENER = "<!-- advisor: BEFORE writing this slot"
 # no_build_record's own patterns: wider than the module's on purpose (over-matching reads as builder-shaped)
 _SUPERHEROES_OPEN_RE = re.compile(r"<!--\s*superheroes:")
 _BUILD_RECORD_WRAPPER_RE = re.compile(r"<summary[^>]*>\s*build\s+record", re.IGNORECASE)
@@ -243,6 +249,76 @@ def check_not_emptied(body):
     if not held:
         raise _Refusal("body-emptied", 'PR body has no "What\'s changing, and why" heading%s%s'
                        % (" above the advisor-vet marker" if markers else "", remedy))
+
+
+def _span_owned_problem(span):
+    """Why the slot ``span`` is not the advisor's own, as ``(line_number, line, sign, why)``, or None when it is.
+
+    The advisor's own span, after the builder's reminder comments and the blank lines are removed, is nothing, or a
+    run of lines that (a) opens with a verdict token of the canonical form, (b) holds no HTML comment opener or
+    closer, and (c) holds no live ATX heading (outside a code fence; a space or a tab after the hashes, or none)."""
+    kept = list(enumerate(span.splitlines(), 1))
+    while True:  # reminders go first, one at a time, so a fence mark inside one cannot hide a later heading
+        inert = md_fence.scan_contexts([text for _n, text in kept]).inert
+        opening = next((i for i, (_n, text) in enumerate(kept)
+                        if not inert[i] and " ".join(text.split()).startswith(_REMINDER_OPENER)), None)
+        if opening is None:
+            break
+        number, first = kept[opening]
+        closing = None
+        for j in range(opening, len(kept)):
+            text = kept[j][1]
+            at = text.find("-->", len(text) - len(text.lstrip()) + len("<!--") if j == opening else 0)
+            if at >= 0:
+                closing = (j, text, at)
+                break
+        # axis: a reminder with no closing --> before the build-record marker is not the advisor's — see bite-proof record i2352_vet_slot_builder_text.md
+        if closing is None:
+            return number, first, "(b) no comment", "a reminder comment is never closed"
+        j, text, at = closing
+        # axis: text after a reminder's closing --> on the same line is span content, not the advisor's — see bite-proof record i2352_vet_slot_builder_text.md
+        if text[at + 3:].strip():
+            return kept[j][0], text, "(b) no comment", "text follows the reminder's closing -->"
+        del kept[opening:j + 1]
+    inert = md_fence.scan_contexts([text for _n, text in kept]).inert
+    rest = [(number, text, dead) for (number, text), dead in zip(kept, inert) if text.strip()]
+    if not rest:
+        return None
+    form, error = stack_check._load_vet_verdict_form()
+    # axis: an unreadable verdict form refuses a non-empty span, failing closed — see bite-proof record i2352_vet_slot_builder_text.md
+    if form is None:
+        return rest[0][0], rest[0][1], "(a) verdict first", "the verdict form cannot be read (%s)" % error
+    tokens = [token for token, _verdict in form[1]]
+    for index, (number, text, dead) in enumerate(rest):
+        # axis: the first remaining line must open with a verdict token — see bite-proof record i2352_vet_slot_builder_text.md
+        if index == 0 and not any(text.startswith(token) for token in tokens):
+            return number, text, "(a) verdict first", "the span does not open with a verdict line"
+        # axis: no remaining line may hold an HTML comment opener or closer — see bite-proof record i2352_vet_slot_builder_text.md
+        if "<!--" in text or "-->" in text:
+            return number, text, "(b) no comment", "an HTML comment other than the builder's reminder"
+        # axis: no remaining line outside a code fence may be an ATX heading, tab-separated or bare too — see bite-proof record i2352_vet_slot_builder_text.md
+        if not dead and _SLOT_HEADING_RE.match(text):
+            return number, text, "(c) no heading", "a heading (a builder section)"
+    return None
+
+
+def check_span_owned(body, advisor_at, build_at):
+    """Refuse ``slot-span-builder-text`` when the slot span of ``body`` holds anything but the advisor's own content.
+
+    The span is the one ``evaluate`` replaces: from the line after the advisor-vet marker line to the build-record
+    marker line. Called on the ``write`` path of a builder body only, after ``analyze_body``, and again over the
+    composed body (emitter ⊆ recogniser)."""
+    start = body.index("\n", advisor_at) + 1
+    end = body.rfind("\n", 0, build_at) + 1
+    problem = _span_owned_problem(body[start:end])
+    if problem is None:
+        return
+    number, text, sign, why = problem
+    raise _Refusal("slot-span-builder-text",
+                   "the slot span holds text that is not the advisor's own: line %d of the span, %r, fails sign %s: %s;"
+                   " write replaces only the builder's reminder and the advisor's own verdict; move that text above"
+                   " the ## Advisor vet heading or below the build-record marker, or ask the builder to, then write"
+                   " again" % (number, text[:60], sign, why))
 
 
 def no_build_record(body):
@@ -616,6 +692,9 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
             if verb == "write":
                 check_not_emptied(body)
             advisor_at, build_at, ids = analyze_body(body)
+            # axis: the evaluate chokepoint refuses builder text in the slot span on write, after analyze_body — see bite-proof record i2352_vet_slot_builder_text.md
+            if verb == "write":
+                check_span_owned(body, advisor_at, build_at)
         if verb == "write":
             check_slot_text(slot_text)
         if not isinstance(advisor_login, str) or not advisor_login.strip():
@@ -663,6 +742,12 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         return _refusal("write-failed", "composed body broke markers: %s" % exc.detail)
     if new_ids != ids or new_advisor_at != advisor_at or new_body[new_build_at:] != body[build_at:]:
         return _refusal("write-failed", "composed body moved or shadowed slot markers")
+    try:
+        # axis: the composed slot must itself read as the advisor's own, so a later write is never refused — see bite-proof record i2352_vet_slot_builder_text.md
+        check_span_owned(new_body, new_advisor_at, new_build_at)
+    except _Refusal as exc:
+        return _refusal("write-failed", "the composed slot would not read as the advisor's own on the next write: %s"
+                        % exc.detail)
     result["newBody"] = new_body
     return result
 
@@ -833,7 +918,10 @@ def _run_verb(verb, pr, repo, slot_file, run):
     else:
         if verb == "write":
             check_not_emptied(body)
-        analyze_body(body)
+        advisor_at, build_at, _ids = analyze_body(body)
+        # axis: the _run_verb chokepoint refuses builder text in the slot span before the slot file is read or any further gh call — see bite-proof record i2352_vet_slot_builder_text.md
+        if verb == "write":
+            check_span_owned(body, advisor_at, build_at)
     slot_text = None
     if verb == "write":
         try:

@@ -195,6 +195,15 @@ verdict names the findings the review left for the owner.
 builder's prose". If you find your verdict and the reminder both present, the verdict wins: delete
 the reminder on that read.
 
+`vet_slot.py write` refuses `slot-span-builder-text`, writing nothing, when the slot span holds
+anything besides the builder's reminder and your own earlier verdict: a builder section, prose
+above your verdict line, any other HTML comment. What you do: move that text above the
+`## Advisor vet` heading or below the build record (a hand edit of the builder's text into its own
+section), or ask the builder to, then write again. The known limit: plain builder prose with no
+heading, added under your existing verdict, still reads as yours and is replaced, so comparing the
+slot with your latest receipt (the check just below) stays the backstop. On a builder PR your slot
+text opens with the verdict line and carries no heading, or the write refuses `write-failed`.
+
 **Check the slot whenever you next read the PR's body** — a re-vet, a re-review, or the read before
 handing it back, not only a formal re-vet. Compare its text against your **most recent** vet receipt
 comment, your canonical copy, not merely whether the marker is there. A rewrite can:

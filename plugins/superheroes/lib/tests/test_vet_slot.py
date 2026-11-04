@@ -26,6 +26,8 @@ The builder's owner half.
 
 ## Advisor vet
 <!-- superheroes:advisor-vet -->
+**Verdict: NOT-READY** · abc
+
 old slot text
 
 <!-- superheroes:build-record -->
@@ -212,20 +214,20 @@ def test_ok_check_reports_receipt_present():
 
 # --- refusal fixtures: literal token, a distinguishing detail, zero edit calls -------------
 
-FOURTEEN_TOKENS = {
+FIFTEEN_TOKENS = {
     "bad-argument", "read-failed", "body-emptied", "markers-invalid", "slot-span-foreign-content",
-    "receipt-missing", "followup-undispositioned", "disposition-unknown", "none-over-list",
+    "slot-span-builder-text", "receipt-missing", "followup-undispositioned", "disposition-unknown", "none-over-list",
     "write-failed", "write-unconfirmed", "owner-command-in-body",
     "leftover-not-accepted", "review-record-unreadable",
 }
 
 
-def test_module_emits_exactly_fourteen_tokens():
+def test_module_emits_exactly_fifteen_tokens():
     source = inspect.getsource(vs)
     emitted = set(re.findall(r'_Refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'_refusal\(\s*"([a-z-]+)"', source))
     emitted |= set(re.findall(r'reason="([a-z-]+)"', source))
-    assert emitted == FOURTEEN_TOKENS
+    assert emitted == FIFTEEN_TOKENS
     for retired in ("followups-malformed", "dispositions-malformed"):
         assert retired not in source, retired
 
@@ -323,7 +325,6 @@ def test_dod_table_in_the_slot_span_refuses_and_leaves_the_body_unchanged(slot_f
     REMINDER,
     "old slot text\n",
     "**Verdict: READY** · old\n\n" + REMINDER,
-    "```\n" + DOD_BLOCK + "```\n",
 ])
 def test_slot_span_holding_only_advisor_text_or_the_reminder_still_writes(span, slot_file):
     body = BODY.replace("old slot text\n", span)
@@ -334,6 +335,20 @@ def test_slot_span_holding_only_advisor_text_or_the_reminder_still_writes(span, 
     a = body.index("<!-- superheroes:advisor-vet -->\n") + len("<!-- superheroes:advisor-vet -->\n")
     assert new == body[:a] + "\n" + SLOT.strip("\n") + "\n\n" + body[body.index(
         "<!-- superheroes:build-record -->"):]
+
+
+def test_a_fenced_dod_table_in_the_slot_span_is_not_foreign_marker_content_but_is_builder_text(slot_file):
+    """A marker line inside a code fence is no ``slot-span-foreign-content`` (the fence hides it from the marker
+    scan); #2352: the span is the advisor's own only when it holds no HTML comment, fenced or not, so the fenced
+    block is refused as ``slot-span-builder-text`` and nothing is written."""
+    body = BODY.replace("old slot text\n", "```\n" + DOD_BLOCK + "```\n")
+    fake = _ok_fake(body=body)
+    result = _write(fake, slot_file)
+    assert result["ok"] is False
+    assert result["reason"] == "slot-span-builder-text"
+    assert "<!-- superheroes:dod-table -->" in result["detail"]
+    assert fake.edit_calls() == [] and fake.edited == []
+    assert fake.calls == [list(VIEW)]
 
 
 def test_dod_table_below_the_build_record_still_writes(slot_file):
