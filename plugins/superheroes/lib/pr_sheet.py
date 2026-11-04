@@ -941,11 +941,13 @@ def _fixed_above(recs, bodies, kind, allowed, problems):
                                     "a fixed-above disposition needs a stack sheet that covers the fixing layer above the finding's PR")
             if held and higher:
                 valid.append(claim)
-        assigned = {claim["acceptance"] for claim in valid}
+        assigned = {" ".join(claim["acceptance"].split()) for claim in valid}
         for bullet, text in (listed_bullets(r["pr"], body) if valid else []):
             # axis: a bullet is accounted by itself only when it is the acceptance the whole-body assignment gave a valid claim
-            # (compared as the rule reads it, comments cut); a bullet is never matched alone again, so it cannot move leftover
-            if any(seen in assigned for seen in leftover_accepting._accepting_items("## What we're accepting\n\n" + text)):
+            # (compared as the rule reads it, comments cut, whitespace runs as one space, so the order a multiline comment is cut
+            # and the lines joined in cannot change it); a bullet is never matched alone again, so it cannot move leftover
+            if any(" ".join(seen.split()) in assigned
+                   for seen in leftover_accepting._accepting_items("## What we're accepting\n\n" + text)):
                 auto.add(bullet)
     return fixed, auto
 

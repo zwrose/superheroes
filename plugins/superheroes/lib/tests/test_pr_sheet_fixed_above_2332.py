@@ -195,3 +195,14 @@ def test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixe
     assert any("was a decided-for-you entry on the earlier sheet" in p and "#11" in p
                and "a carried sheet cannot move a decided-for-you entry; republish unsigned" in p
                for p in caught.value.problems), caught.value.problems
+
+
+def test_a_fixed_above_bullet_with_a_multiline_comment_keeps_its_automatic_accounting():
+    # Bites on: matching the assigned acceptance to its bullet by exact text, which a multiline comment inside the bullet
+    # breaks (cutting the comment before or after the lines are joined leaves one space or two).
+    # Axis: the bullet the whole-body assignment gave a valid claim is accounted by itself whatever comment it carries.
+    bodies = {10: ACCEPTING + f"- f-2 {TITLE} <!-- a note\n  that wraps --> — fixed-above #11 {COMMIT}: the layer above removes it.\n",
+              11: NONE_BODY}
+    sheet = make(stack_records(), stack_input(), bodies)
+    assert f"#10: {TITLE} (fixed above in #11 at {COMMIT})" in sheet["prSheet"]["whatChanged"]["caught"]
+    assert sheet["cards"] == [] and sheet["prSheet"].get("nothingListed") is True
