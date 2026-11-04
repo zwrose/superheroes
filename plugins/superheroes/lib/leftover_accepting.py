@@ -1,11 +1,15 @@
 """The one home of the leftover-acceptance rule (#2280, #2332): every finding the latest review record leaves for the
 owner (its ``leftForOwner`` list) is named in the PR body's ``## What we're accepting`` section by its record id,
 together with its title, in one acceptance. A paraphrase that drops the id, or an id with no title, does not name it.
-The id is compared under one normalisation (NFKC, case-folded, every Unicode dash read as ``-``) as a whole token after
-the punctuation around it is stripped, so ``F-1`` and ``f-1`` name one id but ``f-1`` is never inside ``f-1-b``; two ids
-of one record that share a normal form are each matched byte for byte, so neither satisfies the other. The title is
-compared by its words, case and punctuation aside (quotes and apostrophes are dropped, so ``don't`` and ``don’t`` agree;
-backticks and a hyphen written as a space are read as spaces). An acceptance that
+An id that shares its normal form with no other leftover id of the record is compared under one normalisation (NFKC,
+case-folded, every Unicode dash read as ``-``) as a whole token after the punctuation around it is stripped, so ``F-1``
+and ``f-1`` name one id but ``f-1`` is never inside ``f-1-b``. Two or more ids of one record that share a normal form
+are each compared on their exact bytes: nothing is stripped, the acceptance is not split on whitespace, and an
+occurrence of one inside an occurrence of a longer id of the same group does not count, so one acceptance never names
+two of them. The title is compared by its words, ignoring case, quotes, punctuation and Markdown underscore emphasis
+(quotes and apostrophes are dropped, so ``don't`` and ``don’t`` agree; backticks, a hyphen written as a space and
+underscores that wrap a word, as in ``_slow retry_``, are read as spaces; an underscore inside a word is kept). An
+acceptance that
 carries ``fixed-above #<PR> <7-40 hex commit>`` resolves the leftovers it names as fixed by that higher layer
 (``fixed_above``); whether the named PR is a higher member of this PR's stack is the caller's check, not this module's.
 
@@ -133,30 +137,49 @@ def _tokens(text):
 
 def _title_key(text):
     """A title or an acceptance reduced to its words: NFKC, case-folded, dashes as ``-``, quotes and apostrophes dropped
-    (straight and typographic alike, so ``don't``, ``don’t`` and ``dont`` agree), every other run of non-word characters
-    one space."""
-    folded = _DASHES.sub("-", unicodedata.normalize("NFKC", text).casefold())
-    return re.sub(r"[^\w]+", " ", folded.translate(_QUOTES)).strip()
+    (straight and typographic alike, so ``don't``, ``don’t`` and ``dont`` agree), Markdown underscore emphasis dropped (a
+    run of underscores that touches a non-word character or an end of the text, so ``_slow retry_`` reads as
+    ``slow retry``; ``foo_bar`` keeps its underscore), every other run of non-word characters one space."""
+    folded = _DASHES.sub("-", unicodedata.normalize("NFKC", text).casefold()).translate(_QUOTES)
+    # axis: an underscore run at a word edge is emphasis and reads as a space; one between two word characters is kept
+    folded = re.sub(r"(?<!\w)_+|_+(?!\w)", " ", folded)
+    return re.sub(r"[^\w]+", " ", folded).strip()
 
 
-def _id_named(item, ident, exact):
-    """Whether the id's tokens appear as a consecutive run of the item's tokens (normalised, or byte for byte when
-    ``exact``)."""
+def _id_named(item, ident):
+    """Whether the id's tokens appear as a consecutive run of the item's tokens, both under ``normalise_id``."""
     want, have = _tokens(ident), _tokens(item)
     # axis: an id with no token left after stripping its punctuation is matched as a whole token by the old character rule
     if not want:
         return re.search("(?<![%s])%s(?![%s])" % (_ID_CHAR, re.escape(ident), _ID_CHAR), item) is not None
-    if not exact:
-        want, have = [normalise_id(t) for t in want], [normalise_id(t) for t in have]
+    want, have = [normalise_id(t) for t in want], [normalise_id(t) for t in have]
     n = len(want)
     # axis: whole-token equality, never a substring, so f-1 is not inside f-1-b and F/1 is not inside F.1.2
     return any(have[i:i + n] == want for i in range(len(have) - n + 1))
 
 
-def _names(item, ident, title, exact=False):
-    """Whether one acceptance names the id as a whole token run (``_id_named``) and carries the title (its words, case
-    and punctuation aside). A title that reduces to no words is carried only byte for byte."""
-    if not _id_named(item, ident, exact):
+def _spans(item, ident):
+    """The (start, end) of every occurrence of ``ident``'s exact bytes in ``item`` bounded as a whole id."""
+    pattern = "(?<![%s])%s(?![%s])" % (_ID_CHAR, re.escape(ident), _ID_CHAR)
+    return [found.span() for found in re.finditer(pattern, item)]
+
+
+def _exact_named(item, ident, group):
+    """Whether ``item`` carries ``ident`` on its exact bytes: nothing stripped, no whitespace split, no normalisation.
+    An occurrence that lies inside an occurrence of a longer id of ``group`` (the ids sharing ``ident``'s normal form)
+    is the longer id's, not this one's, and does not count."""
+    longer = [span for other in group if len(other) > len(ident) for span in _spans(item, other)]
+    # axis: the id is named only by an occurrence no longer colliding id of the group accounts for
+    return any(not any(lo <= start and end <= hi for lo, hi in longer) for start, end in _spans(item, ident))
+
+
+def _names(item, ident, title, group=None):
+    """Whether one acceptance names the id and carries the title (its words, case and punctuation aside). An id with a
+    ``group`` (the ids of the record sharing its normal form, itself included) is named on its exact bytes
+    (``_exact_named``); any other id as a whole token run under the normalisation (``_id_named``). A title that reduces
+    to no words is carried only byte for byte."""
+    # axis: a colliding id never goes the normalised path, so one acceptance cannot name two ids of one group
+    if not (_exact_named(item, ident, group) if group else _id_named(item, ident)):
         return False
     if title is None:
         return True
@@ -168,11 +191,12 @@ def _names(item, ident, title, exact=False):
 
 
 def _collisions(leftovers):
-    """The ids that share a normal form with a different leftover id: those are matched byte for byte."""
+    """{id: the frozenset of ids sharing its normal form} for each id that shares it with a different leftover id; those
+    ids are matched on their exact bytes. An id sharing its form with none is absent."""
     forms = {}
     for ident, _title in leftovers:
         forms.setdefault(tuple(normalise_id(t) for t in _tokens(ident)), set()).add(ident)
-    return {ident for ids in forms.values() if len(ids) > 1 for ident in ids}
+    return {ident: frozenset(ids) for ids in forms.values() if len(ids) > 1 for ident in ids}
 
 
 def _accepting_items(body):
@@ -187,9 +211,10 @@ def missing(record, body):
     items = _accepting_items(body)
     leftovers = _leftovers(record)
     colliding = _collisions(leftovers)
-    # axis: two ids of one record that share a normal form are each matched byte for byte, so neither satisfies the other
+    # axis: two ids of one record that share a normal form are each matched on their exact bytes, so neither satisfies
+    # the other
     return [{"id": ident, "title": title} for ident, title in leftovers
-            if not any(_names(item, ident, title, exact=ident in colliding) for item in items)]
+            if not any(_names(item, ident, title, colliding.get(ident)) for item in items)]
 
 
 FIXED_ABOVE_RE = re.compile(
@@ -210,7 +235,7 @@ def fixed_above(record, body):
         for item in items:
             found = FIXED_ABOVE_RE.search(item)
             # axis: the first acceptance that names the leftover and carries the disposition decides it
-            if found and _names(item, ident, title, exact=ident in colliding):
+            if found and _names(item, ident, title, colliding.get(ident)):
                 claims.append({"id": ident, "title": title, "layer": int(found.group(1)), "commit": found.group(2)})
                 break
     return claims

@@ -131,7 +131,7 @@ def test_the_default_reader_is_false_when_the_slug_cannot_be_resolved(monkeypatc
 
 
 def test_the_default_reader_is_false_on_a_non_zero_exit(monkeypatch):
-    _patch_gh(monkeypatch, done=_Done(1, ""))
+    _patch_gh(monkeypatch, done=_Done(1, json.dumps({"number": 1745})))
     assert CC._issue_resolves("/repo", 1745) is False
 
 

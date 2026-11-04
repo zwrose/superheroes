@@ -242,8 +242,55 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 
 ---
 
-Not proven by a neutralization of its own (declared set is C1–C4): the craftDeterminations half of C4
+## E5 — the carried-sheet refusal (`build`), added by vet 809 item 6 (work order wo-2332-D)
+
+**Guarded element:** `pr_sheet.py:1151` `if prior is not None:` → "was a decided-for-you entry on the earlier sheet and is fixed above in #N; a carried sheet cannot move a decided-for-you entry; republish unsigned".
+**Axis:** E5: on a carry, a fixed-above finding that was a decided-for-you entry on the earlier sheet is a named refusal.
+
+**Neutralization:** `if prior is not None:` → `if False and prior is not None:`.
+
+**Red run** (`test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixed_above`, complete, run by the implementer of wo-2332-D):
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixed_above _
+
+    def test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixed_above():
+        # Bites on: a carried sheet that lets a finding the earlier sheet showed as decided for you move into caught as fixed
+        # above, keeping the earlier sheet's answers and Merge over a disposition the owner never saw.
+        # Axis: E5: on a carry, a fixed-above finding that was a decided-for-you entry on the earlier sheet is a named refusal.
+        from test_pr_sheet import carry_input, determination, sheet_bytes
+        plain = {10: NONE_BODY, 11: NONE_BODY}
+        earlier = make(stack_records(), stack_input(craftDeterminations={"10:f-2": determination()}), plain)
+        assert [e["finding"] for e in earlier["prSheet"]["decidedForYou"]] == ["10:balance/f-2"]
+        advisor = carry_input(stack_input(), {"10": "a" * 40, "11": "b" * 40})
+>       with pytest.raises(pr_sheet.Refusal) as caught:
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE Refusal
+
+/home/user/wt-2332/plugins/superheroes/lib/tests/test_pr_sheet_fixed_above_2332.py:186: Failed
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_pr_sheet_fixed_above_2332.py::test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixed_above
+1 failed in 0.98s
+```
+
+**Restore:** `if False and prior is not None:` → `if prior is not None:` (inverse edit).
+**Restore receipt** (`grep -n "^ *if prior is not None:\|if False and prior"` after the restore): `1151:                    if prior is not None:`
+
+**Green run** (same node, after the restore, complete):
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 1.08s
+```
+
+---
+
+Not proven by a neutralization of its own (declared set is C1–C4, plus E5 above): the craftDeterminations half of C4
 (`test_s4_a_craft_determination_for_a_finding_fixed_above_refuses`) shares C4's guard line and was not run red alone;
 the accounting-entry refusal of C2 (`test_s4_an_accounting_entry_for_the_fixed_above_bullet_refuses`) shares C2's
-guard and was not run red alone; E5 (a carried sheet) and E2 (`Unreadable`) have tests only for E2
-(`test_a_record_the_rule_cannot_read_is_a_problem_naming_the_pr_never_a_pass`), none for E5.
+guard and was not run red alone. E5 (a carried sheet) now has a test
+(`test_pr_sheet_fixed_above_2332.py::test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixed_above`)
+and a recorded bite-proof (above). E2 (`Unreadable`) has a test
+(`test_a_record_the_rule_cannot_read_is_a_problem_naming_the_pr_never_a_pass`) and no neutralization of its own.

@@ -106,6 +106,83 @@ def test_normalise_id_folds_case_form_and_dashes():
     assert la.normalise_id("ＦＯＯ—１") == "foo-1"
 
 
+# --- vet 809 item 2: colliding ids are compared on their exact bytes (D-a, D-b, D-c) ------------------
+
+COLLIDING = [
+    ("f-1", "f-1_"),
+    ("f-1", "_f-1"),
+    ("f-1", "f-1."),
+    ("f-1", "f-1:"),
+    ("f-1", "(f-1)"),
+    ("a.py::slow retry@L1", "a.py::slow  retry@L1"),  # the second id is written with two spaces
+    ("a.py::slow retry@L1", "a.py::slow\tretry@L1"),  # the second id is written with a tab
+]
+SHARED_TITLE = "slow retry"
+
+
+@pytest.mark.parametrize("first, second", COLLIDING)
+def test_d_a_one_acceptance_never_names_two_colliding_ids(first, second):
+    # Bites on: a colliding id compared through the normalised token path (stripped, whitespace-split).
+    # Axis: I-COLLIDE: a line naming only one of two ids sharing a normal form leaves the other missing, both ways.
+    record = rec((first, SHARED_TITLE), (second, SHARED_TITLE))
+    assert la.normalise_id(" ".join(la._tokens(first))) == la.normalise_id(" ".join(la._tokens(second)))
+    assert gaps(record, "- %s %s: accepted.\n" % (first, SHARED_TITLE)) == [second]
+    assert gaps(record, "- %s %s: accepted.\n" % (second, SHARED_TITLE)) == [first]
+
+
+@pytest.mark.parametrize("first, second", COLLIDING)
+def test_d_a_a_fixed_above_line_claims_only_the_colliding_id_it_names(first, second):
+    # Bites on: fixed_above matching a colliding id through the normalised path (one line claiming both).
+    # Axis: I-COLLIDE for fixed_above, which goes through the same matcher.
+    record = rec((first, SHARED_TITLE), (second, SHARED_TITLE))
+    line = "- %s %s fixed-above #43 1a2b3c4: gone.\n" % (first, SHARED_TITLE)
+    claims = la.fixed_above(record, body(line))
+    assert [c["id"] for c in claims] == [first] and claims[0]["layer"] == 43
+
+
+def test_d_a_edges_a_colliding_id_not_carried_is_missing_and_two_written_ids_are_both_named():
+    record = rec(("f-1", SHARED_TITLE), ("f-1.", SHARED_TITLE))
+    # F1: neither id in the acceptance
+    assert gaps(record, "- f-9 %s: accepted.\n" % SHARED_TITLE) == ["f-1", "f-1."]
+    # F2: the only occurrence of f-1 sits inside f-1.
+    assert gaps(record, "- f-1. %s: accepted.\n" % SHARED_TITLE) == ["f-1"]
+    # F3: both written, each with its own occurrence
+    assert gaps(record, "- f-1 and f-1. %s: accepted.\n" % SHARED_TITLE) == []
+    # F4: regex metacharacters are escaped
+    record = rec(("(f-1)", SHARED_TITLE), ("f-1", SHARED_TITLE))
+    assert gaps(record, "- (f-1) %s: accepted.\n" % SHARED_TITLE) == ["f-1"]
+    assert gaps(record, "- (f-1) and f-1 %s: accepted.\n" % SHARED_TITLE) == []
+
+
+@pytest.mark.parametrize("written", ["- (F-1): slow retry, accepted.\n", "- `f-1`: slow retry\n"])
+def test_d_b_a_healthy_id_with_punctuation_around_it_is_still_named(written):
+    # Bites on: the normalised whole-token path being lost for an id that collides with nothing (I-HEALTHY).
+    record = rec(("f-1", SHARED_TITLE))
+    assert gaps(record, written) == []
+    claims = la.fixed_above(record, body(written.rstrip("\n") + " fixed-above #43 1a2b3c4\n"))
+    assert [c["id"] for c in claims] == ["f-1"]
+
+
+@pytest.mark.parametrize("written", ["- f-1 _slow retry_: accepted.\n", "- f-1 __slow retry__: accepted.\n"])
+def test_d_c_markdown_underscore_emphasis_is_ignored_in_a_title(written):
+    # Bites on: the underscore-emphasis step of _title_key.
+    # Axis: I-EMPH: _slow retry_ and __slow retry__ carry the title slow retry.
+    assert gaps(rec(("f-1", SHARED_TITLE)), written) == []
+
+
+def test_d_c_an_underscore_inside_a_word_is_kept():
+    record = rec(("f-1", "the foo_bar flag"))
+    assert gaps(record, "- f-1 the foo_bar flag: ok.\n") == []
+    assert gaps(record, "- f-1 the foo bar flag: ok.\n") == ["f-1"]
+
+
+def test_d_c_a_title_of_underscores_only_is_carried_byte_for_byte():
+    # F6: the title reduces to no words, so the byte-for-byte fallback holds.
+    record = rec(("f-1", "___"))
+    assert gaps(record, "- f-1 ___ accepted.\n") == []
+    assert gaps(record, "- f-1 accepted.\n") == ["f-1"]
+
+
 # --- gap 3: the fixed-above disposition, parsed ----------------------------------------------------
 
 F2_TITLE = "a stale cache entry survives restart"
@@ -222,10 +299,14 @@ def test_g3c_every_failing_claim_is_named(monkeypatch):
     use(monkeypatch, Membership(stack(PR, 43)))
     both = (ACCEPT_ONLY_F1 + "- f-2 %s — fixed-above #99 1a2b3c4: gone.\n" % F2_TITLE)
     twin = {"id": "f-3", "title": "typo in the help text", "outcome": "left-for-owner"}
-    both += "- f-3 typo in the help text — fixed-above #43 2b3c4d5: gone.\n"
-    result = handback(body(both), [record_comment([F1, F2, twin])])
+    third = {"id": "f-4", "title": "a log line is too loud", "outcome": "left-for-owner"}
+    both += "- f-3 typo in the help text — fixed-above #98 2b3c4d5: gone.\n"
+    both += "- f-4 a log line is too loud — fixed-above #43 3c4d5e6: gone.\n"
+    result = handback(body(both), [record_comment([F1, F2, twin, third])])
     assert result["reason"] == "fixed-above-not-in-stack"
-    assert "f-2" in result["detail"] and "#99" in result["detail"] and "f-3" not in result["detail"]
+    # both failing claims, with their layers, are in the one refusal; the valid claim is not
+    assert "f-2" in result["detail"] and "#99" in result["detail"]
+    assert "f-3" in result["detail"] and "#98" in result["detail"] and "f-4" not in result["detail"]
 
 
 @pytest.mark.parametrize("read, reason", [
