@@ -211,3 +211,30 @@ quoted blank line ends the run.
 - **Red:** `2 failed, 16 passed, 20 deselected` — `test_c12_a_quoted_blank_line_ends_a_quoted_raw_run`,
   `test_c12_comment_scan_raw_run_boundaries[quoted-blank]`.
 - **Restore:** inverse Edit. **Green:** `38 passed` (the whole file).
+
+K10's guard is now the depth-aware check below (K11); the quoted-blank tests stay green under it.
+
+## Review fix round 3: the quote depth of a raw run (K11–K12)
+
+Added at the third `apply-fixes` step for the round-3 findings (the auditors and the scoped finder): stripping every
+`>` from a line ended an **unquoted** raw block at a literal `>` line, letting a real comment opener after it pass as
+inline code — a fail-open of the owner-half guard. Same method, probe worktree at `7ce74854`, selector
+`-k "c11 or c12 or c13"`, `git status --porcelain` empty after the last restore; nothing cut or redacted.
+
+The guarded-element set declared before the probes: K11 the run ends only at a line blank inside its starting quote
+depth, K12 a tag line inside a running block keeps that depth.
+
+### K11: blank inside the starting quote depth
+
+- **Neutralization:** `if not _strip_quote_marks(line, raw_depth if raw_html else 0).strip():` became
+  `if not line.strip(" \t>"):` (the round-2 rule).
+- **Red:** `5 failed, 19 passed, 20 deselected` — `test_c13_a_literal_gt_line_inside_an_unquoted_div_keeps_the_owner_half_hidden_body_emptied`
+  (the `body-emptied` guard), `test_c13_a_literal_gt_line_inside_an_unquoted_div_still_refuses_a_bot_write` (the slot
+  path), `test_c13_comment_scan_raw_run_depth[gt-in-unquoted-div]`, `[nested-tag-keeps-depth]`, `[deeper-gt-in-quoted-div]`.
+- **Restore:** inverse Edit. **Green:** `24 passed, 20 deselected`.
+
+### K12: a nested tag line keeps the depth
+
+- **Neutralization:** `elif not raw_html and not dead and …` lost `not raw_html and`.
+- **Red:** `1 failed, 23 passed, 20 deselected` — `test_c13_comment_scan_raw_run_depth[nested-tag-keeps-depth]`.
+- **Restore:** inverse Edit. **Green:** `44 passed` (the whole file).
