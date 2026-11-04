@@ -253,3 +253,41 @@ def test_c11_a_comment_line_does_not_make_the_next_line_raw(tmp_path):
 ], ids=["div-run", "blank-ends-run", "quoted-container-escape", "comment-line-not-raw"])
 def test_c11_comment_scan_reads_raw_html_runs(body, expected):
     assert [row[3] for row in vs._comment_scan(body)] == expected
+
+
+# --- C12: the raw-HTML run starts only at a real tag in live Markdown, and ends at a blank line in its container ----
+
+def test_c12_an_autolink_line_is_not_raw_html_so_a_later_quoted_opener_is_text(tmp_path):
+    body = "<https://example.com>\n" + CODE_SPAN_LINE
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
+
+
+def test_c12_a_tag_inside_a_comment_starts_no_raw_run(tmp_path):
+    body = "<!-- note\n<div>\n-->\n" + CODE_SPAN_LINE
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
+
+
+def test_c12_a_quoted_blank_line_ends_a_quoted_raw_run(tmp_path):
+    body = "> <div>\n> </div>\n>\n> Handles `<!--` literally.\n"
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
+
+
+@pytest.mark.parametrize("body, expected", [
+    ("<https://example.com>\n`<!--`\nnext\n", [False, False, False]),
+    ("<div class=\"x\">\n`<!--`\nnext\n", [False, False, True]),
+    ("<br/>\n`<!--`\nnext\n", [False, False, True]),
+    ("</details>\n`<!--`\nnext\n", [False, False, True]),
+    ("<!-- c\n<div>\n-->\n`<!--`\nnext\n", [False, True, True, False, False]),
+    ("> <div>\n>\n> `<!--`\nnext\n", [False, False, False, False]),
+], ids=["autolink", "tag-with-attribute", "self-closing", "closing-tag", "tag-in-comment", "quoted-blank"])
+def test_c12_comment_scan_raw_run_boundaries(body, expected):
+    assert [row[3] for row in vs._comment_scan(body)] == expected

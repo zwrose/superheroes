@@ -92,9 +92,10 @@ _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6} (.*)$")
 _SUPERHEROES_OPEN_RE = re.compile(r"<!--\s*superheroes:")
 _BUILD_RECORD_WRAPPER_RE = re.compile(r"<summary[^>]*>\s*build\s+record", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
-# a line opening raw HTML (an HTML block) with a tag, under any container marks; over-matching keeps more of the body
-# raw. A comment opener is left to the comment state, which hides through its closer already.
-_RAW_HTML_START_RE = re.compile(r"^[ \t>*+\-0-9.)]*<[A-Za-z/?]")
+# a line opening raw HTML (an HTML block) with a tag, under any container marks: a tag name ended by space, "/", ">"
+# or the line's end, a closing tag, or "<?". An autolink (<https://…>) is not a tag. A comment opener is left to the
+# comment state, which hides through its closer already.
+_RAW_HTML_START_RE = re.compile(r"^[ \t>*+\-0-9.)]*<(?:[A-Za-z][A-Za-z0-9-]*(?=[ \t/>]|$)|/[A-Za-z]|\?)")
 _ACCEPTING_KEY = "what were accepting"
 _BUILDER_HEADING_KEYS = ("whats changing", _ACCEPTING_KEY, "how to see it", "build record", "build brief",
                          "dispatch provenance", "disclosed degradations", "followups for the advisor",
@@ -193,9 +194,11 @@ def _comment_scan(body):
     for line, dead, whole in zip(bare, inert, raw):
         starts_in_comment = in_comment
         # axis: a raw HTML run starts at a line opening with a tag and ends at the next blank line — see bite-proof record i2342_comment_scan_inline_code.md
-        if not line.strip():
+        # axis: a line blank inside its blockquote marks ends the raw run too — see bite-proof record i2342_comment_scan_inline_code.md
+        if not line.strip(" \t>"):
             raw_html = False
-        elif not dead and _RAW_HTML_START_RE.match(line):
+        # axis: a tag inside a comment is comment text and starts no raw run — see bite-proof record i2342_comment_scan_inline_code.md
+        elif not dead and not starts_in_comment and _RAW_HTML_START_RE.match(line):
             raw_html = True
         pos = 0
         while True:
