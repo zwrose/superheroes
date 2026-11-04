@@ -222,11 +222,8 @@ def _live_heading_offsets(body):
 
 
 def _heading_key(text):
-    """A heading's text lower-cased, U+2019 as ``'``, reduced to letters, digits and single spaces.
-
-    Any whitespace (a tab included) separates words, so ``Build<TAB>record`` keys as ``build record``."""
-    # axis: a tab inside a heading separates its words, so a tab-separated builder heading is still a builder sign — see bite-proof record i2352_vet_slot_builder_text.md
-    kept = "".join(ch for ch in text.lower().replace("’", "'") if ch.isalnum() or ch.isspace())
+    """A heading's text lower-cased, U+2019 as ``'``, reduced to letters, digits and single spaces."""
+    kept = "".join(ch for ch in text.lower().replace("’", "'") if ch.isalnum() or ch == " ")
     return " ".join(kept.split())
 
 
@@ -352,7 +349,8 @@ def no_build_record(body):
         # axis: headings below the advisor-vet marker are scanned too — see bite-proof record i2342_vet_slot_no_build_record.md
         heading = _ANY_HEADING_RE.match(line)
         if heading:
-            key = _heading_key(heading.group(1))
+            # axis: a tab inside a heading separates its words here, so a tab-separated builder heading is still a builder sign — see bite-proof record i2352_vet_slot_builder_text.md
+            key = _heading_key(" ".join(heading.group(1).split()))
             # axis: a builder-section heading is a builder sign, in a quote, list, fence or comment too — see bite-proof record i2342_vet_slot_no_build_record.md
             if key.startswith(_BUILDER_HEADING_KEYS):
                 # axis: What we're accepting below the live advisor-vet marker is the advisor's slot, not a builder sign — see bite-proof record i2342_vet_slot_no_build_record.md
