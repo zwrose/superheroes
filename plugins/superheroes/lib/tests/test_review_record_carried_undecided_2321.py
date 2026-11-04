@@ -146,7 +146,7 @@ def _later(tmp_path, fake, session, body, checks):
 
 def _setup(tmp_path, findings):
     """The control (the later session with no earlier record reads reviewed), then the abandoned first record."""
-    session, runs, body = _reviewed_second_session(tmp_path)
+    session, runs, body = _reviewed_second_session(tmp_path, session_id="s-2")  # a later session, not the abandoned one's own
     control = Fake(runs=runs)
     control_out = rs.write_from_session(session, put_extras(tmp_path, extras(**body)), str(tmp_path), control.readers())
     assert control_out["ok"] and control_out["status"] == "reviewed" and control_out["whatIsMissing"] == [], control_out
