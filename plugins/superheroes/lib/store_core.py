@@ -388,21 +388,25 @@ def get_worktree_gitdir(cwd, run=None):
     return _terminal_gitdir_outcome(res, cwd, "rev-parse --absolute-git-dir")
 
 
-def get_gitdir(cwd):
+def get_gitdir(cwd, env=None):
     """realpath of the git-common-dir (shared by all worktrees).
 
     Three-step chain mirrors ``control_plane._common_git_dir``: absolute common-dir,
     bare common-dir (joining relative output onto ``cwd``), then absolute-git-dir.
     On total failure, classifies the terminal result fail-closed (issue #742).
 
+    ``env`` (default: the inherited environment) is the git environment every call runs under,
+    so a caller that scrubs repository-routing variables gets the same answer its own git sees.
+
     Per-worktree callers want ``get_worktree_gitdir`` instead — this answer is SHARED by every
     linked worktree of the repository.
     """
-    res = run_git_result(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
+    env_kw = {} if env is None else {"env": env}
+    res = run_git_result(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir", **env_kw)
     if res.status == GIT_OK and res.out:
         return os.path.realpath(res.out)
 
-    res = run_git_result(cwd, "rev-parse", "--git-common-dir")
+    res = run_git_result(cwd, "rev-parse", "--git-common-dir", **env_kw)
     if res.status == GIT_OK and res.out:
         out = res.out if os.path.isabs(res.out) else os.path.join(cwd, res.out)
         resolved = os.path.realpath(out)
@@ -413,7 +417,7 @@ def get_gitdir(cwd):
                 git_status=GIT_DECLINED)
         return resolved
 
-    res = run_git_result(cwd, "rev-parse", "--absolute-git-dir")
+    res = run_git_result(cwd, "rev-parse", "--absolute-git-dir", **env_kw)
     if res.status == GIT_OK and res.out:
         return os.path.realpath(res.out)
 
