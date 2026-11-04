@@ -133,11 +133,18 @@ Contract:
   is not a finite number is ignored, and an outcome time that is not finite makes the lane not dormant.
   A dormant lane reports its newest unanswered ending (handback, stop, park) and its unanswered builder
   notes created at or after the basis, and no comment from before it; it has no close. It is read from
-  the basis, but never from more than DORMANT_LOOKBACK_SECONDS (24 hours) before the read. A dormant lane
+  the basis, but no dormant lane pulls the shared repository-wide comments read further back than
+  DORMANT_LOOKBACK_SECONDS (24 hours) before the read. A dormant lane whose basis is older than that is read
+  from its own issue from its basis (one issue-scoped read per tick, paginated to the same page cap), and
+  its comments are merged by id keeping the newest revision. A failed or incomplete per-lane read names
+  that lane alone in unreadIssues; a read skipped for budget names it only when the tick made a comments
+  request; a tick that made no request names no lane; builder-note-unavailable is recorded in every
+  case. A dormant lane
   is active when its newest activity at or after the basis is newer than its newest ending at or after
   the basis, or it has activity and no ending. Activity is a builder note (answered or not), or its
   progress comment updated more than PARK_SUPERSESSION_GRACE_SECONDS after the basis whose phase reads
-  resumed and has no word beginning hand unless one begins resum. Only an active dormant lane counts for
+  resumed and has no word naming a handback (beginning handback, handed, handover or handoff) unless one
+  begins resum. Only an active dormant lane counts for
   staleness (its progress age floored at the basis), account limits and `cloudLanes` (where it carries
   `reopenedAt`, the basis, and `reopenedBy: "builder-activity"`); no dormant lane is in the activity
   read. A tick that made no comments request, and the deadline timer, decide active from the stored
@@ -208,9 +215,10 @@ _CLOUD_ACTIVITY_QUERY_TAIL = "} }"
 # many seconds after the park, whose phase reads resumed, shows the lane resumed.
 PARK_SUPERSESSION_GRACE_SECONDS = 300
 
-# A dormant lane (a terminal cloud lane the watch keeps after its recorded outcome) is read from its basis,
-# but never from further back than this many seconds before the read: GitHub's `since` filters by
-# `updated_at`, so a progress comment edited inside the bound is in the read however old it was created.
+# A dormant lane (a terminal cloud lane the watch keeps after its recorded outcome) never pulls the shared
+# repository-wide comments read further back than this many seconds before the read: GitHub's `since`
+# filters by `updated_at`, so a progress comment edited inside the bound is in the read however old it
+# was created. A dormant lane whose basis is older than the bound is read from its own issue instead.
 DORMANT_LOOKBACK_SECONDS = 86400
 
 BUILDER_NOTES_ANSWERED_NAME = "builder-notes-answered.json"
@@ -1655,7 +1663,35 @@ def _read_issue_comments(
     if slug is None:
         return False, []
     url = "repos/%s/issues/comments?since=%s&per_page=100" % (slug, since)
-    stored = note_state[0]
+    return _read_comment_pages(url, repo_root, deadline, monotonic, gh_run, env, note_state)
+
+
+def _read_lane_comments(
+    repo_root, issue, basis, deadline, monotonic, gh_run, env, known_slug, slug_cell,
+):
+    """(state, comments) of one issue's comments updated at or after `basis`: the per-lane read of an old
+    dormant lane. state True read, False unreadable, None no request made. Never raises. It carries no
+    ETag state: nothing is sent conditionally and nothing is stored."""
+    if deadline - monotonic() <= 0:
+        return None, []
+    try:
+        since = datetime.fromtimestamp(basis, tz=timezone.utc).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
+    except (ValueError, OverflowError, OSError, TypeError):
+        return False, []
+    slug = _slug_for_read(repo_root, deadline, monotonic, gh_run, env, known_slug, slug_cell)
+    if slug is None:
+        return False, []
+    url = "repos/%s/issues/%d/comments?since=%s&per_page=100" % (slug, issue, since)
+    return _read_comment_pages(url, repo_root, deadline, monotonic, gh_run, env, None)
+
+
+def _read_comment_pages(url, repo_root, deadline, monotonic, gh_run, env, note_state):
+    """(state, comments) over the pages of one comments URL, at most _NOTE_COMMENTS_MAX_PAGES of them.
+
+    `note_state` is a one-slot ETag state, or None for a read that is neither conditional nor stored.
+    state True read, False unreadable (the comments already read are kept), None no request made.
+    """
+    stored = note_state[0] if note_state is not None else None
     # A stored read answers only for the same URL: another `since` is another list.
     if stored is not None and stored[0] != url:
         stored = None
@@ -1699,7 +1735,8 @@ def _read_issue_comments(
                 etag = (
                     headers.get("etag") if page == 1 and len(comments) < 100 else None
                 )
-                note_state[0] = (url, etag, comments)
+                if note_state is not None:
+                    note_state[0] = (url, etag, comments)
                 return True, comments
         return False, comments
     except Exception:
@@ -1727,8 +1764,9 @@ def _note_cutoff(info):
 
 
 def _read_cutoff(info):
-    """The earliest comment the read needs for a lane: a reopened lane's fix order, a dormant lane's basis
-    (never more than DORMANT_LOOKBACK_SECONDS back), else its note cutoff."""
+    """The earliest comment the shared read needs for a lane: a reopened lane's fix order, a dormant lane's basis
+    (never more than DORMANT_LOOKBACK_SECONDS back), else its note cutoff. It bounds the shared read only: a
+    dormant lane whose basis is older than the bound is read from its own issue."""
     if "reopenedAt" in info:
         return info["reopenedAt"]
     if "dormantSince" in info:
@@ -1831,6 +1869,7 @@ def _cloud_note_times(comments, watched):
         if lane is None:
             continue
         lid, _number, created = lane
+        # axis: a lane's newest note, not its oldest, supersedes a park — see bite-proof record i2333_old_resumed_lane.md
         if lid not in newest or created > newest[lid]:
             newest[lid] = created
     return newest
@@ -1868,8 +1907,8 @@ def _dormant_active(info, progress_entry, note_time, ending_time):
 
     Activity is a builder note created at or after the basis (answered or not; `note_time` is the lane's newest
     note's created epoch, else None), or the lane's progress comment (`progress_entry`, else None) updated more
-    than PARK_SUPERSESSION_GRACE_SECONDS after the basis whose phase reads resumed and has no word beginning
-    hand unless one begins resum. `ending_time` is the created epoch of the lane's newest ending comment, else
+    than PARK_SUPERSESSION_GRACE_SECONDS after the basis whose phase reads resumed and has no word naming a
+    handback (beginning handback, handed, handover or handoff) unless one begins resum. `ending_time` is the created epoch of the lane's newest ending comment, else
     None. A progress edit inside the grace, or one that reads parked, stopped or handed back, is no activity.
     """
     basis = info["dormantSince"]
@@ -2111,12 +2150,61 @@ def _apply_cloud_progress(stale_cloud_launches, live_lanes, progress, now, activ
     return sorted(stale, key=lambda entry: entry["launchId"])
 
 
+def _comment_revision(comment):
+    """The epoch a comment was last changed: its updated_at, else its created_at, else None."""
+    for key in ("updated_at", "created_at"):
+        parsed = _parse_activity_time(comment.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _merge_comments(shared, lane_reads):
+    """The shared read's comments plus every per-lane read's, one copy per comment id.
+
+    A repeated id keeps the copy changed later (`_comment_revision`); on a tie, or when neither copy's
+    time is readable (one readable beats one not), the per-lane copy. An element that is not a dict or has no valid id passes through.
+    """
+    merged = []
+    position = {}
+    for comments in [shared] + list(lane_reads):
+        is_lane = comments is not shared
+        for comment in comments:
+            comment_id = comment.get("id") if isinstance(comment, dict) else None
+            if not _valid_positive_int(comment_id):
+                merged.append(comment)
+                continue
+            if comment_id not in position:
+                position[comment_id] = len(merged)
+                merged.append(comment)
+                continue
+            kept = merged[position[comment_id]]
+            kept_time, new_time = _comment_revision(kept), _comment_revision(comment)
+            # axis: a repeated comment id keeps the newest revision, so an edit the per-lane read sees is not shadowed by an older copy — see bite-proof record i2333_old_resumed_lane.md
+            if kept_time is None and new_time is None:
+                replace = is_lane
+            elif kept_time is None or new_time is None:
+                replace = kept_time is None
+            else:
+                replace = new_time > kept_time or (new_time == kept_time and is_lane)
+            if replace:
+                merged[position[comment_id]] = comment
+    return merged
+
+
 def _evaluate_cloud_comments(
     repo_root, live_lanes, *, deadline, env, gh_run, monotonic, degraded,
     note_state, known_slug=None, slug_cell=None, progress_out=None, closed_out=None, unread_out=None,
     known_closes=None, active_out=None,
 ):
-    """(notes, cloud_terminals) on live started cloud lanes' issues, from one comments read.
+    """(notes, cloud_terminals) on live started cloud lanes' issues, from one shared comments read.
+
+    A dormant lane whose basis is older than DORMANT_LOOKBACK_SECONDS is not in the shared read: it gets one
+    issue-scoped read of its own per tick, from its basis, in launch-id order after the shared read. Its
+    comments are merged with the shared ones by id (newest revision kept). A failed or incomplete per-lane
+    read names that lane alone in `unread_out`; a read skipped for budget names it only when the tick made a
+    comments request; a tick that made no request names no lane. builder-note-unavailable is recorded in
+    every case.
 
     `active_out` is a one-slot list: when a request was made (complete or partial) its slot is set to the
     set of dormant lanes `_dormant_active` finds active in what was observed, possibly empty; on every
@@ -2144,25 +2232,59 @@ def _evaluate_cloud_comments(
         return [], []
     if note_state is None:
         note_state = [None]
-    try:
-        since = datetime.fromtimestamp(
-            min(_read_cutoff(info) for info in watched.values()), tz=timezone.utc,
-        ).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
-    except (ValueError, OverflowError, OSError):
-        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+    now = time.time()
+    # An old dormant lane's basis is further back than the shared read may reach: it is read from its own issue.
+    old_dormant = {
+        lid: info for lid, info in watched.items()
+        if "dormantSince" in info and _finite_number(info["dormantSince"])
+        and info["dormantSince"] < now - DORMANT_LOOKBACK_SECONDS
+    }
+    # axis: no dormant lane pulls the shared read further back than DORMANT_LOOKBACK_SECONDS — see bite-proof record i2333_old_resumed_lane.md
+    shared = {lid: info for lid, info in watched.items() if lid not in old_dormant}
+    requested = False
+    state, comments = True, []
+    if shared:
+        try:
+            since = datetime.fromtimestamp(
+                min(_read_cutoff(info) for info in shared.values()), tz=timezone.utc,
+            ).strftime(_CLOUD_ACTIVITY_TIME_FORMAT)
+        except (ValueError, OverflowError, OSError):
+            degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+            # No per-lane read follows, so no watched lane, old dormant ones included, goes unread undisclosed.
+            _record_unread(unread_out, watched)
+            return [], []
+        state, comments = _read_issue_comments(
+            repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state, slug_cell,
+        )
+        requested = state is not None
+        if state is None:
+            # A watched channel that was never sampled for lack of budget is disclosed.
+            degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+            if not old_dormant:
+                return [], []
+        elif not state:
+            # Disclose the incomplete read, but still evaluate whatever was observed.
+            degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+            # axis: only a request that came back partial names the issues it left unread, never a tick that made none — see bite-proof record wo_2148_fix_order.md
+            _record_unread(unread_out, shared)
+    lane_reads = []
+    # axis: an old dormant lane is read from its own issue, so its handback is seen however old its basis — see bite-proof record i2333_old_resumed_lane.md
+    for lid in sorted(old_dormant):
+        info = old_dormant[lid]
+        lane_state, lane_comments = _read_lane_comments(
+            repo_root, info["issue"], info["dormantSince"], deadline, monotonic, gh_run, env,
+            known_slug, slug_cell,
+        )
+        requested = requested or lane_state is not None
+        if lane_state is not True:
+            degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+            # axis: a failed or partial per-lane read, or one skipped for budget after this tick made a request, names its lane; a tick that made no request names none (the disclosure is kept either way) — see bite-proof record i2333_old_resumed_lane.md
+            if unread_out is not None and (lane_state is False or requested):
+                unread_out[lid] = info["issue"]
+        lane_reads.append(lane_comments)
+    comments = _merge_comments(comments, lane_reads)
+    if not requested:
         return [], []
-    state, comments = _read_issue_comments(
-        repo_root, since, deadline, monotonic, gh_run, env, known_slug, note_state, slug_cell,
-    )
-    if state is None:
-        # A watched channel that was never sampled for lack of budget is disclosed.
-        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-        return [], []
-    if not state:
-        # Disclose the incomplete read, but still evaluate whatever was observed.
-        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-        # axis: only a request that came back partial names the issues it left unread, never a tick that made none — see bite-proof record wo_2148_fix_order.md
-        _record_unread(unread_out, watched)
     observed_progress = _cloud_progress(comments, watched)
     if isinstance(progress_out, list) and progress_out:
         progress_out[0] = observed_progress
@@ -2196,7 +2318,7 @@ def _evaluate_cloud_comments(
 
 
 def _record_unread(unread_out, watched):
-    # axis: a comments read that did not complete names every watched issue it may have left unread — see bite-proof record wo_2148_fix_order.md
+    # axis: a comments read that did not complete, and the shared-`since` failure that makes no read at all (no per-lane read follows it), names every watched issue it may have left unread — see bite-proof records wo_2148_fix_order.md and i2333_old_resumed_lane.md
     if unread_out is not None:
         unread_out.update({lid: info["issue"] for lid, info in watched.items()})
 
