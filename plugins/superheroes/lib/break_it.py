@@ -6,8 +6,9 @@ Stdlib only. A break-it test runs **only** from the root of the session's own wo
 the head and no tracked file may be modified or staged, else the run is ``not-run`` and nothing is
 written. The runner writes nowhere but the working copy (its own git directory included) and the
 session folder: the test file it writes, the run's temporary and cache folders (``TMPDIR``, ``TMP``,
-``TEMP`` and ``XDG_CACHE_HOME`` point at a per-run folder in the session folder, or in the git
-directory's ``superheroes`` folder when no session folder is given) and nothing else. After the run, in
+``TEMP`` and ``XDG_CACHE_HOME`` point at a per-run folder in the session folder, or in the system
+temp folder when no session folder is given, and only when git proves that folder is outside every repository) and
+nothing else. After the run, in
 a ``finally``, it restores the working copy to what it was: the test file and the directories the write
 made, the branch HEAD points at, HEAD, the local git config, the index, every tracked file and every
 non-ignored untracked file the test added; a restore that fails is recorded ``working-copy-restore-failed``.
@@ -32,6 +33,7 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import uuid
@@ -1396,24 +1398,27 @@ def _restore(root, snap, ctx):
 
 def _scratch_folder(root, scratch):
     """``(folder base, None)`` for the per-run folders, or ``(None, reason)``: ``scratch`` when given and an existing
-    directory, else the ``superheroes`` folder of the working copy's git directory."""
+    directory, else the system temp folder, and only when git, run there, answers "not a git repository" (so the
+    folder is provably outside every repository); any other answer is ``scratch-unresolved``. ``root`` is unused:
+    the default folder no longer depends on the working copy."""
     if scratch is not None:
         try:
             scratch = os.path.abspath(os.fspath(scratch))
         except (TypeError, ValueError):
             return None, "scratch-unresolved"
         return (scratch, None) if os.path.isdir(scratch) else (None, "scratch-unresolved")
-    # imported late: break_it's import closure is pinned (test_payload_contracts_layering)
-    import store_core
-
-    def run(cwd, *args):
-        return store_core.run_git_result(cwd, *args, env=_clean_env())
-
     try:
-        gitdir = store_core.get_worktree_gitdir(root, run=run)
-    except store_core.RepoRootUnavailable as exc:
-        raise _GitFailed("git-dir: %s" % exc)
-    return os.path.join(gitdir, "superheroes"), None
+        base = os.path.abspath(tempfile.gettempdir())
+    except (OSError, ValueError):
+        return None, "scratch-unresolved"
+    try:
+        done = _git(base, "rev-parse", "--show-toplevel")
+    except (OSError, subprocess.TimeoutExpired):
+        return None, "scratch-unresolved"
+    # axis: the system temp folder is used only when git proves it lies outside every repository (a pytest run there refuses a base temp git does not answer "not a git repository" for) — see bite-proof record wo_a_2351_break_it_system_temp
+    if done.returncode != 0 and "not a git repository" in (done.stderr or b"").decode("utf-8", errors="replace"):
+        return base, None
+    return None, "scratch-unresolved"
 
 
 def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, interpreter=None, scratch=None):
@@ -1424,10 +1429,7 @@ def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, inte
     pinned, reason, detail = _precheck(root, head)
     if reason:
         return rec(OUTCOME_NOT_RUN, reason, output=detail)
-    try:
-        base, reason = _scratch_folder(root, scratch)
-    except _GitFailed as exc:
-        return rec(OUTCOME_NOT_RUN, "working-copy-unreadable", output=str(exc))
+    base, reason = _scratch_folder(root, scratch)
     if reason:
         return rec(OUTCOME_NOT_RUN, reason)
     try:
@@ -1439,7 +1441,9 @@ def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, inte
     result = None
     try:
         try:
-            result = _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx)
+            # axis: the default per-run folder, which lies in the shared system temp folder, is private (0700); a caller-given session folder keeps today's mkdir — see bite-proof record wo_a_2351_break_it_system_temp
+            result = _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx,
+                              mode=0o700 if scratch is None else None)
         except Exception as exc:  # the restore below still runs; the caller decides from the record
             result = rec(OUTCOME_NOT_RUN, "run-error", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     finally:
@@ -1458,11 +1462,15 @@ def _run_in_working_copy(repo_root, head, block, argv, env, timeout, write, inte
     return result
 
 
-def _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx):
-    """Write the block into ``root``, run the interpreter probe and the test there, and return the record."""
+def _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx, mode=None):
+    """Write the block into ``root``, run the interpreter probe and the test there, and return the record.
+    ``mode`` is the per-run folder's permission bits; ``None`` makes it with a plain ``os.mkdir``."""
     try:
         os.makedirs(os.path.dirname(tmp), exist_ok=True)
-        os.mkdir(tmp)
+        if mode is None:
+            os.mkdir(tmp)
+        else:
+            os.mkdir(tmp, mode)
     except OSError as exc:
         return rec(OUTCOME_NOT_RUN, "scratch-unresolved", output=str(exc)[-OUTPUT_TAIL_BYTES:])
     # axis: the run's temporary and cache folders are routed into the per-run folder, so nothing the test writes through them lands elsewhere — see bite-proof record wo_a_2210_break_it_working_copy
@@ -1513,7 +1521,8 @@ def _execute(root, rec, block, argv, env, timeout, write, interpreter, tmp, ctx)
 def run_one(repo_root, head, block, *, timeout=DEFAULT_TIMEOUT, write=True, interpreter=_UNSET, scratch=None):
     """Run one parsed block from the root of the session's own working copy, ``repo_root``, at ``head``, and put the
     working copy back as it was. Always returns a record. ``scratch`` is the session folder that holds the run's
-    temporary folder; left ``None``, that folder is made in the working copy's git directory.
+    temporary folder; left ``None``, that folder is made, private (``0700``), in the system temp folder, which must be
+    provably outside every repository, else the run is not-run ``scratch-unresolved``.
     Given ``interpreter`` (the project's launcher, or ``None`` when it could not be resolved), a
     command whose program is a Python interpreter runs under that launcher, and is not run when
     there is none or it does not start. A ``list`` is the calibrated launcher prefix: it also runs a
