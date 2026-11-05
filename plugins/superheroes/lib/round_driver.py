@@ -152,6 +152,8 @@ EXTRA_AUDIT_CMD = "extra-audit"
 BREAK_IT_CHANGE_CMD = "break-it-change"
 # The test role's original block content, kept on a finding when `break-it-change` first rewrites it.
 REVIEWER_TEST_FIELD = "reviewerTest"
+# Stamped on a round-level break-it run whose finding the verifier refuted in that round (the one writer is `_fold_verifiers`).
+BREAK_IT_REFUTED_FIELD = "refutedProbe"
 RULING_KINDS =frozenset(("out-of-scope", "guidance"))
 RULING_FILE_UNREADABLE = "ruling-file-unreadable"
 RULING_FILE_SHAPE = "ruling-file-shape"
@@ -4619,6 +4621,10 @@ def _fold_verifiers(state, config, artifact, session_dir=None):
                 # axis: the refuted ledger row carries the wrong grade that closed it, written before the disposition — see bite-proof record c1l7_wo_b_verifier_grade
                 _record_grade(state, key, d.get(GRADE_FIELD))
                 _record_disposition(state, key, "refuted", state["round"], refutedReason=reason)
+                # axis: a break-it run of a finding the verifier refuted this round is stamped, current round only, so the kept check can tell the probe's uncommitted test from a fixed finding's real one — see bite-proof record wo_a_2350_refuted_probe
+                for probe in ((state.get("rounds") or {}).get(str(state["round"])) or {}).get("breakItRuns") or []:
+                    if isinstance(probe, dict) and probe.get("findingKey") == key:
+                        probe[BREAK_IT_REFUTED_FIELD] = True
     state["_refuted"] = refuted  # this round's refuted findings (staged ids): they carry a repeat mark, never a merge
     for n in applied["notExecuted"]:
         _decision(state, "verifier-not-executed", n.get("reason"))
@@ -8303,14 +8309,16 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
         _hand_back_unknown_fix_surface(
             state, "%s: baseline diff is not text" % DELTA_BASELINE_ABSENT)
         return
+    # axis: a section the reviewed and head diffs hold byte-for-byte never reaches the hunk parser, so an untouched binary or rename cannot hand the PR back, while a changed one still does — see bite-proof record delta_round_unchanged_sections_2349
+    cut_reviewed, cut_head = _changed_sections_only(reviewed, state.get("headDiff"))
     split = delta_surface.split_fix_surface(
-        reviewed, state.get("headDiff"), state.get("fixBatch") or [])
+        cut_reviewed, cut_head, state.get("fixBatch") or [])
     if split.get("unknown"):
         _hand_back_unknown_fix_surface(state, "delta surface unknown")
         return
     # The scoped finder reads the fixes' own diff and nothing else of the change; a delta that cannot
     # be worked out for some file leaves the whole round's surface unknown, never silently empty.
-    fix_delta = _fix_delta_surface(state, reviewed, state.get("headDiff"))
+    fix_delta = _fix_delta_surface(state, cut_reviewed, cut_head)
     if fix_delta is None:
         _hand_back_unknown_fix_surface(state, "the fixes' own diff could not be computed for every file")
         return
@@ -10509,6 +10517,16 @@ def _round_number(rkey):
     return int(rkey) if str(rkey).isdigit() else 0
 
 
+def _latest_restore_round(state, key):
+    """The round of the finding's latest `testRestore` entry, or None."""
+    restored = None
+    for rkey in sorted(state.get("rounds") or {}, key=_round_number):
+        for entry in (state["rounds"][rkey].get("testRestore") or []):
+            if isinstance(entry, dict) and entry.get("findingKey") == key:
+                restored = _round_number(rkey)
+    return restored
+
+
 def _restored_run_record(state, key, run, run_round, row):
     """The record the kept check expects for the finding ``key`` whose latest run is ``run`` (in round
     ``run_round``). When the finding's latest `testRestore` entry (a restore or a landed correction;
@@ -10516,11 +10534,7 @@ def _restored_run_record(state, key, run, run_round, row):
     restore put back, not the one the run saw: the record's bytes are then the carried block on the
     finding's ledger ``row``, which `_sync_reviewer_test` rewrote. A restore is no run, so the run
     record stands otherwise, and so it does when the row carries no readable block (fail closed)."""
-    restored = None
-    for rkey in sorted(state.get("rounds") or {}, key=_round_number):
-        for entry in (state["rounds"][rkey].get("testRestore") or []):
-            if isinstance(entry, dict) and entry.get("findingKey") == key:
-                restored = _round_number(rkey)
+    restored = _latest_restore_round(state, key)
     if restored is None or restored < run_round:
         return run
     block = break_it.carried_block(row)[0]
@@ -10570,14 +10584,12 @@ def _break_it_kept_step(state, config):
             _record_round(state, "breakItKept", exempt_rows)
         _park_cannot_certify(state, "break-it test not kept: the earlier session's test for %s was lost and no reviewer attached it again" % lost[0])
         return True
-    latest, latest_round = {}, {}
+    seen = []
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
-            # axis: the latest run per finding key wins, passed ones included, by round order and then list order, so a changed test's run is the one checked
             if isinstance(run, dict) and isinstance(run.get("findingKey"), str) and run.get("findingKey"):
-                latest[run["findingKey"]] = run
-                latest_round[run["findingKey"]] = _round_number(rkey)
-    if not latest:
+                seen.append((run["findingKey"], run, _round_number(rkey)))
+    if not seen:
         if exempt_rows:
             _record_round(state, "breakItKept", exempt_rows)
         return False
@@ -10585,9 +10597,27 @@ def _break_it_kept_step(state, config):
     if fault is not None:
         _park_cannot_certify(state, "break-it test not kept: disposition ledger fault (%s)" % fault)
         return True
+    latest, latest_round, skipped = {}, {}, {}
+    for key, run, run_round in seen:
+        held = by_key.get(key)
+        # axis: a refuted probe's run is never the record the kept check runs while the finding's fixed disposition stands on a kept repeat; any other run, stamped or not, is checked as before — see bite-proof record wo_a_2350_refuted_probe
+        # axis: the skip needs the ledger row's repeatKept, so a newer real disposition (which pops it) puts the stamped run back under the check — see bite-proof record wo_a_2350_refuted_probe
+        if (run.get(BREAK_IT_REFUTED_FIELD) is True and isinstance(held, dict)
+                and isinstance(held.get("repeatKept"), dict)):
+            skipped[key] = (run, run_round)
+            continue
+        # axis: the latest run per finding key wins, passed ones included, by round order and then list order, so a changed test's run is the one checked
+        latest[run["findingKey"]] = run
+        latest_round[run["findingKey"]] = run_round
     head = config.get(FIX_FOLD_HEAD_KEY) or config.get("headSha")
     rows, failed = list(exempt_rows), []
-    for key, run in latest.items():
+    for key in list(latest) + [k for k in skipped if k not in latest]:
+        run = latest.get(key)
+        if run is None:
+            # axis: a key whose every run was a refuted probe's owes no kept check — its fixed disposition is the earlier finding's, kept; no check_kept runs — see bite-proof record wo_a_2350_refuted_probe
+            rows.append({"findingKey": key, "path": skipped[key][0].get("path"), "outcome": "not-required",
+                         "reason": "refuted-probe"})
+            continue
         entry = by_key.get(key)
         disposition = entry.get("disposition") if isinstance(entry, dict) else None
         if disposition is None:
@@ -10608,6 +10638,15 @@ def _break_it_kept_step(state, config):
             rows.append({"findingKey": key, "path": run.get("path"), "outcome": "ruled-out-of-scope",
                          "reason": ruled.get("reason"), "ruledBy": ruled["provenance"]["ruledBy"],
                          "ruledAt": ruled["provenance"]["ruledAt"]})
+            continue
+        restore_round = _latest_restore_round(state, key)
+        # axis: a refuted probe's raise after the restore re-seeds the carried block the restored bytes are read from, so the check fails closed instead of reading them — see bite-proof record wo_a_2350_refuted_probe
+        if (key in skipped and restore_round is not None and restore_round >= latest_round[key]
+                and skipped[key][1] > restore_round):
+            row = {"findingKey": key, "path": run.get("path"), "outcome": "unresolved",
+                   "reason": "restore-shadowed-by-refuted-probe", "run": None}
+            rows.append(row)
+            failed.append(row)
             continue
         got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head,
                                   _restored_run_record(state, key, run, latest_round[key], entry),

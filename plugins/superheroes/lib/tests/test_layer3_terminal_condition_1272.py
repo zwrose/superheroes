@@ -508,6 +508,10 @@ def _assert_delta_baseline_refusal(state):
 
 
 _THIRD_DIFF = _mk_diff([("h.py", "@@ -1 +1 @@\n-third\n+third-edited\n")])
+_FIXED_HEAD_DIFF = (
+    "diff --git a/f.py b/f.py\nindex 2..3 100644\n--- a/f.py\n+++ b/f.py\n"
+    "@@ -1 +1 @@\n-new base\n+head line fixed\n"
+)
 
 
 def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
@@ -523,7 +527,8 @@ def test_l3_a3_delta_split_reads_per_round_reviewed_diff(monkeypatch):
     state["round"] = 2
     state["deltaBaseline"] = {"round": 2, "diff": _HEAD_DIFF}
     state["reviewedDiff"] = _THIRD_DIFF
-    state["headDiff"] = _HEAD_DIFF
+    # axis: the head differs from the baseline, so the section-cut keeps the baseline's f.py section
+    state["headDiff"] = _FIXED_HEAD_DIFF
     state["fixBatch"] = _fix_batch()
     RD._enter_delta_round(state, _cfg(diff=_BASE_DIFF))
     assert captured["reviewed"] == _HEAD_DIFF
