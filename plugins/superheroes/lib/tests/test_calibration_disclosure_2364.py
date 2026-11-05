@@ -273,6 +273,13 @@ def test_a_custom_seat_name_with_an_underscore_matches(text):
     assert seats(cd.contradicted(record, bullet(text))) == [["test_role (round 1)"]]
 
 
+@pytest.mark.parametrize("text", ["test_role (round 1) lacked core.md.", "`test_role` (round 1) lacked core.md."])
+def test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat(text):
+    record = rec([row("test_role (round 1)", cal(core="unknown", crew="unknown", claude="unknown")),
+                  row("code-reviewer (round 1)")])
+    assert cd.contradicted(record, bullet(text)) == []
+
+
 def test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files():
     record = rec([row(CODE1, cal(core="read", crew="read", claude="read")),
                   row(SEC1, cal(core="read", crew="unknown", claude="read"))])

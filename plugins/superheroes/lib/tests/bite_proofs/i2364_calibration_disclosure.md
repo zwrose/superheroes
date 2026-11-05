@@ -63,8 +63,9 @@ Disclosures:
   unavailable.") stays green under it, because the claim is the first sentence alone and names no seat at all.
 - **Seat terms and the text share one normal form, on the advisor's 06:04Z ruling.** `_normalise` also collapses every
   whitespace run to one space, and `_terms` stores each seat term through the same function. Entry 10 proves the
-  collapse, entry 11 the term normalisation, and entry 8 was re-run on the final body. **Entry 11 did not go red and is
-  recorded as unproven** (see it below); the order's fixtures were not changed to force a red.
+  collapse, entry 11 the term normalisation, and entry 8 was re-run on the final body. **Entry 11 is proven by
+  `test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat`** (see it below); the first fixture for it did not
+  bite, and this test replaced it as the proof.
 - The claim word also holds `uncalibrat(e|es|ed|ing|ion|ions)`, which the order's word list did not name: "ran
   uncalibrated" holds no other negation or removal word, and the order's text list expects it to refuse.
 
@@ -471,29 +472,42 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
   text, so a seat name with an emphasis character inside it (a custom seat name with `_`) still matches in full.
 - **Neutralization:** `key = _normalise(term).strip().lower()` became `key = term.lower()` (the stored term is the raw
   lowercased term again).
-- **Raw red** (`-k "custom_seat_name or formatted_seat_name"`, verbatim minus the uv warning line): **no red.** The
-  detector did not go red under this neutralization:
+- **Proving test:** `test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat` (two texts: the plain and the
+  backticked `test_role`). The record holds `test_role (round 1)` graded all `unknown` and `code-reviewer (round 1)`
+  graded all `read`. Named in full, the claim narrows to the test seat, which is `unknown` and so not contradicted, and
+  the result is `[]`. If the name fails to match, the claim widens to every seat that ran and the `read` code seat is
+  listed. The earlier `test_a_custom_seat_name_with_an_underscore_matches` did not discriminate (its widening path gave
+  the same answer); this test does.
+- **Raw red** (`-k custom_seat_name_with_an_underscore_narrows`, verbatim minus the uv warning line):
 
 ```
-.....                                                                    [100%]
-5 passed, 99 deselected in 0.31s
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat[test_role (round 1) lacked core.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:280: in test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat
+    assert cd.contradicted(record, bullet(text)) == []
+E   AssertionError: assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': 'test_role (round 1) lacked core.md.', 'seats': [{'name': 'code-reviewer (round 1)', 'line': 'code-reviewer (round 1): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+_ test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat[`test_role` (round 1) lacked core.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:280: in test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat
+    assert cd.contradicted(record, bullet(text)) == []
+E   AssertionError: assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': '`test_role` (round 1) lacked core.md.', 'seats': [{'name': 'code-reviewer (round 1)', 'line': 'code-reviewer (round 1): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat[test_role (round 1) lacked core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat[`test_role` (round 1) lacked core.md.]
+2 failed, 104 deselected in 0.34s
 ```
 
-- **Disclosure: entry 11 is unproven (the order's red did not bite).** Two reasons, both about the fixtures the order
-  named, neither relaxed or replaced. (a) The three `formatted_seat_name` texts use `code-reviewer`, whose raw term has
-  no emphasis character; once entry 10's collapse is in place, the normalised text already holds the raw row name, so
-  they cannot tell raw terms from normalised ones. (b) In `test_a_custom_seat_name_with_an_underscore_matches` the raw
-  term `test_role (round 1)` no longer matches the normalised text `test role (round 1)`, so no seat is named, the claim
-  covers every seat that ran, and the only row graded `read` is `test_role (round 1)`: the same `[["test_role (round 1)"]]`
-  comes out by the widening path (trap 4, second face: the fixture never creates the condition the assertion
-  discriminates on). A fixture that would bite grades the underscore seat `unknown` and the other seat `read`, so a
-  named-seat match yields `[]` and the unmatched widening yields the other seat. The order forbids inventing a test to
-  force a red, so this is reported, not fixed.
 - **Restore:** inverse Edit, `key = term.lower()` back to `key = _normalise(term).strip().lower()`.
 - **Restore receipt:** the restored line reads `                key = _normalise(term).strip().lower()`.
-- **Raw green** (`-k "custom_seat_name or formatted_seat_name"`):
+- **Raw green** (`-k custom_seat_name_with_an_underscore_narrows`):
 
 ```
-.....                                                                    [100%]
-5 passed, 99 deselected in 0.37s
+..                                                                       [100%]
+2 passed, 104 deselected in 0.41s
 ```
