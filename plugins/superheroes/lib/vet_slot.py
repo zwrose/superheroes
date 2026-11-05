@@ -355,6 +355,33 @@ def analyze_no_build_record(body):
     return found[0] if found else None
 
 
+def _after_marker_line(body, advisor_at):
+    """The offset just past the advisor-vet marker's own ``str.splitlines()`` line, the line the readers split.
+
+    -1 when that line has no terminator (the marker is the last line); ``write-failed`` when no line holds the offset."""
+    # axis: the slot starts after the marker's own str.splitlines() line, the line the readers split, so a marker line ended by a lone CR, U+2028 or any other splitlines separator cannot keep an old verdict line first in the region — see bite-proof record i2342_vet_slot_no_build_record.md
+    line_start = 0
+    for whole in body.splitlines(keepends=True):
+        if line_start <= advisor_at < line_start + len(whole):
+            return line_start + len(whole) if whole.splitlines()[0] != whole else -1
+        line_start += len(whole)
+    raise _Refusal("write-failed", "the advisor-vet marker offset is not on any line of the body")
+
+
+def _check_verdict_reads_first(new_body, slot_text):
+    """Refuse ``write-failed`` unless the first non-empty line of the composed body's advisor-vet region, read as
+    ``stack_check.read_vet_verdict`` reads it, is the slot text's first non-empty line."""
+    region, region_refusal = pr_body_regions.read_region(new_body, "advisor-vet")
+    first_written = stack_check._first_nonempty_line(slot_text)
+    first_read = stack_check._first_nonempty_line(region) if region is not None else None
+    # axis: the region the merge train reads must open with the slot's own first line, else the write refuses write-failed and pushes nothing — see bite-proof record i2342_vet_slot_no_build_record.md
+    if region_refusal is not None or region is None or first_read != first_written:
+        raise _Refusal("write-failed", "the advisor-vet region's first line as the merge train reads it is %r, not the"
+                       " new verdict line %r%s" % (first_read, first_written,
+                                                   "; region read refused: %s" % region_refusal
+                                                   if region_refusal is not None else ""))
+
+
 def _compose_no_build_record(body, advisor_at, slot_text):
     """The new body of a no-build-record ``write``; a ``write-failed`` refusal when it would not hold.
 
@@ -369,16 +396,7 @@ def _compose_no_build_record(body, advisor_at, slot_text):
         heading_at = len(prefix) + 2
         marker_at = heading_at + len("## Advisor vet\n")
     else:
-        # axis: the slot starts after the marker's own str.splitlines() line, the line the readers split, so a marker line ended by a lone CR, U+2028 or any other splitlines separator cannot keep an old verdict line first in the region — see bite-proof record i2342_vet_slot_no_build_record.md
-        line_end = None  # None: no line holds the marker; -1: the marker's line has no terminator
-        line_start = 0
-        for whole in body.splitlines(keepends=True):
-            if line_start <= advisor_at < line_start + len(whole):
-                line_end = line_start + len(whole) if whole.splitlines()[0] != whole else -1
-                break
-            line_start += len(whole)
-        if line_end is None:
-            raise _Refusal("write-failed", "the advisor-vet marker offset is not on any line of the body")
+        line_end = _after_marker_line(body, advisor_at)
         if line_end >= 0:
             prefix = body[:line_end]
             new_body = prefix + "\n" + slot + "\n"
@@ -398,15 +416,7 @@ def _compose_no_build_record(body, advisor_at, slot_text):
         raise _Refusal("write-failed", problem)
     if _find_live_standalone_markers(new_body, marker) != [marker_at]:
         raise _Refusal("write-failed", "composed body moved or shadowed slot markers")
-    region, region_refusal = pr_body_regions.read_region(new_body, "advisor-vet")
-    first_written = stack_check._first_nonempty_line(slot_text)
-    first_read = stack_check._first_nonempty_line(region) if region is not None else None
-    # axis: the region the merge train reads must open with the slot's own first line, else the write refuses write-failed and pushes nothing — see bite-proof record i2342_vet_slot_no_build_record.md
-    if region_refusal is not None or region is None or first_read != first_written:
-        raise _Refusal("write-failed", "the advisor-vet region's first line as the merge train reads it is %r, not the"
-                       " new verdict line %r%s" % (first_read, first_written,
-                                                   "; region read refused: %s" % region_refusal
-                                                   if region_refusal is not None else ""))
+    _check_verdict_reads_first(new_body, slot_text)
     return new_body
 
 
@@ -726,7 +736,13 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         except _Refusal as exc:
             return _refusal(exc.reason, exc.detail)
         return result
-    a = body.index("\n", advisor_at) + 1
+    try:
+        # axis: the builder path starts the slot after the marker's own str.splitlines() line (the shared helper), never after the next "\n", so a lone CR or U+2028 marker line cannot keep an old verdict line first — see bite-proof record i2342_vet_slot_no_build_record.md
+        a = _after_marker_line(body, advisor_at)
+    except _Refusal as exc:
+        return _refusal(exc.reason, exc.detail)
+    if a < 0:  # a builder body's marker line is ended by the build-record marker that follows it
+        return _refusal("write-failed", "the advisor-vet marker line has no terminator")
     b = body.rfind("\n", 0, build_at) + 1
     new_body = body[:a] + "\n" + slot_text.strip("\n") + "\n\n" + body[b:]
     tail = len(body) - b
@@ -738,6 +754,11 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         return _refusal("write-failed", "composed body broke markers: %s" % exc.detail)
     if new_ids != ids or new_advisor_at != advisor_at or new_body[new_build_at:] != body[build_at:]:
         return _refusal("write-failed", "composed body moved or shadowed slot markers")
+    try:
+        # axis: the builder path refuses write-failed unless the composed region's first line, as the merge train reads it, is the slot's — see bite-proof record i2342_vet_slot_no_build_record.md
+        _check_verdict_reads_first(new_body, slot_text)
+    except _Refusal as exc:
+        return _refusal(exc.reason, exc.detail)
     result["newBody"] = new_body
     return result
 

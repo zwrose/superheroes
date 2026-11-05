@@ -383,3 +383,96 @@ FAILED test_f5_..._[marker-absent-blank-region]
 .......................                                                  [100%]
 23 passed, 104 deselected in 0.49s
 ```
+
+## Builder path: the slot starts after the marker's own line (H3–H4)
+
+Detector under proof: `plugins/superheroes/lib/tests/test_vet_slot_builder_path_verdict_read_2342.py` (33 tests: B1 and B2,
+each over seven separators through `evaluate` and through `run_verb`; B3; B4 over four region shapes).
+Guarded code: `evaluate`'s builder-path composition in `plugins/superheroes/lib/vet_slot.py`, at base `c23216f9`, which now
+calls the two shared helpers `_after_marker_line` (H3) and `_check_verdict_reads_first` (H4) that `_compose_no_build_record`
+also calls. Every neutralization was a targeted Edit, undone by the inverse Edit. No `git checkout`, `restore`, `reset` or
+`stash` was used. Command for every run below (worktree root):
+`timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_vet_slot_builder_path_verdict_read_2342.py -q -p no:cacheprovider --tb=line`
+with the `-k` named per run. Nothing was redacted; each capture is under 32 KiB. Disclosures: the red captures are
+condensed by hand (the long `FAILED` node ids dropped, the `detail` text of the refusal dicts cut at the width shown,
+uv's deprecation warning line dropped); the counts and the assertion lines are the runner's text.
+
+### Pre-change receipt (new test file against the unedited `vet_slot.py`, head `c23216f9`)
+
+The tests carry the orchestrator's measured vet 817 reproduction: the builder `BODY` with its
+`<!-- superheroes:advisor-vet -->\nold slot text\n` replaced by the marker, one of the seven separators and
+`**Verdict: READY** · <40-hex HEAD>\n`, then a NOT-READY write at HEAD through `evaluate`, then
+`stack_check.read_vet_verdict(newBody, HEAD)`. Every one of the seven separators (`\r`, U+2028, U+2029, U+0085, `\x0b`,
+`\x0c`, `\x1c`) reads READY after the write, through `evaluate` and through `run_verb`:
+
+```
+FFFFFFFFFFFFFFFFFFFFFFFFFFFF.FFFF                                        [100%]
+E   AssertionError: assert 'READY' == 'NOT-READY'     (x14: test file lines 67 evaluate x7, 84 run_verb x7)
+E   AssertionError: assert 'NOT-READY' == 'READY'     (x14: B2, lines 95 evaluate x7 and 105 run_verb x7; the old NOT-READY line stays first)
+E   AssertionError: {'ok': True, 'verb': 'write', ...} assert (True is False)   (x4: B4, line 130)
+32 failed, 1 passed in 0.67s
+```
+
+The one pass is B3 (the LF body). Disclosure: the tool display cut the middle of this `--tb=line` run (3865 characters
+lost), so the block above is condensed from the part that did show (the first eight B1 failures at line 67 and line 84,
+the B2 failures at line 95, the closing `32 failed, 1 passed`) and from a first `--tb=short | tail -80` run of the same
+file that showed the B2 and B4 failures at their lines and the same `32 failed, 1 passed in 0.76s`. The per-case order of
+the progress line (28 `F`, one `.`, 4 `F`) is B1 (14), B2 (14), B3 (1), B4 (4).
+
+### H3: the builder path calls the shared marker-line helper (axis: the slot starts after the marker's own splitlines line)
+
+- **Neutralization:** in `evaluate`'s builder path, `a = _after_marker_line(body, advisor_at)` became
+  `a = body.index("\n", advisor_at) + 1  # H3-NEUTRALIZED` (H4 left in place).
+- **Raw red** (full file, `--tb=line`):
+
+```
+FFFFFFFFFFFFFFFFFFFFFFFFFFFF.....                                        [100%]
+E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': "the advisor-vet region's first line as the merge train reads it is ...3a4b5c6d7e8f9012345678', not the new verdict line '**Verdict: NOT-READY** · a1b2c3d4e5f6...
+    assert False is True        (x14: B1, test file lines 65 and 82)
+E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': "the advisor-vet region's first line as the merge train reads it is ...4b5c6d7e8f9012345678 (old)', not the new verdict line '**Verdict: READY** · a1b2c3d4e5f6...
+    assert False is True        (x14: B2, test file lines 94 and 103)
+28 failed, 5 passed in 0.45s
+```
+
+  With H4 in place the stale-first-line writes refuse `write-failed`, which B1 counts as a failure (B1 asserts `ok` is
+  true). The 5 passes are B3 and the four B4 cases.
+- **Restore:** inverse Edit.
+
+### H4: the builder path calls the shared read-back check (axis: the region's first line, as the merge train reads it, is the slot's)
+
+- **Neutralization:** the builder path's `_check_verdict_reads_first(new_body, slot_text)` became
+  `pass  # H4-NEUTRALIZED` (H3 restored first).
+- **Raw red** (`-k b4`, `--tb=line`):
+
+```
+FFFF                                                                     [100%]
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1', ...}
+    assert (True is False)      (x4: first-line-is-the-old-verdict, no-region, region-refusal, blank-region; line 130)
+4 failed, 29 deselected in 0.36s
+```
+
+- **H3 and H4 both neutralized** (`-k b1`): the inversion, the write succeeds and the merge train reads READY:
+
+```
+FFFFFFFFFFFFFF                                                           [100%]
+     14 E   AssertionError: assert 'READY' == 'NOT-READY'
+14 failed, 19 deselected in 0.41s
+```
+
+  (The second line is `grep -E "^E  |passed|failed" | sort | uniq -c` over the run, so the 14 identical assertion lines
+  are counted rather than repeated.)
+- **Restore:** inverse Edits for both.
+- **Restore receipt:** `grep -n NEUTRALIZED plugins/superheroes/lib/vet_slot.py` matched nothing (exit 1) after both
+  restores; the builder path's restored calls read `        a = _after_marker_line(body, advisor_at)` (inside the `try`
+  that turns a `_Refusal` into the refusal dict) and `        _check_verdict_reads_first(new_body, slot_text)`.
+- **Raw green** (same file, after both restores):
+
+```
+.................................                                        [100%]
+33 passed in 0.50s
+```
+
+### The bot path after the extraction
+
+`_compose_no_build_record` now calls the same two helpers; its H1/H2 proofs above are unchanged. Re-run once after the
+extraction, `-k "test_f"` over `test_vet_slot_no_build_record_2342.py`: `23 passed, 104 deselected in 0.44s`.
