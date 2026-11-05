@@ -134,3 +134,55 @@ def test_b4_a_region_whose_first_line_is_not_the_slots_refuses_write_failed_and_
     assert result["ok"] is False and result["reason"] == "write-failed", result
     assert "advisor-vet region" in result["detail"], result
     assert fake.edit_calls() == []
+
+
+# --- I: vet 823, the slot-span guard and the write share one line rule ----------------------------------------------
+# A marker line ended by a lone CR, U+2028 or a form feed puts a following superheroes: marker line inside the span the
+# write replaces; the guard must start its span at the same offset the write does, so it refuses instead of the write
+# deleting that line with its row.
+
+DOD_MARKER = "<!-- superheroes:dod-table -->"
+DOD_TAIL = DOD_MARKER + "\n| DoD | done |\n"
+# "\n" first (I2, today's behaviour), then the three separators the vet measured
+I_SEPARATORS = ["\n", "\r", " ", "\x0c"]
+I_SEPARATOR_IDS = ["lf", "cr", "u2028", "ff"]
+
+
+def _dod_body(separator):
+    assert BODY.count(OLD_SLOT) == 1
+    return BODY.replace(OLD_SLOT, MARKER + separator + DOD_TAIL)
+
+
+@pytest.mark.parametrize("separator", I_SEPARATORS, ids=I_SEPARATOR_IDS)
+def test_i1_i2_a_foreign_marker_after_the_marker_line_refuses_through_evaluate(separator):
+    result = _evaluate_write(_dod_body(separator), NOT_READY_SLOT)
+    assert result["ok"] is False and result["reason"] == "slot-span-foreign-content", result
+    assert "superheroes:dod-table" in result["detail"], result
+
+
+@pytest.mark.parametrize("separator", I_SEPARATORS, ids=I_SEPARATOR_IDS)
+def test_i1_i2_a_foreign_marker_after_the_marker_line_refuses_and_pushes_nothing_through_run_verb(separator, tmp_path):
+    fake = _raw_fake(_dod_body(separator))
+    result = _run_write(fake, tmp_path, NOT_READY_SLOT)
+    assert result["ok"] is False and result["reason"] == "slot-span-foreign-content", result
+    assert fake.edit_calls() == []
+
+
+@pytest.mark.parametrize("separator", I_SEPARATORS, ids=I_SEPARATOR_IDS)
+def test_i3_analyze_body_refuses_a_foreign_marker_after_the_marker_line(separator):
+    with pytest.raises(vs._Refusal) as raised:
+        vs.analyze_body(_dod_body(separator))
+    assert raised.value.reason == "slot-span-foreign-content"
+
+
+@pytest.mark.parametrize("separator", ["\r", " ", "\x0c"], ids=["cr", "u2028", "ff"])
+def test_i4_the_old_slot_text_before_the_build_record_marker_is_replaced_not_kept(separator):
+    old = "old slot text" + separator + "<!-- superheroes:build-record -->"
+    assert BODY.count("old slot text\n\n<!-- superheroes:build-record -->") == 1
+    body = BODY.replace("old slot text\n\n<!-- superheroes:build-record -->", old)
+    result = _evaluate_write(body, NOT_READY_SLOT)
+    assert result["ok"] is True, result
+    new_body = result["newBody"]
+    assert "old slot text" not in new_body
+    assert _vet(new_body) == stack_check.VERDICT_NOT_READY
+    assert new_body.endswith(body[body.index("<!-- superheroes:build-record -->"):])

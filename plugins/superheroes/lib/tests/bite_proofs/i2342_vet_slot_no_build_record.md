@@ -476,3 +476,124 @@ FFFFFFFFFFFFFF                                                           [100%]
 
 `_compose_no_build_record` now calls the same two helpers; its H1/H2 proofs above are unchanged. Re-run once after the
 extraction, `-k "test_f"` over `test_vet_slot_no_build_record_2342.py`: `23 passed, 104 deselected in 0.44s`.
+
+## Vet 823: the slot-span guard and the write share one line rule (H5–H6)
+
+The invariant: every edge of the advisor-vet slot span is computed by the same line rule. Its start, in the write and in
+`analyze_body`'s guard, is `_after_marker_line(body, <advisor-vet marker offset>)`; on the builder path its end is
+`build_at`, the build-record marker's own line start. Before this change the guard started its span at
+`body.index("\n", offsets["advisor-vet"]) + 1` and the write ended it at `body.rfind("\n", 0, build_at) + 1`, so a marker
+line (or a line before the build record) ended by a lone CR, U+2028 or a form feed put lines inside what the write
+replaced but outside what the guard checked (start), or kept old slot text below the new slot (end).
+
+Tests: `I` section of `test_vet_slot_builder_path_verdict_read_2342.py` (I1/I2 through `evaluate` and `run_verb`, I3
+through `analyze_body`, I4 the write's end). Head `13f2a5a4`.
+
+### Pre-change receipt (the new tests against the unedited `vet_slot.py`)
+
+The tests carry the orchestrator's measured reproduction (builder `BODY` with `<!-- superheroes:advisor-vet -->\nold slot text\n`
+replaced by the marker, a separator, then `<!-- superheroes:dod-table -->\n| DoD | done |\n`; NOT-READY `SLOT`; `RECEIPT`).
+The orchestrator's measurement was `lf refused: slot-span-foreign-content`, and `cr`, `u2028` and `ff` each `WROTE; dod-table
+marker kept: False`. I did not re-run that throwaway script; I ran the new tests instead (the order allows "the new tests
+run before the fix"), `-k "test_i1 or test_i3 or test_i4"`, `--tb=short`:
+
+```
+.FFF.FFF.FFFFFF                                                          [100%]
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1', ...}
+E   assert (True is False)      (x3: I1 evaluate [cr] [u2028] [ff], test file line 159)
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1'}
+E   assert (True is False)      (x3: I1 run_verb [cr] [u2028] [ff], line 167)
+E   Failed: DID NOT RAISE _Refusal      (x3: I3 analyze_body [cr] [u2028] [ff], line 173)
+E   assert 'old slot text' not in "## What's c...n\ntrailer\n"      (x3: I4 [cr] [u2028] [ff], line 186)
+12 failed, 3 passed, 33 deselected in 0.60s
+```
+
+The 3 passes are the LF cases (I2: evaluate, run_verb and `analyze_body` on the LF body), the behaviour that was already
+correct. The block condenses the per-failure traceback lines (the repeated test names and paths); nothing else was elided.
+The write succeeding on `cr`, `u2028` and `ff` reproduces the measured `WROTE` result. The "dod-table marker kept" value
+was not printed by these tests; the write succeeded and refused nothing, as the measurement says.
+
+### H5: the guard's span start goes through the shared helper (axis: the guard's span starts where the write's slot does, after the marker's own splitlines line)
+
+- **Guarded element:** `vet_slot.py:453`, `span_start = _after_marker_line(body, offsets["advisor-vet"])` in `analyze_body`.
+- **Neutralization:** that line became `span_start = body.index("\n", offsets["advisor-vet"]) + 1  # H5-NEUTRALIZED`
+  (the `-1` branch below it left in place, dead under the neutralization).
+- **Raw red** (full new file, `--tb=line`; the tool output was cut to 260 columns per line with `cut -c1-260`, which
+  shortened nothing that matters here: every `E` line fits and the closing summary is whole; the 9 repeated `FAILED`
+  ids are condensed to the groups below):
+
+```
+..................................FFF.FFF.FFF...                         [100%]
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1', ...}
+    assert (True is False)      (x3: I1 evaluate [cr] [u2028] [ff], line 159)
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1'}
+    assert (True is False)      (x3: I1 run_verb [cr] [u2028] [ff], line 167)
+E   Failed: DID NOT RAISE _Refusal      (x3: I3 [cr] [u2028] [ff], line 173)
+9 failed, 39 passed in 0.79s
+```
+
+  The LF cases (I2) and I4 stay green under H5, as expected: they do not depend on the guard's start.
+- **Restore:** inverse Edit, the `# H5-NEUTRALIZED` line back to `span_start = _after_marker_line(body, offsets["advisor-vet"])`.
+- **Restore receipt:** `grep -n NEUTRALIZED plugins/superheroes/lib/vet_slot.py` after both restores matched nothing (exit 1);
+  restored line quoted back, `453:    span_start = _after_marker_line(body, offsets["advisor-vet"])`. `git status --porcelain` over the path: ` M plugins/superheroes/lib/vet_slot.py`
+  (the intended fix, no residue).
+- **Raw green** (`-k "test_i1 or test_i3"`, after the restore):
+
+```
+............                                                             [100%]
+12 passed, 36 deselected in 0.45s
+```
+
+### H5a: the guard's `-1` return and the helper's `write-failed` raise (axis: an unterminated marker line refuses markers-invalid)
+
+**Unreachable through this entry point.** `analyze_body` cannot deliver the guarded input to this branch:
+
+- The public path that strips it: `_find_live_standalone_markers` returns a zero-indent standalone line's start, and
+  `analyze_body` has already refused `markers-invalid` unless the advisor-vet marker is above the build-record marker
+  (`offsets["advisor-vet"] >= offsets["build-record"]`). The build-record marker sits on a later line, so the advisor-vet
+  marker's `str.splitlines()` line always has a terminator and `_after_marker_line` never returns `-1`. The marker offset
+  is the start of a line of the body, so the helper's `write-failed` raise ("the offset is not on any line") cannot
+  happen either.
+- The seam and `file:line` of the proof that does bite: none. No test exercises either branch, by the order's
+  instruction. The branch is a defensive guard (`vet_slot.py:455-456`, `raise _Refusal("markers-invalid", ...)` on `-1`;
+  the helper's `write-failed` propagates unchanged), carrying a one-line `Unreachable through this entry point` comment at
+  the detector (`vet_slot.py:454`). Its protection is unverified, by construction.
+
+### H6: the write's span end is the build-record marker's own line start (axis: the write's span ends at `build_at`, never after the previous "\n")
+
+- **Guarded element:** `vet_slot.py:751`, `b = build_at` in the builder path of `evaluate`.
+- **Neutralization:** that line became `b = body.rfind("\n", 0, build_at) + 1  # H6-NEUTRALIZED` (H5 restored first).
+- **Raw red** (`-k test_i4`, `--tb=short`, `cut -c1-200`; the three failures are the same shape, the assertion text and its
+  context lines are condensed to the first):
+
+```
+FFF                                                                      [100%]
+test_vet_slot_builder_path_verdict_read_2342.py:186: in test_i4_the_old_slot_text_before_the_build_record_marker_is_replaced_not_kept
+    new_body = result["newBody"]
+E   assert 'old slot text' not in "## What's c...n\ntrailer\n"
+E     'old slot text' is contained here:
+E       er half.
+E       
+E       old slot text
+E       <!-- superheroes:build-record -->
+E       <details><summary>Build record</summary>...
+3 failed, 45 deselected in 0.42s      ([cr] [u2028] [ff])
+```
+
+  (The failing assertion is `assert "old slot text" not in new_body` at test file line 186; the short traceback printed
+  the source line above it, `new_body = result["newBody"]`, beside that line number.)
+- **Restore:** inverse Edit, the `# H6-NEUTRALIZED` line back to `b = build_at`.
+- **Restore receipt:** `grep -n NEUTRALIZED plugins/superheroes/lib/vet_slot.py` matched nothing (exit 1); restored line
+  quoted back, `751:    b = build_at`. `git status --porcelain` over the path: ` M plugins/superheroes/lib/vet_slot.py` (the intended fix, no residue).
+- **Raw green** (`-k test_i4`, after the restore):
+
+```
+...                                                                      [100%]
+3 passed, 45 deselected in 0.36s
+```
+
+### After both restores
+
+Full new file before the neutralizations: `48 passed in 0.58s`. I5, the seven named test files together, unedited:
+`664 passed in 3.16s`. In an LF body the write's end offset is the same as before (`rfind("\n", 0, build_at) + 1 == build_at`
+when the character before the marker is "\n"; B3 and the whole existing suite pass unedited).

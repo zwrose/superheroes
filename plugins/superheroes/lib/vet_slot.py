@@ -449,7 +449,11 @@ def analyze_body(body):
     if offsets["advisor-vet"] >= offsets["build-record"]:
         raise _Refusal("markers-invalid", "advisor-vet marker is not above the build-record marker")
     followups = read_marker_list(body, FOLLOWUPS_MARKER_NAME, after=offsets["build-record"])
-    span_start = body.index("\n", offsets["advisor-vet"]) + 1
+    # axis: the guard's span starts at the same offset the write's slot does, after the advisor-vet marker's own str.splitlines() line (the shared helper), never after the next "\n", so a foreign marker after a lone CR, U+2028 or form feed marker line refuses instead of being deleted — see bite-proof record i2342_vet_slot_no_build_record.md
+    span_start = _after_marker_line(body, offsets["advisor-vet"])
+    # Unreachable through this entry point: the -1 return and the helper's write-failed raise cannot happen here, because _find_live_standalone_markers returns a line start and the build-record marker sits on a later line, so the marker line always has a terminator — see bite-proof record i2342_vet_slot_no_build_record.md (H5a)
+    if span_start < 0:
+        raise _Refusal("markers-invalid", "the advisor-vet marker line has no terminator")
     for offset, line in _live_lines(body):
         stripped = line.strip()
         # axis: any other superheroes marker line inside the slot span refuses slot-span-foreign-content
@@ -743,7 +747,8 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         return _refusal(exc.reason, exc.detail)
     if a < 0:  # a builder body's marker line is ended by the build-record marker that follows it
         return _refusal("write-failed", "the advisor-vet marker line has no terminator")
-    b = body.rfind("\n", 0, build_at) + 1
+    # axis: the write's span ends at the build-record marker's own line start (build_at itself), never after the previous "\n", so old slot text on a line ended by a lone CR or U+2028 before the marker is replaced, not kept — see bite-proof record i2342_vet_slot_no_build_record.md
+    b = build_at
     new_body = body[:a] + "\n" + slot_text.strip("\n") + "\n\n" + body[b:]
     tail = len(body) - b
     if new_body[:a] != body[:a] or new_body[len(new_body) - tail:] != body[b:]:
