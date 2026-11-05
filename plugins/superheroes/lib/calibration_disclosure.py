@@ -51,6 +51,11 @@ _LACK = re.compile(
     r"exclud(?:e|es|ed|ing)|omit(?:s|ted|ting)?|omission|drop(?:s|ped|ping)?|delet(?:e|es|ed|ing)|"
     r"hid(?:e|es|den|ing)?|den(?:y|ies|ied|ying|ial)|inaccessible|unavailable|absent|gone|unread|"
     r"uncalibrat(?:e|es|ed|ing|ion|ions))\b|(?<=[a-z])n't\b", re.I)
+# Calibration mentions that are never a claim: the project's show-it surface declaration (the doctrine's own required
+# disclosure) and "calibrated" as a modifier before verify, model, command or a model identifier (a token with a digit).
+_EXEMPT = re.compile(
+    r"\b(?:core\.md|(?:the\s+)?(?:project'?s\s+)?calibration)\s+(?:has|declares)\s+no\s+(?:#+\s*)?show-it surface\b"
+    r"|\bshow-it surface\b|\bcalibrated\s+(?:(?:verify|model|command)s?\b|\S*\d\S*)", re.I)
 _ALIASES = {"premortem": ("failure-mode", "failure mode")}
 # Markdown emphasis characters become spaces and typographic apostrophes and the no-break space become their plain
 # forms, so formatting cannot hide a word from the patterns above.
@@ -75,9 +80,11 @@ def _claims(text):
     another's seats."""
     out = []
     for clause in _CLAUSES.split(text):
-        specific = [label for noun, named in _NOUNS if noun.search(clause) for label in named]
+        # axis: a doctrine-prescribed show-it disclosure or a stock "calibrated verify/model/command" phrase is masked before the claim test, and a real calibration claim beside it still counts — see bite-proof record i2364_calibration_disclosure
+        masked = _EXEMPT.sub(" ", clause)
+        specific = [label for noun, named in _NOUNS if noun.search(masked) for label in named]
         # axis: a clause that names calibration and holds any negation or removal word is a claim, with no judgment of which subject the word belongs to — see bite-proof record i2364_calibration_disclosure
-        if (specific or _GENERIC.search(clause)) and _LACK.search(clause):
+        if (specific or _GENERIC.search(masked)) and _LACK.search(masked):
             out.append((clause, list(dict.fromkeys(specific)) or [_CORE, _CREW, _CLAUDE]))
     return out
 

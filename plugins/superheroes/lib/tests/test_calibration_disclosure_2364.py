@@ -432,6 +432,51 @@ def test_a_harmless_label_is_checked_too():
     assert handback(pr_body, [record_comment([row(CODE1)])])["reason"] == "calibration-disclosure-contradicted"
 
 
+# --- doctrine-prescribed disclosures are not calibration claims (vet 826) ---------------------------------------
+
+DOCTRINE = [
+    ("costly", "The review owes the owner a direct look at the change, and this project declares no show-it surface."
+               " The entry point is `none` (core.md has no `## Show-it surface`), so the owner reads the sample record"
+               " under How to see it instead of opening a live page."),
+    ("costly", "There is no live view for you to open: the project's calibration declares no show-it surface, so"
+               ' "How to see it" shows rendered record lines, not a page.'),
+    ("harmless", "The main merge at `05bed485` landed after session 6 closed. It brings only main's own reviewed content"
+                 " (#2322), merged with no conflict, and CI and the calibrated verify ran on it."),
+    ("harmless", "The pre-code brief check ran on codex's second allowlisted model, `gpt-6-astra`/high, not the"
+                 " calibrated `gpt-6.1-sol`/xhigh, because the calibrated model was at capacity (a terminal forfeit,"
+                 " twice)."),
+]
+CLAIM = " and the code reviewer lacked core.md"
+# the insertion point is inside the clause that holds the exempt phrase, just before that clause's closing punctuation
+ANCHORS = ["show-it surface.", "show-it surface, so", "ran on it.", "twice)."]
+
+
+@pytest.mark.parametrize("label, text", DOCTRINE)
+def test_doctrine_prescribed_disclosures_pass(label, text):
+    record = rec([row(CODE1), row(SEC1)])
+    assert cd.contradicted(record, bullet(text, label)) == []
+    assert handback(bullet(text, label), [record_comment([row(CODE1), row(SEC1)])])["ok"] is True
+
+
+@pytest.mark.parametrize("pair, anchor", list(zip(DOCTRINE, ANCHORS)))
+def test_doctrine_disclosure_with_a_real_claim_still_refuses(pair, anchor):
+    label, text = pair
+    assert text.count(anchor) == 1
+    claimed = text.replace(anchor, _insert(anchor))
+    record = rec([row(CODE1), row(SEC1)])
+    assert cd.contradicted(record, bullet(claimed, label))
+    result = handback(bullet(claimed, label), [record_comment([row(CODE1), row(SEC1)])])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+
+
+def _insert(anchor):
+    """``anchor`` with the real claim spliced in before its closing punctuation: the period, or the comma of ", so"."""
+    for end in (", so", "."):
+        if anchor.endswith(end):
+            return anchor[:-len(end)] + CLAIM + end
+    raise AssertionError(anchor)
+
+
 # --- 15: the sanitized view's notice ----------------------------------------------------------------------
 
 def test_the_sanitized_view_notice_says_calibration_read_is_the_measurement():

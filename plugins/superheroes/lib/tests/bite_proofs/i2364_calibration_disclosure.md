@@ -66,6 +66,13 @@ Disclosures:
   collapse, entry 11 the term normalisation, and entry 8 was re-run on the final body. **Entry 11 is proven by
   `test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat`** (see it below); the first fixture for it did not
   bite, and this test replaced it as the proof.
+- **Doctrine-prescribed disclosures are masked before the claim test, on the advisor's 07:15Z vet 826 order.** The
+  show-it surface declaration (`core.md has no ## Show-it surface`, `the project's calibration declares no show-it
+  surface`, any bare `show-it surface`) and the stock phrases `calibrated verify`, `calibrated model` and `calibrated
+  command` are masked by `_EXEMPT` before the nouns and the lack words are read, so the plugin's own required
+  disclosure never reads as a claim. Entry 12 proves it. **The model-identifier reading of the second exemption
+  (`calibrated` directly followed by one token holding a digit, such as `gpt-6.1-sol`) is the builder's
+  interpretation**, needed so the order's fourth text passes; it is not in the advisor's order text.
 - The claim word also holds `uncalibrat(e|es|ed|ing|ion|ions)`, which the order's word list did not name: "ran
   uncalibrated" holds no other negation or removal word, and the order's text list expects it to refuse.
 
@@ -510,4 +517,61 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 ```
 ..                                                                       [100%]
 2 passed, 104 deselected in 0.41s
+```
+
+## 12. The doctrine exemption (`_claims`, `_EXEMPT`)
+
+- **Axis:** a doctrine-prescribed show-it disclosure or a stock `calibrated verify/model/command` phrase is masked
+  before the claim test, so it never reads as a claim that a seat lacked calibration; a real claim beside it still
+  counts (the second half is pinned by `test_doctrine_disclosure_with_a_real_claim_still_refuses`, which runs green on
+  the unneutralized code, and the DoD headline test).
+- **Neutralization:** `masked = _EXEMPT.sub(" ", clause)` became `masked = clause`.
+- **Raw red** (`-k doctrine_prescribed_disclosures_pass`, main test file; verbatim minus the uv warning line):
+
+```
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+___________ test_doctrine_prescribed_disclosures_pass[costly-text0] ____________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:457: in test_doctrine_prescribed_disclosures_pass
+    assert cd.contradicted(record, bullet(text, label)) == []
+E   AssertionError: assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': 'The review owes the owner a direct look at the change, and this project declares no show-it surface. ...reviewer (round 1)', 'line': 'security-reviewer (round 1): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+___________ test_doctrine_prescribed_disclosures_pass[costly-text1] ____________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:457: in test_doctrine_prescribed_disclosures_pass
+    assert cd.contradicted(record, bullet(text, label)) == []
+E   assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': 'There is no live view for you to open: the project\'s calibration declares no show-it surface, so "Ho...reviewer (round 1)', 'line': 'security-reviewer (round 1): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+__________ test_doctrine_prescribed_disclosures_pass[harmless-text2] ___________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:457: in test_doctrine_prescribed_disclosures_pass
+    assert cd.contradicted(record, bullet(text, label)) == []
+E   assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': "The main merge at `05bed485` landed after session 6 closed. It brings only main's own reviewed conten...reviewer (round 1)', 'line': 'security-reviewer (round 1): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+__________ test_doctrine_prescribed_disclosures_pass[harmless-text3] ___________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:457: in test_doctrine_prescribed_disclosures_pass
+    assert cd.contradicted(record, bullet(text, label)) == []
+E   assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': "The pre-code brief check ran on codex's second allowlisted model, `gpt-6-astra`/high, not the calibra...reviewer (round 1)', 'line': 'security-reviewer (round 1): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[costly-text0]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[costly-text1]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[harmless-text2]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[harmless-text3]
+4 failed, 110 deselected in 0.29s
+```
+
+- **Restore:** inverse Edit, `masked = clause` back to `masked = _EXEMPT.sub(" ", clause)`.
+- **Restore receipt:** the restored line reads `        masked = _EXEMPT.sub(" ", clause)`.
+- **Raw green** (`-k doctrine_prescribed_disclosures_pass`):
+
+```
+....                                                                     [100%]
+4 passed, 110 deselected in 0.41s
 ```
