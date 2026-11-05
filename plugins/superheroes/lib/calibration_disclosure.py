@@ -3,6 +3,10 @@ review seat lacked its calibration (``core.md``, ``review-crew.md`` or ``CLAUDE.
 withheld from it) when the latest review record grades that seat's calibration ``read``. The record's
 ``calibrationRead`` is the measurement; the sanitized view's strip list is not.
 
+The claim test is simple on purpose: a clause that names a calibration file or the word calibration and holds any lack
+word is a claim, whatever the lack word is about. A truthful clause that mixes an unrelated lack with a calibration
+mention is refused, and the refusal tells the builder to put the unrelated lack in its own bullet or sentence.
+
 One caller, no second copy of the rule: ``vet_slot.py handback --pr``. ``contradicted`` takes the latest record exactly
 as ``review_record.py read --pr <n>`` returns it and the PR body; it returns the disclosures the record contradicts, and
 raises ``Unreadable`` for a record it cannot read, which the caller reports as unreadable, never as a pass. A row with no
@@ -24,7 +28,8 @@ REASON = "calibration-disclosure-contradicted"
 
 FIX = ("Read each seat's calibrationRead in the review record and disclose a calibration degradation only for a seat"
        " graded not-read or unknown, or whose order named no calibration, naming that seat; a disclosure that names no"
-       " seat covers every seat.")
+       " seat covers every seat. Put an unrelated lack (a browser, a tool, a runner) in its own bullet or sentence,"
+       " apart from any mention of calibration.")
 
 _CORE, _CREW, _CLAUDE = "core", "review-crew", "CLAUDE.md"
 _CLAUSES = re.compile(r"[.;](?=\s|$)|\b(?:but|while|whereas|although)\b", re.I)
@@ -34,61 +39,18 @@ _NOUNS = (
     (re.compile(r"\bclaude\.md\b", re.I), (_CLAUDE,)),
 )
 _GENERIC = re.compile(r"\bcalibrations?\b", re.I)
-# A lack term counts only when it describes a calibration noun: one that comes before the noun ("without core.md",
-# "the view stripped core.md", "no calibration") or one that follows it ("calibration for the code reviewer was
-# stripped"). The words between them are few, cross no comma, colon or semicolon, and hold no verb of reading or
-# running, so "unavailable, so the reviewer used core.md" or "unavailable and the reviewer read core.md" is no claim;
-# "no" binds only to the noun right after it ("no access to CLAUDE.md"); and a negated lack term ("did not remove",
-# "nothing was removed") is none.
-_LACK_VERBS = (r"strip(?:s|ped|ping)?(?: of)?|remov(?:e|es|ed|ing)|withh(?:e|o)ld(?:s|ing)?|"
-               r"(?:left|leaves|leaving|leave) out|not (?:given|handed|passed)")
-_PRE_LACK = re.compile(
-    r"\b(?:without|lack(?:s|ed|ing)?|missing|no|" + _LACK_VERBS + r"|"
-    r"(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had))\b", re.I)
-_POST_LACK = re.compile(r"\b(?:" + _LACK_VERBS + r"|missing|unavailable|not available|absent)\b", re.I)
-_GAP_WORDS = 6
-_GAP_VERB = re.compile(
-    r"\b(?:read|reads|reading|used|uses|using|consult(?:s|ed|ing)?|open(?:s|ed|ing)?|load(?:s|ed|ing)?|saw|sees|"
-    r"had|got|received|check(?:s|ed|ing)?|cit(?:es|ed|ing)|review(?:s|ed|ing)|follow(?:s|ed|ing)?|appl(?:y|ies|ied)|"
-    r"ran|runs?|running)\b", re.I)
-_NO_GAP = frozenset(("access", "to", "the", "its", "their", "project", "project's", "any"))
-_NEGATED = re.compile(r"\b(?:not|never|nothing|no longer)\s+(?:\w+\s+)?$|n't\s+(?:\w+\s+)?$", re.I)
+# A clause that names a calibration file or the word calibration and holds any lack word is a claim, whatever the lack
+# word is about. Nothing else about the clause is judged. The trade is deliberate: a truthful clause that mixes an
+# unrelated lack with a calibration mention is refused, and an unrelated lack belongs in its own bullet or sentence.
+_LACK = re.compile(
+    r"\b(?:without|lack(?:s|ed|ing)?|missing|no|strip(?:s|ped|ping)?(?: of)?|remov(?:e|es|ed|ing)|"
+    r"withh(?:e|o)ld(?:s|ing)?|(?:left|leaves|leaving|leave) out|not (?:given|handed|passed)|unavailable|"
+    r"not available|absent|(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had))\b", re.I)
 _ALIASES = {"premortem": ("failure-mode", "failure mode")}
 
 
 class Unreadable(Exception):
     """The latest review record could not be read, so the rule cannot be checked."""
-
-
-def _joins(gap, lack):
-    """Whether ``lack`` (a lack-term match) and a calibration noun ``gap`` apart describe one another: with a
-    parenthesis, the other calibration nouns and code marks dropped, the gap is a few words with no clause break and
-    no verb of reading or running; after a bare "no" it may hold only a word such as "access to" or "the"."""
-    gap = re.sub(r"\([^()]*\)", " ", gap)
-    for noun, _named in _NOUNS:
-        gap = noun.sub(" ", gap)
-    gap = _GENERIC.sub(" ", gap).replace("`", " ").replace("*", " ")
-    words = re.findall(r"[\w'.-]+", gap.lower())
-    if re.search(r"[,;:()]", gap) or len(words) > _GAP_WORDS or _GAP_VERB.search(gap):
-        return False
-    return lack.group(0).lower() != "no" or all(word in _NO_GAP for word in words)
-
-
-def _live(clause, lack):
-    """Whether a lack-term match is not itself negated ("did not remove", "nothing was removed")."""
-    return not _NEGATED.search(clause[:lack.start()])
-
-
-def _lacked(clause, noun):
-    """Whether some lack term in ``clause`` describes a match of ``noun``."""
-    for m in noun.finditer(clause):
-        # axis: a lack term counts only when it describes the calibration noun, never when it merely shares the clause — see bite-proof record i2364_calibration_disclosure
-        if any(_live(clause, lack) and _joins(clause[lack.end():m.start()], lack)
-               for lack in _PRE_LACK.finditer(clause, 0, m.start())) \
-                or any(_live(clause, lack) and _joins(clause[m.end():lack.start()], lack)
-                       for lack in _POST_LACK.finditer(clause, m.end())):
-            return True
-    return False
 
 
 def _claims(text):
@@ -97,8 +59,9 @@ def _claims(text):
     another's seats."""
     out = []
     for clause in _CLAUSES.split(text):
-        specific = [label for noun, named in _NOUNS if _lacked(clause, noun) for label in named]
-        if specific or _lacked(clause, _GENERIC):
+        specific = [label for noun, named in _NOUNS if noun.search(clause) for label in named]
+        # axis: a clause that names calibration and holds any lack word is a claim, with no judgment of which subject the lack word belongs to — see bite-proof record i2364_calibration_disclosure
+        if (specific or _GENERIC.search(clause)) and _LACK.search(clause):
             out.append((clause, list(dict.fromkeys(specific)) or [_CORE, _CREW, _CLAUDE]))
     return out
 

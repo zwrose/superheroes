@@ -38,6 +38,15 @@ Disclosures:
 - Element 3's selector is `test_f3`, which selects three tests (most specific wins, the not-run explicit seat, the
   slice seat); the red is the not-run test alone.
 - One extra invocation of the budget's `-k` runs was spent on the invalid element-3 attempt above.
+- **The claim test was reworked after review, on the advisor's ruling** (the subject judgment was removed: a clause that
+  names calibration and holds any lack word is a claim). Entries 6 and 7 below prove the reworked parts; entries 1 to 5
+  guard code that rework did not touch. The two reworked entries ran on the selectors named in them, the same command
+  prefix plus the clause-scope test file `plugins/superheroes/lib/tests/test_calibration_disclosure_clause_scope_2364.py`
+  (entry 7's re-run, below, ran on the main test file alone).
+- **Element 7 is proven by a red run.** The first neutralization of entry 7 edited `_hit_rows`'s `rest` fallback, which
+  holds only a bullet's non-claim clauses, so it could not leak one claim clause's seats into another and no test could
+  bite. Entry 7 was re-run with a neutralization at the call site that does leak, and with the new test
+  `test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files`; that test goes red under it.
 
 ## 1. Record readability (`contradicted`, rule 1)
 
@@ -193,4 +202,131 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_d
 ```
 .                                                                        [100%]
 1 passed, 26 deselected in 0.27s
+```
+
+## 6. The claim test (`_claims`)
+
+- **Axis:** a clause that names calibration (a `_NOUNS` pattern or `_GENERIC`) and holds any lack word is a claim, with
+  no judgment of which subject the lack word belongs to; a mixed clause is refused with the split-it fix sentence.
+- **Neutralization:** `if (specific or _GENERIC.search(clause)) and _LACK.search(clause):` became
+  `if (specific or _GENERIC.search(clause)) and False:` (the `and _LACK.search(clause)` operand became `and False`).
+- **Raw red** (`-k "dod_headline or mixed_clause"`, run over both test files; the clause-scope file had no match):
+
+```
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+___ test_dod_headline_stripped_calibration_the_record_grades_read_is_refused ___
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:114: in test_dod_headline_stripped_calibration_the_record_grades_read_is_refused
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+E   assert (True is False)
+_ test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md and the browser was missing.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md because the browser was unavailable.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_____________ test_a_mixed_clause_is_refused_by_the_ruling[text2] ______________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_a_mixed_clause_is_refused_by_the_ruling[The integration-test runner was unavailable and the code reviewer read core.md instead.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_a_mixed_clause_is_refused_by_the_ruling[No tests ran and the code reviewer consulted core.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_a_mixed_clause_is_refused_by_the_ruling[The sanitized view did not remove core.md from the code reviewer.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer was not only missing core.md but also review-crew.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_dod_headline_stripped_calibration_the_record_grades_read_is_refused
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md and the browser was missing.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md because the browser was unavailable.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[text2]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The integration-test runner was unavailable and the code reviewer read core.md instead.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[No tests ran and the code reviewer consulted core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The sanitized view did not remove core.md from the code reviewer.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer was not only missing core.md but also review-crew.md.]
+8 failed, 45 deselected in 0.53s
+```
+
+- **Restore:** inverse Edit, `and False:` back to `and _LACK.search(clause):`.
+- **Restore receipt:** the restored line reads `        if (specific or _GENERIC.search(clause)) and _LACK.search(clause):`.
+- **Raw green** (`-k "dod_headline or mixed_clause"`):
+
+```
+........                                                                 [100%]
+8 passed, 45 deselected in 3.75s
+```
+
+## 7. Per-clause scope (`contradicted`, the `_hit_rows` call)
+
+- **Axis:** a seat named only in one claim clause is never checked against another claim clause's files, so each claim
+  clause is searched with its own text alone.
+- **Detector:** `test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files` (rows: code-reviewer
+  reads all three files; security-reviewer reads core.md and CLAUDE.md and grades review-crew.md unknown; text:
+  "code-reviewer (round 1) lacked core.md; security-reviewer (round 1) lacked review-crew.md."; expects only the code
+  seat). It was run once against the unneutralized code first and passed:
+  `1 passed, 52 deselected in 0.29s`.
+- **Neutralization:** in `contradicted`, the line
+  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, rest, labels)}` became
+  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, " ".join(c for c, _l in claims), rest, labels)}`
+  (every claim clause's text feeds each clause's seat search, so one clause's seats leak into another's). This replaces
+  the earlier neutralization of `_hit_rows`'s `rest` fallback, which could not leak between claim clauses and so could
+  not bite.
+- **Raw red** (`-k seat_named_in_one_clause`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:231: in test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files
+    assert seats(cd.contradicted(record, bullet(text))) == [[CODE1]]
+E   AssertionError: assert [['code-revie...r (round 1)']] == [['code-reviewer (round 1)']]
+E     
+E     At index 0 diff: ['code-reviewer (round 1)', 'security-reviewer (round 1)'] != ['code-reviewer (round 1)']
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files
+1 failed, 52 deselected in 0.29s
+```
+
+- **Restore:** inverse Edit, back to the original `_hit_rows(rows, clause, rest, labels)` call.
+- **Restore receipt:** the restored line reads
+  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, rest, labels)}`.
+- **Raw green** (`-k seat_named_in_one_clause`):
+
+```
+.                                                                        [100%]
+1 passed, 52 deselected in 0.39s
 ```

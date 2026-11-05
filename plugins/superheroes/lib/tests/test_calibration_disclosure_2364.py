@@ -19,7 +19,8 @@ USER = ("gh", "api", "user", "-q", ".login")
 
 FIX = ("Read each seat's calibrationRead in the review record and disclose a calibration degradation only for a seat"
        " graded not-read or unknown, or whose order named no calibration, naming that seat; a disclosure that names no"
-       " seat covers every seat.")
+       " seat covers every seat. Put an unrelated lack (a browser, a tool, a runner) in its own bullet or sentence,"
+       " apart from any mention of calibration.")
 
 
 def body(degradations, accepting="None\n"):
@@ -223,6 +224,13 @@ def test_f3_a_slice_seat_is_named_by_its_slice():
         ["code-reviewer:ui (round 1)"]]
 
 
+def test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files():
+    record = rec([row(CODE1, cal(core="read", crew="read", claude="read")),
+                  row(SEC1, cal(core="read", crew="unknown", claude="read"))])
+    text = "code-reviewer (round 1) lacked core.md; security-reviewer (round 1) lacked review-crew.md."
+    assert seats(cd.contradicted(record, bullet(text))) == [[CODE1]]
+
+
 def test_f4_a_lack_in_another_clause_is_not_a_calibration_claim():
     record = rec([row(CODE1), row(SEC1)])
     text = "The code reviewer read core.md and review-crew.md, but the integration test runner was unavailable."
@@ -230,18 +238,34 @@ def test_f4_a_lack_in_another_clause_is_not_a_calibration_claim():
 
 
 @pytest.mark.parametrize("text", [
+    "The code reviewer read core.md and the browser was missing.",
+    "The code reviewer read core.md because the browser was unavailable.",
     "The integration-test runner was unavailable, so the code reviewer used core.md and review-crew.md for a static"
     " review.",
     "The integration-test runner was unavailable and the code reviewer read core.md instead.",
-    "The browser was missing; the code reviewer read its calibration in full.",
     "No tests ran and the code reviewer consulted core.md.",
-    "Nothing was removed from the code reviewer, which read core.md in full.",
     "The sanitized view did not remove core.md from the code reviewer.",
-    "core.md was not stripped from the code reviewer.",
+    "The code reviewer was not only missing core.md but also review-crew.md.",
 ])
-def test_a_lack_that_describes_something_else_is_not_a_calibration_claim(text):
-    assert handback(bullet(text), [record_comment([row(CODE1)])])["ok"] is True
-    assert cd.contradicted(rec([row(CODE1)]), bullet(text)) == []
+def test_a_mixed_clause_is_refused_by_the_ruling(text):
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+    result = handback(bullet(text), [record_comment([row(CODE1)])])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+    assert "in its own bullet or sentence" in result["detail"]
+
+
+@pytest.mark.parametrize("pr_body", [
+    body("- [harmless] The browser was missing.\n- [harmless] The code reviewer read core.md.\n"),
+    body("- [harmless] The browser was unavailable.\n- [harmless] The code reviewer read core.md.\n"),
+    body("- [harmless] The integration-test runner was unavailable.\n"
+         "- [harmless] The code reviewer used core.md and review-crew.md for a static review.\n"),
+    body("- [harmless] No tests ran.\n- [harmless] The code reviewer consulted core.md.\n"),
+    body("- [harmless] The browser was missing. The code reviewer read its calibration in full.\n"),
+    body("- [harmless] The browser was missing; the code reviewer read its calibration in full.\n"),
+])
+def test_the_split_rewording_passes(pr_body):
+    assert handback(pr_body, [record_comment([row(CODE1)])])["ok"] is True
+    assert cd.contradicted(rec([row(CODE1)]), pr_body) == []
 
 
 @pytest.mark.parametrize("text", [
