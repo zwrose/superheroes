@@ -18,9 +18,9 @@ COMMENTS = "repos/owner/example/issues/42/comments?per_page=100&page="
 USER = ("gh", "api", "user", "-q", ".login")
 
 FIX = ("Read each seat's calibrationRead in the review record and disclose a calibration degradation only for a seat"
-       " graded not-read or unknown, or whose order named no calibration, naming that seat; a disclosure that names no"
-       " seat covers every seat. Put an unrelated lack (a browser, a tool, a runner) in its own bullet or sentence,"
-       " apart from any mention of calibration.")
+       " graded not-read or unknown, or whose order named no calibration, naming that seat; a disclosure that does not"
+       " name a seat in full covers every seat. Put an unrelated lack (a browser, a tool, a runner) in its own bullet or"
+       " sentence, apart from any mention of calibration.")
 
 
 def body(degradations, accepting="None\n"):
@@ -137,7 +137,7 @@ def test_disclosure_naming_a_seat_not_graded_read_passes(state):
 
 def test_a_seat_whose_order_named_no_calibration_may_be_named():
     reviewers = [row(CODE1, []), row(SEC1)]
-    assert handback(bullet("The code reviewer had no calibration."), [record_comment(reviewers)])["ok"] is True
+    assert handback(bullet("code-reviewer (round 1) had no calibration."), [record_comment(reviewers)])["ok"] is True
     assert cd.contradicted(rec(reviewers), bullet("The security reviewer had no calibration."))
 
 
@@ -207,7 +207,9 @@ def test_f3_the_most_specific_seat_term_wins():
     record = rec([row("code-reviewer (round 1)", cal(crew="unknown")), row("code-reviewer (round 2)")])
     assert seats(cd.contradicted(record, bullet("code-reviewer (round 2) lacked review-crew.md"))) == [
         ["code-reviewer (round 2)"]]
-    assert cd.contradicted(record, bullet("the code reviewer lacked review-crew.md")) == []
+    # a lens word names no seat in full, so the claim covers every seat that ran
+    assert seats(cd.contradicted(record, bullet("the code reviewer lacked review-crew.md"))) == [
+        ["code-reviewer (round 2)"]]
 
 
 def test_f3_an_explicit_seat_that_did_not_run_never_widens_to_the_seats_of_its_lens():
@@ -222,6 +224,24 @@ def test_f3_a_slice_seat_is_named_by_its_slice():
     assert cd.contradicted(record, bullet("code-reviewer:api lacked review-crew.md")) == []
     assert seats(cd.contradicted(record, bullet("code-reviewer:ui lacked review-crew.md"))) == [
         ["code-reviewer:ui (round 1)"]]
+
+
+@pytest.mark.parametrize("text", [
+    "Calibration was stripped from the reviewers. The integration test runner was unavailable.",
+    "Calibration was stripped from the reviewers because the integration test runner was unavailable.",
+])
+def test_a_claim_naming_no_full_seat_covers_every_seat(text):
+    record = rec([row(CODE1), row("test-role (round 1)", cal(core="unknown", crew="unknown", claude="unknown"))])
+    assert seats(cd.contradicted(record, bullet(text))) == [[CODE1]]
+    result = handback(bullet(text), [record_comment(record["reviewers"])])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+    assert "name the seat in full" in result["detail"]
+
+
+def test_a_claim_naming_a_full_seat_still_narrows():
+    record = rec([row(CODE1), row("test-role (round 1)", cal(core="unknown", crew="unknown", claude="unknown"))])
+    assert cd.contradicted(record, bullet("test-role (round 1) lacked core.md.")) == []
+    assert seats(cd.contradicted(record, bullet("code-reviewer (round 1) lacked core.md."))) == [[CODE1]]
 
 
 def test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files():

@@ -54,6 +54,13 @@ Disclosures:
   over both test files; entry 8's red ran with `--tb=line` to keep the capture small. Entry 8's no-break-space case
   stays green under its neutralization (U+00A0 is not a word character, so `\b` already holds around it) and is
   recorded as green, not as a red.
+- **Lens-word narrowing and the `rest` fallback were removed on the advisor's 2026-11-05 04:50Z ruling** (a claim clause
+  that names no full seat name or row name covers every seat that ran; a lens word such as "test" or "code" never
+  narrows a claim). Entry 9 (new) and entry 7 (re-run with the new `_hit_rows(rows, clause, labels)` call) prove the
+  result. Entries 3 and 4 were re-run after the change, with their recorded neutralizations; both still go red, and
+  their captures below are the post-change ones (the line numbers moved). Entry 9's red shows three of the four
+  selected cases red; the first wording of the runner-alias case ("...reviewers. The integration test runner was
+  unavailable.") stays green under it, because the claim is the first sentence alone and names no seat at all.
 - The claim word also holds `uncalibrat(e|es|ed|ing|ion|ions)`, which the order's word list did not name: "ran
   uncalibrated" holds no other negation or removal word, and the order's text list expects it to refuse.
 
@@ -130,7 +137,7 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_i
 .F.                                                                      [100%]
 =================================== FAILURES ===================================
 _ test_f3_an_explicit_seat_that_did_not_run_never_widens_to_the_seats_of_its_lens _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:214: in test_f3_an_explicit_seat_that_did_not_run_never_widens_to_the_seats_of_its_lens
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:217: in test_f3_an_explicit_seat_that_did_not_run_never_widens_to_the_seats_of_its_lens
     assert cd.contradicted(record, bullet("code-reviewer (round 1) lacked review-crew.md")) == []
 E   AssertionError: assert [{'degradatio...CLAUDE.md'}]}] == []
 E     
@@ -138,7 +145,7 @@ E     Left contains one more item: {'degradation': 'code-reviewer (round 1) lack
 E     Use -v to get more diff
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_f3_an_explicit_seat_that_did_not_run_never_widens_to_the_seats_of_its_lens
-1 failed, 2 passed, 24 deselected in 0.36s
+1 failed, 2 passed, 93 deselected in 0.34s
 ```
 
 - **Restore:** inverse Edit, `text = text` back to `text = pattern.sub(lambda m: " " * len(m.group(0)), text)`.
@@ -147,7 +154,7 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_f
 
 ```
 ...                                                                      [100%]
-3 passed, 24 deselected in 0.26s
+3 passed, 93 deselected in 0.27s
 ```
 
 ## 4. The whole-panel branch (`_hit_rows`, rule 7)
@@ -162,7 +169,7 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_f
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_f2_a_claim_naming_no_seat_covers_every_seat_and_names_the_contradicted_ones _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:198: in test_f2_a_claim_naming_no_seat_covers_every_seat_and_names_the_contradicted_ones
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:199: in test_f2_a_claim_naming_no_seat_covers_every_seat_and_names_the_contradicted_ones
     assert seats(hits) == [[CODE1]]
 E   AssertionError: assert [] == [['code-reviewer (round 1)']]
 E     
@@ -170,7 +177,7 @@ E     Right contains one more item: ['code-reviewer (round 1)']
 E     Use -v to get more diff
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_f2_a_claim_naming_no_seat_covers_every_seat_and_names_the_contradicted_ones
-1 failed, 26 deselected in 0.33s
+1 failed, 95 deselected in 0.29s
 ```
 
 - **Restore:** inverse Edit, back to `return [r for r in ran if _contradicted_row(r, labels)]`.
@@ -179,7 +186,7 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_f
 
 ```
 .                                                                        [100%]
-1 passed, 26 deselected in 0.27s
+1 passed, 95 deselected in 0.42s
 ```
 
 ## 5. The handback wiring call (`vet_slot.py` `_run_verb`)
@@ -265,18 +272,17 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_v
   seat). It was run once against the unneutralized code first and passed:
   `1 passed, 52 deselected in 0.29s`.
 - **Neutralization:** in `contradicted`, the line
-  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, rest, labels)}` became
-  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, " ".join(c for c, _l in claims), rest, labels)}`
-  (every claim clause's text feeds each clause's seat search, so one clause's seats leak into another's). This replaces
-  the earlier neutralization of `_hit_rows`'s `rest` fallback, which could not leak between claim clauses and so could
-  not bite.
+  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, labels)}` became
+  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, " ".join(c for c, _l in claims), labels)}`
+  (every claim clause's text feeds each clause's seat search, so one clause's seats leak into another's). The call
+  carries no `rest` argument after the 04:50Z ruling removed the fallback; this entry was re-run with that call line.
 - **Raw red** (`-k seat_named_in_one_clause`):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:231: in test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:251: in test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files
     assert seats(cd.contradicted(record, bullet(text))) == [[CODE1]]
 E   AssertionError: assert [['code-revie...r (round 1)']] == [['code-reviewer (round 1)']]
 E     
@@ -284,17 +290,17 @@ E     At index 0 diff: ['code-reviewer (round 1)', 'security-reviewer (round 1)'
 E     Use -v to get more diff
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files
-1 failed, 52 deselected in 0.29s
+1 failed, 95 deselected in 0.30s
 ```
 
-- **Restore:** inverse Edit, back to the original `_hit_rows(rows, clause, rest, labels)` call.
+- **Restore:** inverse Edit, back to the original `_hit_rows(rows, clause, labels)` call.
 - **Restore receipt:** the restored line reads
-  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, rest, labels)}`.
+  `        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, labels)}`.
 - **Raw green** (`-k seat_named_in_one_clause`):
 
 ```
 .                                                                        [100%]
-1 passed, 52 deselected in 0.39s
+1 passed, 95 deselected in 0.30s
 ```
 
 ## 8. Normalisation (`_normalise`)
@@ -347,4 +353,51 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_v
 ```
 .......................................                                  [100%]
 39 passed, 55 deselected in 0.67s
+```
+
+## 9. Lens words never narrow a claim (`_NARROWING_LEVELS`, `_mentions`, `_hit_rows`)
+
+- **Axis:** a claim clause narrows to a seat only when it names the seat in full (row name, name without the round,
+  seat key or lens name, levels 0 to 3 of `_terms`); a short lens word such as "test" or "code" (level 4) never narrows
+  it. Entry 9 is added to the five declared elements by the 04:50Z ruling.
+- **Neutralization:** `_NARROWING_LEVELS = 4` became `_NARROWING_LEVELS = 5`.
+- **Raw red** (`-k "naming_no_full_seat or runner_mention"`, over `test_calibration_disclosure_2364.py` and
+  `test_calibration_disclosure_runner_alias_2364.py`; the `E   assert 'name the seat in full' in "Disclosed ..."` line
+  is cut by pytest itself, as printed):
+
+```
+FF.F                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_a_claim_naming_no_full_seat_covers_every_seat[Calibration was stripped from the reviewers. The integration test runner was unavailable.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:238: in test_a_claim_naming_no_full_seat_covers_every_seat
+    assert "name the seat in full" in result["detail"]
+E   assert 'name the seat in full' in "Disclosed degradation 'Calibration was stripped from the reviewers. The integration test runner was unavailable.' con... an unrelated lack (a browser, a tool, a runner) in its own bullet or sentence, apart from any mention of calibration."
+_ test_a_claim_naming_no_full_seat_covers_every_seat[Calibration was stripped from the reviewers because the integration test runner was unavailable.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:235: in test_a_claim_naming_no_full_seat_covers_every_seat
+    assert seats(cd.contradicted(record, bullet(text))) == [[CODE1]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_runner_mention_does_not_narrow_a_calibration_claim[Calibration was stripped from the reviewers because the integration test runner was unavailable.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_runner_alias_2364.py:58: in test_runner_mention_does_not_narrow_a_calibration_claim
+    assert _names(record, text) == [code]
+E   AssertionError: assert [] == ['code-reviewer (round 1)']
+E     
+E     Right contains one more item: 'code-reviewer (round 1)'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_claim_naming_no_full_seat_covers_every_seat[Calibration was stripped from the reviewers. The integration test runner was unavailable.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_claim_naming_no_full_seat_covers_every_seat[Calibration was stripped from the reviewers because the integration test runner was unavailable.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_runner_alias_2364.py::test_runner_mention_does_not_narrow_a_calibration_claim[Calibration was stripped from the reviewers because the integration test runner was unavailable.]
+3 failed, 1 passed, 94 deselected in 0.48s
+```
+
+- **Restore:** inverse Edit, `_NARROWING_LEVELS = 5` back to `_NARROWING_LEVELS = 4`.
+- **Restore receipt:** the restored line reads `_NARROWING_LEVELS = 4`.
+- **Raw green** (`-k "naming_no_full_seat or runner_mention"`):
+
+```
+....                                                                     [100%]
+4 passed, 94 deselected in 0.54s
 ```

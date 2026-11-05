@@ -27,9 +27,11 @@ import round_phases  # noqa: E402
 REASON = "calibration-disclosure-contradicted"
 
 FIX = ("Read each seat's calibrationRead in the review record and disclose a calibration degradation only for a seat"
-       " graded not-read or unknown, or whose order named no calibration, naming that seat; a disclosure that names no"
-       " seat covers every seat. Put an unrelated lack (a browser, a tool, a runner) in its own bullet or sentence,"
-       " apart from any mention of calibration.")
+       " graded not-read or unknown, or whose order named no calibration, naming that seat; a disclosure that does not"
+       " name a seat in full covers every seat. Put an unrelated lack (a browser, a tool, a runner) in its own bullet or"
+       " sentence, apart from any mention of calibration.")
+_LENS_WORD_HINT = ('A lens word such as "test" or "code" does not name a seat; name the seat in full (for example'
+                   ' "test-role (round 1)") to point a claim at one seat.')
 
 _CORE, _CREW, _CLAUDE = "core", "review-crew", "CLAUDE.md"
 _CLAUSES = re.compile(r"[.;](?=\s|$)|\b(?:but|while|whereas|although)\b", re.I)
@@ -110,13 +112,23 @@ def _terms(rows):
     return levels
 
 
-def _mentions(rows, text):
-    """The row groups ``text`` names, most specific term first; each matched span is blanked before the next term, so
-    an explicit target never widens through its own alias."""
+# The first four levels of ``_terms`` (full row name, name without round, seat key, lens name) name a seat. The fifth
+# (short lens words such as "test" and "code", and their aliases) never narrows a claim.
+_NARROWING_LEVELS = 4
+
+
+def _edge(term):
+    """The pattern that finds ``term`` as a whole token (no word character or hyphen beside it)."""
+    return re.compile(r"(?<![\w-])%s(?![\w-])" % re.escape(term), re.I)
+
+
+def _mentions(rows, text, levels):
+    """The row groups ``text`` names by the first ``levels`` levels of ``_terms``, most specific term first; each matched
+    span is blanked before the next term, so an explicit target never widens through its own alias."""
     found = []
-    for level in _terms(rows):
+    for level in _terms(rows)[:levels]:
         for term in sorted(level, key=len, reverse=True):
-            pattern = re.compile(r"(?<![\w-])%s(?![\w-])" % re.escape(term), re.I)
+            pattern = _edge(term)
             if pattern.search(text):
                 found.append(level[term])
                 # axis: a matched span is blanked so a less specific term cannot match inside it and widen the target — see bite-proof record i2364_calibration_disclosure
@@ -124,12 +136,13 @@ def _mentions(rows, text):
     return found
 
 
-def _hit_rows(rows, clause, rest, labels):
-    """The ran rows one claim clause contradicts. Its seats are the ones the clause names; a clause that names none
-    takes the seats the bullet's other, non-claim clauses (``rest``) name, and failing that it covers every seat."""
+def _hit_rows(rows, clause, labels):
+    """The ran rows one claim clause contradicts. Its seats are the ones the clause names in full; a clause that names
+    none (a lens word such as "test" alone names none) covers every seat that ran."""
     ran = [r for r in rows if r.get("ran") != "not-run"]
     # axis: each claim clause is checked with its own seats and its own files, never with another claim clause's — see bite-proof record i2364_calibration_disclosure
-    mentions = _mentions(rows, clause) or _mentions(rows, rest)
+    # axis: a claim clause narrows only to a seat named in full; a lens word alone never narrows it — see bite-proof record i2364_calibration_disclosure
+    mentions = _mentions(rows, clause, _NARROWING_LEVELS)
     if not mentions:
         # axis: a claim that names no seat covers every seat, so any contradicted ran row is a hit — see bite-proof record i2364_calibration_disclosure
         return [r for r in ran if _contradicted_row(r, labels)]
@@ -139,6 +152,14 @@ def _hit_rows(rows, clause, rest, labels):
         if targets and all(_contradicted_row(r, labels) for r in targets):
             hit.extend(targets)
     return hit
+
+
+def _lens_word_only(rows, normal, claims):
+    """Whether the bullet holds a short lens word (a level-4 term) while none of its claim clauses names a seat in full."""
+    short = _terms(rows)[_NARROWING_LEVELS:]
+    if not any(_edge(term).search(normal) for level in short for term in level):
+        return False
+    return not any(_mentions(rows, clause, _NARROWING_LEVELS) for clause, _labels in claims)
 
 
 def contradicted(record, body):
@@ -162,9 +183,7 @@ def contradicted(record, body):
         raise Unreadable("the record's reviewers list is missing or malformed")
     out = []
     for text, normal, claims in claimed:
-        claim_clauses = {clause for clause, _labels in claims}
-        rest = " ".join(c for c in _CLAUSES.split(normal) if c not in claim_clauses)
-        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, rest, labels)}
+        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, labels)}
         seats, seen = [], set()
         for row in rows:
             if id(row) in hit and str(row.get("name")) not in seen:
@@ -172,13 +191,21 @@ def contradicted(record, body):
                 seats.append({"name": row.get("name"),
                               "line": "%s: %s" % (row.get("name"), review_record._calibration_words(row))})
         if seats:
-            out.append({"degradation": text, "seats": seats})
+            found = {"degradation": text, "seats": seats}
+            if _lens_word_only(rows, normal, claims):
+                found["lensWordOnly"] = True
+            out.append(found)
     return out
 
 
 def describe(hits, record_url):
     """The refusal detail naming each contradicted disclosure with the record's line for each seat it names."""
     where = record_url if isinstance(record_url, str) and record_url else "the latest review record"
-    parts = ["Disclosed degradation %r contradicts %s: %s" % (h["degradation"][:200], where,
-                                                             "; ".join(s["line"] for s in h["seats"])) for h in hits]
-    return "; ".join(parts) + ". " + FIX
+    text = ""
+    for h in hits:
+        part = "Disclosed degradation %r contradicts %s: %s" % (h["degradation"][:200], where,
+                                                                "; ".join(s["line"] for s in h["seats"]))
+        if h.get("lensWordOnly"):
+            part += ". " + _LENS_WORD_HINT
+        text += (("" if not text else " " if text.endswith(".") else "; ") + part)
+    return text + ("" if text.endswith(".") else ".") + " " + FIX
