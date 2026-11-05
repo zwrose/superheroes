@@ -35,20 +35,24 @@ _NOUNS = (
 )
 _GENERIC = re.compile(r"\bcalibrations?\b", re.I)
 # A lack term counts only when it describes a calibration noun: one that comes before the noun ("without core.md",
-# "the view stripped core.md", "no calibration") or one that follows it ("calibration was stripped"). The words
-# between them may only be ones that join the two (articles, possessives, "and", forms of "be", other calibration
-# nouns), so "unavailable, so the reviewer used core.md" or "no tests ran and the reviewer consulted core.md" is no
-# claim.
+# "the view stripped core.md", "no calibration") or one that follows it ("calibration for the code reviewer was
+# stripped"). The words between them are few, cross no comma, colon or semicolon, and hold no verb of reading or
+# running, so "unavailable, so the reviewer used core.md" or "unavailable and the reviewer read core.md" is no claim;
+# "no" binds only to the noun right after it ("no access to CLAUDE.md"); and a negated lack term ("did not remove",
+# "nothing was removed") is none.
 _LACK_VERBS = (r"strip(?:s|ped|ping)?(?: of)?|remov(?:e|es|ed|ing)|withh(?:e|o)ld(?:s|ing)?|"
                r"(?:left|leaves|leaving|leave) out|not (?:given|handed|passed)")
 _PRE_LACK = re.compile(
     r"\b(?:without|lack(?:s|ed|ing)?|missing|no|" + _LACK_VERBS + r"|"
     r"(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had))\b", re.I)
 _POST_LACK = re.compile(r"\b(?:" + _LACK_VERBS + r"|missing|unavailable|not available|absent)\b", re.I)
-_GAP_OK = frozenset((
-    "a", "an", "the", "its", "their", "this", "that", "these", "those", "project's", "projects", "any", "all", "both",
-    "and", "or", "of", "to", "access", "file", "files", "was", "were", "is", "are", "be", "been", "being", "has",
-    "have", "also", "entirely", "fully", "own", "seat's", "seats'", "reviewer's", "reviewers'"))
+_GAP_WORDS = 6
+_GAP_VERB = re.compile(
+    r"\b(?:read|reads|reading|used|uses|using|consult(?:s|ed|ing)?|open(?:s|ed|ing)?|load(?:s|ed|ing)?|saw|sees|"
+    r"had|got|received|check(?:s|ed|ing)?|cit(?:es|ed|ing)|review(?:s|ed|ing)|follow(?:s|ed|ing)?|appl(?:y|ies|ied)|"
+    r"ran|runs?|running)\b", re.I)
+_NO_GAP = frozenset(("access", "to", "the", "its", "their", "project", "project's", "any"))
+_NEGATED = re.compile(r"\b(?:not|never|nothing|no longer)\s+(?:\w+\s+)?$|n't\s+(?:\w+\s+)?$", re.I)
 _ALIASES = {"premortem": ("failure-mode", "failure mode")}
 
 
@@ -56,25 +60,33 @@ class Unreadable(Exception):
     """The latest review record could not be read, so the rule cannot be checked."""
 
 
-def _joins(gap):
-    """Whether a lack term and a calibration noun ``gap`` apart describe one another: with a parenthesis, the other
-    calibration nouns and code marks dropped, every word left joins the two and no comma, colon or semicolon
-    stands between them."""
+def _joins(gap, lack):
+    """Whether ``lack`` (a lack-term match) and a calibration noun ``gap`` apart describe one another: with a
+    parenthesis, the other calibration nouns and code marks dropped, the gap is a few words with no clause break and
+    no verb of reading or running; after a bare "no" it may hold only a word such as "access to" or "the"."""
     gap = re.sub(r"\([^()]*\)", " ", gap)
     for noun, _named in _NOUNS:
         gap = noun.sub(" ", gap)
     gap = _GENERIC.sub(" ", gap).replace("`", " ").replace("*", " ")
-    if re.search(r"[,;:()]", gap):
+    words = re.findall(r"[\w'.-]+", gap.lower())
+    if re.search(r"[,;:()]", gap) or len(words) > _GAP_WORDS or _GAP_VERB.search(gap):
         return False
-    return all(word in _GAP_OK for word in re.findall(r"[\w'.-]+", gap.lower()))
+    return lack.group(0).lower() != "no" or all(word in _NO_GAP for word in words)
+
+
+def _live(clause, lack):
+    """Whether a lack-term match is not itself negated ("did not remove", "nothing was removed")."""
+    return not _NEGATED.search(clause[:lack.start()])
 
 
 def _lacked(clause, noun):
     """Whether some lack term in ``clause`` describes a match of ``noun``."""
     for m in noun.finditer(clause):
         # axis: a lack term counts only when it describes the calibration noun, never when it merely shares the clause — see bite-proof record i2364_calibration_disclosure
-        if any(_joins(clause[lack.end():m.start()]) for lack in _PRE_LACK.finditer(clause, 0, m.start())) \
-                or any(_joins(clause[m.end():lack.start()]) for lack in _POST_LACK.finditer(clause, m.end())):
+        if any(_live(clause, lack) and _joins(clause[lack.end():m.start()], lack)
+               for lack in _PRE_LACK.finditer(clause, 0, m.start())) \
+                or any(_live(clause, lack) and _joins(clause[m.end():lack.start()], lack)
+                       for lack in _POST_LACK.finditer(clause, m.end())):
             return True
     return False
 

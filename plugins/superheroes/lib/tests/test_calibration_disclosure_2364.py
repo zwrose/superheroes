@@ -236,6 +236,8 @@ def test_f4_a_lack_in_another_clause_is_not_a_calibration_claim():
     "The browser was missing; the code reviewer read its calibration in full.",
     "No tests ran and the code reviewer consulted core.md.",
     "Nothing was removed from the code reviewer, which read core.md in full.",
+    "The sanitized view did not remove core.md from the code reviewer.",
+    "core.md was not stripped from the code reviewer.",
 ])
 def test_a_lack_that_describes_something_else_is_not_a_calibration_claim(text):
     assert handback(bullet(text), [record_comment([row(CODE1)])])["ok"] is True
@@ -251,6 +253,10 @@ def test_a_lack_that_describes_something_else_is_not_a_calibration_claim(text):
     "The code reviewer had no calibration.",
     "The code reviewer had no access to CLAUDE.md.",
     "`core.md` and `review-crew.md` were withheld from the code reviewer.",
+    "The code reviewer lacked the required core.md.",
+    "Calibration for the code reviewer was stripped.",
+    "core.md was still missing for the code reviewer.",
+    "The code reviewer ran without project calibration.",
 ])
 def test_a_lack_that_describes_the_calibration_is_a_claim(text):
     assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
