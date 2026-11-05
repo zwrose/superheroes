@@ -234,6 +234,8 @@ acceptance, and needs no accounting entry. A costly one keeps its line, and so i
 its fix lands. The review seat checks that each **costly** bullet has a consequence line in the owner
 half.
 
+**A calibration degradation is read off the review record, never off the sanitized view.** Before you disclose that a review seat lacked its calibration (`core.md`, `review-crew.md` or `CLAUDE.md` stripped, missing or withheld), read that seat's line in the review record: its `calibrationRead` is the measurement. Disclose one only for a seat graded `not-read` or `unknown`, or whose order named no calibration (`none named in its order`), and name the seat. The sanitized view's strip list says only what left the seat's working directory; seats are handed their calibration by absolute path, outside the view. A disclosure that names no seat covers every seat. `vet_slot.py handback --pr` refuses `calibration-disclosure-contradicted` when a disclosure says a seat lacked calibration the record says it read, naming the seat and its record line; `lib/calibration_disclosure.py` is the rule's one home.
+
 ## Issue linking
 
 GitHub's closing-keyword parser is negation-blind. `Resolves #NNN`, `Closes #NNN`, and `Fixes #NNN`
