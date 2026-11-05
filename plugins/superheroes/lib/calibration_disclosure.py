@@ -34,11 +34,17 @@ _NOUNS = (
     (re.compile(r"\bclaude\.md\b", re.I), (_CLAUDE,)),
 )
 _GENERIC = re.compile(r"\bcalibrations?\b", re.I)
-_LACK = re.compile(
-    r"\bstrip(?:s|ped|ping)?\b|\bmissing\b|\bwithh(?:e|o)ld(?:s|ing)?\b|\bwithout\b|\black(?:s|ed|ing)?\b"
-    r"|\bunavailable\b|\bnot available\b|\babsent\b|\bremoved\b|\b(?:left|leaves|leaving) out\b"
-    r"|\b(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had)\b|\bno calibration\b"
-    r"|\bnot (?:given|handed|passed)\b", re.I)
+# A lack term counts only when it describes a calibration noun: one that comes before the noun ("without core.md",
+# "lacked review-crew.md") or one that follows it ("calibration was stripped"), with a short gap between them that
+# crosses no comma, colon or semicolon and holds no verb of reading ("unavailable, so the reviewer used core.md").
+_PRE_LACK = re.compile(
+    r"\b(?:without|lack(?:s|ed|ing)?|missing|withh(?:e|o)ld(?:s|ing)?|stripped of|no|"
+    r"(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had)|not (?:given|handed|passed))\b", re.I)
+_POST_LACK = re.compile(
+    r"\b(?:strip(?:s|ped|ping)?|missing|withh(?:e|o)ld(?:s|ing)?|unavailable|not available|absent|removed|"
+    r"(?:left|leaves|leaving) out|not (?:given|handed|passed))\b", re.I)
+_GAP_WORDS = 8
+_GAP_BREAK = re.compile(r"[,;:]|\b(?:read|reads|used|uses|opened|opens|loaded|saw|had|got|received)\b", re.I)
 _ALIASES = {"premortem": ("failure-mode", "failure mode")}
 
 
@@ -46,15 +52,33 @@ class Unreadable(Exception):
     """The latest review record could not be read, so the rule cannot be checked."""
 
 
-def _claim_labels(text):
-    """The calibration labels one degradation's text claims a seat lacked, and the claim clauses; ([], []) for none."""
-    labels, claims = [], []
+def _joins(gap):
+    """Whether a lack term and a calibration noun ``gap`` apart describe one another: a parenthesis is dropped, and
+    what is left is at most a few words with no clause break and no verb of reading."""
+    gap = re.sub(r"\([^()]*\)", " ", gap)
+    return len(gap.split()) <= _GAP_WORDS and not _GAP_BREAK.search(gap) and "(" not in gap and ")" not in gap
+
+
+def _lacked(clause, noun):
+    """Whether some lack term in ``clause`` describes a match of ``noun``."""
+    for m in noun.finditer(clause):
+        # axis: a lack term counts only when it describes the calibration noun, never when it merely shares the clause — see bite-proof record i2364_calibration_disclosure
+        if any(_joins(clause[lack.end():m.start()]) for lack in _PRE_LACK.finditer(clause, 0, m.start())) \
+                or any(_joins(clause[m.end():lack.start()]) for lack in _POST_LACK.finditer(clause, m.end())):
+            return True
+    return False
+
+
+def _claims(text):
+    """Each clause of one degradation's text that claims a seat lacked calibration, with the labels that clause names:
+    [(clause, labels)], [] for none. The labels stay with their own clause, so one clause's files never scope
+    another's seats."""
+    out = []
     for clause in _CLAUSES.split(text):
-        specific = [label for noun, named in _NOUNS if noun.search(clause) for label in named]
-        if (specific or _GENERIC.search(clause)) and _LACK.search(clause):
-            claims.append(clause)
-            labels.extend(specific)
-    return (list(dict.fromkeys(labels)) or [_CORE, _CREW, _CLAUDE]) if claims else [], claims
+        specific = [label for noun, named in _NOUNS if _lacked(clause, noun) for label in named]
+        if specific or _lacked(clause, _GENERIC):
+            out.append((clause, list(dict.fromkeys(specific)) or [_CORE, _CREW, _CLAUDE]))
+    return out
 
 
 def _contradicted_row(row, labels):
@@ -102,10 +126,12 @@ def _mentions(rows, text):
     return found
 
 
-def _hit_rows(rows, text, claims, labels):
-    """The ran rows a degradation's claim contradicts."""
+def _hit_rows(rows, clause, rest, labels):
+    """The ran rows one claim clause contradicts. Its seats are the ones the clause names; a clause that names none
+    takes the seats the bullet's other, non-claim clauses (``rest``) name, and failing that it covers every seat."""
     ran = [r for r in rows if r.get("ran") != "not-run"]
-    mentions = _mentions(rows, " ".join(claims)) or _mentions(rows, text)
+    # axis: each claim clause is checked with its own seats and its own files, never with another claim clause's — see bite-proof record i2364_calibration_disclosure
+    mentions = _mentions(rows, clause) or _mentions(rows, rest)
     if not mentions:
         # axis: a claim that names no seat covers every seat, so any contradicted ran row is a hit — see bite-proof record i2364_calibration_disclosure
         return [r for r in ran if _contradicted_row(r, labels)]
@@ -127,17 +153,19 @@ def contradicted(record, body):
         raise Unreadable(detail or "the review record read did not succeed")
     claimed = []
     for _label, text in pr_sheet.degradations_listed(body):
-        labels, claims = _claim_labels(text)
+        claims = _claims(text)
         if claims:
-            claimed.append((text, claims, labels))
+            claimed.append((text, claims))
     if not claimed:
         return []
     rows = record.get("reviewers")
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         raise Unreadable("the record's reviewers list is missing or malformed")
     out = []
-    for text, claims, labels in claimed:
-        hit = {id(r) for r in _hit_rows(rows, text, claims, labels)}
+    for text, claims in claimed:
+        claim_clauses = {clause for clause, _labels in claims}
+        rest = " ".join(c for c in _CLAUSES.split(text) if c not in claim_clauses)
+        hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, rest, labels)}
         seats, seen = [], set()
         for row in rows:
             if id(row) in hit and str(row.get("name")) not in seen:

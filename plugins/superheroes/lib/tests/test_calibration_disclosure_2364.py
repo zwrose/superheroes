@@ -229,6 +229,26 @@ def test_f4_a_lack_in_another_clause_is_not_a_calibration_claim():
     assert cd.contradicted(record, bullet(text)) == []
 
 
+@pytest.mark.parametrize("text", [
+    "The integration-test runner was unavailable, so the code reviewer used core.md and review-crew.md for a static"
+    " review.",
+    "The integration-test runner was unavailable and the code reviewer read core.md instead.",
+    "The browser was missing; the code reviewer read its calibration in full.",
+])
+def test_a_lack_that_describes_something_else_is_not_a_calibration_claim(text):
+    assert handback(bullet(text), [record_comment([row(CODE1)])])["ok"] is True
+    assert cd.contradicted(rec([row(CODE1)]), bullet(text)) == []
+
+
+@pytest.mark.parametrize("text", [
+    "The code reviewer ran without core.md.",
+    "core.md was stripped from the code reviewer's view.",
+    "The code reviewer did not have review-crew.md.",
+])
+def test_a_lack_that_describes_the_calibration_is_a_claim(text):
+    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+
+
 # --- 12: rows that never contradict --------------------------------------------------------------------
 
 @pytest.mark.parametrize("only", [
