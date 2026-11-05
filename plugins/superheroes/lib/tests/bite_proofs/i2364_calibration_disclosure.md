@@ -61,6 +61,10 @@ Disclosures:
   their captures below are the post-change ones (the line numbers moved). Entry 9's red shows three of the four
   selected cases red; the first wording of the runner-alias case ("...reviewers. The integration test runner was
   unavailable.") stays green under it, because the claim is the first sentence alone and names no seat at all.
+- **Seat terms and the text share one normal form, on the advisor's 06:04Z ruling.** `_normalise` also collapses every
+  whitespace run to one space, and `_terms` stores each seat term through the same function. Entry 10 proves the
+  collapse, entry 11 the term normalisation, and entry 8 was re-run on the final body. **Entry 11 did not go red and is
+  recorded as unproven** (see it below); the order's fixtures were not changed to force a red.
 - The claim word also holds `uncalibrat(e|es|ed|ing|ion|ions)`, which the order's word list did not name: "ran
   uncalibrated" holds no other negation or removal word, and the order's text list expects it to refuse.
 
@@ -308,7 +312,8 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 - **Axis:** Markdown emphasis characters (underscore, asterisk, tilde, backtick) and typographic apostrophes are
   normalised before the claim test, so formatting cannot hide a claim word or a calibration noun; the bullet is quoted
   as written in the refusal.
-- **Neutralization:** the body of `_normalise`, `return text.translate(_FORMATTING)`, became `return text`.
+- **Neutralization:** the body of `_normalise`, `return re.sub(r"\s+", " ", text.translate(_FORMATTING))` (after the
+  06:04Z change; it was `return text.translate(_FORMATTING)` before), became `return text`. Re-run on the final body.
 - **Raw red** (`-k vet_825`, run over both test files, with `--tb=line` in place of `--tb=short` to keep the capture
   small; each long `where` line is cut here to its first 160 characters and the cut is marked `[...]`, and the
   failure blocks of the six cases are kept in order). Six cases went red: the two curly-apostrophe cases and the four
@@ -318,24 +323,24 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 .......................FF..FFFF........                                  [100%]
 =================================== FAILURES ===================================
 E   assert []
-     +  where [] = <function contradicted at 0x7faeadb81b20>({'ok': True, 'url': 'https://x/c/900', 'reviewers': [{'name': 'code-reviewer (round 1)', 'ran': 'engine-record', 'cali [...]
+     +  where [] = <function contradicted at 0x7fd4e0d79580>({'ok': True, 'url': 'https://x/c/900', 'reviewers': [{'name': 'code-reviewer (round 1)', 'ran': 'engine-record', 'cali [...]
      +    and   "Closes #1.\n\n[...]- [costly] The code reviewer didn’t have core.md.\n\n<!-- superheroes:followups none -->\n</details>\n" = bullet('The code reviewer didn’t have core.md.')
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:382: assert []
 E   assert []
      +  [...]- [costly] The code reviewer didn’t get its calibration.[...] = bullet('The code reviewer didn’t get its calibration.')
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:382: assert []
 E   assert []
      +  [...]- [costly] core.md was _stripped_ from the code reviewer.[...] = bullet('core.md was _stripped_ from the code reviewer.')
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:382: assert []
 E   assert []
      +  [...]- [costly] _core.md_ was stripped from the code reviewer.[...] = bullet('_core.md_ was stripped from the code reviewer.')
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:382: assert []
 E   assert []
      +  [...]- [costly] __Calibration__ was stripped from every seat.[...] = bullet('__Calibration__ was stripped from every seat.')
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:382: assert []
 E   assert []
      +  [...]- [costly] core.md was __missing__ for every seat.[...] = bullet('core.md was __missing__ for every seat.')
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:382: assert []
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The code reviewer didn’t have core.md.]
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The code reviewer didn’t get its calibration.]
@@ -343,16 +348,16 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_v
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[_core.md_ was stripped from the code reviewer.]
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[__Calibration__ was stripped from every seat.]
 FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was __missing__ for every seat.]
-6 failed, 33 passed, 55 deselected in 0.67s
+6 failed, 33 passed, 66 deselected in 0.67s
 ```
 
-- **Restore:** inverse Edit, `return text` back to `return text.translate(_FORMATTING)`.
-- **Restore receipt:** the restored line reads `    return text.translate(_FORMATTING)`.
+- **Restore:** inverse Edit, `return text` back to `return re.sub(r"\s+", " ", text.translate(_FORMATTING))`.
+- **Restore receipt:** the restored line reads `    return re.sub(r"\s+", " ", text.translate(_FORMATTING))`.
 - **Raw green** (`-k vet_825`):
 
 ```
 .......................................                                  [100%]
-39 passed, 55 deselected in 0.67s
+39 passed, 66 deselected in 0.73s
 ```
 
 ## 9. Lens words never narrow a claim (`_NARROWING_LEVELS`, `_mentions`, `_hit_rows`)
@@ -400,4 +405,95 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_runner_alias_23
 ```
 ....                                                                     [100%]
 4 passed, 94 deselected in 0.54s
+```
+
+## 10. Whitespace collapse (`_normalise`)
+
+- **Axis:** after the emphasis characters become spaces, every whitespace run collapses to one space, so a seat name
+  written with Markdown emphasis or backticks reads as the plain row name and matches in full (and narrows) exactly as
+  the plain text does.
+- **Neutralization:** `return re.sub(r"\s+", " ", text.translate(_FORMATTING))` became
+  `return text.translate(_FORMATTING)` (the `re.sub` wrapper removed).
+- **Raw red** (`-k "formatted_seat_name or named_round_is_never"`, `--tb=short`; verbatim minus the uv warning line):
+
+```
+.FF.FF                                                                   [100%]
+=================================== FAILURES ===================================
+_ test_a_formatted_seat_name_matches_like_plain_text[**code-reviewer** (round 1) lacked core.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:258: in test_a_formatted_seat_name_matches_like_plain_text
+    assert seats(cd.contradicted(R1R2, bullet(text))) == [["code-reviewer (round 1)"]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_a_formatted_seat_name_matches_like_plain_text[`code-reviewer` (round 1) lacked core.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:258: in test_a_formatted_seat_name_matches_like_plain_text
+    assert seats(cd.contradicted(R1R2, bullet(text))) == [["code-reviewer (round 1)"]]
+E   AssertionError: assert [] == [['code-reviewer (round 1)']]
+E     
+E     Right contains one more item: ['code-reviewer (round 1)']
+E     Use -v to get more diff
+_ test_a_named_round_is_never_refused_on_another_rounds_grades[**code-reviewer** (round 1) lacked core.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:266: in test_a_named_round_is_never_refused_on_another_rounds_grades
+    assert cd.contradicted(record, bullet(text)) == []
+E   AssertionError: assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': '**code-reviewer** (round 1) lacked core.md.', 'seats': [{'name': 'code-reviewer (round 2)', 'line': 'code-reviewer (round 2): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+_ test_a_named_round_is_never_refused_on_another_rounds_grades[`code-reviewer` (round 1) lacked core.md.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:266: in test_a_named_round_is_never_refused_on_another_rounds_grades
+    assert cd.contradicted(record, bullet(text)) == []
+E   AssertionError: assert [{'degradatio...CLAUDE.md'}]}] == []
+E     
+E     Left contains one more item: {'degradation': '`code-reviewer` (round 1) lacked core.md.', 'seats': [{'name': 'code-reviewer (round 2)', 'line': 'code-reviewer (round 2): read its calibration: core.md, review-crew.md, CLAUDE.md'}]}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_formatted_seat_name_matches_like_plain_text[**code-reviewer** (round 1) lacked core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_formatted_seat_name_matches_like_plain_text[`code-reviewer` (round 1) lacked core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_named_round_is_never_refused_on_another_rounds_grades[**code-reviewer** (round 1) lacked core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_named_round_is_never_refused_on_another_rounds_grades[`code-reviewer` (round 1) lacked core.md.]
+4 failed, 2 passed, 98 deselected in 0.43s
+```
+
+- **Restore:** inverse Edit, `return text.translate(_FORMATTING)` back to
+  `return re.sub(r"\s+", " ", text.translate(_FORMATTING))`.
+- **Restore receipt:** the restored line reads `    return re.sub(r"\s+", " ", text.translate(_FORMATTING))`.
+- **Raw green** (`-k "formatted_seat_name or named_round_is_never"`):
+
+```
+......                                                                   [100%]
+6 passed, 98 deselected in 0.47s
+```
+
+## 11. Term normalisation (`_terms`)
+
+- **Axis:** every seat term is stored through `_normalise(term).strip().lower()`, the same function as the degradation
+  text, so a seat name with an emphasis character inside it (a custom seat name with `_`) still matches in full.
+- **Neutralization:** `key = _normalise(term).strip().lower()` became `key = term.lower()` (the stored term is the raw
+  lowercased term again).
+- **Raw red** (`-k "custom_seat_name or formatted_seat_name"`, verbatim minus the uv warning line): **no red.** The
+  detector did not go red under this neutralization:
+
+```
+.....                                                                    [100%]
+5 passed, 99 deselected in 0.31s
+```
+
+- **Disclosure: entry 11 is unproven (the order's red did not bite).** Two reasons, both about the fixtures the order
+  named, neither relaxed or replaced. (a) The three `formatted_seat_name` texts use `code-reviewer`, whose raw term has
+  no emphasis character; once entry 10's collapse is in place, the normalised text already holds the raw row name, so
+  they cannot tell raw terms from normalised ones. (b) In `test_a_custom_seat_name_with_an_underscore_matches` the raw
+  term `test_role (round 1)` no longer matches the normalised text `test role (round 1)`, so no seat is named, the claim
+  covers every seat that ran, and the only row graded `read` is `test_role (round 1)`: the same `[["test_role (round 1)"]]`
+  comes out by the widening path (trap 4, second face: the fixture never creates the condition the assertion
+  discriminates on). A fixture that would bite grades the underscore seat `unknown` and the other seat `read`, so a
+  named-seat match yields `[]` and the unmatched widening yields the other seat. The order forbids inventing a test to
+  force a red, so this is reported, not fixed.
+- **Restore:** inverse Edit, `key = term.lower()` back to `key = _normalise(term).strip().lower()`.
+- **Restore receipt:** the restored line reads `                key = _normalise(term).strip().lower()`.
+- **Raw green** (`-k "custom_seat_name or formatted_seat_name"`):
+
+```
+.....                                                                    [100%]
+5 passed, 99 deselected in 0.37s
 ```

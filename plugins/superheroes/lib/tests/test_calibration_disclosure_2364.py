@@ -244,6 +244,35 @@ def test_a_claim_naming_a_full_seat_still_narrows():
     assert seats(cd.contradicted(record, bullet("code-reviewer (round 1) lacked core.md."))) == [[CODE1]]
 
 
+FORMS = [
+    "{} (round 1) lacked core.md.",
+    "**{}** (round 1) lacked core.md.",
+    "`{}` (round 1) lacked core.md.",
+]
+R1R2 = rec([row("code-reviewer (round 1)"),
+            row("code-reviewer (round 2)", cal(core="unknown", crew="unknown", claude="unknown"))])
+
+
+@pytest.mark.parametrize("text", [form.format("code-reviewer") for form in FORMS])
+def test_a_formatted_seat_name_matches_like_plain_text(text):
+    assert seats(cd.contradicted(R1R2, bullet(text))) == [["code-reviewer (round 1)"]]
+    result = handback(bullet(text), [record_comment(R1R2["reviewers"])])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+
+
+@pytest.mark.parametrize("text", [form.format("code-reviewer") for form in FORMS])
+def test_a_named_round_is_never_refused_on_another_rounds_grades(text):
+    record = rec([row("code-reviewer (round 1)", ran="not-run"), row("code-reviewer (round 2)")])
+    assert cd.contradicted(record, bullet(text)) == []
+
+
+@pytest.mark.parametrize("text", [form.format("test_role") for form in FORMS[:1] + FORMS[2:]])
+def test_a_custom_seat_name_with_an_underscore_matches(text):
+    record = rec([row("test_role (round 1)"),
+                  row("code-reviewer (round 1)", cal(core="unknown", crew="unknown", claude="unknown"))])
+    assert seats(cd.contradicted(record, bullet(text))) == [["test_role (round 1)"]]
+
+
 def test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files():
     record = rec([row(CODE1, cal(core="read", crew="read", claude="read")),
                   row(SEC1, cal(core="read", crew="unknown", claude="read"))])

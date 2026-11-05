@@ -63,9 +63,10 @@ class Unreadable(Exception):
 
 def _normalise(text):
     """``text`` with Markdown emphasis characters (underscore, asterisk, tilde, backtick) as spaces, curly apostrophes as
-    ``'`` and the no-break space as a space."""
-    # axis: formatting (emphasis characters, curly apostrophes, the no-break space) never hides a claim word or a calibration noun from the patterns — see bite-proof record i2364_calibration_disclosure
-    return text.translate(_FORMATTING)
+    ``'`` and the no-break space as a space, then every run of whitespace (newlines included) as one space. The one
+    normal form of the degradation text and of every seat term."""
+    # axis: formatting (emphasis characters, curly apostrophes, the no-break space) never hides a claim word or a calibration noun from the patterns, and whitespace runs are collapsed so the body and the seat terms share one normal form — see bite-proof record i2364_calibration_disclosure
+    return re.sub(r"\s+", " ", text.translate(_FORMATTING))
 
 
 def _claims(text):
@@ -108,7 +109,10 @@ def _terms(rows):
             named += [(2, seat), (3, lens)] + ([(4, word)] + [(4, a) for a in _ALIASES.get(word, ())] if word else [])
         for level, term in named:
             if isinstance(term, str) and term:
-                levels[level].setdefault(term.lower(), []).append(row)
+                # axis: seat terms are normalised by the same function as the degradation text, so formatting never breaks a full-name match — see bite-proof record i2364_calibration_disclosure
+                key = _normalise(term).strip().lower()
+                if key:
+                    levels[level].setdefault(key, []).append(row)
     return levels
 
 
