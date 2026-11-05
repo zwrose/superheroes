@@ -3,8 +3,8 @@ review seat lacked its calibration (``core.md``, ``review-crew.md`` or ``CLAUDE.
 withheld from it) when the latest review record grades that seat's calibration ``read``. The record's
 ``calibrationRead`` is the measurement; the sanitized view's strip list is not.
 
-The claim test is simple on purpose: a clause that names a calibration file or the word calibration and holds any lack
-word is a claim, whatever the lack word is about. A truthful clause that mixes an unrelated lack with a calibration
+The claim test is simple on purpose: a clause that names a calibration file or calibration and holds any negation or
+removal word is a claim, whatever the word is about, after Markdown emphasis and typographic apostrophes are normalised. A truthful clause that mixes an unrelated lack with a calibration
 mention is refused, and the refusal tells the builder to put the unrelated lack in its own bullet or sentence.
 
 One caller, no second copy of the rule: ``vet_slot.py handback --pr``. ``contradicted`` takes the latest record exactly
@@ -38,19 +38,32 @@ _NOUNS = (
     (re.compile(r"\breview[- ]crew(?:\.md)?\b|\bfocus hints?\b|\breview notes\b", re.I), (_CREW,)),
     (re.compile(r"\bclaude\.md\b", re.I), (_CLAUDE,)),
 )
-_GENERIC = re.compile(r"\bcalibrations?\b", re.I)
-# A clause that names a calibration file or the word calibration and holds any lack word is a claim, whatever the lack
+_GENERIC = re.compile(
+    r"\b(?:un)?calibrat(?:e|es|ed|ing|ion|ions)\b|\bproject notes\b|\bconventions file\b|\binstructions file\b", re.I)
+# A clause that names a calibration file or calibration and holds any negation or removal word is a claim, whatever the
 # word is about. Nothing else about the clause is judged. The trade is deliberate: a truthful clause that mixes an
 # unrelated lack with a calibration mention is refused, and an unrelated lack belongs in its own bullet or sentence.
 _LACK = re.compile(
-    r"\b(?:without|lack(?:s|ed|ing)?|missing|no|strip(?:s|ped|ping)?(?: of)?|remov(?:e|es|ed|ing)|"
-    r"withh(?:e|o)ld(?:s|ing)?|(?:left|leaves|leaving|leave) out|not (?:given|handed|passed)|unavailable|"
-    r"not available|absent|(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had))\b", re.I)
+    r"\b(?:not|never|no|none|nothing|zero|cannot|without|lack(?:s|ed|ing)?|missing|strip(?:s|ped|ping)?(?: of)?|"
+    r"remov(?:e|es|ed|ing|al)|withh(?:e|o)ld(?:s|ing)?|withheld|(?:left|leaves|leaving|leave) out|"
+    r"exclud(?:e|es|ed|ing)|omit(?:s|ted|ting)?|omission|drop(?:s|ped|ping)?|delet(?:e|es|ed|ing)|"
+    r"hid(?:e|es|den|ing)?|den(?:y|ies|ied|ying|ial)|inaccessible|unavailable|absent|gone|unread|"
+    r"uncalibrat(?:e|es|ed|ing|ion|ions))\b|(?<=[a-z])n't\b", re.I)
 _ALIASES = {"premortem": ("failure-mode", "failure mode")}
+# Markdown emphasis characters become spaces and typographic apostrophes and the no-break space become their plain
+# forms, so formatting cannot hide a word from the patterns above.
+_FORMATTING = str.maketrans({"_": " ", "*": " ", "~": " ", "`": " ", "‘": "'", "’": "'", " ": " "})
 
 
 class Unreadable(Exception):
     """The latest review record could not be read, so the rule cannot be checked."""
+
+
+def _normalise(text):
+    """``text`` with Markdown emphasis characters (underscore, asterisk, tilde, backtick) as spaces, curly apostrophes as
+    ``'`` and the no-break space as a space."""
+    # axis: formatting (emphasis characters, curly apostrophes, the no-break space) never hides a claim word or a calibration noun from the patterns — see bite-proof record i2364_calibration_disclosure
+    return text.translate(_FORMATTING)
 
 
 def _claims(text):
@@ -60,7 +73,7 @@ def _claims(text):
     out = []
     for clause in _CLAUSES.split(text):
         specific = [label for noun, named in _NOUNS if noun.search(clause) for label in named]
-        # axis: a clause that names calibration and holds any lack word is a claim, with no judgment of which subject the lack word belongs to — see bite-proof record i2364_calibration_disclosure
+        # axis: a clause that names calibration and holds any negation or removal word is a claim, with no judgment of which subject the word belongs to — see bite-proof record i2364_calibration_disclosure
         if (specific or _GENERIC.search(clause)) and _LACK.search(clause):
             out.append((clause, list(dict.fromkeys(specific)) or [_CORE, _CREW, _CLAUDE]))
     return out
@@ -138,18 +151,19 @@ def contradicted(record, body):
         raise Unreadable(detail or "the review record read did not succeed")
     claimed = []
     for _label, text in pr_sheet.degradations_listed(body):
-        claims = _claims(text)
+        normal = _normalise(text)
+        claims = _claims(normal)
         if claims:
-            claimed.append((text, claims))
+            claimed.append((text, normal, claims))
     if not claimed:
         return []
     rows = record.get("reviewers")
     if not isinstance(rows, list) or not all(isinstance(r, dict) for r in rows):
         raise Unreadable("the record's reviewers list is missing or malformed")
     out = []
-    for text, claims in claimed:
+    for text, normal, claims in claimed:
         claim_clauses = {clause for clause, _labels in claims}
-        rest = " ".join(c for c in _CLAUSES.split(text) if c not in claim_clauses)
+        rest = " ".join(c for c in _CLAUSES.split(normal) if c not in claim_clauses)
         hit = {id(r) for clause, labels in claims for r in _hit_rows(rows, clause, rest, labels)}
         seats, seen = [], set()
         for row in rows:

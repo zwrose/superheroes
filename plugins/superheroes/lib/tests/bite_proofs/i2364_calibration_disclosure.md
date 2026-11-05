@@ -8,7 +8,8 @@ undone by the inverse Edit before the next element. No `git checkout`, `restore`
 Command prefix for every run below (worktree root), with `-k` as named per entry:
 `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py -q -p no:cacheprovider --tb=short -k <selector>`.
 Captures are verbatim, minus uv's one deprecation-warning line (`UV_NATIVE_TLS`) and, in the red captures, the
-`^^^^` caret line pytest prints under a `with` statement. Nothing else was filtered or redacted; each is far under 32 KiB.
+`^^^^` caret line pytest prints under a `with` statement. Nothing else was filtered or redacted; each is far under 32 KiB
+unless the entry says otherwise.
 The production sites cite this record with `# axis:` comments. Restore receipts are the restored production line,
 quoted; the whole-file `git status --porcelain` is reported in the dispatch return, not here.
 
@@ -47,6 +48,14 @@ Disclosures:
   holds only a bullet's non-claim clauses, so it could not leak one claim clause's seats into another and no test could
   bite. Entry 7 was re-run with a neutralization at the call site that does leak, and with the new test
   `test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files`; that test goes red under it.
+- **The claim word moved from a lack-word list to negation after vet 825.** A clause that names calibration and holds
+  any negation or removal word is a claim, after Markdown emphasis characters and typographic apostrophes are
+  normalised. Entry 6 (re-run on the new selectors) and entry 8 (the normalisation) prove it. Entry 6 and entry 8 ran
+  over both test files; entry 8's red ran with `--tb=line` to keep the capture small. Entry 8's no-break-space case
+  stays green under its neutralization (U+00A0 is not a word character, so `\b` already holds around it) and is
+  recorded as green, not as a red.
+- The claim word also holds `uncalibrat(e|es|ed|ing|ion|ions)`, which the order's word list did not name: "ran
+  uncalibrated" holds no other negation or removal word, and the order's text list expects it to refuse.
 
 ## 1. Record readability (`contradicted`, rule 1)
 
@@ -206,87 +215,44 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_d
 
 ## 6. The claim test (`_claims`)
 
-- **Axis:** a clause that names calibration (a `_NOUNS` pattern or `_GENERIC`) and holds any lack word is a claim, with
-  no judgment of which subject the lack word belongs to; a mixed clause is refused with the split-it fix sentence.
+- **Axis:** a clause that names calibration (a `_NOUNS` pattern or `_GENERIC`) and holds any negation or removal word
+  (`_LACK`) is a claim, with no judgment of which subject the word belongs to; a mixed clause is refused with the
+  split-it fix sentence.
 - **Neutralization:** `if (specific or _GENERIC.search(clause)) and _LACK.search(clause):` became
   `if (specific or _GENERIC.search(clause)) and False:` (the `and _LACK.search(clause)` operand became `and False`).
-- **Raw red** (`-k "dod_headline or mixed_clause"`, run over both test files; the clause-scope file had no match):
+- **Raw red** (`-k "dod_headline or vet_825"`, run over both test files; the clause-scope file had no match). The full
+  capture is 74504 bytes, over the 32 KiB ceiling, so it was written outside the repository to
+  `/tmp/claude-0/-home-user-wt-2364/d18d83ae-01cc-4c43-99d3-350a392c2076/scratchpad/red6.txt` (scratch, not a receipt
+  once the session ends). Its first lines and its last lines are quoted here; the 38 failure blocks between them
+  (the other `test_vet_825_sentences_refuse` cases, each with a long `where` line) and the first 36 lines of the
+  short test summary are elided, about 70 KB:
 
 ```
-FFFFFFFF                                                                 [100%]
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF                                 [100%]
 =================================== FAILURES ===================================
 ___ test_dod_headline_stripped_calibration_the_record_grades_read_is_refused ___
 /home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:114: in test_dod_headline_stripped_calibration_the_record_grades_read_is_refused
     assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
 E   assert (True is False)
-_ test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md and the browser was missing.] _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
-E   AssertionError: assert [] == [['code-reviewer (round 1)']]
-E     
-E     Right contains one more item: ['code-reviewer (round 1)']
-E     Use -v to get more diff
-_ test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md because the browser was unavailable.] _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
-E   AssertionError: assert [] == [['code-reviewer (round 1)']]
-E     
-E     Right contains one more item: ['code-reviewer (round 1)']
-E     Use -v to get more diff
-_____________ test_a_mixed_clause_is_refused_by_the_ruling[text2] ______________
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
-E   AssertionError: assert [] == [['code-reviewer (round 1)']]
-E     
-E     Right contains one more item: ['code-reviewer (round 1)']
-E     Use -v to get more diff
-_ test_a_mixed_clause_is_refused_by_the_ruling[The integration-test runner was unavailable and the code reviewer read core.md instead.] _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
-E   AssertionError: assert [] == [['code-reviewer (round 1)']]
-E     
-E     Right contains one more item: ['code-reviewer (round 1)']
-E     Use -v to get more diff
-_ test_a_mixed_clause_is_refused_by_the_ruling[No tests ran and the code reviewer consulted core.md.] _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
-E   AssertionError: assert [] == [['code-reviewer (round 1)']]
-E     
-E     Right contains one more item: ['code-reviewer (round 1)']
-E     Use -v to get more diff
-_ test_a_mixed_clause_is_refused_by_the_ruling[The sanitized view did not remove core.md from the code reviewer.] _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
-E   AssertionError: assert [] == [['code-reviewer (round 1)']]
-E     
-E     Right contains one more item: ['code-reviewer (round 1)']
-E     Use -v to get more diff
-_ test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer was not only missing core.md but also review-crew.md.] _
-/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:244: in test_a_mixed_clause_is_refused_by_the_ruling
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
-E   AssertionError: assert [] == [['code-reviewer (round 1)']]
-E     
-E     Right contains one more item: ['code-reviewer (round 1)']
-E     Use -v to get more diff
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_dod_headline_stripped_calibration_the_record_grades_read_is_refused
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md and the browser was missing.]
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer read core.md because the browser was unavailable.]
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[text2]
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The integration-test runner was unavailable and the code reviewer read core.md instead.]
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[No tests ran and the code reviewer consulted core.md.]
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The sanitized view did not remove core.md from the code reviewer.]
-FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_mixed_clause_is_refused_by_the_ruling[The code reviewer was not only missing core.md but also review-crew.md.]
-8 failed, 45 deselected in 0.53s
+___ test_vet_825_sentences_refuse[The code reviewer could not read core.md.] ___
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: in test_vet_825_sentences_refuse
+    assert cd.contradicted(rec([row(CODE1), row(SEC1)]), bullet(text))
+E   assert []
+[... 38 further failure blocks and the first 36 summary lines elided ...]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The reviewers lack core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The sanitized view will strip core.md from the reviewers.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The view will withhold core.md from the reviewers.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was not\xa0available to the reviewers.]
+40 failed, 54 deselected in 0.84s
 ```
 
 - **Restore:** inverse Edit, `and False:` back to `and _LACK.search(clause):`.
 - **Restore receipt:** the restored line reads `        if (specific or _GENERIC.search(clause)) and _LACK.search(clause):`.
-- **Raw green** (`-k "dod_headline or mixed_clause"`):
+- **Raw green** (`-k "dod_headline or vet_825"`):
 
 ```
-........                                                                 [100%]
-8 passed, 45 deselected in 3.75s
+........................................                                 [100%]
+40 passed, 54 deselected in 0.57s
 ```
 
 ## 7. Per-clause scope (`contradicted`, the `_hit_rows` call)
@@ -329,4 +295,56 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 ```
 .                                                                        [100%]
 1 passed, 52 deselected in 0.39s
+```
+
+## 8. Normalisation (`_normalise`)
+
+- **Axis:** Markdown emphasis characters (underscore, asterisk, tilde, backtick) and typographic apostrophes are
+  normalised before the claim test, so formatting cannot hide a claim word or a calibration noun; the bullet is quoted
+  as written in the refusal.
+- **Neutralization:** the body of `_normalise`, `return text.translate(_FORMATTING)`, became `return text`.
+- **Raw red** (`-k vet_825`, run over both test files, with `--tb=line` in place of `--tb=short` to keep the capture
+  small; each long `where` line is cut here to its first 160 characters and the cut is marked `[...]`, and the
+  failure blocks of the six cases are kept in order). Six cases went red: the two curly-apostrophe cases and the four
+  emphasis cases. The no-break-space case stayed green (see the result line, 33 passed), as expected:
+
+```
+.......................FF..FFFF........                                  [100%]
+=================================== FAILURES ===================================
+E   assert []
+     +  where [] = <function contradicted at 0x7faeadb81b20>({'ok': True, 'url': 'https://x/c/900', 'reviewers': [{'name': 'code-reviewer (round 1)', 'ran': 'engine-record', 'cali [...]
+     +    and   "Closes #1.\n\n[...]- [costly] The code reviewer didn’t have core.md.\n\n<!-- superheroes:followups none -->\n</details>\n" = bullet('The code reviewer didn’t have core.md.')
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+E   assert []
+     +  [...]- [costly] The code reviewer didn’t get its calibration.[...] = bullet('The code reviewer didn’t get its calibration.')
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+E   assert []
+     +  [...]- [costly] core.md was _stripped_ from the code reviewer.[...] = bullet('core.md was _stripped_ from the code reviewer.')
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+E   assert []
+     +  [...]- [costly] _core.md_ was stripped from the code reviewer.[...] = bullet('_core.md_ was stripped from the code reviewer.')
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+E   assert []
+     +  [...]- [costly] __Calibration__ was stripped from every seat.[...] = bullet('__Calibration__ was stripped from every seat.')
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+E   assert []
+     +  [...]- [costly] core.md was __missing__ for every seat.[...] = bullet('core.md was __missing__ for every seat.')
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:333: assert []
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The code reviewer didn’t have core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The code reviewer didn’t get its calibration.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was _stripped_ from the code reviewer.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[_core.md_ was stripped from the code reviewer.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[__Calibration__ was stripped from every seat.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was __missing__ for every seat.]
+6 failed, 33 passed, 55 deselected in 0.67s
+```
+
+- **Restore:** inverse Edit, `return text` back to `return text.translate(_FORMATTING)`.
+- **Restore receipt:** the restored line reads `    return text.translate(_FORMATTING)`.
+- **Raw green** (`-k vet_825`):
+
+```
+.......................................                                  [100%]
+39 passed, 55 deselected in 0.67s
 ```

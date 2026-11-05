@@ -286,6 +286,55 @@ def test_a_lack_that_describes_the_calibration_is_a_claim(text):
     assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
 
 
+# --- the claim word is negation, after formatting is normalised --------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "The code reviewer could not read core.md.",
+    "The code reviewer couldn't read core.md.",
+    "The code reviewer did not read core.md.",
+    "The reviewers never read core.md or review-crew.md.",
+    "core.md was not read by the code reviewer.",
+    "core.md was not loaded for the code reviewer.",
+    "The view did not include core.md or review-crew.md.",
+    "core.md was not provided to the review seats.",
+    "core.md was not supplied to the reviewers.",
+    "core.md wasn't available to the reviewers.",
+    "core.md isn't available inside the sanitized view.",
+    "Calibration never reached the review seats.",
+    "Calibration did not reach the reviewers.",
+    "core.md was excluded from the code reviewer's view.",
+    "core.md was hidden from every reviewer.",
+    "The sanitized view dropped CLAUDE.md for every seat.",
+    "CLAUDE.md was omitted from the reviewers' view.",
+    "core.md was deleted from the reviewers' worktree.",
+    "The reviewers were denied access to core.md.",
+    "core.md was inaccessible to the reviewers.",
+    "Calibration was gone from the sanitized view.",
+    "The reviewers saw none of the project's calibration.",
+    "The reviewers worked with zero calibration.",
+    "The code reviewer didn’t have core.md.",
+    "The code reviewer didn’t get its calibration.",
+    "The review seats ran uncalibrated.",
+    "The reviewers were not calibrated for this project.",
+    "core.md was _stripped_ from the code reviewer.",
+    "_core.md_ was stripped from the code reviewer.",
+    "__Calibration__ was stripped from every seat.",
+    "core.md was __missing__ for every seat.",
+    "The reviewers lacked the project notes.",
+    "The review seats ran without the project's conventions file.",
+    "The code and security reviewers ran without the project's instructions file.",
+    "The code reviewer read core.md but not review-crew.md.",
+    "The reviewers lack core.md.",
+    "The sanitized view will strip core.md from the reviewers.",
+    "The view will withhold core.md from the reviewers.",
+    "core.md was not available to the reviewers.",
+])
+def test_vet_825_sentences_refuse(text):
+    assert cd.contradicted(rec([row(CODE1), row(SEC1)]), bullet(text))
+    result = handback(bullet(text), [record_comment([row(CODE1), row(SEC1)])])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+
+
 # --- 12: rows that never contradict --------------------------------------------------------------------
 
 @pytest.mark.parametrize("only", [
@@ -293,6 +342,7 @@ def test_a_lack_that_describes_the_calibration_is_a_claim(text):
     {"name": CODE1, "ran": "not-run"},
     {"name": CODE1, "ran": "engine-record"},  # no calibrationRead key
     {"name": CODE1, "ran": "engine-record", "calibrationRead": "not a list"},
+    {"name": CODE1, "ran": "reported-by-session", "calibrationRead": cal()},  # session-reported, carries read grades
 ])
 def test_a_row_with_no_measured_calibration_is_never_contradicted(only):
     pr_body = bullet("Calibration was stripped from the reviewers.")
