@@ -35,16 +35,20 @@ _NOUNS = (
 )
 _GENERIC = re.compile(r"\bcalibrations?\b", re.I)
 # A lack term counts only when it describes a calibration noun: one that comes before the noun ("without core.md",
-# "lacked review-crew.md") or one that follows it ("calibration was stripped"), with a short gap between them that
-# crosses no comma, colon or semicolon and holds no verb of reading ("unavailable, so the reviewer used core.md").
+# "the view stripped core.md", "no calibration") or one that follows it ("calibration was stripped"). The words
+# between them may only be ones that join the two (articles, possessives, "and", forms of "be", other calibration
+# nouns), so "unavailable, so the reviewer used core.md" or "no tests ran and the reviewer consulted core.md" is no
+# claim.
+_LACK_VERBS = (r"strip(?:s|ped|ping)?(?: of)?|remov(?:e|es|ed|ing)|withh(?:e|o)ld(?:s|ing)?|"
+               r"(?:left|leaves|leaving|leave) out|not (?:given|handed|passed)")
 _PRE_LACK = re.compile(
-    r"\b(?:without|lack(?:s|ed|ing)?|missing|withh(?:e|o)ld(?:s|ing)?|stripped of|no|"
-    r"(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had)|not (?:given|handed|passed))\b", re.I)
-_POST_LACK = re.compile(
-    r"\b(?:strip(?:s|ped|ping)?|missing|withh(?:e|o)ld(?:s|ing)?|unavailable|not available|absent|removed|"
-    r"(?:left|leaves|leaving) out|not (?:given|handed|passed))\b", re.I)
-_GAP_WORDS = 8
-_GAP_BREAK = re.compile(r"[,;:]|\b(?:read|reads|used|uses|opened|opens|loaded|saw|had|got|received)\b", re.I)
+    r"\b(?:without|lack(?:s|ed|ing)?|missing|no|" + _LACK_VERBS + r"|"
+    r"(?:did not|didn't|never) (?:have|get|got|see|saw|receive|received|had))\b", re.I)
+_POST_LACK = re.compile(r"\b(?:" + _LACK_VERBS + r"|missing|unavailable|not available|absent)\b", re.I)
+_GAP_OK = frozenset((
+    "a", "an", "the", "its", "their", "this", "that", "these", "those", "project's", "projects", "any", "all", "both",
+    "and", "or", "of", "to", "access", "file", "files", "was", "were", "is", "are", "be", "been", "being", "has",
+    "have", "also", "entirely", "fully", "own", "seat's", "seats'", "reviewer's", "reviewers'"))
 _ALIASES = {"premortem": ("failure-mode", "failure mode")}
 
 
@@ -53,10 +57,16 @@ class Unreadable(Exception):
 
 
 def _joins(gap):
-    """Whether a lack term and a calibration noun ``gap`` apart describe one another: a parenthesis is dropped, and
-    what is left is at most a few words with no clause break and no verb of reading."""
+    """Whether a lack term and a calibration noun ``gap`` apart describe one another: with a parenthesis, the other
+    calibration nouns and code marks dropped, every word left joins the two and no comma, colon or semicolon
+    stands between them."""
     gap = re.sub(r"\([^()]*\)", " ", gap)
-    return len(gap.split()) <= _GAP_WORDS and not _GAP_BREAK.search(gap) and "(" not in gap and ")" not in gap
+    for noun, _named in _NOUNS:
+        gap = noun.sub(" ", gap)
+    gap = _GENERIC.sub(" ", gap).replace("`", " ").replace("*", " ")
+    if re.search(r"[,;:()]", gap):
+        return False
+    return all(word in _GAP_OK for word in re.findall(r"[\w'.-]+", gap.lower()))
 
 
 def _lacked(clause, noun):
