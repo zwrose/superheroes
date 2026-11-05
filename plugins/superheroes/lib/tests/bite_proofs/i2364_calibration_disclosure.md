@@ -73,6 +73,14 @@ Disclosures:
   disclosure never reads as a claim. Entry 12 proves it. **The model-identifier reading of the second exemption
   (`calibrated` directly followed by one token holding a digit, such as `gpt-6.1-sol`) is the builder's
   interpretation**, needed so the order's fourth text passes; it is not in the advisor's order text.
+- **The identifier form of the exemption was narrowed on the advisor's 11:44Z vet 827 order.** The identifier form needs
+  "the" before `calibrated` and a letter-led token that holds a digit (`\bthe\s+calibrated\s+[a-z]\S*\d\S*`); the old
+  `calibrated` plus any token with a digit also masked lack claims such as "was not calibrated 2 rounds in a row".
+  Entry 13 proves it. The same order made the verify/model/command separator `[\s-]+` (so "calibrated-command" is
+  exempt) and added `with` to the declaration verbs (so "a core.md with no ## Show-it surface" is exempt); those two
+  edits are pinned by `test_more_doctrine_wordings_pass` and carry no separate entry. Two known shapes still pass and
+  are the orchestrator's named residuals, not patched and not tested here: "The code reviewer ran without the calibrated
+  gpt-6.1-sol." and "The reviewer ran without calibrated-command."
 - The claim word also holds `uncalibrat(e|es|ed|ing|ion|ions)`, which the order's word list did not name: "ran
   uncalibrated" holds no other negation or removal word, and the order's text list expects it to refuse.
 
@@ -574,4 +582,49 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_d
 ```
 ....                                                                     [100%]
 4 passed, 110 deselected in 0.41s
+```
+
+## 13. The narrowed identifier form (`_EXEMPT`)
+
+- **Axis:** the model-identifier exemption applies only after "the" and only to a token that starts with a letter and
+  holds a digit, so "calibrated" followed by a digit-led token or by a parenthesis never masks the word where it is
+  itself the claim ("not calibrated (gpt-6.1-sol ran bare)", "not calibrated 2 rounds", "calibrated 3 files stripped").
+- **Neutralization:** in `_EXEMPT`, the alternative `\bthe\s+calibrated\s+[a-z]\S*\d\S*` became
+  `\bcalibrated\s+\S*\d\S*` (the old broad form).
+- **Raw red** (`-k an_exemption_never_lets`, over the three test files; verbatim minus the uv warning line; each long
+  `where` line is cut by pytest itself, as printed). All three cases went red, not only the two digit-led ones:
+  the parenthesis-led case also matches the old `\S*\d\S*` (the `\S*` takes the `(`):
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_an_exemption_never_lets_a_real_lack_claim_through[The code reviewer was not calibrated (gpt-6.1-sol ran bare).] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:489: in test_an_exemption_never_lets_a_real_lack_claim_through
+    assert cd.contradicted(record, bullet(text))
+E   assert []
+_ test_an_exemption_never_lets_a_real_lack_claim_through[The reviewers were not calibrated 2 rounds in a row.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:489: in test_an_exemption_never_lets_a_real_lack_claim_through
+    assert cd.contradicted(record, bullet(text))
+E   assert []
+_ test_an_exemption_never_lets_a_real_lack_claim_through[The calibrated 3 files were stripped from the code reviewer.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:489: in test_an_exemption_never_lets_a_real_lack_claim_through
+    assert cd.contradicted(record, bullet(text))
+E   assert []
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_an_exemption_never_lets_a_real_lack_claim_through[The code reviewer was not calibrated (gpt-6.1-sol ran bare).]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_an_exemption_never_lets_a_real_lack_claim_through[The reviewers were not calibrated 2 rounds in a row.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_an_exemption_never_lets_a_real_lack_claim_through[The calibrated 3 files were stripped from the code reviewer.]
+3 failed, 119 deselected in 0.55s
+```
+
+  The `where`/`and` detail lines under each `E   assert []` (the record and body dumps) are elided from this quote,
+  about 1.5 KB; nothing else was cut. Nothing in the capture needed redaction.
+- **Restore:** inverse Edit, `\bcalibrated\s+\S*\d\S*` back to `\bthe\s+calibrated\s+[a-z]\S*\d\S*`.
+- **Restore receipt:** the restored line reads
+  `    r"|\bshow-it surface\b|\bcalibrated[\s-]+(?:verify|model|command)s?\b|\bthe\s+calibrated\s+[a-z]\S*\d\S*", re.I)`.
+- **Raw green** (`-k an_exemption_never_lets`):
+
+```
+...                                                                      [100%]
+3 passed, 119 deselected in 0.62s
 ```

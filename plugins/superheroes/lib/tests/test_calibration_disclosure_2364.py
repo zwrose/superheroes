@@ -477,6 +477,31 @@ def _insert(anchor):
     raise AssertionError(anchor)
 
 
+# --- the exemption never lets a real lack claim through (vet 827) -----------------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "The code reviewer was not calibrated (gpt-6.1-sol ran bare).",
+    "The reviewers were not calibrated 2 rounds in a row.",
+    "The calibrated 3 files were stripped from the code reviewer.",
+])
+def test_an_exemption_never_lets_a_real_lack_claim_through(text):
+    record = rec([row(CODE1), row(SEC1)])
+    assert cd.contradicted(record, bullet(text))
+    result = handback(bullet(text), [record_comment([row(CODE1), row(SEC1)])])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+
+
+@pytest.mark.parametrize("text", [
+    "The entry point is `none` (a `core.md` with no `## Show-it surface`), so the owner reads the sample record.",
+    "The calibrated-command test fixture uses this repo's real verify command, with the home directory and project id"
+    " replaced, so a private path is not published in a public repo.",
+])
+def test_more_doctrine_wordings_pass(text):
+    record = rec([row(CODE1), row(SEC1)])
+    assert cd.contradicted(record, bullet(text)) == []
+    assert handback(bullet(text), [record_comment([row(CODE1), row(SEC1)])])["ok"] is True
+
+
 # --- 15: the sanitized view's notice ----------------------------------------------------------------------
 
 def test_the_sanitized_view_notice_says_calibration_read_is_the_measurement():

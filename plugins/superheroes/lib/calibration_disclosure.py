@@ -52,10 +52,11 @@ _LACK = re.compile(
     r"hid(?:e|es|den|ing)?|den(?:y|ies|ied|ying|ial)|inaccessible|unavailable|absent|gone|unread|"
     r"uncalibrat(?:e|es|ed|ing|ion|ions))\b|(?<=[a-z])n't\b", re.I)
 # Calibration mentions that are never a claim: the project's show-it surface declaration (the doctrine's own required
-# disclosure) and "calibrated" as a modifier before verify, model, command or a model identifier (a token with a digit).
+# disclosure) and "calibrated" as a modifier before verify, model or command, or in "the calibrated <model identifier>"
+# (a token that starts with a letter and holds a digit).
 _EXEMPT = re.compile(
-    r"\b(?:core\.md|(?:the\s+)?(?:project'?s\s+)?calibration)\s+(?:has|declares)\s+no\s+(?:#+\s*)?show-it surface\b"
-    r"|\bshow-it surface\b|\bcalibrated\s+(?:(?:verify|model|command)s?\b|\S*\d\S*)", re.I)
+    r"\b(?:core\.md|(?:the\s+)?(?:project'?s\s+)?calibration)\s+(?:has|declares|with)\s+no\s+(?:#+\s*)?show-it surface\b"
+    r"|\bshow-it surface\b|\bcalibrated[\s-]+(?:verify|model|command)s?\b|\bthe\s+calibrated\s+[a-z]\S*\d\S*", re.I)
 _ALIASES = {"premortem": ("failure-mode", "failure mode")}
 # Markdown emphasis characters become spaces and typographic apostrophes and the no-break space become their plain
 # forms, so formatting cannot hide a word from the patterns above.
