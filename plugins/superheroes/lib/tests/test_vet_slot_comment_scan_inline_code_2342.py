@@ -462,3 +462,75 @@ def test_c15_comment_scan_gate_rows(body, expected):
         "mailto-autolink", "lt-signs", "mid-line-tag", "nbsp", "bom", "zwsp", "after-u2028"])
 def test_c15_could_open_html_block(body, expected):
     assert vs._could_open_html_block(body) is expected
+
+
+# --- J: review session 7 (test-s4-001): a splitlines-only line break turns the exemption off --------------------------
+# After a comment closes, the rest of its line is matched plainly, but that state resets at every str.splitlines()
+# boundary. U+2028, U+0085, a form feed and the other splitlines-only separators are not Markdown line endings, so a
+# quoted opener after one stays on the comment's closing line, where a browser opens a comment over the owner heading.
+# The body has no HTML-block line, so only the splitlines-only clause at the gate can switch the exemption off.
+
+J_NOT_READY_SLOT = "**Verdict: NOT-READY** · " + "a" * 40 + "\n\nNew owner half.\n"
+# the eight characters str.splitlines() breaks on and Markdown does not, written as escapes
+J_SEPARATORS = [("u2028", "\N{LINE SEPARATOR}"), ("u2029", "\N{PARAGRAPH SEPARATOR}"), ("nel", "\x85"), ("vt", "\x0b"), ("ff", "\x0c"),
+                ("fs", "\x1c"), ("gs", "\x1d"), ("rs", "\x1e")]
+J_SEEN = ("u2028", "nel", "ff")  # the three the seat reproduced
+
+
+def _j_body(sep):
+    return ("<!-- done --> " + sep + "`<!--` note\n## What's changing, and why\n\nOwner-facing scope.\n\n"
+            "## Advisor vet\n<!-- superheroes:advisor-vet -->\nold slot\n\n<!-- superheroes:build-record -->\n"
+            "<!-- superheroes:followups none -->\n")
+
+
+def _j_evaluate(body):
+    return vs.evaluate("write", body, [_comment(RECEIPT_NONE)], J_NOT_READY_SLOT, advisor_login="advisor")
+
+
+@pytest.mark.parametrize("entry", ["evaluate", "run_verb"])
+@pytest.mark.parametrize("sep", [s for i, s in J_SEPARATORS if i in J_SEEN], ids=[i for i, _ in J_SEPARATORS if i in J_SEEN])
+def test_j1_a_quoted_opener_after_a_splitlines_only_break_refuses_body_emptied(tmp_path, sep, entry):
+    # J1: the seat's break-it shapes, a NOT-READY slot and a receipt with dispositions none; nothing is pushed
+    body = _j_body(sep)
+    if entry == "evaluate":
+        result = _j_evaluate(body)
+        assert result["ok"] is False and result["reason"] == "body-emptied", result
+    else:
+        fake = _fake(body)
+        _refused(_write(fake, tmp_path, J_NOT_READY_SLOT), fake, "body-emptied")
+
+
+@pytest.mark.parametrize("entry", ["evaluate", "run_verb"])
+def test_j2_the_lf_control_still_writes(tmp_path, entry):
+    # J2: with a real newline the quoted opener sits on its own line, where the exemption reads it as inline code
+    body = _j_body("\n")
+    if entry == "evaluate":
+        result = _j_evaluate(body)
+        assert result["ok"] is True, result
+        assert "New owner half." in result["newBody"]
+    else:
+        fake = _fake(body)
+        result = _write(fake, tmp_path, J_NOT_READY_SLOT)
+        assert result["ok"] is True, result
+        assert len(fake.edit_calls()) == 1
+
+
+@pytest.mark.parametrize("sep", [s for _, s in J_SEPARATORS], ids=[i for i, _ in J_SEPARATORS])
+def test_j3_each_of_the_eight_splitlines_only_breaks_turns_the_exemption_off(sep):
+    # J3: dropping any one character from _SPLITLINES_ONLY_BREAKS turns its own case red
+    result = _j_evaluate(_j_body(sep))
+    assert result["ok"] is False and result["reason"] == "body-emptied", result
+
+
+def test_j3_the_eight_characters_are_all_splitlines_breaks_and_none_is_a_markdown_line_ending():
+    # the constant's premise, read off the language: each one splits a line, none is CR or LF
+    for _, sep in J_SEPARATORS:
+        assert len(("a" + sep + "b").splitlines()) == 2
+        assert sep not in "\r\n"
+    assert len(J_SEPARATORS) == 8
+
+
+def test_j4_a_body_without_a_splitlines_only_break_keeps_the_exemption():
+    # J4: an inline-code opener, no HTML-block line, no splitlines-only break: the exemption stays on
+    assert [row[3] for row in vs._comment_scan("a `<!--` b\nnext\n")] == [False, False]
+    assert [row[3] for row in vs._comment_scan("a \N{LINE SEPARATOR} `<!--` b\nnext\n")] == [False, False, True]

@@ -99,6 +99,9 @@ _ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
 _BLOCK_LEAD_ASCII = " \t>*+-0123456789.)"
 _BLOCK_START_RE = re.compile(r"<[A-Za-z/?!]")
 _AUTOLINK_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.\-]{1,31}:[^\s<>]*>")
+# _comment_scan: the eight characters str.splitlines() breaks a line on that Markdown does not (U+2028, U+2029, U+0085,
+# VT, FF, FS, GS, RS). A body holding any of them gets no escape or code-span exemption.
+_SPLITLINES_ONLY_BREAKS = "\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\x85\x0b\x0c\x1c\x1d\x1e"
 _ACCEPTING_KEY = "what were accepting"
 _BUILDER_HEADING_KEYS = ("whats changing", _ACCEPTING_KEY, "how to see it", "build record", "build brief",
                          "dispatch provenance", "disclosed degradations", "followups for the advisor",
@@ -213,14 +216,17 @@ def _comment_scan(body):
     first ``-->`` closes it wherever it sits, backticks there being plain characters. Outside a comment on an unfenced
     line, a ``<!--`` after a backslash escape or inside an inline code span (``leftover_accepting``'s
     ``_code_span_end``) opens nothing, but only in a body with no line that could open an HTML block
-    (``_could_open_html_block``). In every other body, and in the rest of any line on which a comment closes (raw HTML
-    may follow it), each ``<!--`` outside a fenced code block opens a comment, as a plain search finds it."""
+    (``_could_open_html_block``) and none of the eight characters ``str.splitlines()`` breaks a line on that Markdown
+    does not (``_SPLITLINES_ONLY_BREAKS``). In every other body, and in the rest of any line on which a comment
+    closes (raw HTML may follow it), each ``<!--`` outside a fenced code block opens a comment, as a plain search
+    finds it."""
     raw = body.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
     in_comment = False
     # axis: a body with a line that could open an HTML block gets no escape or code-span exemption — see bite-proof record i2342_comment_scan_inline_code.md
-    exempt = not _could_open_html_block(body)
+    # axis: a body holding a splitlines-only line break (U+2028, U+0085, a form feed, and five more) gets no exemption, the closing-line state resetting where Markdown has no line break — see bite-proof record i2342_comment_scan_inline_code.md
+    exempt = not _could_open_html_block(body) and not any(ch in body for ch in _SPLITLINES_ONLY_BREAKS)
     offset = 0
     for line, dead, whole in zip(bare, inert, raw):
         starts_in_comment = in_comment

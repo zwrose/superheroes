@@ -585,3 +585,105 @@ The captures above keep the names the tests had when they ran (seven of the eigh
 | `test_c14_a_list_item_quoted_raw_run_ends_at_its_quoted_blank_so_the_bot_body_writes` | `test_c14_a_list_item_quoted_raw_run_body_refuses_write_failed` |
 | `test_c14_a_double_spaced_quote_prefix_ends_at_its_quoted_blank_so_the_bot_body_writes` | `test_c14_a_double_spaced_quote_prefix_body_refuses_write_failed` |
 | `test_c14_a_line_of_ascii_spaces_and_tabs_still_ends_a_raw_run` | `test_c14_a_line_of_ascii_spaces_and_tabs_in_an_html_block_body_leaves_the_quoted_opener_a_comment` |
+
+## Review session 7: splitlines-only breaks turn the exemption off (G7)
+
+Finding test-s4-001 (Important): on the line where a comment closes, `_comment_scan` matches the rest of the line plainly
+(`plain = True`), but that state resets at every `str.splitlines()` boundary. U+2028, U+0085, a form feed and the other
+splitlines-only separators are not Markdown line endings, so in a body with no HTML-block line (exemption on) a quoted
+`<!--` after one was read as inline code, while a browser opens a comment on the comment's closing line over the owner
+heading, and the write passed `body-emptied`. Fix (the advisor's option c): the exemption is also off when the body holds
+any of the eight characters `_SPLITLINES_ONLY_BREAKS` (U+2028, U+2029, U+0085, `\x0b`, `\x0c`, `\x1c`, `\x1d`, `\x1e`).
+`_comment_scan`'s loop, state and signature are unchanged. Base `2538b4cb`. Method as above: Edit-tool neutralizations,
+inverse-Edit restores; no `git checkout`, `restore`, `reset` or `stash`. Command prefix as above (`--tb=short`, `--tb=line`
+for the G7 red). Guarded-element set (declared by the order): G7 (the clause at the gate) and G7a (the eight characters,
+one failure-mode class). Detector: the `J` section of `test_vet_slot_comment_scan_inline_code_2342.py`.
+
+Disclosures:
+- Captures are the runner's lines with the `UV_NATIVE_TLS` warning line, the repeated `E` lines and the `FAILED` node-id
+  path prefix cut by hand; counts are exact. Nothing was redacted; each capture is far under 32 KiB.
+- The G7 red and green runs ran while the constant was still spelled with two literal characters for U+2028 and U+2029
+  (the edit tool had turned the two four-digit unicode escapes into the characters). Both were then respelled
+  `\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}` (same value), and the G7a run, its green, and the J5 run all ran on the
+  escaped spelling.
+
+### Pre-change receipt (head `2538b4cb`, `vet_slot.py` unedited)
+
+The J tests were written first and run on the unedited file, `-k "test_j"`:
+
+```
+FFFFFF..FFFFFFFF.F                                                       [100%]
+FAILED ...::test_j1_..._refuses_body_emptied[u2028-evaluate]
+FAILED ...::test_j1_..._refuses_body_emptied[u2028-run_verb]
+FAILED ...::test_j1_..._refuses_body_emptied[nel-evaluate]
+FAILED ...::test_j1_..._refuses_body_emptied[nel-run_verb]
+FAILED ...::test_j1_..._refuses_body_emptied[ff-evaluate]
+FAILED ...::test_j1_..._refuses_body_emptied[ff-run_verb]
+FAILED ...::test_j3_each_of_the_eight_splitlines_only_breaks_turns_the_exemption_off[u2028] [u2029] [nel] [vt] [ff] [fs] [gs] [rs]
+FAILED ...::test_j4_a_body_without_a_splitlines_only_break_keeps_the_exemption
+  E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1'}
+  E   assert [False, False, False] == [False, False, True]
+15 failed, 3 passed, 98 deselected in 0.69s
+```
+
+The three passes are the two LF controls (J2, both entry points) and the premise test (each of the eight characters
+splits a line under `splitlines()` and none is CR or LF). The six J1 reds are the orchestrator's measured set.
+
+### G7: the new clause at the gate
+
+- **Guarded element / axis:** `exempt = not _could_open_html_block(body) and not any(ch in body for ch in
+  _SPLITLINES_ONLY_BREAKS)` (`vet_slot.py:229`); a body holding a splitlines-only line break gets no escape or code-span
+  exemption (J1 through both entry points, J3 for all eight characters, J4 on the scan itself).
+- **Neutralization:** the gate line became `    exempt = not _could_open_html_block(body)` (the line the head had).
+- **Raw red** (`-k "test_j"`, `--tb=line`):
+
+```
+FFFFFF..FFFFFFFF.F                                                       [100%]
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1'}
+E   assert [False, False, False] == [False, False, True]
+FAILED ...::test_j1_..._refuses_body_emptied[u2028-evaluate] [u2028-run_verb] [nel-evaluate] [nel-run_verb] [ff-evaluate] [ff-run_verb]
+FAILED ...::test_j3_each_of_the_eight_splitlines_only_breaks_turns_the_exemption_off[u2028] [u2029] [nel] [vt] [ff] [fs] [gs] [rs]
+FAILED ...::test_j4_a_body_without_a_splitlines_only_break_keeps_the_exemption
+15 failed, 3 passed, 98 deselected in 0.72s
+```
+
+(Elided: the 15 per-test `E` blocks, repeats of the lines shown.)
+
+- **Restore:** inverse Edit (the clause put back).
+- **Restore receipt:** `vet_slot.py:229` reads `    exempt = not _could_open_html_block(body) and not any(ch in body for ch in _SPLITLINES_ONLY_BREAKS)`.
+- **Raw green** (same selector): `18 passed, 98 deselected in 0.41s`.
+
+### G7a: the eight characters (one failure-mode class)
+
+- **Class:** each dropped character lets its own separator reopen the exemption in a body that holds it. **Representative:**
+  `\x1e`. J3 holds one case per character (ids `u2028 u2029 nel vt ff fs gs rs`), so each of the eight turns its own case
+  red when dropped; the representative was run, the other seven are covered by the same shape and not individually
+  neutralized.
+- **Guarded element / axis:** `_SPLITLINES_ONLY_BREAKS` (`vet_slot.py:104`); every one of the eight splitlines-only
+  breaks must be in the constant.
+- **Neutralization:** `\x0c\x1c\x1d\x1e"` became `\x0c\x1c\x1d"` (the constant minus `\x1e`).
+- **Raw red** (`-k "test_j"`):
+
+```
+...............F..                                                       [100%]
+FAILED ...::test_j3_each_of_the_eight_splitlines_only_breaks_turns_the_exemption_off[rs]
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+E   assert (True is False)
+1 failed, 17 passed, 98 deselected in 0.52s
+```
+
+- **Restore:** inverse Edit (`\x1e` put back).
+- **Restore receipt:** `vet_slot.py:104` reads `_SPLITLINES_ONLY_BREAKS = "\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\x85\x0b\x0c\x1c\x1d\x1e"`.
+- **Raw green** (same selector): `18 passed, 98 deselected in 0.48s`.
+
+### Regression run (J5), after the final edit
+
+```
+test_vet_slot.py test_vet_slot_emptied_2323.py test_vet_slot_leftovers_2280.py test_vet_slot_owner_commands.py test_vet_slot_no_build_record_2342.py test_vet_slot_comment_scan_inline_code_2342.py test_vet_slot_builder_path_verdict_read_2342.py
+682 passed in 3.27s
+```
+
+### Elements in no class
+
+None: G7 and G7a each have a neutralization and a red.
