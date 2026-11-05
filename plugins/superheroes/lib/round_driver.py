@@ -7712,7 +7712,8 @@ def _audit_result_entry_fault(entry, index, target_ids, targets_by_id=None):
     checks_fault = audits.audit_checks_fault(entry, (targets_by_id or {}).get(rid))
     if checks_fault is not None:
         return ("%s is refused: %s; expected `checks` with `right`, `brokeNothing` and `testWouldFail`, "
-                "each {\"answer\": \"yes\" or \"no\", \"why\": <reason>}" % (where, checks_fault))
+                "each {\"answer\": \"yes\" or \"no\" (`testWouldFail` may also be \"review-guarded\"), "
+                "\"why\": <reason>}" % (where, checks_fault))
     # axis: the optional `places` answer is a list of {file, line, fixed} rows — `audits.place_answers_fault`, the fold's own judge
     places_fault = audits.place_answers_fault(entry)
     if places_fault is not None:
@@ -8412,19 +8413,87 @@ def _diff_files(diff_text):
     return files
 
 
+_DIFF_GIT_PREFIX = "diff --git "
+
+
+def _diff_header_lines(diff_text):
+    """The distinct ``diff --git`` header lines of a unified diff, in order of first appearance."""
+    headers = []
+    for ln in (diff_text or "").splitlines():
+        if ln.startswith(_DIFF_GIT_PREFIX) and ln not in headers:
+            headers.append(ln)
+    return headers
+
+
+def _one_path_header(header):
+    """The path ``<f>`` when ``header`` reads exactly ``diff --git a/<f> b/<f>`` (one non-empty path on
+    both sides, which may hold spaces), else None — a rename or copy (two paths) or a git-quoted path."""
+    rest = header[len(_DIFF_GIT_PREFIX):]
+    span = len(rest) - 5
+    if span <= 0 or span % 2:
+        return None
+    path = rest[2:2 + span // 2]
+    return path if rest == "a/" + path + " b/" + path else None
+
+
+def _header_section(diff_text, header):
+    """The lines of every section of a unified diff opened by exactly ``header``: the header line through
+    the line before the next ``diff --git`` header."""
+    out, inside = [], False
+    for ln in (diff_text or "").splitlines():
+        if ln.startswith(_DIFF_GIT_PREFIX):
+            inside = ln == header
+        if inside:
+            out.append(ln)
+    return out
+
+
+def _section_delta_lines(before, after):
+    """The unified diff between two sections of a whole file, in the shape ``_fixer_delta_lines`` writes
+    for a whole file: hunk headers, context, ``-`` for a before line and ``+`` for an after line."""
+    delta = []
+    matcher = difflib.SequenceMatcher(None, before, after, autojunk=False)
+    for group in matcher.get_grouped_opcodes(3):
+        first, last = group[0], group[-1]
+        delta.append("@@ -%d,%d +%d,%d @@" % (
+            first[1] + 1, last[2] - first[1], first[3] + 1, last[4] - first[3]))
+        for op, i1, i2, j1, j2 in group:
+            if op == "equal":
+                delta.extend(" " + ln for ln in before[i1:i2])
+                continue
+            delta.extend("-" + ln for ln in before[i1:i2])
+            delta.extend("+" + ln for ln in after[j1:j2])
+    return delta
+
+
 def _attempt_fixer_delta(reviewed_diff, head_diff, leave_out=()):
     """The whole fixer attempt's delta: the fix's own diff (reviewed head -> fixed head) over every
     file the attempt changed, not only a finding's location. A file in ``leave_out`` (a proven copy)
-    has no section in it."""
+    has no section in it. A section whose header is not ``a/<f> b/<f>`` for one path (a rename or copy,
+    or a git-quoted path) is emitted under its own header line verbatim whenever it differs between the
+    two diffs, so a reader of the delta never loses the file."""
     delta = []
-    for file in _diff_files(reviewed_diff) + [f for f in _diff_files(head_diff)
-                                              if f not in _diff_files(reviewed_diff)]:
-        if file in leave_out:
+    reviewed_headers = _diff_header_lines(reviewed_diff)
+    for header in reviewed_headers + [h for h in _diff_header_lines(head_diff)
+                                      if h not in reviewed_headers]:
+        file = _one_path_header(header)
+        if file is not None:
+            if file in leave_out:
+                continue
+            lines = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
+            if lines:
+                delta.append("diff --git a/%s b/%s" % (file, file))
+                delta.extend(lines)
             continue
-        lines = _fixer_delta_lines(reviewed_diff, head_diff, file, None, whole_file=True)
-        if lines:
-            delta.append("diff --git a/%s b/%s" % (file, file))
-            delta.extend(lines)
+        # axis: a left-out proven copy stays out of the delta whatever its header's form, a git-quoted one included
+        sides = _diff_header_sides(header)
+        if sides is not None and sides[1] in leave_out:
+            continue
+        before, after = _header_section(reviewed_diff, header), _header_section(head_diff, header)
+        if before == after:
+            continue
+        delta.append(header)
+        delta.extend(_section_delta_lines(before, after))
     return delta
 
 
