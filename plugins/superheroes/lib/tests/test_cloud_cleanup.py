@@ -18,6 +18,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_cleanup as CC  # noqa: E402
+import cloud_parked as CP  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 
 from test_launch_ledger import _declare, _init_repo, _ledger_env, _reserved, _started  # noqa: E402
@@ -44,10 +45,17 @@ class Gh:
         self.sticky = False
         self.open_raw = None  # when set, the open-PR listing's raw stdout
         self.delete_script = []  # per DELETE, in order: (removes the branch, then times out)
+        self.closing = {}  # PR number -> the closingIssuesReferences rows `gh pr view` answers; absent, the read fails
 
     def __call__(self, argv, **kw):
         assert argv[0] == "gh", argv
         self.calls.append(tuple(argv))
+        if argv[1:3] == ["pr", "view"]:
+            assert argv[4:] == ["--repo", REPO, "--json", "closingIssuesReferences"], argv
+            rows = self.closing.get(int(argv[3]))
+            if rows is None:
+                return SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: HTTP 403")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"closingIssuesReferences": rows}), stderr="")
         path = argv[-1]
         base = "repos/%s" % REPO
         if "DELETE" in argv:
@@ -414,6 +422,88 @@ def test_a_pr_that_links_no_issue_is_unlinked(w):
     assert _branch(w) == {"ok": False, "reason": "pr-unlinked"}
 
 
+def test_a_pr_whose_close_line_sits_below_a_note_is_linked(w):
+    # axis: the closing links; a note above "Closes #N" left the PR unlinked
+    _lane(w, "l-1", 101)
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "> Correction (advisor): the vet slot was rewritten.\n\n" + pull["body"]
+    w.gh.pulls[PR] = pull
+    w.gh.closing[PR] = [_ref(101)]  # the field case: GitHub's list is read
+    out = _plan(w)
+    assert out["ok"] and out["action"] == "cleanup" and out["issue"] == 101, out
+    assert out["linkSource"] == "github", out
+
+
+def test_a_note_above_the_close_line_with_githubs_list_unreadable_is_unlinked(w):
+    # axis: with GitHub's list unreadable only the first line is read, so a note above "Closes #N" leaves the PR unlinked
+    _lane(w, "l-1", 101)
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "> Correction (advisor): the vet slot was rewritten.\n\n" + pull["body"]
+    w.gh.pulls[PR] = pull
+    assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
+
+
+def test_a_pr_whose_only_close_link_names_another_repository_is_unlinked(w):
+    # axis: the cross-repository guard; another repository's issue read as this PR's
+    _lane(w, "l-1", 101)
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "A note.\n\nCloses other/repo#101\n\nthe work"
+    w.gh.pulls[PR] = pull
+    assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
+
+
+def test_a_closing_example_in_code_does_not_link_a_second_issue(w):
+    # axis: Markdown code; a backticked example close line read as a second linked issue
+    _lane(w, "l-1", 101, session="session-a")
+    _lane(w, "l-2", 202, session="session-b")
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "Closes #101\n\nThe first line reads like `Closes #202`.\n\n```\nFixes #202\n```\n"
+    w.gh.pulls[PR] = pull
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["launchId"] == "l-1", out
+
+
+def test_a_pr_that_closes_on_its_first_line_and_one_without_any_keyword(w):
+    # axis: the sibling cases; a first-line link stopped linking, or a body with no keyword linked
+    assert CP._body_links("Closes #7.\n\nbody", REPO) == [7]
+    assert CP._body_links("the work\n\nmentions #8 in passing", REPO) == []
+    assert CP._body_links("Part of #9.\n\nbody", REPO) == [9]
+    assert CP._body_links("This PR fixes #10.", REPO) == [10]
+    assert CP._body_links("Closes other/repo-#202", REPO) == []
+    assert CP._body_links("See x/y#3 and a-#4", REPO) == []
+    assert CP._body_links("Part of (#9).", REPO) == [9]
+
+
+def _ref(number, repo=REPO):
+    owner, name = repo.split("/")
+    return {"number": number, "repository": {"name": name, "owner": {"login": owner}},
+            "url": "https://github.com/%s/issues/%d" % (repo, number)}
+
+
+def test_githubs_own_closing_list_decides_where_it_can_be_read_even_against_the_body(w):
+    # axis: the source; the body read where GitHub's own list was readable, or another repository's issue in it counted
+    _lane(w, "l-1", 101, session="session-a")
+    _lane(w, "l-2", 202, session="session-b")
+    w.gh.pulls[PR] = _pull(issues=(202,), head_sha=w.head)
+    w.gh.closing[PR] = [_ref(101), _ref(202, "other/repo")]
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["launchId"] == "l-1" and out["linkSource"] == "github", out
+    w.gh.closing[PR] = []
+    w.gh.pulls[PR]["body"] = "the work\n\nCloses #202"
+    assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}  # GitHub's empty list is read, never the body's #202
+
+
+def test_the_body_is_read_only_when_githubs_list_cannot_be_read(w):
+    # axis: the fallback; an unreadable or malformed answer from GitHub read as no links instead of falling back
+    _lane(w, "l-1", 101)
+    w.gh.pulls[PR] = _pull(head_sha=w.head)
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["linkSource"] == "body", out
+    w.gh.closing[PR] = [{"number": 101}]  # an entry naming no repository is not GitHub's answer
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["linkSource"] == "body", out
+
+
 def test_a_local_lane_is_no_cloud_lane(w):
     _lane(w, "l-local", 101, session=None, place="local")
     assert _plan(w) == {"ok": False, "reason": "no-cloud-lane"}
@@ -451,7 +541,7 @@ def test_the_plan_carries_the_lanes_facts_and_the_newest_cloud_lane_of_the_issue
     assert got == {"ok": True, "action": "cleanup", "outcome": "merged", "repo": REPO, "pr": PR, "issue": 101,
                    "launchId": "l-2", "session": "session-two", "sessionId": "session_01AbCdEf123", "configDir": None,
                    "archiveText": CC.ARCHIVE_TEXT_MERGED % PR, "request": {"state": "none"}, "closedAt": "2026-10-12T10:00:00Z", "branch": BRANCH,
-                   "headSha": w.head}
+                   "headSha": w.head, "linkSource": "body"}
 
 
 _T1, _T2, _OPENED = 1_700_000_000, 1_700_100_000, "2023-11-15T00:00:00Z"  # _OPENED is between them
@@ -1036,6 +1126,33 @@ def _stack(w, session="session-a", outcome=None):
         w.gh.issues[issue] = {"parent_issue_url": _parent_url(PARENT)}
     w.gh.sub_issues[PARENT] = [{"number": issue, "state": "closed"} for _, issue, _ in LAYERS]
     _lane(w, "l-1", PARENT, session=session, outcome=outcome, ts=_T1)
+
+
+def test_a_closing_keyword_in_an_indented_block_never_binds_a_stack_layer_to_another_lane(w):
+    # axis: the fail direction; a keyword in code GitHub does not read bound cleanup to another issue's lane
+    _stack(w)
+    _lane(w, "l-9", 999, session="session-z", ts=_T1)
+    w.gh.pulls[501]["body"] += "\n\n    Fixes #999\n"
+    out = _plan_n(w, 501)
+    assert out["ok"] and out["issue"] == PARENT and out["launchId"] == "l-1" and out["viaParent"] is True, out
+
+
+@pytest.mark.parametrize("block", [
+    "\n\n<code>\n\nFixes #999\n\n</code>\n",
+    "\n\n<a href=\"https://example.com\">\n\nFixes #999\n\n</a>\n",
+    "\n\n- <a href=\"https://example.com\">\n\n  Fixes #999\n\n  </a>\n",
+    "\n\n`example\n\u00a0\nFixes #999\n\u00a0\nend`\n",
+    "\n\n`example\n\x0c\nFixes #999\n\x0c\nend`\n",
+], ids=["code-element", "anchor-element", "anchor-on-a-list-line", "code-span-over-no-break-space-lines",
+        "code-span-over-form-feed-lines"])
+def test_with_githubs_list_unreadable_markup_in_a_stack_layers_body_never_binds_another_lane(w, block):
+    # axis: the fail direction; with GitHub's list unreadable, only the description's first line is read, so markup GitHub does not read as a close link binds no other issue's lane
+    _stack(w)
+    _lane(w, "l-9", 999, session="session-z", ts=_T1)
+    w.gh.pulls[501]["body"] += block  # w.gh.closing has no entry for 501: GitHub's list is unreadable
+    out = _plan_n(w, 501)
+    assert out["ok"] and out["issue"] == PARENT and out["launchId"] == "l-1" and out["viaParent"] is True, out
+    assert out["linkSource"] == "body", out
 
 
 def _plan_n(w, number, **kw):

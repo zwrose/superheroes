@@ -37,9 +37,10 @@ CANON_SOURCES = {"canonText": canon.entry_line(STANDING, "2026-01-02", "standing
 class Fake:
     """Injectable readers with an in-memory comment list; records create calls."""
 
-    def __init__(self, head=HEAD, runs=None, sources=None):
+    def __init__(self, head=HEAD, runs=None, sources=None, ends=None):
         self.comments, self.writes = [], []
         self.head, self.runs, self.sources = head, runs or {}, sources or {}
+        self.ends = ends or {}  # run dir -> (watchdog ends, error), or an exception to raise
 
     def readers(self):
         return {
@@ -49,12 +50,19 @@ class Fake:
             "ci_workflow": lambda root: ("absent", None),
             "lane_marker": lambda root: None,
             "engine_run": lambda d: self.runs.get(d, (copy.deepcopy(GOOD_RUN), None)),
+            "watchdog_ends": self._watchdog_ends,
             "repo_name": lambda root: "o/r",
             "list_comments": lambda pr, repo: list(self.comments),
             "create_comment": self._create,
             "changed_paths": lambda pr, repo: ["README.md"],
             "decision_sources": self._sources,
         }
+
+    def _watchdog_ends(self, d):
+        got = self.ends.get(d, ([], None))
+        if isinstance(got, Exception):
+            raise got
+        return copy.deepcopy(got)
 
     def _sources(self, root, base_ref, sheet_answers, pr):
         extra = {"sheetAnswers": sheet_answers, "pr": pr} if isinstance(sheet_answers, dict) else {}
@@ -928,3 +936,80 @@ def test_a_legacy_author_family_before_the_first_fix_stays_an_original_maker(tmp
     # bites on: a legacy authorFamily dropped from the pre-fix history, handing its original maker a delayed fromStep
     assert not any(m["family"] == "anthropic" and "fromStep" in m for m in account["makers"])
     assert any(m["family"] == "anthropic" for m in account["makers"])
+
+
+# --- #2375 order C: the silence-watchdog ends of every run dir ride the account as `silenceWatchdogEnds` ---
+
+def _end(attempt, seconds, role="review"):
+    return {"attempt": attempt, "silentSeconds": seconds, "thresholdSeconds": 390, **({"role": role} if role else {})}
+
+
+def _watchdog_session(tmp_path):
+    """code-reviewer answered after a watchdog retry (its run dir binds to its row by nonce n1); security-reviewer
+    forfeited (it returned nothing, so no reviewer row binds its run dir /run/forfeit-1)."""
+    s = Session(tmp_path)
+    s.seat("code-reviewer", nonce="n1")
+    runs = {"/run/n1": (dict(GOOD_RUN, runnerNonce="n1", viewHeadSha=EARLIER), None)}
+    return s.save(), runs
+
+
+def test_a_forfeited_seat_and_a_seat_that_answered_after_a_retry_are_both_named(tmp_path):
+    session, runs = _watchdog_session(tmp_path)
+    ends = {"/run/n1": ([_end(1, 391.5)], None), "/run/forfeit-1": ([_end(1, 400.0), _end(2, 395.25)], None)}
+    fake = Fake(runs=runs, ends=ends)
+    out = send(tmp_path, session, fake, runDirs=["/run/n1", "/run/forfeit-1"])
+    assert out["ok"], out
+    rec = rr.read(7, readers=fake.readers())
+    answered = next(v["name"] for v in rec["reviewers"] if v["runDir"] == "/run/n1")
+    # bites on: the forfeited seat's run dir (no reviewer row binds it) never being read, or an end left out of the record
+    assert rec["silenceWatchdogEnds"] == [
+        {"seat": answered, "attempt": 1, "silentSeconds": 391.5},
+        {"seat": "review (forfeit-1)", "attempt": 1, "silentSeconds": 400.0},
+        {"seat": "review (forfeit-1)", "attempt": 2, "silentSeconds": 395.25}]
+    assert answered == "code-reviewer (round 1)"
+    line = next(l for l in fake.marked()[0]["body"].split("\n") if l.startswith("Silence watchdog ends:"))
+    assert line == ("Silence watchdog ends: code-reviewer (round 1) attempt 1 after 391.5 s silent; "
+                    "review (forfeit-1) attempt 1 after 400.0 s silent; review (forfeit-1) attempt 2 after 395.25 s silent.")
+
+
+def test_r1_no_run_dirs_carry_no_part(tmp_path):
+    # axis: R1 — a session with no run dirs reads no ends and the account carries no part
+    session, runs = _watchdog_session(tmp_path)
+    fake = Fake(runs=runs, ends={"/run/n1": ([_end(1, 391.5)], None)})
+    assert "silenceWatchdogEnds" not in rs.account_from_session(session, extras(), fake.readers())
+
+
+def test_r2_a_run_dir_with_no_ends_carries_no_part(tmp_path):
+    # axis: R2 — run dirs whose reader finds no end leave the account without the part, never an empty list
+    session, runs = _watchdog_session(tmp_path)
+    fake = Fake(runs=runs)
+    account = rs.account_from_session(session, extras(runDirs=["/run/n1", "/run/forfeit-1"]), fake.readers())
+    assert "silenceWatchdogEnds" not in account
+    out = send(tmp_path, session, fake, runDirs=["/run/n1", "/run/forfeit-1"])
+    assert out["ok"] and "silenceWatchdogEnds" not in rr.read(7, readers=fake.readers())
+
+
+def test_r3_a_dir_whose_reader_raises_or_returns_an_error_is_skipped_and_the_rest_still_read(tmp_path):
+    # axis: R3 — one unreadable dir never loses the ends of the dirs read after it
+    session, runs = _watchdog_session(tmp_path)
+    ends = {"/run/raises": RuntimeError("boom"), "/run/errors": ([_end(1, 500.0)], "journal-corrupt"),
+            "/run/garbled": ([{"attempt": 1}], None), "/run/n1": ([_end(1, 391.5)], None)}
+    fake = Fake(runs=runs, ends=ends)
+    account = rs.account_from_session(
+        session, extras(runDirs=["/run/raises", "/run/errors", "/run/garbled", "/run/n1"]), fake.readers())
+    assert account["silenceWatchdogEnds"] == [{"seat": "code-reviewer (round 1)", "attempt": 1, "silentSeconds": 391.5}]
+
+
+def test_r4_a_bound_dir_takes_the_row_name_an_unbound_dir_its_role_and_name_and_no_role_reads_unknown(tmp_path):
+    # axis: R4 — the seat label: the bound row's name, else "<role> (<dir name>)", else "unknown (<dir name>)"
+    session, runs = _watchdog_session(tmp_path)
+    ends = {"/run/n1": ([_end(1, 391.5, role="review")], None),
+            "/run/a/roleful/": ([_end(1, 392.0, role="test-reviewer")], None),
+            "/run/norole": ([_end(2, 393.0, role=None)], None),
+            "/run/emptyrole": ([_end(2, 394.0, role="")], None)}
+    fake = Fake(runs=runs, ends=ends)
+    account = rs.account_from_session(
+        session, extras(runDirs=["/run/n1", "/run/a/roleful/", "/run/norole", "/run/emptyrole"]), fake.readers())
+    assert [(e["seat"], e["attempt"]) for e in account["silenceWatchdogEnds"]] == [
+        ("code-reviewer (round 1)", 1), ("test-reviewer (roleful)", 1), ("unknown (norole)", 2), ("unknown (emptyrole)", 2)]
+    assert all(set(e) == {"seat", "attempt", "silentSeconds"} for e in account["silenceWatchdogEnds"])
