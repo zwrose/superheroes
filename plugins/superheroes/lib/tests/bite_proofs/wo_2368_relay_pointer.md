@@ -250,6 +250,42 @@ FAILED plugins/superheroes/lib/tests/test_relay_pointer_2368.py::test_a_failed_s
 3 passed in 0.89s
 ```
 
+## E8 the delayed-delivery adopt test on the pointer path
+
+Implementer: claude `sonnet-5.5`, work order WO-C. Command prefix (worktree root):
+`scripts/pinned-python -B -X pycache_prefix=/tmp/wo-2368-c-pyc -m pytest plugins/superheroes/lib/tests/test_adopt_delayed_relay_delivery_break_it.py -q -p no:cacheprovider`.
+Captures drop only the uv `UV_NATIVE_TLS` deprecation warning line; the red capture is shortened to the
+decisive lines (the test source echo, ~60 lines, and the blank/`====` banner lines are elided); no secret, token or private URL appears.
+
+- **Guarded element:** `test_adopt_delayed_relay_delivery_break_it.py::test_delivery_after_a_new_handback_keeps_the_lane`,
+  the `assert checked["delivered"] is True` precondition (line 80). Axis: a fix order delivered after the latest
+  handback keeps the lane from being adopted; the test reaches "delivered" through the pointer path (compose, post
+  the body file into a fake gh, `point`, a relay record of the exact pointer with success, `check`).
+- **Neutralization:** the relay-record send line `adoption.SESSION_TITLE, pointed["forward"], delivered_at,`
+  became `adoption.SESSION_TITLE, pointed["forward"] + "x", delivered_at,` (the pointer sent with one character added).
+- **Raw red:**
+
+```
+F                                                                        [100%]
+>       assert checked["delivered"] is True, checked
+E       AssertionError: {'ok': False, 'delivered': False, 'reason': 'relay-text-mismatch', 'msgId': '50a2486cb25b', ...}
+E       assert False is True
+
+/home/user/wt-2368/plugins/superheroes/lib/tests/test_adopt_delayed_relay_delivery_break_it.py:80: AssertionError
+FAILED plugins/superheroes/lib/tests/test_adopt_delayed_relay_delivery_break_it.py::test_delivery_after_a_new_handback_keeps_the_lane
+1 failed in 6.97s
+```
+
+- **Restore:** the inverse Edit (`+ "x"` removed).
+- **Restore receipt (`grep -n` of the restored line):**
+  `76:        "toolu_delayed_fix", adoption.SESSION_TITLE, pointed["forward"], delivered_at,`
+- **Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 2.63s
+```
+
 ## Residual blind spots
 
 - The `nothingReached` proof pins the whole truth table through three tests, but the neutralization (`return False`)
