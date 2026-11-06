@@ -748,7 +748,9 @@ On `ok`, tell the owner the `folder` and the one-time trust step: open Claude Co
 folder (`cd <folder>` and then `claude`), accept the trust question, and exit. Never run it for the
 owner, and never answer the trust question for them. On a refusal, say its `reason` and stop. A path
 that exists but is not the launcher's own clone is left alone, so the owner moves it aside and the
-step runs again. This is done once per project per machine.
+step runs again. This is done once per project per machine. Without it every cloud launch refuses
+`launch-cloud-folder-missing`, and a folder that exists but was never trusted reads
+`cloud-session-unconfirmed`.
 
 The check also asks the cloud session's git for a commit identity. It passes when git, with
 guessing turned off (`user.useConfigOnly`), resolves both an author and a committer identity from
