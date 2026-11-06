@@ -784,6 +784,127 @@ def test_unknown_is_never_idle():
     assert CS.silent_and_idle(False, False, t.state) is False
 
 
+# --- #2375: an item event the tracker cannot fully read is sticky unknown --------------------------
+
+_BAD_SHAPE_EVENTS = [
+    pytest.param({"type": "item.started"}, id="E1-started-item-missing"),
+    pytest.param({"type": "item.started", "item": [1, 2]}, id="E2-started-item-list"),
+    pytest.param({"type": "item.started", "item": {"id": "item_1"}}, id="E3-type-missing"),
+    pytest.param({"type": "item.started", "item": {"id": "item_1", "type": 7}},
+                 id="E4-type-number"),
+    pytest.param({"type": "item.completed", "item": "command_execution"},
+                 id="E5-completed-item-not-object"),
+    pytest.param({"type": "item.completed", "item": None}, id="E5b-completed-item-null"),
+    pytest.param({"type": "item.completed", "item": {"id": "item_1"}},
+                 id="E3b-completed-type-missing"),
+]
+
+_BAD_ID_EVENTS = [
+    pytest.param({"type": "item.started", "item": {"type": "command_execution"}},
+                 id="E6-id-missing"),
+    pytest.param({"type": "item.started", "item": {"id": None, "type": "command_execution"}},
+                 id="E7-id-null"),
+    pytest.param({"type": "item.started", "item": {"id": [1], "type": "command_execution"}},
+                 id="E8-id-list"),
+    pytest.param({"type": "item.started", "item": {"id": True, "type": "command_execution"}},
+                 id="E9-id-true"),
+    pytest.param({"type": "item.completed", "item": {"type": "file_change"}},
+                 id="E6b-completed-id-missing"),
+]
+
+
+def _assert_sticky_unknown(t):
+    assert t.state == "unknown" and t.unreadable is True
+    # a later valid pair does not recover the stream
+    t.feed((_started(1) + _completed(1)).encode())
+    assert t.state == "unknown" and t.unreadable is True
+    assert CS.silent_and_idle(False, False, t.state) is False
+
+
+# axis (G1: the item-not-object / type-not-string branch in StreamTracker._line): an item event whose
+# item is not an object or whose type is not a string may hide an open command, so the stream is
+# sticky unknown, not idle.
+@pytest.mark.parametrize("event", _BAD_SHAPE_EVENTS)
+def test_tracker_item_event_with_a_bad_item_shape_is_sticky_unknown(event):
+    t = CS.StreamTracker()
+    t.feed(_jl(event).encode())
+    _assert_sticky_unknown(t)
+
+
+# axis (G2: the bad-action-id branch in StreamTracker._line): an action item with no usable id can
+# never be matched to its completion, so the stream is sticky unknown, not idle.
+@pytest.mark.parametrize("event", _BAD_ID_EVENTS)
+def test_tracker_action_item_with_a_bad_id_is_sticky_unknown(event):
+    t = CS.StreamTracker()
+    t.feed(_jl(event).encode())
+    _assert_sticky_unknown(t)
+
+
+# axis (G3: the unknown-started-type branch in StreamTracker._line): a started item of a type that is
+# neither an action type nor a named non-action type may open a command, so sticky unknown (E10).
+def test_tracker_started_item_of_an_unnamed_type_is_sticky_unknown():
+    t = CS.StreamTracker()
+    t.feed(_started(1, "collab_tool_call").encode())
+    _assert_sticky_unknown(t)
+
+
+# axis (G4: the unknown-started-type branch in _classify_head): the same rule on the over-long path
+# (E11), where the head, not a parsed object, is the evidence.
+def test_tracker_overlong_started_item_of_an_unnamed_type_is_sticky_unknown():
+    t = CS.StreamTracker()
+    t.feed(_overlong(1, event="item.started", kind="collab_tool_call").encode())
+    _assert_sticky_unknown(t)
+
+
+def test_non_action_item_types_are_pinned():
+    assert CS.NON_ACTION_ITEM_TYPES == ("agent_message", "reasoning", "todo_list")
+
+
+# axis: the readings that must not move: a named non-action item (start or completion, short or
+# over-long) reads idle, so a plan item (todo_list) that stays open all turn never blocks silence; a
+# completion of an unnamed type opens nothing; an integer id started and a string id completed are
+# different ids, so the item stays open.
+@pytest.mark.parametrize("kind", CS.NON_ACTION_ITEM_TYPES)
+def test_tracker_named_non_action_items_read_idle(kind):
+    t = CS.StreamTracker()
+    t.feed(_started(1, kind).encode())
+    assert t.state == "idle" and t.unreadable is False
+    t.feed(_completed(1, kind).encode())
+    assert t.state == "idle" and t.unreadable is False
+    big = CS.StreamTracker()
+    big.feed(_overlong(2, event="item.started", kind=kind, key="text").encode())
+    assert big.state == "idle" and big.unreadable is False
+
+
+def test_tracker_completed_item_of_an_unnamed_type_reads_idle():
+    t = CS.StreamTracker()
+    t.feed(_completed(1, "collab_tool_call").encode())
+    assert t.state == "idle" and t.unreadable is False
+    big = CS.StreamTracker()
+    big.feed(_overlong(2, kind="collab_tool_call").encode())
+    assert big.state == "idle" and big.unreadable is False
+
+
+def test_tracker_integer_id_started_and_string_id_completed_stays_busy():
+    t = CS.StreamTracker()
+    t.feed(_jl({"type": "item.started", "item": {"id": 1, "type": "command_execution"}}).encode())
+    t.feed(_jl({"type": "item.completed", "item": {"id": "1", "type": "command_execution"}}).encode())
+    assert t.state == "busy" and t.unreadable is False
+
+
+# axis (E6 through the sampler): a stream holding an action start with no id is stream-unknown, never
+# a measured idle silence.
+def test_sampler_stream_with_an_action_start_without_an_id_is_stream_unknown(tmp_path):
+    no_id = _jl({"type": "item.started", "item": {"type": "command_execution",
+                                                  "status": "in_progress"}})
+    run = _make_run(tmp_path, lines=[_THREAD, no_id, _MESSAGE], beats=_every(10, 40, 3), wall=40.0)
+    row = _only(run)
+    assert row["measured"] is False and row["reason"] == "stream-unknown"
+    assert row["longestIdleSilenceSeconds"] is None
+    assert row["longestCommandSeconds"] is None
+    assert row["commandOpenAtEnd"] is None
+
+
 # --- silent_and_idle -------------------------------------------------------------------------------
 
 # axis (group: test_silent_and_idle_truth_table, test_silent_and_idle_only_exact_idle): the predicate
@@ -807,6 +928,26 @@ def test_silent_and_idle_truth_table(stdout_grew, stderr_grew, state, expected):
 @pytest.mark.parametrize("state", ["unknown", "", None, "IDLE", "bogus"])
 def test_silent_and_idle_only_exact_idle(state):
     assert CS.silent_and_idle(False, False, state) is False
+
+
+# axis (G5: the exact-False growth check in silent_and_idle): growth that could not be read (None, a
+# falsy non-bool) is never "did not grow", so it is never silence (E12, E13, E14); exactly False twice
+# on an idle state is silence (E15).
+@pytest.mark.parametrize("stdout_grew, stderr_grew", [
+    pytest.param(None, False, id="E12-stdout-none"),
+    pytest.param(False, None, id="E13-stderr-none"),
+    pytest.param(0, 0, id="E14-falsy-ints"),
+    pytest.param(None, None, id="both-none"),
+    pytest.param(0, False, id="stdout-zero"),
+    pytest.param(False, 0, id="stderr-zero"),
+    pytest.param("", False, id="stdout-empty-string"),
+])
+def test_silent_and_idle_unread_growth_is_never_silence(stdout_grew, stderr_grew):
+    assert CS.silent_and_idle(stdout_grew, stderr_grew, "idle") is False
+
+
+def test_e15_silent_and_idle_exact_false_on_idle_is_silence():
+    assert CS.silent_and_idle(False, False, "idle") is True
 
 
 # --- read_increment --------------------------------------------------------------------------------
