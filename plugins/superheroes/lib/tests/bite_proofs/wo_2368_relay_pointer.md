@@ -297,3 +297,24 @@ FAILED plugins/superheroes/lib/tests/test_adopt_delayed_relay_delivery_break_it.
   (`test_a_pointer_line_has_the_one_documented_shape`, `test_anything_that_is_not_a_pointer_is_none`,
   `test_the_comment_helpers_agree_with_each_other`, `test_compose_writes_the_comment_body_file_byte_exact_and_records_its_hash`)
   but were not neutralized one by one: the order's guarded-element set was E1 to E7 only.
+
+## E9 an already-pointed message is judged before its URL (review round 2)
+
+Orchestrator-typed at the review's `apply-fixes` step, committed (`c17236a0`) before the probe; the
+probe was a targeted Edit in the build worktree, undone by the inverse Edit, and the tree read clean after.
+
+- **Guarded element:** `point`, the `commentUrl` block now placed before the URL and lane checks.
+  Axis: every refusal of a message that already has a pointer is `pointer-already-composed`.
+- **Detector:** `test_point_refusals_in_order_each_leave_the_state_unchanged`, its step 4 (an already-pointed
+  message given a URL on another issue, a malformed URL and no URL).
+- **Neutralization:** the block moved back after the `comment-url-invalid` check.
+- **Raw red:**
+
+```
+E   AssertionError: {'ok': False, 'reason': 'comment-url-invalid'}
+    assert (False is False and 'comment-url-invalid' == 'pointer-already-composed'
+/home/user/wt-2368/plugins/superheroes/lib/tests/test_relay_pointer_2368.py:292: AssertionError: {'ok': False, 'reason': 'comment-url-invalid'}
+1 failed in 1.10s
+```
+
+- **Raw green (after the inverse Edit):** `1 passed in 17.14s`.
