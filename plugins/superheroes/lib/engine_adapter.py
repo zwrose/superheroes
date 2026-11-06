@@ -1170,22 +1170,53 @@ def codex_tool_calls(stdout):
         return None
 
 
+def _codex_last_usage(stdout):
+    """(parsed_any, last_usage) from JSONL stdout: whether any codex event parsed, and the usage dict of the last
+    turn.completed that carries one (a later turn.completed without a dict usage does not displace it). Never raises."""
+    parsed_any = False
+    last_usage = None
+    for obj in _iter_jsonl_dict_lines(stdout):
+        if not _is_codex_event_object(obj):
+            continue
+        parsed_any = True
+        if obj.get("type") != "turn.completed":
+            continue
+        usage = obj.get("usage")
+        if isinstance(usage, dict):
+            last_usage = usage
+    return parsed_any, last_usage
+
+
+def codex_usage_tokens(stdout):
+    """Token total of the last turn.completed event that carries a dict usage, summed over _CODEX_TOKEN_PARTS; int or None.
+
+    A part that is absent or None counts 0; any other part must be an int that is not a bool and is >= 0, else None.
+    None (never 0) also when no turn.completed carries a dict usage, or stdout is not a non-empty string. Never raises."""
+    try:
+        if not isinstance(stdout, str) or not stdout:
+            return None
+        _, last_usage = _codex_last_usage(stdout)
+        if last_usage is None:
+            return None
+        total = 0
+        for part in _CODEX_TOKEN_PARTS:
+            val = last_usage.get(part)
+            if val is None:
+                continue
+            if not isinstance(val, int) or isinstance(val, bool) or val < 0:
+                return None
+            total += val
+        return total
+    except Exception:
+        return None
+
+
 def codex_event_tokens(stdout):
     """Sum token parts from the last turn.completed usage in JSONL stdout; int or None. Never raises."""
     try:
         if not isinstance(stdout, str) or not stdout:
             return None
-        parsed_any = False
-        last_usage = None
-        for obj in _iter_jsonl_dict_lines(stdout):
-            if not _is_codex_event_object(obj):
-                continue
-            parsed_any = True
-            if obj.get("type") != "turn.completed":
-                continue
-            usage = obj.get("usage")
-            if isinstance(usage, dict):
-                last_usage = usage
+        parsed_any, last_usage = _codex_last_usage(stdout)
         if last_usage is None:
             return 0 if parsed_any else None
         total = 0

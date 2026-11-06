@@ -466,6 +466,56 @@ def test_e2e_review_real_path_terminal_success(tmp_path, monkeypatch):
             assert not rec.get("refusal")
 
 
+# --- 1b. Review silence watchdog: silent first attempt ended, retry answers (#2375) ---------
+
+
+def test_e2e_review_silence_watchdog_ends_silent_attempt_and_retry_answers(tmp_path, monkeypatch):
+    """Real subprocess, real run-child heartbeat (10 s): attempt 1 of a codex review is silent with no
+    command in flight, so the watchdog (threshold 1 s, recorded in run-opened) ends it at the first
+    heartbeat; attempt 2 answers and the review is accepted, long before the fake's 120 s sleep."""
+    repo = str(tmp_path / "repo")
+    _init_repo(repo)
+    run_dir = _run_dir(tmp_path, "run-review-silence")
+    prompt_path = _prompt(tmp_path, "Review this.\n")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    exe = bin_dir / "codex"
+    exe.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        "sys.stdin.read()\n"
+        "out = sys.argv[sys.argv.index('-o') + 1]\n"
+        "if out.endswith('-1.json'):\n"
+        "    time.sleep(120)\n"
+        "with open(out, 'w', encoding='utf-8') as fh:\n"
+        "    fh.write(%r)\n"
+        "sys.exit(0)\n" % _e2e_native_findings_result_json(),
+        encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+    monkeypatch.setattr(ED, "CODEX_SILENCE_WATCHDOG_SECONDS", 1)
+
+    started = time.monotonic()
+    res = _poll_review_terminal(repo, run_dir, prompt_path, timeout=90)
+    elapsed = time.monotonic() - started
+
+    assert res["ok"] is True
+    assert res["terminal"] is True
+    assert res["attempts"] == 2
+    assert elapsed < 80, "the watchdog did not end attempt 1 well before the fake's 120 s sleep"
+    records = _journal_records(run_dir)
+    opened = [r for r in records if r.get("kind") == "run-opened"][0]
+    assert opened["silenceWatchdogSeconds"] == 1
+    ended = {r["attempt"]: r for r in records if r.get("kind") == "attempt-ended"}
+    assert ended[1]["signalSource"] == "silence-watchdog"
+    assert ended[1]["timedOut"] is False
+    assert ended[1]["silenceWatchdog"]["thresholdSeconds"] == 1
+    assert ended[1]["silenceWatchdog"]["silentSeconds"] >= 1
+    assert "silenceWatchdog" not in ended[2]
+    assert ended[2]["exit"] == 0
+
+
 # --- 2. Write real path terminal success --------------------------------------
 
 
