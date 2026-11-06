@@ -1449,7 +1449,8 @@ class Spawner:
 
 
 def _start(local, spawner, **kw):
-    args = dict(environment=ENV_ID, env=local.env, spawn_fn=spawner, nonce=NONCE)
+    args = dict(environment=ENV_ID, env=local.env, spawn_fn=spawner, nonce=NONCE, issue=1745,
+                issue_reader=lambda root, n: True)
     args.update(kw)
     return CC.start(local.cwd, **args)
 
@@ -1588,8 +1589,8 @@ def test_start_reports_started_when_a_timed_out_launch_printed_its_receipt(tmp_p
     assert result == {"action": "started", "reason": None, "environment": ENV_ID, "nonce": NONCE,
                       "sessionName": "cloud-check-abcd1234", "sessionId": "session_01ABCdef",
                       "sessionUrl": "https://claude.ai/code/session_01ABCdef", "issue": 1745,
-                      "message": "The check session is running. I'll read its result in about a "
-                                 "minute."}
+                      "message": "The check session is running. It posts its result line on "
+                                 "issue #1745; I'll read it there in about a minute."}
 
 
 def test_start_spawns_in_the_repository_root_with_a_copy_of_the_environment(tmp_path):
@@ -1607,7 +1608,8 @@ def test_start_spawns_in_the_repository_root_with_a_copy_of_the_environment(tmp_
     assert call["env"] == expected and call["env"] is not env and call["timeout"] == 7
     assert os.path.isdir(os.path.dirname(call["log_path"]))
     spawner2 = Spawner()
-    CC.start(sub, environment=ENV_ID, env=env, spawn_fn=spawner2, nonce=NONCE)
+    CC.start(sub, environment=ENV_ID, env=env, spawn_fn=spawner2, nonce=NONCE, issue=1745,
+             issue_reader=lambda root, n: True)
     assert os.path.realpath(spawner2.calls[0]["cwd"]) == os.path.realpath(local.cwd)
 
 
@@ -1646,7 +1648,7 @@ def test_start_prompt_carries_the_nonce_the_report_command_and_the_fallback_line
     local = _build(tmp_path)
     spawner = Spawner()
     _start(local, spawner)
-    assert _prompt(spawner) == _expected_prompt()
+    assert _prompt(spawner) == _expected_prompt(1745)
     assert "/opt/superheroes/plugin/lib/cloud_check.py report --nonce " + NONCE in _prompt(spawner)
 
 
@@ -1672,15 +1674,12 @@ def test_start_fallback_line_judges_as_failed_not_passed(tmp_path):
     assert _record_state(local) == "none"
 
 
-def test_start_posts_to_an_issue_only_when_one_is_named(tmp_path):
+def test_start_always_posts_to_the_named_issue(tmp_path):
     local = _build(tmp_path)
-    without, with_issue = Spawner(), Spawner()
-    _start(local, without)
-    _start(local, with_issue, issue=1745)
-    assert "issue #" not in _prompt(without) and _prompt(without) == _expected_prompt()
-    assert _prompt(with_issue) == _expected_prompt(1745)
-    assert _prompt(with_issue).endswith("as one comment on issue #1745 of this repository.")
-    assert _prompt(with_issue).startswith(_prompt(without))
+    spawner = Spawner()
+    _start(local, spawner)
+    assert _prompt(spawner) == _expected_prompt(1745)
+    assert _prompt(spawner).endswith("as one comment on issue #1745 of this repository.")
 
 
 def test_setup_sitting_names_the_id_and_never_the_default(tmp_path, composing):
@@ -1719,7 +1718,8 @@ def test_setup_sitting_names_the_id_and_never_the_default(tmp_path, composing):
     assert record["environment"] == ENV_ID
 
 
-def test_cli_start_exit_codes(tmp_path, capsys):
+def test_cli_start_exit_codes(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(CC, "_issue_resolves", lambda root, number: True)
     local = _build(tmp_path)
     spawner = Spawner()
     code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID, "--issue", "1745"],
@@ -1732,7 +1732,7 @@ def test_cli_start_exit_codes(tmp_path, capsys):
     printed = json.loads(capsys.readouterr().out)
     assert code == 1 and printed["reason"] == "check-environment-invalid"
     assert refused_spawner.calls == []
-    code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID],
+    code = CC.main(["start", "--cwd", local.cwd, "--environment", ENV_ID, "--issue", "1745"],
                    spawn_fn=Spawner(output=""))
     assert code == 1 and json.loads(capsys.readouterr().out)["reason"] == "check-session-unconfirmed"
 

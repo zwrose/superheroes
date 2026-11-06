@@ -659,9 +659,11 @@ launching machine's.
    python3 -B "$ROOT_DIR/lib/cloud_pass.py" make --environment <id>
    ```
 6. **Run the check when the owner says the steps are done.** Start one check session naming the
-   id. Pass `--issue` with an issue number when this seat cannot read the session's log, so the
-   session also posts its one result line there as a comment; that comment is public on a public
-   repository, and the line holds versions, stamps and a date, never the pass.
+   id. Name an issue in this repository with `--issue`: no host tool this plugin supports reads the
+   check session's own log, so the session posts its one result line there as a comment, and
+   `start` refuses `check-issue-required` without an issue and `check-issue-unreadable` when the
+   issue does not resolve, before anything starts. That comment is public on a public repository;
+   the line holds versions, stamps and a date, never the pass.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -679,12 +681,13 @@ launching machine's.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --environment <id> [--issue <n>]
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --environment <id> --issue <n>
    ```
 
    Keep the `nonce` it returns. A refusal starts nothing: say its `message`.
-7. **Read the result and judge it.** Read the session's final message, with the host's run-log
-   reader, or the issue comment. Save its full text to a file, without picking a line out of it, and
+7. **Read the result and judge it.** Read the issue's comments through REST (`gh api
+   "repos/<owner>/<repo>/issues/<n>/comments?per_page=100&page=<N>"`, page by page until a page
+   holds fewer than 100) and take the newest comment that carries the check's nonce. Save its full text to a file, without picking a line out of it, and
    run:
 
    ```bash

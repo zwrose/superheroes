@@ -31,8 +31,12 @@ The owner half is the close line, then three fixed headings in this order, then 
   risks, costly disclosed degradations (§ Disclosed degradations sorts them), deferred DoD rows, and
   any direct question the builder has for the owner. The omission floor's three rows are keyed on
   severity, not on the disposition label. Each finding the review record leaves for the owner (its
-  `leftForOwner` list) gets one line here that carries its record id, byte for byte, and its title, with
-  its consequence around them: a paraphrase that drops the id does not name it. Every break-it test the review record shows as
+  `leftForOwner` list) gets one line here that carries its record id and its title, with
+  its consequence around them: a paraphrase that drops the id does not name it. The id is matched as a whole word, case
+  aside, every kind of dash read as `-` and the punctuation around it ignored; the title is matched by its words, ignoring
+  case, quotes and punctuation (`lib/leftover_accepting.py` states both). A finding a higher layer of the same stack fixes
+  gets the line `<id> <title> — fixed-above #<layer PR> <commit>` instead of an acceptance, and that line is shown on the
+  sheet as fixed above. Every break-it test the review record shows as
   `not run: transit-redacted` is named here as a missing proof. When there are genuinely none, write exactly **None**, the same word *Follow-ups for the advisor* uses.
 - **`## How to see it`.** On a show-it PR, read the project's `## Show-it surface` declaration in
   `core.md` for the level and shape, then carry the concrete instance here. An absent declaration
@@ -163,7 +167,9 @@ Before the ready marking, also run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/vet_sl
 record and refuses `leftover-not-accepted`, naming each missing id with its title, while *What we're
 accepting* does not name every `leftForOwner` finding by its record id and title in one line, and
 `review-record-unreadable` when no record can be read; the advisor's READY slot write runs the same
-check (`lib/leftover_accepting.py`, its one home). On a stacked layer it refuses `stack-not-caught-up`, naming the
+check (`lib/leftover_accepting.py`, its one home). It also refuses `fixed-above-not-in-stack` while a line marked
+`fixed-above #<PR> <commit>` names a PR that is not a higher layer of this PR's stack (a PR in no stack, an unlinked layer
+included), and `fixed-above-unverified` when the stack cannot be read. On a stacked layer it refuses `stack-not-caught-up`, naming the
 catch-up step (`rubric/native-stacks.md` § How a stack stays current), while the PR's pushed head is
 behind its lower layer's current head, or `stack-lower-unreadable` when that head cannot be read.
 

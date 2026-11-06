@@ -15,6 +15,7 @@ Skills in this plugin speak in host-neutral **actions**. On Claude Code they res
 | Track tasks ("todo", "mark done") | `TodoWrite` |
 | Invoke another skill | the `Skill` tool |
 | Message another live session by name, and receive its reply | `ListAgents` finds the name, `SendMessage` sends; a reply is delivered at your next tool call, so wait with tool calls, never a turn end |
+| Read another session's final message (a cloud check's result) | none: no tool reads it; `cloud_check.py start` takes `--issue` and the check posts its result line on that issue, read through REST |
 
 ## Dispatch Reliability
 
