@@ -618,9 +618,11 @@ with `--fix-order`, and it re-opens the watch only once `check` reads delivered 
    later re-reads the relay's record.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
-owner the `say` sentence, or the refusal and its `detail`. Settle every send by one rule, here and in
-every section that points to this one: `delivered: true` is delivered; `nothingReached: true` means
-nothing reached the builder; anything else is uncertain, because the builder may hold the pointer.
+owner the `say` sentence, or the refusal and its `detail`. Settle every relayed send by one rule, here
+and in every section that points to this one: `delivered: true` is delivered; `nothingReached: true`
+means nothing reached the builder; anything else is uncertain, because the builder may hold the pointer.
+A same-account send has no `check` and settles by its own `SendMessage` result instead: `success: true`
+is delivered, `success: false` means nothing reached the builder, and a call with no result is uncertain.
 For an uncertain read, re-run `check` with a longer `--wait` before concluding. Retry once from
 `ensure` only when nothing can have reached the builder: an `ensure` refusal, a `point` refusal that
 reads `nothingSent: true`, or `nothingReached: true`. For anything else, never resend automatically.

@@ -274,9 +274,11 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    `request-delivered`), another caller holds or has settled the request, so send nothing and go on. Only when it succeeds, send the plan's
    `archiveText` to the lane's session: on the same account by `SendMessage`, on another account
    by sending the printed `relayMessage` and then `check`, as that section says. Then run
-   `record` with the same message id and the outcome, settled by that section's one rule: `delivered`
+   `record` with the same message id and the outcome. On another account it is settled by that section's
+   one rule: `delivered`
    when `check` reads `delivered: true`, `failed` when it reads `nothingReached: true`, otherwise
-   `uncertain`. Pass the plan's `launchId` as `--launch-id` to every `record`
+   `uncertain`. On the same account it is settled by the `SendMessage` result: `delivered` on
+   `success: true`, `failed` on `success: false`, and `uncertain` when the call returned no result. Pass the plan's `launchId` as `--launch-id` to every `record`
    and to `branch`, so each settles the lane that was planned. A plan whose `request` is already `pending` or
    `uncertain` is a resume after an unconfirmed send: send nothing. When that message id came from the relay (another
    account), first run `cloud_relay.py check --repo-root <root> --msg-id <id>` (as `wave-watch.md` § Answering a

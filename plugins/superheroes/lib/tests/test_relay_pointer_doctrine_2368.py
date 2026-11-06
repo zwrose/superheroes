@@ -143,3 +143,14 @@ def test_a_point_refusal_is_retried_only_when_it_proves_nothing_was_sent():
     assert "Do not compose again; run `check` on this `msgId` and settle by its result." in wave_watch, "the point step"
     bullets = _send_back_bullets()
     assert "A `point` refusal counts here only when it reads `nothingSent: true`." in bullets, "the send-back bullet"
+
+
+def test_a_same_account_send_settles_by_its_own_send_result():
+    # axis: a same-account send has no relay check, so wave-watch's rule and the cleanup's record settle it by its SendMessage result, never by delivered/nothingReached
+    wave_watch = _collapsed(_WAVE_WATCH)
+    assert ("A same-account send has no `check` and settles by its own `SendMessage` result instead: `success: true` "
+            "is delivered, `success: false` means nothing reached the builder, and a call with no result is uncertain.") in wave_watch
+    step = _cleanup_step_2()
+    assert ("On the same account it is settled by the `SendMessage` result: `delivered` on `success: true`, "
+            "`failed` on `success: false`, and `uncertain` when the call returned no result.") in step
+
