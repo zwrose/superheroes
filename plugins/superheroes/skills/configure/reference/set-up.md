@@ -742,10 +742,18 @@ The check also asks the cloud session's git for a commit identity. It passes whe
 guessing turned off (`user.useConfigOnly`), resolves both an author and a committer identity from
 any source: the platform's own identity, the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables, or git
 config. It requires no particular name or email, and its report line says only whether each one
-resolved. A cloud session starts with the platform's own identity, which signs its commits, so they
-show as Verified on GitHub; that is the default and needs nothing. A project that wants a different
-author or committer sets the four variables on the environment, and git reads them ahead of any
-config; those commits most likely show as Unverified. A missing identity fails the check before any
+resolved and which of the four variables are set, by name, never their values. A cloud session
+starts with the platform's own identity, which signs its commits, so they show as Verified on
+GitHub; that is the default and needs nothing. **A project that wants a different author or
+committer sets the four variables (`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`,
+`GIT_COMMITTER_EMAIL`) in the environment's variables, never with a setup command**; git reads them
+ahead of any config, and those commits most likely show as Unverified. An identity a setup command
+writes with `git config` does not survive a worker restart: the setup does not run again, git falls
+back to the platform's own identity, and the build stops at its next commit. So whenever any of the
+four variables is not set, the check still passes the identity but its message carries a warning
+that the identity comes only (or partly) from git config, will not survive a restart if a setup
+command wrote it, and names the variables to set; a report that does not say which variables are
+set reads unknown and warns the same way. Relay that warning with the result. A missing identity fails the check before any
 build, and its fix line names the four variables with this machine's name and email filled in
 ("your name" and "your email" when this machine resolves none); that line appears only in the
 message on this machine and is never stored. The setup text writes no identity step: `git config`

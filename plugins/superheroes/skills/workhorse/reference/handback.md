@@ -240,6 +240,18 @@ acceptance, and needs no accounting entry. A costly one keeps its line, and so i
 its fix lands. The review seat checks that each **costly** bullet has a consequence line in the owner
 half.
 
+**A calibration degradation is read off the review record, never off the sanitized view.** Before you disclose that a review seat lacked its calibration (`core.md`, `review-crew.md` or `CLAUDE.md` stripped, missing or withheld), read that seat's line in the review record: its `calibrationRead` is the measurement. The sanitized view's strip list says only what left the seat's working directory; seats are handed their calibration by absolute path, outside the view. Disclose a seat that lacked calibration only with this marker, one Markdown code span inside a degradation bullet:
+
+`calibration-lacked[<row name>]: <files>`
+
+For example, one bullet:
+
+```
+- [costly] `calibration-lacked[code-reviewer:s1 (round 1)]: core.md, review-crew.md` — its engine dispatch held neither file.
+```
+
+The row name is the review record's row name exactly, byte for byte, and `*` names every seat that ran. The files are one or more of `core.md`, `review-crew.md` and `CLAUDE.md`, each spelled exactly, separated by a comma and one space, with no duplicate. Name only a seat the record grades `not-read` or `unknown` for those files, or does not measure (a seat whose order named no calibration, or that has no `calibrationRead`); the check refuses a marker when the record grades any file it names `read` for a seat it covers. Outside the marker, a clause in a degradation bullet that names calibration or a calibration file together with a negation or removal word (not, never, no, without, missing, unavailable, stripped, excluded) is refused, whatever the word is about, so put an unrelated lack (a browser, a tool, a runner) in its own bullet or sentence. The two exceptions are the show-it surface declaration the doctrine requires and "calibrated" before verify, model or command, or in "the calibrated <model identifier>". `vet_slot.py handback --pr` refuses `calibration-disclosure-contradicted` when the record grades a file the marker names `read` for a seat it covers, `calibration-disclosure-unknown-seat` when the marker's row name matches no row of the record, and `calibration-disclosure-unmarked` when a degradation bullet mentions calibration outside the marker; `lib/calibration_disclosure.py` is the rule's one home.
+
 ## Issue linking
 
 GitHub's closing-keyword parser is negation-blind. `Resolves #NNN`, `Closes #NNN`, and `Fixes #NNN`

@@ -319,6 +319,9 @@ def _grade_legs(terminal, state, bound_exceeded):
         cd = _leg(False, "no-response-within-wait", {"boundExceeded": True})
     elif not ended:
         cd = _leg(False, "attempt-ended-missing", {})
+    elif engine_dispatch._silence_watchdog_end(ended):
+        # axis: a watchdog end is no response within the wait, whatever its exit code
+        cd = _leg(False, "no-response-within-wait", {"silenceWatchdog": True})
     elif ended.get("timedOut"):
         cd = _leg(False, "no-response-within-wait", {"timedOut": True})
     elif not terminal.get("terminal"):
