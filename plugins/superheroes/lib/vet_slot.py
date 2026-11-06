@@ -14,7 +14,7 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of fifteen reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of seventeen reasons (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
 ``What's changing, and why`` heading sits above the advisor-vet marker, so the builder's owner half is lost and
 the body is restored from the PR's edit history rather than re-stamped),
@@ -25,9 +25,10 @@ inside the slot span, which the write would delete), ``receipt-missing``, ``foll
 names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
 named, by record id and title, under What we're accepting, or that record cannot be read; the rule's one home is
-``leftover_accepting.py``), ``calibration-disclosure-contradicted`` (``handback`` over an open PR: a disclosed
-degradation says a seat lacked calibration the latest review record grades read; the rule's one home is
-``calibration_disclosure.py``)) and a detail naming what was wrong; no edit is made, except
+``leftover_accepting.py``), ``calibration-disclosure-contradicted``, ``calibration-disclosure-unknown-seat`` and
+``calibration-disclosure-unmarked`` (``handback`` over an open PR: a calibration marker in a degradation bullet that the
+latest review record contradicts, or that names a row the record lacks, or a degradation bullet that mentions
+calibration outside the marker; the rule's one home is ``calibration_disclosure.py``)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
 on ok, 1 on refusal."""
@@ -436,15 +437,16 @@ def _latest_record(pr, repo, comments):
 
 
 def check_calibration_disclosures(pr, repo, body, comments):
-    """Refuse while a disclosed degradation says a review seat lacked calibration the latest review record among
-    ``comments`` grades read (``calibration_disclosure``, the rule's one home), or while that record cannot be read."""
+    """Refuse while a calibration marker in a degradation bullet is contradicted by the latest review record among
+    ``comments`` or names a row the record lacks, or while a degradation bullet mentions calibration outside the marker
+    (``calibration_disclosure``, the rule's one home), or while that record cannot be read."""
     record = _latest_record(pr, repo, comments)
     try:
-        hits = calibration_disclosure.contradicted(record, body)
+        found = calibration_disclosure.problems(record, body)
     except calibration_disclosure.Unreadable as exc:
         raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
-    if hits:
-        raise _Refusal(calibration_disclosure.REASON, calibration_disclosure.describe(hits, record.get("url")))
+    if found:
+        raise _Refusal(found[0]["reason"], calibration_disclosure.describe(found, record.get("url")))
 
 
 def check_leftovers(pr, repo, body, comments):

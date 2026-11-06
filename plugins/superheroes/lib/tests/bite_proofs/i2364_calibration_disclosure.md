@@ -1,8 +1,11 @@
 # Bite-proof record: i2364_calibration_disclosure (#2364) a calibration disclosure is checked against the review record
 
 Detector under proof: `plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py`.
-Guarded code: `plugins/superheroes/lib/calibration_disclosure.py` (`contradicted`, `_contradicted_row`, `_mentions`,
-`_hit_rows`) and the call in `plugins/superheroes/lib/vet_slot.py` (`_run_verb`, `handback` branch).
+Guarded code: `plugins/superheroes/lib/calibration_disclosure.py` (`problems`, `_valid_markers`, `_unmarked_text`,
+`_mentions_calibration`, `_contradicts`, `_normalise`, `_EXEMPT`) and the call in `plugins/superheroes/lib/vet_slot.py`
+(`_run_verb`, `handback` branch, through `check_calibration_disclosures`). At the 02:13Z marker rewrite `contradicted`,
+`_contradicted_row`, `_claims`, `_terms`, `_mentions`, `_hit_rows`, `_lens_word_only` and the narrowing levels were
+removed; entries 2, 3, 4, 7, 9 and 11 guard that removed code and are retired (see each).
 Base: `c7444483ecf21893c3a4237685c1fe3339df36a6`. Every neutralization was one targeted edit made with the Edit tool,
 undone by the inverse Edit before the next element. No `git checkout`, `restore`, `reset` or `stash` was used.
 Command prefix for every run below (worktree root), with `-k` as named per entry:
@@ -13,7 +16,11 @@ unless the entry says otherwise.
 The production sites cite this record with `# axis:` comments. Restore receipts are the restored production line,
 quoted; the whole-file `git status --porcelain` is reported in the dispatch return, not here.
 
-The guarded-element set is the five the order declared.
+The guarded-element set is the five the order declared, then the entries added by later rulings (6 to 13), then, at the
+02:13Z marker rewrite (owner ruling "31 b"), entries 14 to 19: marker validity (14), the absent row (15), per-file
+contradiction (16), the marker masked and only the marker (17), the unmarked refusal (18) and engine-record-only
+contradiction (19). Entries 2, 3, 4, 7, 9 and 11 are retired. Entries 1, 5, 6, 8, 10, 12 and 13 were re-run at the
+marker rewrite (a dated block at the end of each).
 
 Disclosures:
 - **Element 3: the order's named red did not bite, and the red below is a different case.** The order named
@@ -112,6 +119,31 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_7
 2 passed, 24 deselected in 0.29s
 ```
 
+**Re-run at the marker rewrite (02:13Z):** selector `-k "test_7a or test_7b"` on `test_calibration_disclosure_2364.py`
+(now `test_7a_..._even_with_no_marker`, `test_7b_...`). Neutralization: `raise Unreadable(detail or "the review record
+read did not succeed")` in `problems` became `return []`. The red is 7a alone, as before: 7b is the unreachable case
+(`check_leftovers` refuses first), see Disclosures. Raw red (verbatim minus the uv warning line):
+
+```
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+____ test_7a_a_record_read_that_did_not_succeed_raises_even_with_no_marker _____
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:232: in test_7a_a_record_read_that_did_not_succeed_raises_even_with_no_marker
+    with pytest.raises(cd.Unreadable, match="review-record-missing"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE Unreadable
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_7a_a_record_read_that_did_not_succeed_raises_even_with_no_marker
+1 failed, 1 passed, 123 deselected in 0.45s
+```
+
+Restore: inverse Edit. Restore receipt: line 152 reads `        raise Unreadable(detail or "the review record read did not succeed")`. Raw green:
+
+```
+..                                                                       [100%]
+2 passed, 123 deselected in 0.34s
+```
+
 ## 2. The contradicted predicate (`_contradicted_row`, rule 5)
 
 - **Axis:** a row is contradicted only when it is an engine-record row whose every entry for the claimed labels is
@@ -146,6 +178,8 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_i
 2 passed, 24 deselected in 0.25s
 ```
 
+**Retired (02:13Z scope order):** the guarded code was removed when the marker replaced free-prose seat narrowing; this entry's runs are history.
+
 ## 3. Span blanking (`_mentions`, rule 6)
 
 - **Axis:** a matched seat term's span is blanked before the next term, so an explicit target never widens through a
@@ -176,6 +210,8 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_f
 ...                                                                      [100%]
 3 passed, 93 deselected in 0.27s
 ```
+
+**Retired (02:13Z scope order):** the guarded code was removed when the marker replaced free-prose seat narrowing; this entry's runs are history.
 
 ## 4. The whole-panel branch (`_hit_rows`, rule 7)
 
@@ -209,6 +245,8 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_f
 1 passed, 95 deselected in 0.42s
 ```
 
+**Retired (02:13Z scope order):** the guarded code was removed when the marker replaced free-prose seat narrowing; this entry's runs are history.
+
 ## 5. The handback wiring call (`vet_slot.py` `_run_verb`)
 
 - **Axis:** `vet_slot.py handback --pr` runs the calibration-disclosure check after the leftover check, so a
@@ -238,6 +276,36 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_d
 ```
 .                                                                        [100%]
 1 passed, 26 deselected in 0.27s
+```
+
+**Re-run at the marker rewrite (02:13Z):** selector `-k dod_headline` (now `test_dod_headline_unmarked_is_refused`, two
+cases, expecting `calibration-disclosure-unmarked`). Neutralization: in `vet_slot.py`, `check_calibration_disclosures(pr,
+repo, body, comments)` became `# check_calibration_disclosures(pr, repo, body, comments)`. Raw red (verbatim minus the
+uv warning line):
+
+```
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_dod_headline_unmarked_is_refused[Calibration was stripped from the reviewers.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:124: in test_dod_headline_unmarked_is_refused
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+E   assert (True is False)
+_ test_dod_headline_unmarked_is_refused[Calibration (CLAUDE.md, .claude) was stripped from the reviewers by the sanitized view.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:124: in test_dod_headline_unmarked_is_refused
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+E   assert (True is False)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_dod_headline_unmarked_is_refused[Calibration was stripped from the reviewers.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_dod_headline_unmarked_is_refused[Calibration (CLAUDE.md, .claude) was stripped from the reviewers by the sanitized view.]
+2 failed, 123 deselected in 0.33s
+```
+
+Restore: inverse Edit. Restore receipt: `vet_slot.py` lines 712 to 714 read `            check_leftovers(pr, repo, body, comments)`, the `# axis:` comment, then
+`            check_calibration_disclosures(pr, repo, body, comments)`. Raw green:
+
+```
+..                                                                       [100%]
+2 passed, 123 deselected in 0.29s
 ```
 
 ## 6. The claim test (`_claims`)
@@ -282,6 +350,40 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_v
 40 passed, 54 deselected in 0.57s
 ```
 
+**Re-run at the marker rewrite (02:13Z):** the claim test is now `_mentions_calibration`; selector `-k "dod_headline or
+vet_825"` (42 selected). Neutralization: in `_mentions_calibration`, `... or _GENERIC.search(masked)) and
+_LACK.search(masked):` became `... or _GENERIC.search(masked)) and False:`. Run with `--tb=line`, the output sent to the
+scratchpad file `/tmp/claude-0/-home-user-wt-2364/02a0e535-3312-42ee-8c4d-d7309443fd11/scratchpad/red6.txt` (19835
+bytes, under the ceiling; scratch, not a receipt once the session ends), so the quote below is the first lines and the
+last three lines, with the remaining failure blocks and the earlier summary lines elided (about 18 KB of the 19835
+bytes). Raw red:
+
+```
+FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF                               [100%]
+=================================== FAILURES ===================================
+E   assert (True is False)
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:124: assert (True is False)
+E   assert (True is False)
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:124: assert (True is False)
+E   AssertionError: assert [] == ['calibration...ure-unmarked']
+      
+      Right contains one more item: 'calibration-disclosure-unmarked'
+      Use -v to get more diff
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:425: AssertionError: assert [] == ['calibration...ure-unmarked']
+[... further failure blocks and summary lines elided ...]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The view will withhold core.md from the reviewers.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was not available to the reviewers.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was left  out of the reviewers' view.]
+42 failed, 83 deselected in 0.44s
+```
+
+Restore: inverse Edit. Restore receipt: line 129 reads `        if (any(noun.search(masked) for noun in _NOUNS) or _GENERIC.search(masked)) and _LACK.search(masked):`. Raw green:
+
+```
+..........................................                               [100%]
+42 passed, 83 deselected in 0.47s
+```
+
 ## 7. Per-clause scope (`contradicted`, the `_hit_rows` call)
 
 - **Axis:** a seat named only in one claim clause is never checked against another claim clause's files, so each claim
@@ -322,6 +424,8 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 .                                                                        [100%]
 1 passed, 95 deselected in 0.30s
 ```
+
+**Retired (02:13Z scope order):** the guarded code was removed when the marker replaced free-prose seat narrowing; this entry's runs are history.
 
 ## 8. Normalisation (`_normalise`)
 
@@ -376,6 +480,41 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_v
 39 passed, 66 deselected in 0.73s
 ```
 
+**Re-run at the marker rewrite (02:13Z):** selector `-k vet_825` on the main test file (40 cases; the cases now expect
+`calibration-disclosure-unmarked`). Neutralization: the body of `_normalise`, `return re.sub(r"\s+", " ",
+text.translate(_FORMATTING))`, became `return text`. Run with `--tb=line` and the lines cut to 200 columns. Seven cases
+went red: the two curly-apostrophe cases, the four emphasis cases, and the new `core.md was left  out of the reviewers'
+view.` case (two spaces, which only the whitespace collapse reads as `left out`). The no-break-space case stays green
+(U+00A0 is not a word character), as in the earlier run. Raw red (verbatim minus the uv warning line; six of the seven
+failure blocks, which are identical in shape, are elided):
+
+```
+.......................FF..FFFF........F                                 [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert [] == ['calibration...ure-unmarked']
+      
+      Right contains one more item: 'calibration-disclosure-unmarked'
+      Use -v to get more diff
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:425: AssertionError: assert [] == ['calibration...ure-unmarked']
+[... the other six failure blocks elided; each is the same four lines plus the location line ...]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The code reviewer didn’t have core.md.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[The code reviewer didn’t get its calibration.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was _stripped_ from the code reviewer.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[_core.md_ was stripped from the code reviewer.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[__Calibration__ was stripped from every seat.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was __missing__ for every seat.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was left  out of the reviewers' view.]
+7 failed, 33 passed, 85 deselected in 0.46s
+```
+
+Restore: inverse Edit. Restore receipt: line 97 reads `    return re.sub(r"\s+", " ", text.translate(_FORMATTING))`. Raw green:
+
+```
+........................................                                 [100%]
+40 passed, 85 deselected in 0.43s
+```
+
 ## 9. Lens words never narrow a claim (`_NARROWING_LEVELS`, `_mentions`, `_hit_rows`)
 
 - **Axis:** a claim clause narrows to a seat only when it names the seat in full (row name, name without the round,
@@ -422,6 +561,8 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_runner_alias_23
 ....                                                                     [100%]
 4 passed, 94 deselected in 0.54s
 ```
+
+**Retired (02:13Z scope order):** the guarded code was removed when the marker replaced free-prose seat narrowing; this entry's runs are history.
 
 ## 10. Whitespace collapse (`_normalise`)
 
@@ -481,6 +622,34 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 6 passed, 98 deselected in 0.47s
 ```
 
+**Re-run at the marker rewrite (02:13Z):** the earlier selector's tests (`formatted_seat_name`, `named_round_is_never`)
+were deleted with the seat narrowing, so the proving case is new: `core.md was left  out of the reviewers' view.` (two
+spaces) in `test_vet_825_sentences_refuse`, because `_LACK` reads `left out` with one space and only the collapse
+produces it. Selector `-k "vet_825 and left"`. Neutralization: `return re.sub(r"\s+", " ", text.translate(_FORMATTING))`
+became `return text.translate(_FORMATTING)`. Raw red (verbatim minus the uv warning line):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_vet_825_sentences_refuse[core.md was left  out of the reviewers' view.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:425: in test_vet_825_sentences_refuse
+    assert reasons(cd.problems(rec([row(CODE1), row(SEC1)]), bullet(text))) == [cd.REASON_UNMARKED]
+E   AssertionError: assert [] == ['calibration...ure-unmarked']
+E     
+E     Right contains one more item: 'calibration-disclosure-unmarked'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_vet_825_sentences_refuse[core.md was left  out of the reviewers' view.]
+1 failed, 124 deselected in 0.31s
+```
+
+Restore: inverse Edit. Restore receipt: line 97 reads `    return re.sub(r"\s+", " ", text.translate(_FORMATTING))`. Raw green:
+
+```
+.                                                                        [100%]
+1 passed, 124 deselected in 0.30s
+```
+
 ## 11. Term normalisation (`_terms`)
 
 - **Axis:** every seat term is stored through `_normalise(term).strip().lower()`, the same function as the degradation
@@ -526,6 +695,8 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 ..                                                                       [100%]
 2 passed, 104 deselected in 0.41s
 ```
+
+**Retired (02:13Z scope order):** the guarded code was removed when the marker replaced free-prose seat narrowing; this entry's runs are history.
 
 ## 12. The doctrine exemption (`_claims`, `_EXEMPT`)
 
@@ -584,6 +755,34 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_d
 4 passed, 110 deselected in 0.41s
 ```
 
+**Re-run at the marker rewrite (02:13Z):** the mask now sits in `_mentions_calibration`; selector `-k
+doctrine_prescribed_disclosures_pass` (4 cases, now `cd.problems(...) == []`). Neutralization: `masked = _EXEMPT.sub("
+", clause)` became `masked = clause`. Raw red (verbatim minus the uv warning line, lines cut to 260 columns by the shell
+`cut`; the `Left contains` and `where` detail is cut as printed):
+
+```
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+___________ test_doctrine_prescribed_disclosures_pass[costly-text0] ____________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:504: in test_doctrine_prescribed_disclosures_pass
+    assert cd.problems(record, bullet(text, label)) == []
+E   AssertionError: assert [{'reason': '... the marker'}] == []
+[... the other three failure blocks elided; each is the same shape, for costly-text1, harmless-text2 and harmless-text3 ...]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[costly-text0]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[costly-text1]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[harmless-text2]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_doctrine_prescribed_disclosures_pass[harmless-text3]
+4 failed, 121 deselected in 0.35s
+```
+
+Restore: inverse Edit. Restore receipt: line 127 reads `        masked = _EXEMPT.sub(" ", clause)`. Raw green:
+
+```
+....                                                                     [100%]
+4 passed, 121 deselected in 0.33s
+```
+
 ## 13. The narrowed identifier form (`_EXEMPT`)
 
 - **Axis:** the model-identifier exemption applies only after "the" and only to a token that starts with a letter and
@@ -627,4 +826,247 @@ FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a
 ```
 ...                                                                      [100%]
 3 passed, 119 deselected in 0.62s
+```
+
+**Re-run at the marker rewrite (02:13Z):** selector `-k an_exemption_never_lets` (3 cases, now expecting
+`calibration-disclosure-unmarked`). Neutralization: in `_EXEMPT`, `\bthe\s+calibrated\s+[a-z]\S*\d\S*` became
+`\bcalibrated\s+\S*\d\S*`. Raw red (verbatim minus the uv warning line; the first failure block is shown and the other two
+are the same shape):
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_an_exemption_never_lets_a_real_lack_claim_through[The code reviewer was not calibrated (gpt-6.1-sol ran bare).] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:536: in test_an_exemption_never_lets_a_real_lack_claim_through
+    assert reasons(cd.problems(record, bullet(text))) == [cd.REASON_UNMARKED]
+E   AssertionError: assert [] == ['calibration...ure-unmarked']
+E     
+E     Right contains one more item: 'calibration-disclosure-unmarked'
+E     Use -v to get more diff
+[... the blocks for "not calibrated 2 rounds in a row" and "The calibrated 3 files were stripped" elided, same shape ...]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_an_exemption_never_lets_a_real_lack_claim_through[The code reviewer was not calibrated (gpt-6.1-sol ran bare).]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_an_exemption_never_lets_a_real_lack_claim_through[The reviewers were not calibrated 2 rounds in a row.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_an_exemption_never_lets_a_real_lack_claim_through[The calibrated 3 files were stripped from the code reviewer.]
+3 failed, 122 deselected in 0.32s
+```
+
+Restore: inverse Edit. Restore receipt: line 80 reads `    r"|\bshow-it surface\b|\bcalibrated[\s-]+(?:verify|model|command)s?\b|\bthe\s+calibrated\s+[a-z]\S*\d\S*", re.I)`.
+Raw green:
+
+```
+...                                                                      [100%]
+3 passed, 122 deselected in 0.31s
+```
+
+## 14. Marker validity (`_valid_markers`)
+
+- **Axis:** a span is a valid marker only when its files, split on a comma and one space, are a non-empty list of the
+  three exact names `core.md`, `review-crew.md` and `CLAUDE.md` with no duplicate; any other span is left in the text
+  and refused `calibration-disclosure-unmarked`, never passed.
+- **Neutralization:** `if None not in labels and len(set(files)) == len(files):` became `if files:` (every non-empty
+  split counts).
+- **Raw red** (`-k malformed_marker`, 8 cases; verbatim minus the uv warning line, lines cut to 260 columns by the shell
+  `cut`; the four failure blocks are shown as the first, the other three are the same shape). Four cases go red: the
+  unknown file, the duplicate file, lowercase `claude.md` and two spaces after the comma. The other four (empty list,
+  no space after the colon, empty brackets, no backticks) never match `_MARKER`, so the file-list check is not reached
+  and they stay green, as they must:
+
+```
+F.FF.F..                                                                 [100%]
+=================================== FAILURES ===================================
+______________ test_a_malformed_marker_is_unmarked[unknown-file] _______________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:303: in test_a_malformed_marker_is_unmarked
+    assert reasons(cd.problems(rec(reviewers), pr_body)) == [cd.REASON_UNMARKED]
+E   AssertionError: assert [] == ['calibration...ure-unmarked']
+E     
+E     Right contains one more item: 'calibration-disclosure-unmarked'
+E     Use -v to get more diff
+[... the blocks for duplicate-file, lowercase-claude and two-spaces-after-comma elided, same shape ...]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_malformed_marker_is_unmarked[unknown-file]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_malformed_marker_is_unmarked[duplicate-file]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_malformed_marker_is_unmarked[lowercase-claude]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_malformed_marker_is_unmarked[two-spaces-after-comma]
+4 failed, 4 passed, 117 deselected in 0.35s
+```
+
+- **Restore:** inverse Edit, `if files:` back to `if None not in labels and len(set(files)) == len(files):`.
+- **Restore receipt:** line 108 reads `        if None not in labels and len(set(files)) == len(files):`.
+- **Raw green** (`-k malformed_marker`):
+
+```
+........                                                                 [100%]
+8 passed, 117 deselected in 0.30s
+```
+
+## 15. The absent row (`problems`)
+
+- **Axis:** a marker whose row name matches no row of the record exactly is refused `calibration-disclosure-unknown-seat`,
+  naming the marker's text and every row; the match is never widened (a trailing space is a different name).
+- **Neutralization:** `if not targets:` (the absent-row branch) became `if False:`, so no problem is added and the
+  targets stay empty.
+- **Raw red** (`-k absent_row`; verbatim minus the uv warning line):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________________ test_a_marker_naming_an_absent_row_refuses __________________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:188: in test_a_marker_naming_an_absent_row_refuses
+    assert reasons(found) == [cd.REASON_UNKNOWN_SEAT]
+E   AssertionError: assert [] == ['calibration...unknown-seat']
+E     
+E     Right contains one more item: 'calibration-disclosure-unknown-seat'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_marker_naming_an_absent_row_refuses
+1 failed, 124 deselected in 0.30s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if not targets:`.
+- **Restore receipt:** line 167 reads `                if not targets:`.
+- **Raw green** (`-k absent_row`):
+
+```
+.                                                                        [100%]
+1 passed, 124 deselected in 0.29s
+```
+
+## 16. Per-file contradiction (`_contradicts`)
+
+- **Axis:** one named file graded `read` is enough to contradict a marker, so a partly false marker cannot pass.
+- **Neutralization:** `return any(entry["label"] in labels and entry["read"] == calibration_vocab.READ for entry in
+  files)` became two lines, `held = [entry for entry in files if entry["label"] in labels]` and `return bool(held) and
+  all(entry["read"] == calibration_vocab.READ for entry in held)` (`all(...)` over every named label held).
+- **Raw red** (`-k any_named_file_read`; verbatim minus the uv warning line). The fixture grades core `read` and
+  review-crew `not-read` and names both files:
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_a_marker_is_contradicted_by_any_named_file_read _____________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:176: in test_a_marker_is_contradicted_by_any_named_file_read
+    assert reasons(cd.problems(rec(reviewers), both)) == [cd.REASON]
+E   AssertionError: assert [] == ['calibration...contradicted']
+E     
+E     Right contains one more item: 'calibration-disclosure-contradicted'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_marker_is_contradicted_by_any_named_file_read
+1 failed, 124 deselected in 0.31s
+```
+
+- **Restore:** inverse Edit, the two lines back to the single `return any(...)`.
+- **Restore receipt:** line 141 reads `    return any(entry["label"] in labels and entry["read"] == calibration_vocab.READ for entry in files)`.
+- **Raw green** (`-k any_named_file_read`):
+
+```
+.                                                                        [100%]
+1 passed, 124 deselected in 0.30s
+```
+
+## 17. The marker is masked, and only the marker (`problems`, `_unmarked_text`)
+
+- **Axis:** only the valid marker spans are replaced by a space before the unmarked test, so prose beside a marker is
+  still read for a mention of calibration. (The other half, that the marker's own words do not trip the test, is pinned
+  by `test_marker_prose_without_a_mention_passes` and `test_the_doctrine_example_is_the_module_constant`, which pass only
+  because the span is masked; that half was not neutralized in this dispatch and is unproven by a red run.)
+- **Neutralization:** `left = _unmarked_text(text, markers)` became `left = " "` (the whole bullet, not the marker span,
+  replaced by a space before the unmarked test).
+- **Raw red** (`-k does_not_cover_unmarked_prose`; verbatim minus the uv warning line):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_a_marker_does_not_cover_unmarked_prose_beside_it _____________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:277: in test_a_marker_does_not_cover_unmarked_prose_beside_it
+    assert reasons(cd.problems(rec(reviewers), pr_body)) == [cd.REASON_UNMARKED]
+E   AssertionError: assert [] == ['calibration...ure-unmarked']
+E     
+E     Right contains one more item: 'calibration-disclosure-unmarked'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_marker_does_not_cover_unmarked_prose_beside_it
+1 failed, 124 deselected in 0.31s
+```
+
+- **Restore:** inverse Edit, `left = " "` back to `left = _unmarked_text(text, markers)`.
+- **Restore receipt:** line 179 reads `        left = _unmarked_text(text, markers)`.
+- **Raw green** (`-k does_not_cover_unmarked_prose`):
+
+```
+.                                                                        [100%]
+1 passed, 124 deselected in 0.28s
+```
+
+## 18. The unmarked refusal (`problems`)
+
+- **Axis:** a bullet that mentions calibration outside a valid marker is refused `calibration-disclosure-unmarked`,
+  whatever the record says.
+- **Neutralization:** `if _mentions_calibration(_normalise(left)):` became `if False:` (the unmarked problem is never
+  added).
+- **Raw red** (`-k "dod_headline or unmarked_mention_refuses"`; verbatim minus the uv warning line):
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_dod_headline_unmarked_is_refused[Calibration was stripped from the reviewers.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:124: in test_dod_headline_unmarked_is_refused
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+E   assert (True is False)
+_ test_dod_headline_unmarked_is_refused[Calibration (CLAUDE.md, .claude) was stripped from the reviewers by the sanitized view.] _
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:124: in test_dod_headline_unmarked_is_refused
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+E   assert (True is False)
+__________ test_an_unmarked_mention_refuses_whatever_the_record_says ___________
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:270: in test_an_unmarked_mention_refuses_whatever_the_record_says
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+E   assert (True is False)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_dod_headline_unmarked_is_refused[Calibration was stripped from the reviewers.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_dod_headline_unmarked_is_refused[Calibration (CLAUDE.md, .claude) was stripped from the reviewers by the sanitized view.]
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_an_unmarked_mention_refuses_whatever_the_record_says
+3 failed, 122 deselected in 0.32s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if _mentions_calibration(_normalise(left)):`.
+- **Restore receipt:** line 181 reads `        if _mentions_calibration(_normalise(left)):`.
+- **Raw green** (`-k "dod_headline or unmarked_mention_refuses"`):
+
+```
+...                                                                      [100%]
+3 passed, 122 deselected in 0.34s
+```
+
+## 19. Engine-record only (`_contradicts`)
+
+- **Axis:** only an engine-record row can contradict a marker; a session-reported row (even one that carries `read`
+  grades), a not-run row, an unmeasured row and a row whose order named none never do.
+- **Neutralization:** the two lines `if row.get("ran") != "engine-record":` and `return False` were removed.
+- **Raw red** (`-k no_measured_calibration`; verbatim minus the uv warning line, lines cut to 260 columns by the shell
+  `cut`). Only the session-reported row that carries `read` grades (`only4`) goes red; the other four rows have no
+  `read` grade to read, so they stay green under this neutralization:
+
+```
+....F                                                                    [100%]
+=================================== FAILURES ===================================
+_____ test_a_row_with_no_measured_calibration_is_never_contradicted[only4] _____
+/home/user/wt-2364/plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py:441: in test_a_row_with_no_measured_calibration_is_never_contradicted
+    assert cd.problems(rec([only]), pr_body) == []
+E   AssertionError: assert [{'reason': '...ine record)'}] == []
+E     
+E     Left contains one more item: {'reason': 'calibration-disclosure-contradicted', 'degradation': '`calibration-lacked[code-reviewer (round 1)]: core.m... code-reviewer (round 1) contradicts <where>: code-reviewer (round 1): calibration read: not shown (no e
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_calibration_disclosure_2364.py::test_a_row_with_no_measured_calibration_is_never_contradicted[only4]
+1 failed, 4 passed, 120 deselected in 0.33s
+```
+
+- **Restore:** inverse Edit, the two lines put back above `files = ...`.
+- **Restore receipt:** lines 137 and 138 read `    if row.get("ran") != "engine-record":` and `        return False`.
+- **Raw green** (`-k no_measured_calibration`):
+
+```
+.....                                                                    [100%]
+5 passed, 120 deselected in 0.33s
 ```

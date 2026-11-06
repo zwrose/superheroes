@@ -1,7 +1,9 @@
-"""#2364: a PR body's Disclosed degradations never says a review seat lacked its calibration while the latest review
-record grades that seat's calibrationRead read. One rule (calibration_disclosure), one caller (vet_slot handback --pr).
-No real gh: every call is faked."""
+"""#2364: a PR body's Disclosed degradations says a review seat lacked its calibration only through one fixed marker,
+and the marker is compared exactly against the latest review record; a degradation that mentions calibration outside a
+valid marker is refused. One rule (calibration_disclosure), one caller (vet_slot handback --pr). No real gh: every call
+is faked."""
 import json
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -16,11 +18,7 @@ PR = 42
 VIEW = ("gh", "api", "repos/owner/example/pulls/42")
 COMMENTS = "repos/owner/example/issues/42/comments?per_page=100&page="
 USER = ("gh", "api", "user", "-q", ".login")
-
-FIX = ("Read each seat's calibrationRead in the review record and disclose a calibration degradation only for a seat"
-       " graded not-read or unknown, or whose order named no calibration, naming that seat; a disclosure that does not"
-       " name a seat in full covers every seat. Put an unrelated lack (a browser, a tool, a runner) in its own bullet or"
-       " sentence, apart from any mention of calibration.")
+HANDBACK_MD = Path(__file__).resolve().parents[2] / "skills" / "workhorse" / "reference" / "handback.md"
 
 
 def body(degradations, accepting="None\n"):
@@ -35,6 +33,11 @@ def body(degradations, accepting="None\n"):
 
 def bullet(text, label="costly"):
     return body("- [%s] %s\n" % (label, text))
+
+
+def mark(name, files):
+    """The calibration marker for row ``name`` and the file list ``files`` (a string, written as given)."""
+    return "`calibration-lacked[%s]: %s`" % (name, files)
 
 
 def entry(label, file, state="read"):
@@ -99,46 +102,117 @@ def handback(pr_body, comments):
     return vs.run_verb("handback", PR, REPO, run=Fake(pr_body, comments))
 
 
-def seats(hits):
-    return [[s["name"] for s in h["seats"]] for h in hits]
+def reasons(found):
+    return [p["reason"] for p in found]
 
 
 CODE1, SEC1, PRE1 = "code-reviewer (round 1)", "security-reviewer (round 1)", "premortem-reviewer (round 1)"
+ALL_FILES = "core.md, review-crew.md, CLAUDE.md"
+NOT_READ = cal("not-read", "not-read", "not-read")
+READ_LINE = ": read its calibration: core.md, review-crew.md, CLAUDE.md"
 
 
-# --- 1, 2: the incident, through handback ------------------------------------------------------------
+# --- 1, 2: the incident, through handback --------------------------------------------------------------------
 
-def test_dod_headline_stripped_calibration_the_record_grades_read_is_refused():
-    pr_body = bullet("Calibration (CLAUDE.md, .claude) was stripped from the reviewers by the sanitized view.")
+@pytest.mark.parametrize("text", [
+    "Calibration was stripped from the reviewers.",
+    "Calibration (CLAUDE.md, .claude) was stripped from the reviewers by the sanitized view.",
+])
+def test_dod_headline_unmarked_is_refused(text):
+    pr_body = bullet(text)
     result = handback(pr_body, [record_comment([row(CODE1), row(SEC1)])])
-    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
-    assert CODE1 in result["detail"] and SEC1 in result["detail"]
-    assert "read its calibration" in result["detail"]
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+    assert cd.MARKER_FORM in result["detail"] and cd.MARKER_EXAMPLE in result["detail"]
+    assert reasons(cd.problems(rec([row(CODE1), row(SEC1)]), pr_body)) == [cd.REASON_UNMARKED]
 
 
-def test_incident_wording_names_all_three_seats():
+def test_incident_wording_unmarked_is_refused():
     pr_body = bullet("The code, security and failure-mode reviewers judged without this project's threat model and"
                      " focus hints.")
     result = handback(pr_body, [record_comment([row(CODE1), row(SEC1), row(PRE1)])])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+    assert reasons(cd.problems(rec([row(CODE1)]), pr_body)) == [cd.REASON_UNMARKED]
+
+
+# --- 3, 4, 5: a marker against what the record grades -----------------------------------------------------------
+
+def test_a_contradicted_marker_refuses():
+    pr_body = bullet(mark(CODE1, "core.md"))
+    found = cd.problems(rec([row(CODE1), row(SEC1)]), pr_body)
+    assert reasons(found) == [cd.REASON]
+    result = handback(pr_body, [record_comment([row(CODE1), row(SEC1)])])
     assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
-    assert all(name in result["detail"] for name in (CODE1, SEC1, PRE1))
+    assert CODE1 + READ_LINE in result["detail"]
+    assert SEC1 not in result["detail"]
 
-
-# --- 3, 4, 5: a seat the record does not grade read ----------------------------------------------------
 
 @pytest.mark.parametrize("state", ["not-read", "unknown"])
 def test_disclosure_naming_a_seat_not_graded_read_passes(state):
     reviewers = [row(CODE1, cal(crew=state)), row(SEC1)]
-    assert handback(bullet("code-reviewer (round 1) lacked review-crew.md."), [record_comment(reviewers)])["ok"] is True
-    # the same words about the seat that did read it are refused
-    other = handback(bullet("security-reviewer (round 1) lacked review-crew.md."), [record_comment(reviewers)])
+    assert handback(bullet(mark(CODE1, "review-crew.md")), [record_comment(reviewers)])["ok"] is True
+    # the same marker for the seat that did read it is refused
+    other = handback(bullet(mark(SEC1, "review-crew.md")), [record_comment(reviewers)])
     assert other["reason"] == "calibration-disclosure-contradicted" and SEC1 in other["detail"]
+
+
+@pytest.mark.parametrize("state", ["not-read", "unknown", "unmeasured"])
+def test_a_supported_marker_passes(state):
+    reviewers = [row(CODE1, False if state == "unmeasured" else cal(state, state, state))]
+    pr_body = bullet(mark(CODE1, "core.md"))
+    assert handback(pr_body, [record_comment(reviewers)])["ok"] is True
+    assert cd.problems(rec(reviewers), pr_body) == []
 
 
 def test_a_seat_whose_order_named_no_calibration_may_be_named():
     reviewers = [row(CODE1, []), row(SEC1)]
-    assert handback(bullet("code-reviewer (round 1) had no calibration."), [record_comment(reviewers)])["ok"] is True
-    assert cd.contradicted(rec(reviewers), bullet("The security reviewer had no calibration."))
+    assert handback(bullet(mark(CODE1, "core.md")), [record_comment(reviewers)])["ok"] is True
+    found = cd.problems(rec(reviewers), bullet(mark(SEC1, "core.md")))
+    assert reasons(found) == [cd.REASON]
+
+
+def test_a_marker_is_contradicted_by_any_named_file_read():
+    reviewers = [row(CODE1, cal(core="read", crew="not-read"))]
+    both = bullet(mark(CODE1, "core.md, review-crew.md"))
+    assert reasons(cd.problems(rec(reviewers), both)) == [cd.REASON]
+    assert handback(both, [record_comment(reviewers)])["reason"] == "calibration-disclosure-contradicted"
+    only_crew = bullet(mark(CODE1, "review-crew.md"))
+    assert cd.problems(rec(reviewers), only_crew) == []
+    assert handback(only_crew, [record_comment(reviewers)])["ok"] is True
+
+
+def test_a_marker_naming_an_absent_row_refuses():
+    reviewers = [row(CODE1), row(SEC1)]
+    for name in ("code-reviewer (round 9)", "code-reviewer (round 1) "):
+        pr_body = bullet(mark(name, "core.md"))
+        found = cd.problems(rec(reviewers), pr_body)
+        assert reasons(found) == [cd.REASON_UNKNOWN_SEAT]
+        result = handback(pr_body, [record_comment(reviewers)])
+        assert result["ok"] is False and result["reason"] == "calibration-disclosure-unknown-seat"
+        assert CODE1 in result["detail"] and SEC1 in result["detail"]
+        assert "calibration-disclosure-contradicted" not in result["detail"]
+
+
+def test_the_every_seat_group():
+    pr_body = bullet(mark("*", "core.md"))
+    both_unread = [row(CODE1, NOT_READ), row(SEC1, NOT_READ)]
+    assert handback(pr_body, [record_comment(both_unread)])["ok"] is True
+    one_read = [row(CODE1, NOT_READ), row(SEC1)]
+    assert reasons(cd.problems(rec(one_read), pr_body)) == [cd.REASON]
+    result = handback(pr_body, [record_comment(one_read)])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+    assert SEC1 in result["detail"] and CODE1 not in result["detail"]
+
+
+def test_two_markers_in_one_bullet_are_each_checked():
+    reviewers = [row(CODE1, cal(core="read", crew="not-read"))]
+    pr_body = bullet(mark(CODE1, "review-crew.md") + " and " + mark(CODE1, "core.md"))
+    assert reasons(cd.problems(rec(reviewers), pr_body)) == [cd.REASON]
+
+
+def test_a_marker_wrapped_across_lines_is_read():
+    pr_body = body("- [costly] `calibration-lacked[code-reviewer (round\n  1)]: core.md`\n")
+    assert reasons(cd.problems(rec([row(CODE1)]), pr_body)) == [cd.REASON]
+    assert cd.problems(rec([row(CODE1, NOT_READ)]), pr_body) == []
 
 
 # --- 6: no calibration disclosure ------------------------------------------------------------------------
@@ -148,149 +222,110 @@ def test_no_calibration_disclosure_passes():
     assert handback(body(None), [record_comment(reviewers)])["ok"] is True
     unrelated = bullet("The integration test runner was unavailable, so the slow suite was skipped.")
     assert handback(unrelated, [record_comment(reviewers)])["ok"] is True
-    assert cd.contradicted(rec(reviewers), unrelated) == []
+    assert cd.problems(rec(reviewers), unrelated) == []
 
 
 # --- 7: fail closed on an unreadable record --------------------------------------------------------------
 
-def test_7a_a_record_read_that_did_not_succeed_raises_even_with_no_claim():
+def test_7a_a_record_read_that_did_not_succeed_raises_even_with_no_marker():
     failed = {"ok": False, "reason": "review-record-missing"}
     with pytest.raises(cd.Unreadable, match="review-record-missing"):
-        cd.contradicted(failed, bullet("Calibration was stripped from the reviewers."))
+        cd.problems(failed, bullet("Calibration was stripped from the reviewers."))
     with pytest.raises(cd.Unreadable, match="review-record-missing"):
-        cd.contradicted(failed, body(None))
+        cd.problems(failed, body(None))
     with pytest.raises(cd.Unreadable, match="did not succeed"):
-        cd.contradicted(None, body(None))
+        cd.problems(None, body(None))
     with pytest.raises(cd.Unreadable, match="the JSON does not parse"):
-        cd.contradicted({"ok": False, "reason": "x", "detail": "the JSON does not parse"}, body(None))
+        cd.problems({"ok": False, "reason": "x", "detail": "the JSON does not parse"}, body(None))
 
 
 def test_7b_a_missing_record_refuses_review_record_unreadable_naming_the_record():
-    result = handback(bullet("Calibration was stripped from the reviewers."), [comment("chatter")])
+    result = handback(bullet(mark(CODE1, "core.md")), [comment("chatter")])
     assert result["ok"] is False and result["reason"] == "review-record-unreadable"
     assert "the latest review record on PR 42" in result["detail"]
 
 
 @pytest.mark.parametrize("reviewers", ["not a list", None, [CODE1], [row(CODE1), "not a dict"]])
-def test_7c_a_malformed_reviewers_list_with_a_claim_refuses_review_record_unreadable(reviewers):
-    pr_body = bullet("Calibration was stripped from the reviewers.")
+def test_7c_a_malformed_reviewers_list_with_a_marker_refuses_review_record_unreadable(reviewers):
+    pr_body = bullet(mark(CODE1, "core.md"))
     with pytest.raises(cd.Unreadable, match="reviewers list is missing or malformed"):
-        cd.contradicted({"ok": True, "reviewers": reviewers}, pr_body)
+        cd.problems({"ok": True, "reviewers": reviewers}, pr_body)
     result = handback(pr_body, [record_comment(reviewers)])
     assert result["ok"] is False and result["reason"] == "review-record-unreadable"
     assert "reviewers list is missing or malformed" in result["detail"]
 
 
-def test_7c_a_malformed_reviewers_list_with_no_claim_is_not_read():
-    assert cd.contradicted({"ok": True, "reviewers": "not a list"}, body(None)) == []
+def test_7c_a_malformed_reviewers_list_with_no_marker_is_not_read():
+    assert cd.problems({"ok": True, "reviewers": "not a list"}, body(None)) == []
+    found = cd.problems({"ok": True, "reviewers": "not a list"}, bullet("Calibration was stripped from the reviewers."))
+    assert reasons(found) == [cd.REASON_UNMARKED]
 
 
-# --- 8 to 11: which seats and which files a claim reaches -------------------------------------------------
+# --- the unmarked rule: a mention of calibration outside a valid marker -----------------------------------------
 
-def test_f1_opposite_grades_on_one_seat_follow_the_files_the_claim_names():
-    record = rec([row(CODE1, cal(core="read", crew="not-read"))])
-    assert seats(cd.contradicted(record, bullet("The reviewers judged without the threat model."))) == [[CODE1]]
-    assert cd.contradicted(record, bullet("The reviewers judged without the focus hints.")) == []
-
-
-def test_f2_a_claim_naming_no_seat_covers_every_seat_and_names_the_contradicted_ones():
-    record = rec([row("code-reviewer (round 1)"), row("security-reviewer (round 1)", cal(core="unknown"))])
-    hits = cd.contradicted(record, bullet("Calibration was missing for the reviewers."))
-    assert seats(hits) == [[CODE1]]
-    assert hits[0]["seats"][0]["line"] == CODE1 + ": read its calibration: core.md, review-crew.md, CLAUDE.md"
-    result = handback(bullet("Calibration was missing for the reviewers."), [record_comment(record["reviewers"])])
-    assert result["reason"] == "calibration-disclosure-contradicted"
-    assert CODE1 in result["detail"] and SEC1 not in result["detail"]
+def test_an_unmarked_mention_refuses_whatever_the_record_says():
+    pr_body = bullet("Calibration (CLAUDE.md, .claude) was stripped from the reviewers by the sanitized view.")
+    unread = [row(CODE1, NOT_READ), row(SEC1, NOT_READ)]
+    result = handback(pr_body, [record_comment(unread)])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
+    assert cd.MARKER_FORM in result["detail"]
 
 
-def test_f3_the_most_specific_seat_term_wins():
-    record = rec([row("code-reviewer (round 1)", cal(crew="unknown")), row("code-reviewer (round 2)")])
-    assert seats(cd.contradicted(record, bullet("code-reviewer (round 2) lacked review-crew.md"))) == [
-        ["code-reviewer (round 2)"]]
-    # a lens word names no seat in full, so the claim covers every seat that ran
-    assert seats(cd.contradicted(record, bullet("the code reviewer lacked review-crew.md"))) == [
-        ["code-reviewer (round 2)"]]
+def test_a_marker_does_not_cover_unmarked_prose_beside_it():
+    pr_body = bullet(mark(CODE1, "core.md") + " and the security reviewer lacked review-crew.md.")
+    reviewers = [row(CODE1, NOT_READ)]
+    assert reasons(cd.problems(rec(reviewers), pr_body)) == [cd.REASON_UNMARKED]
+    result = handback(pr_body, [record_comment(reviewers)])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
 
 
-def test_f3_an_explicit_seat_that_did_not_run_never_widens_to_the_seats_of_its_lens():
-    record = rec([row("code-reviewer (round 1)", ran="not-run"), row("code-reviewer (round 2)")])
-    assert cd.contradicted(record, bullet("code-reviewer (round 1) lacked review-crew.md")) == []
-    assert seats(cd.contradicted(record, bullet("the code reviewer lacked review-crew.md"))) == [
-        ["code-reviewer (round 2)"]]
-
-
-def test_f3_a_slice_seat_is_named_by_its_slice():
-    record = rec([row("code-reviewer:api (round 1)", cal(crew="unknown")), row("code-reviewer:ui (round 1)")])
-    assert cd.contradicted(record, bullet("code-reviewer:api lacked review-crew.md")) == []
-    assert seats(cd.contradicted(record, bullet("code-reviewer:ui lacked review-crew.md"))) == [
-        ["code-reviewer:ui (round 1)"]]
+def test_marker_prose_without_a_mention_passes():
+    pr_body = bullet(mark(CODE1, "core.md, review-crew.md") + " — its engine dispatch held neither file.")
+    reviewers = [row(CODE1, NOT_READ)]
+    assert cd.problems(rec(reviewers), pr_body) == []
+    assert handback(pr_body, [record_comment(reviewers)])["ok"] is True
 
 
 @pytest.mark.parametrize("text", [
-    "Calibration was stripped from the reviewers. The integration test runner was unavailable.",
-    "Calibration was stripped from the reviewers because the integration test runner was unavailable.",
-])
-def test_a_claim_naming_no_full_seat_covers_every_seat(text):
-    record = rec([row(CODE1), row("test-role (round 1)", cal(core="unknown", crew="unknown", claude="unknown"))])
-    assert seats(cd.contradicted(record, bullet(text))) == [[CODE1]]
-    result = handback(bullet(text), [record_comment(record["reviewers"])])
-    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
-    assert "name the seat in full" in result["detail"]
+    mark(CODE1, "foo.md"),
+    mark(CODE1, ""),
+    mark(CODE1, "core.md, core.md"),
+    mark(CODE1, "claude.md"),
+    "`calibration-lacked[%s]:core.md`" % CODE1,
+    mark(CODE1, "core.md,  review-crew.md"),
+    mark("", "core.md"),
+    "calibration-lacked[%s]: core.md" % CODE1,
+], ids=["unknown-file", "empty-list", "duplicate-file", "lowercase-claude", "no-space-after-colon",
+        "two-spaces-after-comma", "empty-brackets", "no-backticks"])
+def test_a_malformed_marker_is_unmarked(text):
+    pr_body = bullet(text)
+    reviewers = [row(CODE1, NOT_READ)]
+    assert reasons(cd.problems(rec(reviewers), pr_body)) == [cd.REASON_UNMARKED]
+    result = handback(pr_body, [record_comment(reviewers)])
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
 
 
-def test_a_claim_naming_a_full_seat_still_narrows():
-    record = rec([row(CODE1), row("test-role (round 1)", cal(core="unknown", crew="unknown", claude="unknown"))])
-    assert cd.contradicted(record, bullet("test-role (round 1) lacked core.md.")) == []
-    assert seats(cd.contradicted(record, bullet("code-reviewer (round 1) lacked core.md."))) == [[CODE1]]
+def test_the_doctrine_example_is_the_module_constant():
+    doctrine = HANDBACK_MD.read_text(encoding="utf-8")
+    assert cd.MARKER_EXAMPLE in doctrine and cd.MARKER_FORM in doctrine
+    pr_body = bullet(cd.MARKER_EXAMPLE + " — its engine dispatch held neither file.")
+    reviewers = [row("code-reviewer:s1 (round 1)", NOT_READ)]
+    assert cd.problems(rec(reviewers), pr_body) == []
+    assert handback(pr_body, [record_comment(reviewers)])["ok"] is True
 
 
-FORMS = [
-    "{} (round 1) lacked core.md.",
-    "**{}** (round 1) lacked core.md.",
-    "`{}` (round 1) lacked core.md.",
-]
-R1R2 = rec([row("code-reviewer (round 1)"),
-            row("code-reviewer (round 2)", cal(core="unknown", crew="unknown", claude="unknown"))])
+def test_the_fix_sentence_spells_the_marker_from_the_constants():
+    assert cd.MARKER_FORM in cd.FIX and cd.MARKER_EXAMPLE in cd.FIX
+    assert cd.MARKER_FORM == "`calibration-lacked[<row name>]: <files>`"
+    assert cd.MARKER_EXAMPLE == "`calibration-lacked[code-reviewer:s1 (round 1)]: core.md, review-crew.md`"
 
 
-@pytest.mark.parametrize("text", [form.format("code-reviewer") for form in FORMS])
-def test_a_formatted_seat_name_matches_like_plain_text(text):
-    assert seats(cd.contradicted(R1R2, bullet(text))) == [["code-reviewer (round 1)"]]
-    result = handback(bullet(text), [record_comment(R1R2["reviewers"])])
-    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+# --- the unmarked rule's wording: the claim test is unchanged -----------------------------------------------
 
-
-@pytest.mark.parametrize("text", [form.format("code-reviewer") for form in FORMS])
-def test_a_named_round_is_never_refused_on_another_rounds_grades(text):
-    record = rec([row("code-reviewer (round 1)", ran="not-run"), row("code-reviewer (round 2)")])
-    assert cd.contradicted(record, bullet(text)) == []
-
-
-@pytest.mark.parametrize("text", [form.format("test_role") for form in FORMS[:1] + FORMS[2:]])
-def test_a_custom_seat_name_with_an_underscore_matches(text):
-    record = rec([row("test_role (round 1)"),
-                  row("code-reviewer (round 1)", cal(core="unknown", crew="unknown", claude="unknown"))])
-    assert seats(cd.contradicted(record, bullet(text))) == [["test_role (round 1)"]]
-
-
-@pytest.mark.parametrize("text", ["test_role (round 1) lacked core.md.", "`test_role` (round 1) lacked core.md."])
-def test_a_custom_seat_name_with_an_underscore_narrows_to_that_seat(text):
-    record = rec([row("test_role (round 1)", cal(core="unknown", crew="unknown", claude="unknown")),
-                  row("code-reviewer (round 1)")])
-    assert cd.contradicted(record, bullet(text)) == []
-
-
-def test_a_seat_named_in_one_clause_is_not_checked_against_another_clauses_files():
-    record = rec([row(CODE1, cal(core="read", crew="read", claude="read")),
-                  row(SEC1, cal(core="read", crew="unknown", claude="read"))])
-    text = "code-reviewer (round 1) lacked core.md; security-reviewer (round 1) lacked review-crew.md."
-    assert seats(cd.contradicted(record, bullet(text))) == [[CODE1]]
-
-
-def test_f4_a_lack_in_another_clause_is_not_a_calibration_claim():
+def test_a_lack_in_another_clause_is_not_a_calibration_mention():
     record = rec([row(CODE1), row(SEC1)])
     text = "The code reviewer read core.md and review-crew.md, but the integration test runner was unavailable."
-    assert cd.contradicted(record, bullet(text)) == []
+    assert cd.problems(record, bullet(text)) == []
 
 
 @pytest.mark.parametrize("text", [
@@ -304,9 +339,9 @@ def test_f4_a_lack_in_another_clause_is_not_a_calibration_claim():
     "The code reviewer was not only missing core.md but also review-crew.md.",
 ])
 def test_a_mixed_clause_is_refused_by_the_ruling(text):
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+    assert reasons(cd.problems(rec([row(CODE1)]), bullet(text))) == [cd.REASON_UNMARKED]
     result = handback(bullet(text), [record_comment([row(CODE1)])])
-    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
     assert "in its own bullet or sentence" in result["detail"]
 
 
@@ -321,7 +356,7 @@ def test_a_mixed_clause_is_refused_by_the_ruling(text):
 ])
 def test_the_split_rewording_passes(pr_body):
     assert handback(pr_body, [record_comment([row(CODE1)])])["ok"] is True
-    assert cd.contradicted(rec([row(CODE1)]), pr_body) == []
+    assert cd.problems(rec([row(CODE1)]), pr_body) == []
 
 
 @pytest.mark.parametrize("text", [
@@ -338,11 +373,11 @@ def test_the_split_rewording_passes(pr_body):
     "core.md was still missing for the code reviewer.",
     "The code reviewer ran without project calibration.",
 ])
-def test_a_lack_that_describes_the_calibration_is_a_claim(text):
-    assert seats(cd.contradicted(rec([row(CODE1)]), bullet(text))) == [[CODE1]]
+def test_a_lack_that_describes_the_calibration_is_a_mention(text):
+    assert reasons(cd.problems(rec([row(CODE1)]), bullet(text))) == [cd.REASON_UNMARKED]
 
 
-# --- the claim word is negation, after formatting is normalised --------------------------------------------
+# --- the mention word is negation, after formatting is normalised ----------------------------------------------
 
 @pytest.mark.parametrize("text", [
     "The code reviewer could not read core.md.",
@@ -383,12 +418,13 @@ def test_a_lack_that_describes_the_calibration_is_a_claim(text):
     "The reviewers lack core.md.",
     "The sanitized view will strip core.md from the reviewers.",
     "The view will withhold core.md from the reviewers.",
-    "core.md was not available to the reviewers.",
+    "core.md was not available to the reviewers.",
+    "core.md was left  out of the reviewers' view.",
 ])
 def test_vet_825_sentences_refuse(text):
-    assert cd.contradicted(rec([row(CODE1), row(SEC1)]), bullet(text))
+    assert reasons(cd.problems(rec([row(CODE1), row(SEC1)]), bullet(text))) == [cd.REASON_UNMARKED]
     result = handback(bullet(text), [record_comment([row(CODE1), row(SEC1)])])
-    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
 
 
 # --- 12: rows that never contradict --------------------------------------------------------------------
@@ -401,21 +437,32 @@ def test_vet_825_sentences_refuse(text):
     {"name": CODE1, "ran": "reported-by-session", "calibrationRead": cal()},  # session-reported, carries read grades
 ])
 def test_a_row_with_no_measured_calibration_is_never_contradicted(only):
-    pr_body = bullet("Calibration was stripped from the reviewers.")
-    assert cd.contradicted(rec([only]), pr_body) == []
-    assert handback(pr_body, [record_comment([only])])["ok"] is True
+    for pr_body in (bullet(mark(CODE1, ALL_FILES)), bullet(mark("*", "core.md"))):
+        assert cd.problems(rec([only]), pr_body) == []
+        assert handback(pr_body, [record_comment([only])])["ok"] is True
 
 
 # --- 13: the refusal detail ---------------------------------------------------------------------------------
 
 def test_describe_carries_the_record_url_and_the_fix_sentence():
-    hits = cd.contradicted(rec([row(CODE1)]), bullet("Calibration was stripped from the reviewers."))
-    text = cd.describe(hits, "https://x/c/900")
-    assert "https://x/c/900" in text and text.endswith(FIX) and CODE1 in text
-    assert "the latest review record" in cd.describe(hits, None)
+    found = cd.problems(rec([row(CODE1)]), bullet(mark(CODE1, "core.md")))
+    text = cd.describe(found, "https://x/c/900")
+    assert "https://x/c/900" in text and text.endswith(cd.FIX)
+    assert "its marker for %s contradicts https://x/c/900: %s%s" % (CODE1, CODE1, READ_LINE) in text
+    assert "the latest review record" in cd.describe(found, None)
     assert cd.REASON == "calibration-disclosure-contradicted"
-    long_hit = [{"degradation": "x" * 500, "seats": [{"name": "a", "line": "a: read its calibration: core.md"}]}]
-    assert "x" * 200 in cd.describe(long_hit, "u") and "x" * 201 not in cd.describe(long_hit, "u")
+    assert cd.REASON_UNKNOWN_SEAT == "calibration-disclosure-unknown-seat"
+    assert cd.REASON_UNMARKED == "calibration-disclosure-unmarked"
+    long_unmarked = [{"reason": cd.REASON_UNMARKED, "degradation": "x" * 500, "detail": "mentions calibration"}]
+    assert "x" * 200 in cd.describe(long_unmarked, "u") and "x" * 201 not in cd.describe(long_unmarked, "u")
+
+
+def test_describe_names_the_row_text_and_every_row_of_an_unknown_seat():
+    found = cd.problems(rec([row(CODE1), row(SEC1)]), bullet(mark("nobody (round 3)", "core.md")))
+    text = cd.describe(found, "https://x/c/900")
+    assert ("its marker names nobody (round 3), which is not a row of https://x/c/900; its rows are: %s; %s"
+            % (CODE1, SEC1)) in text
+    assert text.endswith(cd.FIX)
 
 
 # --- 14: the leftover check still runs first ------------------------------------------------------------
@@ -429,10 +476,10 @@ def test_the_leftover_check_still_refuses_first():
 
 def test_a_harmless_label_is_checked_too():
     pr_body = body("- [harmless] Calibration was stripped from the reviewers.\n")
-    assert handback(pr_body, [record_comment([row(CODE1)])])["reason"] == "calibration-disclosure-contradicted"
+    assert handback(pr_body, [record_comment([row(CODE1)])])["reason"] == "calibration-disclosure-unmarked"
 
 
-# --- doctrine-prescribed disclosures are not calibration claims (vet 826) ---------------------------------------
+# --- doctrine-prescribed disclosures are not calibration mentions (vet 826) ----------------------------------------
 
 DOCTRINE = [
     ("costly", "The review owes the owner a direct look at the change, and this project declares no show-it surface."
@@ -454,7 +501,7 @@ ANCHORS = ["show-it surface.", "show-it surface, so", "ran on it.", "twice)."]
 @pytest.mark.parametrize("label, text", DOCTRINE)
 def test_doctrine_prescribed_disclosures_pass(label, text):
     record = rec([row(CODE1), row(SEC1)])
-    assert cd.contradicted(record, bullet(text, label)) == []
+    assert cd.problems(record, bullet(text, label)) == []
     assert handback(bullet(text, label), [record_comment([row(CODE1), row(SEC1)])])["ok"] is True
 
 
@@ -464,9 +511,9 @@ def test_doctrine_disclosure_with_a_real_claim_still_refuses(pair, anchor):
     assert text.count(anchor) == 1
     claimed = text.replace(anchor, _insert(anchor))
     record = rec([row(CODE1), row(SEC1)])
-    assert cd.contradicted(record, bullet(claimed, label))
+    assert reasons(cd.problems(record, bullet(claimed, label))) == [cd.REASON_UNMARKED]
     result = handback(bullet(claimed, label), [record_comment([row(CODE1), row(SEC1)])])
-    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
 
 
 def _insert(anchor):
@@ -486,9 +533,9 @@ def _insert(anchor):
 ])
 def test_an_exemption_never_lets_a_real_lack_claim_through(text):
     record = rec([row(CODE1), row(SEC1)])
-    assert cd.contradicted(record, bullet(text))
+    assert reasons(cd.problems(record, bullet(text))) == [cd.REASON_UNMARKED]
     result = handback(bullet(text), [record_comment([row(CODE1), row(SEC1)])])
-    assert result["ok"] is False and result["reason"] == "calibration-disclosure-contradicted"
+    assert result["ok"] is False and result["reason"] == "calibration-disclosure-unmarked"
 
 
 @pytest.mark.parametrize("text", [
@@ -498,7 +545,7 @@ def test_an_exemption_never_lets_a_real_lack_claim_through(text):
 ])
 def test_more_doctrine_wordings_pass(text):
     record = rec([row(CODE1), row(SEC1)])
-    assert cd.contradicted(record, bullet(text)) == []
+    assert cd.problems(record, bullet(text)) == []
     assert handback(bullet(text), [record_comment([row(CODE1), row(SEC1)])])["ok"] is True
 
 
