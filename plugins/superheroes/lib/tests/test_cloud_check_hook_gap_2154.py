@@ -37,7 +37,8 @@ CHECK_AGAIN = 'Then say "check again".'
 
 def _report_line(w):
     """The check session's report for the fixture project itself, so every other part matches."""
-    obj = CC.report(env={cloud_pass.ENVIRONMENT_ENV: ENV_ID}, cwd=w.cwd, root=w.root, nonce=NONCE,
+    obj = CC.report(env=dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID},
+                              **dict.fromkeys(CC.IDENTITY_VARIABLES, "x")), cwd=w.cwd, root=w.root, nonce=NONCE,
                     confirm_fn=lambda env: {"schema": cloud_pass.CONFIRMATION_SCHEMA,
                                             "reviewerAnswered": True, "passLapses": FAR,
                                             "reason": None},
