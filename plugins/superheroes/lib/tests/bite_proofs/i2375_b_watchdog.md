@@ -58,3 +58,16 @@ Detector files: `plugins/superheroes/lib/tests/test_engine_dispatch_silence_watc
 - **Neutralization:** `wd_threshold = None  # axis: a failure inside the check disarms it …` changed to `pass  # axis: …`.
 - **Raw red:** `2 failed, 41 passed` — both W9 cases, each `assert 'silenceWatchdog' not in ended` (the attempt was ended by the watchdog at exit -15).
 - **Restore:** inverse edit; `git status --porcelain` empty. **Raw green:** `43 passed in 11.10s`.
+
+## Vet 837 fix leg (order E, commit `d6dc75cd`): a watchdog end never discards an answer produced before the kill
+
+Same file and command as above, at `d6dc75cd`, whole file each run (51 tests); the builder's own runs, after the implementer's.
+
+- **R1. The pre-kill re-poll.** Axis: an engine that exited since the deciding beat's poll is graded by its natural exit. Neutralization: `rc2 = proc.poll()` → `rc2 = None`. Red: `1 failed, 50 passed` — `test_e1_engine_exiting_after_the_deciding_polls_is_a_natural_exit[False]` (the variant with no stream growth, so only the re-poll can see the exit; the `[True]` variant, vet 837's shape with `turn.completed`, is also caught by R2). Restored; green `51 passed`.
+- **R2. The pre-kill size re-check.** Axis: a grown or unreadable stream at the re-check is activity. Neutralization: `if (re_out is None or …` → `if False and (re_out is None or …`. Red: `2 failed, 49 passed` — `test_e2_stream_growth_between_the_deciding_beat_and_the_recheck_resets_the_silence`, `test_e3_unreadable_size_at_the_recheck_does_not_fire`. Restored; green.
+- **R3. The pre-kill read of the result.** Axis: a result already on disk is digested before the kill even if seen only once. Neutralization: the pre-kill terminal `_observe_attempt_completions(...)` call → `pass`. Red: `2 failed, 49 passed` — `test_e4_answer_written_before_the_kill_survives_an_exit_zero_on_sigterm`, `test_r5_content_first_seen_after_the_kill_never_replaces_the_pre_kill_stamp`. Restored; green.
+- **R4. `answered_before_kill`.** Neutralization: `answered_before_kill = (` → `answered_before_kill = False and (`. Red: `2 failed, 49 passed` — the same two tests as R3. Restored; green.
+- **R5. The post-kill cutoff.** Axis: content first seen after the kill never replaces a pre-kill stamp. Neutralization: `post_kill_deadline = kill_mono if watchdog_fired else start + timeout` → `post_kill_deadline = start + timeout`. Red: `1 failed, 50 passed` — `test_r5_content_first_seen_after_the_kill_never_replaces_the_pre_kill_stamp`. Restored; green.
+- **R6. V837-b, an unreadable stderr size is never silence.** Neutralization: `err_grew = None if err_sz is None …` → `err_grew = False if err_sz is None …`. Red: `1 failed, 50 passed` — `test_e7_unreadable_stderr_size_never_counts_as_silence`. Restored; `git status --porcelain` empty; green `51 passed in 13.81s`.
+- `test_w10_watchdog_end_with_valid_result_and_exit_zero_is_never_clean` (a result written on SIGTERM) stays green throughout and now also asserts `killAt`.
+- Residual, disclosed and not fixed (fix-leg order item 7): the microseconds between the last pre-kill read and the kill.
