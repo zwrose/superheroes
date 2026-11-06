@@ -97,12 +97,14 @@ _LANE_RE = re.compile(
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
-# Markdown code, where GitHub's parser links nothing (GFM): a fenced block's opening line, its closing
-# fence being the same character at least as long with nothing after it; and an inline code span,
-# closed by the next run of exactly as many backticks inside the same paragraph.
-_FENCE_OPEN_RE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+# Markdown code, where GitHub's parser links nothing (GFM): a fenced block, opened at a line's start or
+# after quote and list markers, closed by the same character at least as long with nothing after it;
+# and an inline code span, opened by an unescaped backtick run and closed by the next run of exactly as
+# many backticks inside the same paragraph.
+_FENCE_OPEN_RE = re.compile(r" {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)*(`{3,}(?=[^`]*$)|~{3,})")
+_FENCE_CLOSE_LEAD_RE = re.compile(r"[ \t>]*")
 _PARAGRAPH_BREAK_RE = re.compile(r"(\n[ \t]*\n)")
-_CODE_SPAN_RE = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
+_CODE_SPAN_RE = re.compile(r"(?<![`\\])(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -218,9 +220,9 @@ def _markdown_prose(body):
             if m:
                 fence, lines[i] = m.group(1), ""
         else:
-            stripped = line.strip(" \t")
-            if (len(line) - len(line.lstrip(" ")) <= 3 and stripped and set(stripped) == {fence[0]}
-                    and len(stripped) >= len(fence)):
+            # A closing fence is read at any indent or quote depth: reading one too early masks less.
+            stripped = _FENCE_CLOSE_LEAD_RE.sub("", line, count=1).rstrip(" \t")
+            if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):
                 fence = None
             lines[i] = ""
     parts = _PARAGRAPH_BREAK_RE.split("\n".join(lines))
