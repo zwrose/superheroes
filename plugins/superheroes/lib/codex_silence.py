@@ -22,6 +22,7 @@ CLI: python3 -B codex_silence.py sample <path> [<path> ...]
 import json
 import math
 import os
+import re
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,6 +33,7 @@ import engine_adapter  # noqa: E402  the one home of the action item types
 
 FEED_CHUNK_BYTES = 262144
 MAX_PARTIAL_LINE_BYTES = 1048576
+OVERLONG_HEAD_BYTES = 4096  # same keep size as engine_adapter._CMD_HEAD_KEEP
 HEARTBEAT_RESOLUTION_SECONDS = 10
 HEARTBEAT_GAP_LIMIT_SECONDS = 3 * HEARTBEAT_RESOLUTION_SECONDS
 
@@ -46,31 +48,76 @@ STATE_UNKNOWN = "unknown"
 
 OUTCOMES = ("answered", "hit-bound", "silence-watchdog", "other")
 
+# An over-long line is classified by its head with anchored prefix matches, never a search: the event
+# type, then (for an item event) the item id and item type, which codex writes before the payload.
+_NO_EFFECT = ()
+_EVENT_HEAD_RE = re.compile(rb'\s*\{"type":\s*"([^"\\]*)"')
+_ITEM_HEAD_RE = re.compile(rb',\s*"item":\s*\{"id":\s*"([^"\\]*)",\s*"type":\s*"([^"\\]*)"')
+
+
+def _classify_head(head):
+    """None when the head matches no recognized prefix; () when it is recognized and changes nothing;
+    else (kind, item_id) for an action item event."""
+    event = _EVENT_HEAD_RE.match(head)
+    if event is None:
+        return None
+    try:
+        kind = event.group(1).decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if kind not in ("item.started", "item.completed"):
+        return _NO_EFFECT
+    item = _ITEM_HEAD_RE.match(head, event.end())
+    if item is None:
+        return None
+    try:
+        item_id = item.group(1).decode("utf-8")
+        item_type = item.group(2).decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    if item_type not in engine_adapter._CODEX_ACTION_ITEM_TYPES:
+        return _NO_EFFECT
+    return (kind, item_id)
+
 
 class StreamTracker:
     """Reads a codex `--json` stdout stream a chunk at a time and tracks open action items.
 
     `state` is "idle" (no open action item), "busy" (one or more open) or "unknown". `unknown` is
-    sticky; it is entered when a line (partial or complete) is longer than MAX_PARTIAL_LINE_BYTES,
-    or when a non-empty line is not a JSON object. Never raises.
+    sticky when a non-empty line is not a JSON object, or when a line longer than
+    MAX_PARTIAL_LINE_BYTES has a head that classifies no event. Never raises.
+
+    A line longer than MAX_PARTIAL_LINE_BYTES (complete, or still partial) is not parsed. Its first
+    OVERLONG_HEAD_BYTES are kept, the rest is discarded as it arrives, and when its newline arrives
+    the head is classified by an anchored prefix match (the event type, then the item id and item
+    type, which codex writes before the large payload). A head that classifies is applied to the open
+    items exactly as the same line would be if it were short. While such a line is being skipped,
+    `state` reads "unknown" (never idle), and that unknown ends when the line ends. A head that
+    matches no recognized prefix makes `unknown` sticky. At most MAX_PARTIAL_LINE_BYTES are buffered.
 
     `on_item`, when given, is called as on_item("open" | "close", item_id, line_end_offset) for each
     action item opened and for each close that matched an open id; line_end_offset is the byte offset
-    just past the line's newline, counted from the first byte ever fed.
+    just past the line's newline, counted from the first byte ever fed, skipped bytes included.
     """
 
     def __init__(self, on_item=None):
         self._buf = bytearray()
         self._open = set()
         self._unknown = False
-        self._consumed = 0
+        self._skipping = False
+        self._fed = 0
         self.on_item = on_item
 
     @property
     def state(self):
-        if self._unknown:
+        if self._unknown or self._skipping:
             return STATE_UNKNOWN
         return STATE_BUSY if self._open else STATE_IDLE
+
+    @property
+    def unreadable(self):
+        """True once the stream is sticky unknown (a line whose head or body could not be read)."""
+        return self._unknown
 
     def feed(self, data):
         try:
@@ -84,30 +131,53 @@ class StreamTracker:
         if not isinstance(data, (bytes, bytearray)):
             self._unknown = True
             return
-        self._buf.extend(data)
-        buf = self._buf
-        start = 0
-        while True:
-            idx = buf.find(b"\n", start)
-            if idx < 0:
-                break
-            line = bytes(buf[start:idx])
-            line_end = self._consumed + idx + 1
-            start = idx + 1
-            if len(line) > MAX_PARTIAL_LINE_BYTES:
-                self._unknown = True
-                self._buf = bytearray()
+        base = self._fed
+        self._fed += len(data)
+        view = memoryview(data)
+        size = len(data)
+        pos = 0
+        while pos < size:
+            nl = data.find(b"\n", pos)
+            end = size if nl < 0 else nl
+            seg = view[pos:end]
+            if self._skipping:
+                if nl < 0:
+                    return
+                self._finish_overlong(base + nl + 1)
+            elif len(self._buf) + len(seg) > MAX_PARTIAL_LINE_BYTES:
+                head = (bytes(self._buf[:OVERLONG_HEAD_BYTES])
+                        + bytes(seg[:OVERLONG_HEAD_BYTES]))[:OVERLONG_HEAD_BYTES]
+                self._buf = bytearray(head)
+                self._skipping = True
+                if nl < 0:
+                    return
+                self._finish_overlong(base + nl + 1)
+            elif nl < 0:
+                self._buf.extend(seg)
                 return
-            self._line(line, line_end)
+            else:
+                line = bytes(self._buf) + bytes(seg)
+                self._buf = bytearray()
+                self._line(line, base + nl + 1)
             if self._unknown:
                 self._buf = bytearray()
+                self._skipping = False
                 return
-        if start:
-            self._consumed += start
-            del buf[:start]
-        if len(buf) > MAX_PARTIAL_LINE_BYTES:
+            pos = nl + 1
+
+    def _finish_overlong(self, line_end):
+        head = bytes(self._buf)
+        self._buf = bytearray()
+        self._skipping = False
+        self._head_line(head, line_end)
+
+    def _head_line(self, head, line_end):
+        verdict = _classify_head(head)
+        if verdict is None:
             self._unknown = True
-            self._buf = bytearray()
+            return
+        if verdict:
+            self._apply(verdict[0], verdict[1], line_end)
 
     def _line(self, line, line_end):
         text = line.strip()
@@ -132,6 +202,9 @@ class StreamTracker:
         item_id = item.get("id")
         if isinstance(item_id, bool) or not isinstance(item_id, (str, int)):
             return
+        self._apply(kind, item_id, line_end)
+
+    def _apply(self, kind, item_id, line_end):
         if kind == "item.started":
             if item_id not in self._open:
                 self._open.add(item_id)
@@ -290,7 +363,7 @@ def _measure(stdout_path, stderr_path, rows, wall):
                 return "stdout-capture-truncated"
             tracker.feed(data)
             offset = new_offset
-            if tracker.state == STATE_UNKNOWN:
+            if tracker.unreadable:
                 return "stream-unknown"
         return None
 
@@ -331,6 +404,9 @@ def _measure(stdout_path, stderr_path, rows, wall):
     failed = feed_to(final_out)
     if failed:
         return None, failed
+    if tracker.state == STATE_UNKNOWN:
+        # the stream ended while an over-long line was still being skipped
+        return None, "stream-unknown"
     for began in starts.values():
         longest_command[0] = max(longest_command[0], wall - began)
     return {

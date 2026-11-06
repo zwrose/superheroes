@@ -143,15 +143,185 @@ def test_truncated_capture_is_unmeasured(tmp_path):
     assert row["commandOpenAtEnd"] is None
 
 
-def test_oversized_partial_line_is_stream_unknown(tmp_path):
-    big = b"x" * (CS.MAX_PARTIAL_LINE_BYTES + 10)
-    run = _make_run(tmp_path, beats=[(10.0, 0, 0)], wall=10.0, stdout_file=big,
+def _overlong(i, event="item.completed", kind="command_execution", pad=CS.MAX_PARTIAL_LINE_BYTES + 100,
+              key="aggregated_output"):
+    """A codex-shaped line (id and type first, the payload last) longer than the bound."""
+    return _jl({"type": event, "item": {"id": "item_%d" % i, "type": kind, key: "a" * pad}})
+
+
+def test_overlong_completed_line_closes_its_item_and_the_attempt_is_measured(tmp_path):
+    big = _overlong(1)
+    assert len(big) > CS.MAX_PARTIAL_LINE_BYTES
+    lines = [_THREAD, _started(1), big, _started(2), _completed(2), _MESSAGE]
+    beats = [(10.0, 2, 0), (20.0, 2, 0), (30.0, 3, 0), (40.0, 4, 0), (50.0, 5, 0), (60.0, 6, 0)]
+    run = _make_run(tmp_path, lines=lines, beats=beats, wall=60.0)
+    row = _only(run)
+    assert row["measured"] is True and row["reason"] is None
+    assert row["commandOpenAtEnd"] is False
+    assert row["longestCommandSeconds"] == pytest.approx(20, abs=1)
+
+
+def test_overlong_completed_line_then_short_command_timing_is_right(tmp_path):
+    lines = [_THREAD, _started(1), _overlong(1), _started(2), _completed(2), _MESSAGE]
+    beats = [(10.0, 2, 0), (20.0, 3, 0), (30.0, 4, 0), (100.0, 5, 0), (110.0, 6, 0)]
+    run = _make_run(tmp_path, lines=lines, beats=beats, wall=110.0)
+    row = _only(run)
+    assert row["measured"] is True
+    # item_1: open at 10, close at 20; item_2: open at 30, close at 100 (the longest)
+    assert row["longestCommandSeconds"] == pytest.approx(70, abs=1)
+
+
+def test_overlong_started_line_opens_its_item():
+    t = CS.StreamTracker()
+    t.feed(_overlong(1, event="item.started").encode())
+    assert t.state == "busy"
+    t.feed(_completed(1).encode())
+    assert t.state == "idle"
+
+
+def test_overlong_line_across_many_small_chunks_gives_the_same_result():
+    data = (_THREAD + _overlong(1, event="item.started") + _started(2)
+            + _overlong(1) + _MESSAGE).encode()
+    whole_seen = []
+    whole = CS.StreamTracker(on_item=lambda *a: whole_seen.append(a))
+    whole.feed(data)
+    for step in (1000, 4096, 65536, 70001):
+        seen = []
+        t = CS.StreamTracker(on_item=lambda *a: seen.append(a))
+        for i in range(0, len(data), step):
+            t.feed(data[i:i + step])
+        assert seen == whole_seen, step
+        assert t.state == whole.state == "busy", step
+    assert [w[0] for w in whole_seen] == ["open", "open", "close"]
+
+
+def test_overlong_agent_message_does_not_open_what_its_text_contains():
+    embedded = _started(7)
+    seen = []
+    t = CS.StreamTracker(on_item=lambda *a: seen.append(a))
+    t.feed(json.dumps({"type": "item.completed", "item": {
+        "id": "item_m", "type": "agent_message",
+        "text": embedded + "b" * CS.MAX_PARTIAL_LINE_BYTES}}).encode() + b"\n")
+    assert seen == [] and t.state == "idle"
+    # the item keys reordered, with the started object's bytes raw inside the head: still not opened
+    raw = (b'{"type":"item.started","item":{"type":"agent_message","id":"item_m","text":"'
+           + b'{"type":"item.started","item":{"id":"item_7","type":"command_execution"}}'
+           + b"b" * CS.MAX_PARTIAL_LINE_BYTES + b'"}}\n')
+    t2 = CS.StreamTracker(on_item=lambda *a: seen.append(a))
+    t2.feed(raw)
+    assert seen == []
+    assert t2.state != "busy"
+
+
+def test_overlong_non_action_item_and_other_event_change_nothing():
+    for line in (_overlong(1, kind="agent_message", key="text"),
+                 _overlong(2, kind="reasoning", key="text", event="item.started"),
+                 _jl({"type": "turn.completed", "usage": "u" * (CS.MAX_PARTIAL_LINE_BYTES + 5)})):
+        t = CS.StreamTracker()
+        t.feed(line.encode())
+        assert t.state == "idle"
+
+
+def test_overlong_head_that_matches_no_prefix_is_stream_unknown(tmp_path):
+    reordered = _jl({"item": {"id": "item_1", "type": "command_execution",
+                              "aggregated_output": "a" * (CS.MAX_PARTIAL_LINE_BYTES + 100)},
+                     "type": "item.completed"})
+    lines = [_THREAD, _started(1), reordered, _MESSAGE]
+    run = _make_run(tmp_path, lines=lines, beats=_every(10, 40, 3), wall=40.0)
+    row = _only(run)
+    assert row["measured"] is False and row["reason"] == "stream-unknown"
+    t = CS.StreamTracker()
+    t.feed(reordered.encode())
+    t.feed(_MESSAGE.encode())
+    assert t.state == "unknown"
+
+
+def test_overlong_line_with_no_newline_at_the_end_of_the_stream_is_stream_unknown(tmp_path):
+    big = _overlong(1).rstrip("\n").encode()
+    run = _make_run(tmp_path, stdout_file=big, beats=[(10.0, 0, 0)], wall=10.0,
                     stdout_bytes=len(big))
     (run / "progress.jsonl").write_text(
         _jl({"alive": True, "attempt": 1, "elapsed_s": 10.0, "stdout_bytes": len(big),
              "stderr_bytes": 0}), encoding="utf-8")
     row = _only(run)
     assert row["measured"] is False and row["reason"] == "stream-unknown"
+
+
+def test_overlong_line_is_unknown_while_partial_then_idle_or_busy_after_its_newline():
+    t = CS.StreamTracker()
+    big = _overlong(1, event="item.started").encode()
+    t.feed(big[:CS.MAX_PARTIAL_LINE_BYTES + 50])
+    assert t.state == "unknown" and t.unreadable is False
+    t.feed(big[CS.MAX_PARTIAL_LINE_BYTES + 50:])
+    assert t.state == "busy"
+    done = CS.StreamTracker()
+    done.feed(_overlong(1, kind="agent_message", key="text")[:CS.MAX_PARTIAL_LINE_BYTES + 50].encode())
+    assert done.state == "unknown"
+    done.feed(b"c" * 10 + b"\n")
+    assert done.state == "idle"
+
+
+def test_overlong_line_offsets_are_exact_and_count_the_skipped_bytes():
+    seen = []
+    t = CS.StreamTracker(on_item=lambda what, item_id, end: seen.append((what, item_id, end)))
+    first, big, second, third = (_started(1), _overlong(1, pad=3 * 1024 * 1024), _started(2),
+                                 _completed(2))
+    data = (_THREAD + first + big + second + third).encode()
+    for i in range(0, len(data), 65536):
+        t.feed(data[i:i + 65536])
+    base = len(_THREAD)
+    assert seen == [("open", "item_1", base + len(first)),
+                    ("close", "item_1", base + len(first) + len(big)),
+                    ("open", "item_2", base + len(first) + len(big) + len(second)),
+                    ("close", "item_2", len(data))]
+
+
+def test_overlong_buffer_never_exceeds_the_bound():
+    t = CS.StreamTracker()
+    data = _overlong(1, event="item.started", pad=3 * 1024 * 1024).encode()
+    assert len(data) > 3 * 1024 * 1024
+    limit = CS.MAX_PARTIAL_LINE_BYTES + CS.OVERLONG_HEAD_BYTES
+    for i in range(0, len(data), 65536):
+        t.feed(data[i:i + 65536])
+        assert len(t._buf) <= limit
+    assert t.state == "busy"
+
+
+def test_overlong_lines_back_to_back_and_unopened_completion():
+    seen = []
+    t = CS.StreamTracker(on_item=lambda *a: seen.append(a))
+    t.feed((_overlong(1, event="item.started") + _overlong(2, event="item.started")).encode())
+    assert t.state == "busy" and [s[1] for s in seen] == ["item_1", "item_2"]
+    t.feed((_overlong(1) + _overlong(2)).encode())
+    assert t.state == "idle"
+    fresh = CS.StreamTracker()
+    fresh.feed(_overlong(9).encode())
+    assert fresh.state == "idle"
+
+
+def test_overlong_head_with_an_escaped_id_is_sticky_unknown():
+    line = (b'{"type":"item.started","item":{"id":"item\\"_1","type":"command_execution","x":"'
+            + b"a" * CS.MAX_PARTIAL_LINE_BYTES + b'"}}\n')
+    t = CS.StreamTracker()
+    t.feed(line)
+    assert t.state == "unknown" and t.unreadable is True
+
+
+def test_overlong_head_with_whitespace_between_tokens_classifies():
+    line = (b'  {"type": "item.started", "item": {"id": "item_1", "type": "command_execution", "x": "'
+            + b"a" * CS.MAX_PARTIAL_LINE_BYTES + b'"}}\n')
+    t = CS.StreamTracker()
+    t.feed(line)
+    assert t.state == "busy"
+
+
+def test_overlong_newline_inside_a_later_chunk_and_in_the_same_chunk_as_the_overflow():
+    line = _overlong(1, event="item.started", pad=CS.MAX_PARTIAL_LINE_BYTES).encode()
+    cut = CS.MAX_PARTIAL_LINE_BYTES + 1
+    t = CS.StreamTracker()
+    t.feed(line[:cut])
+    t.feed(line[cut:] + _completed(1).encode())
+    assert t.state == "idle"
 
 
 def test_non_json_line_is_stream_unknown(tmp_path):
