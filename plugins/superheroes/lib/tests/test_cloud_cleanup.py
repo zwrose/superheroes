@@ -1076,6 +1076,15 @@ def _stack(w, session="session-a", outcome=None):
     _lane(w, "l-1", PARENT, session=session, outcome=outcome, ts=_T1)
 
 
+def test_a_closing_keyword_in_an_indented_block_never_binds_a_stack_layer_to_another_lane(w):
+    # axis: the fail direction; a keyword in code GitHub does not read bound cleanup to another issue's lane
+    _stack(w)
+    _lane(w, "l-9", 999, session="session-z", ts=_T1)
+    w.gh.pulls[501]["body"] += "\n\n    Fixes #999\n"
+    out = _plan_n(w, 501)
+    assert out["ok"] and out["issue"] == PARENT and out["launchId"] == "l-1" and out["viaParent"] is True, out
+
+
 def _plan_n(w, number, **kw):
     return CC.plan(w.repo, REPO, number, env=w.env, run=w.gh, **kw)
 

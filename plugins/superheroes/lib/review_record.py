@@ -97,12 +97,18 @@ _LANE_RE = re.compile(
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
-# Markdown code, where GitHub's parser links nothing (GFM): a fenced block, opened at a line's start or
-# after quote and list markers, closed by the same character at least as long with nothing after it;
-# and an inline code span, opened by an unescaped backtick run and closed by the next run of exactly as
-# many backticks inside the same paragraph.
-_FENCE_OPEN_RE = re.compile(r" {0,3}(?:>[ \t]?|(?:[-*+]|\d{1,9}[.)])[ \t]+)*(`{3,}(?=[^`]*$)|~{3,})")
-_FENCE_CLOSE_LEAD_RE = re.compile(r"[ \t>]*")
+# Markdown code, where GitHub's parser links nothing (GFM). Where the read cannot tell code from prose it
+# treats it as code, so a misread may miss a link (cleanup refuses), never invent one: an HTML comment (an
+# unclosed one to the end); a fenced block, opened at a line's start or after quote and list markers and
+# closed only by the same character, at least as long, alone on its line, starting at the opener's column
+# or up to 3 columns right of it (any other candidate leaves the fence open); outside a fence, a line
+# indented four or more spaces or by a tab; and an inline code span, opened by an unescaped backtick run
+# and closed by the next run of exactly as many backticks inside the same paragraph.
+_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
+_QUOTE_LEAD_RE = re.compile(r"(?: {0,3}>[ \t]?)*")
+_FENCE_OPEN_RE = re.compile(r" {0,3}(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*(`{3,}(?=[^`]*$)|~{3,})")
+_FENCE_CLOSE_RE = re.compile(r"( *)(`{3,}|~{3,})[ \t]*")
+_INDENTED_CODE_RE = re.compile(r"(?: {4}|[ ]{0,3}\t)")
 _PARAGRAPH_BREAK_RE = re.compile(r"(\n[ \t]*\n)")
 _CODE_SPAN_RE = re.compile(r"(?<![`\\])(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
@@ -212,20 +218,25 @@ def _repo_name_rest(repo_root):
 
 
 def _markdown_prose(body):
-    """`body` with its Markdown code blanked: fenced blocks (an unclosed one to the end) and code spans."""
-    lines, fence = body.replace("\r\n", "\n").replace("\r", "\n").split("\n"), None
+    """`body` with its Markdown code and HTML comments blanked, over-masking wherever the shape is unclear."""
+    text = body.replace("\r\n", "\n").replace("\r", "\n")
+    text = _HTML_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
+    lines, fence, column = text.split("\n"), None, 0
     for i, line in enumerate(lines):
+        rest = line[_QUOTE_LEAD_RE.match(line).end():]
         if fence is None:
-            m = _FENCE_OPEN_RE.match(line)
+            m = _FENCE_OPEN_RE.match(rest)
             if m:
-                fence, lines[i] = m.group(1), ""
+                fence, column, lines[i] = m.group(1), m.start(1), ""
+            elif _INDENTED_CODE_RE.match(rest):
+                lines[i] = ""
         else:
-            # A closing fence is read at any indent or quote depth: reading one too early masks less.
-            stripped = _FENCE_CLOSE_LEAD_RE.sub("", line, count=1).rstrip(" \t")
-            if stripped and set(stripped) == {fence[0]} and len(stripped) >= len(fence):
+            m = _FENCE_CLOSE_RE.fullmatch(rest)
+            if (m and m.group(2)[0] == fence[0] and len(m.group(2)) >= len(fence)
+                    and column <= len(m.group(1)) <= column + 3):
                 fence = None
             lines[i] = ""
-    parts = _PARAGRAPH_BREAK_RE.split("\n".join(lines))
+    parts = _PARAGRAPH_BREAK_RE.split("\n".join(lines).replace("\\\\", "  "))
     return "".join(_CODE_SPAN_RE.sub(" ", p) for p in parts)
 
 
