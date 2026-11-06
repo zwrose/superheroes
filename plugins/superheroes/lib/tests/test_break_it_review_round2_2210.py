@@ -1,6 +1,6 @@
 """Round-2 review fixes for the working-copy break-it run (#2210, WO-E).
 
-G1 the default scratch folder resolves the git directory through `store_core.get_worktree_gitdir`.
+G1 the default scratch folder is the system temp folder (#2351), whatever the working copy and whatever `GIT_DIR` says.
 G2 a break-it-change that edits a staged finding's carried fields never touches its disposition.
 G3 a process the run started in the working copy is stopped when the table shows it descends from the run; an orphan
    no sample saw is never killed (nothing shows it is the run's) and the run is refused; a process older than the run survives.
@@ -13,6 +13,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 
@@ -27,7 +28,6 @@ for _path in (_HERE, _LIB):
 import break_it  # noqa: E402
 import round_driver as RD  # noqa: E402
 import session_contract  # noqa: E402
-import store_core  # noqa: E402
 import test_break_it as TB  # noqa: E402  (the block helpers live there)
 
 # The throwaway fixture repo's commits carry an inline identity; nothing is signed.
@@ -121,44 +121,38 @@ def test_gone_oracle_is_false_for_a_live_worker_without_proc_and_true_once_reape
     assert _gone(live.pid, wait=0) is True
 
 
-# ---- G1: the git directory comes from store_core ---------------------------------------------------------
+# ---- G1: the default scratch folder is the system temp folder (#2351) ------------------------------------
 
 
-def test_g1_the_default_scratch_folder_is_the_worktrees_own_git_directory_superheroes_folder(repo, tmp_path):
+def _private_system_temp(monkeypatch, tmp_path):
+    """Point the system temp folder at a test-private folder, so nothing here scans the shared one."""
+    systmp = tmp_path / "systmp"
+    systmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(systmp))
+    return str(systmp)
+
+
+def test_g1_the_default_scratch_folder_is_the_system_temp_folder_for_the_main_and_a_linked_worktree(repo, tmp_path, monkeypatch):
+    systmp = _private_system_temp(monkeypatch, tmp_path)
     base, reason = break_it._scratch_folder(str(repo), None)
     assert reason is None
-    assert base == os.path.join(os.path.realpath(str(repo / ".git")), "superheroes")
-    assert base == os.path.join(store_core.get_worktree_gitdir(str(repo)), "superheroes")
+    assert base == os.path.abspath(tempfile.gettempdir()) == systmp
     other = tmp_path / "linked"
     _git(repo, "worktree", "add", "-q", "-b", "linked", str(other))
     base, reason = break_it._scratch_folder(str(other), None)
     assert reason is None and os.path.isabs(base)
-    assert base == os.path.join(os.path.realpath(str(repo / ".git" / "worktrees" / "linked")), "superheroes")
-
-
-def test_g1_a_git_directory_that_cannot_be_resolved_reads_working_copy_unreadable(repo, monkeypatch):
-    real = store_core.run_git_result
-
-    def unavailable(cwd, *args, env=None):
-        if args[:1] == ("rev-parse",) and "--absolute-git-dir" in args:
-            return store_core.GitResult(None, store_core.GIT_UNAVAILABLE, "OSError: no git")
-        return real(cwd, *args, env=env)
-
-    monkeypatch.setattr(store_core, "run_git_result", unavailable)
-    record = _run(repo, "tests/test_x.py", "assert True\n")
-    assert (record["outcome"], record["reason"]) == ("not-run", "working-copy-unreadable"), record
-    assert "no git" in record["output"]
-    assert not (repo / "tests").exists()
+    assert base == os.path.abspath(tempfile.gettempdir())
 
 
 def test_g1_the_resolution_ignores_a_git_dir_routed_through_the_environment(repo, tmp_path, monkeypatch):
+    systmp = _private_system_temp(monkeypatch, tmp_path)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     _git(elsewhere, "init", "-q")
     monkeypatch.setenv("GIT_DIR", str(elsewhere / ".git"))
     base, reason = break_it._scratch_folder(str(repo), None)
     assert reason is None
-    assert base == os.path.join(os.path.realpath(str(repo / ".git")), "superheroes")
+    assert base == os.path.abspath(tempfile.gettempdir()) == systmp
 
 
 # ---- G2: break-it-change carries the test onto the ledger entry, never the disposition ------------------

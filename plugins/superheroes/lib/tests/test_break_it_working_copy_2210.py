@@ -5,6 +5,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 
 import pytest
 
@@ -381,19 +382,24 @@ def test_e8_an_exception_inside_the_run_still_restores(repo, monkeypatch):
     assert not (repo / "tests").exists() and not (repo / "leak.txt").exists()
 
 
-# ---- E9: the default scratch is the git directory's superheroes folder -----------------------------------
+# ---- E9: the default scratch is the system temp folder (#2351) -------------------------------------------
 
 PRINT_TMP = "import tempfile\nprint('TMPDIR=' + tempfile.gettempdir())\n"
 
 
-def test_e9_without_a_scratch_the_temp_folder_lies_under_the_git_directory_and_is_gone_afterwards(repo):
+def test_e9_without_a_scratch_the_temp_folder_lies_under_the_system_temp_folder_and_is_gone_afterwards(repo, tmp_path, monkeypatch):
+    systmp = tmp_path / "systmp"
+    systmp.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(systmp))
     record = _run(repo, "tests/test_t.py", PRINT_TMP)
     assert record["outcome"] == "passed", record
     printed = record["output"].split("TMPDIR=", 1)[1].splitlines()[0]
-    base = os.path.realpath(str(repo / ".git" / "superheroes"))
-    assert os.path.realpath(printed).startswith(base + os.sep), (printed, base)
+    base = os.path.realpath(str(systmp))
+    assert os.path.realpath(os.path.dirname(printed)) == base, (printed, base)
     assert os.path.basename(printed).startswith("break-it-tmp-")
+    assert not os.path.realpath(printed).startswith(os.path.realpath(str(repo / ".git")) + os.sep), printed
     assert _no_tmp_folders(repo / ".git" / "superheroes")
+    assert _no_tmp_folders(systmp)
     assert not os.path.exists(printed)
 
 
