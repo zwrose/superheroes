@@ -219,6 +219,11 @@ def _fast_beat(monkeypatch, tmp_path):
     journal_root = str(tmp_path / "journal-root")
     os.makedirs(journal_root, exist_ok=True)
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
+    # Keep sanitized views off the real system temp directory (as test_engine_dispatch.py's pin does).
+    base = str(tmp_path / "sanitized-temp-base")
+    os.makedirs(base, exist_ok=True)
+    monkeypatch.setattr(TD._SV_MOD.tempfile, "gettempdir", lambda: base)
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: base)
 
 
 def _assert_not_watchdog(ended):

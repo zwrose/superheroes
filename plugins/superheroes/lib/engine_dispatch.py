@@ -4379,7 +4379,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         ended_record["signalSource"] = "silence-watchdog"
         ended_record["silenceWatchdog"] = {
             "silentSeconds": round(silent_s, 1), "thresholdSeconds": wd_threshold}
-    completion_stamp =stdout_completion_obs.get("stamp")
+    completion_stamp = stdout_completion_obs.get("stamp")
     if completion_stamp is None:
         completion_stamp = native_completion_obs.get("stamp")
     _apply_completion_stamp(ended_record, completion_stamp)

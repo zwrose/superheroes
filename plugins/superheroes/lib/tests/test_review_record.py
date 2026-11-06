@@ -3227,3 +3227,100 @@ def test_workflow_runs_are_asked_for_by_the_head_sha_page_by_number(monkeypatch)
     monkeypatch.setattr(rr, "_run", cloud_proxy(three_readers_routes(3), seen))
     rr._check_data(HEAD, "o/r")
     assert [a[2] for a in seen if "actions/runs" in a[2]] == [f"repos/o/r/actions/runs?head_sha={HEAD}&per_page=100&page=1"]
+
+
+# --- #2375 order C: the account part `silenceWatchdogEnds`, its record part and its summary line ---
+
+END_A = {"seat": "code-reviewer", "attempt": 1, "silentSeconds": 391.5}
+END_B = {"seat": "review (forfeit-1)", "attempt": 2, "silentSeconds": 400}
+
+
+def watchdog_lines(rec, level):
+    return [l for l in rr._summary(rec, level).split("\n") if l.startswith("Silence watchdog ends:")]
+
+
+def test_a_well_formed_part_is_carried_whole_and_shown_in_the_summary():
+    rec = build(account(silenceWatchdogEnds=[END_A, END_B]))
+    # bites on: the record dropping the part the account carries
+    assert rec["silenceWatchdogEnds"] == [END_A, END_B]
+    assert watchdog_lines(rec, 0) == [
+        "Silence watchdog ends: code-reviewer attempt 1 after 391.5 s silent; review (forfeit-1) attempt 2 after 400 s silent."]
+
+
+@pytest.mark.parametrize("ends", [
+    [{"seat": "s", "attempt": 1}],
+    [{"seat": "s", "attempt": 1, "silentSeconds": 5, "thresholdSeconds": 390}],
+    [{"seat": "s", "attempt": True, "silentSeconds": 5}],
+    [{"seat": "s", "attempt": 0, "silentSeconds": 5}],
+    [{"seat": "s", "attempt": 1.0, "silentSeconds": 5}],
+    [{"seat": "s", "attempt": 1, "silentSeconds": -0.5}],
+    [{"seat": "s", "attempt": 1, "silentSeconds": True}],
+    [{"seat": "s", "attempt": 1, "silentSeconds": "5"}],
+    [{"seat": "s", "attempt": 1, "silentSeconds": float("nan")}],
+    [{"seat": "s", "attempt": 1, "silentSeconds": float("inf")}],
+    [{"seat": "", "attempt": 1, "silentSeconds": 5}],
+    [{"seat": 3, "attempt": 1, "silentSeconds": 5}],
+    [END_A, "not an entry"],
+    {"seat": "s", "attempt": 1, "silentSeconds": 5},
+    "ends",
+])
+def test_r5_a_malformed_part_is_refused_by_name(tmp_path, ends):
+    # axis: R5 — the writer's validation of the part: a missing or extra key, a bool or sub-1 attempt, negative, non-finite or bool seconds, an empty seat
+    fake = Fake()
+    out = rr.write(put(tmp_path, account(silenceWatchdogEnds=ends)), str(tmp_path), fake.readers())
+    assert (out["ok"], out["reason"], out["detail"]) == (False, "review-account-invalid", "silenceWatchdogEnds")
+    assert fake.writes == []
+
+
+def test_r1_an_empty_part_is_accepted_and_the_record_shows_none():
+    # axis: R1 — no ends: the record has no part and the summary no line
+    rec = build(account(silenceWatchdogEnds=[]))
+    assert "silenceWatchdogEnds" not in rec and not watchdog_lines(rec, 0)
+    assert "silenceWatchdogEnds" not in build(account()) and not watchdog_lines(build(account()), 0)
+
+
+def test_r6_level_zero_lists_every_end_and_the_compact_levels_give_only_the_count():
+    ends = [dict(END_A, seat=f"seat-{i}", attempt=1 + i % 2, silentSeconds=391 + i) for i in range(12)]
+    rec = build(account(silenceWatchdogEnds=ends))
+    full = watchdog_lines(rec, 0)
+    # bites on: level 0 giving only a count, or a compact level listing the ends and growing with them
+    assert len(full) == 1 and all(f"seat-{i} attempt {1 + i % 2} after {391 + i} s silent" in full[0] for i in range(12))
+    assert full[0].index("seat-0 ") < full[0].index("seat-1 ") < full[0].index("seat-11 ")
+    assert watchdog_lines(rec, 1) == [f"Silence watchdog ends: 12 ends {rr.LISTED}."]
+    assert watchdog_lines(rec, 2) == [f"Silence watchdog ends: 12 ends {rr.LISTED}."]
+    one = build(account(silenceWatchdogEnds=[END_A]))
+    assert watchdog_lines(one, 1) == [f"Silence watchdog ends: 1 end {rr.LISTED}."]
+
+
+def test_r7_a_seat_the_scrubber_would_hide_reads_redacted_seat():
+    secret = "pass" + "word=hunter2"
+    ends = [dict(END_A, seat=secret), dict(END_B, seat=secret + "-b"), END_A]
+    rec = build(account(silenceWatchdogEnds=ends))
+    # bites on: a seat name the record's own detector would hide appearing as written in the part or the summary
+    assert [e["seat"] for e in rec["silenceWatchdogEnds"]] == ["[REDACTED SEAT]", "[REDACTED SEAT]", "code-reviewer"]
+    assert "hunter2" not in json.dumps(rec) and "hunter2" not in rr._summary(rec, 0)
+    assert "Silence watchdog ends: [REDACTED SEAT] attempt 1 after 391.5 s silent;" in rr._summary(rec, 0)
+
+
+def test_the_seat_hiding_decision_is_one_helper_both_the_cost_and_the_part_use():
+    # axis: the per-key hide decision has one home; the session cost and the part must not drift apart
+    secret = "pass" + "word=hunter2"
+    cost = {"tokens": 1, "minutes": 0.0, "runs": 1, "runsWithoutFigure": 0, "complete": True,
+            "bySeat": {secret: {"tokens": 1, "minutes": 0.0, "runs": 1}, "code-reviewer": {"tokens": 0, "minutes": 0.0, "runs": 0}}}
+    assert set(rr._shown_session_cost(cost)["bySeat"]) == {"[REDACTED SEAT]", "code-reviewer"}
+    assert rr._shown_seat(secret) == "[REDACTED SEAT]" and rr._shown_seat("code-reviewer") == "code-reviewer"
+
+
+def test_a_seat_named_like_a_bug_free_claim_does_not_refuse_the_summary():
+    # axis: the watchdog line carries session seat text, so the bug-free claim check leaves it out by line object
+    rec = build(account(silenceWatchdogEnds=[dict(END_A, seat="no bugs reviewer")]))
+    assert "no bugs reviewer attempt 1" in rr._summary(rec, 0)
+
+
+def test_the_default_reader_never_raises_and_reads_no_end_from_a_missing_dir(tmp_path, monkeypatch):
+    # axis: the engine reader's failure handling — an unavailable engine reads as an error, never an exception
+    ends, error = rr._watchdog_ends(str(tmp_path / "missing"))
+    assert ends == [] and error
+    import engine_dispatch
+    monkeypatch.setattr(engine_dispatch, "silence_watchdog_ends", lambda d: (_ for _ in ()).throw(RuntimeError("x")))
+    assert rr._watchdog_ends("/run/x") == ([], "engine-unavailable")
