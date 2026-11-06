@@ -472,7 +472,10 @@ above).
    (`skills/review-code/reference/review-record.md`), naming the PR's author as its maker
    (`makers: [{"family": "<the bot's name>", "source": "PR author"}]`), never your own family. You
    fix nothing under that review: a finding that needs a change, or a lane floor that reads full,
-   routes the PR as a build whose builder adopts its branch. A spec PR's review is its spec checks,
+   routes the PR as a build whose builder adopts its branch. Its verdict goes through
+   `vet_slot.py write` like any other PR's: on a body with no build record, the write adds the
+   advisor-vet slot itself and reads the follow-up list as none, so your receipt's dispositions read
+   none, and you never hand-stamp a marker into the bot's body. A spec PR's review is its spec checks,
    whose running record the spec's own diff carries
    (`skills/architect-discovery/reference/spec-checks.md`), and its sheet is built from them. A
    stack that
