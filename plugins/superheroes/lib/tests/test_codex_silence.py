@@ -40,7 +40,8 @@ _MESSAGE = _jl({"type": "item.completed", "item": {"id": "item_m", "type": "agen
 def _make_run(root, name="run-a", *, lines=(), beats=(), wall=10.0, exit_code=0, timed_out=False,
               signal_source=None, engine="codex", run_kind="review", role="reviewer",
               order_id="ord-1", stdout_bytes=None, stdout_file=None, stderr_bytes=None,
-              write_progress=True, ended=True, extra_ended=None, extra_journal_lines=()):
+              write_progress=True, ended=True, extra_ended=None, extra_journal_lines=(),
+              journal_prefix_lines=()):
     """Build a run dir. stdout is the concatenation of `lines`; a beat's stdout_bytes is the length
     of its first n lines."""
     run_dir = root / name
@@ -54,8 +55,9 @@ def _make_run(root, name="run-a", *, lines=(), beats=(), wall=10.0, exit_code=0,
         (run_dir / "attempt-1.stdout").write_bytes(stdout_file)
     if stderr_bytes:
         (run_dir / "attempt-1.stderr").write_bytes(b"e" * stderr_bytes)
-    journal = [_jl({"kind": "run-opened", "runKind": run_kind, "engine": engine,
-                    "orderId": order_id, "resolvedInputs": {"role": role}})]
+    journal = list(journal_prefix_lines)
+    journal.append(_jl({"kind": "run-opened", "runKind": run_kind, "engine": engine,
+                        "orderId": order_id, "resolvedInputs": {"role": role}}))
     journal.append(_jl({"kind": "engine-launching", "attempt": 1}))
     if ended:
         record = {"kind": "attempt-ended", "attempt": 1, "exit": exit_code,
@@ -84,6 +86,11 @@ def _only(run_dir):
 
 # --- the profile: the shapes the sample must tell apart -------------------------------------------
 
+# axis (group: test_stall_shape_reports_long_idle_silence_and_hit_bound,
+# test_long_command_shape_is_not_idle_silence, test_clean_run_has_short_gaps_and_no_reason,
+# test_stderr_only_growth_breaks_the_stdout_silent_gap): idle silence is counted only while neither
+# stream grows and no command is open; a regression that counts a long command or stderr growth as
+# idle silence, or loses a real stall, fails one of these.
 
 def test_stall_shape_reports_long_idle_silence_and_hit_bound(tmp_path):
     lines = [_THREAD, _TURN, _started(1), _completed(1), _MESSAGE]
@@ -131,6 +138,8 @@ def test_stderr_only_growth_breaks_the_stdout_silent_gap(tmp_path):
     assert 290 <= row["longestIdleSilenceSeconds"] <= 310
 
 
+# axis: a capture shorter than the journal's recorded stdoutBytes is unmeasured (truncated), never
+# measured on partial data.
 def test_truncated_capture_is_unmeasured(tmp_path):
     lines = [_THREAD, _TURN, _MESSAGE]
     run = _make_run(tmp_path, lines=lines, beats=_every(10, 30, 3), wall=30.0,
@@ -149,6 +158,10 @@ def _overlong(i, event="item.completed", kind="command_execution", pad=CS.MAX_PA
     return _jl({"type": event, "item": {"id": "item_%d" % i, "type": kind, key: "a" * pad}})
 
 
+# axis (group: every test_overlong_* below, through test_overlong_newline_inside_a_later_chunk_and_
+# in_the_same_chunk_as_the_overflow): a line over MAX_PARTIAL_LINE_BYTES is classified by its head
+# only, applied like a short line, bounded in memory, offset-exact, unknown while skipped, and sticky
+# unknown only when the head matches no recognized prefix; each test fails when its one rule breaks.
 def test_overlong_completed_line_closes_its_item_and_the_attempt_is_measured(tmp_path):
     big = _overlong(1)
     assert len(big) > CS.MAX_PARTIAL_LINE_BYTES
@@ -324,6 +337,7 @@ def test_overlong_newline_inside_a_later_chunk_and_in_the_same_chunk_as_the_over
     assert t.state == "idle"
 
 
+# axis: a complete line that is not JSON makes the attempt stream-unknown, never a measured result.
 def test_non_json_line_is_stream_unknown(tmp_path):
     lines = [_THREAD, "this is not json\n", _MESSAGE]
     run = _make_run(tmp_path, lines=lines, beats=_every(10, 30, 3), wall=30.0)
@@ -332,6 +346,8 @@ def test_non_json_line_is_stream_unknown(tmp_path):
     assert row["longestIdleSilenceSeconds"] is None
 
 
+# axis: a command still open at the end is timed to the wall and flagged commandOpenAtEnd, not
+# dropped or counted as idle silence.
 def test_command_open_at_end_runs_to_wall(tmp_path):
     lines = [_THREAD, _started(1)]
     run = _make_run(tmp_path, lines=lines, beats=_every(10, 100, 2), wall=105.0, timed_out=True,
@@ -342,6 +358,7 @@ def test_command_open_at_end_runs_to_wall(tmp_path):
     assert row["longestIdleSilenceSeconds"] < 20
 
 
+# axis: a heartbeat gap over the limit is reported as reason heartbeat-gap but keeps its measurements.
 def test_heartbeat_gap_keeps_measurements(tmp_path):
     lines = [_THREAD, _MESSAGE]
     beats = [(10.0, 1, 0), (20.0, 2, 0), (80.0, 2, 0)]
@@ -352,6 +369,8 @@ def test_heartbeat_gap_keeps_measurements(tmp_path):
     assert row["longestIdleSilenceSeconds"] == pytest.approx(60, abs=1)
 
 
+# axis: the exit/timedOut/signalSource triple maps to exactly one outcome class; a wrong mapping
+# files an attempt under the wrong sample group.
 @pytest.mark.parametrize("kwargs, outcome", [
     ({"exit_code": 0, "timed_out": False}, "answered"),
     ({"exit_code": -9, "timed_out": True}, "hit-bound"),
@@ -365,6 +384,16 @@ def test_outcome_classes(tmp_path, kwargs, outcome):
 
 # --- fail-closed edges ------------------------------------------------------------------------------
 
+# axis (group: test_e1_journal_unreadable, test_e3_progress_file_missing,
+# test_e4_no_heartbeat_rows_for_the_attempt, test_e5_stdout_file_missing,
+# test_e10_wall_missing_or_non_numeric): each missing or unusable input yields an unmeasured row
+# with its own named reason and null measurements, never a guessed measurement.
+# axis (test_journal_found_through_the_pointer_file): a journal moved behind journal-root.txt is
+# still found, so the attempt is measured.
+# axis (test_e9_attempt_never_ended_is_counted_not_profiled): an attempt with no attempt-ended
+# record is counted as unended and produces no row.
+# axis (test_e11_missing_path_is_a_bad_path_and_the_cli_still_exits_zero): a missing path is listed
+# in badPaths and the CLI still exits 0.
 
 def test_e1_journal_unreadable(tmp_path):
     run = tmp_path / "run-x"
@@ -392,11 +421,15 @@ def test_journal_found_through_the_pointer_file(tmp_path):
     assert row["measured"] is True and row["attempt"] == 1
 
 
-def test_e2_non_object_journal_lines_are_skipped(tmp_path):
+# axis: a journal line that is not a JSON object is skipped, not fatal; the noise comes before the
+# valid records, so a reader that stops at the first bad row loses the run-opened record and fails.
+@pytest.mark.parametrize("noise", ["[1, 2]\n", "not json\n", "42\n"])
+def test_e2_non_object_journal_lines_are_skipped(tmp_path, noise):
     run = _make_run(tmp_path, lines=[_THREAD], beats=[(10.0, 1, 0)], wall=10.0,
-                    extra_journal_lines=["[1, 2]\n", "not json\n", "42\n"])
+                    journal_prefix_lines=[noise])
     row = _only(run)
     assert row["measured"] is True
+    assert row["attempt"] == 1
 
 
 def test_e3_progress_file_missing(tmp_path):
@@ -450,6 +483,9 @@ def test_e11_missing_path_is_a_bad_path_and_the_cli_still_exits_zero(tmp_path):
 
 # --- sample ----------------------------------------------------------------------------------------
 
+# axis (group: test_non_codex_and_write_runs_are_skipped_and_counted,
+# test_session_folder_is_searched_recursively): only codex review runs are profiled, non-codex and
+# write runs are counted as skipped, and a session folder is walked recursively in sorted order.
 
 def test_non_codex_and_write_runs_are_skipped_and_counted(tmp_path):
     _make_run(tmp_path, "run-claude", engine="claude", lines=[_THREAD],
@@ -471,23 +507,36 @@ def test_session_folder_is_searched_recursively(tmp_path):
     assert out["summary"]["attempts"] == 2 and out["summary"]["measured"] == 2
 
 
+# axis: the summary keeps the longest idle silence among answered attempts and the shortest among
+# hit-bound ones; two attempts per group, so a reversed max/min picks the wrong one and fails.
 def test_sample_shape_and_summary_keys(tmp_path):
     stall = _make_run(tmp_path, "run-stall", lines=[_THREAD, _MESSAGE],
                       beats=_every(10, 710, 2), wall=710.0, timed_out=True, exit_code=-9)
+    short_stall = _make_run(tmp_path, "run-stall-short", lines=[_THREAD, _MESSAGE],
+                            beats=_every(10, 110, 2), wall=110.0, timed_out=True, exit_code=-9)
     clean = _make_run(tmp_path, "run-clean", lines=[_THREAD, _MESSAGE],
                       beats=[(10.0, 1, 0), (20.0, 2, 0)], wall=20.0)
-    out = CS.sample([str(stall), str(clean), str(clean)])
+    slow_answer = _make_run(tmp_path, "run-slow-answer", lines=[_THREAD, _MESSAGE],
+                            beats=[(10.0, 1, 0), (20.0, 2, 0)] + _every(30, 90, 2), wall=90.0)
+    out = CS.sample([str(stall), str(short_stall), str(clean), str(clean), str(slow_answer)])
     assert out["schema"] == "codex-silence-sample/1"
     assert out["resolutionSeconds"] == 10
     assert set(out["summary"]) == {"attempts", "measured", "unended", "badPaths", "byOutcome",
                                    "longestIdleSilenceAnswered", "shortestIdleSilenceHitBound"}
-    assert out["summary"]["byOutcome"] == {"answered": 1, "hit-bound": 1}
-    assert out["summary"]["attempts"] == 2
-    assert out["summary"]["longestIdleSilenceAnswered"] <= 10
-    assert out["summary"]["shortestIdleSilenceHitBound"] == pytest.approx(700, abs=1)
-    assert [r["runDir"] for r in out["attempts"]] == ["run-clean", "run-stall"]
+    assert out["summary"]["byOutcome"] == {"answered": 2, "hit-bound": 2}
+    assert out["summary"]["attempts"] == 4
+    idle = {r["runDir"]: r["longestIdleSilenceSeconds"] for r in out["attempts"]}
+    assert idle["run-clean"] <= 10
+    assert idle["run-slow-answer"] == pytest.approx(70, abs=1)
+    assert idle["run-stall-short"] == pytest.approx(100, abs=1)
+    assert idle["run-stall"] == pytest.approx(700, abs=1)
+    assert out["summary"]["longestIdleSilenceAnswered"] == idle["run-slow-answer"]
+    assert out["summary"]["shortestIdleSilenceHitBound"] == idle["run-stall-short"]
+    assert [r["runDir"] for r in out["attempts"]] == [
+        "run-clean", "run-slow-answer", "run-stall", "run-stall-short"]
 
 
+# axis: the CLI prints the sample JSON on success and exits 2 with usage on stderr for bad arguments.
 def test_cli_prints_json_and_usage_exit_two(tmp_path):
     run = _make_run(tmp_path, lines=[_THREAD], beats=[(10.0, 1, 0)], wall=10.0)
     proc = subprocess.run([sys.executable, "-B", _MODULE, "sample", str(run)],
@@ -503,6 +552,10 @@ def test_cli_prints_json_and_usage_exit_two(tmp_path):
 
 # --- StreamTracker ---------------------------------------------------------------------------------
 
+# axis (group: test_tracker_opens_and_closes_by_id, test_tracker_unmatched_completed_changes_nothing,
+# test_tracker_non_action_items_change_nothing, test_tracker_every_action_type_opens): open action
+# items are tracked by id over exactly the action item types; a close that matches no open id and a
+# non-action item change nothing.
 
 def test_tracker_opens_and_closes_by_id():
     t = CS.StreamTracker()
@@ -541,19 +594,126 @@ def test_tracker_every_action_type_opens():
         assert t.state == "busy", kind
 
 
+# axis: a line split across two feeds (or fed a byte at a time) is read exactly like the whole line;
+# the exact open/close callback sequence catches a dropped item.completed whose line spans feeds.
 def test_tracker_chunk_boundary_inside_a_line():
     data = (_started(1) + _completed(1) + _started(2)).encode()
+    expected = [("open", "item_1", len(_started(1).encode())),
+                ("close", "item_1", len((_started(1) + _completed(1)).encode())),
+                ("open", "item_2", len(data))]
     for cut in range(1, len(data)):
-        t = CS.StreamTracker()
+        seen = []
+        t = CS.StreamTracker(on_item=lambda *a: seen.append(a))
         t.feed(data[:cut])
         t.feed(data[cut:])
+        assert seen == expected, cut
         assert t.state == "busy", cut
-    one_byte = CS.StreamTracker()
+        t.feed(_completed(2).encode())
+        assert t.state == "idle", cut
+    one_seen = []
+    one_byte = CS.StreamTracker(on_item=lambda *a: one_seen.append(a))
     for i in range(len(data)):
         one_byte.feed(data[i:i + 1])
+    assert one_seen == expected
     assert one_byte.state == "busy"
+    one_byte.feed(_completed(2).encode())
+    assert one_byte.state == "idle"
 
 
+# axis: a non-blank unfinished line reads unknown (not sticky, not unreadable) until its newline
+# arrives; a tracker that calls it idle or busy trusts an unread record.
+def test_tracker_short_partial_line_is_unknown_until_its_newline():
+    t = CS.StreamTracker()
+    t.feed(_started(1).encode()[:-1])
+    assert t.state == "unknown"
+    assert t.unreadable is False
+    t.feed(b"\n")
+    assert t.state == "busy"
+    assert t.unreadable is False
+
+
+# axis: a whitespace-only remainder (spaces, \r, no newline) is not an unfinished record, so a
+# complete stream followed by trailing whitespace stays idle rather than unknown.
+def test_tracker_whitespace_only_remainder_is_idle():
+    t = CS.StreamTracker()
+    t.feed(_THREAD.encode())
+    assert t.state == "idle"
+    t.feed(b"  \r  ")
+    assert t.state == "idle"
+    assert t.unreadable is False
+
+
+# axis: an attempt whose stdout ends on a short unfinished record (below the over-long bound) is
+# stream-unknown, never a measured idle; a measurer that accepts it at EOF reports measured: true.
+def test_short_incomplete_stdout_is_unmeasured(tmp_path):
+    # bite-axis: an incomplete JSON record at EOF must invalidate the measurement,
+    # including records below the overlong-line bound that remain buffered.
+    run = tmp_path / "run-incomplete"
+    run.mkdir()
+    complete = (json.dumps({"type": "thread.started"}) + "\n").encode("utf-8")
+    partial = b'{"type":"item.started","item":{"id":"item_1","type":"command_execution"'
+    stdout = complete + partial
+    (run / "attempt-1.stdout").write_bytes(stdout)
+    (run / "attempt-1.stderr").write_bytes(b"")
+    records = [
+        {"kind": "run-opened", "engine": "codex", "runKind": "review",
+         "orderId": "incomplete-stream", "resolvedInputs": {"role": "test-reviewer"}},
+        {"kind": "engine-launching", "attempt": 1},
+        {"kind": "attempt-ended", "attempt": 1, "exit": -9,
+         "timedOut": True, "wallSeconds": 70.0, "stdoutBytes": len(stdout)},
+    ]
+    (run / "journal.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
+    )
+    beats = [
+        {"alive": True, "attempt": 1, "elapsed_s": elapsed,
+         "stdout_bytes": len(stdout), "stderr_bytes": 0}
+        for elapsed in range(10, 71, 10)
+    ]
+    (run / "progress.jsonl").write_text(
+        "".join(json.dumps(beat) + "\n" for beat in beats), encoding="utf-8"
+    )
+
+    rows = CS.profile_run(str(run))
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["outcome"] == "hit-bound"
+    assert row["measured"] is False, row
+    assert row["reason"] == "stream-unknown"
+    assert row["longestIdleSilenceSeconds"] is None
+    assert row["longestCommandSeconds"] is None
+    assert row["commandOpenAtEnd"] is None
+
+
+# axis: a heartbeat boundary that falls mid-line on an attempt that keeps growing does not stop
+# measurement (an unfinished line is not the sticky unreadable state), and a stream that ends at a
+# newline stays measured; only an unfinished line at the very end reads stream-unknown.
+def test_mid_line_heartbeat_boundary_keeps_measuring_when_the_line_finishes(tmp_path):
+    first, second = _started(1), _completed(1)
+    cut = len(first.encode()) + 10
+    data = (_THREAD + first + second).encode()
+    prefix = len(_THREAD.encode())
+    run = tmp_path / "run-midline"
+    run.mkdir()
+    (run / "attempt-1.stdout").write_bytes(data)
+    records = [
+        {"kind": "run-opened", "engine": "codex", "runKind": "review", "orderId": "o",
+         "resolvedInputs": {"role": "r"}},
+        {"kind": "engine-launching", "attempt": 1},
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "timedOut": False,
+         "wallSeconds": 30.0, "stdoutBytes": len(data)},
+    ]
+    (run / "journal.jsonl").write_text("".join(_jl(r) for r in records), encoding="utf-8")
+    beats = [(10.0, prefix + cut), (20.0, len(data)), (30.0, len(data))]
+    (run / "progress.jsonl").write_text(
+        "".join(_jl({"alive": True, "attempt": 1, "elapsed_s": t, "stdout_bytes": n,
+                     "stderr_bytes": 0}) for t, n in beats), encoding="utf-8")
+    row = _only(run)
+    assert row["measured"] is True and row["reason"] is None
+    assert row["commandOpenAtEnd"] is False
+
+
+# axis: on_item reports the byte offset just past each line's newline, even for lines split across feeds.
 def test_tracker_reports_line_end_offsets():
     seen = []
     t = CS.StreamTracker(on_item=lambda what, item_id, end: seen.append((what, item_id, end)))
@@ -565,6 +725,10 @@ def test_tracker_reports_line_end_offsets():
     assert seen == [("open", "item_1", start_end), ("close", "item_1", start_end + len(second))]
 
 
+# axis (group: test_tracker_oversized_partial_line_is_unknown_and_sticky,
+# test_tracker_oversized_partial_line_across_chunks, test_tracker_line_at_the_bound_is_not_unknown):
+# a non-blank partial line over MAX_PARTIAL_LINE_BYTES is sticky unknown, also across chunks, while a
+# whitespace-only line at the bound is not.
 def test_tracker_oversized_partial_line_is_unknown_and_sticky():
     t = CS.StreamTracker()
     t.feed(b"x" * (CS.MAX_PARTIAL_LINE_BYTES + 1))
@@ -586,6 +750,9 @@ def test_tracker_line_at_the_bound_is_not_unknown():
     assert t.state == "idle"
 
 
+# axis (group: test_tracker_non_json_line_is_unknown_and_sticky,
+# test_tracker_non_object_json_is_unknown): a complete line that is not a JSON object makes the
+# stream sticky unknown; later valid lines do not recover it.
 def test_tracker_non_json_line_is_unknown_and_sticky():
     t = CS.StreamTracker()
     t.feed(b"not json at all\n")
@@ -601,6 +768,7 @@ def test_tracker_non_object_json_is_unknown(line):
     assert t.state == "unknown"
 
 
+# axis: blank lines are ignored, and a non-bytes feed makes the tracker unknown instead of raising.
 def test_tracker_blank_lines_are_ignored_and_feed_never_raises():
     t = CS.StreamTracker()
     t.feed(b"\n\n  \r\n")
@@ -609,6 +777,7 @@ def test_tracker_blank_lines_are_ignored_and_feed_never_raises():
     assert t.state == "unknown"
 
 
+# axis: a tracker in the unknown state never satisfies the silence predicate.
 def test_unknown_is_never_idle():
     t = CS.StreamTracker()
     t.feed(b"garbage\n")
@@ -617,6 +786,9 @@ def test_unknown_is_never_idle():
 
 # --- silent_and_idle -------------------------------------------------------------------------------
 
+# axis (group: test_silent_and_idle_truth_table, test_silent_and_idle_only_exact_idle): the predicate
+# is True only when neither stream grew and the state is exactly "idle"; any growth, busy, unknown or
+# near-miss state value makes it False.
 
 @pytest.mark.parametrize("stdout_grew, stderr_grew, state, expected", [
     (False, False, "idle", True),
@@ -639,6 +811,9 @@ def test_silent_and_idle_only_exact_idle(state):
 
 # --- read_increment --------------------------------------------------------------------------------
 
+# axis (group: test_read_increment_reads_a_bounded_slice, test_read_increment_unreadable_is_none_not_empty,
+# test_constants): read_increment returns at most max_bytes and the new offset, returns None (never
+# b"") on a read error, and the pinned bounds keep their values.
 
 def test_read_increment_reads_a_bounded_slice(tmp_path):
     path = tmp_path / "f"

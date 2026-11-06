@@ -85,7 +85,8 @@ class StreamTracker:
 
     `state` is "idle" (no open action item), "busy" (one or more open) or "unknown". `unknown` is
     sticky when a non-empty line is not a JSON object, or when a line longer than
-    MAX_PARTIAL_LINE_BYTES has a head that classifies no event. Never raises.
+    MAX_PARTIAL_LINE_BYTES has a head that classifies no event. A buffered non-blank unfinished line
+    also reads "unknown" (not sticky) until its newline arrives. Never raises.
 
     A line longer than MAX_PARTIAL_LINE_BYTES (complete, or still partial) is not parsed. Its first
     OVERLONG_HEAD_BYTES are kept, the rest is discarded as it arrives, and when its newline arrives
@@ -110,7 +111,7 @@ class StreamTracker:
 
     @property
     def state(self):
-        if self._unknown or self._skipping:
+        if self._unknown or self._skipping or self._buf.strip():
             return STATE_UNKNOWN
         return STATE_BUSY if self._open else STATE_IDLE
 
