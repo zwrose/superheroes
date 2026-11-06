@@ -97,10 +97,12 @@ _LANE_RE = re.compile(
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
-# Markdown code, where GitHub's parser links nothing: a fenced block (to its closing fence or the end)
-# and an inline code span on one line.
-_FENCED_CODE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*$.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)", re.M | re.S)
-_CODE_SPAN_RE = re.compile(r"(`+)(?!`).+?(?<!`)\1(?!`)")
+# Markdown code, where GitHub's parser links nothing (GFM): a fenced block's opening line, its closing
+# fence being the same character at least as long with nothing after it; and an inline code span,
+# closed by the next run of exactly as many backticks inside the same paragraph.
+_FENCE_OPEN_RE = re.compile(r" {0,3}(`{3,}(?=[^`]*$)|~{3,})")
+_PARAGRAPH_BREAK_RE = re.compile(r"(\n[ \t]*\n)")
+_CODE_SPAN_RE = re.compile(r"(?<!`)(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -207,6 +209,24 @@ def _repo_name_rest(repo_root):
     return name if name and _REPO_RE.fullmatch(name) else None
 
 
+def _markdown_prose(body):
+    """`body` with its Markdown code blanked: fenced blocks (an unclosed one to the end) and code spans."""
+    lines, fence = body.replace("\r\n", "\n").replace("\r", "\n").split("\n"), None
+    for i, line in enumerate(lines):
+        if fence is None:
+            m = _FENCE_OPEN_RE.match(line)
+            if m:
+                fence, lines[i] = m.group(1), ""
+        else:
+            stripped = line.strip(" \t")
+            if (len(line) - len(line.lstrip(" ")) <= 3 and stripped and set(stripped) == {fence[0]}
+                    and len(stripped) >= len(fence)):
+                fence = None
+            lines[i] = ""
+    parts = _PARAGRAPH_BREAK_RE.split("\n".join(lines))
+    return "".join(_CODE_SPAN_RE.sub(" ", p) for p in parts)
+
+
 def _closing_issues(body, repo):
     """The issue numbers the PR body's closing keywords link, anywhere in the body outside Markdown code,
     in order, duplicates removed; a link to another repository's issue never counts, and anything else
@@ -214,8 +234,7 @@ def _closing_issues(body, repo):
     if not isinstance(body, str):
         return []
     found = []
-    prose = _CODE_SPAN_RE.sub(" ", _FENCED_CODE_RE.sub("\n", body))
-    for m in _CLOSING_REF_RE.finditer(prose):
+    for m in _CLOSING_REF_RE.finditer(_markdown_prose(body)):
         n = int(m.group("n") or m.group("bare") or m.group("un"))
         slug = m.group("slug") or m.group("uslug")
         if n > 0 and n not in found and (slug is None or slug.lower() == (repo or "").lower()):
