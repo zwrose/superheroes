@@ -118,13 +118,18 @@ def test_each_relay_step_home_names_point_and_the_post_or_points_to_the_steps():
 def test_merge_train_step_2_settles_by_nothing_reached():
     # axis: the cleanup records `failed` on nothingReached, never on a named relay reason
     step = _cleanup_step_2()
-    assert "nothingReached" in step
+    # Each of the two settlements (the attempt's own record, and the resume of an unconfirmed one) is
+    # checked by its own rule, so neither can drift while the other still names the token.
+    assert "`failed` when it reads `nothingReached: true`, otherwise" in step, "the attempt's record"
+    assert "`failed` when it reads `nothingReached: true` (nothing reached the" in step, "the resume's record"
     assert "relay-send-failed" not in step
 
 
 def test_the_send_back_bullets_settle_by_nothing_reached():
     # axis: the send-back records read delivered / nothingReached / otherwise uncertain, never an enumerated relay reason
     bullets = _send_back_bullets()
-    assert "nothingReached" in bullets
+    # Each bullet's settlement is checked on its own: the uncertain record and the no-record retry.
+    assert "neither `delivered: true` nor `nothingReached: true`, run `sent --uncertain`" in bullets, "the uncertain record"
+    assert "a `point` refusal or `nothingReached: true`, do not run `sent`." in bullets, "the no-record retry"
     for reason in ("relay-silent", "relay-text-mismatch", "relay-send-unconfirmed", "relay-send-failed"):
         assert reason not in bullets, reason
