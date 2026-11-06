@@ -146,6 +146,18 @@ def test_e5_run_verb_refuses_before_the_slot_file_is_read(tmp_path):
     assert list(USER) not in fake.calls
 
 
+@pytest.mark.parametrize("ending", ["\r", " "])
+def test_e5_builder_text_after_a_lone_cr_or_u2028_on_the_marker_line_refuses(ending, tmp_path):
+    """The checked span is the span the write replaces: it starts after the marker's own splitlines() line. A marker
+    line ended by a lone CR or U+2028 holds builder text before the next newline; the write would replace it, so the
+    check reads it, and refuses, with nothing pushed."""
+    body = HEAD[:-1] + ending + "Builder note: keep this.\n" + VERDICT + "\n" + TAIL
+    fake = assert_refused_both_ways("", tmp_path, "slot-span-builder-text", "Builder note: keep this.", "sign (a)",
+                                    body=body)
+    assert fake.calls == [list(VIEW)]
+    assert fake.bodies == [body]
+
+
 def test_e6_a_builder_heading_section_after_an_earlier_verdict_refuses(tmp_path):
     span = VERDICT + "\n" + TEST_ANSWERS
     n = line_of(span, "## Test answers")

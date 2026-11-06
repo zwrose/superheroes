@@ -11,6 +11,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import heartbeat as _heartbeat  # noqa: E402  (needs the sys.path insert above)
+import launcher as _launcher  # noqa: E402
 import round_driver as _round_driver  # noqa: E402
 
 # A non-root conftest may not use pytest_plugins, so the proc_containment guard fixture and outcome
@@ -149,6 +150,63 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # a no-op unless a test opts in by setting its own (applies after this fixture).
     for var in _REVIEWER_CLOUD_ENV:
         monkeypatch.delenv(var, raising=False)
+
+
+def _fixture_repo_is_the_folder(repo_root, stamped, env):
+    """The cloud-launch folder step, with the fixture repository standing in as the folder.
+
+    Returns ``(repo_root, targets, None)``; ``targets`` are the commits the folder may sit at,
+    in order: an adoption with a full-sha ``adoptsHead`` that differs from the base is checked at
+    its head and then at its base, any other launch at its base alone (the either-or adoption
+    semantics the checkout check had before the launcher got its own folder).
+    """
+    base = stamped["baseCommit"]
+    head = stamped.get("adoptsHead")
+    adopting = "adoptsBranch" in stamped and isinstance(head, str) and len(head) == 40 and all(
+        ch in "0123456789abcdefABCDEF" for ch in head)
+    if adopting and head != base:
+        return repo_root, [head, base], None
+    return repo_root, [base], None
+
+
+def _launcher_instances():
+    """Every loaded copy of the launcher the cloud-launch tests drive: the imported module, and the
+    separate copy ``test_launcher`` loads from the file by path (its ``L``, which the cloud tests
+    share), since a monkeypatch on one copy does not reach the other."""
+    found = [_launcher]
+    loaded = getattr(sys.modules.get("test_launcher"), "L", None)
+    if loaded is not None and loaded is not _launcher:
+        found.append(loaded)
+    return found
+
+
+@pytest.fixture(autouse=True)
+def _cloud_launch_folder_is_the_fixture_repo():
+    """Existing cloud-launch tests use their fixture repository as the cloud-launch folder, so
+    their checkout-semantics assertions keep testing ``_cloud_checkout_refusal`` on it (its lock
+    file is ``<fixture repo>.lock``, inside the test's tmp dir). The real folder path (its
+    ownership checks, its repair, its lock) is tested in ``test_launcher_cloud_launch_folder.py``,
+    which puts the real functions back (with ``monkeypatch.setattr``, which wins for its own
+    duration).
+
+    This fixture requests no other fixture, so it changes no other fixture's setup or teardown
+    order (requesting ``monkeypatch`` here set it up before fixtures whose teardown opens files,
+    so a test's ``builtins.open`` patch was still in place when they tore down). It saves the two
+    launcher attributes, sets them, and puts the saved values back in a ``finally``; a module
+    without either attribute raises ``AttributeError`` rather than gaining one."""
+    saved = []
+    try:
+        for module in _launcher_instances():
+            saved.append((module,
+                          getattr(module, "_cloud_launch_folder_fn"),
+                          getattr(module, "_cloud_launch_folder_path_fn")))
+            module._cloud_launch_folder_fn = _fixture_repo_is_the_folder
+            module._cloud_launch_folder_path_fn = lambda repo_root, env=None: repo_root
+        yield
+    finally:
+        for module, folder_fn, folder_path_fn in reversed(saved):
+            module._cloud_launch_folder_fn = folder_fn
+            module._cloud_launch_folder_path_fn = folder_path_fn
 
 
 def _neutral_git(cwd, *args):

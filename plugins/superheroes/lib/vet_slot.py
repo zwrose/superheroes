@@ -14,7 +14,7 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of fifteen reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of twenty reasons (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
 ``What's changing, and why`` heading sits above the advisor-vet marker, so the builder's owner half is lost and
 the body is restored from the PR's edit history rather than re-stamped),
@@ -28,7 +28,12 @@ comment - which the write would delete), ``receipt-missing``, ``followup-undispo
 names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
 named, by record id and title, under What we're accepting, or that record cannot be read; the rule's one home is
-``leftover_accepting.py``)) and a detail naming what was wrong; no edit is made, except
+``leftover_accepting.py``), ``fixed-above-not-in-stack`` and ``fixed-above-unverified`` (both callers of the leftover
+rule: an acceptance carries ``fixed-above #<PR> <commit>`` and the named PR is not a higher member of this PR's own
+stack, or the stack cannot be read so the disposition is not accepted), ``calibration-disclosure-contradicted``, ``calibration-disclosure-unknown-seat`` and
+``calibration-disclosure-unmarked`` (``handback`` over an open PR: a calibration marker in a degradation bullet that the
+latest review record contradicts, or that names a row the record lacks, or a degradation bullet that mentions
+calibration outside the marker; the rule's one home is ``calibration_disclosure.py``)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
 on ok, 1 on refusal.
@@ -48,12 +53,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 import urllib.parse
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import calibration_disclosure  # noqa: E402
 import gh_pages  # noqa: E402
 import leftover_accepting  # noqa: E402
 import md_fence  # noqa: E402
@@ -98,6 +105,15 @@ _REMINDER_OPENER = "<!-- advisor: BEFORE writing this slot"
 _SUPERHEROES_OPEN_RE = re.compile(r"<!--\s*superheroes:")
 _BUILD_RECORD_WRAPPER_RE = re.compile(r"<summary[^>]*>\s*build\s+record", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
+# _could_open_html_block: the characters a line may start with (container marks and indentation) before its first
+# real character, and what that character may begin: "<" then a letter, "/", "?" or "!" (a tag, a closing tag, a
+# processing instruction, a declaration, CDATA, a comment). An autolink (<https://…>) is not a block start.
+_BLOCK_LEAD_ASCII = " \t>*+-0123456789.)"
+_BLOCK_START_RE = re.compile(r"<[A-Za-z/?!]")
+_AUTOLINK_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.\-]{1,31}:[^\s<>]*>")
+# _comment_scan: the eight characters str.splitlines() breaks a line on that Markdown does not (U+2028, U+2029, U+0085,
+# VT, FF, FS, GS, RS). A body holding any of them gets no escape or code-span exemption.
+_SPLITLINES_ONLY_BREAKS = "\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\x85\x0b\x0c\x1c\x1d\x1e"
 _ACCEPTING_KEY = "what were accepting"
 _BUILDER_HEADING_KEYS = ("whats changing", _ACCEPTING_KEY, "how to see it", "build record", "build brief",
                          "dispatch provenance", "disclosed degradations", "followups for the advisor",
@@ -178,35 +194,88 @@ def _find_live_standalone_markers(body, marker):
     return found
 
 
+def _could_open_html_block(body):
+    """True when any line of ``body`` could open a CommonMark HTML block (doubt reads as yes: over-match refuses more).
+
+    Such a line, after a leading run of spaces, tabs, quote and list marks, digits, any whitespace character and any
+    format character (a byte-order mark, a zero-width space), starts with ``<`` and an ASCII letter, ``/``, ``?`` or
+    ``!``. A comment opener is left to the comment state and an autolink (``<https://example.com>``) is not a tag.
+    Lines are ``str.splitlines()`` lines, a superset of Markdown's, so a tag after any line break counts."""
+    for line in body.splitlines():
+        start = 0
+        # axis: a byte-order mark, a zero-width space or any other whitespace before the tag is skipped, so the line still counts — see bite-proof record i2342_comment_scan_inline_code.md
+        while start < len(line) and (line[start] in _BLOCK_LEAD_ASCII
+                                     or line[start].isspace() or unicodedata.category(line[start]) == "Cf"):
+            start += 1
+        text = line[start:]
+        if not _BLOCK_START_RE.match(text):
+            continue
+        # axis: a comment-opener line is left to the comment state and is not an HTML-block line — see bite-proof record i2342_comment_scan_inline_code.md
+        if text.startswith("<!--"):
+            continue
+        # axis: an autolink line is not an HTML-block line — see bite-proof record i2342_comment_scan_inline_code.md
+        if _AUTOLINK_RE.match(text):
+            continue
+        return True
+    return False
+
+
 def _comment_scan(body):
     """Yield ``(offset, line, dead, starts_in_comment)`` for every line of ``body``.
 
     ``dead`` is inside a code fence (``md_fence``); ``starts_in_comment`` is inside an HTML comment span: ``<!--``
-    through the next ``-->``, across lines, a comment never closed running to the end of the body. A ``<!--`` on a
-    fenced line opens no comment; a ``-->`` closes one wherever it sits."""
+    through the next ``-->``, across lines, a comment never closed running to the end of the body; inside a comment the
+    first ``-->`` closes it wherever it sits, backticks there being plain characters. Outside a comment on an unfenced
+    line, a ``<!--`` after a backslash escape or inside an inline code span (``leftover_accepting``'s
+    ``_code_span_end``) opens nothing, but only in a body with no line that could open an HTML block
+    (``_could_open_html_block``) and none of the eight characters ``str.splitlines()`` breaks a line on that Markdown
+    does not (``_SPLITLINES_ONLY_BREAKS``). In every other body, and in the rest of any line on which a comment
+    closes (raw HTML may follow it), each ``<!--`` outside a fenced code block opens a comment, as a plain search
+    finds it."""
     raw = body.splitlines(keepends=True)
     bare = [line.rstrip("\r\n") for line in raw]
     inert = md_fence.scan_contexts(bare).inert
     in_comment = False
+    # axis: a body with a line that could open an HTML block gets no escape or code-span exemption — see bite-proof record i2342_comment_scan_inline_code.md
+    # axis: a body holding a splitlines-only line break (U+2028, U+0085, a form feed, and five more) gets no exemption, the closing-line state resetting where Markdown has no line break — see bite-proof record i2342_comment_scan_inline_code.md
+    exempt = not _could_open_html_block(body) and not any(ch in body for ch in _SPLITLINES_ONLY_BREAKS)
     offset = 0
     for line, dead, whole in zip(bare, inert, raw):
         starts_in_comment = in_comment
+        plain = not exempt
         pos = 0
         while True:
             if in_comment:
+                # axis: a closer inside backticks still closes a comment, comment text not being Markdown — see bite-proof record i2342_comment_scan_inline_code.md
                 at = line.find("-->", pos)
                 if at < 0:
                     break
                 pos = at + 3
                 in_comment = False
+                # axis: after a comment closes, the rest of its line is matched plainly, raw HTML possibly following it — see bite-proof record i2342_comment_scan_inline_code.md
+                plain = True
             else:
-                if dead:
+                if dead or pos >= len(line):
                     break
-                at = line.find("<!--", pos)
-                if at < 0:
-                    break
-                pos = at + 4
-                in_comment = True
+                if plain:
+                    at = line.find("<!--", pos)
+                    if at < 0:
+                        break
+                    pos = at + 4
+                    in_comment = True
+                elif line[pos] == "\\" and pos + 1 < len(line):
+                    # axis: a backslash-escaped character is literal, so an escaped opener opens no comment — see bite-proof record i2342_comment_scan_inline_code.md
+                    pos += 2
+                elif line[pos] == "`":
+                    # axis: an inline code span (a run closed by a run of its own length) hides an opener inside it — see bite-proof record i2342_comment_scan_inline_code.md
+                    end = leftover_accepting._code_span_end(line, pos)
+                    # axis: a backtick run with no closing run is literal backticks, scanning continues after it — see bite-proof record i2342_comment_scan_inline_code.md
+                    pos = end if end is not None else leftover_accepting._TICKS.match(line, pos).end()
+                elif line.startswith("<!--", pos):
+                    pos += 4
+                    in_comment = True
+                else:
+                    pos += 1
         yield offset, line, dead, starts_in_comment
         offset += len(whole)
 
@@ -308,9 +377,11 @@ def check_span_owned(body, advisor_at, build_at):
     The span is the one ``evaluate`` replaces: from the line after the advisor-vet marker line to the build-record
     marker line. Called on the ``write`` path of a builder body only, after ``analyze_body``, and again over the
     composed body (emitter ⊆ recogniser)."""
-    start = body.index("\n", advisor_at) + 1
-    end = body.rfind("\n", 0, build_at) + 1
-    problem = _span_owned_problem(body[start:end])
+    # axis: the checked span is exactly the span the write replaces: it starts after the marker's own str.splitlines() line (the shared helper) and ends at the build-record marker, so builder text after a lone CR or U+2028 on the marker line is checked, never deleted unread — see bite-proof record i2352_vet_slot_builder_text.md
+    start = _after_marker_line(body, advisor_at)
+    if start < 0:  # the marker is the last line: there is no span (the write refuses this body itself)
+        return
+    problem = _span_owned_problem(body[start:build_at])
     if problem is None:
         return
     number, text, sign, why = problem
@@ -375,6 +446,33 @@ def analyze_no_build_record(body):
     return found[0] if found else None
 
 
+def _after_marker_line(body, advisor_at):
+    """The offset just past the advisor-vet marker's own ``str.splitlines()`` line, the line the readers split.
+
+    -1 when that line has no terminator (the marker is the last line); ``write-failed`` when no line holds the offset."""
+    # axis: the slot starts after the marker's own str.splitlines() line, the line the readers split, so a marker line ended by a lone CR, U+2028 or any other splitlines separator cannot keep an old verdict line first in the region — see bite-proof record i2342_vet_slot_no_build_record.md
+    line_start = 0
+    for whole in body.splitlines(keepends=True):
+        if line_start <= advisor_at < line_start + len(whole):
+            return line_start + len(whole) if whole.splitlines()[0] != whole else -1
+        line_start += len(whole)
+    raise _Refusal("write-failed", "the advisor-vet marker offset is not on any line of the body")
+
+
+def _check_verdict_reads_first(new_body, slot_text):
+    """Refuse ``write-failed`` unless the first non-empty line of the composed body's advisor-vet region, read as
+    ``stack_check.read_vet_verdict`` reads it, is the slot text's first non-empty line."""
+    region, region_refusal = pr_body_regions.read_region(new_body, "advisor-vet")
+    first_written = stack_check._first_nonempty_line(slot_text)
+    first_read = stack_check._first_nonempty_line(region) if region is not None else None
+    # axis: the region the merge train reads must open with the slot's own first line, else the write refuses write-failed and pushes nothing — see bite-proof record i2342_vet_slot_no_build_record.md
+    if region_refusal is not None or region is None or first_read != first_written:
+        raise _Refusal("write-failed", "the advisor-vet region's first line as the merge train reads it is %r, not the"
+                       " new verdict line %r%s" % (first_read, first_written,
+                                                   "; region read refused: %s" % region_refusal
+                                                   if region_refusal is not None else ""))
+
+
 def _compose_no_build_record(body, advisor_at, slot_text):
     """The new body of a no-build-record ``write``; a ``write-failed`` refusal when it would not hold.
 
@@ -389,11 +487,11 @@ def _compose_no_build_record(body, advisor_at, slot_text):
         heading_at = len(prefix) + 2
         marker_at = heading_at + len("## Advisor vet\n")
     else:
-        newline = body.find("\n", advisor_at)
-        if newline >= 0:
-            prefix = body[:newline + 1]
+        line_end = _after_marker_line(body, advisor_at)
+        if line_end >= 0:
+            prefix = body[:line_end]
             new_body = prefix + "\n" + slot + "\n"
-        else:  # the marker is the last line, with no newline after it
+        else:  # the marker is the last line, with no terminator after it
             prefix = body
             new_body = body + "\n\n" + slot + "\n"
         marker_at = advisor_at
@@ -409,6 +507,7 @@ def _compose_no_build_record(body, advisor_at, slot_text):
         raise _Refusal("write-failed", problem)
     if _find_live_standalone_markers(new_body, marker) != [marker_at]:
         raise _Refusal("write-failed", "composed body moved or shadowed slot markers")
+    _check_verdict_reads_first(new_body, slot_text)
     return new_body
 
 
@@ -441,7 +540,11 @@ def analyze_body(body):
     if offsets["advisor-vet"] >= offsets["build-record"]:
         raise _Refusal("markers-invalid", "advisor-vet marker is not above the build-record marker")
     followups = read_marker_list(body, FOLLOWUPS_MARKER_NAME, after=offsets["build-record"])
-    span_start = body.index("\n", offsets["advisor-vet"]) + 1
+    # axis: the guard's span starts at the same offset the write's slot does, after the advisor-vet marker's own str.splitlines() line (the shared helper), never after the next "\n", so a foreign marker after a lone CR, U+2028 or form feed marker line refuses instead of being deleted — see bite-proof record i2342_vet_slot_no_build_record.md
+    span_start = _after_marker_line(body, offsets["advisor-vet"])
+    # Unreachable through this entry point: the -1 return and the helper's write-failed raise cannot happen here, because _find_live_standalone_markers returns a line start and the build-record marker sits on a later line, so the marker line always has a terminator — see bite-proof record i2342_vet_slot_no_build_record.md (H5a)
+    if span_start < 0:
+        raise _Refusal("markers-invalid", "the advisor-vet marker line has no terminator")
     for offset, line in _live_lines(body):
         stripped = line.strip()
         # axis: any other superheroes marker line inside the slot span refuses slot-span-foreign-content
@@ -629,12 +732,79 @@ def _handback_file(body_file):
     return check_handback(body)
 
 
-def check_leftovers(pr, repo, body, comments):
-    """Refuse while the latest review record among ``comments`` leaves a finding for the owner that the body's What we're
-    accepting does not name (``leftover_accepting``, the rule's one home), or while that record cannot be read."""
+def _claim_name(claim):
+    return "%s (%s)" % (claim["id"], claim["title"]) if claim["title"] else claim["id"]
+
+
+def _check_fixed_above(pr, repo, claims, run, membership_reader):
+    """Refuse unless every claim's named PR is a member of this PR's own stack at a higher position (#2332). A stack that
+    cannot be read refuses too: the disposition is then not accepted."""
+    try:
+        if membership_reader is not None:
+            read = membership_reader(pr, repo)
+        else:
+            read = stack_check.read_membership(pr=pr, repo=repo, run=run or subprocess.run)
+    except Exception as exc:  # a reader that raises is a read that failed
+        # axis: a membership reader that raises refuses fixed-above-unverified, never passes
+        raise _Refusal("fixed-above-unverified", "%s: the stack membership of PR %d could not be read (%s: %s); the"
+                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr,
+                                                         type(exc).__name__, exc))
+    reason = read.get("reason") if isinstance(read, dict) else None
+    # axis: a read that succeeded in saying this PR is in no stack (not-linked) cannot have a higher layer: refuses
+    # fixed-above-not-in-stack
+    if isinstance(read, dict) and read.get("ok") is not True and reason == stack_check.REASON_NOT_LINKED:
+        raise _Refusal("fixed-above-not-in-stack", "; ".join(
+            "%s names #%d, but PR #%d is in no stack" % (_claim_name(c), c["layer"], pr) for c in claims))
+    # axis: a read that is not an object (membership unknown) or did not succeed refuses fixed-above-unverified, never passes
+    if not isinstance(read, dict) or read.get("ok") is not True:
+        cause = ("%s: %s" % (reason, read.get("detail"))) if isinstance(read, dict) else "the read was not an object"
+        raise _Refusal("fixed-above-unverified", "%s: the stack membership of PR %d could not be read (%s); the"
+                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr, cause))
+    members = read.get("members")
+    members = [m for m in members if isinstance(m, dict)] if isinstance(members, list) else []
+    position = {m.get("number"): m.get("position") for m in members}
+    mine = position.get(pr)
+    # axis: a read that does not list this PR at an integer position is malformed: refuses fixed-above-unverified
+    if not isinstance(mine, int) or isinstance(mine, bool):
+        raise _Refusal("fixed-above-unverified", "%s: the stack membership read does not list PR %d at a position; the"
+                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr))
+    failing = []
+    for claim in claims:
+        layer = position.get(claim["layer"])
+        # axis: a named layer that is not a member of this PR's stack, or sits at or below it, is not a higher layer
+        if not (isinstance(layer, int) and not isinstance(layer, bool) and layer > mine):
+            why = ("is not a member of PR %d's stack" % pr if claim["layer"] not in position
+                   else "is at or below PR %d in the stack" % pr)
+            failing.append("%s names #%d, which %s" % (_claim_name(claim), claim["layer"], why))
+    if failing:
+        raise _Refusal("fixed-above-not-in-stack", "; ".join(failing))
+
+
+def _latest_record(pr, repo, comments):
     rows = [{"id": c.get("id"), "author": c["user"]["login"], "body": c["body"], "url": c.get("html_url")}
             for c in comments]
-    record = review_record.read(pr, repo, readers={"list_comments": lambda _pr, _repo: rows})
+    return review_record.read(pr, repo, readers={"list_comments": lambda _pr, _repo: rows})
+
+
+def check_calibration_disclosures(pr, repo, body, comments):
+    """Refuse while a calibration marker in a degradation bullet is contradicted by the latest review record among
+    ``comments`` or names a row the record lacks, or while a degradation bullet mentions calibration outside the marker
+    (``calibration_disclosure``, the rule's one home), or while that record cannot be read."""
+    record = _latest_record(pr, repo, comments)
+    try:
+        found = calibration_disclosure.problems(record, body)
+    except calibration_disclosure.Unreadable as exc:
+        raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
+    if found:
+        raise _Refusal(found[0]["reason"], calibration_disclosure.describe(found, record.get("url")))
+
+
+def check_leftovers(pr, repo, body, comments, run=None, membership_reader=None):
+    """Refuse while the latest review record among ``comments`` leaves a finding for the owner that the body's What we're
+    accepting does not name (``leftover_accepting``, the rule's one home), or while that record cannot be read. An
+    acceptance that carries ``fixed-above #<PR> <commit>`` also refuses unless that PR is a higher member of this PR's own
+    stack, or when the stack cannot be read (#2332); with no such acceptance the stack is never read."""
+    record = _latest_record(pr, repo, comments)
     try:
         gaps = leftover_accepting.missing(record, body)
     except leftover_accepting.Unreadable as exc:
@@ -643,6 +813,13 @@ def check_leftovers(pr, repo, body, comments):
     # axis: a leftover What we're accepting does not name by id and title refuses leftover-not-accepted
     if gaps:
         raise _Refusal("leftover-not-accepted", leftover_accepting.describe(gaps))
+    try:
+        claims = leftover_accepting.fixed_above(record, body)
+    except leftover_accepting.Unreadable as exc:
+        raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
+    # axis: with no fixed-above acceptance the stack is never read
+    if claims:
+        _check_fixed_above(pr, repo, claims, run, membership_reader)
 
 
 def reads_ready(slot_text):
@@ -731,8 +908,15 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         except _Refusal as exc:
             return _refusal(exc.reason, exc.detail)
         return result
-    a = body.index("\n", advisor_at) + 1
-    b = body.rfind("\n", 0, build_at) + 1
+    try:
+        # axis: the builder path starts the slot after the marker's own str.splitlines() line (the shared helper), never after the next "\n", so a lone CR or U+2028 marker line cannot keep an old verdict line first — see bite-proof record i2342_vet_slot_no_build_record.md
+        a = _after_marker_line(body, advisor_at)
+    except _Refusal as exc:
+        return _refusal(exc.reason, exc.detail)
+    if a < 0:  # a builder body's marker line is ended by the build-record marker that follows it
+        return _refusal("write-failed", "the advisor-vet marker line has no terminator")
+    # axis: the write's span ends at the build-record marker's own line start (build_at itself), never after the previous "\n", so old slot text on a line ended by a lone CR or U+2028 before the marker is replaced, not kept — see bite-proof record i2342_vet_slot_no_build_record.md
+    b = build_at
     new_body = body[:a] + "\n" + slot_text.strip("\n") + "\n\n" + body[b:]
     tail = len(body) - b
     if new_body[:a] != body[:a] or new_body[len(new_body) - tail:] != body[b:]:
@@ -743,6 +927,11 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         return _refusal("write-failed", "composed body broke markers: %s" % exc.detail)
     if new_ids != ids or new_advisor_at != advisor_at or new_body[new_build_at:] != body[build_at:]:
         return _refusal("write-failed", "composed body moved or shadowed slot markers")
+    try:
+        # axis: the builder path refuses write-failed unless the composed region's first line, as the merge train reads it, is the slot's — see bite-proof record i2342_vet_slot_no_build_record.md
+        _check_verdict_reads_first(new_body, slot_text)
+    except _Refusal as exc:
+        return _refusal(exc.reason, exc.detail)
     try:
         # axis: the composed slot must itself read as the advisor's own, so a later write is never refused — see bite-proof record i2352_vet_slot_builder_text.md
         check_span_owned(new_body, new_advisor_at, new_build_at)
@@ -910,7 +1099,10 @@ def _run_verb(verb, pr, repo, slot_file, run):
         body = _body_of(payload)
         result = check_handback(body)
         if result["ok"]:
-            check_leftovers(pr, repo, body, _read_comments(run, pr, repo))
+            comments = _read_comments(run, pr, repo)
+            check_leftovers(pr, repo, body, comments, run)
+            # axis: a disclosed calibration degradation the record grades read refuses calibration-disclosure-contradicted — see bite-proof record i2364_calibration_disclosure
+            check_calibration_disclosures(pr, repo, body, comments)
         return result
     body = _body_of(payload)
     # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md
@@ -938,7 +1130,7 @@ def _run_verb(verb, pr, repo, slot_file, run):
         return result
     if reads_ready(slot_text):
         # axis: the READY check reads the body the write will publish, never the old slot text it replaces
-        check_leftovers(pr, repo, result["newBody"], comments)
+        check_leftovers(pr, repo, result["newBody"], comments, run)
     new_body = result.pop("newBody")
     if _read_body(run, pr, repo) != body:
         raise _Refusal("write-failed", "PR body changed between the read and the push")

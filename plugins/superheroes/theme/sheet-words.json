@@ -74,6 +74,7 @@
     "familyUnknown": "family unknown",
     "notIndependentMark": "not independent",
     "caughtHeading": "What the review caught",
+    "caughtFixedAbove": "{title} (fixed above in #{layer} at {commit})",
     "roundsLine": "{rounds} ran.",
     "ciLine": "CI {state} on {commit}.",
     "laneLine": "{lane} lane: {reason}",

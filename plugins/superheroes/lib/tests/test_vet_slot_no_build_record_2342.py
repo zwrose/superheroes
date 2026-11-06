@@ -420,3 +420,128 @@ def test_e17_a_slot_with_the_accepting_heading_is_the_exemption_and_writes(tmp_p
     fake = _fake(BOT_BODY)
     assert _write(fake, tmp_path, slot)["ok"] is True
     assert fake.edited == [_appended(BOT_BODY, slot)]
+
+
+# --- Vet-817 (H1-H2): the slot starts after the marker's own splitlines line; the first line the merge train reads is the slot's ----
+
+import pr_body_regions  # noqa: E402
+import stack_check  # noqa: E402
+
+V_HEAD = "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+V_NOT_READY_SLOT = "**Verdict: NOT-READY** · " + V_HEAD + "\n\nx\n"
+V_READY_LINE = "**Verdict: READY** · " + V_HEAD
+V_NOT_READY_LINE = "**Verdict: NOT-READY** · " + V_HEAD + " (old)"
+# a hand-stamped marker line ended by a lone CR (F1) and an LF body with U+2028 after the marker (F2)
+V_OLD_VERDICT_BODIES = {
+    "f1-cr-only": "Bumps x.\r" + MARKER + "\r" + V_READY_LINE + "\r",
+    "f2-u2028": "Bumps x.\n\n" + MARKER + " " + V_READY_LINE + "\n",
+}
+V_OLD_NOT_READY_BODIES = {
+    "f1-cr-only": "Bumps x.\r" + MARKER + "\r" + V_NOT_READY_LINE + "\r",
+    "f2-u2028": "Bumps x.\n\n" + MARKER + " " + V_NOT_READY_LINE + "\n",
+}
+
+
+class _RawFakeGh(FakeGh):
+    """FakeGh whose pushed body keeps its carriage returns (the base fake reads the body file with universal newlines)."""
+
+    def __call__(self, argv, **kwargs):
+        raw = None
+        if list(argv[:6]) == ["gh", "pr", "edit", "42", "-R", REPO] and argv[6] == "--body-file":
+            with open(argv[7], encoding="utf-8", newline="") as handle:
+                raw = handle.read()
+        result = super().__call__(argv, **kwargs)
+        if raw is not None:
+            self.edited[-1] = raw
+            if not self.edit_rc and self.bodies:
+                self.bodies = [raw]
+        return result
+
+
+def _raw_fake(body):
+    return _RawFakeGh([body], _pages([_comment(RECEIPT_NONE)]))
+
+
+def _vet(body):
+    return stack_check.read_vet_verdict(body, V_HEAD)[0]
+
+
+def _evaluate_write(body, slot=V_NOT_READY_SLOT):
+    return vs.evaluate("write", body, [_comment(RECEIPT_NONE)], slot, advisor_login="advisor")
+
+
+def _marker_line_end(body):
+    """The offset just past the marker's own str.splitlines() line (the formula the fix writes)."""
+    offset = 0
+    for whole in body.splitlines(keepends=True):
+        if whole.splitlines()[0].strip() == MARKER:
+            return offset + len(whole)
+        offset += len(whole)
+    raise AssertionError("no marker line")
+
+
+@pytest.mark.parametrize("name", sorted(V_OLD_VERDICT_BODIES))
+def test_f1_f2_a_not_ready_write_over_an_old_ready_reads_not_ready_through_evaluate(name):
+    body = V_OLD_VERDICT_BODIES[name]
+    assert _vet(body) == stack_check.VERDICT_READY  # the old READY is what the merge train reads before the write
+    result = _evaluate_write(body)
+    assert result["ok"] is True, result
+    new_body = result["newBody"]
+    assert _vet(new_body) == stack_check.VERDICT_NOT_READY
+    end = _marker_line_end(body)
+    assert new_body == body[:end] + "\n" + V_NOT_READY_SLOT.strip("\n") + "\n"
+    region, refusal = pr_body_regions.read_region(new_body, "advisor-vet")
+    assert refusal is None and region is not None
+    assert stack_check._first_nonempty_line(region) == stack_check._first_nonempty_line(V_NOT_READY_SLOT)
+
+
+@pytest.mark.parametrize("name", sorted(V_OLD_VERDICT_BODIES))
+def test_f1_f2_a_not_ready_write_over_an_old_ready_reads_not_ready_through_run_verb(name, tmp_path):
+    body = V_OLD_VERDICT_BODIES[name]
+    fake = _raw_fake(body)
+    result = _write(fake, tmp_path, V_NOT_READY_SLOT)
+    assert result["ok"] is True, result
+    assert len(fake.edited) == 1
+    pushed = fake.edited[0]
+    assert _vet(pushed) == stack_check.VERDICT_NOT_READY
+    assert pushed == body[:_marker_line_end(body)] + "\n" + V_NOT_READY_SLOT.strip("\n") + "\n"
+
+
+@pytest.mark.parametrize("name", sorted(V_OLD_NOT_READY_BODIES))
+def test_f3_the_reverse_direction_stays_not_ready_through_evaluate_and_run_verb(name, tmp_path):
+    body = V_OLD_NOT_READY_BODIES[name]
+    assert _vet(body) == stack_check.VERDICT_NOT_READY
+    result = _evaluate_write(body)
+    assert result["ok"] is True, result
+    assert _vet(result["newBody"]) == stack_check.VERDICT_NOT_READY
+    fake = _raw_fake(body)
+    assert _write(fake, tmp_path, V_NOT_READY_SLOT)["ok"] is True
+    assert _vet(fake.edited[0]) == stack_check.VERDICT_NOT_READY
+
+
+@pytest.mark.parametrize("separator", ["\r", " ", " ", "\x85", "\x0b", "\x0c", "\x1c", "\r\n", "\n"])
+def test_f1_every_splitlines_separator_after_the_marker_writes_cleanly(separator):
+    body = "Bumps x.\n\n" + MARKER + separator + V_READY_LINE + separator
+    result = _evaluate_write(body)
+    assert result["ok"] is True, result
+    assert result["newBody"] == (body[:body.index(MARKER) + len(MARKER) + len(separator)]
+                                 + "\n" + V_NOT_READY_SLOT.strip("\n") + "\n")
+    assert _vet(result["newBody"]) == stack_check.VERDICT_NOT_READY
+
+
+@pytest.mark.parametrize("region", [
+    (V_READY_LINE + "\n\n" + V_NOT_READY_SLOT, None),
+    (None, None),
+    (None, "markers-invalid"),
+    ("\n\n", None),
+], ids=["first-line-is-the-old-verdict", "no-region", "region-refusal", "blank-region"])
+@pytest.mark.parametrize("body", [BOT_BODY + "\n## Advisor vet\n" + MARKER + "\nold slot\n", BOT_BODY],
+                         ids=["marker-present", "marker-absent"])
+def test_f5_a_region_whose_first_line_is_not_the_slots_refuses_write_failed_and_pushes_nothing(
+        monkeypatch, tmp_path, body, region):
+    monkeypatch.setattr(vs.pr_body_regions, "read_region", lambda _body, _name: region)
+    result = _evaluate_write(body)
+    assert result["ok"] is False and result["reason"] == "write-failed", result
+    assert "advisor-vet region" in result["detail"], result
+    fake = _fake(body)
+    _refused(_write(fake, tmp_path, V_NOT_READY_SLOT), fake, "write-failed", "advisor-vet region")

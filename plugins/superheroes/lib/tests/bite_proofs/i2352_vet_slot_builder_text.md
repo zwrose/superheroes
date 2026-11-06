@@ -348,3 +348,33 @@ FAILED ...::test_a_builder_section_with_a_tab_in_its_heading_below_the_marker_is
 .....                                                                    [100%]
 5 passed, 104 deselected in 14.13s
 ```
+
+## 13. G13: the checked span starts where the write's span starts (`check_span_owned`, bring-current)
+
+Added when main was merged in after its own vet-slot change merged: main's write starts the replaced span after the
+marker's own `str.splitlines()` line (`_after_marker_line`) and ends it at the build-record marker, so the check now
+reads exactly that span. Detector: `test_e5_builder_text_after_a_lone_cr_or_u2028_on_the_marker_line_refuses` in
+`plugins/superheroes/lib/tests/test_vet_slot_builder_text_2352.py`. Run by the build session, same command prefix with
+`--tb=line`.
+
+- **Axis:** builder text after a lone CR or U+2028 on the marker line, before the next `\n`, is inside the span the
+  write replaces, so the check reads it and refuses `slot-span-builder-text`; nothing is pushed.
+- **Neutralization:** in `check_span_owned`, `start = _after_marker_line(body, advisor_at)` became
+  `start = body.index("\n", advisor_at) + 1` (the pre-merge start).
+- **Raw red** (`-k lone_cr`, condensed by hand: introspection lines dropped):
+
+```
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+FAILED ...::test_e5_builder_text_after_a_lone_cr_or_u2028_on_the_marker_line_refuses[\r]
+FAILED ...::test_e5_builder_text_after_a_lone_cr_or_u2028_on_the_marker_line_refuses[ ]
+2 failed, 60 deselected in 0.41s
+```
+
+- **Restore:** inverse Edit, back to `start = _after_marker_line(body, advisor_at)`.
+- **Raw green:**
+
+```
+..                                                                       [100%]
+2 passed, 60 deselected in 16.91s
+```

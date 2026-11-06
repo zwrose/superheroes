@@ -659,9 +659,11 @@ launching machine's.
    python3 -B "$ROOT_DIR/lib/cloud_pass.py" make --environment <id>
    ```
 6. **Run the check when the owner says the steps are done.** Start one check session naming the
-   id. Pass `--issue` with an issue number when this seat cannot read the session's log, so the
-   session also posts its one result line there as a comment; that comment is public on a public
-   repository, and the line holds versions, stamps and a date, never the pass.
+   id. Name an issue in this repository with `--issue`: no host tool this plugin supports reads the
+   check session's own log, so the session posts its one result line there as a comment, and
+   `start` refuses `check-issue-required` without an issue and `check-issue-unreadable` when the
+   issue does not resolve, before anything starts. That comment is public on a public repository;
+   the line holds versions, stamps and a date, never the pass.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -679,12 +681,13 @@ launching machine's.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --environment <id> [--issue <n>]
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --environment <id> --issue <n>
    ```
 
    Keep the `nonce` it returns. A refusal starts nothing: say its `message`.
-7. **Read the result and judge it.** Read the session's final message, with the host's run-log
-   reader, or the issue comment. Save its full text to a file, without picking a line out of it, and
+7. **Read the result and judge it.** Read the issue's comments through REST (`gh api
+   "repos/<owner>/<repo>/issues/<n>/comments?per_page=100&page=<N>"`, page by page until a page
+   holds fewer than 100) and take the newest comment that carries the check's nonce. Save its full text to a file, without picking a line out of it, and
    run:
 
    ```bash
@@ -735,14 +738,39 @@ launching machine's.
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text
    ```
 
+**The launch folder.** A cloud launch runs the platform's command in a folder the launcher owns, a
+separate clone of the project, so the project's primary checkout is never moved for a launch. Make
+that folder once for this project:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/launcher.py" cloud-launch-folder --repo-root .
+```
+
+On `ok`, tell the owner the `folder` and the one-time trust step: open Claude Code once in that
+folder (`cd <folder>` and then `claude`), accept the trust question, and exit. Never run it for the
+owner, and never answer the trust question for them. On a refusal, say its `reason` and stop. A path
+that exists but is not the launcher's own clone is left alone, so the owner moves it aside and the
+step runs again. This is done once per project per machine. Without it every cloud launch refuses
+`launch-cloud-folder-missing`, and a folder that exists but was never trusted reads
+`cloud-session-unconfirmed`.
+
 The check also asks the cloud session's git for a commit identity. It passes when git, with
 guessing turned off (`user.useConfigOnly`), resolves both an author and a committer identity from
 any source: the platform's own identity, the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables, or git
 config. It requires no particular name or email, and its report line says only whether each one
-resolved. A cloud session starts with the platform's own identity, which signs its commits, so they
-show as Verified on GitHub; that is the default and needs nothing. A project that wants a different
-author or committer sets the four variables on the environment, and git reads them ahead of any
-config; those commits most likely show as Unverified. A missing identity fails the check before any
+resolved and which of the four variables are set, by name, never their values. A cloud session
+starts with the platform's own identity, which signs its commits, so they show as Verified on
+GitHub; that is the default and needs nothing. **A project that wants a different author or
+committer sets the four variables (`GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME`,
+`GIT_COMMITTER_EMAIL`) in the environment's variables, never with a setup command**; git reads them
+ahead of any config, and those commits most likely show as Unverified. An identity a setup command
+writes with `git config` does not survive a worker restart: the setup does not run again, git falls
+back to the platform's own identity, and the build stops at its next commit. So whenever any of the
+four variables is not set, the check still passes the identity but its message carries a warning
+that the identity comes only (or partly) from git config, will not survive a restart if a setup
+command wrote it, and names the variables to set; a report that does not say which variables are
+set reads unknown and warns the same way. Relay that warning with the result. A missing identity fails the check before any
 build, and its fix line names the four variables with this machine's name and email filled in
 ("your name" and "your email" when this machine resolves none); that line appears only in the
 message on this machine and is never stored. The setup text writes no identity step: `git config`

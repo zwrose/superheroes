@@ -3,13 +3,15 @@ the judgment of that check on the owner's machine.
 
   cloud_check.py setup-message [--cwd D] [--root D] [--project-name N]
   cloud_check.py sign-in [--cwd D] [--root D] [--project-name N]
-  cloud_check.py start --environment E [--cwd D] [--issue N]
+  cloud_check.py start --environment E --issue N [--cwd D]
   cloud_check.py report [--cwd D] [--root D] [--nonce N]
   cloud_check.py judge --environment E --nonce N (--line TEXT | --line-file F) [--account A]
   cloud_check.py setup-text [--cwd D] [--root D] [--project-name N]
 
 `start` launches the check session on the owner's machine, always naming the environment id the
-owner gave. `report` runs inside the cloud session and prints one marked line saying what that session holds.
+owner gave. `start` refuses `check-issue-required` without an issue and `check-issue-unreadable`
+when the issue does not resolve, before anything is spawned, because no supported host tool reads
+the check session's own log (#2332). `report` runs inside the cloud session and prints one marked line saying what that session holds.
 `judge` runs on the owner's machine, reads that line out of whatever text carries it, and writes
 the setup record only when every part of the report agrees with this machine. Any other result
 writes no record and leaves the account's failed-check marker, which pauses cloud launches on that
@@ -51,6 +53,11 @@ REPORT_SCHEMA = "cloud-check-report/1"
 REPORT_FIELDS = ("schema", "nonce", "environment", "pluginVersion", "placedStamp", "stampFile",
                  "repoStamp", "confirmation")
 IDENTITY_FIELD = "identity"
+# Where the identity came from: the names (never the values) of the identity variables set in the
+# cloud session. A report without it reads as unknown.
+IDENTITY_SOURCE_FIELD = "identitySource"
+IDENTITY_VARIABLES = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+                      "GIT_COMMITTER_EMAIL")
 DIGEST_FIELD = "digest"
 # The failed-check marker's reader lives in cloud_setup; these names stay importable from here.
 FAILED_CHECK_SCHEMA = cloud_setup.FAILED_CHECK_SCHEMA
@@ -154,6 +161,26 @@ _PARTS = (
      cloud_setup.FIX_RECORD),
 )
 _IDENTITY_UNREPORTED = "The cloud session did not report its git identity."
+# The warning a passing identity part carries when any of the four variables is not set; `{names}`
+# is the missing variables, joined in prose.
+_RESTART_SENTENCE = ("An identity that a setup command writes into git config does not survive a "
+                     "worker restart: the setup does not run again, git falls back to the "
+                     "platform's own identity, and a build stops at its next commit.")
+_PLATFORM_SENTENCE = ("If it is the platform's own identity, nothing is needed: the platform "
+                      "supplies it again after a restart.")
+_IDENTITY_WARNINGS = {
+    "config": ("**A warning about the git identity.** The cloud session's git identity comes only "
+               "from git config, not from the environment's variables. " + _RESTART_SENTENCE
+               + " To keep the identity you want, set {names} in the environment's variables "
+               "instead. " + _PLATFORM_SENTENCE),
+    "mixed": ("**A warning about the git identity.** The cloud session's git identity comes partly "
+              "from git config: {names} {verb} not set in the environment's variables. "
+              + _RESTART_SENTENCE + " Set {names} in the environment's variables too."),
+    "unknown": ("**A warning about the git identity.** The cloud session did not say where its git "
+                "identity comes from, so it may come only from git config. " + _RESTART_SENTENCE
+                + " To be sure, set {names} in the environment's variables. "
+                + _PLATFORM_SENTENCE),
+}
 # The standing sentence of every check message: the failed-check marker is the paused state.
 _PAUSED_STANDING = ("Cloud builds are paused for this account until the check passes. "
                     + cloud_setup.PAUSED_RESUME)
@@ -215,7 +242,13 @@ _ENVIRONMENT_NEEDED = ("I need to know which cloud environment to check. Run /re
 _NOT_STARTED = "The check session did not start: the cloud launch command could not be run."
 _UNCONFIRMED = ("I could not confirm that the check session started. Look for a session named "
                 "{name} in your session list; say \"check again\" and I'll start a new one.")
-_STARTED = "The check session is running. I'll read its result in about a minute."
+_STARTED = ("The check session is running. It posts its result line on issue #{issue}; I'll read "
+            "it there in about a minute.")
+_ISSUE_REQUIRED = ("A check needs an issue to post its result on, because this seat cannot read "
+                   "the check session's own log. Name an issue in this repository with --issue, "
+                   "and the check posts its one result line there.")
+_ISSUE_UNREADABLE = ("I could not read issue #%d in this repository, so the check could not post "
+                     "its result there. Name an issue that exists here.")
 
 
 def _environment_ok(value):
@@ -381,6 +414,9 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_
         identity = (identity_fn or launch_doctrine.git_identity)(cwd)
     except Exception:
         identity = {"author": False, "committer": False}
+    # axis: the report says which identity variables are set, by name only, never their values
+    source = {"variables": [name for name in IDENTITY_VARIABLES
+                            if isinstance(env.get(name), str) and env.get(name).strip()]}
     return {
         "schema": REPORT_SCHEMA,
         "nonce": nonce if isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce) else None,
@@ -392,6 +428,7 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_
         "repoStamp": _or_none(repo_calibration_stamp, cwd),
         "confirmation": confirmation,
         IDENTITY_FIELD: identity,
+        IDENTITY_SOURCE_FIELD: source,
     }
 
 
@@ -524,6 +561,34 @@ def _judge_parts(obj, environment, cwd, root, today):
         "environmentMatches": environment_ok,
         "identityPresent": identity_ok,
     }, local_placed, pin, gap
+
+
+def _prose_names(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def identity_warning(obj, identity_present):
+    """None when the identity part did not pass or all four identity variables are set; otherwise
+    {"source": "config" | "mixed" | "unknown", "missing": [variable names], "message": text}. A
+    source that is absent or not the reported shape reads unknown and names all four."""
+    if not identity_present:
+        return None
+    source = obj.get(IDENTITY_SOURCE_FIELD)
+    names = source.get("variables") if isinstance(source, dict) else None
+    # axis: a report that does not say where the identity came from reads unknown and warns
+    if (not isinstance(names, list) or not all(isinstance(n, str) for n in names)
+            or not set(names) <= set(IDENTITY_VARIABLES)):
+        kind, missing = "unknown", list(IDENTITY_VARIABLES)
+    else:
+        missing = [name for name in IDENTITY_VARIABLES if name not in names]
+        # axis: an identity from the four variables carries no warning
+        if not missing:
+            return None
+        # axis: an identity from git config alone warns and names all four variables; a mixed one names the missing ones
+        kind = "config" if len(missing) == len(IDENTITY_VARIABLES) else "mixed"
+    text = _IDENTITY_WARNINGS[kind].format(names=_prose_names(missing),
+                                          verb="is" if len(missing) == 1 else "are")
+    return {"source": kind, "missing": missing, "message": text}
 
 
 def _fail_closed(cwd, who, root, environment, failed, now, identity_reported=True):
@@ -721,11 +786,12 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                      "identityPresent")),
                 "dependencyHookGap": None,
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": False,
-                "markerWritten": marked,
+                "markerWritten": marked, "identityWarning": None,
                 # axis: the unread message says the account is paused exactly when a marker for it is on disk after the judgment, an earlier one included, never the not-paused sentence beside a marker that still pauses
                 "message": _UNREAD.format(standing=_standing(cwd, who, root, marked))}
 
     results, local_placed, pin, gap = _judge_parts(obj, environment, cwd, root, today)
+    warning = identity_warning(obj, results["identityPresent"])
     identity_reported = isinstance(obj.get(IDENTITY_FIELD), dict)
     # axis: a valid pin hook's pin part replaces the version part
     failed = [part for part, key in (("environment", "environmentMatches"),
@@ -769,20 +835,23 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         standing = _standing(cwd, who, root, marked)
         return {"action": "failed", "results": results, "dependencyHookGap": gap,
                 "failedParts": failed, "recordWritten": written, "settingSwitchedOff": False,
-                "markerWritten": marked,
+                "markerWritten": marked, "identityWarning": warning,
                 "message": _failed_message(
                     failed, standing, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
                     identity_reported=identity_reported, pin=pin,
                     cloud_commit=obj.get("pluginCommit"), hook_gap=gap,
                     # axis: an identity the session never reported is not a missing one
                     **({"identity": _local_identity(cwd)}
-                       if "identity" in failed and identity_reported else {}))}
+                       if "identity" in failed and identity_reported else {}))
+                + ("" if warning is None else "\n\n" + warning["message"])}
     on = cloud_setup.read(cwd, who, root)["setting"] is True
     ending = (_PASSED_ON if on else _PASSED_OFF).format(project=name)
     return {"action": "passed", "results": results, "dependencyHookGap": None,
             "failedParts": [], "recordWritten": True,
-            "settingSwitchedOff": False, "markerWritten": False,
-            "message": _PASSED.format(version=obj["pluginVersion"]) + ending}
+            "settingSwitchedOff": False, "markerWritten": False, "identityWarning": warning,
+            # axis: a passing check whose identity is not wholly from the four variables says so
+            "message": (_PASSED.format(version=obj["pluginVersion"])
+                        + ("" if warning is None else warning["message"] + "\n\n") + ending)}
 
 
 def _refusal(reason, message, **more):
@@ -815,7 +884,7 @@ def _fallback_line(nonce):
 def _check_prompt(nonce, issue):
     prompt = _CHECK_PROMPT.format(plugin_dir=cloud_pass.CLOUD_PLUGIN_DIR, nonce=nonce,
                                   fallback=_fallback_line(nonce))
-    return prompt + (_CHECK_POST.format(issue=issue) if issue is not None else "")
+    return prompt + _CHECK_POST.format(issue=issue)
 
 
 def _repo_root(cwd, env=None):
@@ -825,23 +894,49 @@ def _repo_root(cwd, env=None):
         return os.path.abspath(cwd)
 
 
-def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120, nonce=None):
+def _issue_resolves(repo_root, number):
+    """True only when GitHub answers for this issue number in this repository's slug."""
+    try:
+        import stack_check
+        slug, refusal = stack_check.resolve_repo_slug(repo_root)
+        if refusal is not None or not slug:
+            return False
+        done = subprocess.run(["gh", "api", "repos/%s/issues/%d" % (slug, number)],
+                              capture_output=True, text=True, timeout=60)
+        if done.returncode != 0:
+            return False
+        body = json.loads(done.stdout)
+        return isinstance(body, dict) and body.get("number") == number
+    except Exception:
+        return False
+
+
+def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120, nonce=None,
+          issue_reader=None):
     """Start the check session in the environment whose id the owner gave. Never raises for an
     expected failure; nothing is spawned unless every refusal below has been passed."""
     # axis: every check session names the environment id the owner gave, and only a well-formed one
     if not _environment_ok(environment):
         return _refusal("check-environment-invalid", _ENVIRONMENT_NEEDED)
-    number = None
-    if issue is not None:
-        number = _issue_number(issue)
-        if number is None:
-            return _refusal("check-issue-invalid",
-                            "The issue number must be a positive whole number.")
+    # axis: no issue means no readable result path, so the check is refused before anything is spawned
+    if issue is None:
+        return _refusal("check-issue-required", _ISSUE_REQUIRED)
+    number = _issue_number(issue)
+    if number is None:
+        return _refusal("check-issue-invalid",
+                        "The issue number must be a positive whole number.")
     if nonce is None:
         nonce = secrets.token_hex(8)
     elif not (isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce)):
         return _refusal("check-nonce-invalid",
                         "The check's nonce must be 8 to 64 letters and digits.")
+    try:
+        readable = (issue_reader or _issue_resolves)(_repo_root(cwd, env), number)
+    except Exception:
+        readable = False
+    # axis: an issue that does not resolve is no readable result path either
+    if readable is not True:
+        return _refusal("check-issue-unreadable", _ISSUE_UNREADABLE % number)
     name = _CHECK_SESSION_PREFIX + nonce[:8]
     cell = model_registry.resolve_dispatch("mechanical", "claude", None)
     if cell.get("ok") is not True:
@@ -874,7 +969,7 @@ def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120,
     session_id, session_url = got
     return {"action": "started", "reason": None, "environment": environment, "nonce": nonce,
             "sessionName": name, "sessionId": session_id, "sessionUrl": session_url,
-            "issue": number, "message": _STARTED}
+            "issue": number, "message": _STARTED.format(issue=number)}
 
 
 def _print(result):
