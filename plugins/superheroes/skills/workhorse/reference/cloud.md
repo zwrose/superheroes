@@ -15,6 +15,7 @@
   - [The cloud container](#the-cloud-container)
   - [Verify: cloud-only failures](#verify-cloud-only-failures)
   - [Terminal comments: handback, stop, park](#terminal-comments-handback-stop-park)
+  - [Text changed in transit](#text-changed-in-transit)
   - [Handback](#handback)
   - [The gh calls on a cloud build's path](#the-gh-calls-on-a-cloud-builds-path)
 
@@ -379,6 +380,25 @@ The refusal at intake keeps its own header (§ Intake). It is not one of these.
 
 What the advisor does with them is the advisor's: `skills/showrunner/reference/wave-watch.md` and
 `skills/showrunner/reference/orchestration.md`.
+
+## Text changed in transit
+
+The cloud egress can change text on its way to GitHub, besides appending its footer: it has been
+seen deleting a `!` directly before a `[` when a `]` follows anywhere later in the body. So every
+plugin write reads its text back and compares it with what it sent. `cloud_builder.py post` and
+`edit`, `pr_comment.py upsert` and `review_record.py write` return `transit`: `matched`, `changed`
+(naming the changed spans) or `not-checked` (the read-back could not be made). Unless it matched,
+the result also carries a `transitLine`.
+
+After a write made through the session's GitHub tools, run
+`python3 -B <plugin root>/lib/cloud_builder.py readback --repo <o>/<r> --comment-id <id> --sent-file <file>`
+(or `--pr <n>` for a PR body) with the file you sent. Do this for the handback, every park, the review
+receipt and the PR body at least.
+
+Copy every `transitLine` into the build record's Disclosed degradations and into the handback
+comment, as it is. A line names what changed, so the vet grades that text from your committed file
+or the engine artifact (`skills/showrunner/reference/vet-receipt.md`). No line means the read-back
+matched.
 
 ## Handback
 

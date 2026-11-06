@@ -22,6 +22,7 @@ switching, never a lane already running.
 
 ### Before you upgrade
 
+- **After switching.** **Plugin writes to GitHub are read back, and their results and the review record carry new transit keys; a caller matching an exact result dict adds them, and a cloud builder runs the new `cloud_builder.py readback` verb after a write through its own GitHub tools.** Nothing else is owed. See [Cloud: text changed in transit is flagged](#cloud-text-changed-in-transit-is-flagged).
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **`vet_slot.py write` and `check` accept a PR body with no build record and no builder section (a dependency bump, a bot's PR): `write` adds the advisor-vet slot at the end of the body, or writes into the one it added before, and reads the follow-up list as none; `check` reads it as having no follow-ups. Advisors stop hand-stamping markers into such a body.** Nothing else is owed. See [Vet slot: a PR with no build record takes the verdict](#vet-slot-a-pr-with-no-build-record-takes-the-verdict).
@@ -38,6 +39,20 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A break-it probe the verifier refuted, kept as a repeat of an earlier fixed finding, no longer ends the review `cannot-certify` for a test that was never committed; its `breakItKept` row reads `not-required` with reason `refuted-probe`, and a new fail-closed row `restore-shadowed-by-refuted-probe` can appear.** Nothing is owed. See [Review: a refuted break-it probe no longer leaves the review unable to certify](#review-a-refuted-break-it-probe-no-longer-leaves-the-review-unable-to-certify).
 - **After switching.** **The cloud check's message warns when the git identity it passes does not come from all four `GIT_AUTHOR_*`/`GIT_COMMITTER_*` variables, and its report line gains an `identitySource` field (the names of the variables set, never values).** Nothing is owed for a project whose cloud builds commit under the platform's own identity; a project that sets its own identity with a setup command moves it to the environment's variables. See [Cloud check: an identity from git config alone carries a warning](#cloud-check-an-identity-from-git-config-alone-carries-a-warning).
 - **After switching.** **A fix round no longer hands a PR back with `fix-surface-unknown` for a rename, binary file or git-quoted name the fix did not touch.** Nothing is owed. See [Review: a delta round reads only the diff sections the fix changed](#review-a-delta-round-reads-only-the-diff-sections-the-fix-changed).
+
+### Cloud: text changed in transit is flagged
+
+A cloud session's GitHub egress deletes a `!` directly before a `[` when a `]` follows later in the
+body, and nothing noticed, so a vet could grade changed text as what the builder wrote. Every plugin
+write now reads its text back and compares it with what it sent, tolerating line endings, trailing
+whitespace and one trailing cloud footer only. New result keys: `transit` and `transitLine` on
+`cloud_builder.py post` and `edit`, the new `readback` verb and `pr_comment.py upsert`; `transit`,
+`transitChecks` and `transitLine` on `review_record.py write`; `transit` on `reserve_extra_audit` and
+`reservationTransit` on the extra-audit verb; `transit` on a refused PR-body publish receipt. A
+review record carries `sentSha256`, and `read` adds `transitDamage.sentHashMatches: false` when the
+stored record no longer matches it. `vet_slot.py write` now accepts a read-back with one trailing
+cloud footer, and its `write-unconfirmed` detail names the changed spans. The vet grades flagged text
+from its source (`skills/showrunner/reference/vet-receipt.md`).
 
 ### Cloud check: an identity from git config alone carries a warning
 
