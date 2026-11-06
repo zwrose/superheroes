@@ -212,6 +212,25 @@ def _bind(ran, run_dirs, engine_run):
     return {k: v[0] for k, v in hits.items() if len(v) == 1}
 
 
+def _watchdog_ends(run_dirs, reviewers, read_ends):
+    """The silence-watchdog ends of every run dir, each as {seat, attempt, silentSeconds}. A dir is read whether or not a
+    reviewer row binds it; a dir whose reader raises or returns an error is skipped and the rest still read."""
+    out = []
+    for d in dict.fromkeys(run_dirs):
+        try:
+            ends, error = read_ends(d)
+            if error:
+                continue
+            name = next((v.get("name") for v in reviewers if v.get("runDir") == d and v.get("name")), None)
+            base = os.path.basename(d.rstrip(os.sep))
+            # axis: a dir no reviewer row binds (a forfeited seat's) is still read, and named by its role and dir — see bite-proof record i2375_c_watchdog_ends
+            out += [{"seat": name or f"{e.get('role') if isinstance(e.get('role'), str) and e['role'] else 'unknown'} ({base})",
+                     "attempt": e["attempt"], "silentSeconds": e["silentSeconds"]} for e in ends]
+        except Exception:
+            continue
+    return out
+
+
 def _figure(obs):
     """(tokens, wallSeconds) when the observation holds both as a non-negative number (a bool, negative or missing one is none)."""
     t, w = (obs.get("tokens"), obs.get("wallSeconds")) if isinstance(obs, dict) else (None, None)
@@ -223,7 +242,8 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
     """The `sessionCost` of the reviewer runs this session's journal shows dispatched, each run once, every round and attempt.
 
     A run is a recorded review row with a runner nonce, or a `record-result`; its identity is the nonce, else the slot.
-    Its figures come from the engine record whose nonce it carries, never from `_bind`. `hand` names the runs of a
+    Its figures are the every-attempt total (`attemptsCost`) of the engine record whose nonce it carries, never from
+    `_bind`; a record without one gives no figure. `hand` names the runs of a
     hand-submit session (no journaled seat), each counted without a figure."""
     runs, seats = {}, {}
     for r in rows:
@@ -257,7 +277,8 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
         if isinstance(n, str) and n:
             if n in seen:
                 clash.add(n)  # two different run dirs claim one nonce: no figure for it
-            seen[n] = rec.get("observation")
+            # axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run without one — see bite-proof record i2381_every_attempt
+            seen[n] = rec.get("attemptsCost")
     entries = [(name, None if nonce is None or nonce in clash else _figure(seen.get(nonce))) for name, nonce in runs.values()]
     entries += [(name, None) for name in hand]
     for name, fig in entries:
@@ -1315,6 +1336,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                                                if r.get("cmd") == "submit" and r.get("outcome") == "accepted"
                                                and r.get("phase") == round_phases.P_SYNTHESIS and _int(r.get("round"))})
     session_cost = _session_cost(rows, extras.get("runDirs", []), review_record._readers(readers)["engine_run"], hand, session_dir, state)
+    watchdog_ends = _watchdog_ends(extras.get("runDirs", []), reviewers, review_record._readers(readers)["watchdog_ends"])
     checked = list(extras.get("checked", [])) + ([HAND_SUBMIT_NOTE] if by_hand else [])
     pr_body_line = pr_body_stage.record_line(session_dir)
     if pr_body_line is not None:
@@ -1372,6 +1394,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             **({"outsideThisPR": _with_recovered_outside(state.get("outsideThisPR"), recovered_outside, swept_outside)}
                if recovered_outside or swept_outside else {}),
             **({"provenCopies": proven_copies} if proven_copies else {}),
+            **({"silenceWatchdogEnds": watchdog_ends} if watchdog_ends else {}),
             "reviewers": reviewers, "sessionCost": session_cost, "makers": makers, "findings": findings, "rawFindingsFiles": raw,
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),

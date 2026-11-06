@@ -155,7 +155,11 @@ def test_sanitized_view_notice_points_seats_at_absolute_paths_outside_the_view()
     assert "their absence is NOT a finding" not in notice
     assert "Where your instructions name" in notice
     assert "CLAUDE.md or its core and review-crew files" in notice
-    assert "calibration" not in notice
+    # The strip line names calibration only to say the list never means a seat had none (#2364).
+    assert "so this list never means a seat had no calibration" in notice
+    assert "calibrationRead is the measurement" in notice
+    assert notice.count("calibration") == notice.count("calibration files") + notice.count(
+        "had no calibration") + notice.count("calibrationRead")
 
 
 @pytest.mark.parametrize("line", [

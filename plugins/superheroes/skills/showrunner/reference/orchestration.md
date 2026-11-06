@@ -124,20 +124,65 @@ lane's `started` record, and returns once the session exists. It does not wait f
   nothing and ends the lane. A result whose reason begins `terminalization-failed:` means the launcher
   could not confirm it ended the lane. Read the ledger to see whether the lane is ended or still
   live before you reconcile it or launch the issue again. The launcher never pushes.
-- The command cannot be told what to start from, and the platform starts the session from the
-  checkout's commit. So the launch also refuses unless the checkout is on a branch whose local head
-  and whose tip on the remote are both the base commit. `launch-cloud-checkout-unreadable` fires
-  when the branch or the head cannot be read, a detached head included.
-  `launch-cloud-checkout-off-base` fires when the local head, or the branch's tip on the remote,
-  is not the base. `launch-cloud-checkout-branch-not-on-remote` fires when the remote has no such
-  branch, and `launch-cloud-checkout-remote-unchecked` when the remote could not be asked for its
-  tip. The refusal names the checkout, its branch, its head and the base, and the launcher never
-  changes the checkout. These refusals never fall back to the owner's machine. The advisor tells the
-  owner the checkout, branch and base, and launches again once the owner has put the checkout on the
-  base and pushed it.
-- The launcher runs the command from its checkout, which must be a folder the platform's command line
-  already trusts. In an untrusted folder the command waits on its trust question until the launch's
-  time limit, and the launch reads `cloud-session-unconfirmed`.
+- The command cannot be told what to start from. The platform starts the session from the branch of
+  the folder the command runs in, as that branch stands on the remote. So the launcher runs the
+  command in its own folder, never in the project's primary checkout. The folder is a separate clone
+  the launcher owns, at
+  `<worktrees root>/<project tag>/cloud-launch-<first 12 hex of the project identity>`. The
+  worktrees root is the one build worktrees use (`SUPERHEROES_WORKTREES_ROOT`, else the worktrees
+  folder in the home folder). The launcher only reads the primary checkout, for its origin URL and
+  its identity, and never moves it. The advisor never asks the owner to move, switch or push the
+  primary checkout for a cloud launch.
+- Under a lock on the folder, held from the repair through the cloud command, the launcher puts the
+  folder on the base. It checks that the folder is its own clone. It refuses if the folder has
+  uncommitted changes. It picks a remote branch whose tip is the base: the remote's default branch
+  when its tip is the base, otherwise the first such branch by name. An adoption also starts on the
+  base, the commit readiness checked, and its intake checks the adopted head out afterwards. It
+  fetches that branch, refuses if the folder's own branch has commits the target lacks or the
+  folder sits detached at a commit no ref in the folder holds and the primary checkout does not
+  keep under a ref or its HEAD (a commit the primary keeps came from setup), and checks the branch out at the target without
+  overwriting ignored files. Then it runs the checkout check against the folder: the local head and the branch's tip on
+  the remote must both be the base. Only then does it run the command in the folder. The launcher
+  never pushes.
+- The launcher never creates the folder at launch, because the platform's command line asks a trust
+  question in a folder it has not seen and the launch would wait on it. A folder that does not exist
+  refuses `launch-cloud-folder-missing`. A folder another launch holds locked past the wait refuses
+  `launch-cloud-folder-busy`. The checkout refusals, `launch-cloud-checkout-unreadable`,
+  `launch-cloud-checkout-off-base` and `launch-cloud-checkout-remote-unchecked`, apply to the
+  folder. They name it as `launchFolder` and carry a `folderRepair` reason when the repair stopped
+  them: `not-launcher-owned` (the path is not the launcher's own clone), `uncommitted-changes` (the
+  folder has changes), `no-branch-at-base` (no branch on the remote has the base as its tip),
+  `fetch-failed` (the fetch failed), `remote-moved` (the branch moved during the launch),
+  `local-commits` (the folder's branch, or the commit its detached head sits at, holds work the target lacks), `checkout-failed` (the
+  checkout would overwrite a file) and `lock-failed` (the lock file could not be reached). None of
+  these falls back to the owner's machine.
+- The advisor answers each refusal this way:
+  - `launch-cloud-folder-missing`: run the launch-folder step of the configure cloud setup sitting
+    (`skills/configure/reference/set-up.md` § The launch folder), then launch again.
+  - `uncommitted-changes` or `local-commits`: the owner looks at what is in the folder. Nothing
+    should write there, so each change is a surprise worth understanding before anything is removed.
+  - `checkout-failed`: the checkout would overwrite a file in the folder, an ignored file included.
+    The owner looks at the folder as for uncommitted changes.
+  - `no-branch-at-base`: push the base to a branch, or launch again on a current base. An adoption
+    whose base has moved sets its `baseCommit` to the adopted head.
+  - `launch-cloud-folder-busy`: launch again after the other launch returns.
+  - `not-launcher-owned`: the path is not the launcher's own clone (it may be a symlink, a linked
+    worktree, or a foreign or unmarked folder). The owner moves it aside and the setup step runs
+    again.
+  - `fetch-failed` or `lock-failed`, and `launch-cloud-checkout-remote-unchecked`: the remote or the
+    lock file could not be reached. Launch again once it can be.
+  - `remote-moved`: the branch moved during the launch. Launch again.
+  - `launch-cloud-checkout-unreadable` or `launch-cloud-checkout-off-base` with no `folderRepair`,
+    and `launch-cloud-checkout-branch-not-on-remote`: these come from the last check, so the folder
+    or its branch changed after the repair. Launch again, and if it repeats, the owner looks at the
+    folder.
+  - The setup step's own refusals (`launch-cloud-folder-unresolvable`,
+    `launch-cloud-folder-origin-unreadable`, `launch-cloud-folder-create-failed` and
+    `launch-cloud-folder-not-launcher-owned`) are covered in `skills/configure/reference/set-up.md`.
+- The folder must be one the platform's command line already trusts. The owner grants that once, in
+  the setup sitting, by opening Claude Code in the folder and accepting the trust question. In an
+  untrusted folder the command waits on its trust question until the launch's time limit, and the
+  launch reads `cloud-session-unconfirmed`.
 - The launch prompt is the composed order of a local launch, with the standing rulings verbatim, plus
   four lines between the issue pointer and the rulings: `Place: cloud session`,
   `Advisor plugin version: <version>`, `Cloud environment: <id>` and `Base commit: <sha>`.
@@ -616,9 +661,9 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   issue that names the lane's launch id (post `cloud_builder.py superseded-notice --launch-id <lane>`'s
   comment first), so the original builder stands down when it wakes. A lane launched before the stand-down check
   existed (its reserved premise lacks the launcher's `standDown` stamp) still needs the session
-  read, limit or not. An adoption's cloud launch runs from a checkout at
-  its adopted head (`adoptsHead`), so no pointer branch at the premise's `baseCommit` is needed; a
-  launch that is not an adoption keeps the base rule. Every read the launcher makes for this fails
+  read, limit or not. Every cloud launch, an adoption
+  included, starts on a branch whose tip is its `baseCommit`, and an adoption whose base has moved
+  sets its `baseCommit` to the adopted head. Every read the launcher makes for this fails
   closed:
   one that fails or is ambiguous keeps the lane in the check.
   `adopt-original-session-live` means a lane that could still write the branch has a session still

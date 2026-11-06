@@ -295,6 +295,10 @@ none. Before building a PR or stack sheet, the advisor reads the project's Canon
   § Decided for you, each of which means its real consequence needs no card of its own: another
   card on the same sheet carries it; a fix in another layer of the same stack, named in the ground,
   removed it; or a Canon entry, cited by id, answers it. Doubt keeps it a card.
+- A leftover whose PR body carries `fixed-above #<PR> <commit>` for it, on a stack sheet covering that
+  higher PR, is shown in caught as fixed above by the build itself: give it no `leftovers` or
+  `craftDeterminations` entry and its bullet no `accounting` entry. The craft ground "a fix in another
+  layer of the same stack" stays for a finding the body does not mark that way.
 - An acceptance a Canon ruling already covers is never an item. The sheet's `summary` cites it once,
   with the entry id.
 - A sheet with no card whose every acceptance is accounted to a Canon ruling reads the Canon line:
@@ -400,7 +404,8 @@ entry, cited by id, answers it. Each is an entry of the sheet's
 below the cards, unfolded, and is left out when it is empty. Each entry shows its title, its ground, its
 reason and one control, **Make this mine**. An entry never counts toward the accepted items. The advisor
 writes each one in the `craftDeterminations` key of its input, whose shape is in the docstring of
-`lib/pr_sheet.py`. The list's words are in the `pr` block of `sheet-words.json`.
+`lib/pr_sheet.py`. The list's words are in the `pr` block of `sheet-words.json`. A finding its body marks
+fixed above is not a decided-for-you entry; it is in caught.
 
 A carried sheet keeps the earlier sheet's entries. The builder refuses a carry that adds a determination,
 changes one, or turns one back into a card, because each of those changes what the owner decides.
