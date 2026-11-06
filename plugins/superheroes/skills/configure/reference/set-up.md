@@ -738,6 +738,23 @@ launching machine's.
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text
    ```
 
+**The launch folder.** A cloud launch runs the platform's command in a folder the launcher owns, a
+separate clone of the project, so the project's primary checkout is never moved for a launch. Make
+that folder once for this project:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/launcher.py" cloud-launch-folder --repo-root .
+```
+
+On `ok`, tell the owner the `folder` and the one-time trust step: open Claude Code once in that
+folder (`cd <folder>` and then `claude`), accept the trust question, and exit. Never run it for the
+owner, and never answer the trust question for them. On a refusal, say its `reason` and stop. A path
+that exists but is not the launcher's own clone is left alone, so the owner moves it aside and the
+step runs again. This is done once per project per machine. Without it every cloud launch refuses
+`launch-cloud-folder-missing`, and a folder that exists but was never trusted reads
+`cloud-session-unconfirmed`.
+
 The check also asks the cloud session's git for a commit identity. It passes when git, with
 guessing turned off (`user.useConfigOnly`), resolves both an author and a committer identity from
 any source: the platform's own identity, the `GIT_AUTHOR_*` and `GIT_COMMITTER_*` variables, or git
