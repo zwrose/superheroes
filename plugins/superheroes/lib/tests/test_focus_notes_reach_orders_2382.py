@@ -132,7 +132,7 @@ def test_t1_scoped_finder_order_carries_the_focus_notes(tmp_path, monkeypatch):
     texts = _order_texts(session_dir, state, RD.P_SCOPED)
     assert len(texts) == 1, texts
     (text,) = texts.values()
-    assert "- Focus: check the fix order item 3" in text, text[:1500]
+    assert "- Focus: check the fix order item 3" in text.split("\n"), text[:1500]
     rows = _round_rec(state).get("focusNotesNotCarried") or []
     assert not any(r.get("phase") == RD.P_SCOPED for r in rows), rows
 
@@ -199,6 +199,49 @@ def test_t5_no_focus_notes_changes_nothing(tmp_path, monkeypatch, notes):
     assert "focusNotesNotCarried" not in _round_rec(state), _round_rec(state)
     degraded, _skipped = RDISC.build_degraded_prose(state, RD.RECEIPT_FORM_CERTIFIED)
     assert not any("focus-notes-not-carried" in line for line in degraded), degraded
+
+
+def _scoped_render_context(focus_notes):
+    """A direct `render_order` context for the scoped finder; `focus_notes=None` leaves the key out."""
+    session = "/tmp/superheroes-session-t7"
+    rubric = os.path.join(os.path.dirname(_LIB), "rubric", "review-base.md")
+    ph = {
+        "HUNKS_PATH": os.path.join(session, "round-2", "scoped-hunks.json"),
+        "FIX_DIFF_PATH": os.path.join(session, "round-2", "fix-delta.diff"),
+        "RUBRIC_PATH": rubric,
+        "CORE_PATH": "(Core calibration not resolved for this project)",
+        "LAYER_PATH": "(Review-crew layer calibration not resolved for this project)",
+        "VERIFICATION_ROOT": "/home/user/proj",
+        "CLAUDE_MD_PATH": "/home/user/proj/CLAUDE.md",
+        "FINDINGS_OUTPUT_PATH": os.path.join(session, "round-2", "scoped-findings.json"),
+        "CHANNEL": "file",
+    }
+    if focus_notes is not None:
+        ph["FOCUS_NOTES"] = focus_notes
+    return {
+        "session_dir": session, "round": 2, "attempt": 0,
+        "diff_path": os.path.join(session, "round-2", "diff.txt"),
+        "rubric_path": rubric, "core_path": "", "layer_path": "", "repo_root": "/home/user/proj",
+        "landing_path": os.path.join(session, "round-2", "landing", "scoped-finder.a0.payload.json"),
+        "envelope_stub_path": os.path.join(session, "round-2", "stubs", "seat.json"),
+        "ratified_residuals": "- Flaky integration test in CI lane B is accepted",
+        "residuals_provenance": "Residuals below are read from the review base commit (base-pinned).",
+        "residuals_read_failure": None,
+        "threat_model": "Attackers can forge session cookies.",
+        "threat_model_read_failure": None,
+        "standing_rulings": [], "standing_rulings_read_failure": None,
+        "payload": {}, "host_seat": True, "placeholders": ph,
+    }
+
+
+def test_t7_whitespace_only_notes_render_the_scoped_order_byte_identically_to_no_notes():
+    absent, reason_a = RO.render_order(RD.P_SCOPED, "seat", _scoped_render_context(None))
+    blank, reason_b = RO.render_order(RD.P_SCOPED, "seat", _scoped_render_context("   "))
+    assert reason_a is None and reason_b is None, (reason_a, reason_b)
+    assert absent == blank
+    assert "- Focus:" not in absent
+    (conv,) = [line for line in absent.split("\n") if line.startswith("- Project conventions:")]
+    assert ("%s\n\n## Your assignment" % conv) in absent, absent[:1500]
 
 
 def test_t6_a_phase_emitted_twice_in_a_round_unions_its_seats_and_keeps_earlier_rows(

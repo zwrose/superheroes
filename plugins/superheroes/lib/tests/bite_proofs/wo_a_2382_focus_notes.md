@@ -36,22 +36,29 @@ FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test
 
 ## G2 — `dispatch-scoped-finder.md` focus-line placeholder (axis: the template carries notes)
 
-- **Neutralization:** deleted the placeholder line (line 12) after `- Project conventions: …`.
-- **Nodes:** `T::test_t1_scoped_finder_order_carries_the_focus_notes` and `T::test_t4_carrying_phases_are_derived_from_the_templates`
-- **Raw red (filtered to `E` lines and summary, see above):**
+- **Position (re-done for #2382 WO-B):** the placeholder now ends the conventions line itself (no standalone line), so a session with no notes renders byte-identically to the base.
+- **Neutralization:** removed the placeholder appended to the end of the `- Project conventions: …` line (line 11): `…, and the project profile.{{FOCUS_CONTEXT_LINE}}` → `…, and the project profile.` (placeholder written here by name; the template uses two braces each side).
+- **Node (re-run alone):** `T::test_t1_scoped_finder_order_carries_the_focus_notes`. (T4 also goes red on this neutralization by construction — it compares the template text to `order_carries_focus` — but it was not re-run for this re-do.)
+- **Raw red (full pytest output, the order text cut by pytest at 1500 chars as the test writes it; temp paths are the sandbox's):**
 
 ```
-E       assert '- Focus: check the fix order item 3' in 'You are the [scoped finder](../glossary.md#scoped-finder) ...
-E       AssertionError: {'dispatch-panel'}
-E       assert {'dispatch-panel'} == {'dispatch-pa...coped-finder'}
-E         Extra items in the right set:
-E         'dispatch-scoped-finder'
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_t1_scoped_finder_order_carries_the_focus_notes ______________
+>       assert "- Focus: check the fix order item 3" in text.split("\n"), text[:1500]
+E       AssertionError: You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round. ...
+E         - Project conventions: CLAUDE.md at (this project has no CLAUDE.md at /tmp/claude-0/pytest-of-root/pytest-14/test_t1_scoped_finder_order_ca0), and the project profile.
+E         
+E         ## Your assignment
+E       assert '- Focus: check the fix order item 3' in ['You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round. ...
 FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test_t1_scoped_finder_order_carries_the_focus_notes
-FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test_t4_carrying_phases_are_derived_from_the_templates
-2 failed in 1.28s
+1 failed in 1.40s
 ```
 
-- **Restore:** inverse edit re-added the line. **Restore receipt:** grep shows `dispatch-scoped-finder.md:12:` followed by the focus-line placeholder.
+(Elided: the middle `## Input` list lines and the repr of the split list; nothing reconstructed.)
+
+- **Restore:** inverse edit re-appended the placeholder. **Restore receipt:** grep shows `dispatch-scoped-finder.md:11:- Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.{{FOCUS_CONTEXT_LINE}}`.
+- **Raw green:** `. [100%]` / `1 passed in 1.29s` (same node).
 
 ## G3 — `escape_placeholder_syntax` call in `focus_context_line` (axis: placeholder-syntax notes render)
 
@@ -135,6 +142,36 @@ FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test
 ```
 
 - **Restore:** inverse edit. **Restore receipt:** grep shows `round_driver.py:14366:    merged = [dict(row) for row in prior if isinstance(row, dict)] if isinstance(prior, list) else []`.
+
+## G8 — the `"\n" +` prefix in the `P_SCOPED` branch of `_derived_placeholders` (axis: with notes, the focus text is a whole line of its own)
+
+- **Detector tightened (said plainly):** T1 previously asserted a substring (`"- Focus: …" in text`), which would pass with the notes glued onto the conventions line. It now asserts `"- Focus: check the fix order item 3" in text.split("\n")`, i.e. some line of the order is exactly that text.
+- **Neutralization (code, not template):** `round_orders.py:597` `ph["FOCUS_CONTEXT_LINE"] = "\n" + focus_line if focus_line else ""` → `ph["FOCUS_CONTEXT_LINE"] = focus_line if focus_line else ""`.
+- **Node:** `T::test_t1_scoped_finder_order_carries_the_focus_notes`
+- **Raw red (full pytest output, order text cut at 1500 chars by the test itself; temp paths are the sandbox's):**
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_t1_scoped_finder_order_carries_the_focus_notes ______________
+>       assert "- Focus: check the fix order item 3" in text.split("\n"), text[:1500]
+E       AssertionError: You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round. ...
+E         - Project conventions: CLAUDE.md at (this project has no CLAUDE.md at /tmp/claude-0/pytest-of-root/pytest-16/test_t1_scoped_finder_order_ca0), and the project profile.- Focus: check the fix order item 3
+E         
+E         ## Your assignment
+E       assert '- Focus: check the fix order item 3' in ['You are the [scoped finder](../glossary.md#scoped-finder) for a delta review round. ...
+FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test_t1_scoped_finder_order_carries_the_focus_notes
+1 failed in 1.22s
+```
+
+(Elided: the middle `## Input` list lines and the repr of the split list; nothing reconstructed.)
+
+- **Restore:** inverse edit put the prefix back. **Restore receipt:** grep shows `round_orders.py:597:            ph["FOCUS_CONTEXT_LINE"] = "\n" + focus_line if focus_line else ""`.
+- **Raw green:** `. [100%]` / `1 passed in 1.14s` (same node).
+
+## G9 (supplementary, no neutralization run) — T7 whitespace edge
+
+`T::test_t7_whitespace_only_notes_render_the_scoped_order_byte_identically_to_no_notes` was added by #2382 WO-B and passes (`11 passed` for the file). No neutralization was run for it; the golden fixture `test_golden_render_matches_fixture[dispatch-scoped-finder]` is the byte-identity proof against the base, and T7 covers the whitespace-only edge. Unproven by bite.
 
 ## Not proven
 

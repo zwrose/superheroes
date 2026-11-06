@@ -592,7 +592,9 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
         if phase == round_phases.P_SECOND_TEST:
             ph = _test_role_derived_placeholders(ph)
         if phase == round_phases.P_SCOPED:
-            ph["FOCUS_CONTEXT_LINE"] = focus_context_line(ph)
+            # The scoped template carries the line at the end of the conventions line, so a session with no notes renders byte-identically.
+            focus_line = focus_context_line(ph)
+            ph["FOCUS_CONTEXT_LINE"] = "\n" + focus_line if focus_line else ""
     return ph
 
 
