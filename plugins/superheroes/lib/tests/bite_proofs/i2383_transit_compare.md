@@ -16,6 +16,7 @@ The restore receipt for every element is `git diff -- plugins/superheroes/lib/cl
 | E6 | `cloud_builder.py` `edit_comment`, the `_with_transit` return | the rewrite is read back and the result carries `transit` | `test_edit_comment_reports_a_changed_read_back` |
 | E7 | `pr_comment.py` `upsert`, `found = held.get("body") ...` | the final body sent is compared with what GitHub holds, not with itself | `test_upsert_create_reports_a_changed_read_back` |
 | E8 | `cloud_builder.py` `readback`, the `_with_transit` call | the verb compares the held text with the sent file, not the file with itself | `test_readback_by_comment_id_changed` |
+| E9 | `cloud_builder.py` `transit_compare`, the `elif session_footer:` branch over `_SESSION_FOOTER_RE` | one trailing session-form footer (the one the egress appends to a pull request body) is tolerated; a second is a change | `test_one_trailing_session_footer_is_tolerated`, `test_a_second_session_footer_reads_changed` |
 
 Not separately neutralized, so unproven by this record: the `transit_compare` branch for a non-string `sent`, the `except Exception` branch (`the comparison failed`), the `\r\n` normalization, the cap on `changes` and the excerpt length, `transit_line`'s own branches, `read_pr_body`'s null-as-empty rule and the `--pr` path of `readback`, and `upsert`'s `except Exception` fall-through to `found = None` (each is asserted by a test in the suite but was not run against a mutation).
 
@@ -282,6 +283,101 @@ FAILED plugins/superheroes/lib/tests/test_transit_readback_2383.py::test_readbac
 **restore:** the inverse Edit put `return _with_transit({"ok": True}, _read_text(sent_path), found)` back.
 
 **restore receipt:** `git diff -- plugins/superheroes/lib/cloud_builder.py plugins/superheroes/lib/pr_comment.py` printed nothing (exit 0), and `git status --porcelain plugins/superheroes/lib/cloud_builder.py plugins/superheroes/lib/pr_comment.py` printed nothing (exit 0).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.25s
+```
+
+---
+
+## E9 — the session-footer allowance (added by work order A3)
+
+Two neutralizations, each its own red, each restored by the inverse Edit (never `git checkout`, `restore`, `reset` or `stash`) before the next. Run as for E1–E8, with the launcher's one-line `UV_NATIVE_TLS` deprecation warning dropped. The URL in the footer is a placeholder-free public host; the session id used in the tests is the made-up `01ABCxyz`; nothing in the captures is redacted.
+
+### E9a — drop the regex branch (detector: `test_one_trailing_session_footer_is_tolerated`)
+
+**neutralization** (`cloud_builder.py`, `transit_compare`, the `elif` can never fire):
+```python
+-        elif session_footer:
++        elif False:  # BITE-PROOF NEUTRALIZED
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert {'transit': '...i/code/ses'}]} == {'transit': 'matched'}
+      
+      Differing items:
+      {'transit': 'changed'} != {'transit': 'matched'}
+      Left contains 2 more items:
+      {'changeCount': 1,
+       'changes': [{'at': 9,
+                    'found': '\n'...
+      
+      ...Full output truncated, use '-vv' to show
+/home/user/wt-2383/plugins/superheroes/lib/tests/test_transit_readback_2383.py:146: AssertionError: assert {'transit': '...i/code/ses'}]} == {'transit': 'matched'}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_transit_readback_2383.py::test_one_trailing_session_footer_is_tolerated
+1 failed in 0.29s
+```
+
+**restore:** the inverse Edit put `elif session_footer:` back.
+
+**restore receipt:** `git diff -- plugins/superheroes/lib/cloud_builder.py` after the restore showed only the intended change; the restored lines, quoted from it:
+```
++        session_footer = _SESSION_FOOTER_RE.search(b)
+         if b.endswith(tail):
+ ...
++        elif session_footer:
++            b = b[:session_footer.start()].rstrip()
++            if a == b:
++                return {"transit": TRANSIT_MATCHED}
+```
+(the same diff also holds the added `_SESSION_FOOTER_RE` constant and the extended axis comment; no `BITE-PROOF NEUTRALIZED` text remained).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.27s
+```
+
+### E9b — make the regex branch remove every session footer (detector: `test_a_second_session_footer_reads_changed`)
+
+**neutralization** (`cloud_builder.py`, `transit_compare`, the branch loops until no session footer is left):
+```python
+         elif session_footer:
+-            b = b[:session_footer.start()].rstrip()
++            while session_footer:  # BITE-PROOF NEUTRALIZED
++                b = b[:session_footer.start()].rstrip()
++                session_footer = _SESSION_FOOTER_RE.search(b)
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert 'matched' == 'changed'
+      
+      - changed
+      + matched
+/home/user/wt-2383/plugins/superheroes/lib/tests/test_transit_readback_2383.py:153: AssertionError: assert 'matched' == 'changed'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_transit_readback_2383.py::test_a_second_session_footer_reads_changed
+1 failed in 0.59s
+```
+
+**restore:** the inverse Edit removed the `while` loop and put `b = b[:session_footer.start()].rstrip()` back.
+
+**restore receipt:** `git diff -- plugins/superheroes/lib/cloud_builder.py` after the restore showed only the intended change; the restored lines, quoted from it:
+```
++        elif session_footer:
++            b = b[:session_footer.start()].rstrip()
++            if a == b:
++                return {"transit": TRANSIT_MATCHED}
+```
 
 **raw green:**
 ```
