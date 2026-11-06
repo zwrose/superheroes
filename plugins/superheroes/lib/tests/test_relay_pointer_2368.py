@@ -362,6 +362,41 @@ def test_point_refuses_a_state_it_cannot_use_or_write(world, monkeypatch, tmp_pa
     assert out["ok"] is False and out["reason"] == "relay-state-unwritable" and _bytes(world) == before
 
 
+def test_a_point_refusal_says_nothing_was_sent_only_when_no_pointer_can_exist(world, monkeypatch, tmp_path):
+    # axis: nothingSent is True only for a refusal that proves the message has no pointer yet; an unreadable state, a pre-upgrade entry and an already-pointed message leave it open, since a pointer may have been sent
+    _ensure_alive(world)
+    _legacy(world)
+    composed = cr.compose(world.repo, world.config, "issue-77-abcd1234", "hello", env=world.env)
+    mid = composed["msgId"]
+    cid, url = _post(world, composed, 77)
+
+    def sent(msg_id=mid, comment=url, run=None):
+        out = cr.point(world.repo, msg_id, comment, env=world.env, run=run or world.gh)
+        assert out["ok"] is False, out
+        return out["reason"], out["nothingSent"]
+
+    assert sent(msg_id="nope") == ("message-unknown", True)
+    assert sent(comment="not a url") == ("comment-url-invalid", True)
+    assert sent(comment=comment_url(78, cid)) == ("comment-not-on-lane-issue", True)
+    assert sent(comment=comment_url(77, cid + 500)) == ("comment-missing", True)
+    assert sent(run=FakeGh(failure=(1, "gh: Server Error (HTTP 500)"))) == ("comment-unreadable", True)
+    world.comments[cid] = world.comments[cid] + "\n"
+    assert sent() == ("comment-altered", True)
+    world.comments[cid] = world.comments[cid][:-1]
+    assert sent(msg_id=LEGACY_ID) == ("not-a-pointer-message", False)
+    with monkeypatch.context() as patched:
+        patched.setattr(cr, "_save", lambda p, s: False)
+        assert sent() == ("relay-state-unwritable", True)
+    assert cr.point(world.repo, mid, url, env=world.env, run=world.gh)["ok"] is True
+    assert sent(comment=comment_url(77, cid + 1)) == ("pointer-already-composed", False)
+    assert sent(comment="not a url") == ("pointer-already-composed", False)
+    path = _state_file(world)
+    with open(path, "w") as fh:
+        fh.write("{not json")
+    assert sent() == ("relay-state-unreadable", False)
+    assert cr.point(str(tmp_path), mid, url, env=world.env, run=world.gh)["nothingSent"] is False
+
+
 # ---- row 9: compose -----------------------------------------------------------------------------
 
 def test_compose_writes_the_comment_body_file_byte_exact_and_records_its_hash(world):
@@ -592,7 +627,7 @@ def test_cli_point_prints_one_json_object_and_exits_1_on_refusal(world, capsys, 
     base = ["point", "--repo-root", world.repo, "--msg-id", composed["msgId"]]
     assert cr.main(base + ["--comment-url", "nope"]) == 1
     out = json.loads(capsys.readouterr().out)
-    assert out == {"ok": False, "reason": "comment-url-invalid"}
+    assert out == {"ok": False, "reason": "comment-url-invalid", "nothingSent": True}
     assert cr.main(base + ["--comment-url", url]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is True and out["relayMessage"].startswith("RELAY to %s (id %s):\n" % (SESSION, composed["msgId"]))

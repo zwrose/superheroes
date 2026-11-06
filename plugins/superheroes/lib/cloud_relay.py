@@ -440,10 +440,27 @@ def _pointed(entry):
             "relayMessage": "RELAY to %s (id %s):\n%s" % (entry.get("session"), entry["msgId"], entry["forward"])}
 
 
+# The `point` refusals that prove the message has no pointer yet, so nothing can have been sent for it: the URL and
+# lane checks and the comment read-back (each reached only on an entry with no pointer), a message the readable state
+# does not hold, and a final state write that failed (the pointer was never recorded or returned). Every other refusal
+# (an unreadable state, a pre-upgrade entry, `pointer-already-composed`, anything unnamed) leaves it open.
+_POINT_NOTHING_SENT = ("message-unknown", "comment-url-invalid", "comment-not-on-lane-issue", "comment-missing",
+                       "comment-unreadable", "comment-altered", "relay-state-unwritable")
+
+
 def point(repo_root, msg_id, comment_url, *, env=None, run=None):
     """Record the pointer to the comment the advisor posted from message `msg_id`'s body file. The comment is
     read back first and its sha256 must equal the one `compose` recorded; every refusal writes nothing. A repeat
-    with the same URL returns the stored result without a read."""
+    with the same URL returns the stored result without a read. Every refusal carries `nothingSent`: True only
+    when it proves the message has no pointer yet, so nothing was sent for it."""
+    out = _point(repo_root, msg_id, comment_url, env=env, run=run)
+    if out.get("ok") is False:
+        # axis: a point refusal reads nothingSent only when it proves the message has no pointer yet; an unreadable state, a pre-upgrade entry and pointer-already-composed leave it open — see bite-proof record wo_2368_relay_pointer.md
+        out["nothingSent"] = out.get("reason") in _POINT_NOTHING_SENT
+    return out
+
+
+def _point(repo_root, msg_id, comment_url, *, env=None, run=None):
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return refusal

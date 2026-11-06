@@ -133,3 +133,13 @@ def test_the_send_back_bullets_settle_by_nothing_reached():
     assert "a `point` refusal or `nothingReached: true`, do not run `sent`." in bullets, "the no-record retry"
     for reason in ("relay-silent", "relay-text-mismatch", "relay-send-unconfirmed", "relay-send-failed"):
         assert reason not in bullets, reason
+
+
+def test_a_point_refusal_is_retried_only_when_it_proves_nothing_was_sent():
+    # axis: wave-watch's retry rule and the send-back bullet each let a point refusal count as nothing sent only on nothingSent: true; one that reads false is checked, never composed again
+    wave_watch = _collapsed(_WAVE_WATCH)
+    assert "a `point` refusal that reads `nothingSent: true`, or `nothingReached: true`." in wave_watch, "the retry rule"
+    assert "`nothingSent: false` (`pointer-already-composed`, `not-a-pointer-message`, a relay state that could not be read)" in wave_watch, "the point step"
+    assert "Do not compose again; run `check` on this `msgId` and settle by its result." in wave_watch, "the point step"
+    bullets = _send_back_bullets()
+    assert "A `point` refusal counts here only when it reads `nothingSent: true`." in bullets, "the send-back bullet"

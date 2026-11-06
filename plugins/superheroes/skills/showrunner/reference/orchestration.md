@@ -416,9 +416,9 @@ record it, settled by the one rule in that section:
   automatically. `send-back` never lists the PR for
   sending again, but lists it under `uncertain` every time. A later plain `sent` with its `--park-id` records it.
 - After an `ensure` refusal, a `point` refusal or `nothingReached: true`, do not run `sent`. Nothing
-  reached the builder, and the PR stays listed for the next `send-back`. The one exception is the
-  `point` refusal `pointer-already-composed`: that message already has a pointer that may have been
-  sent, so run `check` on it and settle by its result, as above.
+  reached the builder, and the PR stays listed for the next `send-back`. A `point` refusal counts here
+  only when it reads `nothingSent: true`. On one that reads `nothingSent: false`, that message may
+  already have a pointer that was sent, so run `check` on it and settle by its result, as above.
 
 No further word from the owner is needed for any of this, except the one archive in step 4 above.
 On the `sendBack` path the message resumes a session that started after the renewal, which runs its

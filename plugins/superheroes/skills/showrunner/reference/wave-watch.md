@@ -590,15 +590,15 @@ with `--fix-order`, and it re-opens the watch only once `check` reads delivered 
    retype the file and never edit it. A change after compose, even one word, means writing a new
    answer file and composing a new message; never edit a composed one.
 4. `point --repo-root <root> --msg-id <msgId> --comment-url <url>`. It reads the posted comment back
-   and goes on only when its bytes match the composed file. Every refusal but one comes before this
-   message has any pointer, so it sends nothing. On
-   `comment-altered` the posted bytes changed: compose again from a new answer file. `comment-missing`
-   and `comment-unreadable` mean the comment could not be read back. `comment-url-invalid` and
-   `comment-not-on-lane-issue` mean the URL is not a comment on that lane's issue. On
-   `not-a-pointer-message` and `message-unknown`, this message cannot take a pointer: compose again.
-   The one exception is `pointer-already-composed`: this message already has a pointer, to the comment
-   the refusal names, and that pointer may have been sent. Do not compose again; run `check` on this
-   `msgId` and settle by its result. To repeat `point` safely, give it the URL it already holds. It returns `relayMessage` and `forward`: `relayMessage` is the relay's
+   and goes on only when its bytes match the composed file. Every refusal carries `nothingSent`.
+   `nothingSent: true` proves this message has no pointer yet, so nothing was sent for it: on
+   `comment-altered` the posted bytes changed, so compose again from a new answer file; `comment-missing`
+   and `comment-unreadable` mean the comment could not be read back; `comment-url-invalid` and
+   `comment-not-on-lane-issue` mean the URL is not a comment on that lane's issue; on `message-unknown`,
+   compose again. `nothingSent: false` (`pointer-already-composed`, `not-a-pointer-message`, a relay state
+   that could not be read) means this message may already have a pointer that was sent. Do not compose
+   again; run `check` on this `msgId` and settle by its result. To repeat `point` safely, give it the URL
+   it already holds. It returns `relayMessage` and `forward`: `relayMessage` is the relay's
    line `RELAY to <session> (id <msgId>):` and the one-line pointer, and `forward` is the pointer
    alone. Then print the whole composed `relayMessage`, never a truncated view such as `head` or the
    message id alone, so the text you send is text you have read.
@@ -620,8 +620,8 @@ owner the `say` sentence, or the refusal and its `detail`. Settle every send by 
 every section that points to this one: `delivered: true` is delivered; `nothingReached: true` means
 nothing reached the builder; anything else is uncertain, because the builder may hold the pointer.
 For an uncertain read, re-run `check` with a longer `--wait` before concluding. Retry once from
-`ensure` only when nothing can have reached the builder: an `ensure` refusal, a `point` refusal other
-than `pointer-already-composed`, or `nothingReached: true`. For anything else, never resend automatically.
+`ensure` only when nothing can have reached the builder: an `ensure` refusal, a `point` refusal that
+reads `nothingSent: true`, or `nothingReached: true`. For anything else, never resend automatically.
 A `relay-start-failed` naming an untrusted workspace means that account lacks the one-time setup step.
 
 **Delivered.** Run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
