@@ -54,6 +54,7 @@ if _LIB_DIR not in sys.path:
 
 import gh_pages  # noqa: E402
 import leftover_accepting  # noqa: E402
+import cloud_builder  # noqa: E402
 import md_fence  # noqa: E402
 import pr_body_regions  # noqa: E402
 import review_record  # noqa: E402
@@ -982,8 +983,11 @@ def _run_verb(verb, pr, repo, slot_file, run):
         readback = _read_body(run, pr, repo)
     except _Refusal as exc:
         raise _Refusal("write-unconfirmed", "%s; readback: %s" % (pushed, exc.detail))
-    if _normalize(readback) != _normalize(new_body):
-        raise _Refusal("write-unconfirmed", "%s; readback differs from the pushed body" % pushed)
+    # axis: the read-back is compared through the one transit comparison; one trailing cloud footer is tolerated, a lost character or a second footer is not — see bite-proof record i2383_transit_record
+    compared = cloud_builder.transit_compare(new_body, readback)
+    if compared["transit"] != cloud_builder.TRANSIT_MATCHED:
+        raise _Refusal("write-unconfirmed", "%s; readback differs from the pushed body: %s"
+                       % (pushed, cloud_builder.transit_line(compared)))
     return result
 
 
