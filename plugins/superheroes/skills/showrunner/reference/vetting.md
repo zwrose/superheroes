@@ -181,6 +181,16 @@ may be a genuine pre-contract PR or a current-contract body rewrite that dropped
 Retroactive creation applies **only** to pre-contract PRs, never as a way to re-seed a slot whose
 advisor write was dropped.
 
+**A PR no builder made has no slot to find.** A body with no build record and no builder section
+(a dependency bump, a bot's PR) is neither a failed stamp nor a pre-contract PR. Write the verdict
+with `vet_slot.py write` directly: it appends the `## Advisor vet` heading, the marker and your text
+at the end of the body, or replaces everything below the marker it added on an earlier vet, and it
+reads the follow-up list as none. Any builder section in the body (an owner-half heading, a
+build-record remnant, any `superheroes:` marker other than the advisor-vet marker) puts the body
+under the rules above, so a builder body that lost its build record is still refused. Inside your
+slot on such a PR the one builder heading you may write is `## What we're accepting`, where a READY
+verdict names the findings the review left for the owner.
+
 **The reminder is the one builder text you remove.** It is not an exception to "never the
 builder's prose". If you find your verdict and the reminder both present, the verdict wins: delete
 the reminder on that read.
