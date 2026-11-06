@@ -144,6 +144,8 @@ No owner prompt is possible, so every probe must pass on its own.
 3. Run `python3 -B <plugin root>/lib/cloud_builder.py github-channel --gh-probe-file <probe json> --tools-write ok`
    (or `failed`). Its result names the channel for the rest of the build: `gh` or `tools`.
 4. `cloud_builder.py post` writes through `gh` and is for a `gh`-channel session only.
+5. On the `tools` channel, every write you make through the session's GitHub tools is followed by
+   the `readback` check in § Text changed in transit.
 
 No channel at all (`no-github-channel`) is a park the builder cannot post. End the lane; the advisor
 reads the stopped lane. The reviewer pass's state is `python3 -B <plugin root>/lib/cloud_builder.py pass-state`.
@@ -284,7 +286,8 @@ final commit was reported by the session rather than read from the PR (`whatIsMi
 unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR
 as a comment naming the head it reviewed, leaves the PR not ready, and parks, naming the review
 record as missing. The park is also posted on the issue with `terminal --kind park` (§ Terminal
-comments). A record that was written and reads `not-reviewed` or `awaits-owner` for any other reason, such as
+comments). Each comment posted on this path (the lapsed or rejected notice, the receipt, the park)
+takes the read-back check in § Text changed in transit. A record that was written and reads `not-reviewed` or `awaits-owner` for any other reason, such as
 an owner-authorized go-ahead covering a missing review, is a written record: handback follows
 `skills/review-code/reference/review-record.md`.
 
@@ -371,7 +374,7 @@ comment whose first line is one fixed header. The headers are defined once, in `
 Write the comment's text to a file. Run
 `python3 -B <plugin root>/lib/cloud_builder.py terminal --kind handback|stop|park --text-file <file>`.
 Post the result's `comment` on the issue as it is. The cloud harness adds its own footer; the readers
-allow it.
+allow it. Then run the read-back check in § Text changed in transit on the posted comment.
 
 A park on the PR (the lapsed-review comment, the review receipt) is still posted where § Review says.
 The builder also posts a park comment on the issue, because the watch and recovery read the issue.
@@ -407,6 +410,9 @@ the dispositions. Nothing lives only on the cloud machine. Open the PR through t
 from § Preflight. Verify the remote head through `cloud_builder.py pr-json`, not `gh pr view`.
 A stack layer's build record lists the stack link owed to the advisor (§ Workspace).
 The handback comment on the issue is composed with `terminal --kind handback` (§ Terminal comments).
+The PR body and the handback comment each take the read-back check in § Text changed in transit,
+and every `transitLine` the build collected goes into the build record and the handback as that
+section says.
 
 ## The gh calls on a cloud build's path
 
