@@ -9,6 +9,7 @@ driver computed from the fixes' own diff (on a returning PR's round 1, what chan
 - Review-crew layer (scope exclusions, focus hints, conventions): {{LAYER_PATH}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
 - Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
+{{FOCUS_CONTEXT_LINE}}
 
 ## Your assignment
 Review only the hunks named in {{HUNKS_PATH}} at reviewer-deep caliber. Read bounded chunks
