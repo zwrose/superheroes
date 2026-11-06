@@ -266,3 +266,27 @@ def test_e3_a_malformed_row_is_skipped_by_the_receipt_never_raised(tmp_path, mon
     ]
     degraded, _skipped = RDISC.build_degraded_prose(state, RD.RECEIPT_FORM_CERTIFIED)
     assert not any("focus-notes-not-carried" in line for line in degraded), degraded
+
+
+@pytest.mark.parametrize("malformed", [
+    {"phase": "", "seats": ["a"]},
+    {"phase": RD.P_SEAMS, "seats": "a"},
+    {"phase": RD.P_SEAMS, "seats": [1]},
+    {"phase": RD.P_SEAMS},
+    "not-a-row",
+])
+def test_e3b_a_malformed_row_is_skipped_and_a_later_valid_row_still_surfaces(
+        tmp_path, monkeypatch, malformed):
+    session_dir, state = _session(tmp_path, monkeypatch, "e3b", "notes")
+    state["rounds"][str(state["round"])]["focusNotesNotCarried"] = [
+        malformed, {"phase": RD.P_VERIFIERS, "seats": ["kept-seat"]},
+    ]
+    degraded, _skipped = RDISC.build_degraded_prose(state, RD.RECEIPT_FORM_CERTIFIED)
+    lines = [line for line in degraded if "focus-notes-not-carried" in line]
+    if isinstance(malformed, str):
+        # the shape check drops a list holding a non-dict member, so no line appears
+        assert lines == [], degraded
+        return
+    assert len(lines) == 1, degraded
+    assert RD.P_VERIFIERS in lines[0] and "kept-seat" in lines[0], lines[0]
+    assert "dispatch-seams-check" not in lines[0], lines[0]

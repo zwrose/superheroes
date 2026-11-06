@@ -173,6 +173,40 @@ FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test
 
 `T::test_t7_whitespace_only_notes_render_the_scoped_order_byte_identically_to_no_notes` was added by #2382 WO-B and passes (`11 passed` for the file). No neutralization was run for it; the golden fixture `test_golden_render_matches_fixture[dispatch-scoped-finder]` is the byte-identity proof against the base, and T7 covers the whitespace-only edge. Unproven by bite.
 
+## G10 — the malformed-row skips in the `focusNotesNotCarried` loop of `build_degraded_prose` (axis: a malformed row is skipped and every well-formed row after it still surfaces)
+
+- **Detector added (review finding on the E3 test, #2382):** `T::test_e3b_a_malformed_row_is_skipped_and_a_later_valid_row_still_surfaces`, parametrized over five malformed rows (`{"phase": "", "seats": ["a"]}`, `{"phase": P_SEAMS, "seats": "a"}`, `{"phase": P_SEAMS, "seats": [1]}`, `{"phase": P_SEAMS}`, `"not-a-row"`). Each is placed ahead of `{"phase": P_VERIFIERS, "seats": ["kept-seat"]}`; the test asserts exactly one `focus-notes-not-carried` line containing `P_VERIFIERS` and `kept-seat` and not `dispatch-seams-check`. The existing all-malformed E3 test is unchanged.
+- **Non-dict `continue` (`receipt_disclosures.py:690`): no neutralization, unreachable through this path.** The channel's shape check (`dict_list`) refuses a list holding a non-dict member before the loop runs, so the `"not-a-row"` parameter asserts zero lines (observed: passes) and the `continue` at :691 can never be reached from `build_degraded_prose`. Its protection is unverified by this test.
+- **Neutralization A (phase check, `receipt_disclosures.py:694`):** `continue` → `break` after `if not (isinstance(row_phase, str) and row_phase):`.
+- **Raw red A (`pytest <node> -q`, paths are the sandbox's; the assertion's `degraded` repr is cut by the test runner at `...`):**
+
+```
+F....                                                                    [100%]
+>       assert len(lines) == 1, degraded
+E       AssertionError: ['seat-map constraint breach: critical-diversity, maker-family (seat code-reviewer), maker-family (seat premortem-revi... — panel ran without prior PR comments; any claim that prior comments were considered is not supported for this round']
+E       assert 0 == 1
+E        +  where 0 = len([])
+FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test_e3b_a_malformed_row_is_skipped_and_a_later_valid_row_still_surfaces[malformed0]
+1 failed, 4 passed in 7.22s
+```
+
+- **Restore A:** inverse edit (`break` → `continue`). **Restore receipt:** `sed -n 690,698p` shows `receipt_disclosures.py:693-694` as `if not (isinstance(row_phase, str) and row_phase):` / `continue`. **Raw green A:** `.....` / `5 passed in 4.69s` (same node).
+- **Neutralization B (seats check, `receipt_disclosures.py:696`):** `continue` → `break` after `if not (isinstance(row_seats, list) and all(isinstance(s, str) for s in row_seats)):`.
+- **Raw red B (the three failing parameters; each fails at the same line with the same message as red A, the full pytest tracebacks elided to the summary):**
+
+```
+.FFF.                                                                    [100%]
+E       assert 0 == 1
+E        +  where 0 = len([])
+FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test_e3b_a_malformed_row_is_skipped_and_a_later_valid_row_still_surfaces[malformed1]
+FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test_e3b_a_malformed_row_is_skipped_and_a_later_valid_row_still_surfaces[malformed2]
+FAILED plugins/superheroes/lib/tests/test_focus_notes_reach_orders_2382.py::test_e3b_a_malformed_row_is_skipped_and_a_later_valid_row_still_surfaces[malformed3]
+3 failed, 2 passed in 4.39s
+```
+
+- **Restore B:** inverse edit (`break` → `continue`). **Restore receipt:** `sed -n 690,698p` shows `receipt_disclosures.py:695-696` as `if not (isinstance(row_seats, list) and all(isinstance(s, str) for s in row_seats)):` / `continue`; `git status --porcelain` lists no change to `receipt_disclosures.py`. **Raw green B:** `.....` / `5 passed in 4.13s` (same node).
+- **Note:** the `[malformed1]` parameter (`seats: "a"`) is the order's named target for B and fails as expected; `[malformed2]` and `[malformed3]` also fail because the seats `break` swallows the later valid row for them too. Supersedes the "E3 has no neutralization" bullet below for the later-valid-row axis; the all-malformed E3 test still has none.
+
 ## Not proven
 
 - `order_carries_focus`'s read-failure leg (edge E2): T4b covers an unknown phase (no template file), not an unreadable one; no neutralization was run for it.
