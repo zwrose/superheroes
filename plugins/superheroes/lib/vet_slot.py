@@ -14,7 +14,7 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of fourteen reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of seventeen reasons (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
 ``What's changing, and why`` heading sits above the advisor-vet marker, so the builder's owner half is lost and
 the body is restored from the PR's edit history rather than re-stamped),
@@ -25,7 +25,10 @@ inside the slot span, which the write would delete), ``receipt-missing``, ``foll
 names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
 named, by record id and title, under What we're accepting, or that record cannot be read; the rule's one home is
-``leftover_accepting.py``)) and a detail naming what was wrong; no edit is made, except
+``leftover_accepting.py``), ``calibration-disclosure-contradicted``, ``calibration-disclosure-unknown-seat`` and
+``calibration-disclosure-unmarked`` (``handback`` over an open PR: a calibration marker in a degradation bullet that the
+latest review record contradicts, or that names a row the record lacks, or a degradation bullet that mentions
+calibration outside the marker; the rule's one home is ``calibration_disclosure.py``)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
 on ok, 1 on refusal.
@@ -52,6 +55,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import calibration_disclosure  # noqa: E402
 import gh_pages  # noqa: E402
 import leftover_accepting  # noqa: E402
 import md_fence  # noqa: E402
@@ -647,12 +651,29 @@ def _handback_file(body_file):
     return check_handback(body)
 
 
+def _latest_record(pr, repo, comments):
+    rows = [{"id": c.get("id"), "author": c["user"]["login"], "body": c["body"], "url": c.get("html_url")}
+            for c in comments]
+    return review_record.read(pr, repo, readers={"list_comments": lambda _pr, _repo: rows})
+
+
+def check_calibration_disclosures(pr, repo, body, comments):
+    """Refuse while a calibration marker in a degradation bullet is contradicted by the latest review record among
+    ``comments`` or names a row the record lacks, or while a degradation bullet mentions calibration outside the marker
+    (``calibration_disclosure``, the rule's one home), or while that record cannot be read."""
+    record = _latest_record(pr, repo, comments)
+    try:
+        found = calibration_disclosure.problems(record, body)
+    except calibration_disclosure.Unreadable as exc:
+        raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
+    if found:
+        raise _Refusal(found[0]["reason"], calibration_disclosure.describe(found, record.get("url")))
+
+
 def check_leftovers(pr, repo, body, comments):
     """Refuse while the latest review record among ``comments`` leaves a finding for the owner that the body's What we're
     accepting does not name (``leftover_accepting``, the rule's one home), or while that record cannot be read."""
-    rows = [{"id": c.get("id"), "author": c["user"]["login"], "body": c["body"], "url": c.get("html_url")}
-            for c in comments]
-    record = review_record.read(pr, repo, readers={"list_comments": lambda _pr, _repo: rows})
+    record = _latest_record(pr, repo, comments)
     try:
         gaps = leftover_accepting.missing(record, body)
     except leftover_accepting.Unreadable as exc:
@@ -931,7 +952,10 @@ def _run_verb(verb, pr, repo, slot_file, run):
         body = _body_of(payload)
         result = check_handback(body)
         if result["ok"]:
-            check_leftovers(pr, repo, body, _read_comments(run, pr, repo))
+            comments = _read_comments(run, pr, repo)
+            check_leftovers(pr, repo, body, comments)
+            # axis: a disclosed calibration degradation the record grades read refuses calibration-disclosure-contradicted — see bite-proof record i2364_calibration_disclosure
+            check_calibration_disclosures(pr, repo, body, comments)
         return result
     body = _body_of(payload)
     # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md
