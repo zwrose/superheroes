@@ -51,6 +51,7 @@ OUTCOMES = ("answered", "hit-bound", "silence-watchdog", "other")
 # An over-long line is classified by its head with anchored prefix matches, never a search: the event
 # type, then (for an item event) the item id and item type, which codex writes before the payload.
 _NO_EFFECT = ()
+NON_ACTION_ITEM_TYPES = ("agent_message", "reasoning", "todo_list")
 _EVENT_HEAD_RE = re.compile(rb'\s*\{"type":\s*"([^"\\]*)"')
 _ITEM_HEAD_RE = re.compile(rb',\s*"item":\s*\{"id":\s*"([^"\\]*)",\s*"type":\s*"([^"\\]*)"')
 
@@ -76,6 +77,9 @@ def _classify_head(head):
     except UnicodeDecodeError:
         return None
     if item_type not in engine_adapter._CODEX_ACTION_ITEM_TYPES:
+        if kind == "item.started" and item_type not in NON_ACTION_ITEM_TYPES:
+            # axis: an over-long start of an unnamed item type may open a command, so it reads unknown
+            return None
         return _NO_EFFECT
     return (kind, item_id)
 
@@ -85,7 +89,10 @@ class StreamTracker:
 
     `state` is "idle" (no open action item), "busy" (one or more open) or "unknown". `unknown` is
     sticky when a non-empty line is not a JSON object, or when a line longer than
-    MAX_PARTIAL_LINE_BYTES has a head that classifies no event. A buffered non-blank unfinished line
+    MAX_PARTIAL_LINE_BYTES has a head that classifies no event. It is also sticky when an item event's
+    item is not an object or its type is not a string, when an action item's id is missing or not a
+    str/int, and when an item.started has a type that is neither an action type nor one of
+    NON_ACTION_ITEM_TYPES (on the over-long path too). A buffered non-blank unfinished line
     also reads "unknown" (not sticky) until its newline arrives. Never raises.
 
     A line longer than MAX_PARTIAL_LINE_BYTES (complete, or still partial) is not parsed. Its first
@@ -196,12 +203,20 @@ class StreamTracker:
         if kind not in ("item.started", "item.completed"):
             return
         item = obj.get("item")
-        if not isinstance(item, dict):
+        if not isinstance(item, dict) or not isinstance(item.get("type"), str):
+            # axis: an item event whose item or type cannot be read may hide a command, so unknown
+            self._unknown = True
             return
-        if item.get("type") not in engine_adapter._CODEX_ACTION_ITEM_TYPES:
+        item_type = item["type"]
+        if item_type not in engine_adapter._CODEX_ACTION_ITEM_TYPES:
+            if kind == "item.started" and item_type not in NON_ACTION_ITEM_TYPES:
+                # axis: a started item of an unnamed type may open a command, so unknown
+                self._unknown = True
             return
         item_id = item.get("id")
         if isinstance(item_id, bool) or not isinstance(item_id, (str, int)):
+            # axis: an action item whose id cannot be read can never be closed, so unknown
+            self._unknown = True
             return
         self._apply(kind, item_id, line_end)
 
@@ -225,8 +240,12 @@ class StreamTracker:
 
 
 def silent_and_idle(stdout_grew, stderr_grew, tracker_state):
-    """The one predicate: True only when neither stream grew and the state is exactly "idle"."""
-    return (not stdout_grew) and (not stderr_grew) and tracker_state == STATE_IDLE
+    """The one predicate: True only when neither stream grew and the state is exactly "idle".
+
+    Growth counts as "did not grow" only when it is exactly False. A growth that could not be read
+    (anything but False, e.g. None or 0) never counts as silence."""
+    # axis: unread growth is never silence, so only an exact False counts as "did not grow"
+    return stdout_grew is False and stderr_grew is False and tracker_state == STATE_IDLE
 
 
 def read_increment(path, offset, max_bytes=FEED_CHUNK_BYTES):
