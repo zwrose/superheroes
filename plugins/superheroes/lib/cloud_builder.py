@@ -42,6 +42,9 @@ preflight, review and park.
                           `comment` is the stand-down to post
   cloud_builder.py superseded-notice --launch-id L
                           the notice the advisor posts on the issue before it launches a successor
+  cloud_builder.py relayed --repo O/R --issue N --pointer-file F
+                          the advisor's message a relayed pointer names: the pointer's comment on this
+                          issue is read, checked against the sha256 in the pointer, and its text returned
 
 Stdlib only. A function that runs a command or reads the environment takes `env=None` (a mapping;
 default the process environment), and one that runs a command also takes `run=None` (default
@@ -705,6 +708,45 @@ def superseded(repo, issue, launch_id, *, env=None, run=None):
             "comment": stand_down_text(url)}
 
 
+def _relayed_refusal(reason, what, parsed=None):
+    """A refusal of `relayed`, with `noteQuestion`: one plain sentence for a builder note that names the message
+    id and comment URL when they are known and what failed."""
+    named = ""
+    if parsed is not None:
+        named = " (id %s, comment %s)" % (parsed["msgId"], parsed["commentUrl"])
+    out = {"ok": False, "reason": reason,
+           "noteQuestion": "The advisor's message%s could not be used because %s; "
+                           "I have not acted on it; please send it again." % (named, what)}
+    if parsed is not None:
+        out.update(msgId=parsed["msgId"], commentUrl=parsed["commentUrl"])
+    return out
+
+
+def relayed(repo, issue, pointer_text, *, env=None, run=None):
+    """The advisor's message that a relayed pointer line names, or a refusal that carries a `noteQuestion`. The
+    pointer must be well formed and name a comment on this repository's issue `issue`; the comment is read and
+    its body's sha256 must equal the pointer's, and the body must be the one `compose` makes for the pointer's id.
+    `{"ok": True, "msgId", "commentUrl", "text"}` on success. A refusal is a result, never a raise."""
+    relay = _sibling("cloud_relay")
+    if not (isinstance(repo, str) and _REPO_RE.match(repo) and _positive_int(issue)):
+        return _relayed_refusal("input-invalid", "the repository or issue number I was given is invalid")
+    parsed = relay.parse_pointer(pointer_text)
+    if parsed is None:
+        return _relayed_refusal("pointer-malformed", "the pointer line is malformed")
+    if parsed["repo"] != repo or parsed["issue"] != issue:
+        return _relayed_refusal("comment-elsewhere", "its comment is not on this issue (%s#%d)" % (repo, issue), parsed)
+    status, body = relay.read_comment(repo, parsed["commentId"], env=env, run=run)
+    if status == "missing":
+        return _relayed_refusal("comment-missing", "the comment it names is missing", parsed)
+    if status != "ok":
+        return _relayed_refusal("comment-unreadable", "the comment it names could not be read", parsed)
+    text = relay.comment_text(body, parsed["msgId"])
+    # axis: the comment's body must hash to the pointer's sha256 and open with the marker and header for the pointer's id — an edited or foreign comment is refused and its text never returned — see bite-proof record wo_2368_relay_pointer.md
+    if relay.comment_sha256(body) != parsed["sha256"] or text is None:
+        return _relayed_refusal("comment-altered", "the comment it names does not match the pointer's sha256", parsed)
+    return {"ok": True, "msgId": parsed["msgId"], "commentUrl": parsed["commentUrl"], "text": text}
+
+
 def pass_state(env=None, now=None):
     """The placed reviewer sign-in's state and lapse date, and whether this is a cloud session."""
     env = _env(env)
@@ -764,6 +806,7 @@ def _build_parser():
     verb("pass-state")
     verb("superseded", "--repo", "--issue", "--launch-id", **{"--issue": {"type": int}})
     verb("superseded-notice", "--launch-id")
+    verb("relayed", "--repo", "--issue", "--pointer-file", **{"--issue": {"type": int}})
     return parser
 
 
@@ -816,6 +859,13 @@ def _dispatch(args):
         return terminal_text(args.kind, text)
     if args.verb == "superseded":
         return superseded(args.repo, args.issue, args.launch_id)
+    if args.verb == "relayed":
+        pointer = _read_text(args.pointer_file)
+        if pointer is None:
+            if not (_REPO_RE.match(args.repo) and _positive_int(args.issue)):
+                return relayed(args.repo, args.issue, "")
+            return _relayed_refusal("pointer-unreadable", "the pointer file could not be read")
+        return relayed(args.repo, args.issue, pointer)
     if args.verb == "superseded-notice":
         comment = superseded_notice_text(args.launch_id)
         if comment is None:

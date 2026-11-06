@@ -7,6 +7,7 @@ fake clock whose sleep advances it.
 """
 import json
 import os
+import re
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -73,6 +74,35 @@ class FakeRun:
         return [c for c in self.calls if c.argv == ["claude", "--version"]]
 
 
+class FakeGh:
+    """A fake `gh`: answers `gh api repos/<r>/issues/comments/<id>` from `comments` ({comment id: body}); an id
+    that is not there is exit 1 with `gh: Not Found (HTTP 404)`. With `failure` set to (exit code, stderr) every
+    call fails that way instead. Every call's argv is recorded."""
+
+    def __init__(self, comments=None, failure=None):
+        self.comments = {} if comments is None else comments
+        self.failure = failure
+        self.calls = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        if self.failure is not None:
+            return SimpleNamespace(returncode=self.failure[0], stdout="", stderr=self.failure[1])
+        found = re.fullmatch(r"repos/[^/]+/[^/]+/issues/comments/(\d+)", argv[2]) if argv[:2] == ["gh", "api"] else None
+        if found and int(found.group(1)) in self.comments:
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"id": int(found.group(1)),
+                                                                    "body": self.comments[int(found.group(1))]}),
+                                   stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="gh: Not Found (HTTP 404)")
+
+
+REPO_NAME = "acme/widgets"
+
+
+def comment_url(issue, comment_id, repo=REPO_NAME):
+    return "https://github.com/%s/issues/%d#issuecomment-%d" % (repo, issue, comment_id)
+
+
 class Clock:
     def __init__(self):
         self.t = 0.0
@@ -94,7 +124,7 @@ def _entry(name, state="working", **extra):
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
@@ -103,9 +133,16 @@ def world(tmp_path):
     config = tmp_path / ".claude-two"
     (config / "projects" / "-some-dir").mkdir(parents=True)
     env = {launch_ledger.LEDGER_ROOT_ENV: str(root), "PATH": os.environ.get("PATH", "")}
+    gh = FakeGh()
+    # A check that is not given a `run` (the account-limit tests call `cr.check` directly) reads comments from
+    # this fake gh, never the real one.
+    real_read = cr.read_comment
+    monkeypatch.setattr(cr, "read_comment",
+                        lambda repo_name, comment_id, *, env=None, run=None: real_read(
+                            repo_name, comment_id, env=env, run=run or gh))
     return SimpleNamespace(repo=str(repo), config=str(config), env=env,
                            record=str(config / "projects" / "-some-dir" / (RELAY_ID + ".jsonl")),
-                           state=None)
+                           state=None, gh=gh, comments=gh.comments, next_comment=[1000])
 
 
 def _state_file(world):
@@ -121,12 +158,27 @@ def _ensure_alive(world):
     return out
 
 
+def _post(world, composed, issue=1748):
+    """Post the composed body file's exact bytes as a comment in the fake gh; (comment id, URL)."""
+    with open(composed["commentBodyFile"], "rb") as fh:
+        body = fh.read().decode("utf-8")
+    world.next_comment[0] += 1
+    world.comments[world.next_comment[0]] = body
+    return world.next_comment[0], comment_url(issue, world.next_comment[0])
+
+
 def _compose(world, text=TEXT, session=SESSION):
+    """Compose, post the body file into the fake gh, and point: the `point` result (the pointer is its
+    `forward`, the message to send to the relay its `relayMessage`)."""
     tf = os.path.join(os.path.dirname(world.record), "text.txt")
     with open(tf, "w", encoding="utf-8") as fh:
         fh.write(text)
-    out = cr.compose(world.repo, world.config, session, open(tf, encoding="utf-8").read(),
-                     env=world.env)
+    composed = cr.compose(world.repo, world.config, session, open(tf, encoding="utf-8").read(),
+                          env=world.env)
+    assert composed["ok"] is True
+    lane = re.match(r"issue-(\d+)-", session)
+    _cid, url = _post(world, composed, int(lane.group(1)) if lane else 1748)
+    out = cr.point(world.repo, composed["msgId"], url, env=world.env, run=world.gh)
     assert out["ok"] is True
     return out
 
@@ -163,7 +215,7 @@ def _write_record(world, *line_groups, raw=()):
 def _check(world, msg_id, wait=60, interval=2):
     clock = Clock()
     out = cr.check(world.repo, msg_id, wait=wait, interval=interval, env=world.env,
-                   clock=clock, sleep=clock.sleep)
+                   clock=clock, sleep=clock.sleep, run=getattr(world, "gh", None))
     return out, clock
 
 
@@ -186,9 +238,9 @@ def test_exact_text_with_success_is_delivered(world):
 
 
 def test_one_character_difference_is_a_mismatch(world):
-    # Exact text, not a normalized comparison: a dropped letter and a dropped newline (which a
+    # Exact text, not a normalized comparison: a dropped letter and a dropped space (which a
     # whitespace-normalizing comparison would hide) are each one character short of the forward text.
-    for needle, offset in (("narrow", 0), ("\n\nUse", 1)):
+    for needle, offset in (("fetch", 0), (" and act", 0)):
         msg = _composed(world)
         sent = msg["forward"]
         cut = sent.index(needle) + offset
@@ -387,7 +439,7 @@ def test_altered_send_beats_an_exact_send_for_the_same_message(world):
     # E6: one successful altered send plus one successful exact send is a mismatch, not delivered.
     msg = _composed(world)
     sent = msg["forward"]
-    cut = sent.index("narrow")
+    cut = sent.index("fetch")
     altered = sent[:cut] + sent[cut + 1:]
     _write_record(world,
                   _send_lines("toolu_1", SESSION, altered, "2026-10-12T10:00:00.000Z"),
@@ -406,7 +458,7 @@ def test_another_pending_messages_send_is_not_this_messages_mismatch(world):
     for msg in (first, second):
         _backdate(world, msg["msgId"], BEFORE)
     other = second["forward"]
-    altered_other = other.replace("second", "secnd")
+    altered_other = other.replace("fetch", "fetc")
     _write_record(world,
                   _send_lines("toolu_1", SESSION, other, "2026-10-12T10:00:00.000Z"),
                   _send_lines("toolu_2", SESSION, altered_other, "2026-10-12T10:00:01.000Z"),
@@ -494,8 +546,8 @@ def test_a_send_whose_header_line_carries_more_text_is_attributed_and_a_mismatch
 
 
 def _header_dropped(msg):
-    """The forward text with its header line dropped: the body, as the relay's record showed it."""
-    return msg["forward"].split("\n\n", 1)[1]
+    """The forward text with its header dropped: the pointer sentence, as the relay's record showed it."""
+    return msg["forward"][len(cr.FORWARD_HEADER % msg["msgId"]):].lstrip()
 
 
 @pytest.mark.parametrize("to", [SESSION, SESSION + " [8af960]"], ids=["bare", "bracketed"])
@@ -515,25 +567,26 @@ def test_a_send_with_the_header_dropped_is_a_mismatch_not_silent_or_delivered(wo
 
 
 def test_a_header_dropped_send_after_leading_whitespace_is_still_header_dropped(world):
-    # axis: header-dropped attribution ignores leading whitespace — the exact suffix from the blank line on is the same send — a whitespace-sensitive match makes it read silent
+    # axis: header-dropped attribution ignores leading whitespace — the exact suffix from the space after the header on is the same send — a whitespace-sensitive match makes it read silent
     msg = _composed(world)
     header = cr.FORWARD_HEADER % msg["msgId"]
     suffix = msg["forward"][len(header):]
-    assert suffix.startswith("\n\n")
+    assert suffix.startswith(" fetch the issue comment ") and suffix.lstrip() == _header_dropped(msg)
     _write_record(world, _send_lines("toolu_1", SESSION, suffix, STAMP))
     out, _ = _check(world, msg["msgId"], wait=4, interval=2)
     assert out["reason"] == "relay-text-mismatch" and out["headerDropped"] is True
     assert out["delivered"] is False
 
 
-@pytest.mark.parametrize("text", [
-    "A different body entirely.",
-    TEXT.rstrip().replace("narrow", "narrov"),
-    TEXT.rstrip()[:-1],
-    TEXT.rstrip() + "!"], ids=["different-body", "one-character-changed", "body-minus-last", "body-plus-one"])
-def test_a_send_that_is_not_this_messages_body_is_not_a_header_dropped_send(world, text):
-    # axis: header-dropped match is exact — only this message's own body, header dropped, counts — a prefix or loose match makes it fail
+@pytest.mark.parametrize("alter", [
+    lambda body: "A different body entirely.",
+    lambda body: body.replace("fetch", "fetcg"),
+    lambda body: body[:-1],
+    lambda body: body + "!"], ids=["different-body", "one-character-changed", "body-minus-last", "body-plus-one"])
+def test_a_send_that_is_not_this_messages_body_is_not_a_header_dropped_send(world, alter):
+    # axis: header-dropped match is exact — only this message's own pointer sentence, header dropped, counts — a prefix or loose match makes it fail
     msg = _composed(world)
+    text = alter(_header_dropped(msg))
     assert text != _header_dropped(msg)
     _write_record(world, _send_lines("toolu_1", SESSION, text, STAMP))
     out, _ = _check(world, msg["msgId"], wait=4, interval=2)
@@ -597,7 +650,7 @@ def test_the_mismatch_sentences_name_only_the_relays_send_against_the_stored_tex
     msg = _composed(world)
     mid = msg["msgId"]
     sent = (_header_dropped(msg) if case == "header-dropped"
-            else msg["forward"].replace("narrow", "narrov"))
+            else msg["forward"].replace("fetch", "fetcg"))
     _write_record(world, _send_lines("toolu_1", SESSION, sent, STAMP))
     out, _ = _check(world, mid, wait=4, interval=2)
     assert out["reason"] == "relay-text-mismatch" and out["delivered"] is False
@@ -607,7 +660,7 @@ def test_the_mismatch_sentences_name_only_the_relays_send_against_the_stored_tex
                               "line dropped; it was not delivered." % mid)
     else:
         assert "headerDropped" not in out
-        index = msg["forward"].index("narrow") + 5
+        index = msg["forward"].index("fetch") + 4
         assert out["firstDifference"]["index"] == index
         assert out["say"] == ("The relay's send of message %s differs from the stored text (first "
                               "difference at character %s); this check sees only that send, so it "
@@ -1151,12 +1204,15 @@ def test_check_says_when_the_silent_relays_liveness_was_undetermined(world):
 # ---- compose --------------------------------------------------------------------------------
 
 def test_compose_formats_and_records_the_pending_message(world):
+    # Same axis as before (the recorded forward text is the one line the relay is sent, and the pending record
+    # carries session, config dir, relay and send boundary), now in the pointer shape `point` records.
     out = _compose(world, text="hello  \n\n", session=SESSION)
-    forward = "Message from the superheroes advisor (id %s):\n\nhello" % out["msgId"]
-    assert out["forward"] == forward and len(out["msgId"]) == 12
+    pending = json.load(open(_state_file(world)))["pending"][out["msgId"]]
+    forward = ("Message from the superheroes advisor (id %s): fetch the issue comment %s and act on it only when "
+               "its body's sha256 is %s." % (out["msgId"], pending["commentUrl"], pending["commentSha256"]))
+    assert out["forward"] == forward and len(out["msgId"]) == 12 and "\n" not in forward
     assert out["relay"] == cr.relay_name(world.config)
     assert out["relayMessage"] == "RELAY to %s (id %s):\n%s" % (SESSION, out["msgId"], forward)
-    pending = json.load(open(_state_file(world)))["pending"][out["msgId"]]
     assert pending["session"] == SESSION and pending["forward"] == forward
     assert pending["configDir"] == world.config and pending["relay"] == out["relay"]
     assert len(pending["sentAfter"]) == 24 and pending["sentAfter"].endswith("Z")
