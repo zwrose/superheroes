@@ -409,3 +409,24 @@ FAILED plugins/superheroes/lib/tests/test_relay_pointer_2368.py::test_point_refu
   on the reason. A neutralization that let an unreadable repository reach the comment read would also be red on the
   `world.gh.calls == []` line, which was not separately neutralized.
 - `lane_repo`'s parsing is pinned by unit rows (`test_lane_repo_*`), not neutralized one by one.
+
+## E13 point compares repository names without case (returning review, round 1)
+
+Orchestrator-typed at the review's `apply-fixes` step, committed (`7d70dacd`) before the probe; a targeted
+Edit undone by the inverse Edit, tree clean after.
+
+- **Guarded element:** `_point`, `repo.lower() != lane_name.lower()`. Axis: an origin spelled `Acme/Widgets`
+  accepts a comment URL on `acme/widgets`.
+- **Detector:** `test_point_reads_a_lane_repository_name_whatever_its_case`.
+- **Neutralization:** the comparison became `repo != lane_name`.
+- **Raw red:**
+
+```
+E   AssertionError: {'ok': False, 'reason': 'comment-not-on-lane-repo', 'laneRepo': 'Acme/Widgets', 'commentRepo': 'acme/widgets', ...}
+1 failed in 0.92s
+```
+
+- **Raw green (after the inverse Edit):** passed within `7 passed in 0.62s`.
+- **Not neutralized separately:** `relayed`'s matching `.lower()`, pinned by
+  `test_relayed_reads_a_repository_name_whatever_its_case`.
+

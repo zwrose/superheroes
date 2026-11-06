@@ -247,3 +247,22 @@ orchestration.md:418:- After an `ensure` refusal, a `point` refusal or `nothingR
 and not a sixth place that tells the advisor to relay a message (orchestration's adopt step and
 recover steps name `point` too, and no detector pins them); D4 and D5 pin the word `nothingReached`
 and forbid named relay reasons only in D5's bullets and D4's step.
+
+## D6 a same-account send settles by its own SendMessage result (returning review, round 1)
+
+Orchestrator-typed at the review's `apply-fixes` step, committed (`602ca550`) before the probe; a targeted
+Edit undone by the inverse Edit, tree clean after.
+
+- **Guarded element:** `merge-train.md` step 2's same-account settlement sentence.
+- **Detector:** `test_a_same_account_send_settles_by_its_own_send_result`.
+- **Neutralization:** the sentence "On the same account it is settled by the `SendMessage` result: …" removed.
+- **Raw red:**
+
+```
+E   AssertionError: assert 'On the same account it is settled by the `SendMessage` result: `delivered` on `success: true`, `failed` on `success: false`, and `uncertain` when the call returned no resul…
+FAILED plugins/superheroes/lib/tests/test_relay_pointer_doctrine_2368.py::test_a_same_account_send_settles_by_its_own_send_result
+```
+
+- **Raw green (after the inverse Edit):** passed within `7 passed in 0.62s`.
+- **Not neutralized separately:** the matching wave-watch sentence, which the same test asserts first.
+
