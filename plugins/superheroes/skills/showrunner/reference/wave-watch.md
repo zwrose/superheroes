@@ -254,7 +254,8 @@ of `activityAgeSeconds`. The `cloudLanes` entry carries `phase`, `progressAgeSec
 `progressExpectedSeconds` when a progress comment was read.
 
 **The first check on a quiet cloud lane is a relayed status ping**: a message to the lane's session
-asking it to update its progress comment. Read the comment again. Start a helper session to read the
+asking it to update its progress comment, sent by the steps in § Answering a builder note. Read the
+comment again. Start a helper session to read the
 lane only after about 15 minutes with no answer. A session the platform shows working is not wedged. A
 branch whose name omits the issue number is not read until its PR opens, so a builder on such a branch
 can read quiet while it works.
@@ -454,7 +455,7 @@ skipped that tick, so a cloud ending in the same tick surfaces on the next arm.
 
 A terminal cloud lane **sent a fix order is watched again**, exactly like a live cloud lane, from that
 moment until its next ending. The fix order is a `vet not-ready` amendment, or a fix-order relay to the
-lane's session (`compose --fix-order`) once its `check` read delivered or a may-hold-text verdict; the relay opens the window at the
+lane's session (`compose --fix-order`) once its `check` read delivered or uncertain; the relay opens the window at the
 message's own compose time (`sentAfter`), never at the check, so a re-check moves nothing. A
 `reoutcome` amendment, or a vet `ready` or `parked-blocker`, closes it; the newest opener must be later
 than the newest closer. When the fix order is also sent by message, record the vet `not-ready`
@@ -553,7 +554,7 @@ yourself, now, and answer any builder note there inside the builder's 15-minute 
 
 Each note names the session to answer (`cloudSessionName`) and the account it runs on (`configDir`).
 Compare `configDir` with the account you run on, your resolved config directory (`CLAUDE_CONFIG_DIR`
-when set, otherwise `~/.claude`). Answer by message, or through the relay below. The send is still the gate for `note-answered`; posting the same answer on the issue as the durable record is allowed and recommended.
+when set, otherwise `~/.claude`). Answer by message, or through the relay below. The send is still the gate for `note-answered`. On another account the answer's comment on the issue is the durable record and the message itself; the relay sends only a pointer to it.
 
 **What the answer says.** Name the chosen option literally, in your own words: the line, value or
 step the builder should use, written out in full. Never answer by reference to the note ("go ahead
@@ -568,9 +569,11 @@ relay on that account can start.
 reading `success: true`.
 
 **Another account.** The answer goes through a relay, a background session on that account
-(`lib/cloud_relay.py`; `skills/workhorse/reference/cloud.md` has the builder's side). A vet's fix
-order relayed to the lane's session is composed with `--fix-order`, and it re-opens the watch only once
-`check` reads delivered (or a may-hold-text verdict). In order:
+(`lib/cloud_relay.py`; `skills/workhorse/reference/cloud.md` § A message from the advisor has the
+builder's side). The message itself is a comment on the lane's issue, posted byte for byte from the
+composed file; the relay forwards only a one-line pointer to that comment, which the builder checks
+against the comment's hash before it acts. A vet's fix order relayed to the lane's session is composed
+with `--fix-order`, and it re-opens the watch only once `check` reads delivered or uncertain. In order:
 
 1. `python3 -B <plugin root>/lib/cloud_relay.py ensure --repo-root <root> --config-dir <configDir>`,
    before every relayed answer. It starts the relay if none is listed, which keeps it alive and
@@ -578,34 +581,44 @@ order relayed to the lane's session is composed with `--fix-order`, and it re-op
    process) is replaced: `ensure` starts a fresh one under the same name, stops the dead entry, and returns
    `replaced`; `deadEntries` lists each dead entry `ensure` tried to stop, each with `stopped`, so no hand restart is needed.
 2. Write the answer to a file, then `compose --repo-root <root> --config-dir <configDir> --session
-   <cloudSessionName> --text-file <file>`. It returns `msgId`, `relayMessage` and `forward`. The
-   answer text never carries a shell-evaluated value you have not seen expanded, such as a time
-   from `$(date -u …)` inside a heredoc: run the command first, read its output, and write the
-   value into the answer as text. Then print the whole composed `relayMessage`, never a truncated
-   view such as `head` or the message id alone, so the text you send is text you have read.
-3. Send exactly the `relayMessage` you printed by `SendMessage` to the relay's `name`, copied from
-   that output and never retyped from your own draft. A change after compose, even one word, means
-   writing a new answer file and composing a new message; never edit a composed one.
-4. `check --repo-root <root> --msg-id <msgId>`. The gate is `delivered: true`. A message counts as
-   delivered only when the text the relay sent matches `forward` exactly; the relay's own words about
-   what it sent are never the receipt. `check` reads every send of that exact text, to the session's
-   name or to `<session name> [<ref>]`: it reads `delivered` when some send of the exact text has
-   `success: true` and no send of this message carries altered text, while any altered send reads
-   `relay-text-mismatch`, whatever else succeeded. A failed attempt does not end the check early. At
-   the end of the wait it reads `relay-send-unconfirmed` when an exact send still has no result,
-   `relay-send-failed` when every exact send failed, and `relay-silent` when there was none.
-   Re-running `check` later re-reads the relay's record. A send of the message's text with its header
-   line dropped reads `relay-text-mismatch` with `headerDropped: true` at the end of the wait, unless an
-   exact send succeeded; it was sent, altered, so the builder may hold the text. `check` sees only
-   the relay's send compared with the stored text, so a mismatch does not say which step changed
-   it: your own send can reach the relay already changed.
+   <cloudSessionName> --text-file <file>`. It returns `msgId`, `relay`, `commentBodyFile` and
+   `commentSha256`. The answer text never carries a shell-evaluated value you have not seen
+   expanded, such as a time from `$(date -u …)` inside a heredoc: run the command first, read its
+   output, and write the value into the answer as text.
+3. Post the file `commentBodyFile` names on the lane's issue: `gh issue comment <issue> --repo
+   <owner/name> --body-file <commentBodyFile>`. It prints the comment's URL; print it too. Never
+   retype the file and never edit it. A change after compose, even one word, means writing a new
+   answer file and composing a new message; never edit a composed one.
+4. `point --repo-root <root> --msg-id <msgId> --comment-url <url>`. It reads the posted comment back
+   and goes on only when its bytes match the composed file. A refusal sends nothing. On
+   `comment-altered` the posted bytes changed: compose again from a new answer file. `comment-missing`
+   and `comment-unreadable` mean the comment could not be read back. `comment-url-invalid` and
+   `comment-not-on-lane-issue` mean the URL is not a comment on that lane's issue. On
+   `pointer-already-composed`, `not-a-pointer-message` and `message-unknown`, this message cannot take
+   a pointer: compose again. It returns `relayMessage` and `forward`: `relayMessage` is the relay's
+   line `RELAY to <session> (id <msgId>):` and the one-line pointer, and `forward` is the pointer
+   alone. Then print the whole composed `relayMessage`, never a truncated view such as `head` or the
+   message id alone, so the text you send is text you have read.
+5. Send exactly the `relayMessage` you printed by `SendMessage` to the relay's `name`, copied from
+   that output and never retyped from your own draft.
+6. `check --repo-root <root> --msg-id <msgId>`. The gate is `delivered: true`, and it needs both
+   legs. The pointer leg holds when the text the relay sent equals `forward` exactly and the send
+   succeeded; the relay's own words about what it sent are never the receipt. The comment leg holds
+   when the comment on the issue still matches the composed file. When a leg fails, `failedParts`
+   names it (`pointer`, `comment`, or both), and `pointerLeg` and `commentLeg` say what each leg
+   read. A pointer that was sent while its comment no longer verifies is not delivered: the builder
+   refuses it. A message composed before this release reads `legacy-unverified` and never reads
+   delivered. `check` sees only the relay's send compared with the pointer, so a mismatch does not
+   say which step changed it: your own send can reach the relay already changed. Re-running `check`
+   later re-reads the relay's record.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
-owner the `say` sentence, or the refusal and its `detail`. After `relay-silent` or
-`relay-send-unconfirmed`, re-run `check` with a longer `--wait` before concluding. Retry once from
-`ensure` only when nothing can have reached the builder: an `ensure` refusal or `relay-send-failed`.
-After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed` the builder may hold text:
-never resend automatically.
+owner the `say` sentence, or the refusal and its `detail`. Settle every send by one rule, here and in
+every section that points to this one: `delivered: true` is delivered; `nothingReached: true` means
+nothing reached the builder; anything else is uncertain, because the builder may hold the pointer.
+For an uncertain read, re-run `check` with a longer `--wait` before concluding. Retry once from
+`ensure` only when nothing can have reached the builder: an `ensure` refusal, a `point` refusal, or
+`nothingReached: true`. For anything else, never resend automatically.
 A `relay-start-failed` naming an untrusted workspace means that account lacks the one-time setup step.
 
 **Delivered.** Run `python3 -B <plugin root>/lib/wave_watch.py note-answered --repo-root <root>
@@ -617,7 +630,8 @@ note still waiting (`notes`, oldest first). Answer each in turn as above, each w
 also resumes each lane that parked on one. There is no separate resume step.
 
 Any other message you send to a cloud session on another account, the archive request after a merge
-or close included, goes through the same relay path and gate. The archive request's own steps are in
+or close included, goes through the same steps (`ensure`, `compose`, the post with `--body-file`,
+`point`, the send, `check`) and is settled by the same rule. The archive request's own steps are in
 `skills/showrunner/reference/merge-train.md` § Cleaning up a finished cloud lane.
 
 ## The boundary the owner accepted
