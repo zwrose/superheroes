@@ -100,15 +100,19 @@ _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
 # The body fallback's masking. GitHub's own closingIssuesReferences list decides wherever it can be read;
 # the body is read only when it cannot, and then the read never returns an issue GitHub does not link: it
 # masks whole lines and can only over-mask, so a misread misses a link (cleanup refuses), never invents one.
-# A line holding ``` or ~~~ or $$ masks to the end of the body, since no closer is safe to trust; an HTML
-# comment, and a <pre>, <script>, <style> or <textarea> block, mask from their line to the line that ends
-# them (or the end); and a run of non-blank lines is masked whole when any line of it is masked, holds a
-# backtick, `<` or `[`, or looks like code or a quote (indented four columns, a list marker followed by two
-# or more spaces or a tab, or a `>` after any list markers).
+# A line holding ``` or ~~~ or $$ masks to the end of the body, since no closer is safe to trust; every raw
+# HTML block that runs across blank lines (a comment, a processing instruction, CDATA, a declaration, and a
+# <pre>, <script>, <style> or <textarea> block) masks from its line to the line that ends it (or the end);
+# and a run of non-blank lines is masked whole when any line of it is masked, holds a backtick, `<` or `[`,
+# or looks like code or a quote (indented four columns, a list marker followed by two or more spaces or a
+# tab, or a `>` after any list markers).
 _RAW_TO_END_RE = re.compile(r"```|~~~|\$\$")
-_COMMENT_CLOSE_RE = re.compile("-->")
 _RAW_HTML_OPEN_RE = re.compile(r"<(?:pre|script|style|textarea)\b", re.I)
 _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.I)
+# (opener, closer) of each raw HTML block GFM keeps open across blank lines until its closer.
+_RAW_SPANS = ((re.compile("<!--"), re.compile("-->")), (re.compile(r"<\?"), re.compile(r"\?>")),
+              (re.compile(r"<!\[CDATA\["), re.compile(r"\]\]>")), (re.compile(r"<![A-Za-z]"), re.compile(">")),
+              (_RAW_HTML_OPEN_RE, _RAW_HTML_CLOSE_RE))
 _BLOCK_MARK_RE = re.compile(r"[`<\[]")
 _LIST_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])( +|$)")
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
@@ -247,14 +251,11 @@ def _markdown_prose(body):
             keep[i] = False
             pending = [closer for closer in pending if not closer.search(line)]
         # Every opener on the line leaves its own span pending when no closer follows it on that line.
-        for at in (m.start() for m in re.finditer("<!--", line)):
-            keep[i] = False
-            if "-->" not in line[at + 4:] and _COMMENT_CLOSE_RE not in pending:
-                pending.append(_COMMENT_CLOSE_RE)
-        for m in _RAW_HTML_OPEN_RE.finditer(line):
-            keep[i] = False
-            if not _RAW_HTML_CLOSE_RE.search(line, m.end()) and _RAW_HTML_CLOSE_RE not in pending:
-                pending.append(_RAW_HTML_CLOSE_RE)
+        for opener, closer in _RAW_SPANS:
+            for m in opener.finditer(line):
+                keep[i] = False
+                if not closer.search(line, m.end()) and closer not in pending:
+                    pending.append(closer)
     start = 0
     while start < len(lines):
         end = start
