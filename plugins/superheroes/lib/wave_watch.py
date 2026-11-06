@@ -1299,14 +1299,8 @@ _ACTIVITY_BRANCH_LIMIT = 50
 _MANUAL_LINK_EVENTS = ("connected", "disconnected")
 
 
-# GitHub's closing connection: the keyword and its reference sit together on one line, the
-# reference being #n, owner/repo#n or an issue URL. (Not the shared first-line CLOSES_RE, which
-# lets \s+ cross paragraphs and cannot read a URL.)
-_CLOSING_REF_RE = re.compile(
-    sc.CLOSING_KEYWORD + r"[ \t]*:?[ \t]+"
-    r"(?:(?P<slug>[^/\s#]+/[^/\s#]+)#(?P<n>\d+)(?!\w)|#(?P<bare>\d+)(?!\w)"
-    r"|https?://(?:www\.)?github\.com/(?P<uslug>[^/\s#]+/[^/\s#]+)/issues/(?P<un>\d+)(?![\w/]))",
-    re.IGNORECASE)
+# GitHub's closing connection, read from a whole body; its one home is stack_check.
+_CLOSING_REF_RE = sc.CLOSING_REF_RE
 
 
 def _closing_pr_numbers_rest(timeline, slug, number):
