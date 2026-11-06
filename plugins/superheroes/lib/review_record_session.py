@@ -223,7 +223,8 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
     """The `sessionCost` of the reviewer runs this session's journal shows dispatched, each run once, every round and attempt.
 
     A run is a recorded review row with a runner nonce, or a `record-result`; its identity is the nonce, else the slot.
-    Its figures come from the engine record whose nonce it carries, never from `_bind`. `hand` names the runs of a
+    Its figures are the every-attempt total (`attemptsCost`) of the engine record whose nonce it carries, never from
+    `_bind`; a record without one gives no figure. `hand` names the runs of a
     hand-submit session (no journaled seat), each counted without a figure."""
     runs, seats = {}, {}
     for r in rows:
@@ -257,7 +258,8 @@ def _session_cost(rows, run_dirs, engine_run, hand=(), session_dir=None, state=N
         if isinstance(n, str) and n:
             if n in seen:
                 clash.add(n)  # two different run dirs claim one nonce: no figure for it
-            seen[n] = rec.get("observation")
+            # axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run without one — see bite-proof record i2381_every_attempt
+            seen[n] = rec.get("attemptsCost")
     entries = [(name, None if nonce is None or nonce in clash else _figure(seen.get(nonce))) for name, nonce in runs.values()]
     entries += [(name, None) for name in hand]
     for name, fig in entries:

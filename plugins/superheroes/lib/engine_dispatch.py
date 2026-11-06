@@ -7620,6 +7620,41 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     return observation
 
 
+# axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run
+# without one — see bite-proof record i2381_every_attempt
+def _attempts_cost(run_dir_real, state):
+    """{"tokens", "wallSeconds", "attempts"} summed over every attempt the journal shows, or None.
+
+    Each attempt needs a dict `ended` and a finite non-negative numeric (not bool) `wallSeconds`; a codex run also needs
+    the attempt's own stdout to carry a valid usage total. Any other engine, an empty attempts map, or any attempt
+    short of a figure gives None. Never raises."""
+    try:
+        opened = state.get("opened")
+        if not isinstance(opened, dict) or opened.get("engine") != "codex":
+            return None
+        attempts = state.get("attempts")
+        if not isinstance(attempts, dict) or not attempts:
+            return None
+        tokens, wall = 0, 0
+        for att in sorted(attempts):
+            slot = attempts[att]
+            ended = slot.get("ended") if isinstance(slot, dict) else None
+            if not isinstance(ended, dict):
+                return None
+            secs = ended.get("wallSeconds")
+            if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not 0 <= secs < float("inf"):
+                return None
+            stdout = _read_capped_text(os.path.join(run_dir_real, "attempt-%d.stdout" % att), stream=CAP_STREAM_STDOUT)
+            used = engine_adapter.codex_usage_tokens(stdout)
+            if used is None:
+                return None
+            tokens += used
+            wall += secs
+        return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts)}
+    except Exception:
+        return None
+
+
 def _calibration_capture_truncated(ended, stdout):
     """True when the stdout the calibration grade reads lost its head to the capture cap (so an earlier read may be gone).
 
@@ -7711,6 +7746,7 @@ def run_execution_record(run_dir):
             "runnerNonce": echo_nonce,
             "recordDigest": record_digest,
             "observation": observation,
+            "attemptsCost": _attempts_cost(run_dir_real, state),
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),
             "runKind": run_kind,

@@ -36,6 +36,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A left-for-owner or undecided finding that only this session's own earlier record lists (one the session raised itself, never carried from another session's record) now keeps its outcome when a `fixed` carried check names it, with the reason `not carried from an earlier record`, instead of reading fixed; and when the latest earlier record is unreadable, the check reads the newest readable earlier record of another session (as a shown-wrong finding already did).** Nothing is owed. See [Review: a never-carried finding is never moved, for every outcome](#review-a-never-carried-finding-is-never-moved-for-every-outcome).
 - **After switching.** **A break-it probe the verifier refuted, kept as a repeat of an earlier fixed finding, no longer ends the review `cannot-certify` for a test that was never committed; its `breakItKept` row reads `not-required` with reason `refuted-probe`, and a new fail-closed row `restore-shadowed-by-refuted-probe` can appear.** Nothing is owed. See [Review: a refuted break-it probe no longer leaves the review unable to certify](#review-a-refuted-break-it-probe-no-longer-leaves-the-review-unable-to-certify).
 - **After switching.** **A fix round no longer hands a PR back with `fix-surface-unknown` for a rename, binary file or git-quoted name the fix did not touch.** Nothing is owed. See [Review: a delta round reads only the diff sections the fix changed](#review-a-delta-round-reads-only-the-diff-sections-the-fix-changed).
+- **After switching.** **For a reader of a review record's `sessionCost`, a run's tokens and minutes now count every attempt it made, and a run with a retried attempt whose figure is missing now reads `complete: false`.** Nothing is owed. See [Review: a run's cost counts every attempt](#review-a-runs-cost-counts-every-attempt).
 
 ### Review: a refuted break-it probe no longer leaves the review unable to certify
 
@@ -109,6 +110,10 @@ There is no new result key. A failed or incomplete per-lane read names that lane
 ### Review: a delta round reads only the diff sections the fix changed
 
 In a fix round (round 2 or later), a file section that is byte-for-byte the same in the reviewed diff and the head diff is cut before the hunk parser reads either diff, as the returning review already does. A rename, a binary file or a git-quoted name the fix did not touch no longer hands the PR back with `fix-surface-unknown`. A section the fix changed that holds one still does.
+
+### Review: a run's cost counts every attempt
+
+For a reader of a review record's `sessionCost`, a run's tokens and minutes now count every attempt it made, a timed-out or retried one included; before, they came from the run's last attempt alone, so a run that retried read low. A run with a retried attempt whose figure is missing (common for codex runs whose first attempt timed out, and for every claude or cursor run as before) now reads `complete: false`, so `review_measures` keeps that PR out of the cost figures instead of reporting it low.
 
 ## 0.48.0
 
