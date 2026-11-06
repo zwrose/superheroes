@@ -398,7 +398,9 @@ def sanitized_view_notice(view, *, mode="review"):
         labels = file_names + dir_names
         if labels:
             lines.append(
-                "Stripped agent/IDE config names: %s (%d path(s) removed)"
+                "Stripped agent/IDE config names: %s (%d path(s) removed). The project's CLAUDE.md and calibration "
+                "files are handed to seats by absolute path, outside this view, so this list never means a seat had "
+                "no calibration; the review record's calibrationRead is the measurement."
                 % (", ".join(labels), len(stripped))
             )
         else:

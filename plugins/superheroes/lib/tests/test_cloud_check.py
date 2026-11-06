@@ -102,7 +102,9 @@ def _confirm(answered=True, lapses=FAR, reason=None):
 
 
 def _cloud_report(cloud, **over):
-    obj = CC.report(env={cloud_pass.ENVIRONMENT_ENV: ENV_ID}, cwd=cloud.cwd, root=cloud.root,
+    # the session sets the four identity variables, so the identity part carries no warning
+    env = dict({cloud_pass.ENVIRONMENT_ENV: ENV_ID}, **dict.fromkeys(CC.IDENTITY_VARIABLES, "x"))
+    obj = CC.report(env=env, cwd=cloud.cwd, root=cloud.root,
                     nonce=NONCE, confirm_fn=_confirm(),
                     identity_fn=lambda cwd: {"author": True, "committer": True})
     obj.update(over)
@@ -430,7 +432,7 @@ def test_report_never_raises_in_an_empty_session(tmp_path, monkeypatch):
         "pluginVersion": None, "pluginCommit": None, "placedStamp": "none", "stampFile": None,
         "repoStamp": "none", "confirmation": {"schema": cloud_pass.CONFIRMATION_SCHEMA, "reviewerAnswered": False,
                          "passLapses": None, "reason": "confirm-raised"},
-        "identity": {"author": False, "committer": False}}
+        "identity": {"author": False, "committer": False}, "identitySource": {"variables": []}}
     line = CC.report_line(obj)
     assert line.startswith("SUPERHEROES-CLOUD-CHECK ") and "\n" not in line
     assert json.loads(line.split(" ", 1)[1]) == dict(obj, digest=CC.report_digest(obj))
