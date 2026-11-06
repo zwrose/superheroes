@@ -212,7 +212,7 @@ def test_notice_for_a_lapsed_pass_park_names_the_pr_the_reason_and_the_renewal(w
     w.gh.comments[42] = [{"id": 1, "body": "hello"}, _lapsed_comment(42)]
     w.gh.pulls[42] = _pull(101)
     out = _notice(w, 42)
-    assert out == {"ok": True, "kind": "lapsed-pass", "pr": 42, "text": CP.NOTICE_TEXT % 42}
+    assert out == {"ok": True, "kind": "lapsed-pass", "pr": 42, "text": CP.NOTICE_TEXT % 42, "linkSource": "body"}
     assert out["text"].startswith("#42 is parked.") and "lapsed" in out["text"] and "Renew the pass" in out["text"]
     assert _entries(w) == [{"repo": REPO, "pr": 42, "parkedOn": "2026-10-05", "outcome": None,
                             "launchId": "l-42", "parkId": 942}]
@@ -262,7 +262,7 @@ def test_after_a_confirmed_renewal_the_open_parked_pr_goes_back_with_its_lanes_s
     assert out == {"ok": True, "skipped": [], "unread": [], "notRenewed": [], "noLane": [], "superseded": [], "uncertain": [],
                    "adopt": [], "adopting": [], "sendBack": [{
         "pr": 10, "repo": REPO, "issue": 101, "launchId": "l-newer", "cloudSessionName": "newer-session",
-        "parkId": 910, "configDir": None, "message": CP.SEND_BACK_MESSAGE}]}
+        "parkId": 910, "configDir": None, "message": CP.SEND_BACK_MESSAGE, "linkSource": "body"}]}
     assert _entries(w)[0]["outcome"] is None
 
 
@@ -324,7 +324,7 @@ def test_the_notice_by_stored_outcome_and_whether_the_park_is_newer(w, outcome, 
     out = _notice(w, 10)
     saved = _entries(w)[0]
     if newer:
-        assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10}
+        assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10, "linkSource": "body"}
         assert saved["outcome"] is None and saved["parkId"] == 1010 and saved["parkedOn"] == "2026-10-11"
     elif outcome in ("closed", "owner-let-through"):
         assert out == {"ok": True, "kind": "park-resolved", "pr": 10, "text": None}
@@ -1222,7 +1222,8 @@ def _confirmed_file(w):
 def _adopt_item(pr, issue, launch_id, session, park_id, cause):
     return {"pr": pr, "repo": REPO, "issue": issue, "launchId": launch_id, "parkId": park_id,
             "cloudSessionName": session, "configDir": None, "cause": cause,
-            "notice": cloud_builder.superseded_notice_text(launch_id), "message": CP.ADOPT_MESSAGE % launch_id}
+            "notice": cloud_builder.superseded_notice_text(launch_id), "message": CP.ADOPT_MESSAGE % launch_id,
+            "linkSource": "body"}
 
 
 def test_t1_a_rejected_sign_in_park_is_classed_apart_recorded_with_its_cause_and_adopted_once_renewed(w):
@@ -1230,7 +1231,8 @@ def test_t1_a_rejected_sign_in_park_is_classed_apart_recorded_with_its_cause_and
     w.gh.comments[10] = [{"id": 1, "body": "hello"}, _rejected_comment(10)]
     w.gh.pulls[10] = _pull(101)
     out = _notice(w, 10)
-    assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "cause": "rejected", "text": CP.REJECTED_NOTICE_TEXT % 10}
+    assert out == {"ok": True, "kind": "lapsed-pass", "pr": 10, "cause": "rejected", "text": CP.REJECTED_NOTICE_TEXT % 10,
+                   "linkSource": "body"}
     assert "401" in out["text"] and "sign-in was rejected" in out["text"]
     assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": "2026-10-05", "outcome": None,
                             "launchId": "l-a", "parkId": 910, "cause": "rejected"}]
@@ -1239,7 +1241,7 @@ def test_t1_a_rejected_sign_in_park_is_classed_apart_recorded_with_its_cause_and
     w.gh.comments[11] = [_park_comment(11, free)]
     w.gh.pulls[11] = _pull()
     assert _notice(w, 11) == {"ok": True, "kind": "lapsed-pass", "pr": 11, "cause": "rejected",
-                              "text": CP.REJECTED_NOTICE_TEXT % 11}
+                              "text": CP.REJECTED_NOTICE_TEXT % 11, "linkSource": "body"}
     assert _entries(w)[1]["cause"] == "rejected"
     # not yet renewed: the record was written before the lane started
     _renew(w)
@@ -1274,7 +1276,8 @@ def test_a_newer_park_of_the_other_cause_replaces_the_entry_and_the_newest_park_
     assert _entries(w) == [{"repo": REPO, "pr": 10, "parkedOn": "2026-10-08", "outcome": None, "launchId": "l-a",
                             "parkId": 1010, "cause": "rejected"}]
     w.gh.comments[10].append(_lapsed_comment(10, created_at="2026-10-09T10:00:00Z", cid=1011))
-    assert _notice(w, 10) == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10}
+    assert _notice(w, 10) == {"ok": True, "kind": "lapsed-pass", "pr": 10, "text": CP.NOTICE_TEXT % 10,
+                              "linkSource": "body"}
     assert "cause" not in _entries(w)[0] and _entries(w)[0]["parkId"] == 1011
 
 
@@ -1297,7 +1300,7 @@ def test_t2_a_lane_started_before_the_renewal_is_adopted_and_one_started_after_i
     assert out["adopt"] == [_adopt_item(10, 101, "l-a", "session-a", 910, "rejected")]
     assert out["adopt"][0]["message"] == CP.ADOPT_MESSAGE % "l-a"
     assert out["sendBack"] == [{"pr": 11, "repo": REPO, "issue": 102, "launchId": "l-b", "parkId": 911,
-                                "cloudSessionName": "session-b", "configDir": None, "message": CP.SEND_BACK_MESSAGE}]
+                                "cloudSessionName": "session-b", "configDir": None, "message": CP.SEND_BACK_MESSAGE, "linkSource": "body"}]
     assert [s["pr"] for s in out["sendBack"]] == [11] and 10 not in [s["pr"] for s in out["sendBack"]]
     assert out["notRenewed"] == [] and out["adopting"] == []
     assert [e["outcome"] for e in _entries(w)] == ["adopting", None]

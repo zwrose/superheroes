@@ -278,8 +278,9 @@ re-verify, review and hand back.
 A cloud build hands back only with its review record written, as the charter's §11 and
 `rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. In a cloud session
 the record writer reads the repository, the PR and its issue through REST, and takes the issues the
-PR closes from the closing keywords anywhere in the body, as GitHub reads them (a link to another
-repository's issue never counts); write the close link on the first line all the same (charter §11). The record is not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
+PR closes from the closing keywords on the body's plain prose lines (a line near code, a quote,
+markup or an indent is skipped, so a close link there is missed, never invented; a link to another
+repository's issue never counts). Write the close link on the first line, on its own (charter §11). The record is not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
 final commit was reported by the session rather than read from the PR (`whatIsMissing` names an
 unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR
 as a comment naming the head it reviewed, leaves the PR not ready, and parks, naming the review
@@ -400,7 +401,7 @@ off a cloud build's path:
 | `skills/review-code/SKILL.md`, PR mode setup | `gh pr list --head`, `gh pr view --json`, `gh repo view --json nameWithOwner` | the stand-ins in § GitHub reads |
 | `skills/workhorse/reference/handback.md`, § The build record | `gh pr view --json body` | `gh api repos/<o>/<r>/pulls/<n> --jq .body` |
 | `lib/vet_slot.py`, `--pr <n> --repo <owner/name>` | the PR body through `gh api repos/<o>/<r>/pulls/<n>` (REST); `write` also edits it with `gh pr edit` | the body read works; `write` is the advisor's, not a builder's path |
-| `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issues come from the closing keywords anywhere in the PR body |
+| `lib/review_record.py`, repo, PR and issue reads | `gh repo view`, `gh pr view`, `gh issue view` | `gh api` (REST) in a cloud session; the closing issues come from the closing keywords on the PR body's plain prose lines |
 | `lib/pr_body_stage.py publish` (review-code, after a `converged` terminal) | `gh api repos/{owner}/{repo}/pulls/<n>` (REST) to read the body, `gh api -X PATCH repos/{owner}/{repo}/pulls/<n>` to edit it | works |
 | `lib/stack_check.py` | `gh repo view`, `gh pr view` | the advisor's: § GitHub reads |
 | `rubric/native-stacks.md`, linking a layer | `gh stack link` | the advisor's, at handback: § Workspace, "A stack layer" |

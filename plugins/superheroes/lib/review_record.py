@@ -21,7 +21,7 @@ CLI:
   review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]
 
 In a cloud session (CLAUDE_CODE_REMOTE is "true") the repo, PR and issue reads go through `gh api` REST, and the
-closing issues come from the closing keywords anywhere in the PR body, read as GitHub reads them.
+closing issues come from the closing keywords on the PR body's plain prose lines (see `_markdown_prose`).
 """
 from __future__ import annotations
 
@@ -97,20 +97,19 @@ _LANE_RE = re.compile(
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
-# Markdown code, where GitHub's parser links nothing (GFM). Where the read cannot tell code from prose it
-# treats it as code, so a misread may miss a link (cleanup refuses), never invent one: an HTML comment (an
-# unclosed one to the end); a fenced block, opened at a line's start or after quote and list markers and
-# closed only by the same character, at least as long, alone on its line, starting at the opener's column
-# or up to 3 columns right of it (any other candidate leaves the fence open); outside a fence, a line
-# indented four or more spaces or by a tab; and an inline code span, opened by an unescaped backtick run
-# and closed by the next run of exactly as many backticks inside the same paragraph.
-_HTML_COMMENT_RE = re.compile(r"<!--.*?(?:-->|\Z)", re.S)
-_QUOTE_LEAD_RE = re.compile(r"(?: {0,3}>[ \t]?)*")
-_FENCE_OPEN_RE = re.compile(r" {0,3}(?:(?:[-*+]|\d{1,9}[.)])[ \t]+)*(`{3,}(?=[^`]*$)|~{3,})")
-_FENCE_CLOSE_RE = re.compile(r"( *)(`{3,}|~{3,})[ \t]*")
-_INDENTED_CODE_RE = re.compile(r"(?: {4}|[ ]{0,3}\t)")
-_PARAGRAPH_BREAK_RE = re.compile(r"(\n[ \t]*\n)")
-_CODE_SPAN_RE = re.compile(r"(?<![`\\])(`+)(?!`).*?(?<!`)\1(?!`)", re.S)
+# The body fallback's masking. GitHub's own closingIssuesReferences list decides wherever it can be read;
+# the body is read only when it cannot, and then the read never returns an issue GitHub does not link: it
+# masks whole lines and can only over-mask, so a misread misses a link (cleanup refuses), never invents one.
+# A line holding ``` or ~~~ or $$ masks to the end of the body, since no closer is safe to trust; an HTML
+# comment, and a <pre>, <script>, <style> or <textarea> block, mask from their line to the line that ends
+# them (or the end); and a run of non-blank lines is masked whole when any line of it is masked, holds a
+# backtick, `<` or `[`, or looks like code or a quote (indented four columns, a list marker followed by two
+# or more spaces or a tab, or a `>` after any list markers).
+_RAW_TO_END_RE = re.compile(r"```|~~~|\$\$")
+_RAW_HTML_OPEN_RE = re.compile(r"<(?:pre|script|style|textarea)\b", re.I)
+_RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.I)
+_BLOCK_MARK_RE = re.compile(r"[`<\[]")
+_LIST_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])( +|$)")
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -217,33 +216,86 @@ def _repo_name_rest(repo_root):
     return name if name and _REPO_RE.fullmatch(name) else None
 
 
+def _code_like(line):
+    """True when `line` could be code or a quote: indented four columns, a list marker followed by two or more
+    spaces (a tab counts as one to four), or a `>` after any list markers."""
+    text = line.expandtabs(4)
+    rest = text.lstrip(" ")
+    if len(text) - len(rest) >= 4:
+        return True
+    while (m := _LIST_MARKER_RE.match(rest)):
+        if len(m.group(1)) >= 2:
+            return True
+        rest = rest[m.end():]
+    return rest.startswith(">")
+
+
 def _markdown_prose(body):
-    """`body` with its Markdown code and HTML comments blanked, over-masking wherever the shape is unclear."""
-    text = body.replace("\r\n", "\n").replace("\r", "\n")
-    text = _HTML_COMMENT_RE.sub(lambda m: "\n" * m.group(0).count("\n"), text)
-    lines, fence, column = text.split("\n"), None, 0
+    """`body` with every line blanked that might not be prose GitHub reads, masking whole lines only."""
+    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    keep, raw = [True] * len(lines), None
     for i, line in enumerate(lines):
-        rest = line[_QUOTE_LEAD_RE.match(line).end():]
-        if fence is None:
-            m = _FENCE_OPEN_RE.match(rest)
-            if m:
-                fence, column, lines[i] = m.group(1), m.start(1), ""
-            elif _INDENTED_CODE_RE.match(rest):
-                lines[i] = ""
-        else:
-            m = _FENCE_CLOSE_RE.fullmatch(rest)
-            if (m and m.group(2)[0] == fence[0] and len(m.group(2)) >= len(fence)
-                    and column <= len(m.group(1)) <= column + 3):
-                fence = None
-            lines[i] = ""
-    parts = _PARAGRAPH_BREAK_RE.split("\n".join(lines).replace("\\\\", "  "))
-    return "".join(_CODE_SPAN_RE.sub(" ", p) for p in parts)
+        if raw is not None:
+            keep[i] = False
+            if raw == "end" or not raw.search(line):
+                continue
+            raw = None
+            continue
+        if _RAW_TO_END_RE.search(line):
+            keep[i], raw = False, "end"
+            continue
+        at = line.find("<!--")
+        if at != -1:
+            keep[i] = False
+            if "-->" not in line[at + 4:]:
+                raw = re.compile("-->")
+            continue
+        m = _RAW_HTML_OPEN_RE.search(line)
+        if m:
+            keep[i] = False
+            if not _RAW_HTML_CLOSE_RE.search(line, m.end()):
+                raw = _RAW_HTML_CLOSE_RE
+    start = 0
+    while start < len(lines):
+        end = start
+        while end < len(lines) and lines[end].strip():
+            end += 1
+        block = range(start, end)
+        if any(not keep[k] or _BLOCK_MARK_RE.search(lines[k]) or _code_like(lines[k]) for k in block):
+            for k in block:
+                keep[k] = False
+        start = end + 1
+    return "\n".join(line if kept else "" for line, kept in zip(lines, keep))
+
+
+def github_closing_issues(text, repo):
+    """The issue numbers `gh pr view --json closingIssuesReferences` output `text` lists in `repo`, in order,
+    duplicates removed; another repository's issue never counts. None when `text` is not that answer, or an
+    entry names no number or no repository."""
+    try:
+        refs = json.loads(text)["closingIssuesReferences"]
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not isinstance(refs, list):
+        return None
+    found = []
+    for ref in refs:
+        n = ref.get("number") if isinstance(ref, dict) else None
+        where = ref.get("repository") if isinstance(ref, dict) else None
+        owner = where.get("owner") if isinstance(where, dict) else None
+        login = owner.get("login") if isinstance(owner, dict) else None
+        name = where.get("name") if isinstance(where, dict) else None
+        if type(n) is not int or n <= 0 or not isinstance(login, str) or not isinstance(name, str):
+            return None
+        if f"{login}/{name}".lower() == (repo or "").lower() and n not in found:
+            found.append(n)
+    return found
 
 
 def _closing_issues(body, repo):
-    """The issue numbers the PR body's closing keywords link, anywhere in the body outside Markdown code,
-    in order, duplicates removed; a link to another repository's issue never counts, and anything else
-    reads as none."""
+    """The issue numbers the PR body's closing keywords link, on lines the body fallback's masking keeps, in
+    order, duplicates removed; a link to another repository's issue never counts, and anything else reads as
+    none. GitHub's own closingIssuesReferences list, where it can be read, decides instead."""
     if not isinstance(body, str):
         return []
     found = []

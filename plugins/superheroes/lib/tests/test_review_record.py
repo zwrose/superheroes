@@ -1229,6 +1229,7 @@ def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_tr
     pytest.param("Fixes: #3", "o/r", [3], id="colon"),
     pytest.param("Closes #3. Resolves #5. Closes #3.", "o/r", [3, 5], id="several-deduplicated"),
     pytest.param("Closes #3, #5", "o/r", [3], id="one-issue-per-keyword"),
+    pytest.param("This PR fixes #7.", "o/r", [7], id="a-plain-prose-line"),
     pytest.param("Intro\nCloses #3.", "o/r", [3], id="a-later-line"),
     pytest.param("> Correction (advisor): see below.\n\nCloses #3.\n\n## What's changing", "o/r", [3],
                  id="a-note-above-the-close-line"),
@@ -1238,40 +1239,64 @@ def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_tr
     pytest.param("Note\nCloses https://github.com/O/R/issues/9", "o/r", [9], id="issue-url-same-repo"),
     pytest.param("Note\nCloses https://github.com/x/y/issues/9", "o/r", [], id="issue-url-other-repo"),
     pytest.param("Note\nSee #3 and part of #4.", "o/r", [], id="no-closing-keyword-anywhere"),
-    pytest.param("Closes #3.\n\nExample: `Closes #4` is the close line.", "o/r", [3], id="inline-code-example"),
-    pytest.param("Closes #3.\n\n```\nCloses #4\n```\nFixes #5", "o/r", [3, 5], id="fenced-code-example"),
-    pytest.param("Note\n~~~md\nCloses #4\n", "o/r", [], id="unclosed-fence-runs-to-the-end"),
-    pytest.param("Note `code`\nCloses #3", "o/r", [3], id="code-span-then-a-real-link"),
-    pytest.param("Closes #3\n\nExample: `Closes #4\ncontinued`.", "o/r", [3], id="code-span-across-a-line-break"),
-    pytest.param("A `stray backtick\n\nCloses #3 and `x`", "o/r", [3], id="code-span-never-crosses-a-paragraph"),
-    pytest.param("Note\r\n```text\r\nCloses #4\r\n```\r\n\r\nCloses #3\r\n", "o/r", [3], id="crlf-fence"),
-    pytest.param("Note\n\n```example```\n\nCloses #3", "o/r", [3], id="backticks-in-a-fence-info-string"),
-    pytest.param("Note\n````\nCloses #4\n```\nCloses #5\n````\nCloses #3", "o/r", [3], id="shorter-fence-does-not-close"),
-    pytest.param("Note\n~~~\nCloses #4\n```\n~~~\nCloses #3", "o/r", [3], id="other-fence-character-does-not-close"),
-    pytest.param("Note\n```\nCloses #4\n``` x\nCloses #5\n```\nCloses #3", "o/r", [3], id="closing-fence-with-text-does-not-close"),
-    pytest.param("Note\n    ```\nCloses #3", "o/r", [3], id="four-space-indent-is-no-fence"),
-    pytest.param("Closes #3\n\n- ```text\n  Closes #4\n  ```\n- Fixes #5", "o/r", [3, 5], id="fence-in-a-list-item"),
-    pytest.param("Closes #3\n\n1. ```\n   Closes #4\n   ```\n\nFixes #5", "o/r", [3, 5], id="fence-in-an-ordered-list-item"),
-    pytest.param("Closes #3\n\n> ```\n> Closes #4\n> ```\n\nFixes #5", "o/r", [3, 5], id="fence-in-a-quote"),
-    pytest.param("Note: type \\` for a backtick.\nCloses #3; label `ready`.", "o/r", [3], id="escaped-backtick-opens-no-span"),
-    pytest.param("Closes #101\n\n<!-- Fixes #202 -->", "o/r", [101], id="a-html-comment"),
-    pytest.param("Closes #101\n\n<!-- a note\nFixes #202", "o/r", [101], id="a-unclosed-html-comment-runs-to-the-end"),
-    pytest.param("Closes #101\n\n    Fixes #202", "o/r", [101], id="b-four-space-indented-block"),
-    pytest.param("Closes #101\n\n\tFixes #202", "o/r", [101], id="b-tab-indented-block"),
-    pytest.param("Closes #101\n\n```\n    ```\nFixes #202\n```", "o/r", [101], id="c-four-space-fence-line-inside-a-fence"),
-    pytest.param("Closes #101\n\n- ```\n  code\n```\nFixes #202\n", "o/r", [101], id="d-column-0-fence-line-after-a-list-fence"),
-    pytest.param("Closes #101\n\n- ```\n      ```\nFixes #202\n  ```", "o/r", [101], id="e-six-space-closer-inside-a-list-fence"),
-    pytest.param("Closes #101\n\nPath \\\\`Fixes #202` here", "o/r", [101], id="f-escaped-backslash-before-a-backtick"),
-    pytest.param("Closes #101\n\n> ```\n> Fixes #202\n> ```\n\nFixes #5", "o/r", [101, 5], id="quoted-fence-closes-at-its-column"),
     pytest.param("Closes #3.\r\nx", "o/r", [3], id="crlf"),
     pytest.param("Closes O/R#8", "o/r", [8], id="qualified-same-repo"),
     pytest.param("Closes x/y#8", "o/r", [], id="qualified-other-repo"),
     pytest.param("Encloses #3", "o/r", [], id="not-a-whole-word-keyword"),
     pytest.param("Closes #3a", "o/r", [], id="not-a-whole-number"),
+    # the body fallback's masking: a line that might not be prose GitHub reads never links
+    pytest.param("Closes #3.\n\nExample: `Closes #4` is the close line.", "o/r", [3], id="inline-code"),
+    pytest.param("Closes #3.\n\n```\nCloses #4\n```\n\nFixes #5", "o/r", [3], id="a-fence-masks-to-the-end"),
+    pytest.param("Note\n~~~md\nCloses #4\n", "o/r", [], id="a-tilde-fence"),
+    pytest.param("Closes #3\n\n$$\nFixes #4\n$$", "o/r", [3], id="a-math-block"),
+    pytest.param("Closes #3\n\n`a\nFixes #4\nb`", "o/r", [3], id="a-code-span-over-three-lines"),
+    pytest.param("Closes #3\n\n-     Fixes #4", "o/r", [3], id="a-list-marker-then-indented-code"),
+    pytest.param("Closes #3\n\n[Fixes #4](https://example.com)", "o/r", [3], id="link-text"),
+    pytest.param("Closes #3\n\n<a href=x>Fixes #4</a>", "o/r", [3], id="html-anchor-text"),
+    pytest.param("Closes #3\n\n<pre>\n\nFixes #4\n</pre>\n\nFixes #5", "o/r", [3, 5], id="a-pre-block-across-a-blank-line"),
+    pytest.param("Closes #3\n\n> Fixes #4", "o/r", [3], id="a-quote"),
+    pytest.param("Closes #3\nUses `x`.", "o/r", [], id="a-close-line-beside-code-is-missed-never-invented"),
+    # the false-link shapes found by vet 832 (a-f) and the returning review (c1), each linking only the real issue
+    pytest.param("Closes #101\n\n<!-- Fixes #202 -->", "o/r", [101], id="vet832-a-html-comment"),
+    pytest.param("Closes #101\n\n<!-- a note\n\nFixes #202", "o/r", [101], id="vet832-a-unclosed-html-comment"),
+    pytest.param("Closes #101\n\n    Fixes #202", "o/r", [101], id="vet832-b-four-space-indented-block"),
+    pytest.param("Closes #101\n\n\tFixes #202", "o/r", [101], id="vet832-b-tab-indented-block"),
+    pytest.param("Closes #101\n\n```\n    ```\nFixes #202\n```", "o/r", [101], id="vet832-c-four-space-fence-line-inside-a-fence"),
+    pytest.param("Closes #101\n\n- ```\n  code\n```\nFixes #202\n", "o/r", [101], id="vet832-d-column-0-fence-line-after-a-list-fence"),
+    pytest.param("Closes #101\n\n- ```\n      ```\nFixes #202\n  ```", "o/r", [101], id="vet832-e-six-space-closer-inside-a-list-fence"),
+    pytest.param("Closes #101\n\nPath \\\\`Fixes #202` here", "o/r", [101], id="vet832-f-escaped-backslash-before-a-backtick"),
+    pytest.param("Closes #201\n\n```\n```<!-- sample -->\nFixes #999\n```", "o/r", [201], id="c1-code-001-comment-inside-a-fence"),
+    pytest.param("Closes #201\n\nExample: `Fixes #999\n    continued`.", "o/r", [201], id="c1-code-002-indented-span-closer"),
+    pytest.param("Closes #201\n\n- > ```\n  > Fixes #999", "o/r", [201], id="c1-code-003-fence-in-a-quote-in-a-list"),
+    pytest.param("Note\n````\nCloses #4\n```\nCloses #5\n````\nCloses #3", "o/r", [], id="a-shorter-fence-line-inside-a-fence"),
 ])
 def test_closing_issues_reads_the_whole_body_and_fails_closed(body, repo, expected):
-    # axis: the closing-issue rule; a close link below a note read as none, or another repository, a non-closing verb, a split line or a partial word read as a closed issue
+    # axis: the body fallback; a close link below a note read as none, or a line that might be code, a quote or markup, another repository, a non-closing verb, a split line or a partial word read as a closed issue
     assert rr._closing_issues(body, repo) == expected
+
+
+def _gh_ref(number, owner="o", name="r"):
+    return {"number": number, "repository": {"name": name, "owner": {"login": owner}}}
+
+
+@pytest.mark.parametrize("refs,expected", [
+    pytest.param([_gh_ref(3), _gh_ref(5, "O", "R"), _gh_ref(3)], [3, 5], id="same-repo-any-case-deduplicated"),
+    pytest.param([_gh_ref(3), _gh_ref(4, "x", "y"), _gh_ref(6, "o", "r-fork")], [3], id="another-repository-never-counts"),
+    pytest.param([], [], id="an-empty-list-is-read"),
+    pytest.param([{"number": 3}], None, id="no-repository-is-unreadable"),
+    pytest.param([_gh_ref(True)], None, id="a-bool-is-no-number"),
+    pytest.param([_gh_ref(0)], None, id="zero-is-no-issue"),
+    pytest.param(["#3"], None, id="a-non-object-entry"),
+    pytest.param("3", None, id="not-a-list"),
+])
+def test_githubs_own_closing_list_is_read_with_the_cross_repository_guard(refs, expected):
+    # axis: GitHub's list; another repository's issue counted, or a malformed answer read as a list
+    assert rr.github_closing_issues(json.dumps({"closingIssuesReferences": refs}), "o/r") == expected
+
+
+@pytest.mark.parametrize("text", [None, "", "not json", "[]", '{"other": []}'])
+def test_an_answer_that_is_not_githubs_closing_list_is_unreadable(text):
+    assert rr.github_closing_issues(text, "o/r") is None
 
 
 def test_rest_pr_and_issue_readers_fail_closed_on_a_missing_or_malformed_answer(monkeypatch):

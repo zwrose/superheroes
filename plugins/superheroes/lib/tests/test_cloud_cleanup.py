@@ -45,10 +45,17 @@ class Gh:
         self.sticky = False
         self.open_raw = None  # when set, the open-PR listing's raw stdout
         self.delete_script = []  # per DELETE, in order: (removes the branch, then times out)
+        self.closing = {}  # PR number -> the closingIssuesReferences rows `gh pr view` answers; absent, the read fails
 
     def __call__(self, argv, **kw):
         assert argv[0] == "gh", argv
         self.calls.append(tuple(argv))
+        if argv[1:3] == ["pr", "view"]:
+            assert argv[4:] == ["--repo", REPO, "--json", "closingIssuesReferences"], argv
+            rows = self.closing.get(int(argv[3]))
+            if rows is None:
+                return SimpleNamespace(returncode=1, stdout="", stderr="GraphQL: HTTP 403")
+            return SimpleNamespace(returncode=0, stdout=json.dumps({"closingIssuesReferences": rows}), stderr="")
         path = argv[-1]
         base = "repos/%s" % REPO
         if "DELETE" in argv:
@@ -447,9 +454,40 @@ def test_a_closing_example_in_code_does_not_link_a_second_issue(w):
 
 def test_a_pr_that_closes_on_its_first_line_and_one_without_any_keyword(w):
     # axis: the sibling cases; a first-line link stopped linking, or a body with no keyword linked
-    assert CP._linked_issues("Closes #7.\n\nbody", REPO) == [7]
-    assert CP._linked_issues("the work\n\nmentions #8 in passing", REPO) == []
-    assert CP._linked_issues("Part of #9.\n\nbody", REPO) == [9]
+    assert CP._body_links("Closes #7.\n\nbody", REPO) == [7]
+    assert CP._body_links("the work\n\nmentions #8 in passing", REPO) == []
+    assert CP._body_links("Part of #9.\n\nbody", REPO) == [9]
+    assert CP._body_links("This PR fixes #10.", REPO) == [10]
+
+
+def _ref(number, repo=REPO):
+    owner, name = repo.split("/")
+    return {"number": number, "repository": {"name": name, "owner": {"login": owner}},
+            "url": "https://github.com/%s/issues/%d" % (repo, number)}
+
+
+def test_githubs_own_closing_list_decides_where_it_can_be_read_even_against_the_body(w):
+    # axis: the source; the body read where GitHub's own list was readable, or another repository's issue in it counted
+    _lane(w, "l-1", 101, session="session-a")
+    _lane(w, "l-2", 202, session="session-b")
+    w.gh.pulls[PR] = _pull(issues=(202,), head_sha=w.head)
+    w.gh.closing[PR] = [_ref(101), _ref(202, "other/repo")]
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["launchId"] == "l-1" and out["linkSource"] == "github", out
+    w.gh.closing[PR] = []
+    w.gh.pulls[PR]["body"] = "the work\n\nCloses #202"
+    assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}  # GitHub's empty list is read, never the body's #202
+
+
+def test_the_body_is_read_only_when_githubs_list_cannot_be_read(w):
+    # axis: the fallback; an unreadable or malformed answer from GitHub read as no links instead of falling back
+    _lane(w, "l-1", 101)
+    w.gh.pulls[PR] = _pull(head_sha=w.head)
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["linkSource"] == "body", out
+    w.gh.closing[PR] = [{"number": 101}]  # an entry naming no repository is not GitHub's answer
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["linkSource"] == "body", out
 
 
 def test_a_local_lane_is_no_cloud_lane(w):
@@ -489,7 +527,7 @@ def test_the_plan_carries_the_lanes_facts_and_the_newest_cloud_lane_of_the_issue
     assert got == {"ok": True, "action": "cleanup", "outcome": "merged", "repo": REPO, "pr": PR, "issue": 101,
                    "launchId": "l-2", "session": "session-two", "sessionId": "session_01AbCdEf123", "configDir": None,
                    "archiveText": CC.ARCHIVE_TEXT_MERGED % PR, "request": {"state": "none"}, "closedAt": "2026-10-12T10:00:00Z", "branch": BRANCH,
-                   "headSha": w.head}
+                   "headSha": w.head, "linkSource": "body"}
 
 
 _T1, _T2, _OPENED = 1_700_000_000, 1_700_100_000, "2023-11-15T00:00:00Z"  # _OPENED is between them

@@ -297,14 +297,29 @@ def _let_through(repo, pr, env, run, head):
     return not parked and covers
 
 
-def _linked_issues(body, repo):
-    """The issues the PR body links: those its closing keywords close anywhere in the body, else any `#N`
-    its first line names (a non-closing link)."""
-    found = _sib("review_record").closing_issues(body, repo)
-    if found or not isinstance(body, str):
-        return found
-    first = body.split("\n", 1)[0]
-    return [int(n) for n in dict.fromkeys(re.findall(r"(?<![\w/])#([1-9]\d*)", first))]
+def _first_line_mentions(body):
+    """Every `#N` the body's first line names, in order (a non-closing link)."""
+    if not isinstance(body, str):
+        return []
+    return [int(n) for n in dict.fromkeys(re.findall(r"(?<![\w/])#([1-9]\d*)", body.split("\n", 1)[0]))]
+
+
+def _body_links(body, repo):
+    """The issues the PR body links: those its closing keywords close (the body fallback's read), else any
+    `#N` its first line names."""
+    return _sib("review_record").closing_issues(body, repo) or _first_line_mentions(body)
+
+
+def _linked_issues(pull, repo, pr, env, run):
+    """(issues, source) for the PR: those GitHub's own closingIssuesReferences list closes (`source`
+    "github"), or, only when that list cannot be read, those the body links (`source` "body"); with nothing
+    closed, any `#N` the body's first line names."""
+    code, out = _sib("cloud_builder")._gh(
+        run, ["pr", "view", str(pr), "--repo", repo, "--json", "closingIssuesReferences"], env)
+    found = _sib("review_record").github_closing_issues(out if code == 0 else None, repo)
+    if found is None:
+        return _body_links(pull.get("body"), repo), "body"
+    return found or _first_line_mentions(pull.get("body")), "github"
 
 
 def _lane(repo_root, issues, env, launch_id=None, reserved_by=None):
@@ -361,13 +376,14 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
     # axis: a resolved park that is not newer gets no renewal advice — see bite-proof record c8a_wo4.md
     if known and not newer and known[0]["outcome"] in _RESOLVED:
         return {"ok": True, "kind": "park-resolved", "pr": pr, "text": None}
+    link_source = None
     if not known or newer:
         if parked_on is None:
             return _refusal("park-date-unreadable")
         pull = _pull(repo, pr, env, run)
         if pull is None:
             return _refusal("pr-read-failed")
-        issues = _linked_issues(pull.get("body"), repo)
+        issues, link_source = _linked_issues(pull, repo, pr, env, run)
         old = known[0].get(_LAUNCH_KEY) if known else None
         superseded, recover_readable = _sib("cloud_recover").superseded_ids(repo_root, env)
         # axis: an unreadable recovery record refuses before the park id is saved, so a retry can still rebind to the replacement
@@ -392,9 +408,12 @@ def notice(repo_root, repo, pr, today=None, *, env=None, run=None):
         if not _save(path, entries):
             return _refusal("parked-state-unwritable")
     # axis: a rejected sign-in is told apart from a lapsed pass in the result, with its own renewal words
+    # the closing links' source shows only when this call read them
+    source = {"linkSource": link_source} if link_source else {}
     if rejected:
-        return {"ok": True, "kind": "lapsed-pass", "pr": pr, "cause": "rejected", "text": REJECTED_NOTICE_TEXT % pr}
-    return {"ok": True, "kind": "lapsed-pass", "pr": pr, "text": NOTICE_TEXT % pr}
+        return {"ok": True, "kind": "lapsed-pass", "pr": pr, "cause": "rejected", "text": REJECTED_NOTICE_TEXT % pr,
+                **source}
+    return {"ok": True, "kind": "lapsed-pass", "pr": pr, "text": NOTICE_TEXT % pr, **source}
 
 
 def _adopt_item(e, issue, launch_id, lane, rejected):
@@ -450,7 +469,7 @@ def send_back(repo_root, today=None, *, confirmed=False, env=None, run=None, now
             e["outcome"], changed = "closed", True
             out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
             continue
-        issues = _linked_issues(pull.get("body"), e["repo"])
+        issues, link_source = _linked_issues(pull, e["repo"], e["pr"], env, run)
         launch_id, lane, ledger_reason = (
             _lane(repo_root, issues, env, e[_LAUNCH_KEY]) if e.get(_LAUNCH_KEY) else (None, {}, None))
         if ledger_reason:
@@ -466,7 +485,7 @@ def send_back(repo_root, today=None, *, confirmed=False, env=None, run=None, now
                 e["outcome"], changed = "adopted", True
                 out["skipped"].append({"pr": e["pr"], "outcome": e["outcome"]})
             else:
-                out["adopting"].append(_adopt_item(e, issue, launch_id, lane, rejected))
+                out["adopting"].append(dict(_adopt_item(e, issue, launch_id, lane, rejected), linkSource=link_source))
             continue
         # axis: a rejected park with no lane to relaunch from is a no-lane PR before any renewal is judged
         if rejected and not lane.get("cloudSessionName"):
@@ -504,10 +523,11 @@ def send_back(repo_root, today=None, *, confirmed=False, env=None, run=None, now
             continue
         # axis: a lane that started before the renewal, or has no readable start, or whose renewal time cannot be read, never gets the message; a fresh session adopts it
         if not _is_time(started) or renewal is None or started < renewal:
-            out["adopt"].append(_adopt_item(e, issue, launch_id, lane, rejected))
+            out["adopt"].append(dict(_adopt_item(e, issue, launch_id, lane, rejected), linkSource=link_source))
             e["outcome"], changed = "adopting", True
             continue
-        out["sendBack"].append({"pr": e["pr"], "repo": e["repo"], "issue": issue, "launchId": launch_id,
+        out["sendBack"].append({"pr": e["pr"], "repo": e["repo"], "issue": issue, "linkSource": link_source,
+                                "launchId": launch_id,
                                 _PARK_KEY: e.get(_PARK_KEY),
                                 "cloudSessionName": lane["cloudSessionName"],
                                 "configDir": lane.get("configDir"), "message": SEND_BACK_MESSAGE})
