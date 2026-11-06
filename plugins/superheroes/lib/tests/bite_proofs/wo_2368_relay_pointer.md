@@ -318,3 +318,24 @@ E   AssertionError: {'ok': False, 'reason': 'comment-url-invalid'}
 ```
 
 - **Raw green (after the inverse Edit):** `1 passed in 17.14s`.
+
+## E10 a point refusal says nothing was sent only when no pointer can exist (review round 3)
+
+Orchestrator-typed at the review's `apply-fixes` step, committed (`8759def5`) before the probe; a targeted
+Edit undone by the inverse Edit, tree clean after.
+
+- **Guarded element:** `point`'s `nothingSent` stamp (`reason in _POINT_NOTHING_SENT`).
+  Axis: an unreadable state, a pre-upgrade entry and an already-pointed message read `nothingSent: false`.
+- **Detector:** `test_a_point_refusal_says_nothing_was_sent_only_when_no_pointer_can_exist`.
+- **Neutralization:** the stamp became `out["nothingSent"] = True`.
+- **Raw red:**
+
+```
+E   AssertionError: assert ('not-a-point...essage', True) == ('not-a-point...ssage', False)
+/home/user/wt-2368/plugins/superheroes/lib/tests/test_relay_pointer_2368.py:386: AssertionError: assert ('not-a-point...essage', True) == ('not-a-point...ssage', False)
+1 failed in 16.16s
+```
+
+- **Raw green (after the inverse Edit):** `1 passed in 0.86s`.
+- **Not neutralized separately:** each member of `_POINT_NOTHING_SENT` one by one; the test asserts every
+  member's value, so a member dropped from the tuple reads false and fails its own line.
