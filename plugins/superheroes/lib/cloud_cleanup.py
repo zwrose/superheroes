@@ -289,7 +289,7 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     if closed is None:
         return _refusal("pr-unreadable"), None
     cp = _sib("cloud_parked")
-    issues = cp._linked_issues(pull.get("body"), repo)
+    issues, link_source = cp._linked_issues(pull, repo, pr, env, run)
     if not issues:
         return _refusal("pr-unlinked"), None
     head_ref = _name(pull.get("head"), "ref")
@@ -371,7 +371,8 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
             request = max(held, key=lambda r: r["at"])
     request = request if request is not None else {"state": "none"}
     head = pull.get("head")
-    facts = {"branch": _name(head, "ref"), "headSha": _name(head, "sha"), "headRepo": _name(head, "repo", "full_name"),
+    facts = {"linkSource": link_source, "branch": _name(head, "ref"), "headSha": _name(head, "sha"),
+             "headRepo": _name(head, "repo", "full_name"),
              "baseRepo": _name(pull.get("base"), "repo", "full_name")}
     text = ARCHIVE_TEXT_MERGED if outcome == "merged" else ARCHIVE_TEXT_CLOSED
     delivered = request.get("outcome") == "delivered"
@@ -389,7 +390,8 @@ def _plan(repo_root, repo, pr, launch_id, env, run):
     result = {"ok": True, "action": "cleanup", "outcome": outcome, "repo": repo, "pr": pr, "issue": lane.get("issue"),
               "launchId": lid, "session": session, "sessionId": lane.get("cloudSessionId"),
               "configDir": lane.get("configDir"), "archiveText": None if delivered or hold else text % pr,
-              "request": request, "closedAt": closed_at, "branch": facts["branch"], "headSha": facts["headSha"]}
+              "request": request, "closedAt": closed_at, "branch": facts["branch"], "headSha": facts["headSha"],
+              "linkSource": facts["linkSource"]}
     # axis: a confirmed delivery needs no further send, so a retried cleanup carries no archive text
     if delivered:
         result["alreadyDelivered"] = True
