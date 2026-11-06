@@ -1269,6 +1269,9 @@ def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_tr
     pytest.param("Closes #201\n\nExample: `Fixes #999\n    continued`.", "o/r", [201], id="c1-code-002-indented-span-closer"),
     pytest.param("Closes #201\n\n- > ```\n  > Fixes #999", "o/r", [201], id="c1-code-003-fence-in-a-quote-in-a-list"),
     pytest.param("Note\n````\nCloses #4\n```\nCloses #5\n````\nCloses #3", "o/r", [], id="a-shorter-fence-line-inside-a-fence"),
+    pytest.param("A note.\n\n<pre><!-- example -->\n\nFixes #202\n\n</pre>", "o/r", [], id="brief-1-comment-and-pre-on-one-line"),
+    pytest.param("A note.\n\n<!-- x --><pre>\n\nFixes #202\n\n</pre>\n\nCloses #3", "o/r", [3], id="brief-1-closed-comment-then-pre"),
+    pytest.param("A note.\n\n<pre><!-- a\n\nFixes #202\n\n</pre>\n\n-->\n\nCloses #3", "o/r", [3], id="brief-1-both-spans-must-end"),
 ])
 def test_closing_issues_reads_the_whole_body_and_fails_closed(body, repo, expected):
     # axis: the body fallback; a close link below a note read as none, or a line that might be code, a quote or markup, another repository, a non-closing verb, a split line or a partial word read as a closed issue
@@ -1286,6 +1289,8 @@ def _gh_ref(number, owner="o", name="r"):
     pytest.param([{"number": 3}], None, id="no-repository-is-unreadable"),
     pytest.param([_gh_ref(True)], None, id="a-bool-is-no-number"),
     pytest.param([_gh_ref(0)], None, id="zero-is-no-issue"),
+    pytest.param([_gh_ref(3, "o", "")], None, id="an-empty-repository-name-is-unreadable"),
+    pytest.param([_gh_ref(3, " ", "r")], None, id="a-blank-owner-is-unreadable"),
     pytest.param(["#3"], None, id="a-non-object-entry"),
     pytest.param("3", None, id="not-a-list"),
 ])

@@ -106,7 +106,8 @@ _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
 # backtick, `<` or `[`, or looks like code or a quote (indented four columns, a list marker followed by two
 # or more spaces or a tab, or a `>` after any list markers).
 _RAW_TO_END_RE = re.compile(r"```|~~~|\$\$")
-_RAW_HTML_OPEN_RE = re.compile(r"<(?:pre|script|style|textarea)\b", re.I)
+_COMMENT_CLOSE_RE = re.compile("-->")
+_RAW_HTML_OPEN_RE =re.compile(r"<(?:pre|script|style|textarea)\b", re.I)
 _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.I)
 _BLOCK_MARK_RE = re.compile(r"[`<\[]")
 _LIST_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])( +|$)")
@@ -233,28 +234,26 @@ def _code_like(line):
 def _markdown_prose(body):
     """`body` with every line blanked that might not be prose GitHub reads, masking whole lines only."""
     lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    keep, raw = [True] * len(lines), None
+    keep, to_end, pending = [True] * len(lines), False, []
     for i, line in enumerate(lines):
-        if raw is not None:
+        if to_end or pending:
+            # A masked line is read only for the pending spans' closers: never for a fence or a new opener.
             keep[i] = False
-            if raw == "end" or not raw.search(line):
-                continue
-            raw = None
+            if not to_end:
+                pending = [closer for closer in pending if not closer.search(line)]
             continue
         if _RAW_TO_END_RE.search(line):
-            keep[i], raw = False, "end"
+            keep[i], to_end = False, True
             continue
-        at = line.find("<!--")
-        if at != -1:
+        # Every opener on the line leaves its own span pending when no closer follows it on that line.
+        for at in (m.start() for m in re.finditer("<!--", line)):
             keep[i] = False
-            if "-->" not in line[at + 4:]:
-                raw = re.compile("-->")
-            continue
-        m = _RAW_HTML_OPEN_RE.search(line)
-        if m:
+            if "-->" not in line[at + 4:] and _COMMENT_CLOSE_RE not in pending:
+                pending.append(_COMMENT_CLOSE_RE)
+        for m in _RAW_HTML_OPEN_RE.finditer(line):
             keep[i] = False
-            if not _RAW_HTML_CLOSE_RE.search(line, m.end()):
-                raw = _RAW_HTML_CLOSE_RE
+            if not _RAW_HTML_CLOSE_RE.search(line, m.end()) and _RAW_HTML_CLOSE_RE not in pending:
+                pending.append(_RAW_HTML_CLOSE_RE)
     start = 0
     while start < len(lines):
         end = start
@@ -271,7 +270,7 @@ def _markdown_prose(body):
 def github_closing_issues(text, repo):
     """The issue numbers `gh pr view --json closingIssuesReferences` output `text` lists in `repo`, in order,
     duplicates removed; another repository's issue never counts. None when `text` is not that answer, or an
-    entry names no number or no repository."""
+    entry names no number or no repository (an empty or blank repository name or owner counts as none)."""
     try:
         refs = json.loads(text)["closingIssuesReferences"]
     except (TypeError, ValueError, KeyError):
@@ -285,7 +284,8 @@ def github_closing_issues(text, repo):
         owner = where.get("owner") if isinstance(where, dict) else None
         login = owner.get("login") if isinstance(owner, dict) else None
         name = where.get("name") if isinstance(where, dict) else None
-        if type(n) is not int or n <= 0 or not isinstance(login, str) or not isinstance(name, str):
+        if type(n) is not int or n <= 0 or not (isinstance(login, str) and login.strip()) \
+                or not (isinstance(name, str) and name.strip()):
             return None
         if f"{login}/{name}".lower() == (repo or "").lower() and n not in found:
             found.append(n)

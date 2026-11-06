@@ -298,10 +298,11 @@ def _let_through(repo, pr, env, run, head):
 
 
 def _first_line_mentions(body):
-    """Every `#N` the body's first line names, in order (a non-closing link)."""
+    """Every `#N` the body's first line names, in order (a non-closing link): one at the line's start, or right
+    after whitespace or `(`, so another repository's `x/y#3` or a `repo-#3` never counts."""
     if not isinstance(body, str):
         return []
-    return [int(n) for n in dict.fromkeys(re.findall(r"(?<![\w/])#([1-9]\d*)", body.split("\n", 1)[0]))]
+    return [int(n) for n in dict.fromkeys(re.findall(r"(?:^|(?<=[\s(]))#([1-9]\d*)", body.split("\n", 1)[0]))]
 
 
 def _body_links(body, repo):

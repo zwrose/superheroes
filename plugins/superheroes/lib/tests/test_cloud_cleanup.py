@@ -458,6 +458,9 @@ def test_a_pr_that_closes_on_its_first_line_and_one_without_any_keyword(w):
     assert CP._body_links("the work\n\nmentions #8 in passing", REPO) == []
     assert CP._body_links("Part of #9.\n\nbody", REPO) == [9]
     assert CP._body_links("This PR fixes #10.", REPO) == [10]
+    assert CP._body_links("Closes other/repo-#202", REPO) == []
+    assert CP._body_links("See x/y#3 and a-#4", REPO) == []
+    assert CP._body_links("Part of (#9).", REPO) == [9]
 
 
 def _ref(number, repo=REPO):
