@@ -67,6 +67,8 @@ def test_delivery_after_a_new_handback_keeps_the_lane(tmp_path, monkeypatch):
     assert composed["ok"], composed
     # The message travels as an issue comment; the relay is sent the one-line pointer.
     _cid, url = _post(world, composed, issue=656)
+    # This repo's origin is a local bare remote, so `point` could not read a GitHub repository from it.
+    monkeypatch.setattr(cloud_relay, "lane_repo", lambda repo_root, **kw: ("acme/widgets", None))
     pointed = cloud_relay.point(repo, composed["msgId"], url, env=world.env, run=world.gh)
     assert pointed["ok"] is True, pointed
     handback = original + 180

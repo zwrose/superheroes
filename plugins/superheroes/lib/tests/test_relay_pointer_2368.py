@@ -9,7 +9,9 @@ and the relay's session record is a fixture file. "Posting" is putting the body 
 import hashlib
 import json
 import os
+import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -338,6 +340,97 @@ def test_point_refusals_in_order_each_leave_the_state_unchanged(world):
     assert len(world.gh.calls) == calls
 
 
+def _lane_composed(world, issue=77):
+    _ensure_alive(world)
+    composed = cr.compose(world.repo, world.config, "issue-%d-abcd1234" % issue, "hello", env=world.env)
+    assert composed["ok"] is True
+    return composed
+
+
+def test_point_accepts_a_comment_on_the_lane_checkouts_own_repository(world):
+    # axis: the lane's own repository (the checkout's origin) still passes the repository check
+    composed = _lane_composed(world)
+    cid, url = _post(world, composed, 77)
+    assert cr.lane_repo(world.repo, env=world.env) == (REPO_NAME, None)
+    out = cr.point(world.repo, composed["msgId"], url, env=world.env, run=world.gh)
+    assert out["ok"] is True and out["commentUrl"] == url
+
+
+def test_point_refuses_a_comment_on_another_repository_and_check_never_reads_delivered(world):
+    # axis: a comment on the same-numbered issue of another repository is refused comment-not-on-lane-repo, nothing recorded, nothing read — see bite-proof record wo_2368_relay_pointer.md
+    composed = _lane_composed(world)
+    mid = composed["msgId"]
+    cid, url = _post(world, composed, 77)
+    other = comment_url(77, cid, repo="other/repo")  # the fake gh holds the same body under that id
+    before = _bytes(world)
+    out = cr.point(world.repo, mid, other, env=world.env, run=world.gh)
+    assert out["ok"] is False and out["reason"] == "comment-not-on-lane-repo", out
+    assert out["nothingSent"] is True and out["laneRepo"] == REPO_NAME and out["commentRepo"] == "other/repo"
+    assert _bytes(world) == before and world.gh.calls == []
+    # what the pointer would have been is sent anyway: check still never reads delivered
+    forward = cr.pointer_text(mid, other, composed["commentSha256"])
+    _backdate(world, mid, BEFORE)
+    _write_record(world, _send_lines("toolu_1", LANE, forward, STAMP))
+    checked, _ = _check(world, mid, wait=0)
+    assert checked["delivered"] is False and checked["reason"] == "pointer-not-composed", checked
+
+
+def test_point_refuses_when_the_lane_repository_cannot_be_read(world):
+    # axis: a lane repository that cannot be read refuses lane-repo-unreadable, fail closed (nothingSent false), before any comment is read — see bite-proof record wo_2368_relay_pointer.md
+    composed = _lane_composed(world)
+    cid, url = _post(world, composed, 77)
+    git = ["git", "-C", world.repo]
+    before = _bytes(world)
+
+    def refused():
+        out = cr.point(world.repo, composed["msgId"], url, env=world.env, run=world.gh)
+        assert out["ok"] is False and out["reason"] == "lane-repo-unreadable" and out["nothingSent"] is False, out
+        assert _bytes(world) == before and world.gh.calls == []
+
+    subprocess.run(git + ["remote", "remove", "origin"], check=True)
+    refused()
+    subprocess.run(git + ["remote", "add", "origin", "https://gitlab.com/acme/widgets.git"], check=True)
+    refused()
+
+
+def _remote(url):
+    def run(argv, **kwargs):
+        return SimpleNamespace(returncode=0, stdout=url + "\n", stderr="")
+    return run
+
+
+@pytest.mark.parametrize("remote", ["https://github.com/acme/widgets.git", "https://github.com/acme/widgets",
+                                    "git@github.com:acme/widgets.git", "ssh://git@github.com/acme/widgets"])
+def test_lane_repo_reads_a_github_remote_in_any_form(remote):
+    assert cr.lane_repo("/x", run=_remote(remote)) == ("acme/widgets", None)
+
+
+@pytest.mark.parametrize("remote", ["https://gitlab.com/acme/widgets.git", "https://github.com/acme",
+                                    "https://github.com/a/b/c", "https://github.com/acme/..", "https://github.com/./x",
+                                    "", "not a url", "https://github.com/ac me/widgets"])
+def test_lane_repo_reads_anything_else_as_unreadable(remote):
+    assert cr.lane_repo("/x", run=_remote(remote)) == (None, "lane-repo-unreadable")
+
+
+def test_lane_repo_is_unreadable_when_git_fails_or_cannot_run():
+    failed = lambda argv, **kw: SimpleNamespace(returncode=2, stdout="https://github.com/acme/widgets\n", stderr="x")
+    assert cr.lane_repo("/x", run=failed) == (None, "lane-repo-unreadable")
+
+    def boom(argv, **kw):
+        raise OSError("no git")
+    assert cr.lane_repo("/x", run=boom) == (None, "lane-repo-unreadable")
+
+
+def test_lane_repo_asks_git_for_the_origin_of_the_repo_root():
+    seen = []
+
+    def run(argv, **kwargs):
+        seen.append(argv)
+        return SimpleNamespace(returncode=0, stdout="https://github.com/acme/widgets\n", stderr="")
+    cr.lane_repo("/some/root", run=run)
+    assert seen == [["git", "-C", "/some/root", "remote", "get-url", "origin"]]
+
+
 def test_point_refuses_a_state_it_cannot_use_or_write(world, monkeypatch, tmp_path):
     _ensure_alive(world)
     composed = cr.compose(world.repo, world.config, SESSION, "hello", env=world.env)
@@ -378,6 +471,13 @@ def test_a_point_refusal_says_nothing_was_sent_only_when_no_pointer_can_exist(wo
     assert sent(msg_id="nope") == ("message-unknown", True)
     assert sent(comment="not a url") == ("comment-url-invalid", True)
     assert sent(comment=comment_url(78, cid)) == ("comment-not-on-lane-issue", True)
+    assert sent(comment=comment_url(77, cid, repo="other/repo")) == ("comment-not-on-lane-repo", True)
+    # the lane's repository cannot be read: fail closed, so a pointer cannot be ruled out
+    subprocess.run(["git", "-C", world.repo, "remote", "set-url", "origin", "https://gitlab.com/acme/widgets.git"],
+                   check=True)
+    assert sent() == ("lane-repo-unreadable", False)
+    subprocess.run(["git", "-C", world.repo, "remote", "set-url", "origin", "https://github.com/%s.git" % REPO_NAME],
+                   check=True)
     assert sent(comment=comment_url(77, cid + 500)) == ("comment-missing", True)
     assert sent(run=FakeGh(failure=(1, "gh: Server Error (HTTP 500)"))) == ("comment-unreadable", True)
     world.comments[cid] = world.comments[cid] + "\n"

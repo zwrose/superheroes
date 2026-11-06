@@ -203,6 +203,19 @@ def read_comment(repo, comment_id, *, env=None, run=None):
     return ("ok", body) if isinstance(body, str) else ("unreadable", None)
 
 
+def lane_repo(repo_root, *, env=None, run=None):
+    """(`owner/name`, None) of the GitHub repository the `repo_root` checkout's `origin` remote names, or
+    (None, "lane-repo-unreadable") when git fails, the remote is empty or not on github.com, or the path is not
+    exactly `<owner>/<name>` of `[A-Za-z0-9._-]+` (neither part `.` or `..`)."""
+    code, out, _ = _call(run, ["git", "-C", str(repo_root), "remote", "get-url", "origin"], _env(env), _LIST_TIMEOUT)
+    normalized = _sibling("store_core").normalize_remote(out) if code == 0 and out.strip() else None
+    parts = normalized.split("/") if isinstance(normalized, str) else []
+    if (len(parts) == 3 and parts[0] == "github.com"
+            and all(re.fullmatch(r"[A-Za-z0-9._-]+", part) and part not in (".", "..") for part in parts[1:])):
+        return "%s/%s" % (parts[1], parts[2]), None
+    return None, "lane-repo-unreadable"
+
+
 def _state_path(repo_root, env):
     ledger = _sibling("launch_ledger").ledger_path(repo_root, env=env)
     if not ledger["ok"]:
@@ -444,8 +457,8 @@ def _pointed(entry):
 # lane checks and the comment read-back (each reached only on an entry with no pointer), a message the readable state
 # does not hold, and a final state write that failed (the pointer was never recorded or returned). Every other refusal
 # (an unreadable state, a pre-upgrade entry, `pointer-already-composed`, anything unnamed) leaves it open.
-_POINT_NOTHING_SENT = ("message-unknown", "comment-url-invalid", "comment-not-on-lane-issue", "comment-missing",
-                       "comment-unreadable", "comment-altered", "relay-state-unwritable")
+_POINT_NOTHING_SENT = ("message-unknown", "comment-url-invalid", "comment-not-on-lane-issue",
+                       "comment-not-on-lane-repo", "comment-missing", "comment-unreadable", "comment-altered", "relay-state-unwritable")
 
 
 def point(repo_root, msg_id, comment_url, *, env=None, run=None):
@@ -483,6 +496,13 @@ def _point(repo_root, msg_id, comment_url, *, env=None, run=None):
     if lane and int(lane.group(1)) != int(issue):
         return _refuse("comment-not-on-lane-issue", laneIssue=int(lane.group(1)), commentIssue=int(issue))
     repo = "%s/%s" % (owner, name)
+    lane_name, why = lane_repo(repo_root, env=env, run=run)
+    # axis: a lane repository that cannot be read refuses before any comment is read, so a comment is never judged against an unknown repository — see bite-proof record wo_2368_relay_pointer.md
+    if lane_name is None:
+        return _refuse(why)
+    # axis: the comment's owner/name must equal the lane checkout's GitHub repository exactly, so a same-numbered issue of another repository is never pointed — see bite-proof record wo_2368_relay_pointer.md
+    if repo != lane_name:
+        return _refuse("comment-not-on-lane-repo", laneRepo=lane_name, commentRepo=repo)
     status, body = read_comment(repo, int(comment_id), env=env, run=run)
     if status == "missing":
         return _refuse("comment-missing")

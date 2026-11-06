@@ -594,9 +594,11 @@ with `--fix-order`, and it re-opens the watch only once `check` reads delivered 
    `nothingSent: true` proves this message has no pointer yet, so nothing was sent for it: on
    `comment-altered` the posted bytes changed, so compose again from a new answer file; `comment-missing`
    and `comment-unreadable` mean the comment could not be read back; `comment-url-invalid` and
-   `comment-not-on-lane-issue` mean the URL is not a comment on that lane's issue; on `message-unknown`,
-   compose again. `nothingSent: false` (`pointer-already-composed`, `not-a-pointer-message`, a relay state
-   that could not be read) means this message may already have a pointer that was sent. Do not compose
+   `comment-not-on-lane-issue` and `comment-not-on-lane-repo` mean the URL is not a comment on that lane's
+   issue in this checkout's repository; on `message-unknown`, compose again. `nothingSent: false`
+   (`pointer-already-composed`, `not-a-pointer-message`, a relay state that could not be read) means this
+   message may already have a pointer that was sent; `lane-repo-unreadable` (this checkout's GitHub
+   repository could not be read from its `origin` remote) reads `nothingSent: false` too. Do not compose
    again; run `check` on this `msgId` and settle by its result. To repeat `point` safely, give it the URL
    it already holds. It returns `relayMessage` and `forward`: `relayMessage` is the relay's
    line `RELAY to <session> (id <msgId>):` and the one-line pointer, and `forward` is the pointer

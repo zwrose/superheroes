@@ -339,3 +339,73 @@ E   AssertionError: assert ('not-a-point...essage', True) == ('not-a-point...ssa
 - **Raw green (after the inverse Edit):** `1 passed in 0.86s`.
 - **Not neutralized separately:** each member of `_POINT_NOTHING_SENT` one by one; the test asserts every
   member's value, so a member dropped from the tuple reads false and fails its own line.
+
+## E11 `point` checks the comment's repository (WO-D, fix leg V839-a)
+
+Order-named. Base `98124e77`. A targeted Edit in the build worktree, undone by the inverse Edit.
+
+- **Guarded element:** `cloud_relay.py` `_point`, the `if repo != lane_name:` comparison (the `# axis:` line above it).
+  Axis: a comment on the same-numbered issue of another repository is refused `comment-not-on-lane-repo`, nothing
+  recorded, nothing read.
+- **Detector:** `test_relay_pointer_2368.py::test_point_refuses_a_comment_on_another_repository_and_check_never_reads_delivered`.
+- **Neutralization:** `if repo != lane_name:` became `if False and repo != lane_name:`.
+- **Raw red** (the `UV_NATIVE_TLS` warning line and the traceback-body lines past the assertion dropped; each
+  remaining line cut at 400 characters, none was that long):
+
+```
+>       assert out["ok"] is False and out["reason"] == "comment-not-on-lane-repo", out
+E       AssertionError: {'ok': True, 'msgId': '3f12e76e641b', 'relay': 'superheroes-relay-claude-two-cdf0d56a', 'commentUrl': 'https://github.com/other/repo/issues/77#issuecomment-1001', ...}
+E       assert (True is False)
+/home/user/wt-2368/plugins/superheroes/lib/tests/test_relay_pointer_2368.py:367: AssertionError
+FAILED plugins/superheroes/lib/tests/test_relay_pointer_2368.py::test_point_refuses_a_comment_on_another_repository_and_check_never_reads_delivered
+1 failed in 3.57s
+```
+
+- **Restore:** the inverse Edit, `if False and repo != lane_name:` back to `if repo != lane_name:`.
+- **Restore receipt:** `grep -n "if repo != lane_name\|if lane_name is None\|False and"` on `cloud_relay.py` read
+  `504:    if repo != lane_name:` and `501:    if lane_name is None:`, with no `False and`.
+- **Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 1.65s
+```
+
+## E12 the fail-closed read of the lane's repository (WO-D, fix leg V839-a)
+
+Order-named. Same method as E11.
+
+- **Guarded element:** `cloud_relay.py` `_point`, the `if lane_name is None: return _refuse(why)` branch (the `# axis:` line above it).
+  Axis: a lane repository that cannot be read refuses `lane-repo-unreadable` before any comment is read, and reads
+  `nothingSent: false`.
+- **Detector:** `test_relay_pointer_2368.py::test_point_refuses_when_the_lane_repository_cannot_be_read` (no origin,
+  then a gitlab origin).
+- **Neutralization:** `if lane_name is None:` became `if False and lane_name is None:` (the unreadable result falls
+  through to the comparison).
+- **Raw red** (same elisions as E11):
+
+```
+E       AssertionError: {'ok': False, 'reason': 'comment-not-on-lane-repo', 'laneRepo': None, 'commentRepo': 'acme/widgets', ...}
+E       assert (False is False and 'comment-not-on-lane-repo' == 'lane-repo-unreadable'
+E         - lane-repo-unreadable
+E         + comment-not-on-lane-repo
+/home/user/wt-2368/plugins/superheroes/lib/tests/test_relay_pointer_2368.py:387: AssertionError
+FAILED plugins/superheroes/lib/tests/test_relay_pointer_2368.py::test_point_refuses_when_the_lane_repository_cannot_be_read
+1 failed in 1.52s
+```
+
+- **Restore:** the inverse Edit, `if False and lane_name is None:` back to `if lane_name is None:`.
+- **Restore receipt:** the same `grep` read `501:    if lane_name is None:` and `504:    if repo != lane_name:`, no `False and`.
+- **Raw green:**
+
+```
+.                                                                        [100%]
+1 passed in 0.58s
+```
+
+## Residual blind spots (WO-D)
+
+- With E12 neutralized the code still refused (as `comment-not-on-lane-repo`, `laneRepo: None`); the detector went red
+  on the reason. A neutralization that let an unreadable repository reach the comment read would also be red on the
+  `world.gh.calls == []` line, which was not separately neutralized.
+- `lane_repo`'s parsing is pinned by unit rows (`test_lane_repo_*`), not neutralized one by one.

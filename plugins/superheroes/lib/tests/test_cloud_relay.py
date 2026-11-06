@@ -85,6 +85,10 @@ class FakeGh:
         self.calls = []
 
     def __call__(self, argv, **kwargs):
+        if argv[:2] == ["git", "-C"] and argv[3:] == ["remote", "get-url", "origin"]:
+            # `point` reads the lane's repository from the checkout's origin: really ask git, and keep it out of `calls`
+            # (those are the `gh` calls).
+            return subprocess.run(argv, capture_output=True, text=True)
         self.calls.append(list(argv))
         if self.failure is not None:
             return SimpleNamespace(returncode=self.failure[0], stdout="", stderr=self.failure[1])
@@ -128,6 +132,8 @@ def world(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    subprocess.run(["git", "-C", str(repo), "remote", "add", "origin", "https://github.com/%s.git" % REPO_NAME],
+                   check=True)
     root = tmp_path / "ledger-root"
     root.mkdir(mode=0o700)
     config = tmp_path / ".claude-two"
