@@ -50,3 +50,11 @@ Detector files: `plugins/superheroes/lib/tests/test_engine_dispatch_silence_watc
 - **Neutralization:** `seconds = opened.get("silenceWatchdogSeconds")` changed to `seconds = 10**9`.
 - **Raw red:** `10 failed, 33 passed in 144.89s`, including the real-subprocess `test_e2e_review_silence_watchdog_ends_silent_attempt_and_retry_answers` (attempt 1 was never ended, so the 120 s silent fake ran out its sleep) and `test_w7_threshold_reader_accepts_only_real_positive_finite_numbers`.
 - **Restore:** inverse edit; `git status --porcelain` empty. **Raw green:** `43 passed in 20.75s` (e2e included).
+
+## D1. One failure disarms the watchdog for the rest of the attempt (review fix, order D, commit `20198f98`)
+
+- **Axis:** after one exception inside the armed check, a later silent, idle beat never ends the attempt.
+- **Detector:** `test_w9_exception_in_the_armed_block_disarms_the_watchdog[read_increment|silent_and_idle]`, whose stub now raises once and then calls the real function (before this fix it raised every time, so the guard below could be removed behind a green test; that was the review's confirmed Minor).
+- **Neutralization:** `wd_threshold = None  # axis: a failure inside the check disarms it …` changed to `pass  # axis: …`.
+- **Raw red:** `2 failed, 41 passed` — both W9 cases, each `assert 'silenceWatchdog' not in ended` (the attempt was ended by the watchdog at exit -15).
+- **Restore:** inverse edit; `git status --porcelain` empty. **Raw green:** `43 passed in 11.10s`.
