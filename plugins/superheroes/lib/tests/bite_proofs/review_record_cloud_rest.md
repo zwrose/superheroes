@@ -7,7 +7,7 @@
 | Class | Representative element | Axis | Proving test | Verdict |
 |---|---|---|---|---|
 | C-select | the cloud condition in `_readers` | a cloud session on the old `gh pr`/`gh issue`/`gh repo` readers | `test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_body_first_line` | proven |
-| L-first-line | the first-line cut in `_closing_issues` | a closing keyword on a later line read as the PR's closing issue | `test_closing_issues_reads_only_the_first_line_and_fails_closed[not-on-the-first-line]` | proven |
+| L-first-line | the first-line cut in `_closing_issues` | a closing keyword on a later line read as the PR's closing issue | `test_closing_issues_reads_only_the_first_line_and_fails_closed[not-on-the-first-line]` | superseded (see the L-first-line section) |
 | C-cwd | the `cwd=repo_root` argument in `_repo_name_rest` | the cloud repo read run in a directory other than the repo root | `test_cloud_cli_write_reads_through_rest_only_and_takes_the_issue_from_the_body_first_line` | proven |
 
 Unproven (no neutralization run, inside the order's six-command budget): the other
@@ -88,6 +88,8 @@ EXIT=1
 **raw green:** not run apart from the full post-restore state: the order's six-command budget was spent
 (baseline, post-edit suite, red 1, green 1, red 2, validator), so this element has no separate green
 capture. The restored line is quoted above; the orchestrator's re-run closes it.
+
+**Superseded.** The first-line cut was removed when issue #2369 moved `_closing_issues` to the whole body's plain prose lines, and the test was renamed `test_closing_issues_reads_the_whole_body_and_fails_closed` (the `not-on-the-first-line` case became `a-later-line`, which now expects `[3]`). The receipt above records the element as it stood; that PR's build record carries the current bite-proofs.
 
 ## C-cwd — the cloud repo read runs in the repo root
 

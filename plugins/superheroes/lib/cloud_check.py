@@ -51,6 +51,11 @@ REPORT_SCHEMA = "cloud-check-report/1"
 REPORT_FIELDS = ("schema", "nonce", "environment", "pluginVersion", "placedStamp", "stampFile",
                  "repoStamp", "confirmation")
 IDENTITY_FIELD = "identity"
+# Where the identity came from: the names (never the values) of the identity variables set in the
+# cloud session. A report without it reads as unknown.
+IDENTITY_SOURCE_FIELD = "identitySource"
+IDENTITY_VARIABLES = ("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME",
+                      "GIT_COMMITTER_EMAIL")
 DIGEST_FIELD = "digest"
 # The failed-check marker's reader lives in cloud_setup; these names stay importable from here.
 FAILED_CHECK_SCHEMA = cloud_setup.FAILED_CHECK_SCHEMA
@@ -154,6 +159,26 @@ _PARTS = (
      cloud_setup.FIX_RECORD),
 )
 _IDENTITY_UNREPORTED = "The cloud session did not report its git identity."
+# The warning a passing identity part carries when any of the four variables is not set; `{names}`
+# is the missing variables, joined in prose.
+_RESTART_SENTENCE = ("An identity that a setup command writes into git config does not survive a "
+                     "worker restart: the setup does not run again, git falls back to the "
+                     "platform's own identity, and a build stops at its next commit.")
+_PLATFORM_SENTENCE = ("If it is the platform's own identity, nothing is needed: the platform "
+                      "supplies it again after a restart.")
+_IDENTITY_WARNINGS = {
+    "config": ("**A warning about the git identity.** The cloud session's git identity comes only "
+               "from git config, not from the environment's variables. " + _RESTART_SENTENCE
+               + " To keep the identity you want, set {names} in the environment's variables "
+               "instead. " + _PLATFORM_SENTENCE),
+    "mixed": ("**A warning about the git identity.** The cloud session's git identity comes partly "
+              "from git config: {names} {verb} not set in the environment's variables. "
+              + _RESTART_SENTENCE + " Set {names} in the environment's variables too."),
+    "unknown": ("**A warning about the git identity.** The cloud session did not say where its git "
+                "identity comes from, so it may come only from git config. " + _RESTART_SENTENCE
+                + " To be sure, set {names} in the environment's variables. "
+                + _PLATFORM_SENTENCE),
+}
 # The standing sentence of every check message: the failed-check marker is the paused state.
 _PAUSED_STANDING = ("Cloud builds are paused for this account until the check passes. "
                     + cloud_setup.PAUSED_RESUME)
@@ -381,6 +406,9 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_
         identity = (identity_fn or launch_doctrine.git_identity)(cwd)
     except Exception:
         identity = {"author": False, "committer": False}
+    # axis: the report says which identity variables are set, by name only, never their values
+    source = {"variables": [name for name in IDENTITY_VARIABLES
+                            if isinstance(env.get(name), str) and env.get(name).strip()]}
     return {
         "schema": REPORT_SCHEMA,
         "nonce": nonce if isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce) else None,
@@ -392,6 +420,7 @@ def report(env=None, cwd=None, root=None, nonce=None, confirm_fn=None, identity_
         "repoStamp": _or_none(repo_calibration_stamp, cwd),
         "confirmation": confirmation,
         IDENTITY_FIELD: identity,
+        IDENTITY_SOURCE_FIELD: source,
     }
 
 
@@ -524,6 +553,34 @@ def _judge_parts(obj, environment, cwd, root, today):
         "environmentMatches": environment_ok,
         "identityPresent": identity_ok,
     }, local_placed, pin, gap
+
+
+def _prose_names(names):
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
+
+
+def identity_warning(obj, identity_present):
+    """None when the identity part did not pass or all four identity variables are set; otherwise
+    {"source": "config" | "mixed" | "unknown", "missing": [variable names], "message": text}. A
+    source that is absent or not the reported shape reads unknown and names all four."""
+    if not identity_present:
+        return None
+    source = obj.get(IDENTITY_SOURCE_FIELD)
+    names = source.get("variables") if isinstance(source, dict) else None
+    # axis: a report that does not say where the identity came from reads unknown and warns
+    if (not isinstance(names, list) or not all(isinstance(n, str) for n in names)
+            or not set(names) <= set(IDENTITY_VARIABLES)):
+        kind, missing = "unknown", list(IDENTITY_VARIABLES)
+    else:
+        missing = [name for name in IDENTITY_VARIABLES if name not in names]
+        # axis: an identity from the four variables carries no warning
+        if not missing:
+            return None
+        # axis: an identity from git config alone warns and names all four variables; a mixed one names the missing ones
+        kind = "config" if len(missing) == len(IDENTITY_VARIABLES) else "mixed"
+    text = _IDENTITY_WARNINGS[kind].format(names=_prose_names(missing),
+                                          verb="is" if len(missing) == 1 else "are")
+    return {"source": kind, "missing": missing, "message": text}
 
 
 def _fail_closed(cwd, who, root, environment, failed, now, identity_reported=True):
@@ -721,11 +778,12 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
                      "identityPresent")),
                 "dependencyHookGap": None,
                 "failedParts": failed, "recordWritten": False, "settingSwitchedOff": False,
-                "markerWritten": marked,
+                "markerWritten": marked, "identityWarning": None,
                 # axis: the unread message says the account is paused exactly when a marker for it is on disk after the judgment, an earlier one included, never the not-paused sentence beside a marker that still pauses
                 "message": _UNREAD.format(standing=_standing(cwd, who, root, marked))}
 
     results, local_placed, pin, gap = _judge_parts(obj, environment, cwd, root, today)
+    warning = identity_warning(obj, results["identityPresent"])
     identity_reported = isinstance(obj.get(IDENTITY_FIELD), dict)
     # axis: a valid pin hook's pin part replaces the version part
     failed = [part for part, key in (("environment", "environmentMatches"),
@@ -769,20 +827,23 @@ def judge(cwd, line, *, environment, nonce, account=None, root=None, env=None, n
         standing = _standing(cwd, who, root, marked)
         return {"action": "failed", "results": results, "dependencyHookGap": gap,
                 "failedParts": failed, "recordWritten": written, "settingSwitchedOff": False,
-                "markerWritten": marked,
+                "markerWritten": marked, "identityWarning": warning,
                 "message": _failed_message(
                     failed, standing, obj["pluginVersion"], _or_none(cloud_setup_text._plugin_version),
                     identity_reported=identity_reported, pin=pin,
                     cloud_commit=obj.get("pluginCommit"), hook_gap=gap,
                     # axis: an identity the session never reported is not a missing one
                     **({"identity": _local_identity(cwd)}
-                       if "identity" in failed and identity_reported else {}))}
+                       if "identity" in failed and identity_reported else {}))
+                + ("" if warning is None else "\n\n" + warning["message"])}
     on = cloud_setup.read(cwd, who, root)["setting"] is True
     ending = (_PASSED_ON if on else _PASSED_OFF).format(project=name)
     return {"action": "passed", "results": results, "dependencyHookGap": None,
             "failedParts": [], "recordWritten": True,
-            "settingSwitchedOff": False, "markerWritten": False,
-            "message": _PASSED.format(version=obj["pluginVersion"]) + ending}
+            "settingSwitchedOff": False, "markerWritten": False, "identityWarning": warning,
+            # axis: a passing check whose identity is not wholly from the four variables says so
+            "message": (_PASSED.format(version=obj["pluginVersion"])
+                        + ("" if warning is None else warning["message"] + "\n\n") + ending)}
 
 
 def _refusal(reason, message, **more):
