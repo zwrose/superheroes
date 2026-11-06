@@ -328,10 +328,13 @@ def test_point_refusals_in_order_each_leave_the_state_unchanged(world):
     after = _bytes(world)
     assert after != before
     before = after
-    # 4. already pointed: a different URL is refused before any read, even one not on the lane's issue
+    # 4. already pointed: any other URL is refused pointer-already-composed before any read, a malformed one
+    # or one not on the lane's issue included, so no other refusal can follow a pointer that may have been sent
     calls = len(world.gh.calls)
     refused("pointer-already-composed", url=comment_url(77, cid + 1), commentUrl=good_url)
-    refused("comment-not-on-lane-issue", url=other_issue)
+    refused("pointer-already-composed", url=other_issue, commentUrl=good_url)
+    refused("pointer-already-composed", url="not a url", commentUrl=good_url)
+    refused("pointer-already-composed", url=None, commentUrl=good_url)
     assert len(world.gh.calls) == calls
 
 

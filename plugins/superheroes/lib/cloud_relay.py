@@ -453,6 +453,11 @@ def point(repo_root, msg_id, comment_url, *, env=None, run=None):
     expected = entry.get("commentSha256")
     if not isinstance(expected, str):
         return _refuse("not-a-pointer-message")
+    # axis: an entry that already has a pointer is judged before the URL, so every refusal of an already-pointed message is pointer-already-composed and no other refusal can follow a pointer that may have been sent — see bite-proof record wo_2368_relay_pointer.md
+    if entry.get("commentUrl") is not None:
+        if entry["commentUrl"] == comment_url and isinstance(entry.get("forward"), str):
+            return _pointed(entry)
+        return _refuse("pointer-already-composed", commentUrl=entry["commentUrl"])
     found = _COMMENT_URL_RE.match(comment_url) if isinstance(comment_url, str) else None
     if found is None:
         return _refuse("comment-url-invalid")
@@ -460,10 +465,6 @@ def point(repo_root, msg_id, comment_url, *, env=None, run=None):
     lane = re.match(r"issue-(\d+)-", entry["session"]) if isinstance(entry.get("session"), str) else None
     if lane and int(lane.group(1)) != int(issue):
         return _refuse("comment-not-on-lane-issue", laneIssue=int(lane.group(1)), commentIssue=int(issue))
-    if entry.get("commentUrl") is not None:
-        if entry["commentUrl"] == comment_url and isinstance(entry.get("forward"), str):
-            return _pointed(entry)
-        return _refuse("pointer-already-composed", commentUrl=entry["commentUrl"])
     repo = "%s/%s" % (owner, name)
     status, body = read_comment(repo, int(comment_id), env=env, run=run)
     if status == "missing":
