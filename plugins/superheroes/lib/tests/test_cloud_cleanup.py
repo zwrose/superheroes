@@ -1141,7 +1141,7 @@ def test_a_closing_keyword_in_an_indented_block_never_binds_a_stack_layer_to_ano
     "\n\n<code>\n\nFixes #999\n\n</code>\n",
     "\n\n<a href=\"https://example.com\">\n\nFixes #999\n\n</a>\n",
     "\n\n- <a href=\"https://example.com\">\n\n  Fixes #999\n\n  </a>\n",
-    "\n\n`example\n \nFixes #999\n \nend`\n",
+    "\n\n`example\n\u00a0\nFixes #999\n\u00a0\nend`\n",
     "\n\n`example\n\x0c\nFixes #999\n\x0c\nend`\n",
 ], ids=["code-element", "anchor-element", "anchor-on-a-list-line", "code-span-over-no-break-space-lines",
         "code-span-over-form-feed-lines"])

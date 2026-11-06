@@ -316,7 +316,8 @@ def _pr_meta_rest(pr, repo):
     d = _gh_json("api", _api(repo, f"pulls/{pr}"))
     try:
         body = d.get("body") or ""
-        return {"head": d["head"]["sha"], "body": body, "issues": _closing_issues(body, repo)}
+        return {"head": d["head"]["sha"], "body": body, "issues": _closing_issues(body, repo),
+                "laneIssues": _closing_issues(body.split("\n", 1)[0], repo)}
     except (KeyError, TypeError, AttributeError):
         return None
 
@@ -1074,9 +1075,10 @@ def _ci(rd, repo, sha, repo_root):
 
 
 def _lane_call(a, rd, meta):
-    """The first lane-call line in the PR's closing issues' bodies, then the PR body, as (match, source)."""
+    """The first lane-call line in the bodies of the issues the description's first line closes where the reader
+    gives them (`laneIssues`), else the PR's closing issues, then the PR body, as (match, source)."""
     if meta:
-        texts = [(rd["issue_body"](n, a["repo"]), "issue lane call") for n in meta["issues"]]
+        texts = [(rd["issue_body"](n, a["repo"]), "issue lane call") for n in meta.get("laneIssues", meta["issues"])]
         for body, source in texts + [(meta["body"], "PR lane call")]:
             hit = _LANE_RE.search(body or "")
             if hit:

@@ -1202,6 +1202,54 @@ else:
     assert posted["lane"]["value"] == "light" and posted["lane"]["source"] == "issue lane call"
 
 
+BELOW_FIRST_LINE_PR = {"head": {"sha": HEAD}, "body": "Closes #9\n\n<code>\n\nFixes #50\n\n</code>\n"}
+NO_CALL = "no lane call here"
+
+
+def _meta_through_the_rest_reader(monkeypatch):
+    """The meta the cloud writer builds: the real REST reader over a description that closes #9 on its first line
+    and #50 only below it."""
+    monkeypatch.setattr(rr, "_gh_json", lambda *args: BELOW_FIRST_LINE_PR)
+    meta = rr._pr_meta_rest(7, "o/r")
+    assert meta["issues"] == [9, 50]
+    assert meta["laneIssues"] == [9]
+    return meta
+
+
+def test_a_lane_call_on_an_issue_below_the_first_line_never_sets_the_writers_lane(monkeypatch):
+    # axis: the lane the record certifies against; an issue read from below the description's first line supplying it
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: NO_CALL, 50: "**Lane call:** full. spans contracts"},
+                runs={"/run/code-reviewer": (_run_with({"read": "unknown"}), None)})
+    rec = build(account(**LIGHT), fake)
+    assert rec["lane"]["value"] == "light"
+    assert rec["status"] != "reviewed"
+
+
+def test_a_light_review_over_the_cap_is_refused_whatever_an_issue_below_the_first_line_says(monkeypatch):
+    # axis: the round-cap refusal; an issue below the first line lifting a light review out of the cap
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: NO_CALL, 50: "**Lane call:** full. spans contracts"})
+    with pytest.raises(rr.Refusal) as e:
+        build(account(**LIGHT, rounds={"count": 5, "cap": 4, "stoppedAtCap": False}), fake)
+    assert e.value.reason == "review-record-round-cap-exceeded"
+
+
+def test_a_full_review_over_the_cap_is_written_when_only_an_issue_below_the_first_line_says_light(monkeypatch):
+    # axis: the round-cap refusal; an issue below the first line putting a full review under the light lane's cap
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: NO_CALL, 50: "**Lane call:** light. small"})
+    rec = build(account(lane="full", rounds={"count": 5, "cap": 4, "stoppedAtCap": False}), fake)
+    assert rec["lane"]["value"] == "full"
+
+
+def test_a_lane_call_on_the_first_line_issue_decides(monkeypatch):
+    # axis: the first-line issue still supplying the lane call, so the narrowed read is not a read of nothing
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: "**Lane call:** full. spans contracts", 50: "**Lane call:** light. small"})
+    assert build(account(**LIGHT), fake)["lane"]["value"] == "full"
+
+
 def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_true(monkeypatch):
     # axis: reader selection; a cloud session on the old gh pr/issue/repo readers, or an off-cloud session moved off them
     old = {"pr_meta": rr._pr_meta, "issue_body": rr._issue_body, "repo_name": rr._repo_name}
@@ -1319,7 +1367,7 @@ def test_rest_pr_and_issue_readers_fail_closed_on_a_missing_or_malformed_answer(
         monkeypatch.setattr(rr, "_gh_json", lambda *a, answer=answer: answer)
         assert rr._issue_body_rest(9, "o/r") is None
     monkeypatch.setattr(rr, "_gh_json", lambda *a: {"head": {"sha": HEAD}, "body": None})
-    assert rr._pr_meta_rest(7, "o/r") == {"head": HEAD, "body": "", "issues": []}
+    assert rr._pr_meta_rest(7, "o/r") == {"head": HEAD, "body": "", "issues": [], "laneIssues": []}
 
 
 def test_a_credential_used_as_a_dictionary_key_is_redacted_and_colliding_keys_survive():
