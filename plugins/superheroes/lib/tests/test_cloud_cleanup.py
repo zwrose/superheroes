@@ -434,6 +434,17 @@ def test_a_pr_whose_only_close_link_names_another_repository_is_unlinked(w):
     assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
 
 
+def test_a_closing_example_in_code_does_not_link_a_second_issue(w):
+    # axis: Markdown code; a backticked example close line read as a second linked issue
+    _lane(w, "l-1", 101, session="session-a")
+    _lane(w, "l-2", 202, session="session-b")
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "Closes #101\n\nThe first line reads like `Closes #202`.\n\n```\nFixes #202\n```\n"
+    w.gh.pulls[PR] = pull
+    out = _plan(w)
+    assert out["ok"] and out["issue"] == 101 and out["launchId"] == "l-1", out
+
+
 def test_a_pr_that_closes_on_its_first_line_and_one_without_any_keyword(w):
     # axis: the sibling cases; a first-line link stopped linking, or a body with no keyword linked
     assert CP._linked_issues("Closes #7.\n\nbody", REPO) == [7]

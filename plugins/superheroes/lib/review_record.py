@@ -97,6 +97,10 @@ _LANE_RE = re.compile(
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
 _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
+# Markdown code, where GitHub's parser links nothing: a fenced block (to its closing fence or the end)
+# and an inline code span on one line.
+_FENCED_CODE_RE = re.compile(r"^[ \t]{0,3}(`{3,}|~{3,})[^\n]*$.*?(?:^[ \t]{0,3}\1[`~]*[ \t]*$|\Z)", re.M | re.S)
+_CODE_SPAN_RE = re.compile(r"(`+)(?!`).+?(?<!`)\1(?!`)")
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -204,12 +208,14 @@ def _repo_name_rest(repo_root):
 
 
 def _closing_issues(body, repo):
-    """The issue numbers the PR body's closing keywords link, anywhere in the body, in order, duplicates
-    removed; a link to another repository's issue never counts, and anything else reads as none."""
+    """The issue numbers the PR body's closing keywords link, anywhere in the body outside Markdown code,
+    in order, duplicates removed; a link to another repository's issue never counts, and anything else
+    reads as none."""
     if not isinstance(body, str):
         return []
     found = []
-    for m in _CLOSING_REF_RE.finditer(body):
+    prose = _CODE_SPAN_RE.sub(" ", _FENCED_CODE_RE.sub("\n", body))
+    for m in _CLOSING_REF_RE.finditer(prose):
         n = int(m.group("n") or m.group("bare") or m.group("un"))
         slug = m.group("slug") or m.group("uslug")
         if n > 0 and n not in found and (slug is None or slug.lower() == (repo or "").lower()):
