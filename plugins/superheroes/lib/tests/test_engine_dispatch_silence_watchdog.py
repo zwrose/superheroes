@@ -123,10 +123,10 @@ def _gate_engine_poll(monkeypatch, gate):
     monkeypatch.setattr(ED.subprocess, "Popen", popen)
 
 
-def _result_json():
+def _result_json(body="issue found"):
     branch = TD._native_review_branch("findings")
     branch["findings"][0]["id"] = "f1"
-    branch["findings"][0]["body"] = "issue found"
+    branch["findings"][0]["body"] = body
     return json.dumps(TD._wrap_native_review_result(branch), separators=(",", ":"))
 
 
@@ -485,6 +485,9 @@ def test_w10_watchdog_end_with_valid_result_and_exit_zero_is_never_clean(tmp_pat
     run_dir = _watchdog_end_with_native_result(tmp_path, monkeypatch)
     state = _state(run_dir)
     ended = state["attempts"][1]["ended"]
+    # E5: the kill moment is recorded on a forfeit, and a result written only on SIGTERM is no race
+    assert isinstance(ended["silenceWatchdog"]["killAt"], float) and ended["silenceWatchdog"]["killAt"] > 0
+    assert "silenceWatchdogRace" not in ended
     assert ED._grade_review_attempt(run_dir, state, 1) == {
         "forfeit": True, "reason": ED.dispatch_outcome.REASON_FORFEITED, "detail": "silence-watchdog"}
     assert ED._attempt_ended_successfully(ended) is False
@@ -605,3 +608,252 @@ def test_silence_watchdog_ends_projection_never_raises(tmp_path):
     empty = tmp_path / "empty"
     empty.mkdir()
     assert ED.silence_watchdog_ends(str(empty)) == ([], None)
+
+
+# --- the kill race (#2375 vet 837): a watchdog end never discards an answer produced before the kill ---
+#
+# Pinned condition (stated here, at the pin): the same fake clock as above, plus a hook on
+# CS.silent_and_idle that runs a fixture action on the beat that brings the silence to the threshold
+# (after that beat's poll and size reads, before the watchdog decides). Production timing the pin makes
+# unobservable: the real window between the beat's poll and the kill is microseconds wide, so the real
+# race is rare; the hook makes it deterministic. Every real-time wait below is bounded.
+
+
+def _hook_decisive_beat(monkeypatch, action):
+    """Wrap CS.silent_and_idle: on the first silent beat that reaches the threshold, run action() once
+    and then return the real value. Returns the spy state (every call's arguments, and `done`)."""
+    real = CS.silent_and_idle
+    spy = {"silent": 0.0, "done": False, "calls": []}
+
+    def wrapped(out_grew, err_grew, tracker_state):
+        value = real(out_grew, err_grew, tracker_state)
+        spy["calls"].append((out_grew, err_grew, tracker_state))
+        if not value:
+            spy["silent"] = 0.0
+        elif not spy["done"]:
+            spy["silent"] += _TICK
+            if spy["silent"] >= _THRESHOLD:
+                spy["done"] = True
+                action()
+        return value
+
+    monkeypatch.setattr(CS, "silent_and_idle", wrapped)
+    return spy
+
+
+def _gate_stdout(run_dir):
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+
+    def gate(tick):
+        if tick == 0:
+            _wait_for(_nonempty(stdout_path), "fake engine stdout")
+
+    return gate
+
+
+def _touch(path):
+    open(path, "w").close()
+
+
+def _release_script(release, done, announce):
+    """vet 837's engine: turn.started, then blocked until `release` exists, then the native result, an
+    optional turn.completed, a marker written just before exit 0."""
+    return _PRELUDE + (
+        "sys.stdout.write('{\"type\":\"turn.started\"}\\n'); sys.stdout.flush()\n"
+        "while not os.path.exists(%r):\n    time.sleep(0.02)\n"
+        "open(_out, 'w').write(_RESULT)\n" % release
+        + ("sys.stdout.write('{\"type\":\"turn.completed\"}\\n'); sys.stdout.flush()\n" if announce else "")
+        + "open(%r, 'w').close()\nsys.exit(0)\n" % done)
+
+
+def _answer_then_silent_script(release, wrote, on_sigterm):
+    """turn.started, then (once `release` exists) the native result and a marker, then silence until
+    killed. on_sigterm: 'default' dies of SIGTERM, 'exit0' exits 0, 'rewrite' writes a different result
+    and exits 0."""
+    handler = {
+        "default": "",
+        "exit0": "signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(0))\n",
+        "rewrite": ("def _h(signum, frame):\n    with open(_out, 'w') as fh:\n        fh.write(%r)\n"
+                    "    sys.exit(0)\nsignal.signal(signal.SIGTERM, _h)\n")
+        % _result_json("rewritten after the kill"),
+    }[on_sigterm]
+    return _PRELUDE + handler + (
+        "sys.stdout.write('{\"type\":\"turn.started\"}\\n'); sys.stdout.flush()\n"
+        "while not os.path.exists(%r):\n    time.sleep(0.02)\n"
+        "open(_out, 'w').write(_RESULT)\nopen(%r, 'w').close()\ntime.sleep(20)\n" % (release, wrote))
+
+
+def _assert_graded_answered(run_dir):
+    state = _state(run_dir)
+    assert ED._attempt_ended_successfully(state["attempts"][1]["ended"]) is True
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert not grade.get("forfeit"), grade
+    assert grade.get("ok") is True, grade
+
+
+def _assert_watchdog_forfeit(run_dir, ended):
+    assert ended["signalSource"] == "silence-watchdog"
+    assert isinstance(ended["silenceWatchdog"]["killAt"], float)
+    assert "silenceWatchdogRace" not in ended
+    state = _state(run_dir)
+    assert ED._attempt_ended_successfully(ended) is False
+    assert ED._grade_review_attempt(run_dir, state, 1) == {
+        "forfeit": True, "reason": ED.dispatch_outcome.REASON_FORFEITED, "detail": "silence-watchdog"}
+
+
+def _answer_before_kill_run(tmp_path, monkeypatch, on_sigterm):
+    """The engine writes its native result on the deciding beat (after the beat's size reads, so no
+    stream grows), stays silent, and meets the watchdog's SIGTERM as `on_sigterm` says."""
+    run_dir, prompt, argv = _open_run(tmp_path)
+    release, wrote = str(tmp_path / "release"), str(tmp_path / "wrote")
+    TD._install_fake_codex(monkeypatch, tmp_path, _answer_then_silent_script(release, wrote, on_sigterm))
+
+    def engine_answers():
+        _touch(release)
+        _wait_for(lambda: os.path.exists(wrote), "fake engine wrote its result")
+        time.sleep(0.2)  # real time: the result file is closed and visible
+
+    spy = _hook_decisive_beat(monkeypatch, engine_answers)
+    _Clock(monkeypatch, before_tick=_gate_stdout(run_dir))
+    ended = _run_attempt(run_dir, prompt, argv, 1, 60)
+    assert spy["done"], "the deciding beat never ran"
+    assert ended["exit"] == 0 or on_sigterm == "default"
+    return run_dir, ended
+
+
+@pytest.mark.parametrize("announce", [True, False])
+def test_e1_engine_exiting_after_the_deciding_polls_is_a_natural_exit(tmp_path, monkeypatch, announce):
+    """E1 (vet 837): the engine answers and exits 0 after the beat's poll and size reads, before the kill.
+    announce=True is vet 837's shape (it also prints turn.completed); announce=False leaves no stream
+    growth, so only the re-poll can see the exit. A natural exit: no watchdog key of any kind."""
+    run_dir, prompt, argv = _open_run(tmp_path)
+    release, done = str(tmp_path / "release"), str(tmp_path / "done")
+    TD._install_fake_codex(monkeypatch, tmp_path, _release_script(release, done, announce))
+
+    def engine_exits():
+        _touch(release)
+        _wait_for(lambda: os.path.exists(done), "fake engine exit marker")
+        time.sleep(0.5)  # real time: the process is gone, so the next poll() reports its exit
+
+    spy = _hook_decisive_beat(monkeypatch, engine_exits)
+    _Clock(monkeypatch, before_tick=_gate_stdout(run_dir))
+    ended = _run_attempt(run_dir, prompt, argv, 1, 60)
+    assert spy["done"], "the deciding beat never ran"
+    assert ended["exit"] == 0 and ended["timedOut"] is False
+    _assert_not_watchdog(ended)
+    assert ended["signalSource"] is None
+    assert "silenceWatchdogRace" not in ended
+    assert os.path.getsize(ED._native_result_path(run_dir, 1)) > 0
+    _assert_graded_answered(run_dir)
+
+
+def test_e4_answer_written_before_the_kill_survives_an_exit_zero_on_sigterm(tmp_path, monkeypatch):
+    """E4: result on disk (seen only once) before the kill, engine silent, exits 0 on SIGTERM -> a race
+    record, no silenceWatchdog, graded answered."""
+    run_dir, ended = _answer_before_kill_run(tmp_path, monkeypatch, "exit0")
+    assert "silenceWatchdog" not in ended
+    assert ended["signalSource"] is None
+    assert ED._silence_watchdog_end(ended) is False
+    race = ended["silenceWatchdogRace"]
+    assert race["silentSeconds"] >= _THRESHOLD and race["thresholdSeconds"] == _THRESHOLD
+    assert isinstance(race["killAt"], float)
+    _assert_graded_answered(run_dir)
+
+
+def test_e6_answer_before_the_kill_but_the_engine_dies_of_sigterm_is_still_a_forfeit(tmp_path, monkeypatch):
+    """E6: the same answer-before-kill, but the engine dies of SIGTERM (non-zero exit) -> watchdog forfeit."""
+    run_dir, ended = _answer_before_kill_run(tmp_path, monkeypatch, "default")
+    assert ended["exit"] != 0
+    _assert_watchdog_forfeit(run_dir, ended)
+
+
+def test_r5_content_first_seen_after_the_kill_never_replaces_the_pre_kill_stamp(tmp_path, monkeypatch):
+    """R5: the engine answers before the kill, then rewrites a different result on SIGTERM and exits 0.
+    The held stamp stays the pre-kill content's digest, so the race record stands."""
+    run_dir, ended = _answer_before_kill_run(tmp_path, monkeypatch, "rewrite")
+    pre = ED.engine_result_channel.canonical_payload_digest(ED._scrub_native_payload(json.loads(_result_json())))
+    post = ED.engine_result_channel.canonical_payload_digest(
+        ED._scrub_native_payload(json.loads(_result_json("rewritten after the kill"))))
+    assert pre != post
+    assert ended[ED.engine_result_channel.FIELD_RESULT_COMPLETE_SHA256] == pre
+    assert "silenceWatchdogRace" in ended and "silenceWatchdog" not in ended
+
+
+def _recheck_run(tmp_path, monkeypatch, disturb):
+    """A silent attempt whose deciding beat is disturbed before the watchdog's re-check. Returns
+    (ended, ticks at the deciding beat, ticks when the kill began). The kill's own grace sleeps tick the
+    fake clock, so the tick count is read at the kill, not at the end."""
+    run_dir, prompt, argv = _open_run(tmp_path)
+    TD._install_fake_codex(monkeypatch, tmp_path, _TURN)
+    seen = {}
+    clock_box = {}
+    real_terminate = ED._terminate_process_group
+
+    def action():
+        seen["ticks"] = clock_box["clock"].ticks
+        disturb(run_dir)
+
+    def terminate(pgid):
+        seen["kill_ticks"] = clock_box["clock"].ticks
+        real_terminate(pgid)
+
+    monkeypatch.setattr(ED, "_terminate_process_group", terminate)
+    _hook_decisive_beat(monkeypatch, action)
+    clock_box["clock"] = _Clock(monkeypatch, before_tick=_gate_stdout(run_dir))
+    ended = _run_attempt(run_dir, prompt, argv, 1, 60)
+    assert "ticks" in seen, "the deciding beat never ran"
+    return ended, seen["ticks"], seen["kill_ticks"]
+
+
+def test_e2_stream_growth_between_the_deciding_beat_and_the_recheck_resets_the_silence(tmp_path, monkeypatch):
+    """E2: stderr grows after the beat's size reads. The attempt is not ended on that tick; the silence
+    restarts and the (still silent) engine is ended by the watchdog only later."""
+    def grow(run_dir):
+        with open(os.path.join(run_dir, "attempt-1.stderr"), "ab") as fh:
+            fh.write(b"x")
+
+    ended, decisive_ticks, end_ticks = _recheck_run(tmp_path, monkeypatch, grow)
+    assert end_ticks > decisive_ticks
+    assert ended["signalSource"] == "silence-watchdog"
+    assert ended["silenceWatchdog"]["silentSeconds"] >= _THRESHOLD
+
+
+def test_e3_unreadable_size_at_the_recheck_does_not_fire(tmp_path, monkeypatch):
+    """E3: the first size read of the re-check fails (None). Not fired on that tick."""
+    state = {"armed": False}
+    real = ED._size_or_none
+
+    def flaky(path):
+        if state["armed"]:
+            state["armed"] = False
+            return None
+        return real(path)
+
+    monkeypatch.setattr(ED, "_size_or_none", flaky)
+    ended, decisive_ticks, end_ticks = _recheck_run(
+        tmp_path, monkeypatch, lambda run_dir: state.update(armed=True))
+    assert state["armed"] is False, "the re-check never read a size"
+    assert end_ticks > decisive_ticks
+    assert ended["signalSource"] == "silence-watchdog"
+
+
+def test_e7_unreadable_stderr_size_never_counts_as_silence(tmp_path, monkeypatch):
+    """V837-b: os.path.getsize fails for the stderr path on every call. Every beat hands the predicate an
+    unknown stderr growth (None, never False) and the attempt runs to its bound."""
+    run_dir, prompt, argv = _open_run(tmp_path)
+    TD._install_fake_codex(monkeypatch, tmp_path, _TURN)
+    stderr_path = os.path.join(run_dir, "attempt-1.stderr")
+    real_getsize = os.path.getsize
+
+    def getsize(path, *args, **kwargs):
+        if os.fspath(path) == stderr_path:
+            raise OSError("injected: stderr size unreadable")
+        return real_getsize(path, *args, **kwargs)
+
+    monkeypatch.setattr(os.path, "getsize", getsize)
+    spy = _hook_decisive_beat(monkeypatch, lambda: None)
+    _Clock(monkeypatch, before_tick=_gate_stdout(run_dir))
+    ended = _run_attempt(run_dir, prompt, argv, 1, 2.0)
+    _assert_bound_end(ended)
+    assert spy["calls"], "no beat reached the predicate"
+    assert all(err_grew is None for _out, err_grew, _state_ in spy["calls"]), spy["calls"]

@@ -4271,6 +4271,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
                 try:
                     out_sz, err_sz = _size_or_none(stdout_path), _size_or_none(stderr_path)
                     out_grew = None if out_sz is None or wd_prev[0] is None else out_sz > wd_prev[0]
+                    # axis: R6 (V837-b) — an unreadable stderr size is unknown growth (None), never "did not grow"
                     err_grew = None if err_sz is None or wd_prev[1] is None else err_sz > wd_prev[1]
                     wd_prev = (out_sz if out_sz is not None else wd_prev[0],
                                err_sz if err_sz is not None else wd_prev[1])
@@ -4318,13 +4319,38 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             break
         # axis: precedence — a natural exit, then the per-attempt bound, both outrank the watchdog
         if watchdog_due:
-            watchdog_fired = True
-            break
+            rc2 = proc.poll()
+            if rc2 is not None:  # axis: R1 — an engine that exited since the beat's poll is graded by its natural exit
+                natural_rc = rc2
+                break
+            re_out, re_err = _size_or_none(stdout_path), _size_or_none(stderr_path)
+            # axis: R2 — an unreadable or grown stream at the re-check is activity, never silence
+            if (re_out is None or re_err is None or wd_prev[0] is None or wd_prev[1] is None
+                    or re_out > wd_prev[0] or re_err > wd_prev[1]):
+                silent_s = 0.0
+                wd_prev = (re_out if re_out is not None else wd_prev[0],
+                           re_err if re_err is not None else wd_prev[1])
+            else:
+                watchdog_fired = True
+                break
         time.sleep(_ATTEMPT_POLL_INTERVAL)
     _observe_attempt_completions(
         delivery, stdout_completion_obs, native_completion_obs,
         run_dir_real, attempt, stdout_path, deadline_mono=start + timeout,
     )
+    kill_mono = None
+    kill_at = None
+    if watchdog_fired:
+        # axis: R3 — a result already on disk is digested before the kill, even if it was seen only once
+        _observe_attempt_completions(
+            delivery, stdout_completion_obs, native_completion_obs,
+            run_dir_real, attempt, stdout_path, terminal=True,
+            deadline_mono=start + timeout,
+        )
+        kill_mono = time.monotonic()
+        kill_at = time.time()
+    # axis: R5 — content first seen after the kill never replaces a pre-kill stamp
+    post_kill_deadline = kill_mono if watchdog_fired else start + timeout
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)
@@ -4333,7 +4359,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     _observe_attempt_completions(
         delivery, stdout_completion_obs, native_completion_obs,
         run_dir_real, attempt, stdout_path, terminal=True,
-        deadline_mono=start + timeout,
+        deadline_mono=post_kill_deadline,
     )
     stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
     last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
@@ -4375,13 +4401,22 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     )
     if timed_out:
         ended_record["timeoutAt"] = timeout_at
-    if watchdog_fired:
-        ended_record["signalSource"] = "silence-watchdog"
-        ended_record["silenceWatchdog"] = {
-            "silentSeconds": round(silent_s, 1), "thresholdSeconds": wd_threshold}
     completion_stamp = stdout_completion_obs.get("stamp")
     if completion_stamp is None:
         completion_stamp = native_completion_obs.get("stamp")
+    pre_kill_at = (completion_stamp.get(engine_result_channel.FIELD_RESULT_COMPLETE_AT)
+                   if isinstance(completion_stamp, dict) else None)
+    # axis: R4 — answered before the kill only for an exit-0 engine whose stamp is at or before the kill
+    answered_before_kill = (
+        watchdog_fired and returncode == 0 and isinstance(pre_kill_at, (int, float))
+        and not isinstance(pre_kill_at, bool) and pre_kill_at <= kill_mono)
+    if answered_before_kill:
+        ended_record["silenceWatchdogRace"] = {
+            "silentSeconds": round(silent_s, 1), "thresholdSeconds": wd_threshold, "killAt": kill_at}
+    elif watchdog_fired:
+        ended_record["signalSource"] = "silence-watchdog"
+        ended_record["silenceWatchdog"] = {
+            "silentSeconds": round(silent_s, 1), "thresholdSeconds": wd_threshold, "killAt": kill_at}
     _apply_completion_stamp(ended_record, completion_stamp)
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
