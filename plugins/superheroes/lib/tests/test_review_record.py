@@ -1253,7 +1253,7 @@ def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_tr
     pytest.param("Closes #3\n\n-     Fixes #4", "o/r", [3], id="a-list-marker-then-indented-code"),
     pytest.param("Closes #3\n\n[Fixes #4](https://example.com)", "o/r", [3], id="link-text"),
     pytest.param("Closes #3\n\n<a href=x>Fixes #4</a>", "o/r", [3], id="html-anchor-text"),
-    pytest.param("Closes #3\n\n<pre>\n\nFixes #4\n</pre>\n\nFixes #5", "o/r", [3, 5], id="a-pre-block-across-a-blank-line"),
+    pytest.param("Closes #3\n\n<pre>\n\nFixes #4\n\n</pre>\n\nFixes #5", "o/r", [3, 5], id="a-pre-block-across-blank-lines"),
     pytest.param("Closes #3\n\n> Fixes #4", "o/r", [3], id="a-quote"),
     pytest.param("Closes #3\nUses `x`.", "o/r", [], id="a-close-line-beside-code-is-missed-never-invented"),
     # the false-link shapes found by vet 832 (a-f) and the returning review (c1), each linking only the real issue
