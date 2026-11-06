@@ -1272,6 +1272,9 @@ def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_tr
     pytest.param("A note.\n\n<pre><!-- example -->\n\nFixes #202\n\n</pre>", "o/r", [], id="brief-1-comment-and-pre-on-one-line"),
     pytest.param("A note.\n\n<!-- x --><pre>\n\nFixes #202\n\n</pre>\n\nCloses #3", "o/r", [3], id="brief-1-closed-comment-then-pre"),
     pytest.param("A note.\n\n<pre><!-- a\n\nFixes #202\n\n</pre>\n\n-->\n\nCloses #3", "o/r", [3], id="brief-1-both-spans-must-end"),
+    pytest.param("A note.\n\n<!-- a\n--> <pre>\n\nFixes #202\n\n</pre>", "o/r", [], id="a-span-ends-and-another-opens-on-one-line"),
+    pytest.param("A note.\n\n<!-- a\n--> ```\n\nFixes #202", "o/r", [], id="a-span-ends-and-a-fence-opens-on-one-line"),
+    pytest.param("A note.\n\n<!-- a <pre> -->\n\nCloses #3", "o/r", [], id="a-pre-inside-a-closed-comment-over-masks"),
 ])
 def test_closing_issues_reads_the_whole_body_and_fails_closed(body, repo, expected):
     # axis: the body fallback; a close link below a note read as none, or a line that might be code, a quote or markup, another repository, a non-closing verb, a split line or a partial word read as a closed issue

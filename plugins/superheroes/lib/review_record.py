@@ -107,7 +107,7 @@ _CLOSING_REF_RE = stack_check.CLOSING_REF_RE
 # or more spaces or a tab, or a `>` after any list markers).
 _RAW_TO_END_RE = re.compile(r"```|~~~|\$\$")
 _COMMENT_CLOSE_RE = re.compile("-->")
-_RAW_HTML_OPEN_RE =re.compile(r"<(?:pre|script|style|textarea)\b", re.I)
+_RAW_HTML_OPEN_RE = re.compile(r"<(?:pre|script|style|textarea)\b", re.I)
 _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.I)
 _BLOCK_MARK_RE = re.compile(r"[`<\[]")
 _LIST_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])( +|$)")
@@ -236,15 +236,16 @@ def _markdown_prose(body):
     lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
     keep, to_end, pending = [True] * len(lines), False, []
     for i, line in enumerate(lines):
-        if to_end or pending:
-            # A masked line is read only for the pending spans' closers: never for a fence or a new opener.
+        if to_end:
             keep[i] = False
-            if not to_end:
-                pending = [closer for closer in pending if not closer.search(line)]
             continue
         if _RAW_TO_END_RE.search(line):
             keep[i], to_end = False, True
             continue
+        # A line seen while a span is pending is masked, and is read for the pending closers and, like any line, for new openers: reading never unmasks.
+        if pending:
+            keep[i] = False
+            pending = [closer for closer in pending if not closer.search(line)]
         # Every opener on the line leaves its own span pending when no closer follows it on that line.
         for at in (m.start() for m in re.finditer("<!--", line)):
             keep[i] = False
