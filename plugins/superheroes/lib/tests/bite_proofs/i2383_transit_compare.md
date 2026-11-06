@@ -17,6 +17,7 @@ The restore receipt for every element is `git diff -- plugins/superheroes/lib/cl
 | E7 | `pr_comment.py` `upsert`, `found = held.get("body") ...` | the final body sent is compared with what GitHub holds, not with itself | `test_upsert_create_reports_a_changed_read_back` |
 | E8 | `cloud_builder.py` `readback`, the `_with_transit` call | the verb compares the held text with the sent file, not the file with itself | `test_readback_by_comment_id_changed` |
 | E9 | `cloud_builder.py` `transit_compare`, the `elif session_footer:` branch over `_SESSION_FOOTER_RE` | one trailing session-form footer (the one the egress appends to a pull request body) is tolerated; a second is a change | `test_one_trailing_session_footer_is_tolerated`, `test_a_second_session_footer_reads_changed` |
+| E10 | the five doc sections where a builder writes to GitHub: `skills/workhorse/reference/cloud.md` `## Preflight`, `## Review`, `## Terminal comments: handback, stop, park`, `## Handback`, and `skills/detective/reference/cloud.md` `## Terminal notes` — the pointer to `§ Text changed in transit` | a write section that no longer names the read-back section reads red; a heading found zero or two times fails | `test_each_write_section_names_the_transit_read_back[<id>]` in `test_cloud_doctrine_pointers.py` |
 
 Not separately neutralized, so unproven by this record: the `transit_compare` branch for a non-string `sent`, the `except Exception` branch (`the comparison failed`), the `\r\n` normalization, the cap on `changes` and the excerpt length, `transit_line`'s own branches, `read_pr_body`'s null-as-empty rule and the `--pr` path of `readback`, and `upsert`'s `except Exception` fall-through to `found = None` (each is asserted by a test in the suite but was not run against a mutation).
 
@@ -346,6 +347,7 @@ FAILED plugins/superheroes/lib/tests/test_transit_readback_2383.py::test_one_tra
 
 ### E9b — make the regex branch remove every session footer (detector: `test_a_second_session_footer_reads_changed`)
 
+
 **neutralization** (`cloud_builder.py`, `transit_compare`, the branch loops until no session footer is left):
 ```python
          elif session_footer:
@@ -384,3 +386,163 @@ FAILED plugins/superheroes/lib/tests/test_transit_readback_2383.py::test_a_secon
 .                                                                        [100%]
 1 passed in 0.25s
 ```
+
+---
+
+## E10 — the pointer census (added by work order D)
+
+**Guarded element and axis:** the five sections where a builder writes to GitHub — `skills/workhorse/reference/cloud.md` `## Preflight`, `## Review`, `## Terminal comments: handback, stop, park`, `## Handback`, and `skills/detective/reference/cloud.md` `## Terminal notes` — each names `§ Text changed in transit`. The detector is `test_each_write_section_names_the_transit_read_back` in `plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py`, one parametrized case per section. It also fails when a named heading is found zero or two times (`_section_of` asserts exactly one match), and when `## Text changed in transit` is no longer a heading of the workhorse page.
+
+Five neutralizations, one per pointer, each its own red on that section's case, each applied by a targeted Edit of the doc and restored by the inverse Edit (never `git checkout`, `restore`, `reset` or `stash`). Every run was `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest <node> -q -p no:cacheprovider --tb=line` from the worktree root; the launcher's one-line `UV_NATIVE_TLS` deprecation warning is dropped, and the red captures are otherwise unfiltered (the long `assert ... in "<section text>"` lines are pytest's own and are printed as pytest printed them). They hold no secrets, tokens, private URLs or PII. The restore receipt for each is `git diff --stat -- plugins/superheroes/skills/workhorse/reference/cloud.md plugins/superheroes/skills/detective/reference/cloud.md` printing nothing (exit 0) after the inverse Edit.
+
+### E10a — Preflight item 5 (node `[preflight]`)
+
+**neutralization** (`skills/workhorse/reference/cloud.md`, `## Preflight` item 5):
+```
+-   the `readback` check in § Text changed in transit.
++   the `readback` check.
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: skills/workhorse/reference/cloud.md '## Preflight' does not name 'Text changed in transit'
+/home/user/wt-2383/plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py:90: AssertionError: skills/workhorse/reference/cloud.md '## Preflight' does not name 'Text changed in transit'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py::test_each_write_section_names_the_transit_read_back[preflight]
+1 failed in 0.23s
+```
+(The `assert 'Text changed in transit' in "Preflight\n\nNo owner prompt ..."` and `where ...` lines pytest prints between the `E   AssertionError` line and the location line are elided here: two lines, each repeating the section text.)
+
+**restore:** the inverse Edit put `the `readback` check in § Text changed in transit.` back.
+
+**restore receipt:** `git diff --stat` over both docs printed nothing (exit 0).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 1.10s
+```
+
+### E10b — the Review park paragraph (node `[review]`)
+
+**neutralization** (`skills/workhorse/reference/cloud.md`, `## Review`):
+```
+-takes the read-back check in § Text changed in transit. A record
++takes the read-back check. A record
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: skills/workhorse/reference/cloud.md '## Review' does not name 'Text changed in transit'
+/home/user/wt-2383/plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py:90: AssertionError: skills/workhorse/reference/cloud.md '## Review' does not name 'Text changed in transit'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py::test_each_write_section_names_the_transit_read_back[review]
+1 failed in 0.21s
+```
+(The two section-text echo lines elided as for E10a.)
+
+**restore:** the inverse Edit put `takes the read-back check in § Text changed in transit. A record` back.
+
+**restore receipt:** `git diff --stat` over both docs printed nothing (exit 0).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.17s
+```
+
+### E10c — Terminal comments (node `[terminal-comments]`)
+
+**neutralization** (`skills/workhorse/reference/cloud.md`, `## Terminal comments: handback, stop, park`):
+```
+-allow it. Then run the read-back check in § Text changed in transit on the posted comment.
++allow it. Then run the read-back check on the posted comment.
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: skills/workhorse/reference/cloud.md '## Terminal comments: handback, stop, park' does not name 'Text changed in transit'
+/home/user/wt-2383/plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py:90: AssertionError: skills/workhorse/reference/cloud.md '## Terminal comments: handback, stop, park' does not name 'Text changed in transit'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py::test_each_write_section_names_the_transit_read_back[terminal-comments]
+1 failed in 0.16s
+```
+(The two section-text echo lines elided as for E10a.)
+
+**restore:** the inverse Edit put `Then run the read-back check in § Text changed in transit on the posted comment.` back.
+
+**restore receipt:** `git diff --stat` over both docs printed nothing (exit 0).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.15s
+```
+
+### E10d — Handback (node `[handback]`)
+
+**neutralization** (`skills/workhorse/reference/cloud.md`, `## Handback`):
+```
+-The PR body and the handback comment each take the read-back check in § Text changed in transit,
++The PR body and the handback comment each take the read-back check,
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: skills/workhorse/reference/cloud.md '## Handback' does not name 'Text changed in transit'
+/home/user/wt-2383/plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py:90: AssertionError: skills/workhorse/reference/cloud.md '## Handback' does not name 'Text changed in transit'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py::test_each_write_section_names_the_transit_read_back[handback]
+1 failed in 0.16s
+```
+(The two section-text echo lines elided as for E10a.)
+
+**restore:** the inverse Edit put `each take the read-back check in § Text changed in transit,` back.
+
+**restore receipt:** `git diff --stat` over both docs printed nothing (exit 0).
+
+**raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.16s
+```
+
+### E10e — the detective's Terminal notes (node `[detective-terminal-notes]`)
+
+**neutralization** (`skills/detective/reference/cloud.md`, `## Terminal notes`):
+```
+-`skills/workhorse/reference/cloud.md` § Text changed in transit says, and put any `transitLine` it
++`skills/workhorse/reference/cloud.md` says, and put any `transitLine` it
+```
+
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: skills/detective/reference/cloud.md '## Terminal notes' does not name 'Text changed in transit'
+/home/user/wt-2383/plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py:90: AssertionError: skills/detective/reference/cloud.md '## Terminal notes' does not name 'Text changed in transit'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_cloud_doctrine_pointers.py::test_each_write_section_names_the_transit_read_back[detective-terminal-notes]
+1 failed in 0.17s
+```
+(The two section-text echo lines elided as for E10a.)
+
+**restore:** the inverse Edit put `` `skills/workhorse/reference/cloud.md` § Text changed in transit says, and put any `transitLine` it `` back.
+
+**restore receipt:** `git diff --stat` over both docs printed nothing (exit 0).
+
+**raw green (the final green):**
+```
+.                                                                        [100%]
+1 passed in 0.19s
+```
+
+Not separately neutralized, so unproven for E10: the zero-or-two-headings failure of `_section_of` and the `## Text changed in transit` heading existence check (the latter is asserted in every case but was not run against a mutation).

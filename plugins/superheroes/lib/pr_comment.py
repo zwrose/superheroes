@@ -19,7 +19,6 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-import cloud_builder  # noqa: E402
 import gh_pages  # noqa: E402
 
 MARKER_FAMILIES = ("plan", "results")
@@ -216,6 +215,7 @@ def upsert(pr, family, key, body, plans_dir=None):
     """Edit-else-create the marker-managed comment; preserve plan checkboxes;
     delete the local fallback file once posted. Returns {"action", "id", "transit"} (plus "transitLine"
     when the comment GitHub holds differs from the body sent, or could not be read back)."""
+    import cloud_builder  # imported here so the modules that import pr_comment (readout, and through it engine_adapter) keep their pinned closure
     marker = render_marker(family, key)
     body = scrub(body)
     if marker not in body:
