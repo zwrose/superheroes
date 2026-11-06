@@ -414,15 +414,24 @@ def test_w8_write_run_and_non_codex_review_run_are_never_armed(tmp_path, monkeyp
 
 @pytest.mark.parametrize("site", ["read_increment", "silent_and_idle"])
 def test_w9_exception_in_the_armed_block_disarms_the_watchdog(tmp_path, monkeypatch, site):
-    """W9: any exception inside the armed block disarms it for the rest of the attempt."""
+    """W9: any exception inside the armed block disarms it for the rest of the attempt. The failure is
+    transient: the stub raises on its first call only and delegates every later call to the real function.
+    The stream is output then silence with no command in flight, so after that one failure every later
+    beat is silent and idle and, were the watchdog still armed, would pass the threshold well before the
+    bound. The attempt still runs to its bound, and the stub is never entered again."""
     run_dir, prompt, argv = _open_run(tmp_path)
     TD._install_fake_codex(monkeypatch, tmp_path, _TURN)
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    real = getattr(CS, site)
+    calls = []
 
-    def boom(*args, **kwargs):
-        raise RuntimeError("injected")
+    def fail_once_then_real(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError("injected")
+        return real(*args, **kwargs)
 
-    monkeypatch.setattr(CS, site, boom)
+    monkeypatch.setattr(CS, site, fail_once_then_real)
 
     def gate(tick):
         if tick == 0:
@@ -431,6 +440,8 @@ def test_w9_exception_in_the_armed_block_disarms_the_watchdog(tmp_path, monkeypa
     _Clock(monkeypatch, before_tick=gate)
     ended = _run_attempt(run_dir, prompt, argv, 1, 2.0)
     _assert_bound_end(ended)
+    # the disarm means no later beat re-enters the armed block
+    assert len(calls) == 1
 
 
 # --- W10 and every reader of a watchdog end ----------------------------------------------------------
