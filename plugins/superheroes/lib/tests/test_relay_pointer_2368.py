@@ -667,6 +667,27 @@ def test_relayed_returns_the_text_byte_exact(world):
     assert out["commentUrl"] == msg["commentUrl"]
 
 
+def test_relayed_reads_a_repository_name_whatever_its_case(world):
+    # axis: the builder's repository check ignores case, as GitHub names do, so it agrees with point — see bite-proof record wo_2368_relay_pointer.md
+    msg, _ = _lane_message(world, "Please do the thing.")
+    out = cb.relayed(REPO_NAME.upper(), 77, msg["forward"], run=world.gh, env=world.env)
+    assert out["ok"] is True and out["text"] == "Please do the thing.", out
+    out = cb.relayed("other/repo", 77, msg["forward"], run=world.gh, env=world.env)
+    assert out["ok"] is False and out["reason"] == "comment-elsewhere"
+
+
+def test_point_reads_a_lane_repository_name_whatever_its_case(world):
+    # axis: point's repository check ignores case, as GitHub names do: an origin spelled Acme/Widgets accepts a comment URL on acme/widgets, while another repository is still refused — see bite-proof record wo_2368_relay_pointer.md
+    subprocess.run(["git", "-C", world.repo, "remote", "set-url", "origin", "git@github.com:Acme/Widgets.git"], check=True)
+    assert cr.lane_repo(world.repo, env=world.env) == ("Acme/Widgets", None)
+    composed = _lane_composed(world)
+    cid, url = _post(world, composed, 77)
+    other = comment_url(77, cid, repo="other/widgets")
+    assert cr.point(world.repo, composed["msgId"], other, env=world.env, run=world.gh)["reason"] == "comment-not-on-lane-repo"
+    out = cr.point(world.repo, composed["msgId"], url, env=world.env, run=world.gh)
+    assert out["ok"] is True and out["commentUrl"] == url, out
+
+
 # ---- row 12: fix_orders --------------------------------------------------------------------------
 
 def test_fix_orders_lists_a_fix_order_whose_comment_was_altered_or_never_verified(world):

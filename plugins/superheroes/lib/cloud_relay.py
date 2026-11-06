@@ -500,8 +500,8 @@ def _point(repo_root, msg_id, comment_url, *, env=None, run=None):
     # axis: a lane repository that cannot be read refuses before any comment is read, so a comment is never judged against an unknown repository — see bite-proof record wo_2368_relay_pointer.md
     if lane_name is None:
         return _refuse(why)
-    # axis: the comment's owner/name must equal the lane checkout's GitHub repository exactly, so a same-numbered issue of another repository is never pointed — see bite-proof record wo_2368_relay_pointer.md
-    if repo != lane_name:
+    # axis: the comment's owner/name must name the lane checkout's GitHub repository (GitHub names ignore case), so a same-numbered issue of another repository is never pointed — see bite-proof record wo_2368_relay_pointer.md
+    if repo.lower() != lane_name.lower():
         return _refuse("comment-not-on-lane-repo", laneRepo=lane_name, commentRepo=repo)
     status, body = read_comment(repo, int(comment_id), env=env, run=run)
     if status == "missing":

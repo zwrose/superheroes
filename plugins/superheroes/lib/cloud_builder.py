@@ -733,7 +733,8 @@ def relayed(repo, issue, pointer_text, *, env=None, run=None):
     parsed = relay.parse_pointer(pointer_text)
     if parsed is None:
         return _relayed_refusal("pointer-malformed", "the pointer line is malformed")
-    if parsed["repo"] != repo or parsed["issue"] != issue:
+    # axis: the pointer's comment must be on this repository (GitHub names ignore case) and this issue, the same test point makes on the advisor's side — see bite-proof record wo_2368_relay_pointer.md
+    if parsed["repo"].lower() != repo.lower() or parsed["issue"] != issue:
         return _relayed_refusal("comment-elsewhere", "its comment is not on this issue (%s#%d)" % (repo, issue), parsed)
     status, body = relay.read_comment(repo, parsed["commentId"], env=env, run=run)
     if status == "missing":
