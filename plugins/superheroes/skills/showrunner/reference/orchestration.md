@@ -382,7 +382,8 @@ whose session started **after** the renewal goes to `sendBack`. A lane whose ses
    `cloud_builder.py superseded-notice --launch-id <the lane>` text.
 2. Send the item's `message` to `cloudSessionName`. It asks the parked builder to run its wake check
    for a newer launch now. On the same account that is `SendMessage`. On another account
-   (`configDir`) it is the relay's `ensure`, `compose`, `SendMessage`, `check`, as
+   (`configDir`) it is the relay's `ensure`, `compose`, the post of the composed file (`--body-file`),
+   `point`, `SendMessage`, `check`, as
    `skills/showrunner/reference/wave-watch.md` § Answering a builder note sends an answer. The builder
    stands down, posts its self-archive record when it has pushed work, and archives its own session
    (`skills/workhorse/reference/cloud.md` § Workspace).
@@ -402,18 +403,20 @@ For each item under `sendBack` (a session that started after the renewal and so 
 pass), send `message` to the item's `cloudSessionName` as
 `skills/showrunner/reference/wave-watch.md` § Answering a builder note sends an answer. On the same
 account that is `SendMessage`. On another account (`configDir`) it is the relay's `ensure`,
-`compose`, `SendMessage`, `check`. Then record it:
+`compose`, the post of the composed file (`--body-file`), `point`, `SendMessage`, `check`. Then
+record it, settled by the one rule in that section:
 
 - After a direct `SendMessage` returns `success: true`, or the relay's `check` returns
   `delivered: true`, run `python3 -B <plugin root>/lib/cloud_parked.py sent --repo-root <root>
   --repo <owner/name> --pr <n> --park-id <the item's parkId>` (omit it when null). A second call is
   `unchanged`; `park-changed` means a newer park replaced it, so record nothing.
-- After `relay-silent`, `relay-text-mismatch` or `relay-send-unconfirmed`, run `sent --uncertain`
-  (not plain `sent`) with the same `--repo-root`, `--repo`, `--pr` and `--park-id`, and tell the owner. The builder
-  may already hold the text, so never resend it automatically. `send-back` never lists the PR for
+- After any other read of `check`, neither `delivered: true` nor `nothingReached: true`, run
+  `sent --uncertain` (not plain `sent`) with the same `--repo-root`, `--repo`, `--pr` and
+  `--park-id`, and tell the owner. The builder may already hold the pointer, so never resend it
+  automatically. `send-back` never lists the PR for
   sending again, but lists it under `uncertain` every time. A later plain `sent` with its `--park-id` records it.
-- After an `ensure` refusal or `relay-send-failed`, do not run `sent`. Nothing reached the builder,
-  and the PR stays listed for the next `send-back`.
+- After an `ensure` refusal, a `point` refusal or `nothingReached: true`, do not run `sent`. Nothing
+  reached the builder, and the PR stays listed for the next `send-back`.
 
 No further word from the owner is needed for any of this, except the one archive in step 4 above.
 On the `sendBack` path the message resumes a session that started after the renewal, which runs its
@@ -529,7 +532,7 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
      wave watch. When the builders' account is at its usage limit (the wave watch reports
      `account-limited`, or the relay check reports it), the session state is read as `unread` and
      `assess` reads the limit itself. The relay writes the limit only when it next runs, so send a
-     status ping through the relay first.
+     status ping through the relay first, by the steps in `wave-watch.md` § Answering a builder note.
   2. Run `assess`. Its answer is `working`, `unresolved`, `parked`, `awaiting-handover`,
      `ask-to-push` or `stopped`. `assess` returns `stopped` with evidence `account-limited` for a
      lane that started before the limit was recorded, while the limit holds. A lane whose session
@@ -545,9 +548,10 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
      On `parked`, act on the named comment as `wave-watch.md` says for a stop or a park (repair a
      stop; answer or route a park); never ask to push and never launch a successor.
   3. On `ask-to-push`, send `ask`'s text to the lane's session: on the same account with
-     `SendMessage`, on another account through the relay, as an answer to a builder note is sent.
-     Then run `asked`: with `--uncertain` after a relay delivery that was not confirmed, and not at
-     all after a definite failure.
+     `SendMessage`, on another account through the relay (`ensure`, `compose`, the post of the
+     composed file with `--body-file`, `point`, `SendMessage`, `check`), as an answer to a builder
+     note is sent. Then run `asked`: with `--uncertain` after a relay send that is neither
+     `delivered: true` nor `nothingReached: true`, and not at all after `nothingReached: true`.
   4. On `stopped`, record the lane's outcome `died` with `record-outcome`, post
      `cloud_builder.py superseded-notice --launch-id <the stopped lane>`'s `comment` on the issue,
      then run `successor` and launch that premise with `launcher.py launch`. The notice comes before
@@ -581,7 +585,7 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   session listing. When that session is still listed live, the fix order goes to it and no new lane
   launches: send the vet's NOT-READY findings as the fix order by message to the lane's
   `cloudSessionName` (`SendMessage` on the same account, the relay (`ensure`, `compose --fix-order`,
-  `SendMessage`, `check`) on another), as `skills/showrunner/reference/wave-watch.md` § Answering a
+  the post of the composed file with `--body-file`, `point`, `SendMessage`, `check`) on another), as `skills/showrunner/reference/wave-watch.md` § Answering a
   builder note sends an answer. Record the vet `not-ready` first (§ Amending a lane's record), then
   send: the wave watch opens the lane's window at the newest fix order, so a builder note or handback
   posted between the send and a later `not-ready` is not surfaced.
