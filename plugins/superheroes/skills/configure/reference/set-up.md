@@ -659,9 +659,11 @@ launching machine's.
    python3 -B "$ROOT_DIR/lib/cloud_pass.py" make --environment <id>
    ```
 6. **Run the check when the owner says the steps are done.** Start one check session naming the
-   id. Pass `--issue` with an issue number when this seat cannot read the session's log, so the
-   session also posts its one result line there as a comment; that comment is public on a public
-   repository, and the line holds versions, stamps and a date, never the pass.
+   id. Name an issue in this repository with `--issue`: no host tool this plugin supports reads the
+   check session's own log, so the session posts its one result line there as a comment, and
+   `start` refuses `check-issue-required` without an issue and `check-issue-unreadable` when the
+   issue does not resolve, before anything starts. That comment is public on a public repository;
+   the line holds versions, stamps and a date, never the pass.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
@@ -679,12 +681,13 @@ launching machine's.
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
-   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --environment <id> [--issue <n>]
+   python3 -B "$ROOT_DIR/lib/cloud_check.py" start --environment <id> --issue <n>
    ```
 
    Keep the `nonce` it returns. A refusal starts nothing: say its `message`.
-7. **Read the result and judge it.** Read the session's final message, with the host's run-log
-   reader, or the issue comment. Save its full text to a file, without picking a line out of it, and
+7. **Read the result and judge it.** Read the issue's comments through REST (`gh api
+   "repos/<owner>/<repo>/issues/<n>/comments?per_page=100&page=<N>"`, page by page until a page
+   holds fewer than 100) and take the newest comment that carries the check's nonce. Save its full text to a file, without picking a line out of it, and
    run:
 
    ```bash
@@ -734,6 +737,23 @@ launching machine's.
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
    python3 -B "$ROOT_DIR/lib/cloud_check.py" setup-text
    ```
+
+**The launch folder.** A cloud launch runs the platform's command in a folder the launcher owns, a
+separate clone of the project, so the project's primary checkout is never moved for a launch. Make
+that folder once for this project:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
+python3 -B "$ROOT_DIR/lib/launcher.py" cloud-launch-folder --repo-root .
+```
+
+On `ok`, tell the owner the `folder` and the one-time trust step: open Claude Code once in that
+folder (`cd <folder>` and then `claude`), accept the trust question, and exit. Never run it for the
+owner, and never answer the trust question for them. On a refusal, say its `reason` and stop. A path
+that exists but is not the launcher's own clone is left alone, so the owner moves it aside and the
+step runs again. This is done once per project per machine. Without it every cloud launch refuses
+`launch-cloud-folder-missing`, and a folder that exists but was never trusted reads
+`cloud-session-unconfirmed`.
 
 The check also asks the cloud session's git for a commit identity. It passes when git, with
 guessing turned off (`user.useConfigOnly`), resolves both an author and a committer identity from

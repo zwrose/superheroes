@@ -30,14 +30,21 @@ is true only when every covered body was read and lists none, and the page, the 
 then; prSheet.canonAccounted lists the Canon entry ids (sorted, distinct) when every covered body was read, they list at least one
 acceptance and every listed acceptance is accounted to a Canon ruling, and those surfaces say it was checked and all covered by
 Canon rulings; with neither field (a sheet built through the API with no bodies, or an earlier one) they say the sheet was not
-checked against the bodies. The two fields never come together. The build also reads the body's degradations list
+checked against the bodies. The two fields never come together. A fixed-above bullet (below) counts toward neither: it is left
+out of the bullets nothingListed and canonAccounted are read from. The build also reads the body's degradations list
 (degradations_listed) and refuses a [costly] or unlabelled deviation whose text (after its label) appears in no What we're
 accepting line, naming the bullet; a [harmless] one never needs a line.
+A left-for-owner finding that an acceptance names with `fixed-above #<PR> <commit>` (leftover_accepting.fixed_above) is read only when
+the bodies are given. On a stack sheet whose prs list that PR above the finding's own PR it is shown in "caught" as fixed above, needs no
+leftovers or craftDeterminations entry (and is refused one), and its acceptance is accounted by itself. On a pr sheet, or when the PR is
+not in prs or is the finding's own or a lower one, the build refuses, naming the finding and the layer. Whether the named commit sits in
+that layer is not read here: the vet checks it.
 
 A record file holds what `review_record.py read --pr N` prints, or the bare record. Every fact is copied
 from the records or the advisor's input, and each finding lands where its outcome names: fixed in "caught",
 craft in "craft", ruling in "alreadyDecided", shown-wrong in "history", left-for-owner as a card (one with a craft
-determination lands in "decidedForYou" instead, and is no card). The words
+determination lands in "decidedForYou" instead, and is no card; one its body marks `fixed-above #<PR> <commit>`, on a
+stack sheet covering that higher PR, lands in "caught" as fixed above and takes neither). The words
 come from the "pr" block of theme/sheet-words.json.
 
 The advisor's input is one JSON object; any key not listed is refused.
@@ -95,7 +102,8 @@ The advisor's input is one JSON object; any key not listed is refused.
                  "<key>"} (the leftover card it restates: a key of leftovers that names exactly one left-for-owner finding);
                  {"canon": "<entry id>"} (a Canon entry id, YYYY-MM-DD-xxxxxxxx-N, that the summary cites; the acceptance then
                  gets no item). Every listed acceptance needs an entry and each key must name a listed one. A fold line that no
-                 acceptance names is allowed.
+                 acceptance names is allowed. An acceptance that is a fixed-above disposition (see the bodies paragraph) is
+                 accounted by itself and takes no entry; an entry for it is refused.
   walk           Optional object {open, note?, picturesFrom, stops}: open is {label, url?, detail?} with url
                  http(s); stops is at least 1 of {id, title, pr, group, kind, steps?, expect, optional?, notWalked?,
                  pictures?}: id as above and unique, pr equal to number on a pr or one of prs on a stack, kind
@@ -844,9 +852,11 @@ def _excerpt(text):
     return text if len(text) <= 80 else text[:80] + "…"
 
 
-def _check_accounting(accounting, listed, advisor, leftovers, named, problems):
+def _check_accounting(accounting, listed, advisor, leftovers, named, problems, auto=frozenset()):
     """Collects the problems of the input's accounting against the acceptances the bodies list (listed: PR number to
-    listed_bullets): each bullet needs exactly one target that exists on the sheet, and each key must name a bullet."""
+    listed_bullets): each bullet needs exactly one target that exists on the sheet, and each key must name a bullet.
+    auto holds the bullet ids that are accounted by themselves (a fixed-above disposition the build shows in caught): such a
+    bullet needs no entry and an entry for it is a problem."""
     if not isinstance(accounting, dict):
         problems.append("accounting must be an object of bullet id to where that acceptance is accounted for")
         accounting = {}
@@ -858,6 +868,11 @@ def _check_accounting(accounting, listed, advisor, leftovers, named, problems):
         for bullet, text in bullets:
             known.add(bullet)
             shown = f'accounting "{bullet}" (PR #{pr}: "{_excerpt(text)}")'
+            # axis: a fixed-above bullet the build shows in caught is accounted by itself: it takes no entry, and an entry for it is refused
+            if bullet in auto:
+                if bullet in accounting:
+                    problems.append(f'accounting "{bullet}" is a fixed-above disposition, accounted by itself; remove it')
+                continue
             if bullet not in accounting:
                 problems.append(f"PR #{pr}'s acceptance {bullet} (\"{_excerpt(text)}\") is not accounted for: "
                                 f'give accounting "{bullet}" one of item, fold with line, leftover, or canon')
@@ -881,6 +896,60 @@ def _check_accounting(accounting, listed, advisor, leftovers, named, problems):
             elif targets[0] == "canon" and not (canon.is_entry_id(value["canon"]) and value["canon"] in canon.cited_entry_ids(summary)):
                 problems.append(f'{shown} names canon "{value["canon"]}", which is not a Canon entry id (YYYY-MM-DD-xxxxxxxx-N) cited in the summary')
     problems.extend(f'accounting key "{k}" names no acceptance in the covered PR bodies' for k in accounting if k not in known)
+
+
+def _fixed_above(recs, bodies, kind, allowed, problems):
+    """(fixed, auto) for the bodies given: fixed maps (PR number, index in that record's findings) to the claim
+    {id, title, layer, commit} of each left-for-owner finding whose PR body marks it fixed-above a higher layer of this stack
+    sheet, and auto is the set of bullet ids (listed_bullets) of the acceptances that carry such a claim, which are accounted
+    by themselves. Every other fixed-above claim on a finding of the record is a problem naming the finding and the layer, so
+    the leftover is never dropped silently. A claim whose id names no left-for-owner finding of the record is ignored here (the
+    leftover checks stay as they were)."""
+    # leftover_accepting imports pr_sheet, so it is imported here, inside the function, never at module level (a circular import)
+    import leftover_accepting
+    fixed, auto = {}, set()
+    for r in recs:
+        body = bodies.get(r["pr"])
+        # A body with no fixed-above form has no claim to read, so a record the rule cannot read is not asked to be.
+        if not (isinstance(body, str) and leftover_accepting.FIXED_ABOVE_RE.search(body)):
+            continue
+        record = {"ok": True, **r}
+        if "leftForOwner" not in record:  # a record given as bare findings: the list review_record builds, from the same rule
+            record["leftForOwner"] = [review_record._name(f) for f in r["findings"] if isinstance(f, dict) and f.get("outcome") == _LEFT
+                                      and not review_record.repeat_held_elsewhere(f, r["findings"])]
+        # axis: a record the rule cannot read is a problem naming the PR, never a pass
+        try:
+            claims = leftover_accepting.assigned_fixed_above(record, body)
+        except leftover_accepting.Unreadable as err:
+            problems.append(f"PR #{r['pr']}'s review record cannot be read for its fixed-above dispositions: {err}")
+            continue
+        valid = []
+        for claim in claims:
+            held = [n for n, f in enumerate(r["findings"]) if isinstance(f, dict) and f.get("outcome") == _LEFT
+                    and not review_record.repeat_held_elsewhere(f, r["findings"]) and review_record._name(f) == claim["id"]
+                    and (f["title"] if isinstance(f.get("title"), str) and f["title"].strip() else None) == claim["title"]]
+            layer = claim["layer"]
+            # axis: a fixed-above layer must be a PR of this stack sheet above the finding's own PR; a pr sheet, an unknown PR, the
+            # finding's own PR and a lower one are all refused
+            higher = kind == "stack" and layer in allowed and r["pr"] in allowed and allowed.index(layer) > allowed.index(r["pr"])
+            for n in held:
+                if higher:
+                    fixed[(r["pr"], n)] = claim
+                else:
+                    why = "which is not a higher PR of this stack sheet" if kind == "stack" else "and a pr sheet covers no higher layer"
+                    problems.append(f"PR #{r['pr']}'s finding {_title(r['findings'][n])!r} ({claim['id']}) is marked fixed-above #{layer}, {why}; "
+                                    "a fixed-above disposition needs a stack sheet that covers the fixing layer above the finding's PR")
+            if held and higher:
+                valid.append(claim)
+        assigned = {" ".join(claim["acceptance"].split()) for claim in valid}
+        for bullet, text in (listed_bullets(r["pr"], body) if valid else []):
+            # axis: a bullet is accounted by itself only when it is the acceptance the whole-body assignment gave a valid claim
+            # (compared as the rule reads it, comments cut, whitespace runs as one space, so the order a multiline comment is cut
+            # and the lines joined in cannot change it); a bullet is never matched alone again, so it cannot move leftover
+            if any(" ".join(seen.split()) in assigned
+                   for seen in leftover_accepting._accepting_items("## What we're accepting\n\n" + text)):
+                auto.add(bullet)
+    return fixed, auto
 
 
 _VET_MARKER = "<!-- superheroes:spec-vet -->"
@@ -1063,6 +1132,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     # The earlier sheet's decided-for-you entries by finding: a carried sheet keeps them as they stand.
     before = {e["finding"]: e for e in earlier["prSheet"].get("decidedForYou", [])} if earlier is not None else {}
     named, decisions = {}, {}
+    # Only with the bodies read: a bodies-less build makes no fixed-above reading, so its leftovers entry stays required.
+    fixed, auto = _fixed_above(recs, bodies, kind, allowed, problems) if bodies_sound else ({}, set())
     for r in recs:
         for n, f in enumerate(r["findings"]):
             if isinstance(f, dict) and f.get("outcome") == _LEFT and not review_record.repeat_held_elsewhere(f, r["findings"]):
@@ -1073,6 +1144,17 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                     continue
                 call_at, det_at = next((k for k in keys if k in leftovers), None), next((k for k in keys if k in determined), None)
                 prior = before.get(keys[0])
+                if (r["pr"], n) in fixed:
+                    # axis: a finding fixed above needs no leftovers or craftDeterminations entry and takes none, and a carried sheet
+                    # cannot move an earlier decided-for-you entry to caught
+                    claim = fixed[(r["pr"], n)]
+                    if call_at is not None or det_at is not None:
+                        problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} is fixed above in #{claim['layer']}; "
+                                        "give it no leftovers or craftDeterminations entry")
+                    if prior is not None:
+                        problems.append(f"left-for-owner finding {_title(f)!r} on PR #{r['pr']} was a decided-for-you entry on the earlier sheet and is "
+                                        f"fixed above in #{claim['layer']}; a carried sheet cannot move a decided-for-you entry; republish unsigned")
+                    continue
                 det = determined[det_at] if det_at is not None else prior if prior is not None and call_at is None else None
                 if earlier is not None and det_at is not None:
                     if prior is None:
@@ -1094,7 +1176,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                         for k in given if named.get(k, 0) > 1)
     listed = {pr: listed_bullets(pr, bodies[pr]) for pr in allowed} if bodies_sound else {}
     if bodies_sound:
-        _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems)
+        _check_accounting(advisor.get("accounting", {}), listed, advisor, leftovers, named, problems, auto)
         for pr in allowed:
             for label, text in costly_unlisted(bodies[pr]):
                 problems.append(f'PR #{pr}\'s {"costly" if label else "unlabelled (read as costly)"} deviation ("{_excerpt(text)}") has no line under '
@@ -1109,8 +1191,8 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     for r in recs:
         for n, f in enumerate(r["findings"]):
             # axis: a kept left-for-owner repeat adds no card; the earlier finding holds it — see bite-proof record c1l8_wo_b_record_repeats
-            if f["outcome"] != _LEFT or review_record.repeat_held_elsewhere(f, r["findings"]):
-                continue
+            if f["outcome"] != _LEFT or review_record.repeat_held_elsewhere(f, r["findings"]) or (r["pr"], n) in fixed:
+                continue  # a finding fixed above is shown in caught below, never as a card
             if (r["pr"], n) in decisions:
                 det = decisions[(r["pr"], n)]
                 decided_for_you.append({"id": card_id("d-", r["pr"], f.get("findingKey") or f["id"], "decided-for-you"),
@@ -1165,9 +1247,12 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         lines = [_fill(words["historyRounds"], rounds=r["rounds"]["count"])]
         if r["rounds"]["stoppedAtCap"]:
             lines.append(words["historyCap"])
-        for f in r["findings"]:
+        for n, f in enumerate(r["findings"]):
             entries = {_CRAFT: craft, _RULING: decided}.get(f["outcome"])
-            if f["outcome"] == _FIXED:
+            if (r["pr"], n) in fixed:
+                claim = fixed[(r["pr"], n)]
+                caught.append(tag(r) + _fill(words["caughtFixedAbove"], title=_title(f), layer=claim["layer"], commit=claim["commit"][:7]))
+            elif f["outcome"] == _FIXED:
                 caught.append(tag(r) + _title(f))
             elif entries is not None:
                 entries.append({"title": _title(f), "detail": f["reason"], **({"pr": r["pr"]} if stack else {})})
@@ -1177,7 +1262,11 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             said = _go_ahead(m.get("goAhead"))
             lines.append(_fill(words["historyMissing"], name=m["name"],
                                goAhead=_fill(words["historyGoAhead"], goAhead=said) if said else words["historyNoGoAhead"]))
-        gaps =(r.get("whatIsMissing") or []) if not review_record.cleared(r.get("status")) else []
+        gaps = list(r.get("whatIsMissing") or []) if not review_record.cleared(r.get("status")) else []
+        # axis: the waiting line of a finding shown as fixed above is neither counted as waiting for the owner nor printed as incomplete
+        for n, f in enumerate(r["findings"]):
+            if (r["pr"], n) in fixed and review_record.leftover_line(f) in gaps:
+                gaps.remove(review_record.leftover_line(f))
         owned = [review_record.leftover_line(f) for f in r["findings"]
                  if f.get("outcome") == _LEFT and not review_record.repeat_held_elsewhere(f, r["findings"])]
         count, counted = sum(1 for m in gaps if m in owned), False
@@ -1217,11 +1306,13 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
             "ci": {"state": top["ci"]["state"], "commit": top["ci"].get("sha")},
             "lane": top["lane"].get("value"), "laneReason": top["lane"].get("reason")},
         "craft": craft, "alreadyDecided": decided, **({"decidedForYou": decided_for_you} if decided_for_you else {}), "history": history}
-    if bodies is not None and not any(listed.values()):  # every covered body was read and none lists an acceptance
+    # axis: a fixed-above bullet is accounted by itself and never counts toward the listed state
+    left = {pr: [(bullet, text) for bullet, text in bullets if bullet not in auto] for pr, bullets in listed.items()}
+    if bodies is not None and not any(left.values()):  # every covered body was read and none lists an acceptance (but a fixed-above one)
         sheet["nothingListed"] = True
     elif bodies is not None:  # at least one is listed: Canon alone covers them all when every bullet is accounted to a Canon ruling
         accounting = advisor.get("accounting", {})
-        rulings = [accounting[bullet].get("canon") for bullets in listed.values() for bullet, _ in bullets]
+        rulings = [accounting[bullet].get("canon") for bullets in left.values() for bullet, _ in bullets]
         if all(isinstance(ruling, str) for ruling in rulings):
             sheet["canonAccounted"] = sorted(set(rulings))
     if "walk" in advisor:

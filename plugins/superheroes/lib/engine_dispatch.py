@@ -23,6 +23,7 @@ import contextlib
 import glob
 import hashlib
 import json
+import math
 import os
 import posixpath
 import re
@@ -42,6 +43,7 @@ if _LIB_DIR not in sys.path:
 
 import calibration_read  # noqa: E402  per-seat calibration read stamp and states (#2311)
 import claude_modes  # noqa: E402  claude dispatch-mode vocabulary (#1504)
+import codex_silence  # noqa: E402  the one silence predicate and stream tracker (#2370)
 import command_refusals  # noqa: E402  ORDER_TEXT — the one home of the refused-command stop rule (#2011)
 import bite_proof_format  # noqa: E402  the record format an order that asks for one carries (#2082)
 import cli_contract as cc  # noqa: E402  argparse caller-contract builders
@@ -170,6 +172,9 @@ SIZE_BASE_REF_CONTAINS_HEAD = "size-base-ref-contains-head"
 SIZE_INPUTS_MISMATCH = "size-inputs-mismatch"
 SIZE_TRIPWIRE_ABSENT_NOT_SUPPLIED = "size-inputs-not-supplied"
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
+# #2375: chosen as at least twice the longest idle silence seen in clean codex review attempts (183 s),
+# rounded up to a 30 s step, and below the shortest idle silence seen in a stalled attempt (630 s).
+CODEX_SILENCE_WATCHDOG_SECONDS = 390
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = engine_adapter.ENGINE_OUTPUT_MAX_BYTES   # keep only the last 8 MB of engine stdout — the result JSON
 # is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
@@ -3769,6 +3774,33 @@ def _sample_stream_sizes(stdout_path, stderr_path):
     return stdout_sz, stderr_sz
 
 
+def _size_or_none(path):
+    try:
+        return os.path.getsize(path)
+    except OSError:
+        return None
+
+
+def _silence_watchdog_threshold(opened, attempt):
+    """The armed watchdog threshold in seconds, or None when it is off (#2375 I4). Never raises."""
+    try:
+        seconds = opened.get("silenceWatchdogSeconds")  # axis: the threshold is the one recorded at run open
+        # axis: armed only for a codex review run, never on the final attempt, with a finite positive number
+        if (opened.get("engine") == "codex" and opened.get("runKind") == RUN_KIND_REVIEW
+                and attempt < MAX_ATTEMPTS and isinstance(seconds, (int, float))
+                and not isinstance(seconds, bool) and math.isfinite(seconds) and seconds > 0):
+            return seconds
+    except Exception:
+        pass
+    return None
+
+
+def _silence_watchdog_end(ended):
+    """True when an attempt-ended record is a silence-watchdog end: never a clean completion (#2375 I3)."""
+    return isinstance(ended, dict) and (
+        "silenceWatchdog" in ended or ended.get("signalSource") == "silence-watchdog")
+
+
 def _apply_completion_stamp(ended_record, stamp):
     """Merge a completion stamp onto an attempt-ended record when present. Never raises."""
     if isinstance(stamp, dict):
@@ -4218,6 +4250,12 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "drop_cause": None,
     }
     native_completion_obs = {"stamp": None, "prev_sig": None}
+    wd_threshold = _silence_watchdog_threshold(opened, attempt)
+    wd_tracker = codex_silence.StreamTracker()
+    wd_offset = 0
+    wd_prev = (_size_or_none(stdout_path), _size_or_none(stderr_path))
+    silent_s = 0.0
+    watchdog_fired = False
     while True:
         _observe_attempt_completions(
             delivery, stdout_completion_obs, native_completion_obs,
@@ -4225,8 +4263,37 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         )
         rc = proc.poll()
         now = time.monotonic()
+        watchdog_due = False
         if now - last_beat >= HEARTBEAT_INTERVAL:
+            beat_gap = now - last_beat
             last_beat = now
+            if wd_threshold is not None:
+                try:
+                    out_sz, err_sz = _size_or_none(stdout_path), _size_or_none(stderr_path)
+                    out_grew = None if out_sz is None or wd_prev[0] is None else out_sz > wd_prev[0]
+                    # axis: R6 (V837-b) — an unreadable stderr size is unknown growth (None), never "did not grow"
+                    err_grew = None if err_sz is None or wd_prev[1] is None else err_sz > wd_prev[1]
+                    wd_prev = (out_sz if out_sz is not None else wd_prev[0],
+                               err_sz if err_sz is not None else wd_prev[1])
+                    for _chunk in range(4):
+                        if out_sz is None or wd_offset >= out_sz:
+                            break
+                        data, wd_offset = codex_silence.read_increment(
+                            stdout_path, wd_offset,
+                            min(codex_silence.FEED_CHUNK_BYTES, out_sz - wd_offset))
+                        if not data:
+                            break
+                        wd_tracker.feed(data)
+                    fed_all = out_sz is not None and wd_offset >= out_sz
+                    wd_state = wd_tracker.state if fed_all else codex_silence.STATE_UNKNOWN
+                    if codex_silence.silent_and_idle(out_grew, err_grew, wd_state):
+                        silent_s += beat_gap
+                    else:
+                        silent_s = 0.0  # axis: any growth or non-idle beat resets the silence
+                    watchdog_due = silent_s >= wd_threshold  # axis: due only after the threshold of unbroken silence
+                except Exception:
+                    wd_threshold = None  # axis: a failure inside the check disarms it, never ends the attempt
+                    watchdog_due = False
             stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
             if stdout_sz > prev_stdout:
                 last_activity_at = time.time()
@@ -4250,11 +4317,40 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
             # one written before the cap (see timeoutAt on the ended record).
             timeout_at = timeout_deadline_wall
             break
+        # axis: precedence — a natural exit, then the per-attempt bound, both outrank the watchdog
+        if watchdog_due:
+            rc2 = proc.poll()
+            if rc2 is not None:  # axis: R1 — an engine that exited since the beat's poll is graded by its natural exit
+                natural_rc = rc2
+                break
+            re_out, re_err = _size_or_none(stdout_path), _size_or_none(stderr_path)
+            # axis: R2 — an unreadable or grown stream at the re-check is activity, never silence
+            if (re_out is None or re_err is None or wd_prev[0] is None or wd_prev[1] is None
+                    or re_out > wd_prev[0] or re_err > wd_prev[1]):
+                silent_s = 0.0
+                wd_prev = (re_out if re_out is not None else wd_prev[0],
+                           re_err if re_err is not None else wd_prev[1])
+            else:
+                watchdog_fired = True
+                break
         time.sleep(_ATTEMPT_POLL_INTERVAL)
     _observe_attempt_completions(
         delivery, stdout_completion_obs, native_completion_obs,
         run_dir_real, attempt, stdout_path, deadline_mono=start + timeout,
     )
+    kill_mono = None
+    kill_at = None
+    if watchdog_fired:
+        # axis: R3 — a result already on disk is digested before the kill, even if it was seen only once
+        _observe_attempt_completions(
+            delivery, stdout_completion_obs, native_completion_obs,
+            run_dir_real, attempt, stdout_path, terminal=True,
+            deadline_mono=start + timeout,
+        )
+        kill_mono = time.monotonic()
+        kill_at = time.time()
+    # axis: R5 — content first seen after the kill never replaces a pre-kill stamp
+    post_kill_deadline = kill_mono if watchdog_fired else start + timeout
     _terminate_process_group(pgid)
     try:
         proc.wait(timeout=2)
@@ -4263,7 +4359,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     _observe_attempt_completions(
         delivery, stdout_completion_obs, native_completion_obs,
         run_dir_real, attempt, stdout_path, terminal=True,
-        deadline_mono=start + timeout,
+        deadline_mono=post_kill_deadline,
     )
     stdout_sz, stderr_sz = _sample_stream_sizes(stdout_path, stderr_path)
     last_activity_at, silence_seconds, activity_stream = _fold_stream_activity(
@@ -4308,6 +4404,19 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     completion_stamp = stdout_completion_obs.get("stamp")
     if completion_stamp is None:
         completion_stamp = native_completion_obs.get("stamp")
+    pre_kill_at = (completion_stamp.get(engine_result_channel.FIELD_RESULT_COMPLETE_AT)
+                   if isinstance(completion_stamp, dict) else None)
+    # axis: R4 — answered before the kill only for an exit-0 engine whose stamp is at or before the kill
+    answered_before_kill = (
+        watchdog_fired and returncode == 0 and isinstance(pre_kill_at, (int, float))
+        and not isinstance(pre_kill_at, bool) and pre_kill_at <= kill_mono)
+    if answered_before_kill:
+        ended_record["silenceWatchdogRace"] = {
+            "silentSeconds": round(silent_s, 1), "thresholdSeconds": wd_threshold, "killAt": kill_at}
+    elif watchdog_fired:
+        ended_record["signalSource"] = "silence-watchdog"
+        ended_record["silenceWatchdog"] = {
+            "silentSeconds": round(silent_s, 1), "thresholdSeconds": wd_threshold, "killAt": kill_at}
     _apply_completion_stamp(ended_record, completion_stamp)
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
@@ -4864,7 +4973,7 @@ def _load_native_result_json(run_dir_real, attempt, opened):
     state = _journal_state(records)
     attempt_rec = state.get("attempts", {}).get(attempt)
     ended = attempt_rec.get("ended") if isinstance(attempt_rec, dict) else None
-    if not isinstance(ended, dict):
+    if not isinstance(ended, dict) or _silence_watchdog_end(ended):
         return None, engine_result_channel.REFUSAL_RESULT_COMPLETION_UNRECORDED
     if ended.get("timedOut"):
         deadline_mono = ended.get(engine_result_channel.FIELD_DEADLINE_MONO)
@@ -5269,6 +5378,9 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
         result["detail"] = ended["refusal"]
         return result
+    if _silence_watchdog_end(ended):  # axis: a watchdog end is a forfeit whatever its exit code
+        return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED,
+                "detail": "silence-watchdog"}
     if ended.get("exit") not in (0, None) and not ended.get("timedOut"):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
@@ -6055,6 +6167,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "cwd": cwd,
         "timeout": timeout,
         "retryTimeout": retry_timeout,
+        "silenceWatchdogSeconds": CODEX_SILENCE_WATCHDOG_SECONDS if engine == "codex" else None,
         "promptPath": os.path.join(run_dir_real, PROMPT_NAME),
         "progressPath": progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
         "viewPath": view_path,
@@ -7442,6 +7555,8 @@ def _attempt_ended_successfully(ended):
     """True when the journal's attempt-ended record is a clean completion. Never raises."""
     if not isinstance(ended, dict):
         return False
+    if _silence_watchdog_end(ended):  # axis: a watchdog end is never a clean completion
+        return False
     if "exit" not in ended:
         return False
     exit_val = ended["exit"]
@@ -7463,6 +7578,8 @@ def _parse_review_attempt(run_dir_real, state, attempt):
             slot = state["attempts"][attempt]
             ended = slot.get("ended") or {}
             if ended.get("guardRefusal"):
+                return None
+            if _silence_watchdog_end(ended):  # axis: a watchdog end parses to no result
                 return None
             if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
                 return None
@@ -7620,6 +7737,41 @@ def _observation_from_attempt(run_dir_real, state, attempt):
     return observation
 
 
+# axis: a run's figure is the sum over every attempt its engine journal shows; an attempt without a figure leaves the run
+# without one — see bite-proof record i2381_every_attempt
+def _attempts_cost(run_dir_real, state):
+    """{"tokens", "wallSeconds", "attempts"} summed over every attempt the journal shows, or None.
+
+    Each attempt needs a dict `ended` and a finite non-negative numeric (not bool) `wallSeconds`; a codex run also needs
+    the attempt's own stdout to carry a valid usage total. Any other engine, an empty attempts map, or any attempt
+    short of a figure gives None. Never raises."""
+    try:
+        opened = state.get("opened")
+        if not isinstance(opened, dict) or opened.get("engine") != "codex":
+            return None
+        attempts = state.get("attempts")
+        if not isinstance(attempts, dict) or not attempts:
+            return None
+        tokens, wall = 0, 0
+        for att in sorted(attempts):
+            slot = attempts[att]
+            ended = slot.get("ended") if isinstance(slot, dict) else None
+            if not isinstance(ended, dict):
+                return None
+            secs = ended.get("wallSeconds")
+            if isinstance(secs, bool) or not isinstance(secs, (int, float)) or not 0 <= secs < float("inf"):
+                return None
+            stdout = _read_capped_text(os.path.join(run_dir_real, "attempt-%d.stdout" % att), stream=CAP_STREAM_STDOUT)
+            used = engine_adapter.codex_usage_tokens(stdout)
+            if used is None:
+                return None
+            tokens += used
+            wall += secs
+        return {"tokens": tokens, "wallSeconds": wall, "attempts": len(attempts)}
+    except Exception:
+        return None
+
+
 def _calibration_capture_truncated(ended, stdout):
     """True when the stdout the calibration grade reads lost its head to the capture cap (so an earlier read may be gone).
 
@@ -7634,6 +7786,42 @@ def _calibration_capture_truncated(ended, stdout):
         return _stdout_capture_truncated(stdout)
     except Exception:
         return True
+
+
+def silence_watchdog_ends(run_dir):
+    """The silence-watchdog ends of a codex review run, for the record. Returns (ends, error); ends is
+    [{"attempt", "silentSeconds", "thresholdSeconds", "role"}] in attempt order. Never raises or writes."""
+    try:
+        ok, detail = _validate_run_dir(run_dir)
+        if not ok:
+            return [], detail
+        records, interior_corrupt, corruption_classes = _journal_read_classes(detail)
+        if interior_corrupt:
+            return [], _journal_corrupt_detail(corruption_classes)
+        state = _journal_state(records)
+        opened = state.get("opened")
+        if (not isinstance(opened, dict) or opened.get("engine") != "codex"
+                or opened.get("runKind") != RUN_KIND_REVIEW):
+            return [], None
+        inputs = opened.get("resolvedInputs")
+        role = inputs.get("role") if isinstance(inputs, dict) else None
+        role = role if isinstance(role, str) and role else None
+
+        def number(value):
+            return (isinstance(value, (int, float)) and not isinstance(value, bool)
+                    and math.isfinite(value))
+
+        ends = []
+        for att in sorted(a for a in state["attempts"] if isinstance(a, int) and not isinstance(a, bool)):
+            ended = state["attempts"][att].get("ended")
+            wd = ended.get("silenceWatchdog") if isinstance(ended, dict) else None
+            if isinstance(wd, dict) and number(wd.get("silentSeconds")) and number(
+                    wd.get("thresholdSeconds")):
+                ends.append({"attempt": att, "silentSeconds": wd["silentSeconds"],
+                             "thresholdSeconds": wd["thresholdSeconds"], "role": role})
+        return ends, None
+    except Exception as exc:
+        return [], "silence-watchdog-ends-failed:%s" % type(exc).__name__
 
 
 def run_execution_record(run_dir):
@@ -7711,6 +7899,7 @@ def run_execution_record(run_dir):
             "runnerNonce": echo_nonce,
             "recordDigest": record_digest,
             "observation": observation,
+            "attemptsCost": _attempts_cost(run_dir_real, state),
             "promptSha256": prompt_sha256,
             "orderPromptSha256": opened.get("basePromptSha256"),
             "runKind": run_kind,

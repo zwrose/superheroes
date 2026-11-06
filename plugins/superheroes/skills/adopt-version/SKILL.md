@@ -183,8 +183,8 @@ When both are owed, the order is the pin commit (write, commit, push), then the 
 cloud check. Each is an **owed** item (after switching): step 6 writes its line and step 8 names it.
 
 **The cloud check is the advisor's, and never part of adoption.** On a project that builds in the
-cloud, re-running the cloud check (`lib/cloud_check.py` `start`, then `judge` on the session's
-`report`) is an item you run yourself, never owner input, but only after that project's owed paste
+cloud, re-running the cloud check (`lib/cloud_check.py` `start --issue <n>`, then `judge` on the result line the session posts on
+that issue) is an item you run yourself, never owner input, but only after that project's owed paste
 or pin commit has landed. Never run it in steps 1–7: it fails on the version mismatch the owed step
 repairs, and a failed check pauses cloud launches for that Claude account until a check passes.
 Only pasting new setup text into the cloud environment needs the owner.

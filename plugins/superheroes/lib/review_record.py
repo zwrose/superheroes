@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 import re
 import subprocess
@@ -395,6 +396,14 @@ def _engine_run(run_dir):
         return None, "engine-unavailable"
 
 
+def _watchdog_ends(run_dir):
+    try:
+        import engine_dispatch
+        return engine_dispatch.silence_watchdog_ends(run_dir)
+    except Exception:
+        return [], "engine-unavailable"
+
+
 def _list_comments(pr, repo):
     rows = _read_pages(_api(repo, f"issues/{pr}/comments"))
     try:
@@ -458,7 +467,7 @@ def _readers(overrides):
     cloud = cloud_pass._is_cloud(os.environ)
     return {"pr_meta": _pr_meta_rest if cloud else _pr_meta, "issue_body": _issue_body_rest if cloud else _issue_body,
             "check_data": _check_data, "ci_workflow": _ci_workflow,
-            "lane_marker": _lane_marker, "engine_run": _engine_run, "list_comments": _list_comments,
+            "lane_marker": _lane_marker, "engine_run": _engine_run, "watchdog_ends": _watchdog_ends, "list_comments": _list_comments,
             "create_comment": _create_comment, "repo_name": _repo_name_rest if cloud else _repo_name,
             "read_text": _read_text, "is_ancestor": _is_ancestor,
             "changed_paths": changed_paths, "withheld_paths": _withheld_paths, "decision_sources": finding_outcomes.decision_sources,
@@ -963,6 +972,14 @@ def _validate(a):
                                            for k, v in seats.items()), "sessionCost.bySeat")
         chk(sum(v["tokens"] for v in seats.values()) == c["tokens"] and sum(v["runs"] for v in seats.values()) == c["runs"]
             and round(sum((v["minutes"] for v in seats.values()), 0.0), 1) == c["minutes"], "sessionCost.bySeat")
+    if "silenceWatchdogEnds" in a:
+        ends = a["silenceWatchdogEnds"]
+        # axis: a watchdog end names its seat, a 1-based attempt and finite non-negative silent seconds, exactly those keys — see bite-proof record i2375_c_watchdog_ends
+        chk(isinstance(ends, list) and all(
+            isinstance(e, dict) and set(e) == {"seat", "attempt", "silentSeconds"} and ne(e["seat"])
+            and _is_int(e["attempt"]) and e["attempt"] >= 1
+            and isinstance(e["silentSeconds"], (int, float)) and not isinstance(e["silentSeconds"], bool)
+            and math.isfinite(e["silentSeconds"]) and e["silentSeconds"] >= 0 for e in ends), "silenceWatchdogEnds")
     return {"repo": None, "lane": None, "laneReason": None, "finalCommit": None, "ci": None,
             "findings": [], "rawFindingsFiles": [], "goAheads": [], "checked": [], "makers": [], "refused": [],
             "commandRefusals": [], "carriedChecks": [], "ownerRulings": [], "sheetAnswers": None, "baseRef": None, **a,
@@ -1899,6 +1916,9 @@ def build_record(account, readers, prior=None, history=()):
         **{k: a[k] for k in _ROUND_PARTS if k in a},
         # axis: the session's own reviewer cost rides the record whenever the account carries it — see bite-proof record i2307_session_cost
         **({"sessionCost": _shown_session_cost(a["sessionCost"])} if "sessionCost" in a else {}),
+        # axis: a codex seat the watchdog ended is named in the record whenever the account lists an end — see bite-proof record i2375_c_watchdog_ends
+        **({"silenceWatchdogEnds": [dict(e, seat=_shown_seat(e["seat"])) for e in a["silenceWatchdogEnds"]]}
+           if a.get("silenceWatchdogEnds") else {}),
         "unreadFiles": unread, "rawOutputs": [],
         # axis: a kept left-for-owner repeat is not listed again beside the earlier finding that holds it — see bite-proof record c1l8_wo_b_record_repeats
         "leftForOwner": [_name(f) for f in findings
@@ -2064,13 +2084,24 @@ def _scrubbed(value):
     return value
 
 
+def _seat_hidden(seat):
+    """True when the record's own detector would hide this seat name."""
+    return _has_secret(seat) or _secret_key(seat) or pr_comment.scrub(seat) != seat
+
+
+def _shown_seat(seat):
+    """A seat name as the record shows it: `[REDACTED SEAT]` when the scrubber would hide it."""
+    # axis: a seat name the scrubber would hide reads `[REDACTED SEAT]`, never the name itself — see bite-proof record i2375_c_watchdog_ends
+    return "[REDACTED SEAT]" if _seat_hidden(seat) else seat
+
+
 def _shown_session_cost(cost):
     """The session cost with each seat key the record's own detector would hide shown as `[REDACTED SEAT]` (`-1`, `-2`, ... when taken), its figures kept."""
     # axis: a seat key the scrubber would hide keeps its figures under a neutral key, so the cost is never lost to the scrub — see bite-proof record i2307_session_cost
     out = {}
     for k, v in cost["bySeat"].items():
         n, shown = 0, k
-        if _has_secret(k) or _secret_key(k) or pr_comment.scrub(k) != k:
+        if _seat_hidden(k):
             shown = "[REDACTED SEAT]"
             while shown in out or shown in cost["bySeat"]:
                 n += 1
@@ -2536,6 +2567,19 @@ def _transit_line(damage, level):
     return f"Transit damage: redacted text in {count}, so that text is lost: " + ", ".join(str(f) for f in fields) + "."
 
 
+def _watchdog_line(ends, level):
+    """The summary line for the codex attempts the silence watchdog ended; None when the record carries none. Level 0
+    names each end; the compact levels give their count, and the record's JSON keeps the list."""
+    if not (isinstance(ends, list) and ends):
+        return None
+    if level >= 1:
+        # axis: the compact levels give the count only, so the line stays bounded however many ends there are — see bite-proof record i2375_c_watchdog_ends
+        return f"Silence watchdog ends: {_plural(len(ends), 'end', 'ends')} {LISTED}."
+    # axis: level 0 names every end (seat, attempt, silent seconds) in list order — see bite-proof record i2375_c_watchdog_ends
+    return "Silence watchdog ends: " + "; ".join(
+        f"{e['seat']} attempt {e['attempt']} after {e['silentSeconds']} s silent" for e in ends) + "."
+
+
 def _test_lens_line(r):
     """The one `Test lens:` line. A record with no usable `testLens` part reads unmeasured."""
     part = r.get("testLens")
@@ -2633,6 +2677,7 @@ def _summary(r, level):
     refused = r.get("refused") or []
     withheld_line = _withheld_line(r.get("withheldFromReviewers"), level)
     transit_line = _transit_line(r.get("transitDamage"), level)
+    watchdog_line = _watchdog_line(r.get("silenceWatchdogEnds"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
     lines = [
@@ -2644,6 +2689,7 @@ def _summary(r, level):
         withheld_line,
         # axis: the transit-damage line is present whenever a recorded field holds redacted text — see bite-proof record wo1_2121_redacted
         *([transit_line] if transit_line else []),
+        *([watchdog_line] if watchdog_line else []),
         *(["Makers: " + ", ".join(m["family"] for m in r["makers"]) + "."] if r["makers"] else []),
         f"CI on the final commit {(r['finalCommit']['sha'] or 'unknown')[:7]}: {ci['state']} ({ci['source']}).",
         *([rounds_line] if rounds_line else []),
@@ -2670,11 +2716,12 @@ def _summary(r, level):
     # line carries the recorded fields' literal paths (record keys), so it is left out too.
     # The findings block, the outside list and the reviewer header carry reviewers' and the session's own text, so
     # they are left out too, by the line objects built above.
+    # axis: the watchdog line carries session seat names, so it is left out of the claim check, by line object — see bite-proof record i2375_c_watchdog_ends
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
     # axis: the findings block and the outside list are left out of the claim check, by line object — see bite-proof record c1l1_wo_a_record_seam
     _assert_no_bug_free_claim(
         "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
-                  and l is not transit_line and l not in wider_lines and all(l is not q for q in quoted_lines)))
+                  and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines)))
     return "\n".join(lines)
 
 

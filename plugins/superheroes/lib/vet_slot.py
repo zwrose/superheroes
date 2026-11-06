@@ -14,7 +14,7 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of fourteen reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of nineteen reasons (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
 ``What's changing, and why`` heading sits above the advisor-vet marker, so the builder's owner half is lost and
 the body is restored from the PR's edit history rather than re-stamped),
@@ -25,7 +25,12 @@ inside the slot span, which the write would delete), ``receipt-missing``, ``foll
 names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
 named, by record id and title, under What we're accepting, or that record cannot be read; the rule's one home is
-``leftover_accepting.py``)) and a detail naming what was wrong; no edit is made, except
+``leftover_accepting.py``), ``fixed-above-not-in-stack`` and ``fixed-above-unverified`` (both callers of the leftover
+rule: an acceptance carries ``fixed-above #<PR> <commit>`` and the named PR is not a higher member of this PR's own
+stack, or the stack cannot be read so the disposition is not accepted), ``calibration-disclosure-contradicted``, ``calibration-disclosure-unknown-seat`` and
+``calibration-disclosure-unmarked`` (``handback`` over an open PR: a calibration marker in a degradation bullet that the
+latest review record contradicts, or that names a row the record lacks, or a degradation bullet that mentions
+calibration outside the marker; the rule's one home is ``calibration_disclosure.py``)) and a detail naming what was wrong; no edit is made, except
 for ``write-unconfirmed``: the edit call was launched (and may have failed) but the
 readback failed or differed from the pushed body. One JSON line on stdout; exit 0
 on ok, 1 on refusal.
@@ -52,6 +57,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import calibration_disclosure  # noqa: E402
 import gh_pages  # noqa: E402
 import leftover_accepting  # noqa: E402
 import md_fence  # noqa: E402
@@ -647,12 +653,79 @@ def _handback_file(body_file):
     return check_handback(body)
 
 
-def check_leftovers(pr, repo, body, comments):
-    """Refuse while the latest review record among ``comments`` leaves a finding for the owner that the body's What we're
-    accepting does not name (``leftover_accepting``, the rule's one home), or while that record cannot be read."""
+def _claim_name(claim):
+    return "%s (%s)" % (claim["id"], claim["title"]) if claim["title"] else claim["id"]
+
+
+def _check_fixed_above(pr, repo, claims, run, membership_reader):
+    """Refuse unless every claim's named PR is a member of this PR's own stack at a higher position (#2332). A stack that
+    cannot be read refuses too: the disposition is then not accepted."""
+    try:
+        if membership_reader is not None:
+            read = membership_reader(pr, repo)
+        else:
+            read = stack_check.read_membership(pr=pr, repo=repo, run=run or subprocess.run)
+    except Exception as exc:  # a reader that raises is a read that failed
+        # axis: a membership reader that raises refuses fixed-above-unverified, never passes
+        raise _Refusal("fixed-above-unverified", "%s: the stack membership of PR %d could not be read (%s: %s); the"
+                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr,
+                                                         type(exc).__name__, exc))
+    reason = read.get("reason") if isinstance(read, dict) else None
+    # axis: a read that succeeded in saying this PR is in no stack (not-linked) cannot have a higher layer: refuses
+    # fixed-above-not-in-stack
+    if isinstance(read, dict) and read.get("ok") is not True and reason == stack_check.REASON_NOT_LINKED:
+        raise _Refusal("fixed-above-not-in-stack", "; ".join(
+            "%s names #%d, but PR #%d is in no stack" % (_claim_name(c), c["layer"], pr) for c in claims))
+    # axis: a read that is not an object (membership unknown) or did not succeed refuses fixed-above-unverified, never passes
+    if not isinstance(read, dict) or read.get("ok") is not True:
+        cause = ("%s: %s" % (reason, read.get("detail"))) if isinstance(read, dict) else "the read was not an object"
+        raise _Refusal("fixed-above-unverified", "%s: the stack membership of PR %d could not be read (%s); the"
+                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr, cause))
+    members = read.get("members")
+    members = [m for m in members if isinstance(m, dict)] if isinstance(members, list) else []
+    position = {m.get("number"): m.get("position") for m in members}
+    mine = position.get(pr)
+    # axis: a read that does not list this PR at an integer position is malformed: refuses fixed-above-unverified
+    if not isinstance(mine, int) or isinstance(mine, bool):
+        raise _Refusal("fixed-above-unverified", "%s: the stack membership read does not list PR %d at a position; the"
+                       " disposition is not accepted" % ("; ".join(_claim_name(c) for c in claims), pr))
+    failing = []
+    for claim in claims:
+        layer = position.get(claim["layer"])
+        # axis: a named layer that is not a member of this PR's stack, or sits at or below it, is not a higher layer
+        if not (isinstance(layer, int) and not isinstance(layer, bool) and layer > mine):
+            why = ("is not a member of PR %d's stack" % pr if claim["layer"] not in position
+                   else "is at or below PR %d in the stack" % pr)
+            failing.append("%s names #%d, which %s" % (_claim_name(claim), claim["layer"], why))
+    if failing:
+        raise _Refusal("fixed-above-not-in-stack", "; ".join(failing))
+
+
+def _latest_record(pr, repo, comments):
     rows = [{"id": c.get("id"), "author": c["user"]["login"], "body": c["body"], "url": c.get("html_url")}
             for c in comments]
-    record = review_record.read(pr, repo, readers={"list_comments": lambda _pr, _repo: rows})
+    return review_record.read(pr, repo, readers={"list_comments": lambda _pr, _repo: rows})
+
+
+def check_calibration_disclosures(pr, repo, body, comments):
+    """Refuse while a calibration marker in a degradation bullet is contradicted by the latest review record among
+    ``comments`` or names a row the record lacks, or while a degradation bullet mentions calibration outside the marker
+    (``calibration_disclosure``, the rule's one home), or while that record cannot be read."""
+    record = _latest_record(pr, repo, comments)
+    try:
+        found = calibration_disclosure.problems(record, body)
+    except calibration_disclosure.Unreadable as exc:
+        raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
+    if found:
+        raise _Refusal(found[0]["reason"], calibration_disclosure.describe(found, record.get("url")))
+
+
+def check_leftovers(pr, repo, body, comments, run=None, membership_reader=None):
+    """Refuse while the latest review record among ``comments`` leaves a finding for the owner that the body's What we're
+    accepting does not name (``leftover_accepting``, the rule's one home), or while that record cannot be read. An
+    acceptance that carries ``fixed-above #<PR> <commit>`` also refuses unless that PR is a higher member of this PR's own
+    stack, or when the stack cannot be read (#2332); with no such acceptance the stack is never read."""
+    record = _latest_record(pr, repo, comments)
     try:
         gaps = leftover_accepting.missing(record, body)
     except leftover_accepting.Unreadable as exc:
@@ -661,6 +734,13 @@ def check_leftovers(pr, repo, body, comments):
     # axis: a leftover What we're accepting does not name by id and title refuses leftover-not-accepted
     if gaps:
         raise _Refusal("leftover-not-accepted", leftover_accepting.describe(gaps))
+    try:
+        claims = leftover_accepting.fixed_above(record, body)
+    except leftover_accepting.Unreadable as exc:
+        raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
+    # axis: with no fixed-above acceptance the stack is never read
+    if claims:
+        _check_fixed_above(pr, repo, claims, run, membership_reader)
 
 
 def reads_ready(slot_text):
@@ -931,7 +1011,10 @@ def _run_verb(verb, pr, repo, slot_file, run):
         body = _body_of(payload)
         result = check_handback(body)
         if result["ok"]:
-            check_leftovers(pr, repo, body, _read_comments(run, pr, repo))
+            comments = _read_comments(run, pr, repo)
+            check_leftovers(pr, repo, body, comments, run)
+            # axis: a disclosed calibration degradation the record grades read refuses calibration-disclosure-contradicted — see bite-proof record i2364_calibration_disclosure
+            check_calibration_disclosures(pr, repo, body, comments)
         return result
     body = _body_of(payload)
     # axis: a body with no builder sign takes the no-build-record path on write and check — see bite-proof record i2342_vet_slot_no_build_record.md
@@ -956,7 +1039,7 @@ def _run_verb(verb, pr, repo, slot_file, run):
         return result
     if reads_ready(slot_text):
         # axis: the READY check reads the body the write will publish, never the old slot text it replaces
-        check_leftovers(pr, repo, result["newBody"], comments)
+        check_leftovers(pr, repo, result["newBody"], comments, run)
     new_body = result.pop("newBody")
     if _read_body(run, pr, repo) != body:
         raise _Refusal("write-failed", "PR body changed between the read and the push")

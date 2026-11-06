@@ -27,7 +27,8 @@ NONE = {"tokens": 0, "minutes": 0.0, "runs": 0, "runsWithoutFigure": 0, "complet
 
 def run(nonce, tokens=100, wall=120, obs=None):
     """An engine record for the run dir `/run/<nonce>`: the record the reader returns for it."""
-    return dict(GOOD_RUN, runnerNonce=nonce, observation=obs if obs is not None else {"tokens": tokens, "wallSeconds": wall}), None
+    figure = obs if obs is not None else {"tokens": tokens, "wallSeconds": wall}
+    return dict(GOOD_RUN, runnerNonce=nonce, observation=figure, attemptsCost=figure), None
 
 
 def written(tmp_path, session, runs, dirs=None, **over):
