@@ -18,6 +18,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import cloud_cleanup as CC  # noqa: E402
+import cloud_parked as CP  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 
 from test_launch_ledger import _declare, _init_repo, _ledger_env, _reserved, _started  # noqa: E402
@@ -412,6 +413,32 @@ def test_a_pr_that_links_no_issue_is_unlinked(w):
     w.gh.pulls[PR] = _pull(issues=(), head_sha=w.head)
     assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
     assert _branch(w) == {"ok": False, "reason": "pr-unlinked"}
+
+
+def test_a_pr_whose_close_line_sits_below_a_note_is_linked(w):
+    # axis: the closing links; a note above "Closes #N" left the PR unlinked
+    _lane(w, "l-1", 101)
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "> Correction (advisor): the vet slot was rewritten.\n\n" + pull["body"]
+    w.gh.pulls[PR] = pull
+    out = _plan(w)
+    assert out["ok"] and out["action"] == "cleanup" and out["issue"] == 101, out
+
+
+def test_a_pr_whose_only_close_link_names_another_repository_is_unlinked(w):
+    # axis: the cross-repository guard; another repository's issue read as this PR's
+    _lane(w, "l-1", 101)
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "A note.\n\nCloses other/repo#101\n\nthe work"
+    w.gh.pulls[PR] = pull
+    assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
+
+
+def test_a_pr_that_closes_on_its_first_line_and_one_without_any_keyword(w):
+    # axis: the sibling cases; a first-line link stopped linking, or a body with no keyword linked
+    assert CP._linked_issues("Closes #7.\n\nbody", REPO) == [7]
+    assert CP._linked_issues("the work\n\nmentions #8 in passing", REPO) == []
+    assert CP._linked_issues("Part of #9.\n\nbody", REPO) == [9]
 
 
 def test_a_local_lane_is_no_cloud_lane(w):

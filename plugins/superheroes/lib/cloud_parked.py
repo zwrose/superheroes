@@ -298,7 +298,8 @@ def _let_through(repo, pr, env, run, head):
 
 
 def _linked_issues(body, repo):
-    """The issues the PR body's first line links: those it closes, else any `#N` it names (a non-closing link)."""
+    """The issues the PR body links: those its closing keywords close anywhere in the body, else any `#N`
+    its first line names (a non-closing link)."""
     found = _sib("review_record").closing_issues(body, repo)
     if found or not isinstance(body, str):
         return found

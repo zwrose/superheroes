@@ -1229,15 +1229,23 @@ def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_tr
     pytest.param("Fixes: #3", "o/r", [3], id="colon"),
     pytest.param("Closes #3. Resolves #5. Closes #3.", "o/r", [3, 5], id="several-deduplicated"),
     pytest.param("Closes #3, #5", "o/r", [3], id="one-issue-per-keyword"),
-    pytest.param("Intro\nCloses #3.", "o/r", [], id="not-on-the-first-line"),
+    pytest.param("Intro\nCloses #3.", "o/r", [3], id="a-later-line"),
+    pytest.param("> Correction (advisor): see below.\n\nCloses #3.\n\n## What's changing", "o/r", [3],
+                 id="a-note-above-the-close-line"),
+    pytest.param("Closes #3.\n\nThe build record.\nFixes #5", "o/r", [3, 5], id="first-and-later-lines"),
+    pytest.param("Closes\n#3", "o/r", [], id="keyword-and-reference-on-different-lines"),
+    pytest.param("Intro\nCloses x/y#8", "o/r", [], id="qualified-other-repo-on-a-later-line"),
+    pytest.param("Note\nCloses https://github.com/O/R/issues/9", "o/r", [9], id="issue-url-same-repo"),
+    pytest.param("Note\nCloses https://github.com/x/y/issues/9", "o/r", [], id="issue-url-other-repo"),
+    pytest.param("Note\nSee #3 and part of #4.", "o/r", [], id="no-closing-keyword-anywhere"),
     pytest.param("Closes #3.\r\nx", "o/r", [3], id="crlf"),
     pytest.param("Closes O/R#8", "o/r", [8], id="qualified-same-repo"),
     pytest.param("Closes x/y#8", "o/r", [], id="qualified-other-repo"),
     pytest.param("Encloses #3", "o/r", [], id="not-a-whole-word-keyword"),
     pytest.param("Closes #3a", "o/r", [], id="not-a-whole-number"),
 ])
-def test_closing_issues_reads_only_the_first_line_and_fails_closed(body, repo, expected):
-    # axis: the closing-issue rule; a later line, another repository, a non-closing verb or a partial word read as a closed issue
+def test_closing_issues_reads_the_whole_body_and_fails_closed(body, repo, expected):
+    # axis: the closing-issue rule; a close link below a note read as none, or another repository, a non-closing verb, a split line or a partial word read as a closed issue
     assert rr._closing_issues(body, repo) == expected
 
 

@@ -21,7 +21,7 @@ CLI:
   review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]
 
 In a cloud session (CLAUDE_CODE_REMOTE is "true") the repo, PR and issue reads go through `gh api` REST, and the
-closing issue comes from the first line of the PR body.
+closing issues come from the closing keywords anywhere in the PR body, read as GitHub reads them.
 """
 from __future__ import annotations
 
@@ -96,7 +96,7 @@ _LANE_RE = re.compile(
     r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in LANES) + r")\b[.:]?[ \t]*(.*)$"
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
-_CLOSES_RE = stack_check.CLOSES_RE
+_CLOSING_REF_RE = stack_check.CLOSING_REF_RE
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -204,14 +204,15 @@ def _repo_name_rest(repo_root):
 
 
 def _closing_issues(body, repo):
-    """The issue numbers the PR body's first line closes, in order, duplicates removed; anything else reads as none."""
+    """The issue numbers the PR body's closing keywords link, anywhere in the body, in order, duplicates
+    removed; a link to another repository's issue never counts, and anything else reads as none."""
     if not isinstance(body, str):
         return []
-    first = body.split("\n", 1)[0].removesuffix("\r")
     found = []
-    for m in _CLOSES_RE.finditer(first):
-        n = int(m.group(2))
-        if n > 0 and n not in found and (m.group(1) is None or m.group(1).lower() == (repo or "").lower()):
+    for m in _CLOSING_REF_RE.finditer(body):
+        n = int(m.group("n") or m.group("bare") or m.group("un"))
+        slug = m.group("slug") or m.group("uslug")
+        if n > 0 and n not in found and (slug is None or slug.lower() == (repo or "").lower()):
             found.append(n)
     return found
 
