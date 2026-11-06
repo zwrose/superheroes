@@ -21,7 +21,7 @@ CLI:
   review_record.py reading-next --run-dir A [--run-dir B] [--seat-map FILE] --maker-family F [--maker-family F ...]
 
 In a cloud session (CLAUDE_CODE_REMOTE is "true") the repo, PR and issue reads go through `gh api` REST, and the
-closing issue comes from the first line of the PR body.
+closing issues come from the closing keywords on the PR body's plain prose lines (see `_markdown_prose`).
 """
 from __future__ import annotations
 
@@ -97,7 +97,25 @@ _LANE_RE = re.compile(
     r"(?m)^\*\*Lane call:\*\*\s*(" + "|".join(re.escape(lane) for lane in LANES) + r")\b[.:]?[ \t]*(.*)$"
 )
 _REPO_RE = re.compile(r"[^/\s]+/[^/\s]+")
-_CLOSES_RE = stack_check.CLOSES_RE
+_CLOSING_REF_RE = stack_check.CLOSING_REF_RE
+# The body fallback's masking. GitHub's own closingIssuesReferences list decides wherever it can be read;
+# the body is read only when it cannot, and then the read never returns an issue GitHub does not link: it
+# masks whole lines and can only over-mask, so a misread misses a link (cleanup refuses), never invents one.
+# A line holding ``` or ~~~ or $$ masks to the end of the body, since no closer is safe to trust; every raw
+# HTML block that runs across blank lines (a comment, a processing instruction, CDATA, a declaration, and a
+# <pre>, <script>, <style> or <textarea> block) masks from its line to the line that ends it (or the end);
+# and a run of non-blank lines is masked whole when any line of it is masked, holds a backtick, `<` or `[`,
+# or looks like code or a quote (indented four columns, a list marker followed by two or more spaces or a
+# tab, or a `>` after any list markers).
+_RAW_TO_END_RE = re.compile(r"```|~~~|\$\$")
+_RAW_HTML_OPEN_RE = re.compile(r"<(?:pre|script|style|textarea)\b", re.I)
+_RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.I)
+# (opener, closer) of each raw HTML block GFM keeps open across blank lines until its closer.
+_RAW_SPANS = ((re.compile("<!--"), re.compile("-->")), (re.compile(r"<\?"), re.compile(r"\?>")),
+              (re.compile(r"<!\[CDATA\["), re.compile(r"\]\]>")), (re.compile(r"<![A-Za-z]"), re.compile(">")),
+              (_RAW_HTML_OPEN_RE, _RAW_HTML_CLOSE_RE))
+_BLOCK_MARK_RE = re.compile(r"[`<\[]")
+_LIST_MARKER_RE = re.compile(r"(?:[-*+]|\d{1,9}[.)])( +|$)")
 _REASON_LEAD_RE = re.compile(r"^[\s,;:—–-]+")
 _VENDOR_MODELS = {"claude": model_registry.claude_models, "codex": model_registry.codex_models,
                   "cursor": model_registry.cursor_models}
@@ -204,15 +222,90 @@ def _repo_name_rest(repo_root):
     return name if name and _REPO_RE.fullmatch(name) else None
 
 
+def _code_like(line):
+    """True when `line` could be code or a quote: indented four columns, a list marker followed by two or more
+    spaces (a tab counts as one to four), or a `>` after any list markers."""
+    text = line.expandtabs(4)
+    rest = text.lstrip(" ")
+    if len(text) - len(rest) >= 4:
+        return True
+    while (m := _LIST_MARKER_RE.match(rest)):
+        if len(m.group(1)) >= 2:
+            return True
+        rest = rest[m.end():]
+    return rest.startswith(">")
+
+
+def _markdown_prose(body):
+    """`body` with every line blanked that might not be prose GitHub reads, masking whole lines only."""
+    lines = body.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    keep, to_end, pending = [True] * len(lines), False, []
+    for i, line in enumerate(lines):
+        if to_end:
+            keep[i] = False
+            continue
+        if _RAW_TO_END_RE.search(line):
+            keep[i], to_end = False, True
+            continue
+        # A line seen while a span is pending is masked, and is read for the pending closers and, like any line, for new openers: reading never unmasks.
+        if pending:
+            keep[i] = False
+            pending = [closer for closer in pending if not closer.search(line)]
+        # Every opener on the line leaves its own span pending when no closer follows it on that line.
+        for opener, closer in _RAW_SPANS:
+            for m in opener.finditer(line):
+                keep[i] = False
+                if not closer.search(line, m.end()) and closer not in pending:
+                    pending.append(closer)
+    start = 0
+    while start < len(lines):
+        end = start
+        while end < len(lines) and lines[end].strip():
+            end += 1
+        block = range(start, end)
+        if any(not keep[k] or _BLOCK_MARK_RE.search(lines[k]) or _code_like(lines[k]) for k in block):
+            for k in block:
+                keep[k] = False
+        start = end + 1
+    return "\n".join(line if kept else "" for line, kept in zip(lines, keep))
+
+
+def github_closing_issues(text, repo):
+    """The issue numbers `gh pr view --json closingIssuesReferences` output `text` lists in `repo`, in order,
+    duplicates removed; another repository's issue never counts. None when `text` is not that answer, or an
+    entry names no number or no repository (an empty or blank repository name or owner counts as none)."""
+    try:
+        refs = json.loads(text)["closingIssuesReferences"]
+    except (TypeError, ValueError, KeyError):
+        return None
+    if not isinstance(refs, list):
+        return None
+    found = []
+    for ref in refs:
+        n = ref.get("number") if isinstance(ref, dict) else None
+        where = ref.get("repository") if isinstance(ref, dict) else None
+        owner = where.get("owner") if isinstance(where, dict) else None
+        login = owner.get("login") if isinstance(owner, dict) else None
+        name = where.get("name") if isinstance(where, dict) else None
+        if type(n) is not int or n <= 0 or not (isinstance(login, str) and login.strip()) \
+                or not (isinstance(name, str) and name.strip()):
+            return None
+        if f"{login}/{name}".lower() == (repo or "").lower() and n not in found:
+            found.append(n)
+    return found
+
+
 def _closing_issues(body, repo):
-    """The issue numbers the PR body's first line closes, in order, duplicates removed; anything else reads as none."""
+    """The issue numbers the PR body's closing keywords link, on lines the body fallback's masking keeps, in
+    order, duplicates removed; a link to another repository's issue never counts, and anything else reads as
+    none. GitHub's own closingIssuesReferences list, where it can be read, decides instead."""
     if not isinstance(body, str):
         return []
-    first = body.split("\n", 1)[0].removesuffix("\r")
     found = []
-    for m in _CLOSES_RE.finditer(first):
-        n = int(m.group(2))
-        if n > 0 and n not in found and (m.group(1) is None or m.group(1).lower() == (repo or "").lower()):
+    for m in _CLOSING_REF_RE.finditer(_markdown_prose(body)):
+        n = int(m.group("n") or m.group("bare") or m.group("un"))
+        slug = m.group("slug") or m.group("uslug")
+        if n > 0 and n not in found and (slug is None or slug.lower() == (repo or "").lower()):
             found.append(n)
     return found
 
@@ -224,7 +317,8 @@ def _pr_meta_rest(pr, repo):
     d = _gh_json("api", _api(repo, f"pulls/{pr}"))
     try:
         body = d.get("body") or ""
-        return {"head": d["head"]["sha"], "body": body, "issues": _closing_issues(body, repo)}
+        return {"head": d["head"]["sha"], "body": body, "issues": _closing_issues(body, repo),
+                "laneIssues": _closing_issues(body.split("\n", 1)[0], repo)}
     except (KeyError, TypeError, AttributeError):
         return None
 
@@ -998,9 +1092,10 @@ def _ci(rd, repo, sha, repo_root):
 
 
 def _lane_call(a, rd, meta):
-    """The first lane-call line in the PR's closing issues' bodies, then the PR body, as (match, source)."""
+    """The first lane-call line in the bodies of the issues the description's first line closes where the reader
+    gives them (`laneIssues`), else the PR's closing issues, then the PR body, as (match, source)."""
     if meta:
-        texts = [(rd["issue_body"](n, a["repo"]), "issue lane call") for n in meta["issues"]]
+        texts = [(rd["issue_body"](n, a["repo"]), "issue lane call") for n in meta.get("laneIssues", meta["issues"])]
         for body, source in texts + [(meta["body"], "PR lane call")]:
             hit = _LANE_RE.search(body or "")
             if hit:

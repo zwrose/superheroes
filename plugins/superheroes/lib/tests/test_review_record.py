@@ -1202,6 +1202,54 @@ else:
     assert posted["lane"]["value"] == "light" and posted["lane"]["source"] == "issue lane call"
 
 
+BELOW_FIRST_LINE_PR = {"head": {"sha": HEAD}, "body": "Closes #9\n\n<code>\n\nFixes #50\n\n</code>\n"}
+NO_CALL = "no lane call here"
+
+
+def _meta_through_the_rest_reader(monkeypatch):
+    """The meta the cloud writer builds: the real REST reader over a description that closes #9 on its first line
+    and #50 only below it."""
+    monkeypatch.setattr(rr, "_gh_json", lambda *args: BELOW_FIRST_LINE_PR)
+    meta = rr._pr_meta_rest(7, "o/r")
+    assert meta["issues"] == [9, 50]
+    assert meta["laneIssues"] == [9]
+    return meta
+
+
+def test_a_lane_call_on_an_issue_below_the_first_line_never_sets_the_writers_lane(monkeypatch):
+    # axis: the lane the record certifies against; an issue read from below the description's first line supplying it
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: NO_CALL, 50: "**Lane call:** full. spans contracts"},
+                runs={"/run/code-reviewer": (_run_with({"read": "unknown"}), None)})
+    rec = build(account(**LIGHT), fake)
+    assert rec["lane"]["value"] == "light"
+    assert rec["status"] != "reviewed"
+
+
+def test_a_light_review_over_the_cap_is_refused_whatever_an_issue_below_the_first_line_says(monkeypatch):
+    # axis: the round-cap refusal; an issue below the first line lifting a light review out of the cap
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: NO_CALL, 50: "**Lane call:** full. spans contracts"})
+    with pytest.raises(rr.Refusal) as e:
+        build(account(**LIGHT, rounds={"count": 5, "cap": 4, "stoppedAtCap": False}), fake)
+    assert e.value.reason == "review-record-round-cap-exceeded"
+
+
+def test_a_full_review_over_the_cap_is_written_when_only_an_issue_below_the_first_line_says_light(monkeypatch):
+    # axis: the round-cap refusal; an issue below the first line putting a full review under the light lane's cap
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: NO_CALL, 50: "**Lane call:** light. small"})
+    rec = build(account(lane="full", rounds={"count": 5, "cap": 4, "stoppedAtCap": False}), fake)
+    assert rec["lane"]["value"] == "full"
+
+
+def test_a_lane_call_on_the_first_line_issue_decides(monkeypatch):
+    # axis: the first-line issue still supplying the lane call, so the narrowed read is not a read of nothing
+    meta = _meta_through_the_rest_reader(monkeypatch)
+    fake = Fake(meta=meta, issue_bodies={9: "**Lane call:** full. spans contracts", 50: "**Lane call:** light. small"})
+    assert build(account(**LIGHT), fake)["lane"]["value"] == "full"
+
+
 def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_true(monkeypatch):
     # axis: reader selection; a cloud session on the old gh pr/issue/repo readers, or an off-cloud session moved off them
     old = {"pr_meta": rr._pr_meta, "issue_body": rr._issue_body, "repo_name": rr._repo_name}
@@ -1229,16 +1277,85 @@ def test_the_default_readers_are_the_rest_set_only_when_the_cloud_variable_is_tr
     pytest.param("Fixes: #3", "o/r", [3], id="colon"),
     pytest.param("Closes #3. Resolves #5. Closes #3.", "o/r", [3, 5], id="several-deduplicated"),
     pytest.param("Closes #3, #5", "o/r", [3], id="one-issue-per-keyword"),
-    pytest.param("Intro\nCloses #3.", "o/r", [], id="not-on-the-first-line"),
+    pytest.param("This PR fixes #7.", "o/r", [7], id="a-plain-prose-line"),
+    pytest.param("Intro\nCloses #3.", "o/r", [3], id="a-later-line"),
+    pytest.param("> Correction (advisor): see below.\n\nCloses #3.\n\n## What's changing", "o/r", [3],
+                 id="a-note-above-the-close-line"),
+    pytest.param("Closes #3.\n\nThe build record.\nFixes #5", "o/r", [3, 5], id="first-and-later-lines"),
+    pytest.param("Closes\n#3", "o/r", [], id="keyword-and-reference-on-different-lines"),
+    pytest.param("Intro\nCloses x/y#8", "o/r", [], id="qualified-other-repo-on-a-later-line"),
+    pytest.param("Note\nCloses https://github.com/O/R/issues/9", "o/r", [9], id="issue-url-same-repo"),
+    pytest.param("Note\nCloses https://github.com/x/y/issues/9", "o/r", [], id="issue-url-other-repo"),
+    pytest.param("Note\nSee #3 and part of #4.", "o/r", [], id="no-closing-keyword-anywhere"),
     pytest.param("Closes #3.\r\nx", "o/r", [3], id="crlf"),
     pytest.param("Closes O/R#8", "o/r", [8], id="qualified-same-repo"),
     pytest.param("Closes x/y#8", "o/r", [], id="qualified-other-repo"),
     pytest.param("Encloses #3", "o/r", [], id="not-a-whole-word-keyword"),
     pytest.param("Closes #3a", "o/r", [], id="not-a-whole-number"),
+    # the body fallback's masking: a line that might not be prose GitHub reads never links
+    pytest.param("Closes #3.\n\nExample: `Closes #4` is the close line.", "o/r", [3], id="inline-code"),
+    pytest.param("Closes #3.\n\n```\nCloses #4\n```\n\nFixes #5", "o/r", [3], id="a-fence-masks-to-the-end"),
+    pytest.param("Note\n~~~md\nCloses #4\n", "o/r", [], id="a-tilde-fence"),
+    pytest.param("Closes #3\n\n$$\nFixes #4\n$$", "o/r", [3], id="a-math-block"),
+    pytest.param("Closes #3\n\n`a\nFixes #4\nb`", "o/r", [3], id="a-code-span-over-three-lines"),
+    pytest.param("Closes #3\n\n-     Fixes #4", "o/r", [3], id="a-list-marker-then-indented-code"),
+    pytest.param("Closes #3\n\n[Fixes #4](https://example.com)", "o/r", [3], id="link-text"),
+    pytest.param("Closes #3\n\n<a href=x>Fixes #4</a>", "o/r", [3], id="html-anchor-text"),
+    pytest.param("Closes #3\n\n<pre>\n\nFixes #4\n\n</pre>\n\nFixes #5", "o/r", [3, 5], id="a-pre-block-across-blank-lines"),
+    pytest.param("Closes #3\n\n> Fixes #4", "o/r", [3], id="a-quote"),
+    pytest.param("Closes #3\nUses `x`.", "o/r", [], id="a-close-line-beside-code-is-missed-never-invented"),
+    # the false-link shapes found by vet 832 (a-f) and the returning review (c1), each linking only the real issue
+    pytest.param("Closes #101\n\n<!-- Fixes #202 -->", "o/r", [101], id="vet832-a-html-comment"),
+    pytest.param("Closes #101\n\n<!-- a note\n\nFixes #202", "o/r", [101], id="vet832-a-unclosed-html-comment"),
+    pytest.param("Closes #101\n\n    Fixes #202", "o/r", [101], id="vet832-b-four-space-indented-block"),
+    pytest.param("Closes #101\n\n\tFixes #202", "o/r", [101], id="vet832-b-tab-indented-block"),
+    pytest.param("Closes #101\n\n```\n    ```\nFixes #202\n```", "o/r", [101], id="vet832-c-four-space-fence-line-inside-a-fence"),
+    pytest.param("Closes #101\n\n- ```\n  code\n```\nFixes #202\n", "o/r", [101], id="vet832-d-column-0-fence-line-after-a-list-fence"),
+    pytest.param("Closes #101\n\n- ```\n      ```\nFixes #202\n  ```", "o/r", [101], id="vet832-e-six-space-closer-inside-a-list-fence"),
+    pytest.param("Closes #101\n\nPath \\\\`Fixes #202` here", "o/r", [101], id="vet832-f-escaped-backslash-before-a-backtick"),
+    pytest.param("Closes #201\n\n```\n```<!-- sample -->\nFixes #999\n```", "o/r", [201], id="c1-code-001-comment-inside-a-fence"),
+    pytest.param("Closes #201\n\nExample: `Fixes #999\n    continued`.", "o/r", [201], id="c1-code-002-indented-span-closer"),
+    pytest.param("Closes #201\n\n- > ```\n  > Fixes #999", "o/r", [201], id="c1-code-003-fence-in-a-quote-in-a-list"),
+    pytest.param("Note\n````\nCloses #4\n```\nCloses #5\n````\nCloses #3", "o/r", [], id="a-shorter-fence-line-inside-a-fence"),
+    pytest.param("A note.\n\n<pre><!-- example -->\n\nFixes #202\n\n</pre>", "o/r", [], id="brief-1-comment-and-pre-on-one-line"),
+    pytest.param("A note.\n\n<?example\n\nFixes #202\n\n?>\n\nCloses #3", "o/r", [3], id="a-processing-instruction-across-blank-lines"),
+    pytest.param("A note.\n\n<![CDATA[\n\nFixes #202\n\n]]>\n\nCloses #3", "o/r", [3], id="cdata-across-blank-lines"),
+    pytest.param("A note.\n\n<!DOCTYPE example\n\nFixes #202\n\n>\n\nCloses #3", "o/r", [3], id="a-declaration-across-blank-lines"),
+    pytest.param("A note.\n\n<!-- x --><pre>\n\nFixes #202\n\n</pre>\n\nCloses #3", "o/r", [3], id="brief-1-closed-comment-then-pre"),
+    pytest.param("A note.\n\n<pre><!-- a\n\nFixes #202\n\n</pre>\n\n-->\n\nCloses #3", "o/r", [3], id="brief-1-both-spans-must-end"),
+    pytest.param("A note.\n\n<!-- a\n--> <pre>\n\nFixes #202\n\n</pre>", "o/r", [], id="a-span-ends-and-another-opens-on-one-line"),
+    pytest.param("A note.\n\n<!-- a\n--> ```\n\nFixes #202", "o/r", [], id="a-span-ends-and-a-fence-opens-on-one-line"),
+    pytest.param("A note.\n\n<!-- a <pre> -->\n\nCloses #3", "o/r", [], id="a-pre-inside-a-closed-comment-over-masks"),
 ])
-def test_closing_issues_reads_only_the_first_line_and_fails_closed(body, repo, expected):
-    # axis: the closing-issue rule; a later line, another repository, a non-closing verb or a partial word read as a closed issue
+def test_closing_issues_reads_the_whole_body_and_fails_closed(body, repo, expected):
+    # axis: the body fallback; a close link below a note read as none, or a line that might be code, a quote or markup, another repository, a non-closing verb, a split line or a partial word read as a closed issue
     assert rr._closing_issues(body, repo) == expected
+
+
+def _gh_ref(number, owner="o", name="r"):
+    return {"number": number, "repository": {"name": name, "owner": {"login": owner}}}
+
+
+@pytest.mark.parametrize("refs,expected", [
+    pytest.param([_gh_ref(3), _gh_ref(5, "O", "R"), _gh_ref(3)], [3, 5], id="same-repo-any-case-deduplicated"),
+    pytest.param([_gh_ref(3), _gh_ref(4, "x", "y"), _gh_ref(6, "o", "r-fork")], [3], id="another-repository-never-counts"),
+    pytest.param([], [], id="an-empty-list-is-read"),
+    pytest.param([{"number": 3}], None, id="no-repository-is-unreadable"),
+    pytest.param([_gh_ref(True)], None, id="a-bool-is-no-number"),
+    pytest.param([_gh_ref(0)], None, id="zero-is-no-issue"),
+    pytest.param([_gh_ref(3, "o", "")], None, id="an-empty-repository-name-is-unreadable"),
+    pytest.param([_gh_ref(3, " ", "r")], None, id="a-blank-owner-is-unreadable"),
+    pytest.param(["#3"], None, id="a-non-object-entry"),
+    pytest.param("3", None, id="not-a-list"),
+])
+def test_githubs_own_closing_list_is_read_with_the_cross_repository_guard(refs, expected):
+    # axis: GitHub's list; another repository's issue counted, or a malformed answer read as a list
+    assert rr.github_closing_issues(json.dumps({"closingIssuesReferences": refs}), "o/r") == expected
+
+
+@pytest.mark.parametrize("text", [None, "", "not json", "[]", '{"other": []}'])
+def test_an_answer_that_is_not_githubs_closing_list_is_unreadable(text):
+    assert rr.github_closing_issues(text, "o/r") is None
 
 
 def test_rest_pr_and_issue_readers_fail_closed_on_a_missing_or_malformed_answer(monkeypatch):
@@ -1250,7 +1367,7 @@ def test_rest_pr_and_issue_readers_fail_closed_on_a_missing_or_malformed_answer(
         monkeypatch.setattr(rr, "_gh_json", lambda *a, answer=answer: answer)
         assert rr._issue_body_rest(9, "o/r") is None
     monkeypatch.setattr(rr, "_gh_json", lambda *a: {"head": {"sha": HEAD}, "body": None})
-    assert rr._pr_meta_rest(7, "o/r") == {"head": HEAD, "body": "", "issues": []}
+    assert rr._pr_meta_rest(7, "o/r") == {"head": HEAD, "body": "", "issues": [], "laneIssues": []}
 
 
 def test_a_credential_used_as_a_dictionary_key_is_redacted_and_colliding_keys_survive():

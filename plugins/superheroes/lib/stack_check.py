@@ -35,9 +35,15 @@ TRANSPORTS = (TRANSPORT_AUTO, TRANSPORT_GRAPHQL, TRANSPORT_REST)
 # call that exited non-zero with both strings in its output restarts a read on REST.
 GRAPHQL_REFUSED_MARKERS = ("HTTP 403", "use the REST API")
 
-# The closing keywords a PR body's first line uses to name the issue it closes; its one home, read by review_record.
+# The closing keywords a PR body uses to name the issue it closes; their one home.
 CLOSING_KEYWORD = r"(?<!\w)(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)(?!\w)"
-CLOSES_RE = re.compile(CLOSING_KEYWORD + r":?\s+(?:([^/\s#]+/[^/\s#]+))?#(\d+)(?!\w)", re.IGNORECASE)
+# GitHub's closing connection, anywhere in a body: the keyword and its reference sit together on one
+# line, the reference being #n, owner/repo#n or an issue URL. Read by review_record and wave_watch.
+CLOSING_REF_RE = re.compile(
+    CLOSING_KEYWORD + r"[ \t]*:?[ \t]+"
+    r"(?:(?P<slug>[^/\s#]+/[^/\s#]+)#(?P<n>\d+)(?!\w)|#(?P<bare>\d+)(?!\w)"
+    r"|https?://(?:www\.)?github\.com/(?P<uslug>[^/\s#]+/[^/\s#]+)/issues/(?P<un>\d+)(?![\w/]))",
+    re.IGNORECASE)
 
 # Every read of the open-PR list asks for at most this many rows, on either transport (`gh pr list --limit`).
 OPEN_PRS_LIMIT = 1000
