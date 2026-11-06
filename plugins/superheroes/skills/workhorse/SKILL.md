@@ -714,7 +714,7 @@ so use a non-closing verb ("addresses", "part of", "relates to") for an issue th
 **Every finding left for the owner is named before the ready mark.** The PR-mode handback check
 (`vet_slot.py handback --pr <n> --repo <owner/name>`) reads the latest review record and refuses
 `leftover-not-accepted`, naming each missing id and title, while `## What we're accepting` does not
-name every `leftForOwner` finding by its record id, byte for byte, with its title in the same line;
+name every `leftForOwner` finding by its record id, under the rule's normalisation (`lib/leftover_accepting.py`), with its title in the same line;
 it refuses `review-record-unreadable` when no record can be read. Never mark the PR ready on either
 refusal. The advisor's READY slot write refuses the same way (`lib/leftover_accepting.py` is the
 rule's one home).

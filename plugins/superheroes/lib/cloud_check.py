@@ -3,13 +3,15 @@ the judgment of that check on the owner's machine.
 
   cloud_check.py setup-message [--cwd D] [--root D] [--project-name N]
   cloud_check.py sign-in [--cwd D] [--root D] [--project-name N]
-  cloud_check.py start --environment E [--cwd D] [--issue N]
+  cloud_check.py start --environment E --issue N [--cwd D]
   cloud_check.py report [--cwd D] [--root D] [--nonce N]
   cloud_check.py judge --environment E --nonce N (--line TEXT | --line-file F) [--account A]
   cloud_check.py setup-text [--cwd D] [--root D] [--project-name N]
 
 `start` launches the check session on the owner's machine, always naming the environment id the
-owner gave. `report` runs inside the cloud session and prints one marked line saying what that session holds.
+owner gave. `start` refuses `check-issue-required` without an issue and `check-issue-unreadable`
+when the issue does not resolve, before anything is spawned, because no supported host tool reads
+the check session's own log (#2332). `report` runs inside the cloud session and prints one marked line saying what that session holds.
 `judge` runs on the owner's machine, reads that line out of whatever text carries it, and writes
 the setup record only when every part of the report agrees with this machine. Any other result
 writes no record and leaves the account's failed-check marker, which pauses cloud launches on that
@@ -240,7 +242,13 @@ _ENVIRONMENT_NEEDED = ("I need to know which cloud environment to check. Run /re
 _NOT_STARTED = "The check session did not start: the cloud launch command could not be run."
 _UNCONFIRMED = ("I could not confirm that the check session started. Look for a session named "
                 "{name} in your session list; say \"check again\" and I'll start a new one.")
-_STARTED = "The check session is running. I'll read its result in about a minute."
+_STARTED = ("The check session is running. It posts its result line on issue #{issue}; I'll read "
+            "it there in about a minute.")
+_ISSUE_REQUIRED = ("A check needs an issue to post its result on, because this seat cannot read "
+                   "the check session's own log. Name an issue in this repository with --issue, "
+                   "and the check posts its one result line there.")
+_ISSUE_UNREADABLE = ("I could not read issue #%d in this repository, so the check could not post "
+                     "its result there. Name an issue that exists here.")
 
 
 def _environment_ok(value):
@@ -876,7 +884,7 @@ def _fallback_line(nonce):
 def _check_prompt(nonce, issue):
     prompt = _CHECK_PROMPT.format(plugin_dir=cloud_pass.CLOUD_PLUGIN_DIR, nonce=nonce,
                                   fallback=_fallback_line(nonce))
-    return prompt + (_CHECK_POST.format(issue=issue) if issue is not None else "")
+    return prompt + _CHECK_POST.format(issue=issue)
 
 
 def _repo_root(cwd, env=None):
@@ -886,23 +894,49 @@ def _repo_root(cwd, env=None):
         return os.path.abspath(cwd)
 
 
-def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120, nonce=None):
+def _issue_resolves(repo_root, number):
+    """True only when GitHub answers for this issue number in this repository's slug."""
+    try:
+        import stack_check
+        slug, refusal = stack_check.resolve_repo_slug(repo_root)
+        if refusal is not None or not slug:
+            return False
+        done = subprocess.run(["gh", "api", "repos/%s/issues/%d" % (slug, number)],
+                              capture_output=True, text=True, timeout=60)
+        if done.returncode != 0:
+            return False
+        body = json.loads(done.stdout)
+        return isinstance(body, dict) and body.get("number") == number
+    except Exception:
+        return False
+
+
+def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120, nonce=None,
+          issue_reader=None):
     """Start the check session in the environment whose id the owner gave. Never raises for an
     expected failure; nothing is spawned unless every refusal below has been passed."""
     # axis: every check session names the environment id the owner gave, and only a well-formed one
     if not _environment_ok(environment):
         return _refusal("check-environment-invalid", _ENVIRONMENT_NEEDED)
-    number = None
-    if issue is not None:
-        number = _issue_number(issue)
-        if number is None:
-            return _refusal("check-issue-invalid",
-                            "The issue number must be a positive whole number.")
+    # axis: no issue means no readable result path, so the check is refused before anything is spawned
+    if issue is None:
+        return _refusal("check-issue-required", _ISSUE_REQUIRED)
+    number = _issue_number(issue)
+    if number is None:
+        return _refusal("check-issue-invalid",
+                        "The issue number must be a positive whole number.")
     if nonce is None:
         nonce = secrets.token_hex(8)
     elif not (isinstance(nonce, str) and _NONCE_RE.fullmatch(nonce)):
         return _refusal("check-nonce-invalid",
                         "The check's nonce must be 8 to 64 letters and digits.")
+    try:
+        readable = (issue_reader or _issue_resolves)(_repo_root(cwd, env), number)
+    except Exception:
+        readable = False
+    # axis: an issue that does not resolve is no readable result path either
+    if readable is not True:
+        return _refusal("check-issue-unreadable", _ISSUE_UNREADABLE % number)
     name = _CHECK_SESSION_PREFIX + nonce[:8]
     cell = model_registry.resolve_dispatch("mechanical", "claude", None)
     if cell.get("ok") is not True:
@@ -935,7 +969,7 @@ def start(cwd, *, environment, issue=None, env=None, spawn_fn=None, timeout=120,
     session_id, session_url = got
     return {"action": "started", "reason": None, "environment": environment, "nonce": nonce,
             "sessionName": name, "sessionId": session_id, "sessionUrl": session_url,
-            "issue": number, "message": _STARTED}
+            "issue": number, "message": _STARTED.format(issue=number)}
 
 
 def _print(result):

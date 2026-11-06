@@ -15,6 +15,7 @@ Skills in this plugin speak in host-neutral **actions**. On Codex they resolve t
 | Track tasks ("todo", "mark done") | `update_plan` |
 | Invoke another skill | skills load natively — follow their instructions |
 | Message another live session by name, and receive its reply | none known: `send_message` addresses agents this session spawned, and reaching a session it did not spawn is unverified — treat it as absent and take the fallback the skill names |
+| Read another session's final message (a cloud check's result) | none: no tool reads it; `cloud_check.py start` takes `--issue` and the check posts its result line on that issue, read through REST |
 
 ## Dispatch surface (codex-cli 0.153.4)
 
