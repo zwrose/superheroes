@@ -279,7 +279,8 @@ A cloud build hands back only with its review record written, as the charter's ย
 `rubric/review-discipline.md` (the driver mandate) say; there is no cloud exception. In a cloud session
 the record writer reads the repository, the PR and its issue through REST, and takes the issues the
 PR closes from the closing keywords on the body's plain prose lines (a line near code, a quote,
-markup or an indent is skipped, so a close link there is missed, never invented; a link to another
+markup or an indent is skipped, so a close link there is missed; in rare HTML or whitespace shapes it
+can take an extra issue, which only changes which lane-call line the record shows; a link to another
 repository's issue never counts). Write the close link on the first line, on its own (charter ยง11). The record is not written when the writer refuses with `review-record-gh-failed`, or when it returns `ok` but its
 final commit was reported by the session rather than read from the PR (`whatIsMissing` names an
 unreadable PR). In either case the builder does not hand back. It posts the review receipt on the PR

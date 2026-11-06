@@ -428,8 +428,19 @@ def test_a_pr_whose_close_line_sits_below_a_note_is_linked(w):
     pull = _pull(head_sha=w.head)
     pull["body"] = "> Correction (advisor): the vet slot was rewritten.\n\n" + pull["body"]
     w.gh.pulls[PR] = pull
+    w.gh.closing[PR] = [_ref(101)]  # the field case: GitHub's list is read
     out = _plan(w)
     assert out["ok"] and out["action"] == "cleanup" and out["issue"] == 101, out
+    assert out["linkSource"] == "github", out
+
+
+def test_a_note_above_the_close_line_with_githubs_list_unreadable_is_unlinked(w):
+    # axis: with GitHub's list unreadable only the first line is read, so a note above "Closes #N" leaves the PR unlinked
+    _lane(w, "l-1", 101)
+    pull = _pull(head_sha=w.head)
+    pull["body"] = "> Correction (advisor): the vet slot was rewritten.\n\n" + pull["body"]
+    w.gh.pulls[PR] = pull
+    assert _plan(w) == {"ok": False, "reason": "pr-unlinked"}
 
 
 def test_a_pr_whose_only_close_link_names_another_repository_is_unlinked(w):
@@ -1124,6 +1135,24 @@ def test_a_closing_keyword_in_an_indented_block_never_binds_a_stack_layer_to_ano
     w.gh.pulls[501]["body"] += "\n\n    Fixes #999\n"
     out = _plan_n(w, 501)
     assert out["ok"] and out["issue"] == PARENT and out["launchId"] == "l-1" and out["viaParent"] is True, out
+
+
+@pytest.mark.parametrize("block", [
+    "\n\n<code>\n\nFixes #999\n\n</code>\n",
+    "\n\n<a href=\"https://example.com\">\n\nFixes #999\n\n</a>\n",
+    "\n\n- <a href=\"https://example.com\">\n\n  Fixes #999\n\n  </a>\n",
+    "\n\n`example\n \nFixes #999\n \nend`\n",
+    "\n\n`example\n\x0c\nFixes #999\n\x0c\nend`\n",
+], ids=["code-element", "anchor-element", "anchor-on-a-list-line", "code-span-over-no-break-space-lines",
+        "code-span-over-form-feed-lines"])
+def test_with_githubs_list_unreadable_markup_in_a_stack_layers_body_never_binds_another_lane(w, block):
+    # axis: the fail direction; with GitHub's list unreadable, only the description's first line is read, so markup GitHub does not read as a close link binds no other issue's lane
+    _stack(w)
+    _lane(w, "l-9", 999, session="session-z", ts=_T1)
+    w.gh.pulls[501]["body"] += block  # w.gh.closing has no entry for 501: GitHub's list is unreadable
+    out = _plan_n(w, 501)
+    assert out["ok"] and out["issue"] == PARENT and out["launchId"] == "l-1" and out["viaParent"] is True, out
+    assert out["linkSource"] == "body", out
 
 
 def _plan_n(w, number, **kw):

@@ -313,13 +313,15 @@ def _body_links(body, repo):
 
 def _linked_issues(pull, repo, pr, env, run):
     """(issues, source) for the PR: those GitHub's own closingIssuesReferences list closes (`source`
-    "github"), or, only when that list cannot be read, those the body links (`source` "body"); with nothing
-    closed, any `#N` the body's first line names."""
+    "github"), with nothing closed, any `#N` the body's first line names; or, when that list cannot be read
+    (`source` "body"), only the description's first line: the issues its closing keywords close, else any
+    `#N` it names."""
     code, out = _sib("cloud_builder")._gh(
         run, ["pr", "view", str(pr), "--repo", repo, "--json", "closingIssuesReferences"], env)
     found = _sib("review_record").github_closing_issues(out if code == 0 else None, repo)
     if found is None:
-        return _body_links(pull.get("body"), repo), "body"
+        body = pull.get("body")
+        return _body_links(body.split("\n", 1)[0] if isinstance(body, str) else body, repo), "body"
     return found or _first_line_mentions(pull.get("body")), "github"
 
 
