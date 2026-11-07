@@ -479,7 +479,8 @@ J_SEEN = ("u2028", "nel", "ff")  # the three the seat reproduced
 
 def _j_body(sep):
     return ("<!-- done --> " + sep + "`<!--` note\n## What's changing, and why\n\nOwner-facing scope.\n\n"
-            "## Advisor vet\n<!-- superheroes:advisor-vet -->\nold slot\n\n<!-- superheroes:build-record -->\n"
+            "## Advisor vet\n<!-- superheroes:advisor-vet -->\n**Verdict: NOT-READY** · old\n\nold slot\n\n"
+            "<!-- superheroes:build-record -->\n"
             "<!-- superheroes:followups none -->\n")
 
 

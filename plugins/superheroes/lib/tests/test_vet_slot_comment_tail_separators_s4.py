@@ -25,7 +25,7 @@ def test_comment_tail_preserves_markdown_line_boundaries(
     body = (
         "<!-- done --> " + separator + "`<!--` note\n"
         + "## What's changing, and why\n\nOwner-facing scope.\n\n"
-        + "## Advisor vet\n<!-- superheroes:advisor-vet -->\nold slot\n\n"
+        + "## Advisor vet\n<!-- superheroes:advisor-vet -->\n**Verdict: NOT-READY** · old\n\nold slot\n\n"
         + "<!-- superheroes:build-record -->\n"
         + "<!-- superheroes:followups none -->\n"
     )
