@@ -155,6 +155,9 @@ _UNSURE_SHAPES = frozenset({
     # vet 845 F2: a line that starts inside a tag or a bogus comment reads unsure (the declaration and processing-
     # instruction blocks; the stored CDATA row holds no such line, only the sent form does).
     "decl_block", "pi_block",
+    # park ruling option (a): a reference definition's range holds the next line's backtick and the block holds a `<`,
+    # so it reads unsure (the accepted refusal cost)
+    "linkref_div",
 })
 
 
