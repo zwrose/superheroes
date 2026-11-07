@@ -1,5 +1,49 @@
 # Changelog
 
+## [0.48.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.47.0...superheroes-v0.48.0) (2026-11-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **superheroes:** retire the canaryResult tolerance (D35), delete the review loop's dead code, and share one FakeAdapters test helper ([#2329](https://github.com/zwrose/superheroes/issues/2329))
+
+### Features
+
+* **superheroes:** a doctrine-prose-only fix clears its fix audit on a review-guarded answer ([#2345](https://github.com/zwrose/superheroes/issues/2345)) ([482284c](https://github.com/zwrose/superheroes/commit/482284c7e030a1cff472bc11a13d936495aabf5a))
+* **superheroes:** a returning round's scoped finder sees the session's focus notes ([#2385](https://github.com/zwrose/superheroes/issues/2385)) ([a5915c5](https://github.com/zwrose/superheroes/commit/a5915c59094a975c3b54d43183a4d8f14be0a06a))
+* **superheroes:** add a read-only codex silence sampler ([#2376](https://github.com/zwrose/superheroes/issues/2376)) ([6999535](https://github.com/zwrose/superheroes/commit/6999535b0758b3d5926e7f3cb6c44065d77cebc8))
+* **superheroes:** cloud launches start from the launcher's own folder ([#2360](https://github.com/zwrose/superheroes/issues/2360)) ([d232dec](https://github.com/zwrose/superheroes/commit/d232decf96109b107e20165ec95de97fa5aaa5c1))
+* **superheroes:** end and retry a codex review attempt that goes silent with nothing running ([#2378](https://github.com/zwrose/superheroes/issues/2378)) ([493ce22](https://github.com/zwrose/superheroes/commit/493ce229fa7e10ee199b3b0eda9ac3731fcb72f5))
+* **superheroes:** flag cloud-written GitHub text that changed in transit ([#2386](https://github.com/zwrose/superheroes/issues/2386)) ([1db2e91](https://github.com/zwrose/superheroes/commit/1db2e91a4d44bbfc904ce702c02f2a0a44ee46e1))
+* **superheroes:** the launcher's cloud launch folder, made once and trusted once ([#2359](https://github.com/zwrose/superheroes/issues/2359)) ([6f1e2dd](https://github.com/zwrose/superheroes/commit/6f1e2dd0776231f918cc68f4e04c213453279ab5))
+* **superheroes:** the relay forwards a pointer to a byte-exact issue comment ([#2377](https://github.com/zwrose/superheroes/issues/2377)) ([d1499c1](https://github.com/zwrose/superheroes/commit/d1499c1d6a450fd4b13862e9600190168fe0331b))
+
+
+### Bug Fixes
+
+* **superheroes:** a build never claims calibration was stripped from reviewers the record says read it ([#2367](https://github.com/zwrose/superheroes/issues/2367)) ([ef79904](https://github.com/zwrose/superheroes/commit/ef79904a337dca41a07bdbfb8e78d6dbdfa219ce))
+* **superheroes:** a delta round cuts unchanged diff sections before it parses ([#2354](https://github.com/zwrose/superheroes/issues/2354)) ([e8c1f0e](https://github.com/zwrose/superheroes/commit/e8c1f0ef01018c9402c25a3e06d47e9bd144eb50))
+* **superheroes:** a fixed carried finding reads fixed, and the test-lens line counts only this round ([#2340](https://github.com/zwrose/superheroes/issues/2340)) ([c96dbd0](https://github.com/zwrose/superheroes/commit/c96dbd068a97c28b8481d805324e8fe1c0d32c10))
+* **superheroes:** a forfeited slice seat re-read by an unread-part wave counts as recovered ([#2337](https://github.com/zwrose/superheroes/issues/2337)) ([b3b9271](https://github.com/zwrose/superheroes/commit/b3b927163a6f5db430c30fd8f869d8edcf6cb747))
+* **superheroes:** a local lane runs its advisor's plugin version, not whatever installs mid-lane ([#2330](https://github.com/zwrose/superheroes/issues/2330)) ([dbb9050](https://github.com/zwrose/superheroes/commit/dbb9050d57b4e9da50c6c6479f721b66a1057a7f))
+* **superheroes:** a never-carried finding is never moved, for every outcome ([#2344](https://github.com/zwrose/superheroes/issues/2344)) ([bbb18df](https://github.com/zwrose/superheroes/commit/bbb18df3ed5348965be287038dc7a30af2741644))
+* **superheroes:** a refuted break-it probe no longer leaves the review unable to certify ([#2358](https://github.com/zwrose/superheroes/issues/2358)) ([faab004](https://github.com/zwrose/superheroes/commit/faab004265d1d597a99c864e9326adb352f50836))
+* **superheroes:** a review's reported reviewer cost counts every attempt ([#2384](https://github.com/zwrose/superheroes/issues/2384)) ([24e66e3](https://github.com/zwrose/superheroes/commit/24e66e3f0b93db76d0848b46f0e64bde17c69c5a))
+* **superheroes:** break-it default temp folder sits outside every repository ([#2356](https://github.com/zwrose/superheroes/issues/2356)) ([c744448](https://github.com/zwrose/superheroes/commit/c7444483ecf21893c3a4237685c1fe3339df36a6))
+* **superheroes:** every PR gets a review before its vet ([#2336](https://github.com/zwrose/superheroes/issues/2336)) ([bd8c4ce](https://github.com/zwrose/superheroes/commit/bd8c4ced7fde55592a082375ecc23ed1b19458a1))
+* **superheroes:** read a PR's closing links from its whole body ([#2373](https://github.com/zwrose/superheroes/issues/2373)) ([dade140](https://github.com/zwrose/superheroes/commit/dade1404e8caf6038c3d9da935c69d5717bdf24f))
+* **superheroes:** readable cloud-check results, normalised leftover ids, and a fixed-above disposition ([#2348](https://github.com/zwrose/superheroes/issues/2348)) ([d051c9a](https://github.com/zwrose/superheroes/commit/d051c9a2c81b9b444a3f0c76dd77c9066eecaa97))
+* **superheroes:** the cloud check warns when the git identity comes only from git config ([#2372](https://github.com/zwrose/superheroes/issues/2372)) ([0d58d5d](https://github.com/zwrose/superheroes/commit/0d58d5d02d740e04cd438e2463ee16504a6d2f12))
+* **superheroes:** the vet-slot writer accepts a PR with no build record ([#2347](https://github.com/zwrose/superheroes/issues/2347)) ([ec59fd1](https://github.com/zwrose/superheroes/commit/ec59fd11404fb142c537ee41f9a280538e37875d))
+* **superheroes:** the vet-slot writer refuses builder text in the slot span ([#2357](https://github.com/zwrose/superheroes/issues/2357)) ([f76fbe5](https://github.com/zwrose/superheroes/commit/f76fbe524cff9578f1e6768d40f2165ac01cdb72))
+* **superheroes:** the wave watch keeps a lane resumed after its handback, and the vet-slot writer refuses an emptied PR body ([#2331](https://github.com/zwrose/superheroes/issues/2331)) ([73cae63](https://github.com/zwrose/superheroes/commit/73cae632b81aef4ead00de254f313783e0003415))
+* **superheroes:** the wave watch reads an old resumed lane's own issue ([#2346](https://github.com/zwrose/superheroes/issues/2346)) ([1ff1107](https://github.com/zwrose/superheroes/commit/1ff1107a20d32273803843e7540ad951cde08d54))
+
+
+### Code Refactoring
+
+* **superheroes:** retire the canaryResult tolerance (D35), delete the review loop's dead code, and share one FakeAdapters test helper ([#2329](https://github.com/zwrose/superheroes/issues/2329)) ([33aece4](https://github.com/zwrose/superheroes/commit/33aece4471a3d25564ecfc285c6872a2293938f6))
+
 ## [0.47.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.46.2...superheroes-v0.47.0) (2026-11-02)
 
 
