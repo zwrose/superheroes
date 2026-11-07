@@ -301,7 +301,8 @@ def test_unsure_footnote_definition():
 
 def test_unsure_footnote_definition_inside_a_quote_and_not_a_link_label():
     _check_unsure("a\n\n> [^note]: text\n\n## H\n", 2)
-    _no_unsure("a\n\n[^ 1]: not a footnote\n\n## H\n")
+    # vet-849 amendment: a block whose first line starts with `[` and holds `]:` reads unsure; GitHub shows this line, so this is a disclosed over-refusal
+    _check_unsure("a\n\n[^ 1]: not a footnote\n\n## H\n", 2)
 
 
 @pytest.mark.parametrize("row", [
@@ -920,11 +921,7 @@ def _corpus_false_hidden(body):
 
 
 # Corpus bodies the advisor declined (each key is a corpus body, each value the ruling). An exception never outlives its
-# cause: the tests below assert each declined body still fails the plain check.
-_CORPUS_DECLINED = {
-    'x\n\n[ZQ1]: /u\n\n## ZQ2\n': "vet 846 F7, declined by the advisor: a link reference definition renders nothing on "
-                                  "GitHub and md_hidden reads it as text; no heading, marker or verdict line can be one",
-}
+# cause: the test below asserts each declined body still fails the plain check.
 _CORPUS_DECLINED_FALSE_HIDDEN = {
     'x\n\n<svg>\n\n<![CDATA[ x > <!-- y ]]>\n\n## ZQ1\n': "vet 845 F4(c), declined by the advisor: CDATA inside "
                                                           "``<svg>`` is foreign content, which md_hidden reads as a bogus "
@@ -934,17 +931,11 @@ _CORPUS_DECLINED_FALSE_HIDDEN = {
 
 def test_corpus_no_line_github_hides_reads_visible():
     """The bound's check: advisor's corpus, ``md_hidden_github_corpus_2388.json`` (660 bodies, GitHub's own renders). A line
-    with a sentinel word that GitHub's visible text lacks is hidden by GitHub and must not read VISIBLE. One body is
-    declined by the advisor (``_CORPUS_DECLINED``) and must still fail the plain check."""
+    with a sentinel word that GitHub's visible text lacks is hidden by GitHub and must not read VISIBLE. Every one of the
+    660 bodies must pass; none is declined."""
     assert len(_CORPUS) == 660
-    assert list(_CORPUS_DECLINED) == ['x\n\n[ZQ1]: /u\n\n## ZQ2\n']
-    for declined in _CORPUS_DECLINED:
-        assert declined in _CORPUS, "declined body is not in the advisor's corpus: %r" % (declined,)
-        assert _corpus_fail_open(declined) != [], "declined body no longer fails: drop it from _CORPUS_DECLINED: %r" % (declined,)
     failing = []
     for body in _CORPUS:
-        if body in _CORPUS_DECLINED:
-            continue
         failing.extend(_corpus_fail_open(body))
     assert failing == [], "%d fail-open (body, line index, line):\n%s" % (
         len(failing), "\n".join(repr(entry) for entry in failing))
@@ -1237,3 +1228,38 @@ def test_link_metadata_rule_puts_the_unsure_point_at_the_blocks_first_line():
     body = "intro\n\n[a](x`y)\nmid <b>\nZQ1\n"
     assert _line_state(body, "[a]") == U
     assert _line_state(body, "intro") == V
+
+
+# --- Table ruling and vet-849 amendment (issue #2388) -------------------------------------------------------------
+
+@pytest.mark.parametrize("body, needle", [
+    ('x\n\n[F-1]: https://example.com "The retry loop never backs off"\n\n## H\n', "[F-1]"),
+    ("x\n\n[F-1 The retry loop never backs off]: https://example.com\n\n## H\n", "[F-1"),
+    ("x\n\n[ZQ1]: /u\n\n## ZQ2\n", "[ZQ1]"),
+], ids=["titled-definition", "label-with-spaces", "bare-definition"])
+def test_amendment_link_reference_definition_lines_read_unsure(body, needle):
+    """Checked against: the advisor's vet 849 (a text block whose first line starts with ``[`` and holds ``]:`` reads
+    unsure; the ``[ZQ1]: /u`` corpus exception becomes a passing case). The needle's line reads UNSURE."""
+    assert _line_state(body, needle) == U
+
+
+def test_destination_quotes_do_not_stop_the_parenthesis_count():
+    """Checked against: the review raw output comment 6714091519 on PR #2390, finding "Count parentheses inside quoted
+    characters of bare destinations". cmark counts parentheses to the end of a bare destination, quotes included, so the
+    ``(`` inside ``u"(x"`` keeps the link open and the code span after it is not a span; the comment is raw and hides
+    ZQ1. The control has a balanced destination: its code span is a span, so ZQ1 shows and nothing is unsure."""
+    assert _line_state('[a](u"(x")y`z) <!-- b\nZQ1\n--> c`\n', "ZQ1") != V
+    control = '[a](u"x") `<!--` code\nZQ1\n'
+    assert _line_state(control, "ZQ1") == V
+    assert md.scan(control).unsure == ()
+
+
+@pytest.mark.parametrize("body", [
+    "| a | b |\n| - | - |\n| <b>x</b> | `<!--` |\n\nZQ1\n",
+    "| a | b |\n| - | - |\n| <!-- c --> | d |\n\nZQ1\n",
+], ids=["tag-beside-code-quoted-opener", "closed-comment-in-a-cell"])
+def test_table_cells_controls_keep_their_answers(body):
+    """Controls (checked against: control): each cell is parsed on its own, so a tag in one cell and a code-quoted
+    opener in another, or a comment that opens and closes inside one cell, leave ZQ1 visible with no unsure point."""
+    assert _line_state(body, "ZQ1") == V
+    assert md.scan(body).unsure == ()
