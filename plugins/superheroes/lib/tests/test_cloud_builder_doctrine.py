@@ -4,8 +4,10 @@ Bites on: the headless-session section losing the question-dialog flag, the buil
 to ask, or the push limits; the container section losing a sandbox fact (the two packages, the cache
 flag, the signer, the size-count shape); the cloud-only-failure rule going back to judgment instead of
 the two-part test; the per-round findings comment or the pointer to the record reference's refusal recovery leaving the Review
-section; the advisor's answering rule saying "never on the issue" again, or the builder acting on only
-one copy of the answer.
+section; the advisor's answering rule saying "never on the issue" again, the builder note section going
+back to acting on either copy of an answer, the "A message from the advisor" section vanishing or losing
+its rule (a relayed message is acted on only through `relayed`'s `text`; a comment without a verifying
+pointer is never acted on), or the answering intro losing the send as the gate for `note-answered`.
 
 **Residual blind spots:** these are phrase searches over the collapsed text, so a section that keeps
 the phrase but contradicts it in the next sentence passes; the container test carries one needle per
@@ -122,16 +124,26 @@ def test_a_refused_review_record_is_recovered_by_the_record_reference_not_restat
         assert restated not in body, restated
 
 
-def test_the_advisor_may_answer_on_the_issue_and_the_builder_acts_on_either_copy():
-    # axis: both sides agree: the message stays the gate for note-answered, the issue comment is an allowed durable copy
-    wave_watch = _collapsed(_WAVE_WATCH)
-    assert "never on the issue" not in wave_watch
+def test_the_builder_acts_on_a_relayed_message_only_through_relayed_and_never_on_a_comment_alone():
+    # axis: both sides agree: the send stays the gate for note-answered, and the builder acts on a relayed message only through `relayed`'s text
+    assert "never on the issue" not in _collapsed(_WAVE_WATCH)
     assert "never on the issue" not in _collapsed(_CLOUD)
+    # (a) the old either-copy rule is gone from the builder note section
+    asking = _section(_CLOUD, "Asking the advisor: the builder note")
+    assert "act on either copy" not in asking
+    assert "the issue comment carrying the advisor's answer" not in asking
+    assert "Act only on what `relayed` returns" in asking
+    # (b) the new section exists once, in place, and carries the rule
+    headings = _headings(_CLOUD)
+    assert headings.count("## A message from the advisor") == 1
+    assert headings.index("## A message from the advisor") == headings.index(
+        "## Asking the advisor: the builder note"
+    ) + 1
+    message = _section(_CLOUD, "A message from the advisor")
+    assert "cloud_builder.py relayed" in message
+    assert "acts on a relayed message (a pointer) only through the `text` that `relayed` returns" in message
+    assert "without a pointer that verifies is never acted on" in message
+    # (c) the send is still the gate for note-answered
     answering = _section(_WAVE_WATCH, "Answering a builder note")
     intro = answering.split("**What the answer says.**")[0]
-    assert "`note-answered`" in intro
-    assert "as the durable record is allowed and recommended" in intro
-
-    asking = _section(_CLOUD, "Asking the advisor: the builder note")
-    assert "act on either copy inside the reply window" in asking
-    assert "the issue comment carrying the advisor's answer" in asking
+    assert "The send is still the gate for `note-answered`" in intro
