@@ -18,11 +18,11 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
-## Unreleased
+## 0.48.0
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts this release. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.48.0. Each step names the note it comes from.
 
 - **After switching.** **`vet_slot.py handback --pr` refuses three new reasons, `calibration-disclosure-contradicted`, `calibration-disclosure-unknown-seat` and `calibration-disclosure-unmarked`; a caller matching on reasons adds them. A build discloses a seat's missing calibration only with the marker `` `calibration-lacked[<row name>]: <files>` `` in a degradation bullet, and builds must use it, because, outside the marker, a degradation bullet clause that names calibration or a calibration file together with a negation or removal word is refused.** Nothing else is owed. See [Handback: a calibration disclosure is checked against the review record](#handback-a-calibration-disclosure-is-checked-against-the-review-record).
 - **After switching.** **A codex review attempt that is not the run's last is now ended and retried once it has been silent for 390 seconds with no command in flight, and new journal and review-record keys name it. List every engine-dispatched seat's run directory, a forfeited seat's included, in the review record extras' `runDirs`.** See [Review: a silent codex review attempt is ended and retried](#review-a-silent-codex-review-attempt-is-ended-and-retried).
@@ -49,12 +49,16 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **A cloud launch now runs the platform's command in the launcher's own folder, never the primary checkout: the primary checkout no longer needs to be on the base, pushed, so that earlier step is no longer owed.** Before the launch-folder step has run, every cloud launch refuses `launch-cloud-folder-missing`; with the folder made but not yet trusted, a launch reads `cloud-session-unconfirmed`. See [Launcher: cloud launches start from the launcher's own folder](#launcher-cloud-launches-start-from-the-launchers-own-folder).
 - **After switching.** **A new read-only sampler, `lib/codex_silence.py sample <run-dir-or-review-session-folder>...`, reports for each codex review attempt in saved run records its outcome, wall time, longest silence with no command in flight and longest command, as one JSON document.** Nothing is owed. See [Review: a sampler measures codex review attempts' silence](#review-a-sampler-measures-codex-review-attempts-silence).
 
+- **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
+
+- **After switching.** **Nothing is owed: a sliced review whose forfeited slice seat a later unread-part wave re-read now certifies instead of ending cannot-certify, and its review record names the recovery in a new optional sliceRecoveries part.** See [Review: a forfeited slice seat re-read by an unread-part wave counts as recovered](#review-a-forfeited-slice-seat-re-read-by-an-unread-part-wave-counts-as-recovered).
+
 ### Review: a silent codex review attempt is ended and retried
 
 - **What ends an attempt.** The runner ends a codex review attempt once neither its stdout nor its stderr has grown for 390 seconds while no command, file change or other action item is open in its stdout stream, and the existing single retry runs. A command in flight never counts as silence, and a stream the runner cannot read never counts as silent.
 - **The last attempt is never ended this way.** It keeps the full per-attempt bound (900 seconds by default), so the watchdog never takes a seat's last chance.
 - **Why 390 seconds.** The threshold sits at about twice the longest silence a clean, answering attempt shows, and below the silence of a stalled one. The trade: an attempt that would have answered after more than 390 seconds of silence is retried instead, and that answer is lost.
-- **What a consumer sees.** The `attempt-ended` record of an ended attempt has `timedOut: false`, `signalSource: "silence-watchdog"` and `silenceWatchdog: {silentSeconds, thresholdSeconds}`; it is graded a forfeit whatever its exit code. A review run's `run-opened` record names the threshold as `silenceWatchdogSeconds`. The review record lists each end under `silenceWatchdogEnds`.
+- **What a consumer sees.** The `attempt-ended` record of an ended attempt has `timedOut: false`, `signalSource: "silence-watchdog"` and `silenceWatchdog: {silentSeconds, thresholdSeconds, killAt}`, where `killAt` is the time (seconds since the epoch) the runner ended the attempt; it is graded a forfeit whatever its exit code. An attempt whose answer was already complete before the runner ended it (a clean exit whose answer was stamped at or before the end) is not a forfeit: its `attempt-ended` record carries `silenceWatchdogRace: {silentSeconds, thresholdSeconds, killAt}` in place of `silenceWatchdog`, keeps its own `signalSource`, and is graded answered. A review run's `run-opened` record names the threshold as `silenceWatchdogSeconds`. The review record lists each end under `silenceWatchdogEnds`.
 
 ### Review: a sampler measures codex review attempts' silence
 
@@ -209,16 +213,6 @@ On a PR sheet built with the PR bodies, a stack sheet shows the finding in `what
 - **The refusals.** Two reasons are new: `launch-cloud-folder-missing` (the folder does not exist) and `launch-cloud-folder-busy` (another launch holds the folder lock past the wait). A refusal from the repair carries `launchFolder` and a `folderRepair` reason: `not-launcher-owned`, `uncommitted-changes`, `no-branch-at-base`, `fetch-failed`, `remote-moved`, `local-commits`, `checkout-failed` or `lock-failed`. None of them falls back to the owner's machine. The `launch-cloud-base-*` refusals and their local fallback are unchanged.
 - **The 0.x refusals now describe the folder.** The `launch-cloud-checkout-unreadable`, `launch-cloud-checkout-off-base`, `launch-cloud-checkout-remote-unchecked` and `launch-cloud-checkout-branch-not-on-remote` refusals, which an earlier release added when a cloud launch first refused an off-base checkout, now describe the launch folder, not the primary checkout. The first three carry `launchFolder`, and a `folderRepair` reason when the repair stopped them. `launch-cloud-checkout-branch-not-on-remote` can still come from the final check.
 - **The owner's one-time step** is unchanged: make and trust the folder once, as [Configure: the cloud launch folder](#configure-the-cloud-launch-folder) says.
-
-## 0.48.0
-
-### Before you upgrade
-
-Check these in a consuming project when it adopts 0.48.0. Each step names the note it comes from.
-
-- **After switching.** **Nothing is owed: a panel artifact in the legacy shape (the artifact itself is the seats map) that carries a top-level `canaryResult` key is now refused `seat-key-mismatch` as an unknown seat key; nothing at 0.43.0 or later writes the key.** See [Review: the panel artifact's `canaryResult` tolerance is retired](#review-the-panel-artifacts-canaryresult-tolerance-is-retired).
-
-- **After switching.** **Nothing is owed: a sliced review whose forfeited slice seat a later unread-part wave re-read now certifies instead of ending cannot-certify, and its review record names the recovery in a new optional sliceRecoveries part.** See [Review: a forfeited slice seat re-read by an unread-part wave counts as recovered](#review-a-forfeited-slice-seat-re-read-by-an-unread-part-wave-counts-as-recovered).
 
 ### Review: the panel artifact's `canaryResult` tolerance is retired
 
