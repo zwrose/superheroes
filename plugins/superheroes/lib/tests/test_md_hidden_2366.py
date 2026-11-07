@@ -152,6 +152,9 @@ _UNSURE_SHAPES = frozenset({
     "footnote_div", "div_open_then_inline_comment", "div_open_then_inline_dashdash", "textarea_block",
     "script_attr_opener", "unclosed_attr", "div_title_unclosed_mid", "source_tag", "search_tag",
     "fence_tilde_256_cap", "fence_tick_256_cap", "fence_tilde_300_close_256",
+    # vet 845 F2: a line that starts inside a tag or a bogus comment reads unsure (the declaration and processing-
+    # instruction blocks; the stored CDATA row holds no such line, only the sent form does).
+    "decl_block", "pi_block",
 })
 
 
@@ -205,7 +208,9 @@ _HIDDEN_SHAPES = [
 def test_named_shape_hides_the_owner_heading(shape, form):
     """The sent body (the egress normalised U+2028, U+0085, form feed, CR and <![CDATA[ in transit)."""
     row = _ROW_BY_KEY[(shape, form)]
-    _reads(row["sent"], OWNER[form], H)
+    # vet 845 F2: the line after "<![CDATA[" starts inside a bogus comment, which reads UNSURE (a ">" early in the line
+    # can end the state), so the CDATA shape's owner heading is UNSURE; every other shape is HIDDEN.
+    _reads(row["sent"], OWNER[form], U if shape == "cdata_block" else H)
 
 
 @pytest.mark.parametrize("form", ["builder", "bot"])
@@ -673,7 +678,8 @@ def test_guard_g11_type7_cannot_interrupt_a_paragraph():
 
 def test_guard_g12_type4_needs_an_uppercase_letter():
     assert _state("x\n\n<!x\nfoo > <!--\n\n## H\n", "## H") == V  # lowercase: paragraph text, GitHub shows no block
-    assert _state("x\n\n<!X\nfoo > <!--\n\n## H\n", "## H") == H  # uppercase: a declaration block
+    # uppercase: a declaration block; vet 845 F2 reads its `## H` UNSURE (a line starting inside a bogus comment)
+    assert _state("x\n\n<!X\nfoo > <!--\n\n## H\n", "## H") == U
 
 
 # --- Review round 1 (PR #2390): cmark whitespace, closing version tags, a leading byte-order mark ------------------
@@ -701,3 +707,125 @@ def test_review_r1_a_leading_byte_order_mark_is_skipped():
     _reads("﻿<!--\n\n## H\n", "## H", H)
     # only the document's first character: a BOM at the start of a later line is ordinary text
     assert _state("x\n\n﻿<!--\n\n## H\n", "## H") == V
+
+
+# --- Vet 845 fix leg (F1-F4): places GitHub hides text and the head read VISIBLE ------------------------------------
+# Every expectation below was checked against the vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``.
+
+_F1_TAGS = ["</pre>", "</PRE>", "</pre >", "<pre/>"]
+_F1_SHAPES = {
+    "top": "x\n\n{tag}\nx <!--\n\n## H\n",
+    "item": "- x\n\n  {tag}\n  x <!--\n\n## H\n",
+    "quote": "> {tag}\n> x <!--\n\n## H\n",
+}
+
+
+@pytest.mark.parametrize("tag", _F1_TAGS, ids=["close", "CLOSE", "close-space", "selfclose"])
+@pytest.mark.parametrize("where", ["top", "item", "quote"])
+def test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block(tag, where):
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid everything below the ``x <!--``
+    line. cmark-gfm's type-7 scanner has no script/style/pre exclusion."""
+    body = _F1_SHAPES[where].format(tag=tag)
+    got = _state(body, "## H")
+    assert got != V, "## H reads VISIBLE in %r; unsure=%r" % (body, md.scan(body).unsure)
+    if where == "top":
+        _reads(body, "## H", H)
+
+
+def test_vet845_f1_the_builder_body_shape_does_not_read_visible():
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid ``## What we're accepting``."""
+    body = (
+        "## What's changing, and why\n\nText.\n\n</pre>\nQuotes `<!--` in code.\n\n"
+        "## What we're accepting\n\nNone.\n"
+    )
+    assert _state(body, "## What we're accepting") != V
+
+
+@pytest.mark.parametrize("name", ["script", "style"])
+def test_vet845_f1_a_closing_script_or_style_tag_alone_reads_unsure(name):
+    """The tagfilter rule, unchanged and pinned: the line and every later line read UNSURE (vet 845 receipt on PR #2390,
+    comment 6709845874, ``POST /markdown``: GitHub escapes these tags)."""
+    body = "a\n\n</%s>\nb\n" % name
+    assert _state(body, "a") == V
+    assert _state(body, "</%s>" % name) == U
+    assert _state(body, "b") == U
+
+
+def test_vet845_f2_a_line_inside_an_attribute_value_of_the_bot_path_reads_unsure():
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub put the marker and the verdict line
+    inside the ``title`` attribute (hidden); the head read them VISIBLE."""
+    body = 'Bumps x.\n\n## Advisor vet\n<div title="a\n<!-- superheroes:advisor-vet -->\n**Verdict: READY** · abc\n">\n'
+    assert _state(body, "<!-- superheroes:advisor-vet -->") == U
+    assert _state(body, "**Verdict: READY** · abc") == U
+
+
+def test_vet845_f2_a_line_inside_an_open_bogus_comment_reads_unsure_never_hidden():
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``after`` (the ``>`` ended the
+    bogus comment) - so neither line may read HIDDEN, and ``middle`` must not read VISIBLE."""
+    body = "<div>\n<? a\nmiddle\n> after\n</div>\n"
+    assert _state(body, "middle") == U
+    assert _state(body, "> after") == U
+
+
+def test_vet845_f2_a_line_inside_an_unclosed_attribute_value_reads_unsure():
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid ``middle`` (inside the quoted
+    ``title`` value that closes on the next line)."""
+    body = '<div title="x\nmiddle\n">\n\n## H\n'
+    assert _state(body, "middle") == U
+
+
+def test_vet845_f2_control_plain_lines_in_a_closed_block_stay_visible():
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``plain``."""
+    body = "<div>\n<span>\nplain\n</div>\n"
+    assert _state(body, "plain") == V
+    assert md.scan(body).unsure == ()
+
+
+@pytest.mark.parametrize("opener", ['x <a\vb="> <!-- "> y', 'x <a b=\v"> <!-- "> y'], ids=["vtab-name", "vtab-value"])
+@pytest.mark.parametrize("where", ["para", "atx", "item", "cell"])
+def test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure(opener, where):
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid everything below (HTML parsing
+    does not count ``\\v`` as tag whitespace, so the tag ended at the ``>`` inside the quoted value)."""
+    shapes = {
+        "para": "{o}\n\n## H\n",
+        "atx": "# {o}\n\n## H\n",
+        "item": "- {o}\n\n## H\n",
+        "cell": "| a | b |\n| - | - |\n| {o} | z |\n\n## H\n",
+    }
+    body = shapes[where].format(o=opener)
+    assert _state(body, "## H") == U, "unsure=%r" % (md.scan(body).unsure,)
+
+
+@pytest.mark.parametrize("quote", ['"', "'"], ids=["dq", "sq"])
+@pytest.mark.parametrize("form", ["pi", "cdata"])
+def test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure(form, quote):
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid everything below (HTML parsing
+    ended the bogus comment at the first ``>``, so the later ``<a title=`` opened an unclosed attribute quote)."""
+    if form == "pi":
+        body = "x <? > <a title=%s ?> y\n\n## H\n" % quote
+    else:
+        body = "x <![CDATA[ > <a title=%s ]]> y\n\n## H\n" % quote
+    assert _state(body, "## H") == U, "unsure=%r" % (md.scan(body).unsure,)
+
+
+@pytest.mark.parametrize("body", ['x <a b="c"> y\n\n## H\n', "x <? a ?> y\n\n## H\n"], ids=["tag", "pi"])
+def test_vet845_f3_controls_a_closed_inline_tag_or_pi_stays_visible(body):
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``H``."""
+    assert _state(body, "## H") == V
+    assert md.scan(body).unsure == ()
+
+
+@pytest.mark.parametrize("char", [0x17F, 0x212A, 0x130], ids=["long-s", "kelvin", "dotted-i"])
+def test_vet845_f4a_a_unicode_case_fold_of_an_ascii_tag_letter_is_no_block_start(char):
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``H`` (cmark is ASCII-only, so
+    the opener stays paragraph text and the ``<!--`` is not raw HTML)."""
+    tags = {0x17F: "<%section>", 0x212A: "<lin%s>", 0x130: "<d%sv>"}
+    body = "a\n" + tags[char] % chr(char) + "\nx <!--\n\n## H\n"
+    assert _state(body, "## H") == V
+
+
+def test_vet845_f4b_a_vertical_tab_after_a_type7_tag_is_not_trailing_whitespace():
+    """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``H`` after ``<span>\\v`` (a
+    paragraph) and hid it after ``<span>\\f`` (a type-7 block)."""
+    assert _state("<span>\v\nx <!--\n\n## H\n", "## H") == V
+    _reads("<span>\f\nx <!--\n\n## H\n", "## H", H)

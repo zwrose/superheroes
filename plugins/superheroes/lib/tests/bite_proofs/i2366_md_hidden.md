@@ -843,3 +843,368 @@ The 24 skips are not itemised by this command (no `-rs`); the detector file itse
 None: G1 to G12 each have their own neutralization and red. Unproven elements: none outright. Partially proven, with the
 reasons above: G4 (quote shape only), G5 (closer site only by the named test), G6 (eight of nine names), G8 (the `<`
 disjunct only), G11 (the condition as a whole, not each clause).
+
+## Vet 845 fix leg (F1–F4)
+
+Detector under proof: the `test_vet845_*` tests of `plugins/superheroes/lib/tests/test_md_hidden_2366.py` (added at
+`db9b09ee`). Guarded code: `plugins/superheroes/lib/md_hidden.py` at `db9b09ee`, F1–F4. Worktree `/home/user/wt-2366`.
+Every neutralization was one targeted Edit-tool edit to `md_hidden.py`, undone by the inverse Edit before the next
+element; no `git checkout`, `restore`, `reset` or `stash`. Each run is the single test function's node id (all of its
+parametrized cases), command prefix (worktree root):
+`scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_md_hidden_2366.py::<test> -q`
+Restore receipts are the restored lines quoted back with the file-search tool after each inverse Edit. A final
+`git diff db9b09ee --stat -- plugins/superheroes/lib/md_hidden.py` printed nothing: the file is byte-identical to `db9b09ee`.
+
+Guarded-element set (declared by the order): B1 to B6, no others.
+
+Disclosures:
+- Every capture is the runner's output with uv's one `UV_NATIVE_TLS` deprecation warning line dropped. Nothing was redacted.
+- Where a red repeats the same traceback for each parametrized case, only the first traceback is quoted and the repeats are
+  marked `[N repeated tracebacks elided]`; the `FAILED` list and the summary line are quoted whole. In two runs (B1, B3)
+  the tool output itself arrived with a middle part cut off (`... [4546 characters truncated] ...`, `... [1165 characters
+  truncated] ...`); those two captures are **incomplete** by that much, and the summary lists, which are whole, are what
+  the red rests on.
+- The neutralization of B2, B3, B4, B5 and B6 each left the module importable; B1 restored the old clause as two lines.
+
+## B1: F1 no `script`/`style`/`pre` exclusion on a type-7 start
+
+- **Guarded element / axis:** `md_hidden.py:460-461`, `if _HTML_T7.match(rest): return 7` in `_html_start_type`; a
+  closing or self-closing `pre` tag alone on a line starts a type-7 block (cmark-gfm has no such exclusion), so a `<!--`
+  after it opens a comment. The axis is a hidden heading read VISIBLE.
+- **Neutralization:** the two lines became `m = _HTML_T7.match(rest)` /
+  `if m and (m.group(1) or m.group(2)).lower() not in ("script", "style", "pre"):` (the exclusion clause restored).
+- **Raw red** (`test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block` and
+  `test_vet845_f1_the_builder_body_shape_does_not_read_visible`, one command), incomplete as disclosed:
+
+```
+FFFFFFFFFFFFF                                                            [100%]
+=================================== FAILURES ===================================
+___ test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[top-close] ___
+
+tag = '</pre>', where = 'top'
+
+    @pytest.mark.parametrize("tag", _F1_TAGS, ids=["close", "CLOSE", "close-space", "selfclose"])
+    @pytest.mark.parametrize("where", ["top", "item", "quote"])
+    def test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block(tag, where):
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid everything below the ``x <!--``
+        line. cmark-gfm's type-7 scanner has no script/style/pre exclusion."""
+        body = _F1_SHAPES[where].format(tag=tag)
+        got = _state(body, "## H")
+>       assert got != V, "## H reads VISIBLE in %r; unsure=%r" % (body, md.scan(body).unsure)
+E       AssertionError: ## H reads VISIBLE in 'x\n\n</pre>\nx <!--\n\n## H\n'; unsure=()
+E       assert 'visible' != 'visible'
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:730: AssertionError
+[10 repeated tracebacks elided, and the tool's own truncation: top-CLOSE ... quote-selfclose, same assertion]
+_________ test_vet845_f1_the_builder_body_shape_does_not_read_visible __________
+
+    def test_vet845_f1_the_builder_body_shape_does_not_read_visible():
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid ``## What we're accepting``."""
+        body = (
+            "## What's changing, and why\n\nText.\n\n</pre>\nQuotes `<!--` in code.\n\n"
+            "## What we're accepting\n\nNone.\n"
+        )
+>       assert _state(body, "## What we're accepting") != V
+E       assert 'visible' != 'visible'
+E        +  where 'visible' = _state("## What's changing, and why\n\nText.\n\n</pre>\nQuotes `<!--` in code.\n\n## What we're accepting\n\nNone.\n", "## What we're accepting")
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:741: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[top-close]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[top-CLOSE]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[top-close-space]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[top-selfclose]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[item-close]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[item-CLOSE]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[item-close-space]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[item-selfclose]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[quote-close]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[quote-CLOSE]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[quote-close-space]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_a_pre_tag_alone_on_a_line_starts_a_type7_block[quote-selfclose]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f1_the_builder_body_shape_does_not_read_visible
+13 failed in 0.57s
+```
+
+  All 12 parametrized cases (four tags in three containers) and the builder-body shape go red on `visible` read where
+  not-`visible` is owed.
+- **Restore:** inverse Edit, the two lines back to `if _HTML_T7.match(rest):` / `return 7`.
+- **Restore receipt:** the file search returned `460: if _HTML_T7.match(rest):` / `461: return 7`
+  (the comment on `:459` is unchanged).
+- **Raw green** (same node ids):
+
+```
+.............                                                            [100%]
+13 passed in 0.40s
+```
+
+## B2: F2 a line that starts inside a tag or bogus comment reads unsure
+
+- **Guarded element / axis:** `md_hidden.py:672-674`, the line-start unsure point in `_scan`'s comment pass; a line that
+  starts with the tokenizer in a tag or bogus-comment state reads UNSURE (never HIDDEN), where the head read it VISIBLE.
+- **Neutralization:** `md_hidden.py:672` `        if state not in _OPEN_STATES:` became `        if False and state not in _OPEN_STATES:`
+  (the end-of-block rule at `:677` was left alone).
+- **Raw red** (`test_vet845_f2_a_line_inside_an_attribute_value_of_the_bot_path_reads_unsure`,
+  `test_vet845_f2_a_line_inside_an_open_bogus_comment_reads_unsure_never_hidden` and
+  `test_vet845_f2_a_line_inside_an_unclosed_attribute_value_reads_unsure`, one command):
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_vet845_f2_a_line_inside_an_attribute_value_of_the_bot_path_reads_unsure _
+
+    def test_vet845_f2_a_line_inside_an_attribute_value_of_the_bot_path_reads_unsure():
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub put the marker and the verdict line
+        inside the ``title`` attribute (hidden); the head read them VISIBLE."""
+        body = 'Bumps x.\n\n## Advisor vet\n<div title="a\n<!-- superheroes:advisor-vet -->\n**Verdict: READY** · abc\n">\n'
+>       assert _state(body, "<!-- superheroes:advisor-vet -->") == U
+E       AssertionError: assert 'visible' == 'unsure'
+E         
+E         - unsure
+E         + visible
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:758: AssertionError
+_ test_vet845_f2_a_line_inside_an_open_bogus_comment_reads_unsure_never_hidden _
+
+    def test_vet845_f2_a_line_inside_an_open_bogus_comment_reads_unsure_never_hidden():
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``after`` (the ``>`` ended the
+        bogus comment) - so neither line may read HIDDEN, and ``middle`` must not read VISIBLE."""
+        body = "<div>\n<? a\nmiddle\n> after\n</div>\n"
+>       assert _state(body, "middle") == U
+E       AssertionError: assert 'visible' == 'unsure'
+E         
+E         - unsure
+E         + visible
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:766: AssertionError
+____ test_vet845_f2_a_line_inside_an_unclosed_attribute_value_reads_unsure _____
+
+    def test_vet845_f2_a_line_inside_an_unclosed_attribute_value_reads_unsure():
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid ``middle`` (inside the quoted
+        ``title`` value that closes on the next line)."""
+        body = '<div title="x\nmiddle\n">\n\n## H\n'
+>       assert _state(body, "middle") == U
+E       AssertionError: assert 'visible' == 'unsure'
+E         
+E         - unsure
+E         + visible
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:774: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f2_a_line_inside_an_attribute_value_of_the_bot_path_reads_unsure
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f2_a_line_inside_an_open_bogus_comment_reads_unsure_never_hidden
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f2_a_line_inside_an_unclosed_attribute_value_reads_unsure
+3 failed in 0.44s
+```
+
+  Each test goes red on its first assertion. The second assertions of the first two tests (the verdict line, `> after`)
+  were not reached. The control `test_vet845_f2_control_plain_lines_in_a_closed_block_stay_visible` was not run in this
+  proof: it asserts a line stays VISIBLE, which this neutralization cannot break.
+- **Restore:** inverse Edit, `if False and state not in _OPEN_STATES:` back to `if state not in _OPEN_STATES:`.
+- **Restore receipt:** the file search returned `672: if state not in _OPEN_STATES:` and `677: if i in html_last and state not in _OPEN_STATES:`.
+- **Raw green** (same node ids):
+
+```
+...                                                                      [100%]
+3 passed in 0.30s
+```
+
+## B3: F3(a) a vertical tab inside an inline tag reads unsure
+
+- **Guarded element / axis:** `md_hidden.py:687`, `if _tag_holds_vtab(joined):` (the helper at `:633-639`, the regex
+  `_VTAB_TAG` at `:65`); a paragraph, heading, list item or table cell holding an inline tag with a `\v` before the next
+  `>` reads UNSURE from its first line, where the head read it VISIBLE.
+- **Neutralization:** `md_hidden.py:687` `            if _tag_holds_vtab(joined):` became `            if False and _tag_holds_vtab(joined):`.
+- **Raw red** (`test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure`), incomplete as disclosed (the
+  tool cut the output between the `atx-vtab-value` and `item-vtab-value` tracebacks):
+
+```
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+_ test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[para-vtab-name] _
+
+opener = 'x <a\x0bb="> <!-- "> y', where = 'para'
+
+    @pytest.mark.parametrize("opener", ['x <a\vb="> <!-- "> y', 'x <a b=\v"> <!-- "> y'], ids=["vtab-name", "vtab-value"])
+    @pytest.mark.parametrize("where", ["para", "atx", "item", "cell"])
+    def test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure(opener, where):
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid everything below (HTML parsing
+        does not count ``\\v`` as tag whitespace, so the tag ended at the ``>`` inside the quoted value)."""
+        shapes = {
+            "para": "{o}\n\n## H\n",
+            "atx": "# {o}\n\n## H\n",
+            "item": "- {o}\n\n## H\n",
+            "cell": "| a | b |\n| - | - |\n| {o} | z |\n\n## H\n",
+        }
+        body = shapes[where].format(o=opener)
+>       assert _state(body, "## H") == U, "unsure=%r" % (md.scan(body).unsure,)
+E       AssertionError: unsure=()
+E       assert 'visible' == 'unsure'
+E         
+E         - unsure
+E         + visible
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:796: AssertionError
+[7 repeated tracebacks elided, same assertion at :796 with unsure=()]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[para-vtab-name]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[para-vtab-value]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[atx-vtab-name]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[atx-vtab-value]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[item-vtab-name]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[item-vtab-value]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[cell-vtab-name]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[cell-vtab-value]
+8 failed in 0.40s
+```
+
+  All eight cases (two tag shapes in a paragraph, ATX heading, list item and table cell) read `visible` where `unsure` is owed.
+- **Restore:** inverse Edit, `if False and _tag_holds_vtab(joined):` back to `if _tag_holds_vtab(joined):`.
+- **Restore receipt:** the file search returned `687: if _tag_holds_vtab(joined):`.
+- **Raw green** (same node id):
+
+```
+........                                                                 [100%]
+8 passed in 0.38s
+```
+
+## B4: F3(b) text after the first `>` of an inline `<?` or CDATA holds a `<`
+
+- **Guarded element / axis:** `md_hidden.py:628`, `if close >= 0 and text.find("<", close) >= 0:` in
+  `_runs_past_its_end`; an inline `<?` or `<![CDATA[` ended early by HTML parsing at its first `>` makes any later `<`
+  (an unclosed attribute quote, not only a comment opener) a hazard, so the block reads UNSURE.
+- **Neutralization:** `md_hidden.py:628` `text.find("<", close)` became `text.find("<!--", close)` (the pre-fix search).
+- **Raw red** (`test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure`):
+
+```
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+_ test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[pi-dq] _
+
+form = 'pi', quote = '"'
+
+    @pytest.mark.parametrize("quote", ['"', "'"], ids=["dq", "sq"])
+    @pytest.mark.parametrize("form", ["pi", "cdata"])
+    def test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure(form, quote):
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub hid everything below (HTML parsing
+        ended the bogus comment at the first ``>``, so the later ``<a title=`` opened an unclosed attribute quote)."""
+        if form == "pi":
+            body = "x <? > <a title=%s ?> y\n\n## H\n" % quote
+        else:
+            body = "x <![CDATA[ > <a title=%s ]]> y\n\n## H\n" % quote
+>       assert _state(body, "## H") == U, "unsure=%r" % (md.scan(body).unsure,)
+E       AssertionError: unsure=()
+E       assert 'visible' == 'unsure'
+E         
+E         - unsure
+E         + visible
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:808: AssertionError
+[3 repeated tracebacks elided, same assertion at :808 with unsure=()]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[pi-dq]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[pi-sq]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[cdata-dq]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[cdata-sq]
+4 failed in 0.32s
+```
+
+  All four cases go red. The bodies hold no `<!--`, so the pre-fix search cannot see their later `<`.
+- **Restore:** inverse Edit, `text.find("<!--", close)` back to `text.find("<", close)`.
+- **Restore receipt:** the file search returned `628: if close >= 0 and text.find("<", close) >= 0:`.
+- **Raw green** (same node id):
+
+```
+....                                                                     [100%]
+4 passed in 0.28s
+```
+
+## B5: F4(a) tag regexes match ASCII only
+
+- **Guarded element / axis:** `md_hidden.py:44`, `_HTML_T6 = re.compile(..., re.I | re.A)`; Unicode case folding
+  (`ſ` U+017F, the Kelvin sign U+212A, `İ` U+0130) must not match an ASCII letter of a block tag name (cmark is
+  ASCII-only), so `<ſection>`, `<linK>` and `<dİv>` are paragraph text and a `<!--` after them opens no comment.
+- **Neutralization:** `md_hidden.py:44` `re.I | re.A)` became `re.I)` on `_HTML_T6` alone (the order's neutralization).
+- **Raw red** (`test_vet845_f4a_a_unicode_case_fold_of_an_ascii_tag_letter_is_no_block_start`):
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+_ test_vet845_f4a_a_unicode_case_fold_of_an_ascii_tag_letter_is_no_block_start[long-s] _
+
+char = 383
+
+    @pytest.mark.parametrize("char", [0x17F, 0x212A, 0x130], ids=["long-s", "kelvin", "dotted-i"])
+    def test_vet845_f4a_a_unicode_case_fold_of_an_ascii_tag_letter_is_no_block_start(char):
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``H`` (cmark is ASCII-only, so
+        the opener stays paragraph text and the ``<!--`` is not raw HTML)."""
+        tags = {0x17F: "<%section>", 0x212A: "<lin%s>", 0x130: "<d%sv>"}
+        body = "a\n" + tags[char] % chr(char) + "\nx <!--\n\n## H\n"
+>       assert _state(body, "## H") == V
+E       AssertionError: assert 'hidden' == 'visible'
+E         
+E         - visible
+E         + hidden
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:824: AssertionError
+[2 repeated tracebacks elided, same assertion at :824: kelvin (char = 8490) and dotted-i (char = 304)]
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f4a_a_unicode_case_fold_of_an_ascii_tag_letter_is_no_block_start[long-s]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f4a_a_unicode_case_fold_of_an_ascii_tag_letter_is_no_block_start[kelvin]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f4a_a_unicode_case_fold_of_an_ascii_tag_letter_is_no_block_start[dotted-i]
+3 failed in 0.32s
+```
+
+  All three characters go red: `hidden` read where `visible` is owed. Only `_HTML_T6` was neutralized; the same `re.A`
+  on `_HTML_T1`, `_T1_END`, `_VERSION_TAGS` and `_TAGFILTER` is **not** discriminated by this test (no proof run for those
+  four; they are unproven elements of F4(a)).
+- **Restore:** inverse Edit, `re.I)` back to `re.I | re.A)` on `_HTML_T6`.
+- **Restore receipt:** the file search returned `44: _HTML_T6 = re.compile(r"</?(?:" + "|".join(_BLOCK_TAGS) + r")(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)`.
+- **Raw green** (same node id):
+
+```
+...                                                                      [100%]
+3 passed in 0.25s
+```
+
+## B6: F4(b) type 7's trailing whitespace excludes a vertical tab
+
+- **Guarded element / axis:** `md_hidden.py:49`, `+ r"[ \t\f]*\Z"` in `_HTML_T7`; cmark-gfm's type 7 ends in `[\t\n\f ]`, so
+  `<span>` + vertical tab is a paragraph (a `<!--` after it opens no comment) and `<span>` + form feed is a type-7 block.
+- **Neutralization:** `md_hidden.py:49` `+ r"[ \t\f]*\Z"` became `+ _WS + r"*\Z"` (the pre-fix trailing class `[ \t\v\f]`).
+- **Raw red** (`test_vet845_f4b_a_vertical_tab_after_a_type7_tag_is_not_trailing_whitespace`):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_vet845_f4b_a_vertical_tab_after_a_type7_tag_is_not_trailing_whitespace __
+
+    def test_vet845_f4b_a_vertical_tab_after_a_type7_tag_is_not_trailing_whitespace():
+        """vet 845 receipt on PR #2390 (comment 6709845874), ``POST /markdown``: GitHub showed ``H`` after ``<span>\\v`` (a
+        paragraph) and hid it after ``<span>\\f`` (a type-7 block)."""
+>       assert _state("<span>\v\nx <!--\n\n## H\n", "## H") == V
+E       AssertionError: assert 'hidden' == 'visible'
+E         
+E         - visible
+E         + hidden
+
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:830: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f4b_a_vertical_tab_after_a_type7_tag_is_not_trailing_whitespace
+1 failed in 0.27s
+```
+
+  The red is on the first assertion (`:830`); the form-feed assertion (`:831`, `HIDDEN`) holds either way and was not reached.
+- **Restore:** inverse Edit, `+ _WS + r"*\Z"` back to `+ r"[ \t\f]*\Z"`.
+- **Restore receipt:** the file search returned `49: + r"[ \t\f]*\Z"  # cmark-gfm's type 7 ends in [\t\n\f ]: a vertical tab after the tag is not whitespace here`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.29s
+```
+
+Findings for the builder (detector, not changed): the F1 red covers the three containers and four tags together (a case
+of the 12 is not shown to bite alone, since every case went red in this one neutralization); B5 proves the `re.A` on
+`_HTML_T6` only; the F2 control and the F3 controls were not neutralized (they guard against false-unsure, which none of
+these six neutralizations produces).

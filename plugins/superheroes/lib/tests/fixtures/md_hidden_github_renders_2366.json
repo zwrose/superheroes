@@ -4,7 +4,7 @@
   "id": "shape id",
   "form": "builder (shape above a builder owner half) or bot (shape inside a bot body, then the appended Advisor vet heading, marker and slot)",
   "sent": "the body as written",
-  "stored": "the body GitHub stored and rendered: the cloud egress appends a footer, and it rewrote U+2028, U+0085, form feed and CR line ends to LF and <![CDATA[ to <[CDATA[ (transitChanged true)",
+  "stored": "the body GitHub stored and rendered: the cloud egress appends a footer, and it rewrote U+2028, U+0085, form feed and CR line ends to LF and <![CDATA[ to <[CDATA[, and it dropped the ! of an image in a heading (the image_heading rows: ## ![…](…) stored as ## […](…)) (transitChanged true)",
   "html": "GitHub's body_html for stored",
   "transitChanged": "stored differs from sent beyond the appended footer: the row is an oracle for stored only, never for sent"
  },
