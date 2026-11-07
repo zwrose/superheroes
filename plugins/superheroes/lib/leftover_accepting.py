@@ -78,6 +78,8 @@ _TICKS = re.compile(r"`+")
 # the openers GitHub's HTML parser reads as a comment-like run that hides the rest of the line (#2389 V847-1, BR684-2/3):
 # a comment, a processing instruction, a declaration (`<!` + an ASCII letter) or a CDATA section
 _OPENER = re.compile(r"<!--|<\?|<![A-Za-z]|<!\[")
+# the token that starts a fixed-above claim, matched on its own so a claim wrapped across lines is still seen in a cut tail
+_FIXED_ABOVE_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])fixed-above(?![A-Za-z0-9_])", re.IGNORECASE)
 # an ATX heading line (CommonMark: up to three spaces, one to six #, then a space, a tab or the line's end)
 _ATX_LINE = re.compile(r" {0,3}#{1,6}(?:[ \t\r\n]|\Z)")
 # the same minus the comment, which keeps the multi-line comment state below
@@ -117,7 +119,8 @@ def _visible(body):
       trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole. A fence content
       line holding an opener is blanked whole, never shortened, so the shortened text cannot read as a fence delimiter
       when the section reader re-reads it; a fence delimiter line is shortened, so it stays the opener or closer it was.
-      A cut tail that holds a ``fixed-above`` claim blanks its whole block (the run of non-blank lines around it), so the
+      A cut tail that holds the ``fixed-above`` token (a whole claim or the start of a wrapped one) blanks its whole block
+      (the run of non-blank lines around it, stopping at and never blanking an ATX heading or a marker line), so the
       acceptance is not counted without the claim that needs verifying. A comment the cut tail opens and does not close
       still opens the comment state for later lines. An open comment state ends at a blank line or an ATX heading that
       ``md_hidden`` reads VISIBLE (an inline comment cannot cross either; a raw HTML comment that does is md_hidden's).
@@ -208,8 +211,8 @@ def _visible(body):
                 i += 1
         if cut is not None:
             tail = line[cut:]
-            # axis: a cut tail that holds a fixed-above claim blanks its whole block (below), so a claim that needs stack verification is never dropped while its acceptance still counts — see bite-proof record i2389_leftover_visible_within_line.md
-            if FIXED_ABOVE_RE.search(tail):
+            # axis: a cut tail that holds the fixed-above token (a whole claim, or the start of one wrapped onto the next line) blanks its whole block (below), so a claim that needs stack verification is never dropped while its acceptance still counts — see bite-proof record i2389_leftover_visible_within_line.md
+            if _FIXED_ABOVE_TOKEN.search(tail):
                 claimed.append(n)
             # axis: a comment the cut tail opens and does not close still opens the comment state for later lines (fails closed: an over-read only cuts more) — see bite-proof record i2389_leftover_visible_within_line.md
             opened = tail.rfind("<!--")
@@ -223,17 +226,21 @@ def _visible(body):
         # the line keeps its own terminator (\r\n, \n or lone \r) even when a comment cut it, so the line count never changes
         out.append(text if not term or text.endswith(term) else text + term)
     # axis: a line whose cut tail held a fixed-above claim blanks every line of its block (the run of non-blank lines around it, so a list
-    # item's first line and its continuation lines alike), a marker line excepted; this over-cuts a tight list, failing toward a refusal
+    # item's first line and its continuation lines alike); the block stops at, and never blanks, an ATX heading or a marker line, so the
+    # heading that bounds the acceptance section always survives; this over-cuts a tight list, failing toward a refusal
     # — see bite-proof record i2389_leftover_visible_within_line.md
+    def _boundary(m):
+        return not lines[m].strip() or _ATX_LINE.match(lines[m]) or _MARKER_LINE.match(lines[m])
+
     for n in claimed:
         first = n
-        while first > 0 and lines[first - 1].strip():
+        while first > 0 and not _boundary(first - 1):
             first -= 1
         last = n
-        while last + 1 < len(lines) and lines[last + 1].strip():
+        while last + 1 < len(lines) and not _boundary(last + 1):
             last += 1
         for m in range(first, last + 1):
-            if not _MARKER_LINE.match(lines[m]):
+            if not _boundary(m):
                 out[m] = _terminator(lines[m])
     return "".join(out)
 

@@ -436,3 +436,29 @@ def test_g8_comment_state_a_raw_comment_block_across_a_blank_line_still_hides():
     body = "## What we're accepting\n\n<!--\n\n- F-1 The retry loop never backs off\n-->\n"
     assert "F-1" not in la._visible(body)
     assert missing(body)
+
+
+# --- Fix-audit round 3 (#2389): the claimed block never crosses a heading; a wrapped claim is still seen -------------
+
+def test_g9_claimed_block_a_heading_next_to_the_claim_survives_and_bounds_the_section():
+    # round-3 audits and scoped finder: blanking a claimed block must not erase the How to see it heading, or text under it
+    # would become an acceptance
+    body = ("## What we're accepting\n\nNone.\n## How to see it\n- F-1 The retry loop never backs off `<!--` fixed-above #99 abcdef0\n"
+            "- F-1 The retry loop never backs off\n")
+    out = la._visible(body)
+    assert "## How to see it" in out
+    assert missing(body), "text under How to see it must not count as an acceptance"
+
+
+def test_g9_claimed_block_stops_at_a_heading_above_it():
+    body = ("## What we're accepting\n- F-1 The retry loop never backs off `<!--` fixed-above #99 abcdef0\n\n## How to see it\n")
+    out = la._visible(body)
+    assert "## What we're accepting" in out and "F-1" not in out
+
+
+def test_g6_fixed_above_tail_a_claim_wrapped_onto_the_next_line_is_still_seen():
+    # round-3 audit of scoped-finder-002: "fixed-above #99" on the cut line, its commit on the continuation line
+    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99\n  abcdef0\n\n"
+            "## How to see it\n\nN/A\n")
+    assert "F-1" not in la._visible(body)
+    assert missing(body), "F-1 must not count as accepted without its fixed-above claim"
