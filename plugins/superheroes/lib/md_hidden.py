@@ -35,12 +35,16 @@ _BLOCK_TAGS = (
     "tr track ul"
 ).split()
 
-_HTML_T1 = re.compile(r"<(?:script|pre|style)(?:[ \t>]|\Z)", re.I)
+# cmark's HTML scanners treat a vertical tab and a form feed as whitespace too (``spacechar`` in scanners.re)
+_WS = "[ \t\v\f]"
+_HTML_T1 = re.compile(r"<(?:script|pre|style)(?:[ \t\v\f>]|\Z)", re.I)
 _HTML_T4 = re.compile(r"<![A-Z]")
-_HTML_T6 = re.compile(r"</?(?:" + "|".join(_BLOCK_TAGS) + r")(?:[ \t>]|/>|\Z)", re.I)
-_ATTR = r"""(?:[ \t]+[A-Za-z_:][A-Za-z0-9_.:-]*(?:[ \t]*=[ \t]*(?:[^ \t"'=<>`]+|'[^']*'|"[^"]*"))?)"""
+_HTML_T6 = re.compile(r"</?(?:" + "|".join(_BLOCK_TAGS) + r")(?:[ \t\v\f>]|/>|\Z)", re.I)
+_ATTR = (r"(?:" + _WS + r"+[A-Za-z_:][A-Za-z0-9_.:-]*(?:" + _WS + r"*=" + _WS
+         + r"""*(?:[^ \t\v\f"'=<>`]+|'[^']*'|"[^"]*"))?)""")
 _HTML_T7 = re.compile(
-    r"(?:<([A-Za-z][A-Za-z0-9-]*)" + _ATTR + r"*[ \t]*/?>|</([A-Za-z][A-Za-z0-9-]*)[ \t]*>)[ \t]*\Z"
+    r"(?:<([A-Za-z][A-Za-z0-9-]*)" + _ATTR + r"*" + _WS + r"*/?>|</([A-Za-z][A-Za-z0-9-]*)" + _WS + r"*>)"
+    + _WS + r"*\Z"
 )
 _T1_END = re.compile(r"</(?:script|pre|style)>", re.I)
 
@@ -54,7 +58,7 @@ _ORDERED = re.compile(r"([0-9]{1,9})[.)](?=[ ]|\Z)")
 _LIST_START = re.compile(r"(?:[-+*]|[0-9]{1,9}[.)])(?:[ ]|\Z)")
 _TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z")
 _FOOTNOTE = re.compile(r"[ ]{0,3}\[\^[^\]\s]+\]:")
-_VERSION_TAGS = re.compile(r"[ ]{0,3}<(?:textarea|search|source)(?:[ >]|/>|\Z)", re.I)
+_VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I)
 _TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I)
 
 _COMMENT_RUN = re.compile(r"<!--.*?(?:-->|--!>)", re.S)
@@ -625,10 +629,14 @@ def _scan(body):
     offsets = []
     texts = []
     offset = 0
-    for item in items:
+    for i, item in enumerate(items):
         offsets.append(offset)
         offset += len(item)
-        texts.append(_terminator_free(item).expandtabs(_CODE_INDENT))
+        text = _terminator_free(item)
+        # axis: cmark skips one byte-order mark at the start of the document, so a BOM never hides a block start
+        if i == 0 and text.startswith("﻿"):
+            text = text[1:]
+        texts.append(text.expandtabs(_CODE_INDENT))
     parser = _Parser(offsets, texts)
     parser.run()
 

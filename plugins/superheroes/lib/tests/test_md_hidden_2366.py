@@ -674,3 +674,30 @@ def test_guard_g11_type7_cannot_interrupt_a_paragraph():
 def test_guard_g12_type4_needs_an_uppercase_letter():
     assert _state("x\n\n<!x\nfoo > <!--\n\n## H\n", "## H") == V  # lowercase: paragraph text, GitHub shows no block
     assert _state("x\n\n<!X\nfoo > <!--\n\n## H\n", "## H") == H  # uppercase: a declaration block
+
+
+# --- Review round 1 (PR #2390): cmark whitespace, closing version tags, a leading byte-order mark ------------------
+
+@pytest.mark.parametrize("ws", ["\f", "\v"], ids=["formfeed", "vtab"])
+@pytest.mark.parametrize("shape", [
+    "a\n<div{ws}>\nx <!--\n\n## H\n",                 # type 6 interrupting a paragraph
+    "a\n<pre{ws}>\nx <!--\n</pre>\n\n## H\n",          # type 1 interrupting a paragraph
+    "<span{ws}class=\"c\">\nx <!--\n\n## H\n",          # type 7: whitespace before an attribute
+    "<span class{ws}={ws}\"c\"{ws}>\nx <!--\n\n## H\n",  # type 7: whitespace around = and before >
+    "</span{ws}>\nx <!--\n\n## H\n",                   # type 7: a closing tag
+], ids=["t6", "t1", "t7-attr", "t7-eq", "t7-close"])
+def test_review_r1_form_feed_and_vertical_tab_are_tag_whitespace(shape, ws):
+    _reads(shape.format(ws=ws), "## H", H)
+
+
+@pytest.mark.parametrize("tag", ["source", "search", "textarea"])
+def test_review_r1_a_closing_version_tag_reads_unsure(tag):
+    body = "a\n</%s>\nx <!--\n\n## H\n" % tag
+    assert _state(body, "## H") == U
+    assert _state(body, "a") == V
+
+
+def test_review_r1_a_leading_byte_order_mark_is_skipped():
+    _reads("﻿<!--\n\n## H\n", "## H", H)
+    # only the document's first character: a BOM at the start of a later line is ordinary text
+    assert _state("x\n\n﻿<!--\n\n## H\n", "## H") == V
