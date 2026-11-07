@@ -1,9 +1,11 @@
-"""#2342 fix round: ``_comment_scan`` ignores a comment opener inside inline code or after a backslash escape.
+"""#2342 fix round: a comment opener inside inline code or after a backslash escape hides nothing.
 
-``_comment_scan`` reports a line as starting inside an HTML comment exactly when the rendered Markdown would hide it
-(the model of ``leftover_accepting._visible``). Its two callers share the scan: the no-build-record write path
-(``_unrendered_slot``) and the emptied-description guard (``check_not_emptied``). Fake-runner units; no real gh, no
-network. The fixtures come from test_vet_slot.py, test_vet_slot_leftovers_2280.py and
+Since #2389 the verdict is ``md_hidden.scan``'s (a CommonMark parse of the body; ``_comment_scan``,
+``_could_open_html_block`` and ``_SPLITLINES_ONLY_BREAKS`` are gone, so the tests that called them are gone too). The
+behaviour tests below stay, through ``_run_verb`` and ``evaluate``: the no-build-record write path
+(``_unrendered_slot``) and the emptied-description guard (``check_not_emptied``) both read ``md_hidden``. Where a
+body's outcome differs from the old line scanner's, the test says so with a ``# #2389:`` comment. Fake-runner units; no
+real gh, no network. The fixtures come from test_vet_slot.py, test_vet_slot_leftovers_2280.py and
 test_vet_slot_no_build_record_2342.py."""
 import pytest
 
@@ -83,19 +85,22 @@ def test_c1_evaluate_composes_the_same_body():
 
 # --- C2: a builder description quoting the opener above its heading is not body-emptied ----------------------------
 
-def test_c2_run_verb_refuses_body_emptied_for_an_inline_code_opener_above_the_heading(tmp_path):
-    # vet 816: BODY carries the <details><summary>Build record line, which could open an HTML block, so the exemption
-    # is off and the quoted opener opens a comment over the owner half: body-emptied, as on main
+def test_c2_run_verb_writes_for_an_inline_code_opener_above_the_heading(tmp_path):
+    # #2389: GitHub renders this heading visible (md_hidden: visible): the opener is inline code, the build record's
+    # <details> line no longer switches a whole-body exemption off. It was body-emptied before.
     body = NOTE_LINE + BODY
     fake = _fake(body, receipt=RECEIPT)
-    _refused(_write(fake, tmp_path), fake, "body-emptied")
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_builder_new_body(body)]
 
 
-def test_c2_evaluate_refuses_body_emptied():
-    # vet 816: the body has a line that could open an HTML block, so the exemption is off, as on main
+def test_c2_evaluate_writes_for_an_inline_code_opener_above_the_heading():
+    # #2389: GitHub renders this heading visible (md_hidden: visible); it was body-emptied before
     body = NOTE_LINE + BODY
     result = vs.evaluate("write", body, [_comment(RECEIPT)], SLOT, advisor_login="advisor")
-    assert result["ok"] is False and result["reason"] == "body-emptied", result
+    assert result["ok"] is True, result
+    assert result["newBody"] == _builder_new_body(body)
 
 
 # --- C3: a double-backtick span closes on a double-backtick run ----------------------------------------------------
@@ -110,10 +115,14 @@ def test_c3_a_double_backtick_span_holding_the_opener_writes(tmp_path):
 
 # --- C4: a backtick run with no closing run is literal, then a real opener opens a comment -------------------------
 
-def test_c4_an_unclosed_backtick_run_then_a_real_opener_still_refuses_write_failed(tmp_path):
+def test_c4_an_unclosed_backtick_run_then_an_unclosed_opener_writes(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible): an inline <!-- with no --> in its paragraph is literal
+    # text, not a comment. It was write-failed before.
     body = BOT_BODY + "a ` b <!-- hidden\n"
     fake = _fake(body)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "HTML comment")
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
 # --- C5: a backslash escape --------------------------------------------------------------------------------------------
@@ -126,10 +135,14 @@ def test_c5_an_escaped_opener_writes(tmp_path):
     assert fake.edited == [_appended(body, SLOT)]
 
 
-def test_c5_an_escaped_backtick_leaves_the_opener_real_and_still_refuses(tmp_path):
+def test_c5_an_escaped_backtick_then_an_unclosed_opener_writes(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible): an inline <!-- with no --> in its paragraph is literal
+    # text, not a comment. It was write-failed before.
     body = BOT_BODY + "\\` <!-- hidden\n"
     fake = _fake(body)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "HTML comment")
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
 # --- C6: a real comment opened on a plain line hides the slot ---------------------------------------------------------
@@ -140,7 +153,8 @@ C6_CLOSED = "Bumps x.\n<!-- note\nmore text\n-->\n" + MARKER + "\n\nold slot\n"
 
 def test_c6_a_real_comment_closed_on_the_marker_line_still_refuses_write_failed(tmp_path):
     fake = _fake(C6_HIDING)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "HTML comment")
+    # #2389: still a refusal; the detail is now md_hidden's sentence (the marker line reads hidden), not "HTML comment"
+    _refused(_write(fake, tmp_path), fake, "write-failed", "marker line reads hidden")
 
 
 def test_c6_a_plain_closer_line_before_the_marker_lets_the_write_succeed(tmp_path):
@@ -185,23 +199,6 @@ def test_c9_a_fenced_line_holding_the_opener_opens_no_comment(tmp_path):
     assert fake.edited == [_appended(body, SLOT)]
 
 
-# --- the scan itself: the yield shape is unchanged -----------------------------------------------------------------------------
-
-@pytest.mark.parametrize("body, expected", [
-    ("a `<!--` b\nnext\n", [False, False]),
-    ("a ``x `<!-- y`` z\nnext\n", [False, False]),
-    ("a ` b <!-- c\nnext\n", [False, True]),
-    ("\\<!-- c\nnext\n", [False, False]),
-    ("\\` <!-- c\nnext\n", [False, True]),
-    ("<!-- a `-->` b\nnext\n", [False, False]),
-    ("a --> `<!--`\nnext\n", [False, False]),
-], ids=["span", "double-span", "unclosed-run", "escaped-opener", "escaped-tick", "quoted-closer", "stray-closer"])
-def test_comment_scan_starts_in_comment_per_line(body, expected):
-    rows = list(vs._comment_scan(body))
-    assert [row[3] for row in rows] == expected
-    assert all(len(row) == 4 for row in rows)
-
-
 # --- C11: raw HTML is not Markdown: no escape or code span is read inside it (review finding, scoped finder) ---------
 
 RAW_DIV_OPENER = "<div>\n`<!--`\n\n"
@@ -221,11 +218,14 @@ def test_c11_a_bot_body_with_a_quoted_opener_inside_a_raw_div_refuses_write_fail
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
 
 
-def test_c11_a_blank_line_after_the_raw_block_still_refuses_write_failed_for_a_later_quoted_opener(tmp_path):
-    # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
+def test_c11_a_blank_line_after_the_raw_block_ends_it_so_a_later_quoted_opener_is_text(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible): the blank line ends the <div> block, so the code span
+    # after it is Markdown. It was write-failed before.
     body = "Bumps x.\n\n<div>\nsee notes\n</div>\n\n" + CODE_SPAN_LINE
     fake = _fake(body)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
 def test_c11_a_raw_block_under_a_blockquote_is_raw_too(tmp_path):
@@ -243,17 +243,6 @@ def test_c11_a_comment_line_does_not_make_the_next_line_raw(tmp_path):
     assert fake.edited == [_appended(body, SLOT)]
 
 
-@pytest.mark.parametrize("body, expected", [
-    ("<div>\n`<!--`\nnext\n", [False, False, True]),
-    # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main)
-    ("<div>\n\n`<!--`\nnext\n", [False, False, False, True]),
-    ("> <details>\n> \\<!-- x\nnext\n", [False, False, True]),
-    ("<!-- a -->\n`<!--`\nnext\n", [False, False, False]),
-], ids=["div-run", "blank-ends-run", "quoted-container-escape", "comment-line-not-raw"])
-def test_c11_comment_scan_reads_raw_html_runs(body, expected):
-    assert [row[3] for row in vs._comment_scan(body)] == expected
-
-
 # --- C12: the raw-HTML run starts only at a real tag in live Markdown, and ends at a blank line in its container ----
 
 def test_c12_an_autolink_line_is_not_raw_html_so_a_later_quoted_opener_is_text(tmp_path):
@@ -264,33 +253,24 @@ def test_c12_an_autolink_line_is_not_raw_html_so_a_later_quoted_opener_is_text(t
     assert fake.edited == [_appended(body, SLOT)]
 
 
-def test_c12_a_tag_inside_a_comment_still_refuses_write_failed_for_the_quoted_opener(tmp_path):
-    # vet 816: the gate reads every line, a tag line inside a comment included: the body has a line that could open an
-    # HTML block, so the exemption is off (as on main) and the quoted opener opens a comment
+def test_c12_a_tag_inside_a_closed_comment_does_not_hide_a_later_quoted_opener(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible): the comment closes on its --> line and the code span
+    # after it is Markdown. It was write-failed before.
     body = "<!-- note\n<div>\n-->\n" + CODE_SPAN_LINE
     fake = _fake(body)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
-def test_c12_a_quoted_blank_line_raw_run_body_refuses_write_failed(tmp_path):
-    # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
+def test_c12_a_quoted_blank_line_ends_the_raw_run_so_the_quoted_opener_is_text(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible): the blank quoted line ends the <div> block inside the
+    # quote. It was write-failed before.
     body = "> <div>\n> </div>\n>\n> Handles `<!--` literally.\n"
     fake = _fake(body)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
-
-
-@pytest.mark.parametrize("body, expected", [
-    ("<https://example.com>\n`<!--`\nnext\n", [False, False, False]),
-    ("<div class=\"x\">\n`<!--`\nnext\n", [False, False, True]),
-    ("<br/>\n`<!--`\nnext\n", [False, False, True]),
-    ("</details>\n`<!--`\nnext\n", [False, False, True]),
-    # vet 816 (rows tag-in-comment and quoted-blank): the body has a line that could open an HTML block, so the
-    # exemption is off (as on main) and the quoted opener opens a comment
-    ("<!-- c\n<div>\n-->\n`<!--`\nnext\n", [False, True, True, False, True]),
-    ("> <div>\n>\n> `<!--`\nnext\n", [False, False, False, True]),
-], ids=["autolink", "tag-with-attribute", "self-closing", "closing-tag", "tag-in-comment", "quoted-blank"])
-def test_c12_comment_scan_raw_run_boundaries(body, expected):
-    assert [row[3] for row in vs._comment_scan(body)] == expected
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
 # --- C13: a raw run ends only at a line blank inside the blockquote depth it started in ------------------------------
@@ -307,17 +287,6 @@ def test_c13_a_literal_gt_line_inside_an_unquoted_div_still_refuses_a_bot_write(
     body = "Bumps x.\n\n<div>\n>\n`<!--` notes\n"
     fake = _fake(body)
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
-
-
-@pytest.mark.parametrize("body, expected", [
-    ("<div>\n>\n`<!--`\nnext\n", [False, False, False, True]),
-    ("<div>\n> <p>\n>\n`<!--`\nnext\n", [False, False, False, False, True]),
-    ("> <div>\n> >\n> `<!--`\nnext\n", [False, False, False, True]),
-    # vet 816 (row quoted-blank-ends): the body has a line that could open an HTML block, so the exemption is off
-    ("> <div>\n>\n> `<!--`\nnext\n", [False, False, False, True]),
-], ids=["gt-in-unquoted-div", "nested-tag-keeps-depth", "deeper-gt-in-quoted-div", "quoted-blank-ends"])
-def test_c13_comment_scan_raw_run_depth(body, expected):
-    assert [row[3] for row in vs._comment_scan(body)] == expected
 
 
 # --- C14: a blank line is ASCII spaces and tabs only; a run's quote depth counts list markers and extra spaces -------
@@ -337,49 +306,36 @@ def test_c14_evaluate_also_refuses_body_emptied_for_a_non_breaking_space_line_in
     assert vs.evaluate("write", body, [_comment(RECEIPT)], SLOT, advisor_login="advisor")["reason"] == "body-emptied"
 
 
-def test_c14_a_list_item_quoted_raw_run_body_refuses_write_failed(tmp_path):
-    # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
+def test_c14_a_list_item_quoted_raw_run_ends_at_its_blank_line_and_writes(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible): the blank quoted line ends the <div> block in the list
+    # item's quote. It was write-failed before.
     body = "Bumps x.\n\n- > <div>\n  > </div>\n  >\n  > Handles `<!--` literally.\n"
     fake = _fake(body)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
-def test_c14_a_double_spaced_quote_prefix_body_refuses_write_failed(tmp_path):
-    # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main): write-failed
+def test_c14_a_double_spaced_quote_prefix_raw_run_ends_at_its_blank_line_and_writes(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible), as above with a nested quote. It was write-failed before.
     body = "Bumps x.\n\n>  > <div>\n>  > </div>\n>  >\n>  > Handles `<!--` literally.\n"
     fake = _fake(body)
-    _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
-def test_c14_a_line_of_ascii_spaces_and_tabs_in_an_html_block_body_leaves_the_quoted_opener_a_comment():
-    # vet 816: the body has a line that could open an HTML block, so the exemption is off (as on main)
-    assert [row[3] for row in vs._comment_scan("<div>\n \t \n`<!--`\nnext\n")] == [False, False, False, True]
+# --- C15: HTML-block openers (a tag line ending in U+2028, U+0085 or a form feed; a declaration, CDATA or processing-
+# instruction block). Since #2389 md_hidden parses them: a tag line that carries on past a splitlines-only break keeps
+# its block open (the quoted opener after it is a real comment); a one-line declaration, CDATA or PI block closes on its line.
 
-
-@pytest.mark.parametrize("body, expected", [
-    ("<div>\n" + NBSP + "\n`<!--`\nnext\n", [False, False, False, True]),
-    # vet 816 (the three rows below): the body has a line that could open an HTML block, so the exemption is off
-    ("- > <div>\n  > </div>\n  >\n  > `<!--`\nnext\n", [False, False, False, False, True]),
-    (">  > <div>\n>  > </div>\n>  >\n>  > `<!--`\nnext\n", [False, False, False, False, True]),
-    ("- > <div>\n- >\n- > `<!--`\nnext\n", [False, False, False, True]),
-], ids=["nbsp-is-not-blank", "list-marker-quote-depth", "double-space-quote-depth", "list-marker-quoted-blank"])
-def test_c14_comment_scan_raw_run_blankness_and_depth(body, expected):
-    assert [row[3] for row in vs._comment_scan(body)] == expected
-
-
-# --- C15: vet 816: a body with a line that could open an HTML block gets no exemption (the body-level gate) ----------
-# A line scanner cannot track CommonMark's HTML blocks (a tag line ending in U+2028, U+0085 or a form feed; a
-# declaration, CDATA or processing-instruction block), so the scan does not try: in a body with such a line, every
-# <!-- outside a fence opens a comment, as on main.
-
-# A tag line ending in a character that splitlines() breaks on but CommonMark does not, then a real newline: the line
-# scanner saw a blank line and ended the HTML block; the renderer sees one tag line that carries on.
+# A tag line ending in a character that splitlines() breaks on but CommonMark does not, then a real newline: the renderer
+# sees one tag line that carries on, so the HTML block stays open.
 LINE_BREAK_OPENERS = [("u2028", "<div>  \n"), ("u0085", "<div> \u0085\n"), ("formfeed", "<div> \x0c\n")]
 BLOCK_OPENERS = [("doctype", "<!DOCTYPE html>\n"), ("cdata", "<![CDATA[ x ]]>\n"), ("pi", "<?xml x?>\n")]
-ALL_OPENERS = LINE_BREAK_OPENERS + BLOCK_OPENERS
 
 
-@pytest.mark.parametrize("opener", [o for _, o in ALL_OPENERS], ids=[i for i, _ in ALL_OPENERS])
+@pytest.mark.parametrize("opener", [o for _, o in LINE_BREAK_OPENERS], ids=[i for i, _ in LINE_BREAK_OPENERS])
 def test_c15_a_builder_body_with_an_html_block_opener_then_a_quoted_opener_refuses_body_emptied(tmp_path, opener):
     # V1/V2: the quoted opener opens a real comment that hides the owner half until the advisor-vet marker
     body = opener + "`<!--`\n\n" + BODY
@@ -389,12 +345,29 @@ def test_c15_a_builder_body_with_an_html_block_opener_then_a_quoted_opener_refus
     assert result["ok"] is False and result["reason"] == "body-emptied", result
 
 
-@pytest.mark.parametrize("opener", [o for _, o in ALL_OPENERS], ids=[i for i, _ in ALL_OPENERS])
+@pytest.mark.parametrize("opener", [o for _, o in LINE_BREAK_OPENERS], ids=[i for i, _ in LINE_BREAK_OPENERS])
 def test_c15_a_bot_body_with_an_html_block_opener_then_a_quoted_opener_refuses_write_failed(tmp_path, opener):
     # V3
     body = "Bumps x.\n\n" + opener + "`<!--` notes\n"
     fake = _fake(body)
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+
+
+@pytest.mark.parametrize("opener", [o for _, o in BLOCK_OPENERS], ids=[i for i, _ in BLOCK_OPENERS])
+def test_c15_a_one_line_declaration_cdata_or_pi_block_ends_on_its_line_so_the_quoted_opener_is_text(tmp_path, opener):
+    # #2389: GitHub renders these visible (md_hidden: visible): a declaration, CDATA or processing-instruction HTML block
+    # ends on the line that closes it, so the code span after it is Markdown. Builder and bot, both write; both were
+    # refused (body-emptied, write-failed) before.
+    body = opener + "`<!--`\n\n" + BODY
+    fake = _fake(body, receipt=RECEIPT)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_builder_new_body(body)]
+    bot = "Bumps x.\n\n" + opener + "`<!--` notes\n"
+    fake = _fake(bot)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(bot, SLOT)]
 
 
 def test_c15_a_comment_closing_mid_line_then_a_quoted_opener_refuses_write_failed(tmp_path):
@@ -404,12 +377,21 @@ def test_c15_a_comment_closing_mid_line_then_a_quoted_opener_refuses_write_faile
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
 
 
-@pytest.mark.parametrize("lead", ["﻿", "​"], ids=["bom", "zwsp"])
-def test_c15_a_format_character_before_a_tag_still_gates_the_body(tmp_path, lead):
-    # V6: a byte-order mark or a zero-width space before the tag is skipped, so the line still counts
-    body = lead + "<div>\n`<!--` x\n"
+def test_c15_a_byte_order_mark_before_a_tag_still_refuses(tmp_path):
+    # V6: unchanged under md_hidden (the write still refuses; no #2389 expectation change)
+    body = "﻿<div>\n`<!--` x\n"
     fake = _fake(body)
     _refused(_write(fake, tmp_path), fake, "write-failed", "would not render")
+
+
+def test_c15_a_zero_width_space_before_a_tag_is_text_and_writes(tmp_path):
+    # #2389: GitHub renders this visible (md_hidden: visible): a zero-width space is not whitespace to CommonMark, so
+    # the line is a paragraph with an inline tag and the code span after it is Markdown. It was write-failed before.
+    body = "​<div>\n`<!--` x\n"
+    fake = _fake(body)
+    result = _write(fake, tmp_path)
+    assert result["ok"] is True, result
+    assert fake.edited == [_appended(body, SLOT)]
 
 
 def test_c15_the_exemption_survives_in_a_body_without_such_a_line_after_a_closing_comment_line(tmp_path):
@@ -421,54 +403,10 @@ def test_c15_the_exemption_survives_in_a_body_without_such_a_line_after_a_closin
     assert fake.edited == [_appended(body, SLOT)]
 
 
-@pytest.mark.parametrize("body, expected", [
-    ("<div>  \n`<!--`\nnext\n", [False, False, False, True]),
-    ("<div> \u0085\n`<!--`\nnext\n", [False, False, False, True]),
-    ("<div> \x0c\n`<!--`\nnext\n", [False, False, False, True]),
-    ("<div>  `<!--`\nnext\n", [False, False, True]),
-    ("<!DOCTYPE html>\n`<!--`\nnext\n", [False, False, True]),
-    ("<![CDATA[ x ]]>\n`<!--`\nnext\n", [False, False, True]),
-    ("<?xml x?>\n`<!--`\nnext\n", [False, False, True]),
-    ("﻿<div>\n`<!--`\nnext\n", [False, False, True]),
-    ("​<div>\n`<!--`\nnext\n", [False, False, True]),
-    ("<!-- a --> `<!--` b\nnext\n", [False, True]),
-    ("<!-- a --> x\n`<!--`\nnext\n", [False, False, False]),
-    ("<https://example.com>\n`<!--`\nnext\n", [False, False, False]),
-], ids=["u2028", "u0085", "formfeed", "u2028-inline", "doctype", "cdata", "pi", "bom", "zwsp", "comment-tail",
-        "comment-tail-exempt", "autolink"])
-def test_c15_comment_scan_gate_rows(body, expected):
-    assert [row[3] for row in vs._comment_scan(body)] == expected
-
-
-@pytest.mark.parametrize("body, expected", [
-    ("plain text `<!--` here\n", False),
-    ("<div>\n", True),
-    ("x\n> - 1. <p>\n", True),
-    ("</details>\n", True),
-    ("<br/>\n", True),
-    ("<?php x\n", True),
-    ("<!DOCTYPE html>\n", True),
-    ("<!-- a comment -->\n", False),
-    ("  > <!-- a comment\n", False),
-    ("<https://example.com>\n", False),
-    ("- <mailto:a@b.c>\n", False),
-    ("a < b and <3\n", False),
-    ("x <div> mid-line\n", False),
-    (" <div>\n", True),
-    ("﻿<div>\n", True),
-    ("​<div>\n", True),
-    ("x <div>\n", True),
-], ids=["plain", "div", "marks", "closing", "self-closing", "pi", "doctype", "comment", "quoted-comment", "autolink",
-        "mailto-autolink", "lt-signs", "mid-line-tag", "nbsp", "bom", "zwsp", "after-u2028"])
-def test_c15_could_open_html_block(body, expected):
-    assert vs._could_open_html_block(body) is expected
-
-
-# --- J: review session 7 (test-s4-001): a splitlines-only line break turns the exemption off --------------------------
-# After a comment closes, the rest of its line is matched plainly, but that state resets at every str.splitlines()
-# boundary. U+2028, U+0085, a form feed and the other splitlines-only separators are not Markdown line endings, so a
-# quoted opener after one stays on the comment's closing line, where a browser opens a comment over the owner heading.
-# The body has no HTML-block line, so only the splitlines-only clause at the gate can switch the exemption off.
+# --- J: review session 7 (test-s4-001): a splitlines-only line break is no Markdown line end ----------------------------
+# After a comment closes, the rest of its line is raw HTML. U+2028, U+0085, a form feed and the other splitlines-only
+# separators are not Markdown line endings (md_fence.split_lines), so a quoted opener after one stays on the comment's
+# closing line, where GitHub opens a comment over the owner heading. md_hidden reads the lines Markdown does.
 
 J_NOT_READY_SLOT = "**Verdict: NOT-READY** · " + "a" * 40 + "\n\nNew owner half.\n"
 # the eight characters str.splitlines() breaks on and Markdown does not, written as escapes
@@ -518,20 +456,14 @@ def test_j2_the_lf_control_still_writes(tmp_path, entry):
 
 @pytest.mark.parametrize("sep", [s for _, s in J_SEPARATORS], ids=[i for i, _ in J_SEPARATORS])
 def test_j3_each_of_the_eight_splitlines_only_breaks_turns_the_exemption_off(sep):
-    # J3: dropping any one character from _SPLITLINES_ONLY_BREAKS turns its own case red
+    # J3: Markdown does not break a line on any of the eight, so the quoted opener stays inside the comment's line
     result = _j_evaluate(_j_body(sep))
     assert result["ok"] is False and result["reason"] == "body-emptied", result
 
 
 def test_j3_the_eight_characters_are_all_splitlines_breaks_and_none_is_a_markdown_line_ending():
-    # the constant's premise, read off the language: each one splits a line, none is CR or LF
+    # the premise, read off the language: each one splits a line for str.splitlines(), none is CR or LF
     for _, sep in J_SEPARATORS:
         assert len(("a" + sep + "b").splitlines()) == 2
         assert sep not in "\r\n"
     assert len(J_SEPARATORS) == 8
-
-
-def test_j4_a_body_without_a_splitlines_only_break_keeps_the_exemption():
-    # J4: an inline-code opener, no HTML-block line, no splitlines-only break: the exemption stays on
-    assert [row[3] for row in vs._comment_scan("a `<!--` b\nnext\n")] == [False, False]
-    assert [row[3] for row in vs._comment_scan("a \N{LINE SEPARATOR} `<!--` b\nnext\n")] == [False, False, True]
