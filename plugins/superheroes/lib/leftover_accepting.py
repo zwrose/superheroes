@@ -80,6 +80,9 @@ _TICKS = re.compile(r"`+")
 _OPENER = re.compile(r"<!--|<\?|<![A-Za-z]|<!\[")
 # the token that starts a fixed-above claim, counted on its own (case-insensitive) so a claim a cut removed is seen even when it wraps across lines
 _FIXED_ABOVE_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])fixed-above(?![A-Za-z0-9_])", re.IGNORECASE)
+# the two words of a fixed-above claim, matched apart, so a line that holds a claim split by a comment is still seen
+_FIXED_WORD = re.compile(r"fixed", re.IGNORECASE)
+_ABOVE_WORD = re.compile(r"above", re.IGNORECASE)
 # an ATX heading line (CommonMark: up to three spaces, one to six #, then a space, a tab or the line's end)
 _ATX_LINE = re.compile(r" {0,3}#{1,6}(?:[ \t\r\n]|\Z)")
 # the same minus the comment, which keeps the multi-line comment state below
@@ -202,13 +205,14 @@ def _visible_claim(body):
                 # axis: a code span closes only on a backtick run of exactly its own length
                 end = _code_span_end(line, i)
                 run = len(_TICKS.match(line, i).group(0))
-                kept.append(line[i:end if end is not None else i + run])
-                # axis: a code span whose content holds an opener keeps the span as text, then cuts the rest of the line (inside an HTML block GitHub honours no code span) — see bite-proof record i2389_leftover_visible_within_line.md
+                # axis: a code span whose content holds an opener keeps the span only up to that opener, then cuts the rest of the line, so text inside the span after the opener (which GitHub hides inside an HTML block, honouring no code span) never counts — see bite-proof record i2389_leftover_visible_within_line.md
                 quoted = _OPENER.search(line, i + run, end - run) if end is not None else None
-                i = end if end is not None else i + run
                 if quoted is not None:
-                    cut = i
+                    kept.append(line[i:quoted.start()])
+                    cut = end  # the tail read for comment state starts after the span: a quoted opener opens nothing
                     break
+                kept.append(line[i:end if end is not None else i + run])
+                i = end if end is not None else i + run
             elif line.startswith("<!--", i):
                 inside, i = True, i + 4
             # axis: an unescaped, unquoted processing instruction, declaration or CDATA opener cuts the rest of the line, GitHub's parser reads it as a bogus comment — see bite-proof record i2389_leftover_visible_within_line.md
@@ -234,9 +238,24 @@ def _visible_claim(body):
     text = "".join(out)
     # axis: a ``fixed-above`` claim the cuts removed (fewer tokens, or fewer whole claims over the whole text, so a wrapped one counts)
     # voids the body, whichever path removed it; the caller then accepts nothing — see bite-proof record i2389_leftover_visible_within_line.md
-    claim_removed = (len(_FIXED_ABOVE_TOKEN.findall(text)) < len(_FIXED_ABOVE_TOKEN.findall(body))
-                     or len(FIXED_ABOVE_RE.findall(text)) < len(FIXED_ABOVE_RE.findall(body)))
-    return text, claim_removed
+    void = (len(_FIXED_ABOVE_TOKEN.findall(text)) < len(_FIXED_ABOVE_TOKEN.findall(body))
+            or len(FIXED_ABOVE_RE.findall(text)) < len(FIXED_ABOVE_RE.findall(body)))
+    # axis: so does any line the cuts changed that holds both "fixed" and "above" in its source and whose whole claims differ before and
+    # after the cut (one removed, or one joined from fragments), so a joined claim elsewhere cannot balance the counts of one the cuts
+    # removed — see bite-proof record i2389_leftover_visible_within_line.md
+    void = void or any(out[n] != lines[n] and _FIXED_WORD.search(lines[n]) and _ABOVE_WORD.search(lines[n])
+                       and sorted(FIXED_ABOVE_RE.findall(out[n])) != sorted(FIXED_ABOVE_RE.findall(lines[n]))
+                       for n in range(len(lines)))
+    # axis: and so does a cut that changes the block role of any line md_hidden reads VISIBLE (its fence kind, or whether it is an
+    # ATX heading), because the section reader re-parses the cut text and a manufactured or lost fence or heading moves what it
+    # reads as the acceptance section — see bite-proof record i2389_leftover_visible_within_line.md
+    if not void:
+        out_bare = [item[:len(item) - len(_terminator(item))] for item in out]
+        out_kinds = md_fence.scan(out_bare).kinds
+        void = any(shown[n] and (out_kinds[n] != fence_kinds[n]
+                                 or bool(_ATX_LINE.match(out[n])) != bool(_ATX_LINE.match(lines[n])))
+                   for n in range(len(lines)))
+    return text, void
 
 
 def normalise_id(text):

@@ -152,14 +152,15 @@ def test_g2_code_span_opener_github_hides_f1_so_the_check_reports_it_missing(nam
 
 
 @pytest.mark.parametrize("source, expected", [
-    ("a `<!--` tail\n", "a `<!--`\n"),
-    ("a `<?` tail\n", "a `<?`\n"),
-    ("a `<!X` tail\n", "a `<!X`\n"),
-    ("a `<![` tail\n", "a `<![`\n"),
-    ("a `see <?x` tail\n", "a `see <?x`\n"),  # the opener is anywhere in the span's content
-    ("a ``<!-- ` -->`` tail\n", "a ``<!-- ` -->``\n"),  # a double-backtick span
-    ("a `<!--` tail\nnext -->\nz\n", "a `<!--`\nnext -->\nz\n"),  # no comment state carried to the next line
-    ("a `<!--` tail", "a `<!--`"),  # a last line with no terminator
+    # #2389 review (test-role s1): the span is kept only up to its opener, so text inside the span after the opener never counts
+    ("a `<!--` tail\n", "a `\n"),
+    ("a `<?` tail\n", "a `\n"),
+    ("a `<!X` tail\n", "a `\n"),
+    ("a `<![` tail\n", "a `\n"),
+    ("a `see <?x` tail\n", "a `see \n"),  # the opener is anywhere in the span's content
+    ("a ``<!-- ` -->`` tail\n", "a ``\n"),  # a double-backtick span
+    ("a `<!--` tail\nnext -->\nz\n", "a `\nnext -->\nz\n"),  # no comment state carried to the next line
+    ("a `<!--` tail", "a `"),  # a last line with no terminator
 ])
 def test_g2_code_span_opener_keeps_the_span_then_cuts_the_line(source, expected):
     out = la._visible(source)
@@ -466,6 +467,52 @@ def test_g10_claim_removed_a_tail_without_a_claim_does_not_void_the_body():
 def test_g10_claim_removed_the_text_and_the_flag_come_from_one_helper():
     source = "- F-1 x `<!--` fixed-above #99 abcdef0\n"
     text, removed = la._visible_claim(source)
-    assert removed is True and text == la._visible(source) == "- F-1 x `<!--`\n"
+    assert removed is True and text == la._visible(source) == "- F-1 x `\n"
 
 
+
+
+# --- Review session 3 round 1 (#2389): the structural guard (G12), the per-line claim check (G13), the in-span cut (G2) ---
+
+def test_g12_structure_a_fence_opener_swallowed_by_a_tail_comment_voids_the_body():
+    # cr-s1-001: the quoted tail opener sets the comment state, which swallows the fence opener below it; the fenced sample
+    # heading would then read as the live acceptance section, so a cut that changes a visible line's fence kind accepts nothing
+    body = ("## What we're accepting\n\nNone.\n\nNote `<?` and `<!--`\n```\n## What we're accepting\n"
+            "- F-1 The retry loop never backs off\n```\n")
+    assert la._accepting_items(body) == []
+    assert missing(body)
+
+
+def test_g12_structure_a_cut_that_manufactures_a_fence_opener_voids_the_body():
+    # seams-check: "```md <? ...`note" is text (a backtick in a backtick fence's info string); cutting at <? would make it a
+    # fence opener that fences the How to see it heading into the acceptance section
+    body = ("## What we're accepting\n\nNone.\n```md <?  `note\n## How to see it\n\n```\n"
+            "- F-1 The retry loop never backs off\n```\n")
+    assert la._accepting_items(body) == []
+    assert missing(body)
+
+
+def test_g12_structure_an_ordinary_inline_comment_cut_keeps_the_acceptances():
+    body = "## What we're accepting\n\n- F-1 The retry loop never backs off <!-- a note -->\n"
+    assert missing(body) == []
+
+
+def test_g13_claim_join_a_claim_joined_from_fragments_cannot_balance_a_removed_one():
+    # cr-s1-002 / tr-s1-002: the comment cut joins "fixed-" and "above #99" into a new claim while the cut after `<?` removes
+    # the real #98 claim; the counts balance, the per-line claim comparison does not
+    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; fixed-<!-- note -->above #99 abcdef0; "
+            "`<?` fixed-above #98 1234567\n")
+    assert la._accepting_items(body) == []
+    assert missing(body)
+
+
+def test_g13_claim_join_an_inline_comment_on_a_claim_line_keeps_the_claim():
+    body = "## What we're accepting\n\n- F-1 The retry loop never backs off <!-- a note --> fixed-above #99 abcdef0\n"
+    assert la._accepting_items(body) != []
+
+
+def test_g2_code_span_opener_text_inside_the_span_after_the_opener_never_counts():
+    # tr-s1-001: inside a raw HTML line GitHub hides the comment inside the apparent code span
+    body = "## What we're accepting\n\n<div>Quoting `<!-- F-1 The retry loop never backs off -->`\n</div>\n"
+    assert "F-1" not in la._visible(body)
+    assert missing(body)

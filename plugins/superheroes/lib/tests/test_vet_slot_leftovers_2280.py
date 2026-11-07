@@ -339,7 +339,8 @@ def test_an_escaped_comment_opener_is_shown_text():
 
 def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
     # #2389 V847-1: the span stays one span (no comment opens inside it), then the rest of the line is cut because the span holds `<!--`
-    assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` <!-- b --> c``\n"
+    # #2389 review (test-role s1): the span is kept only up to its opener, so the text inside it after the opener never counts
+    assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` \n"
 
 
 def test_ready_write_checks_the_body_it_will_publish(tmp_path):
