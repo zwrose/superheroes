@@ -72,7 +72,8 @@ def test_g1_visible_split_a_line_cut_to_nothing_keeps_its_own_terminator(ending)
 @pytest.mark.parametrize("ending", EOLS)
 def test_g1_visible_split_a_fence_opens_and_closes_under_every_line_ending(ending):
     source = eol("```\n<!-- shown -->\n```\n<!-- cut -->\nz\n", ending)
-    assert la._visible(source) == eol("```\n<!-- shown -->\n```\n\nz\n", ending)
+    # #2389 V847-1: a fenced line is cut at its first opener (rule 4), so the fenced `<!-- shown -->` is now cut too, as a tilde line inside a raw <pre> block is not a fence
+    assert la._visible(source) == eol("```\n\n```\n\nz\n", ending)
 
 
 # --- G2: _visible keeps nothing md_hidden does not read VISIBLE ------------------------------------------------

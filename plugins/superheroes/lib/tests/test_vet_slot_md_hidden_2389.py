@@ -380,12 +380,25 @@ def test_g5_builder_path_visibility_the_plain_body_still_writes(tmp_path):
 
 
 def test_g5_builder_path_visibility_an_internal_md_hidden_error_refuses_never_passes(monkeypatch):
-    def boom(_body):
-        raise RuntimeError("boom")
+    # The failure fires only on a scan of a text other than the builder's own BODY, i.e. on the composed body. Found by
+    # reading vet_slot.py: the only md_hidden reader before composition is check_not_emptied (it scans BODY itself); the
+    # leftover check (leftover_accepting._visible -> md_hidden.scan) runs in run_verb, not in evaluate. So the failure
+    # reaches the composed body's visibility check at vet_slot.py:911, and write-failed is the one reason that can refuse.
+    real_scan = md_hidden._scan
+    seen = []
 
-    monkeypatch.setattr(md_hidden, "_scan", boom)
+    def fail_composed(text):
+        if text != BODY:
+            seen.append(text)
+            raise RuntimeError("boom")
+        return real_scan(text)
+
+    monkeypatch.setattr(md_hidden, "_scan", fail_composed)
     result = _evaluate(BODY, receipt=RECEIPT)
-    assert result["ok"] is False and result["reason"] in ("body-emptied", "write-failed"), result
+    assert seen  # the composed body was scanned, and that scan failed
+    assert result["ok"] is False and result["reason"] == "write-failed", result
+    # md_hidden.scan reports an internal failure as an unsure point on every line, which _visibility_problem words so
+    assert "the render could not be decided" in result["detail"] and "so the slot would not render" in result["detail"], result
 
 
 def test_g4_bot_path_visibility_an_internal_md_hidden_error_refuses_never_passes(monkeypatch):

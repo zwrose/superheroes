@@ -302,14 +302,16 @@ def test_a_comment_opener_inside_a_code_span_is_shown_text(tmp_path):
     """code-005: a title that quotes the comment opener in a code span can still be named."""
     literal = dict(F1, title="Handle `<!--` literally")
     shown = body("- f-1 Handle `<!--` literally: merging accepts it.\n")
-    assert la.missing(read_ok(literal), shown) == []
-    assert handback(shown, [record_comment([literal])])["ok"] is True
-    result, _fake = write(shown, [RECEIPT, record_comment([literal])], tmp_path)
-    assert result["ok"] is True
+    # #2389 V847-1: a code span holding `<!--` keeps the span and cuts the rest of the line (over-cut accepted, fails toward a refusal), so the title's tail is lost
+    assert [g["id"] for g in la.missing(read_ok(literal), shown)] == ["f-1"]
+    assert handback(shown, [record_comment([literal])])["reason"] == "leftover-not-accepted"
+    result, fake = write(shown, [RECEIPT, record_comment([literal])], tmp_path)
+    assert result["reason"] == "leftover-not-accepted" and fake.edited == []
 
 
 def test_visible_keeps_fenced_text_and_marker_lines_and_drops_an_unclosed_comment():
-    assert la._visible("```\n<!-- shown -->\n```\n") == "```\n<!-- shown -->\n```\n"
+    # #2389 V847-1: a fenced line is cut at its first opener (a tilde line inside a raw <pre> block is not a fence), so the fenced `<!-- shown -->` is cut
+    assert la._visible("```\n<!-- shown -->\n```\n") == "```\n\n```\n"
     assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
     assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "a \n\n e\nf "
 
@@ -330,11 +332,13 @@ def test_a_comment_outside_any_real_code_span_or_fence_stays_hidden(accepting, t
 
 
 def test_an_escaped_comment_opener_is_shown_text():
-    assert la._visible("a \\<!-- b --> c\n") == "a \\<!-- b --> c\n"
+    # #2389 V847-1: the escaped opener and the backslash stay as text, then the rest of the line is cut (inside an HTML block GitHub honours no escape)
+    assert la._visible("a \\<!-- b --> c\n") == "a \\<!--\n"
 
 
 def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
-    assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` <!-- b --> c`` y\n"
+    # #2389 V847-1: the span stays one span (no comment opens inside it), then the rest of the line is cut because the span holds `<!--`
+    assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` <!-- b --> c``\n"
 
 
 def test_ready_write_checks_the_body_it_will_publish(tmp_path):

@@ -1,0 +1,95 @@
+{
+ "source": "GitHub POST /markdown renders made on the owner's machine for vets 845-847, copied from branch advisor/md-hidden-renders at 81b672f5",
+ "rows": [
+  {
+   "id": "f1_control_list_item",
+   "body": "Closes #1\n\n## What's changing, and why ZQOWN\n\nThe change, in owner terms.\n\n## What we're accepting\n\n- F-1 The retry loop never backs off: merging accepts slower recovery.\n\n## How to see it\n\nN/A\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n<!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference\n     pointer to the receipt. -->\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n### Follow-ups for the advisor\n\nFollow-ups: none\n<!-- superheroes:followups none -->\n\n</details>\n",
+   "html": "<p dir=\"auto\">Closes <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4607530117\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/1\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/1/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/1\">#1</a></p>\n<h2 dir=\"auto\">What's changing, and why ZQOWN</h2>\n<p dir=\"auto\">The change, in owner terms.</p>\n<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off: merging accepts slower recovery.</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n\n\n\n<details><summary>Build record</summary>\n<h3 dir=\"auto\">Follow-ups for the advisor</h3>\n<p dir=\"auto\">Follow-ups: none</p>\n\n</details>"
+  },
+  {
+   "id": "f1_details_codespan_closed",
+   "body": "Closes #1\n\n## What's changing, and why ZQOWN\n\nThe change, in owner terms.\n\n## What we're accepting\n\n<details><summary>Quoting `<!--` F-1 The retry loop never backs off --></summary>\n\nSlower recovery.\n</details>\n\n## How to see it\n\nN/A\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n\n**Verdict: READY** \u00b7 e18731af8c7be4e23f688859ff7b123ddaa78519 as a layer ZQVERDICT\n\nWhat was checked.\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n### Follow-ups for the advisor\n\nFollow-ups: none\n<!-- superheroes:followups none -->\n\n</details>\n",
+   "html": "<p dir=\"auto\">Closes <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4607530117\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/1\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/1/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/1\">#1</a></p>\n<h2 dir=\"auto\">What's changing, and why ZQOWN</h2>\n<p dir=\"auto\">The change, in owner terms.</p>\n<h2 dir=\"auto\">What we're accepting</h2>\n<details><summary>Quoting `</summary>\n<p dir=\"auto\">Slower recovery.</p>\n</details>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n\n<p dir=\"auto\"><strong>Verdict: READY</strong> \u00b7 <a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/zwrose/superheroes/commit/e18731af8c7be4e23f688859ff7b123ddaa78519/hovercard\" href=\"https://github.com/zwrose/superheroes/commit/e18731af8c7be4e23f688859ff7b123ddaa78519\"><tt>e18731a</tt></a> as a layer ZQVERDICT</p>\n<p dir=\"auto\">What was checked.</p>\n\n<details><summary>Build record</summary>\n<h3 dir=\"auto\">Follow-ups for the advisor</h3>\n<p dir=\"auto\">Follow-ups: none</p>\n\n</details>"
+  },
+  {
+   "id": "f1_details_codespan_unclosed",
+   "body": "Closes #1\n\n## What's changing, and why ZQOWN\n\nThe change, in owner terms.\n\n## What we're accepting\n\n<details><summary>Quoting `<!--` F-1 The retry loop never backs off</summary>\n\nmore\n</details>\n\n## How to see it\n\nN/A\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n<!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference\n     pointer to the receipt. -->\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n### Follow-ups for the advisor\n\nFollow-ups: none\n<!-- superheroes:followups none -->\n\n</details>\n",
+   "html": "<p dir=\"auto\">Closes <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4607530117\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/1\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/1/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/1\">#1</a></p>\n<h2 dir=\"auto\">What's changing, and why ZQOWN</h2>\n<p dir=\"auto\">The change, in owner terms.</p>\n<h2 dir=\"auto\">What we're accepting</h2>\n<details><summary>Quoting `\n\n\n<details><summary>Build record</summary>\n<h3 dir=\"auto\">Follow-ups for the advisor</h3>\n<p dir=\"auto\">Follow-ups: none</p>\n\n</details></summary></details>"
+  },
+  {
+   "id": "f1_div_comment_then_item",
+   "body": "Closes #1\n\n## What's changing, and why ZQOWN\n\nThe change, in owner terms.\n\n## What we're accepting\n\n<div>\n<!-- note\nb -->\n- F-1 The retry loop never backs off\n</div>\n\n## How to see it\n\nN/A\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n<!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference\n     pointer to the receipt. -->\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n### Follow-ups for the advisor\n\nFollow-ups: none\n<!-- superheroes:followups none -->\n\n</details>\n",
+   "html": "<p dir=\"auto\">Closes <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4607530117\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/1\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/1/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/1\">#1</a></p>\n<h2 dir=\"auto\">What's changing, and why ZQOWN</h2>\n<p dir=\"auto\">The change, in owner terms.</p>\n<h2 dir=\"auto\">What we're accepting</h2>\n<div dir=\"auto\">\n\n- F-1 The retry loop never backs off\n</div>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n\n\n\n<details><summary>Build record</summary>\n<h3 dir=\"auto\">Follow-ups for the advisor</h3>\n<p dir=\"auto\">Follow-ups: none</p>\n\n</details>"
+  },
+  {
+   "id": "f1_div_escaped_unclosed",
+   "body": "Closes #1\n\n## What's changing, and why ZQOWN\n\nThe change, in owner terms.\n\n## What we're accepting\n\n<div>Accepting \\<!-- F-1 The retry loop never backs off\n</div>\n\n## How to see it\n\nN/A\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n<!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference\n     pointer to the receipt. -->\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n### Follow-ups for the advisor\n\nFollow-ups: none\n<!-- superheroes:followups none -->\n\n</details>\n",
+   "html": "<p dir=\"auto\">Closes <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4607530117\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/1\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/1/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/1\">#1</a></p>\n<h2 dir=\"auto\">What's changing, and why ZQOWN</h2>\n<p dir=\"auto\">The change, in owner terms.</p>\n<h2 dir=\"auto\">What we're accepting</h2>\n<div dir=\"auto\">Accepting \\\n\n\n<details><summary>Build record</summary>\n<h3 dir=\"auto\">Follow-ups for the advisor</h3>\n<p dir=\"auto\">Follow-ups: none</p>\n\n</details></div>"
+  },
+  {
+   "id": "f1_div_codespan_unclosed",
+   "body": "Closes #1\n\n## What's changing, and why ZQOWN\n\nThe change, in owner terms.\n\n## What we're accepting\n\n<div>Accepting `<!--` F-1 The retry loop never backs off\n</div>\n\n## How to see it\n\nN/A\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n<!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference\n     pointer to the receipt. -->\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n### Follow-ups for the advisor\n\nFollow-ups: none\n<!-- superheroes:followups none -->\n\n</details>\n",
+   "html": "<p dir=\"auto\">Closes <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4607530117\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/1\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/1/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/1\">#1</a></p>\n<h2 dir=\"auto\">What's changing, and why ZQOWN</h2>\n<p dir=\"auto\">The change, in owner terms.</p>\n<h2 dir=\"auto\">What we're accepting</h2>\n<div dir=\"auto\">Accepting `\n\n\n<details><summary>Build record</summary>\n<h3 dir=\"auto\">Follow-ups for the advisor</h3>\n<p dir=\"auto\">Follow-ups: none</p>\n\n</details></div>"
+  },
+  {
+   "id": "f1_div_escaped_closed",
+   "body": "Closes #1\n\n## What's changing, and why ZQOWN\n\nThe change, in owner terms.\n\n## What we're accepting\n\n<div>Quoting \\<!-- F-1 The retry loop never backs off --></div>\n\n## How to see it\n\nN/A\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n\n**Verdict: READY** \u00b7 e18731af8c7be4e23f688859ff7b123ddaa78519 as a layer ZQVERDICT\n\nWhat was checked.\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n### Follow-ups for the advisor\n\nFollow-ups: none\n<!-- superheroes:followups none -->\n\n</details>\n",
+   "html": "<p dir=\"auto\">Closes <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4607530117\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/1\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/1/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/1\">#1</a></p>\n<h2 dir=\"auto\">What's changing, and why ZQOWN</h2>\n<p dir=\"auto\">The change, in owner terms.</p>\n<h2 dir=\"auto\">What we're accepting</h2>\n<div dir=\"auto\">Quoting \\</div>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n\n<p dir=\"auto\"><strong>Verdict: READY</strong> \u00b7 <a class=\"commit-link\" data-hovercard-type=\"commit\" data-hovercard-url=\"https://github.com/zwrose/superheroes/commit/e18731af8c7be4e23f688859ff7b123ddaa78519/hovercard\" href=\"https://github.com/zwrose/superheroes/commit/e18731af8c7be4e23f688859ff7b123ddaa78519\"><tt>e18731a</tt></a> as a layer ZQVERDICT</p>\n<p dir=\"auto\">What was checked.</p>\n\n<details><summary>Build record</summary>\n<h3 dir=\"auto\">Follow-ups for the advisor</h3>\n<p dir=\"auto\">Follow-ups: none</p>\n\n</details>"
+  },
+  {
+   "id": "decl_1",
+   "body": "x\n\n<!X a> <!--\n\n## ZQ1\n",
+   "html": "<p dir=\"auto\">x</p>\n "
+  },
+  {
+   "id": "pi_1",
+   "body": "x\n\n<? a ?> <!--\n\n## ZQ1\n",
+   "html": "<p dir=\"auto\">x</p>\n "
+  },
+  {
+   "id": "pi_2",
+   "body": "x <? a > b ?> y\n\n## ZQ1\n",
+   "html": "<p dir=\"auto\">x  b ?&gt; y</p>\n<h2 dir=\"auto\">ZQ1</h2>"
+  },
+  {
+   "id": "pi_3",
+   "body": "## a <? > <a t=\" ?>\n\n## ZQ1\n",
+   "html": "<h2 dir=\"auto\">a  </h2>"
+  },
+  {
+   "id": "pi_4",
+   "body": "x <? > <a title=\" ?> y\n\n## ZQ1\n",
+   "html": "<p dir=\"auto\">x  </p>"
+  },
+  {
+   "id": "pi_5",
+   "body": "x <? > <a title=' ?> y\n\n## ZQ1\n",
+   "html": "<p dir=\"auto\">x  </p>"
+  },
+  {
+   "id": "cdata_1",
+   "body": "x\n\n<![CDATA[ a ]]> <!--\n\n## ZQ1\n",
+   "html": "<p dir=\"auto\">x</p>\n "
+  },
+  {
+   "id": "cdata_2",
+   "body": "x <![CDATA[ a\nZQ1\n]]> y\n\n## ZQ2\n",
+   "html": "<p dir=\"auto\">x  y</p>\n<h2 dir=\"auto\">ZQ2</h2>"
+  },
+  {
+   "id": "pi_6",
+   "body": "x <? > <a title=\"q\" ?> y\n\n## ZQ1\n",
+   "html": "<p dir=\"auto\">x   y</p>\n<h2 dir=\"auto\">ZQ1</h2>"
+  },
+  {
+   "id": "decl_3",
+   "body": "x <!X a \"> <!-- \"> y\n\nZQ1\n\n## ZQ2\n",
+   "html": "<p dir=\"auto\">x  &lt;!-- \"&gt; y</p>\n<p dir=\"auto\">ZQ1</p>\n<h2 dir=\"auto\">ZQ2</h2>"
+  },
+  {
+   "id": "pi_7",
+   "body": "<?><![CDATA[\n\n## ZQ1\n' ---\n\n## ZQ2\n",
+   "html": "ZQ1\n<p dir=\"auto\">' ---</p>\n<h2 dir=\"auto\">ZQ2</h2>"
+  }
+ ]
+}

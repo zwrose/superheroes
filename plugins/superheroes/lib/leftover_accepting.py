@@ -75,6 +75,11 @@ def _leftovers(record):
 
 _MARKER_LINE = re.compile(r"^<!-- superheroes:[^>]*-->\s*$")
 _TICKS = re.compile(r"`+")
+# the openers GitHub's HTML parser reads as a comment-like run that hides the rest of the line (#2389 V847-1, BR684-2/3):
+# a comment, a processing instruction, a declaration (`<!` + an ASCII letter) or a CDATA section
+_OPENER = re.compile(r"<!--|<\?|<![A-Za-z]|<!\[")
+# the same minus the comment, which keeps the multi-line comment state below
+_PI_OPENER = re.compile(r"<\?|<![A-Za-z]|<!\[")
 
 
 def _code_span_end(line, i):
@@ -94,14 +99,26 @@ def _terminator(line):
 
 
 def _visible(body):
-    """The body as it renders, for matching: every HTML comment (one that spans lines included) is cut out, while a
-    comment delimiter inside a fenced block (``md_fence``'s CommonMark rules), an inline code span, or after a
-    backslash escape is shown text and stays. A whole-line ``superheroes:`` marker is kept, so the section reader still
-    finds the build-record boundary. Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so
-    U+2028, U+2029, U+0085, VT, FF, FS, GS and RS are ordinary characters inside one. The result is also cut to
-    ``md_hidden``'s reading (#2389): a line whose start ``md_hidden.scan`` does not read VISIBLE (hidden or unsure) keeps
-    only its line terminator, a marker line excepted, so text GitHub renders hidden is never kept; this only ever cuts
-    more than the comment cut alone."""
+    """The body reduced to text the leftover check may count; every change below only removes text, so a miss fails toward
+    a ``leftover-not-accepted`` refusal and never toward a pass.
+
+    * Every HTML comment (one that spans lines included) is cut out. A whole-line ``superheroes:`` marker is kept, so the
+      section reader still finds the build-record boundary.
+    * A line whose start ``md_hidden.scan`` does not read VISIBLE (hidden or unsure) keeps only its line terminator, a
+      marker line excepted (#2389).
+    * Within a line that is kept (#2389 V847-1, BR684-2, BR684-3), the rest of the line is cut, with no comment state
+      carried to later lines, starting at the first of: a backslash escaping an opener (``\\<!--``, ``\\<?``,
+      ``\\<!X``, ``\\<![``; the backslash and the opener stay), an inline code span whose content holds an opener (the
+      span stays), an unescaped, unquoted processing instruction, declaration or CDATA opener (``<?``, ``<!`` + an
+      ASCII letter, ``<![``), and, on a line ``md_fence`` calls fenced, the first opener of any of these kinds or
+      ``<!--`` (a raw HTML block such as ``<pre>`` makes a tilde line text, not a fence, so a fenced line is not
+      trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole.
+    * Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so U+2028, U+2029, U+0085, VT, FF,
+      FS, GS and RS are ordinary characters inside one.
+
+    Not modelled: the cut over-reaches where GitHub would show the tail (an opener in a plain paragraph, or in a real
+    fenced block), which is accepted because it fails toward a refusal; and an inline raw tag other than these openers
+    is not read, so a tail such a tag hides within a line is kept."""
     lines = md_fence.split_lines(body)
     # axis: lines break only on Markdown endings (never U+2028 and the other str.splitlines breaks), and the fence scan
     # reads each line with exactly one terminator removed — see bite-proof record i2389_scanner_line_boundaries.md
@@ -123,7 +140,12 @@ def _visible(body):
         # axis: a fenced line (by md_fence's rules) is shown text; a comment open across it stays open
         if fenced[n] and not inside:
             # axis: a fenced line md_hidden does not read VISIBLE keeps only its terminator — see bite-proof record i2389_scanner_line_boundaries.md
-            out.append(line if shown[n] else term)
+            if not shown[n]:
+                out.append(term)
+                continue
+            # axis: on a fenced line the first opener (comment, PI, declaration, CDATA) cuts the rest of the line, as a raw HTML block makes a tilde line text, not a fence — see bite-proof record i2389_leftover_visible_within_line.md
+            opener = _OPENER.search(line)
+            out.append(line if opener is None else line[:opener.start()] + term)
             continue
         kept, i = [], 0
         while i < len(line):
@@ -136,6 +158,11 @@ def _visible(body):
                 inside, i = False, end + 3
             elif line[i] == "\\" and i + 1 < len(line):
                 # axis: an escaped character (a backtick or a `<`) is literal text, never a delimiter
+                # axis: a backslash before an opener keeps both as text, then cuts the rest of the line (inside an HTML block GitHub honours no escape) — see bite-proof record i2389_leftover_visible_within_line.md
+                escaped = _OPENER.match(line, i + 1)
+                if escaped is not None:
+                    kept.append(line[i:i + 1 + len(escaped.group(0))])
+                    break
                 kept.append(line[i:i + 2])
                 i += 2
             elif line[i] == "`":
@@ -143,9 +170,16 @@ def _visible(body):
                 end = _code_span_end(line, i)
                 run = len(_TICKS.match(line, i).group(0))
                 kept.append(line[i:end if end is not None else i + run])
+                # axis: a code span whose content holds an opener keeps the span as text, then cuts the rest of the line (inside an HTML block GitHub honours no code span) — see bite-proof record i2389_leftover_visible_within_line.md
+                quoted = _OPENER.search(line, i + run, end - run) if end is not None else None
                 i = end if end is not None else i + run
+                if quoted is not None:
+                    break
             elif line.startswith("<!--", i):
                 inside, i = True, i + 4
+            # axis: an unescaped, unquoted processing instruction, declaration or CDATA opener cuts the rest of the line, GitHub's parser reads it as a bogus comment — see bite-proof record i2389_leftover_visible_within_line.md
+            elif _PI_OPENER.match(line, i):
+                break
             else:
                 kept.append(line[i])
                 i += 1
