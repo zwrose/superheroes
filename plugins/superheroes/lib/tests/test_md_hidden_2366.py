@@ -902,31 +902,64 @@ def _corpus_judge(body):
     return out
 
 
+def _corpus_fail_open(body):
+    """The (body, line index, line) entries of ``body`` where GitHub hides a sentinel line and md_hidden reads it VISIBLE."""
+    rendering = md.scan(body)
+    return [(body, index, item) for index, offset, item, sentinels, shows in _corpus_judge(body)
+            if not shows and rendering.state_at(offset) == V]
+
+
+def _corpus_false_hidden(body):
+    """The (body, line index, line) entries of ``body`` where GitHub shows a sentinel line and md_hidden reads it HIDDEN."""
+    rendering = md.scan(body)
+    return [(body, index, item) for index, offset, item, sentinels, shows in _corpus_judge(body)
+            if shows and rendering.state_at(offset) == H]
+
+
+# Corpus bodies the advisor declined (each key is a corpus body, each value the ruling). An exception never outlives its
+# cause: the tests below assert each declined body still fails the plain check.
+_CORPUS_DECLINED = {
+    'x\n\n[ZQ1]: /u\n\n## ZQ2\n': "vet 846 F7, declined by the advisor: a link reference definition renders nothing on "
+                                  "GitHub and md_hidden reads it as text; no heading, marker or verdict line can be one",
+}
+_CORPUS_DECLINED_FALSE_HIDDEN = {
+    'x\n\n<svg>\n\n<![CDATA[ x > <!-- y ]]>\n\n## ZQ1\n': "vet 845 F4(c), declined by the advisor: CDATA inside "
+                                                          "``<svg>`` is foreign content, which md_hidden reads as a bogus "
+                                                          "comment; it fails closed",
+}
+
+
 def test_corpus_no_line_github_hides_reads_visible():
     """The bound's check: advisor's corpus, ``md_hidden_github_corpus_2388.json`` (660 bodies, GitHub's own renders). A line
-    with a sentinel word that GitHub's visible text lacks is hidden by GitHub and must not read VISIBLE."""
+    with a sentinel word that GitHub's visible text lacks is hidden by GitHub and must not read VISIBLE. One body is
+    declined by the advisor (``_CORPUS_DECLINED``) and must still fail the plain check."""
     assert len(_CORPUS) == 660
+    assert list(_CORPUS_DECLINED) == ['x\n\n[ZQ1]: /u\n\n## ZQ2\n']
+    for declined in _CORPUS_DECLINED:
+        assert declined in _CORPUS, "declined body is not in the advisor's corpus: %r" % (declined,)
+        assert _corpus_fail_open(declined) != [], "declined body no longer fails: drop it from _CORPUS_DECLINED: %r" % (declined,)
     failing = []
     for body in _CORPUS:
-        rendering = md.scan(body)
-        for index, offset, item, sentinels, shows in _corpus_judge(body):
-            if not shows and rendering.state_at(offset) == V:
-                failing.append((body, index, item))
+        if body in _CORPUS_DECLINED:
+            continue
+        failing.extend(_corpus_fail_open(body))
     assert failing == [], "%d fail-open (body, line index, line):\n%s" % (
         len(failing), "\n".join(repr(entry) for entry in failing))
 
 
-@pytest.mark.xfail(strict=True, reason="1 false-hidden line in the corpus: a CDATA section inside <svg> (foreign content), "
-                   "which the tokenizer reads as a bogus comment; it fails closed")
 def test_corpus_no_line_github_shows_reads_hidden():
     """The reverse check (fails closed, so it is not the bound): advisor's corpus, ``md_hidden_github_corpus_2388.json``.
-    A line whose sentinel words all appear in GitHub's visible text must not read HIDDEN."""
+    A line whose sentinel words all appear in GitHub's visible text must not read HIDDEN. One body is declined by the
+    advisor (``_CORPUS_DECLINED_FALSE_HIDDEN``) and must still fail the plain check."""
+    assert list(_CORPUS_DECLINED_FALSE_HIDDEN) == ['x\n\n<svg>\n\n<![CDATA[ x > <!-- y ]]>\n\n## ZQ1\n']
+    for declined in _CORPUS_DECLINED_FALSE_HIDDEN:
+        assert declined in _CORPUS, "declined body is not in the advisor's corpus: %r" % (declined,)
+        assert _corpus_false_hidden(declined) != [], "declined body no longer fails: drop it from _CORPUS_DECLINED_FALSE_HIDDEN: %r" % (declined,)
     failing = []
     for body in _CORPUS:
-        rendering = md.scan(body)
-        for index, offset, item, sentinels, shows in _corpus_judge(body):
-            if shows and rendering.state_at(offset) == H:
-                failing.append((body, index, item))
+        if body in _CORPUS_DECLINED_FALSE_HIDDEN:
+            continue
+        failing.extend(_corpus_false_hidden(body))
     assert failing == [], "%d false-hidden (body, line index, line):\n%s" % (
         len(failing), "\n".join(repr(entry) for entry in failing))
 

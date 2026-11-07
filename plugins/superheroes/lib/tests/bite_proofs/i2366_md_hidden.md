@@ -1211,12 +1211,279 @@ these six neutralizations produces).
 
 ## Fix leg 2 (vet 846)
 
-- **Status: bite-proofs not run.** After the inline pass the corpus test `test_corpus_no_line_github_hides_reads_visible`
-  still fails on one line: body `'x\n\n[ZQ1]: /u\n\n## ZQ2\n'`, line index 2 (`[ZQ1]: /u`, a link reference definition,
-  which GitHub does not render and which is not an inline raw-HTML construct). The order's bound applied: no point patch,
-  stop, report to the builder.
-- Owed and not applied: C1 (inline pass applied to text blocks), C2 (code spans skipped), C3 (comment-state line start
-  inside a construct reads HIDDEN), C4 (tag/bogus state at a line start is unsure), C5 (end-of-construct unsure), C6 (F8).
-- Test of record for the state of the tree: `test_md_hidden_2366.py` ends `1 failed, 467 passed, 28 skipped, 1 xfailed`;
-  the one failure is the bound test above, the xfail is `test_corpus_no_line_github_shows_reads_hidden` (1 false-hidden
-  line, an `<svg>` CDATA section; it fails closed).
+- **Status: bite-proofs C1–C7 run** (work order WO-4b). The two corpus bodies the advisor declined are pinned in
+  `test_md_hidden_2366.py` as `_CORPUS_DECLINED` (vet 846 F7: `'x\n\n[ZQ1]: /u\n\n## ZQ2\n'`, a link reference definition)
+  and `_CORPUS_DECLINED_FALSE_HIDDEN` (vet 845 F4(c): `'x\n\n<svg>\n\n<![CDATA[ x > <!-- y ]]>\n\n## ZQ1\n'`, CDATA inside
+  `<svg>`). Each corpus test asserts its mapping holds exactly that one body, that the body is in the corpus, and that it
+  **still fails** the plain check (so an exception never outlives its cause); every other body passes both directions.
+  The `xfail` on `test_corpus_no_line_github_shows_reads_hidden` is removed.
+- Test of record for the state of the tree: `test_md_hidden_2366.py` ends `469 passed, 28 skipped`;
+  `test_md_fence.py` ends `76 passed`. Every neutralization below was restored by the inverse edit; `md_hidden.py` is
+  byte-identical to `fda82205` (`git diff --stat` lists only the test file).
+- All raw captures below are under the 32 KiB ceiling. Where a capture is shortened, the elision is said in place.
+
+### C1: the inline pass is applied to text blocks
+
+- **Guarded element / axis:** `md_hidden.py:801`, the call `_inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure)` (axis C1): every raw-HTML construct inside a paragraph or other text block is read.
+- **Neutralization:** the call at `:801` became `pass  # C1 NEUTRALIZED`.
+- **Raw red** (`test_corpus_no_line_github_hides_reads_visible`, `test_f5_a_comment_across_paragraph_lines_hides_the_lines_inside`,
+  `test_f5_a_comment_across_paragraph_lines_with_two_hidden_lines_and_a_sentinel_after_the_closer`,
+  `test_f5_a_setext_heading_paragraph_holding_a_multi_line_comment`, `test_f5_the_leftovers_shape_does_not_read_visible`),
+  shortened: the corpus test's list of 61 `fail-open` entries is cut to its first 3 (58 entries elided), and each test's
+  source listing is cut to its failing line:
+
+```
+FFFFF                                                                    [100%]
+E       AssertionError: 61 fail-open (body, line index, line):
+E         ('# x <a b=\x0b"> <!-- "> y\n\nZQ1\n\n## ZQ2\n', 2, 'ZQ1\n')
+E         ('# x <a b=\x0b"> <!-- "> y\n\nZQ1\n\n## ZQ2\n', 4, '## ZQ2\n')
+E         ('## H <!-- a -->\n\nb <!-- c\nZQ1 d -->\n\n## ZQ2\n', 3, 'ZQ1 d -->\n')
+E       Left contains 61 more items, first extra item: ('# x <a b=\x0b"> <!-- "> y\n\nZQ1\n\n## ZQ2\n', 2, 'ZQ1\n')
+test_md_hidden_2366.py:946: AssertionError
+>       assert _state(body, "ZQ1") == H
+E       AssertionError: assert 'visible' == 'hidden'
+test_md_hidden_2366.py:973: AssertionError
+>       assert _state(body, "ZQ1") == H and _state(body, "ZQ2") == H
+E       AssertionError: assert ('visible' == 'hidden'
+test_md_hidden_2366.py:984: AssertionError
+>       assert _state(body, "ZQ1") == H
+E       AssertionError: assert 'visible' == 'hidden'
+test_md_hidden_2366.py:1026: AssertionError
+>       assert _state(body, "F1 the retry loop ZQ1") in (H, U)
+E       assert 'visible' in ('hidden', 'unsure')
+test_md_hidden_2366.py:1035: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_corpus_no_line_github_hides_reads_visible
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_comment_across_paragraph_lines_hides_the_lines_inside
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_comment_across_paragraph_lines_with_two_hidden_lines_and_a_sentinel_after_the_closer
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_setext_heading_paragraph_holding_a_multi_line_comment
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_the_leftovers_shape_does_not_read_visible
+5 failed in 0.62s
+```
+
+- **Restore:** inverse Edit, `pass  # C1 NEUTRALIZED` back to the `_inline_pass(...)` call.
+- **Restore receipt:** the file search returned `801:                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure)`.
+- **Raw green** (same five node ids):
+
+```
+.....                                                                    [100%]
+5 passed in 0.57s
+```
+
+### C2: code spans are skipped
+
+- **Guarded element / axis:** `md_hidden.py:672`, `i = closed if closed >= 0 else end` (axis C2): a backtick run that closes is skipped whole, so a `<!--` inside a code span is no comment.
+- **Neutralization:** `:672` became `i = end` (the scan continues inside the span).
+- **Raw red** (`test_f5_c2_a_code_span_opener_is_no_comment_even_with_a_later_closer`), source listing cut to the failing line:
+
+```
+F                                                                        [100%]
+>       assert _state(body, "ZQ1") == V
+E       AssertionError: assert 'hidden' == 'visible'
+E         - visible
+E         + hidden
+test_md_hidden_2366.py:1090: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_c2_a_code_span_opener_is_no_comment_even_with_a_later_closer
+1 failed in 0.44s
+```
+
+- **Restore:** inverse Edit, `i = end` back to `i = closed if closed >= 0 else end`.
+- **Restore receipt:** the file search returned `672:            i = closed if closed >= 0 else end`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.41s
+```
+
+### C3: a comment-state line start inside a construct reads HIDDEN
+
+- **Guarded element / axis:** `md_hidden.py:734-738`, the `state == _COMMENT` branch of the per-line loop in `_inline_pass` (axis C3): a line that starts inside an inline comment is hidden (or unsure per C6).
+- **Neutralization:** the branch body (the `_comment_line_state` test, `line_unsure.add`, `hidden_lines.add`) became `pass  # C3 NEUTRALIZED`, so the line keeps the default VISIBLE.
+- **Raw red** (the same five node ids as C1), shortened the same way (11 `fail-open` entries, cut to the first 3, 8 elided):
+
+```
+FFFFF                                                                    [100%]
+E       AssertionError: 11 fail-open (body, line index, line):
+E         ('## H <!-- a -->\n\nb <!-- c\nZQ1 d -->\n\n## ZQ2\n', 3, 'ZQ1 d -->\n')
+E         ("## What we're accepting\n\nLeftovers: <!-- draft list\nF1 the retry loop ZQ1\n-->\n- F2 ZQ2\n", 3, 'F1 the retry loop ZQ1\n')
+E         ('- a <!-- b\n  ZQ1\n  --> c\n\n## ZQ2\n', 1, '  ZQ1\n')
+E       Left contains 11 more items, first extra item: ('## H <!-- a -->\n\nb <!-- c\nZQ1 d -->\n\n## ZQ2\n', 3, 'ZQ1 d -->\n')
+test_md_hidden_2366.py:946: AssertionError
+E       AssertionError: assert 'visible' == 'hidden'      (:973, test_f5_a_comment_across_paragraph_lines_hides_the_lines_inside)
+E       AssertionError: assert ('visible' == 'hidden'     (:984, ..._with_two_hidden_lines_and_a_sentinel_after_the_closer)
+E       AssertionError: assert 'visible' == 'hidden'      (:1026, test_f5_a_setext_heading_paragraph_holding_a_multi_line_comment)
+E       assert 'visible' in ('hidden', 'unsure')          (:1035, test_f5_the_leftovers_shape_does_not_read_visible)
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_corpus_no_line_github_hides_reads_visible
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_comment_across_paragraph_lines_hides_the_lines_inside
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_comment_across_paragraph_lines_with_two_hidden_lines_and_a_sentinel_after_the_closer
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_setext_heading_paragraph_holding_a_multi_line_comment
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_the_leftovers_shape_does_not_read_visible
+5 failed in 0.49s
+```
+
+  (The four `E` lines after the first block are a compaction of four separate tracebacks, written as `E` line plus node; the
+  run printed each with its full source listing.)
+- **Restore:** inverse Edit, `pass  # C3 NEUTRALIZED` back to the four-line `if _comment_line_state(lines[k]) == UNSURE: ... else: hidden_lines.add(first + k)`.
+- **Restore receipt:** the file read at `:734-738` returned `if state == _COMMENT:` / `if _comment_line_state(lines[k]) == UNSURE:` / `line_unsure.add(first + k)` / `else:` / `hidden_lines.add(first + k)`.
+- **Raw green** (same five node ids):
+
+```
+.....                                                                    [100%]
+5 passed in 0.43s
+```
+
+  C1 and C3 turn the same five tests red by different routes (C1 never runs the pass; C3 runs it and drops the comment-line
+  result). The tests do not tell the two apart, and the set of reds is the order's own expectation for both.
+
+### C4: a tag or bogus state at a line start inside a construct is unsure
+
+- **Guarded element / axis:** `md_hidden.py:739-740`, `elif state != _DATA: sure_points.add(...)` (axis C4): a line that starts inside a tag or a bogus comment of an inline construct is an unsure point.
+- **Neutralization:** `:739` `elif state != _DATA:` became `elif False and state != _DATA:  # C4 NEUTRALIZED`.
+- **Raw red** (`test_f5_a_double_quoted_value_across_list_item_lines_reads_unsure`, `test_f5_a_single_quoted_value_across_paragraph_lines_reads_unsure`, `test_f5_an_unquoted_value_ended_by_a_line_break_reads_unsure`), source listings cut to the failing line:
+
+```
+FFF                                                                      [100%]
+>       assert _state(body, "  ZQ1") == U
+E       AssertionError: assert 'visible' == 'unsure'
+test_md_hidden_2366.py:992: AssertionError
+>       assert _state(body, "ZQ1") == U
+E       AssertionError: assert 'visible' == 'unsure'
+test_md_hidden_2366.py:1002: AssertionError
+>       assert _state(body, "ZQ1") == U
+E       AssertionError: assert 'visible' == 'unsure'
+test_md_hidden_2366.py:1010: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_double_quoted_value_across_list_item_lines_reads_unsure
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_a_single_quoted_value_across_paragraph_lines_reads_unsure
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f5_an_unquoted_value_ended_by_a_line_break_reads_unsure
+3 failed in 0.37s
+```
+
+- **Restore:** inverse Edit, `elif False and state != _DATA:  # C4 NEUTRALIZED` back to `elif state != _DATA:`.
+- **Restore receipt:** the file search returned `739:                elif state != _DATA:`.
+- **Raw green** (same three node ids):
+
+```
+...                                                                      [100%]
+3 passed in 0.33s
+```
+
+  The pi/cdata cross-line test `test_f5_an_inline_pi_or_cdata_across_lines_reads_unsure` was not in the order's list and was not run under C4.
+
+### C5: the end-of-construct disagreement is unsure
+
+- **Guarded element / axis:** `md_hidden.py:745-746`, the `state != _DATA` clause of `if state != _DATA or (is_tag and "\v" in construct): sure_points.add(...)` (axis C5): a construct that HTML parsing ends in a state other than `_DATA` makes the line that holds cmark's end of it an unsure point.
+- **Neutralization:** `:745` became `if False or (is_tag and "\v" in construct):  # C5 NEUTRALIZED` (the vertical-tab clause is left, because it is C7's element).
+- **Raw red** (`test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure`, `test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure`, `test_unsure_inline_processing_instruction_ended_early_by_html`), shortened: the four `f3b` tracebacks are the same assertion and each prints its source listing, cut here to the failing line:
+
+```
+........FFFFF                                                            [100%]
+>       assert _state(body, "## H") == U, "unsure=%r" % (md.scan(body).unsure,)
+E       AssertionError: unsure=()
+E       assert 'visible' == 'unsure'
+test_md_hidden_2366.py:808: AssertionError          (x4: [pi-dq], [pi-sq], [cdata-dq], [cdata-sq])
+>       assert any(offset == at for offset, _ in rendering.unsure), rendering.unsure
+E       AssertionError: ()
+E       assert False
+test_md_hidden_2366.py:283: AssertionError          (test_unsure_inline_processing_instruction_ended_early_by_html, via _check_unsure at :407)
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[pi-dq]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[pi-sq]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[cdata-dq]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet845_f3b_text_after_the_first_gt_of_an_inline_pi_or_cdata_reads_unsure[cdata-sq]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_unsure_inline_processing_instruction_ended_early_by_html
+5 failed, 8 passed in 0.46s
+```
+
+  **The order expected `test_vet845_f3a_*` red; it is not.** All eight `f3a` cases (`para`, `atx`, `item`, `cell` x `vtab-name`, `vtab-value`)
+  stay green under C5 alone, because each opener is a tag holding a vertical tab, so C7's clause (`is_tag and "\v" in construct`)
+  still raises the unsure point. `f3a` therefore does not discriminate the `state != _DATA` clause: it proves the pair of clauses
+  together. Supplementary run, not C5's own proof: with both clauses removed (`:745` became `if False:  # C5+C7 NEUTRALIZED`),
+  `f3a` alone (`--tb=line`) went red, all eight cases:
+
+```
+FFFFFFFF                                                                 [100%]
+E   AssertionError: unsure=()
+    assert 'visible' == 'unsure'
+test_md_hidden_2366.py:796: AssertionError: unsure=()          (x8, one per case)
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[para-vtab-name]
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[para-vtab-value]
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[atx-vtab-name]
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[atx-vtab-value]
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[item-vtab-name]
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[item-vtab-value]
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[cell-vtab-name]
+FAILED ...::test_vet845_f3a_a_vertical_tab_inside_an_inline_tag_reads_unsure[cell-vtab-value]
+8 failed in 0.32s
+```
+
+  (the `FAILED ...::` lines are shortened from the full `plugins/superheroes/lib/tests/test_md_hidden_2366.py::` prefix.)
+  The `state != _DATA` clause is proven by the `f3b` and `test_unsure_inline_processing_instruction_ended_early_by_html` reds
+  (5 cases); `f3a` is **unproven for that clause alone** (redundant with C7's clause; the test was not edited).
+- **Restore:** inverse Edit, `:745` back to `if state != _DATA or (is_tag and "\v" in construct):`.
+- **Restore receipt:** the file search returned `745:        if state != _DATA or (is_tag and "\v" in construct):`.
+- **Raw green** (the three C5 node ids, all `f3a` cases included):
+
+```
+.............                                                            [100%]
+13 passed in 0.34s
+```
+
+### C6: F8, a comment-state line with text after its closer reads UNSURE
+
+- **Guarded element / axis:** `md_hidden.py:696`, `return UNSURE` in `_comment_line_state` (axis C6, vet 846 F8): GitHub shows the text after a comment closer, so that line is not HIDDEN.
+- **Neutralization:** `:696` `return UNSURE` became `return HIDDEN  # C6 NEUTRALIZED`.
+- **Raw red** (`test_f8_a_line_that_closes_a_comment_in_html_block_content_shows_its_tail`, `test_f8_a_closer_with_nothing_after_it_stays_hidden_and_a_bang_closer_counts`), source listings cut to the failing line:
+
+```
+FF                                                                       [100%]
+>       assert _state(body, "ZQ1 --> ZQ2") == U
+E       AssertionError: assert 'hidden' == 'unsure'
+test_md_hidden_2366.py:1114: AssertionError
+>       assert _state("<div>\n<!-- a\nZQ1 --!> ZQ2\n</div>\n\n## H\n", "ZQ1 --!> ZQ2") == U
+E       AssertionError: assert 'hidden' == 'unsure'
+test_md_hidden_2366.py:1123: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f8_a_line_that_closes_a_comment_in_html_block_content_shows_its_tail
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_f8_a_closer_with_nothing_after_it_stays_hidden_and_a_bang_closer_counts
+2 failed in 0.36s
+```
+
+- **Restore:** inverse Edit, `return HIDDEN  # C6 NEUTRALIZED` back to `return UNSURE`.
+- **Restore receipt:** the file read at `:689-697` returned `if line[at + width:].strip(_ASCII_WS):` / `return UNSURE` / `return HIDDEN`.
+- **Raw green** (same two node ids):
+
+```
+..                                                                       [100%]
+2 passed in 0.34s
+```
+
+  The same `_comment_line_state` also serves the inline pass, so C6 would also turn the `--> c` assertions of the `test_f5_*`
+  comment tests red; those were not run under C6.
+
+### C7: a vertical tab inside a tag construct is unsure
+
+- **Guarded element / axis:** `md_hidden.py:745`, the `(is_tag and "\v" in construct)` clause (axis C7, added in WO-4): a tag construct holding a vertical tab is an unsure point, as the earlier conservative reading (cmark takes `\v` as tag whitespace, HTML parsing does not).
+- **Neutralization:** `:745` became `if state != _DATA or (False and is_tag and "\v" in construct):  # C7 NEUTRALIZED`.
+- **Raw red** (`test_review_s2_r2_a_vertical_tab_inside_a_quoted_value_still_reads_unsure`), source listing cut to the failing line:
+
+```
+F                                                                        [100%]
+>       assert _state('x <a title="p\vq"> y\n\n## H\n', "## H") == U
+E       AssertionError: assert 'visible' == 'unsure'
+test_md_hidden_2366.py:851: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_review_s2_r2_a_vertical_tab_inside_a_quoted_value_still_reads_unsure
+1 failed in 0.35s
+```
+
+  The red is on the first assertion (`:851`); the later assertions of the test were not reached.
+- **Restore:** inverse Edit, `False and ` removed and the `# C7 NEUTRALIZED` comment dropped.
+- **Restore receipt:** an end-of-work file search for `NEUTRALIZED|if state != _DATA or` returned only `745:        if state != _DATA or (is_tag and "\v" in construct):` (no neutralization marker left in the file), and `git diff --stat` does not list `md_hidden.py`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.33s
+```
+
+### Findings for the builder (detector, not changed)
+
+- C5 and C7 share one condition (`:745`); `test_vet845_f3a_*` is red only when both are removed, so no test in the order's list proves the `state != _DATA` clause through a vertical-tab tag. The `f3b` and `..._ended_early_by_html` tests prove it through a bogus comment.
+- C1 and C3 turn the same five tests red; the tests cannot tell a skipped pass from a dropped comment-line result.
