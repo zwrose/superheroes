@@ -1208,3 +1208,15 @@ Findings for the builder (detector, not changed): the F1 red covers the three co
 of the 12 is not shown to bite alone, since every case went red in this one neutralization); B5 proves the `re.A` on
 `_HTML_T6` only; the F2 control and the F3 controls were not neutralized (they guard against false-unsure, which none of
 these six neutralizations produces).
+
+## Fix leg 2 (vet 846)
+
+- **Status: bite-proofs not run.** After the inline pass the corpus test `test_corpus_no_line_github_hides_reads_visible`
+  still fails on one line: body `'x\n\n[ZQ1]: /u\n\n## ZQ2\n'`, line index 2 (`[ZQ1]: /u`, a link reference definition,
+  which GitHub does not render and which is not an inline raw-HTML construct). The order's bound applied: no point patch,
+  stop, report to the builder.
+- Owed and not applied: C1 (inline pass applied to text blocks), C2 (code spans skipped), C3 (comment-state line start
+  inside a construct reads HIDDEN), C4 (tag/bogus state at a line start is unsure), C5 (end-of-construct unsure), C6 (F8).
+- Test of record for the state of the tree: `test_md_hidden_2366.py` ends `1 failed, 467 passed, 28 skipped, 1 xfailed`;
+  the one failure is the bound test above, the xfail is `test_corpus_no_line_github_shows_reads_hidden` (1 false-hidden
+  line, an `<svg>` CDATA section; it fails closed).

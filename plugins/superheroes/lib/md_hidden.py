@@ -62,7 +62,6 @@ _TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z")
 _FOOTNOTE = re.compile(r"[ ]{0,3}\[\^[^\]\s]+\]:")
 _VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)
 _TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I | re.A)
-_TAG_OPENER = re.compile(r"</?[A-Za-z]")
 
 _COMMENT_RUN = re.compile(r"<!--.*?(?:-->|--!>)", re.S)
 _TAG_RUN = re.compile(r"<[^>]*>")
@@ -615,42 +614,136 @@ def _closer_after_lt(text):
     return at >= 0 and (text.find("-->", at) >= 0 or text.find("--!>", at) >= 0)
 
 
-def _runs_past_its_end(text):
-    """True when an inline processing instruction or CDATA section is followed by a ``>`` and then any ``<``: the
-    HTML parser ends such a chunk (a bogus comment) at the first ``>``, earlier than the Markdown parser does, and a
-    later ``<`` can open a comment or an unclosed attribute quote.
+# --- The inline raw-HTML pass (fix leg 2, vet 846 F5/F6/F8) -------------------------------------------------------------
 
-    A narrow check, not an inline tokenizer pass."""
-    for opener in ("<?", "<![CDATA["):
-        at = text.find(opener)
-        if at >= 0:
-            close = text.find(">", at)
-            if close >= 0 and text.find("<", close) >= 0:
-                return True
-    return False
+# cmark-gfm 0.29 inline grammar. Whitespace is ``[ \t\n\v\f\r]``, so a construct may span lines.
+_IWS = "[ \t\n\v\f\r]"
+_ASCII_PUNCT = frozenset("!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~")
+_AUTOLINK_URI = re.compile(r"<[A-Za-z][A-Za-z0-9.+-]{1,31}:[^\x00-\x20<>]*>")
+_AUTOLINK_EMAIL = re.compile(
+    r"<[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*>"
+)
+_INLINE_OPEN_TAG = re.compile(
+    r"<[A-Za-z][A-Za-z0-9-]*(?:" + _IWS + r"+[A-Za-z_:][A-Za-z0-9_.:-]*(?:" + _IWS + r"*=" + _IWS
+    + r"""*(?:[^ \t\n\v\f\r"'=<>`]+|'[^']*'|"[^"]*"))?)*""" + _IWS + r"*/?>"
+)
+_INLINE_CLOSE_TAG = re.compile(r"</[A-Za-z][A-Za-z0-9-]*" + _IWS + r"*>")
+_INLINE_COMMENT = re.compile(r"<!--.*?-->", re.S)
+_INLINE_PI = re.compile(r"<\?.*?\?>", re.S)
+_INLINE_CDATA = re.compile(r"<!\[CDATA\[.*?\]\]>", re.S)
+_INLINE_DECL = re.compile(r"<![A-Z][^>]*>")
+_INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI, _INLINE_CDATA, _INLINE_DECL)
+_ASCII_WS = " \t\n\v\f\r"
 
 
-def _tag_holds_vtab(text):
-    """True when ``text`` holds an inline tag opener (``<``, an optional ``/``, an ASCII letter) with a vertical tab
-    before the tag's own closing ``>``, a vertical tab inside a quoted value included: cmark counts ``\\v`` as tag whitespace and passes the tag through raw, HTML
-    parsing does not, so the tag can end at an earlier ``>``. The walk to the closing ``>`` skips a ``>`` inside a
-    quoted value (``title=">"``), and a quote that never closes runs to the end of the text.
+def _inline_constructs(text):
+    """The raw-HTML constructs of a text block, left to right as cmark-gfm's inline parser finds them: a list of
+    ``(start, end)`` (end exclusive). A backslash escapes an ASCII punctuation character; a backtick run opens a code
+    span that closes at the next run of exactly its length (nothing inside is raw HTML; with no such run the backticks
+    are literal); at ``<`` an autolink is text, otherwise one of the six raw-HTML grammars either matches there or the
+    ``<`` is literal."""
+    found = []
+    i = 0
+    n = len(text)
+    while i < n:
+        c = text[i]
+        if c == "\\":
+            i += 2 if text[i + 1:i + 2] in _ASCII_PUNCT and i + 1 < n else 1
+        elif c == "`":
+            end = i
+            while end < n and text[end] == "`":
+                end += 1
+            width = end - i
+            at = end
+            closed = -1
+            while at < n:
+                at = text.find("`", at)
+                if at < 0:
+                    break
+                run = at
+                while run < n and text[run] == "`":
+                    run += 1
+                if run - at == width:
+                    closed = run
+                    break
+                at = run
+            # axis (C2): a code span is skipped whole, so a <!-- inside one is no comment
+            i = closed if closed >= 0 else end
+        elif c == "<":
+            m = _AUTOLINK_URI.match(text, i) or _AUTOLINK_EMAIL.match(text, i)
+            if m:
+                i = m.end()
+                continue
+            for pattern in _INLINE_RAW:
+                m = pattern.match(text, i)
+                if m:
+                    found.append((i, m.end()))
+                    break
+            i = m.end() if m else i + 1
+        else:
+            i += 1
+    return found
 
-    A narrow check, not an inline tokenizer pass."""
-    for m in _TAG_OPENER.finditer(text):
-        quote = None
-        for c in text[m.end():]:
-            if c == "\v":
-                # axis: a vertical tab before the tag's own closing > reads unsure, inside a quoted value or after a quoted >
-                return True
-            if quote:
-                if c == quote:
-                    quote = None
-            elif c in "\"'":
-                quote = c
-            elif c == ">":
-                break
-    return False
+
+def _comment_line_state(line):
+    """The state of a line that starts inside a comment: ``HIDDEN``, or ``UNSURE`` when it holds a closer (``-->`` or
+    ``--!>``) with text after the first one, since GitHub shows that text (vet 846 F8)."""
+    ends = [(at, width) for at, width in ((line.find("-->"), 3), (line.find("--!>"), 4)) if at >= 0]
+    if ends:
+        at, width = min(ends)
+        if line[at + width:].strip(_ASCII_WS):
+            return UNSURE
+    return HIDDEN
+
+
+def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure):
+    """Run the inline raw-HTML pass over one text block (``lines``: its lines after container prefixes; source line
+    ``first + k`` is ``lines[k]``).
+
+    Each raw construct is run through ``_tokenize`` from ``_DATA`` piece by piece, the way GitHub's HTML parse reads it.
+    For every source line that starts inside the construct, the tokenizer state at the line's start decides it: a
+    comment state is ``HIDDEN`` (``UNSURE`` per ``_comment_line_state``, recorded in ``line_unsure``); a tag or bogus
+    state is an unsure point at that line; ``_DATA`` leaves it unchanged. A construct that ends with the tokenizer not
+    back in ``_DATA`` (or a tag holding a vertical tab) is an unsure point at the line that holds cmark's end of it."""
+    joined = "\n".join(lines)
+    starts = [0]
+    for k, line in enumerate(lines[:-1]):
+        starts.append(starts[-1] + len(line) + 1)
+
+    def line_of(position):
+        lo, hi = 0, len(starts) - 1
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if starts[mid] <= position:
+                lo = mid
+            else:
+                hi = mid - 1
+        return lo
+
+    for begin, end in _inline_constructs(joined):
+        construct = joined[begin:end]
+        first_line = line_of(begin)
+        last_line = line_of(end - 1)
+        pieces = construct.split("\n")
+        state = _DATA
+        for offset, piece in enumerate(pieces):
+            k = first_line + offset
+            if offset:
+                # axis (C3, C4, C6): the state at the start of a line inside the construct decides that line
+                if state == _COMMENT:
+                    if _comment_line_state(lines[k]) == UNSURE:
+                        line_unsure.add(first + k)
+                    else:
+                        hidden_lines.add(first + k)
+                elif state != _DATA:
+                    sure_points.add((first + k, "line starts inside a tag or a bogus comment of an inline construct"))
+            state = _tokenize(state, piece + "\n" if offset < len(pieces) - 1 else piece)
+        # axis (C5): the HTML parse disagrees with cmark about where the construct ends
+        # (a vertical tab in a tag also counts, as the earlier conservative reading: cmark takes \v as tag whitespace)
+        is_tag = _INLINE_OPEN_TAG.fullmatch(construct) or _INLINE_CLOSE_TAG.fullmatch(construct)
+        if state != _DATA or (is_tag and "\v" in construct):
+            sure_points.add((first + last_line, "inline construct that HTML parsing ends differently than cmark"))
 
 
 def _scan(body):
@@ -679,10 +772,17 @@ def _scan(body):
 
     unsure = dict(parser.unsure)
     raw = []
+    inline_hidden = set()  # source lines that start inside an inline comment
+    inline_unsure = set()  # source lines that start inside an inline comment and show text after its closer
+    inline_points = set()  # (source line, why)
     state = _DATA
     for i in range(len(texts)):
         hidden = state == _COMMENT
-        raw.append(HIDDEN if hidden else VISIBLE)
+        if hidden:
+            # vet 846 F8: a raw closer in HTML-block content shows the text after it
+            raw.append(_comment_line_state(html_line[i]) if i in html_line else HIDDEN)
+        else:
+            raw.append(VISIBLE)
         if state not in _OPEN_STATES:
             # unsure, never hidden: a > early in this line can end the tag or bogus comment, and the rest of the line shows
             unsure[(offsets[i], "line starts inside a tag or a bogus comment")] = None
@@ -693,13 +793,22 @@ def _scan(body):
                 unsure[(at, "HTML block ends inside a tag or a bogus comment")] = None
                 state = _DATA
         elif i in text_block:
-            joined = "\n".join(text_block[i].lines)
-            if hidden and _closer_after_lt(joined):
-                unsure[(offsets[i], "text inside a comment holds < and a later -->")] = None
-            if _runs_past_its_end(joined):
-                unsure[(offsets[i], "inline processing instruction or CDATA that HTML parsing ends early")] = None
-            if _tag_holds_vtab(joined):
-                unsure[(offsets[i], "inline tag with a vertical tab that HTML parsing ends at an earlier >")] = None
+            if hidden:
+                if _closer_after_lt("\n".join(text_block[i].lines)):
+                    unsure[(offsets[i], "text inside a comment holds < and a later -->")] = None
+            else:
+                # axis (C1): the inline raw-HTML pass over the text block's content
+                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure)
+
+    for line_index, why in inline_points:
+        if line_index < len(offsets):
+            unsure[(offsets[line_index], why)] = None
+    for line_index in inline_hidden:
+        if line_index < len(raw):
+            raw[line_index] = HIDDEN
+    for line_index in inline_unsure:
+        if line_index < len(raw):
+            raw[line_index] = UNSURE
 
     first_unsure = min((at for at, _ in unsure), default=None)
     lines = []

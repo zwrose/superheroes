@@ -851,3 +851,240 @@ def test_review_s2_r2_a_vertical_tab_inside_a_quoted_value_still_reads_unsure():
     assert _state('x <a title="p\vq"> y\n\n## H\n', "## H") == U
     assert _state("x <a title='p\vq'> y\n\n## H\n", "## H") == U
     assert _state("x <a b=\"c\">\v y\n\n## H\n", "## H") == V
+
+
+# --- Fix leg 2 (vet 846 F5, F6, F8): the inline raw-HTML pass --------------------------------------------------------------
+
+_CORPUS_PATH = os.path.join(_HERE, "fixtures", "md_hidden_github_corpus_2388.json")
+with open(_CORPUS_PATH, encoding="utf-8") as _fh:
+    _CORPUS = json.load(_fh)
+
+_SENTINEL = re.compile(r"\bZQ\d+\b")
+
+
+class _VisibleText(HTMLParser):
+    """The visible text of a render: ``handle_data`` only (comments and attribute values are not visible text)."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts = []
+
+    def handle_data(self, data):
+        self.parts.append(data)
+
+
+def _visible_sentinels(rendered):
+    parser = _VisibleText()
+    parser.feed(rendered)
+    parser.close()
+    found = set()
+    for part in parser.parts:  # one text node at a time: adjacent nodes (``<h2>ZQ4</h2><h2>ZQ5</h2>``) never fuse a word
+        found.update(_SENTINEL.findall(part))
+    return found
+
+
+def _corpus_hides(body, sentinel):
+    """The advisor's corpus (``md_hidden_github_corpus_2388.json``) holds ``body`` and GitHub's render hides ``sentinel``."""
+    assert body in _CORPUS, "body is not in the advisor's corpus: %r" % (body,)
+    assert sentinel not in _visible_sentinels(_CORPUS[body]), "GitHub shows %s in %r" % (sentinel, body)
+
+
+def _corpus_judge(body):
+    """(line index, offset, line, sentinels, GitHub shows all of them) for each line of ``body`` that holds a sentinel."""
+    shown = _visible_sentinels(_CORPUS[body])
+    out = []
+    offset = 0
+    for index, item in enumerate(md_fence.split_lines(body)):
+        sentinels = set(_SENTINEL.findall(item))
+        if sentinels:
+            out.append((index, offset, item, sentinels, sentinels <= shown))
+        offset += len(item)
+    return out
+
+
+def test_corpus_no_line_github_hides_reads_visible():
+    """The bound's check: advisor's corpus, ``md_hidden_github_corpus_2388.json`` (660 bodies, GitHub's own renders). A line
+    with a sentinel word that GitHub's visible text lacks is hidden by GitHub and must not read VISIBLE."""
+    assert len(_CORPUS) == 660
+    failing = []
+    for body in _CORPUS:
+        rendering = md.scan(body)
+        for index, offset, item, sentinels, shows in _corpus_judge(body):
+            if not shows and rendering.state_at(offset) == V:
+                failing.append((body, index, item))
+    assert failing == [], "%d fail-open (body, line index, line):\n%s" % (
+        len(failing), "\n".join(repr(entry) for entry in failing))
+
+
+@pytest.mark.xfail(strict=True, reason="1 false-hidden line in the corpus: a CDATA section inside <svg> (foreign content), "
+                   "which the tokenizer reads as a bogus comment; it fails closed")
+def test_corpus_no_line_github_shows_reads_hidden():
+    """The reverse check (fails closed, so it is not the bound): advisor's corpus, ``md_hidden_github_corpus_2388.json``.
+    A line whose sentinel words all appear in GitHub's visible text must not read HIDDEN."""
+    failing = []
+    for body in _CORPUS:
+        rendering = md.scan(body)
+        for index, offset, item, sentinels, shows in _corpus_judge(body):
+            if shows and rendering.state_at(offset) == H:
+                failing.append((body, index, item))
+    assert failing == [], "%d false-hidden (body, line index, line):\n%s" % (
+        len(failing), "\n".join(repr(entry) for entry in failing))
+
+
+def test_f5_a_comment_across_paragraph_lines_hides_the_lines_inside():
+    """Advisor's corpus, ``md_hidden_github_corpus_2388.json``: GitHub hides ``ZQ1``. The line that closes the comment
+    shows the text after the closer, so it reads UNSURE (F8); the heading after it is decided."""
+    body = "a <!-- b\nZQ1\n--> c\n\n## ZQ2\n"
+    _corpus_hides(body, "ZQ1")
+    assert _state(body, "a <!-- b") == V
+    assert _state(body, "ZQ1") == H
+    assert _state(body, "--> c") == U
+    assert _state(body, "## ZQ2") == V
+    assert md.scan(body).unsure == ()
+
+
+def test_f5_a_comment_across_paragraph_lines_with_two_hidden_lines_and_a_sentinel_after_the_closer():
+    """Advisor's corpus, ``md_hidden_github_corpus_2388.json``: GitHub hides ``ZQ1`` and ``ZQ2``, shows ``ZQ3``."""
+    body = "Note <!-- hidden\nZQ1\nZQ2\nend --> after ZQ3\n\n## ZQ4\n"
+    _corpus_hides(body, "ZQ1")
+    _corpus_hides(body, "ZQ2")
+    assert _state(body, "ZQ1") == H and _state(body, "ZQ2") == H
+    assert _state(body, "end --> after ZQ3") == U
+    assert _state(body, "## ZQ4") == V
+
+
+def test_f5_a_double_quoted_value_across_list_item_lines_reads_unsure():
+    """Advisor's corpus, ``md_hidden_github_corpus_2388.json``: GitHub hides ``ZQ1`` (inside the ``title`` value)."""
+    body = '- x <span title="\n  ZQ1\n  "> y\n\n## ZQ2\n'
+    assert _state(body, "  ZQ1") == U
+    assert _state(body, "## ZQ2") == U  # sticky
+    assert md.scan(body).unsure[0][0] == _off(body, 1)
+
+
+def test_f5_a_single_quoted_value_across_paragraph_lines_reads_unsure():
+    """Advisor's corpus, ``md_hidden_github_corpus_2388.json``: GitHub hides ``ZQ1`` (inside the single-quoted value)."""
+    body = "x <span title='\nZQ1\n'> y\n\n## ZQ2\n"
+    _corpus_hides(body, "ZQ1")
+    assert _state(body, "x <span title='") == V
+    assert _state(body, "ZQ1") == U
+    assert md.scan(body).unsure[0][0] == _off(body, 1)
+
+
+def test_f5_an_unquoted_value_ended_by_a_line_break_reads_unsure():
+    """The corpus class (a tag that spans lines): the tag is ``<a href=foo`` newline ``ZQ1`` newline ``class=z>``, so ``ZQ1``
+    is an attribute name, hidden by HTML parsing (this exact body is not one of the corpus's 660)."""
+    body = "x <a href=foo\nZQ1\nclass=z> y\n\n## ZQ2\n"
+    assert _state(body, "ZQ1") == U
+
+
+@pytest.mark.parametrize("opener,closer", [("<? a", "?>"), ("<![CDATA[ a", "]]>")], ids=["pi", "cdata"])
+def test_f5_an_inline_pi_or_cdata_across_lines_reads_unsure(opener, closer):
+    """The corpus class (a bogus comment that spans lines): HTML parsing reads ``<?`` and ``<![CDATA[`` as a bogus comment
+    that ends at the first ``>``; the line inside it reads UNSURE, never VISIBLE (this exact body is not in the corpus)."""
+    body = "x %s\nZQ1\n%s y\n\n## ZQ2\n" % (opener, closer)
+    assert _state(body, "ZQ1") == U
+    assert md.scan(body).unsure[0][0] == _off(body, 1)
+
+
+def test_f5_a_setext_heading_paragraph_holding_a_multi_line_comment():
+    """The corpus class (a comment across the lines of a text block; here a setext heading): ``ZQ1`` sits inside the
+    comment (this exact body is not one of the corpus's 660)."""
+    body = "Title <!-- a\nZQ1\n-->\n=====\n\n## ZQ2\n"
+    assert _state(body, "ZQ1") == H
+    assert _state(body, "-->") == H
+    assert _state(body, "## ZQ2") == V
+
+
+def test_f5_the_leftovers_shape_does_not_read_visible():
+    """Advisor's corpus, ``md_hidden_github_corpus_2388.json`` (the ``What we're accepting`` body): GitHub hides ``ZQ1``."""
+    body = "## What we're accepting\n\nLeftovers: <!-- draft list\nF1 the retry loop ZQ1\n-->\n- F2 ZQ2\n"
+    _corpus_hides(body, "ZQ1")
+    assert _state(body, "F1 the retry loop ZQ1") in (H, U)
+    assert _state(body, "F1 the retry loop ZQ1") != V
+
+
+def test_f5_controls_an_unclosed_comment_opener_in_a_paragraph_stays_text():
+    body = "a <!-- b\nZQ1\n\n## ZQ2\n"
+    assert _state(body, "ZQ1") == V
+    assert _state(body, "## ZQ2") == V
+    assert md.scan(body).unsure == ()
+
+
+def test_f5_controls_an_unclosed_tag_opener_is_literal_text():
+    """E3: a construct whose end cmark's grammar never finds is literal text and changes nothing."""
+    body = "x <a b='\nZQ1\n\n## ZQ2\n"
+    assert _state(body, "ZQ1") == V
+    assert md.scan(body).unsure == ()
+
+
+@pytest.mark.parametrize("form", ["builder", "bot"])
+def test_f5_controls_the_lower_decl_and_inline_code_opener_shapes_stay_visible(form):
+    """``md_hidden_github_renders_2366.json``: GitHub showed the owner heading after ``<!x`` (lowercase, no declaration)
+    and after a code span holding the opener."""
+    _reads(_ROW_BY_KEY[("lower_decl", form)]["sent"], OWNER[form], V)
+    _reads(_ROW_BY_KEY[("inline_code_opener", form)]["sent"], OWNER[form], V)
+
+
+def test_f5_controls_a_code_span_across_lines_holding_an_opener_stays_visible():
+    body = "x `a <!--\nb` y\n--> z\nZQ1\n\n## ZQ2\n"
+    assert _state(body, "b` y") == V
+    assert _state(body, "ZQ1") == V
+    assert _state(body, "## ZQ2") == V
+    assert md.scan(body).unsure == ()
+
+
+def test_f5_controls_an_escaped_opener_stays_text():
+    body = "x \\<!-- y\nZQ1\n--> z\n\n## ZQ2\n"
+    assert _state(body, "ZQ1") == V
+    assert md.scan(body).unsure == ()
+
+
+def test_f6_code_spans_holding_a_pi_and_a_tag_leave_the_heading_visible():
+    """Vet 846 receipt on PR #2390, comment 6711193618 (and the corpus's ``The reader skips a`` body): GitHub showed the
+    heading after code spans holding ``<?xml ?>`` and ``<br>``."""
+    body = "Quotes `<?xml ?>` here and `<br>` too.\n\n## H\n"
+    assert _state(body, "## H") == V
+    assert md.scan(body).unsure == ()
+    corpus_body = "## What we're accepting\n\nThe reader skips a `<?xml ?>` header and keeps `<br>` tags ZQ1.\n\n## ZQ2\n"
+    assert _state(corpus_body, "## ZQ2") == V
+    assert md.scan(corpus_body).unsure == ()
+
+
+def test_f5_c2_a_code_span_opener_is_no_comment_even_with_a_later_closer():
+    """Code spans (the C2 discriminator): cmark sees no comment in ``x `<!--` y``, so GitHub shows ``ZQ1`` (this exact
+    body is not one of the corpus's 660); read as a comment from ``<!--`` to ``-->`` it would hide ``ZQ1``."""
+    body = "x `<!--` y\nZQ1\n--> w\n\n## ZQ2\n"
+    assert _state(body, "ZQ1") == V
+    assert _state(body, "## ZQ2") == V
+    assert md.scan(body).unsure == ()
+
+
+def test_f5_a_pi_that_html_parsing_ends_early_reads_unsure_at_its_end_line():
+    """Advisor's corpus, ``md_hidden_github_corpus_2388.json`` (``x <? > <a title=' ?> y``): GitHub hid the heading."""
+    body = "x <? > <a title=' ?> y\n\n## ZQ1\n"
+    assert body in _CORPUS
+    assert "ZQ1" not in _visible_sentinels(_CORPUS[body])
+    assert _state(body, "## ZQ1") == U
+
+
+def test_f5_an_inline_pass_failure_edges_never_raise():
+    """E1: ``scan`` never raises on a str, whatever the inline openers."""
+    for body in ["<", "`", "\\", "<!--", "<a b='", "<<<<<", "`<!--\n", "<?\n", "<![CDATA[", "<!A", "\\`<!-- `\n\n", "``a`<!--\n--> `` <",
+                 "<a\n\n<b\n", "<a b=\n", "\x00<!-- \v", "a <!--\n\n--> <!-- \n-->", "- <a b='\n  x\n  '>\n", "> a <!-- b\n> c --> d\n"]:
+        rendering = md.scan(body)
+        assert len(rendering.lines) == len(md_fence.split_lines(body))
+
+
+def test_f8_a_line_that_closes_a_comment_in_html_block_content_shows_its_tail():
+    """F8 (vet 846): GitHub shows the text after the closer, so the closing line reads UNSURE, never HIDDEN."""
+    body = "<div>\n<!-- a\nZQ1 --> ZQ2\n</div>\n\n## ZQ3\n"
+    assert _state(body, "ZQ1 --> ZQ2") == U
+    assert _state(body, "## ZQ3") in (V, U)
+    assert _state(body, "## ZQ3") != H
+
+
+def test_f8_a_closer_with_nothing_after_it_stays_hidden_and_a_bang_closer_counts():
+    """The closing line with no text after the closer shows nothing (the existing ``-->`` line stays HIDDEN); ``--!>``
+    closes a comment for GitHub too."""
+    assert _state("<div>\n<!-- a\nZQ1 -->\n</div>\n\n## H\n", "ZQ1 -->") == H
+    assert _state("<div>\n<!-- a\nZQ1 --!> ZQ2\n</div>\n\n## H\n", "ZQ1 --!> ZQ2") == U
