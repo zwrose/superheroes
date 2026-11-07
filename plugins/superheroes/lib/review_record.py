@@ -825,6 +825,9 @@ def _validate(a):
         chk(sn(a.get(k)), k)
     ab = a.get("abandoned")
     chk(ab is None or (isinstance(ab, dict) and isinstance(ab.get("reason"), str) and bool(ab["reason"].strip())), "abandoned")
+    unc = a.get("uncertified")
+    chk(unc is None or (isinstance(unc, dict) and isinstance(unc.get("terminal"), str) and unc["terminal"].strip() not in ("", "converged")
+                        and sn(unc.get("reason"))), "uncertified")
     # an abandoned session may have run no seat, so only its record may list no reviewer
     chk(isinstance(a.get("reviewers"), list) and (a["reviewers"] or ab is not None), "reviewers")
     for i, r in enumerate(a["reviewers"]):
@@ -1618,6 +1621,14 @@ def _lane_lines(rec):
     return lines
 
 
+def uncertified_line(u):
+    """The one home of the withheld-certificate wording: the terminal a non-converged session ended on and the driver's
+    reason (clipped; its literal text), or that none was recorded. The summary leaves this line's text out of the claim check."""
+    reason = u.get("reason")
+    cause = _clip(reason.strip()) if isinstance(reason, str) and reason.strip() else "no reason recorded"
+    return f"the review session ended {u['terminal']}, not converged, so its certificate was withheld: {cause}"
+
+
 def _status(rec, unread=(), finding_lines=()):
     fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
@@ -1648,6 +1659,9 @@ def _status(rec, unread=(), finding_lines=()):
     if rec.get("abandoned"):
         # fixed prose: no data enters
         lines.append("session abandoned: the review loop was closed before it ended, so this record cannot read reviewed")
+    # axis: a session that did not converge never reads reviewed, whatever else is clear — see bite-proof record i2395_uncertified_record
+    if rec.get("uncertified"):
+        lines.append(uncertified_line(rec["uncertified"]))
     return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
 
@@ -1916,6 +1930,7 @@ def build_record(account, readers, prior=None, history=()):
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "withheldFromReviewers": withheld,
         **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
+        **({"uncertified": a["uncertified"]} if a.get("uncertified") else {}),
         "ci": ci, "reviewers": reviewers,
         # axis: the test-lens part is computed from the credited reviewer rows and the record's findings, never from the account's own claim — see bite-proof record wo_b_2311_record_calibration
         "testLens": _test_lens(reviewers, findings, fc["sha"], earlier_other),
@@ -2729,9 +2744,14 @@ def _summary(r, level):
     # axis: the watchdog line carries session seat names, so it is left out of the claim check, by line object — see bite-proof record i2375_c_watchdog_ends
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
     # axis: the findings block and the outside list are left out of the claim check, by line object — see bite-proof record c1l1_wo_a_record_seam
-    _assert_no_bug_free_claim(
-        "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
-                  and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines)))
+    checked_text = "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
+                             and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines))
+    # The withheld-certificate line carries the driver's literal reason, so exactly that one line's text is taken out of
+    # the first line (where `Left:` joins it); every other part of that line and every other line is still checked.
+    # axis: the withheld-certificate line's literal cause is left out of the claim check, by its exact text — see bite-proof record i2395_uncertified_record
+    if r.get("uncertified"):
+        checked_text = checked_text.replace(uncertified_line(r["uncertified"]), "")
+    _assert_no_bug_free_claim(checked_text)
     return "\n".join(lines)
 
 

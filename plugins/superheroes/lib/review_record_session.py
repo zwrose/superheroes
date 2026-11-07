@@ -1380,6 +1380,13 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     # the extra audit round is labelled, never counted: it is a round of `rounds` the cap did not allow
     # axis: the extra audit round does not count toward rounds.count — see bite-proof record c1l4b_wo_a
     counted = len(rounds) - (1 if isinstance(extra, dict) and str(extra.get("round")) in rounds else 0)
+    uncertified = None
+    # axis: a session that ended on any terminal but converged carries the terminal and the driver's reason, so its record never reads reviewed — see bite-proof record i2395_uncertified_record
+    if abandoned is None and state["terminal"] != "converged":
+        cert = state.get("certification")
+        reason = next((v for v in (cert.get("reason") if isinstance(cert, dict) else None, last.get("detail"))
+                       if isinstance(v, str) and v.strip()), None)
+        uncertified = {"terminal": state["terminal"], "reason": reason}
     account = {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
@@ -1399,7 +1406,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
             "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked,
-            **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {})}
+            **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {}),
+            **({"uncertified": uncertified} if uncertified is not None else {})}
     if carry is not None:
         account["_carry"] = carry  # private: `write_from_session` settles it and strips it before the account is dumped
         # axis: the carry check reads the session's pinned review base (the driver's full sha), never extras.baseRef, which may be a symbolic ref — see bite-proof record c1l11d_wo_c_fold
