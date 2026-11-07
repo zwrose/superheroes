@@ -470,6 +470,14 @@ def _evaluate_write(body, slot=V_NOT_READY_SLOT):
     return vs.evaluate("write", body, [_comment(RECEIPT_NONE)], slot, advisor_login="advisor")
 
 
+def _assert_marker_not_standalone_refused(result):
+    # #2389: U+2028 (and the other str.splitlines-only breaks) is no Markdown line end (md_fence.split_lines), so the marker
+    # shares its line with the verdict, is not found, and the composed body would hold the marker twice: the merge train's
+    # reader refuses the region (region-marker-duplicated), the write refuses write-failed and pushes nothing
+    assert result["ok"] is False and result["reason"] == "write-failed", result
+    assert "region-marker-duplicated" in result["detail"], result
+
+
 def _marker_line_end(body):
     """The offset just past the marker's own str.splitlines() line (the formula the fix writes)."""
     offset = 0
@@ -485,6 +493,9 @@ def test_f1_f2_a_not_ready_write_over_an_old_ready_reads_not_ready_through_evalu
     body = V_OLD_VERDICT_BODIES[name]
     assert _vet(body) == stack_check.VERDICT_READY  # the old READY is what the merge train reads before the write
     result = _evaluate_write(body)
+    if name == "f2-u2028":
+        _assert_marker_not_standalone_refused(result)
+        return
     assert result["ok"] is True, result
     new_body = result["newBody"]
     assert _vet(new_body) == stack_check.VERDICT_NOT_READY
@@ -500,6 +511,10 @@ def test_f1_f2_a_not_ready_write_over_an_old_ready_reads_not_ready_through_run_v
     body = V_OLD_VERDICT_BODIES[name]
     fake = _raw_fake(body)
     result = _write(fake, tmp_path, V_NOT_READY_SLOT)
+    if name == "f2-u2028":
+        _assert_marker_not_standalone_refused(result)
+        assert fake.edit_calls() == []
+        return
     assert result["ok"] is True, result
     assert len(fake.edited) == 1
     pushed = fake.edited[0]
@@ -512,6 +527,12 @@ def test_f3_the_reverse_direction_stays_not_ready_through_evaluate_and_run_verb(
     body = V_OLD_NOT_READY_BODIES[name]
     assert _vet(body) == stack_check.VERDICT_NOT_READY
     result = _evaluate_write(body)
+    if name == "f2-u2028":
+        _assert_marker_not_standalone_refused(result)
+        fake = _raw_fake(body)
+        _assert_marker_not_standalone_refused(_write(fake, tmp_path, V_NOT_READY_SLOT))
+        assert fake.edit_calls() == []
+        return
     assert result["ok"] is True, result
     assert _vet(result["newBody"]) == stack_check.VERDICT_NOT_READY
     fake = _raw_fake(body)
@@ -523,6 +544,9 @@ def test_f3_the_reverse_direction_stays_not_ready_through_evaluate_and_run_verb(
 def test_f1_every_splitlines_separator_after_the_marker_writes_cleanly(separator):
     body = "Bumps x.\n\n" + MARKER + separator + V_READY_LINE + separator
     result = _evaluate_write(body)
+    if separator not in ("\r", "\r\n", "\n"):
+        _assert_marker_not_standalone_refused(result)
+        return
     assert result["ok"] is True, result
     assert result["newBody"] == (body[:body.index(MARKER) + len(MARKER) + len(separator)]
                                  + "\n" + V_NOT_READY_SLOT.strip("\n") + "\n")
