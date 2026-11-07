@@ -32,6 +32,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import md_fence  # noqa: E402
+import md_hidden  # noqa: E402
 import pr_sheet  # noqa: E402
 import review_record  # noqa: E402
 
@@ -87,18 +88,42 @@ def _code_span_end(line, i):
     return None
 
 
+def _terminator(line):
+    """The one Markdown line terminator ending ``line`` (``\\r\\n``, ``\\n`` or ``\\r``), or ``""`` for a last line with none."""
+    return "\r\n" if line.endswith("\r\n") else line[-1] if line.endswith(("\n", "\r")) else ""
+
+
 def _visible(body):
     """The body as it renders, for matching: every HTML comment (one that spans lines included) is cut out, while a
     comment delimiter inside a fenced block (``md_fence``'s CommonMark rules), an inline code span, or after a
     backslash escape is shown text and stays. A whole-line ``superheroes:`` marker is kept, so the section reader still
-    finds the build-record boundary."""
-    lines = body.splitlines(keepends=True)
-    fenced = md_fence.scan([line.rstrip("\n") for line in lines]).inert
+    finds the build-record boundary. Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so
+    U+2028, U+2029, U+0085, VT, FF, FS, GS and RS are ordinary characters inside one. The result is also cut to
+    ``md_hidden``'s reading (#2389): a line whose start ``md_hidden.scan`` does not read VISIBLE (hidden or unsure) keeps
+    only its line terminator, a marker line excepted, so text GitHub renders hidden is never kept; this only ever cuts
+    more than the comment cut alone."""
+    lines = md_fence.split_lines(body)
+    # axis: lines break only on Markdown endings (never U+2028 and the other str.splitlines breaks), and the fence scan
+    # reads each line with exactly one terminator removed — see bite-proof record i2389_scanner_line_boundaries.md
+    fenced = md_fence.scan([line[:len(line) - len(_terminator(line))] for line in lines]).inert
+    rendering = md_hidden.scan(body)
+    offset, shown = 0, []
+    for line in lines:
+        try:
+            shown.append(rendering.state_at(offset) == md_hidden.VISIBLE)
+        except ValueError:
+            shown.append(False)  # a line start md_hidden does not report reads as not visible: the cut fails closed
+        offset += len(line)
     out, inside = [], False
     for n, line in enumerate(lines):
-        # axis: a fenced line (by md_fence's rules) is shown text; a comment open across it stays open
-        if (fenced[n] and not inside) or (not inside and _MARKER_LINE.match(line)):
+        term = _terminator(line)
+        if not inside and _MARKER_LINE.match(line):
             out.append(line)
+            continue
+        # axis: a fenced line (by md_fence's rules) is shown text; a comment open across it stays open
+        if fenced[n] and not inside:
+            # axis: a fenced line md_hidden does not read VISIBLE keeps only its terminator — see bite-proof record i2389_scanner_line_boundaries.md
+            out.append(line if shown[n] else term)
             continue
         kept, i = [], 0
         while i < len(line):
@@ -125,7 +150,12 @@ def _visible(body):
                 kept.append(line[i])
                 i += 1
         text = "".join(kept)
-        out.append(text + "\n" if line.endswith("\n") and not text.endswith("\n") else text)
+        # axis: a line md_hidden does not read VISIBLE keeps only its terminator (the loop above still ran, so `inside` carries on)
+        # — see bite-proof record i2389_scanner_line_boundaries.md
+        if not shown[n]:
+            text = term
+        # the line keeps its own terminator (\r\n, \n or lone \r) even when a comment cut it, so the line count never changes
+        out.append(text if not term or text.endswith(term) else text + term)
     return "".join(out)
 
 
