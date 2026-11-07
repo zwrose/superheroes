@@ -130,7 +130,7 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    FAILED / PARTIAL — the observed outcome of the run, not a certification
    that the branch is correct; per-step table; findings with evidence; run
    metadata). Post:
-   `pr_comment.py upsert --pr N --family results --key K --body-file F --plans-dir <plans_dir>`.
+   `pr_comment.py upsert --pr N --family results --key K --body-file F --plans-dir <plans_dir>`. When its result carries a `transitLine`, put that line in your report as it is: the posted comment differs from what you sent.
    No PR → write to `<plans_dir>/<key>.results.md`. If the run was
    interrupted (browser died, server unreachable), post whatever completed
    marked **partial** — state stays intact for resumption.

@@ -22,6 +22,7 @@ switching, never a lane already running.
 
 ### Before you upgrade
 
+- **After switching.** **Plugin writes to GitHub are read back, and their results and the review record carry new transit keys; a caller matching an exact result dict adds them, and a cloud builder runs the new `cloud_builder.py readback` verb after a write through its own GitHub tools.** Nothing else is owed. See [Cloud: text changed in transit is flagged](#cloud-text-changed-in-transit-is-flagged).
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **A returning round's scoped finder now sees the session's focus notes (`--focus`), so a fix order passed as focus notes reaches it; every other order emitted while notes are set is disclosed as `focusNotesNotCarried` on the round and a `focus-notes-not-carried` line in the receipt's `degraded` list.** Nothing is owed: no command, result key or reason is removed. See [Review: focus notes reach the scoped finder](#review-focus-notes-reach-the-scoped-finder).
@@ -49,6 +50,18 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **After switching.** **Run the setup sitting's launch-folder step once per project per machine, and trust the folder it makes once: open Claude Code in it, accept the trust question, and exit.** Nothing else is owed. See [Configure: the cloud launch folder](#configure-the-cloud-launch-folder).
 - **After switching.** **A cloud launch now runs the platform's command in the launcher's own folder, never the primary checkout: the primary checkout no longer needs to be on the base, pushed, so that earlier step is no longer owed.** Before the launch-folder step has run, every cloud launch refuses `launch-cloud-folder-missing`; with the folder made but not yet trusted, a launch reads `cloud-session-unconfirmed`. See [Launcher: cloud launches start from the launcher's own folder](#launcher-cloud-launches-start-from-the-launchers-own-folder).
 - **After switching.** **A new read-only sampler, `lib/codex_silence.py sample <run-dir-or-review-session-folder>...`, reports for each codex review attempt in saved run records its outcome, wall time, longest silence with no command in flight and longest command, as one JSON document.** Nothing is owed. See [Review: a sampler measures codex review attempts' silence](#review-a-sampler-measures-codex-review-attempts-silence).
+- **After switching.** **`vet_slot.py write` refuses a new reason, `slot-span-builder-text`, when the slot span of a builder PR holds anything but the builder's reminder and the advisor's own earlier verdict; a caller matching on reasons adds it. On a builder PR the slot text must open with a verdict token and carry no heading, or the write refuses `write-failed`.** Nothing is owed otherwise. See [Vet slot: write refuses builder text in the slot](#vet-slot-write-refuses-builder-text-in-the-slot).
+
+### Vet slot: write refuses builder text in the slot
+
+`vet_slot.py write` replaces the whole slot span, from the line after the advisor-vet marker to the build-record marker. A builder section stamped there (a `## Test answers` section, say) was deleted with it. The write now replaces the span only when it holds nothing but the advisor's own content, and otherwise refuses `slot-span-builder-text` and writes nothing.
+
+- **What counts as the advisor's own span.** After the builder's reminder comments (a comment opening `<!-- advisor: BEFORE writing this slot`, closed by its own `-->`) and the blank lines are removed, the span is empty, or it opens with a verdict token of the canonical verdict form, holds no HTML comment opener or closer (fenced or not), and holds no heading outside a code fence (a space or a tab after the hashes, or none).
+- **What refuses.** A builder section or heading, prose above the verdict line, prose with no verdict, any other HTML comment (including one that opens `<!-- advisor:` with other words), a reminder that is never closed, and text after a reminder's closing `-->`. When the canonical verdict form cannot be read, a non-empty span refuses too (the detail says so).
+- **The remedy.** Move that text above the `## Advisor vet` heading or below the build-record marker, or ask the builder to, then write again. The detail names the line of the span, its first 60 characters, and the sign that failed.
+- **Slot text.** On a builder PR the slot text must itself read as the advisor's own on the next write: it opens with a verdict token and carries no heading outside a code fence, or the write refuses `write-failed`. A body written once can therefore always be written again.
+- **Unchanged.** A healthy write is byte-identical to before. `check`, `handback` and the no-build-record path are unchanged; the last keeps its `What we're accepting` allowance. Marker lines in the span still refuse `slot-span-foreign-content`, and a lost owner half still refuses `body-emptied`, both before the new reason.
+- **Known limit.** Plain builder prose with no heading, added under the advisor's existing verdict, still reads as the advisor's own and is replaced. Comparing the slot with the latest vet receipt, as the vetting reference says, stays the backstop.
 
 ### Review: a silent codex review attempt is ended and retried
 
@@ -80,6 +93,20 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Plain prose lines only.** The fallback masks whole lines and can only over-mask: a line holding ```` ``` ````, `~~~` or `$$` masks to the end of the body; an HTML comment, a processing instruction (`<?`), CDATA, a declaration (`<!` and a letter), or a `<pre>`, `<script>`, `<style>` or `<textarea>` block, masks from its line to the line that ends it (or the end); and a run of non-blank lines is masked whole when any line of it is masked, holds a backtick, `<` or `[`, is indented four columns, has a list marker followed by two or more spaces or a tab, or starts with `>` after any list markers. A close link written beside such a line is missed. In rare HTML or whitespace shapes (an element GitHub renders as code or link text around a blank-line paragraph, or a "blank" line holding a no-break space or form feed), this read can take an extra issue. Such an issue never supplies the lane call the record certifies against, which is read only from the issues the description's first line closes; it only takes part in the build-lane marker match.
 - **Kept.** The non-closing fallback in `cloud_parked` (a bare `#N` on the first line when nothing closes) still reads the first line only.
 - **Result key.** `linkSource` (`github` or `body`) is new on a cleanup plan, on a parked-lane `lapsed-pass` notice that read the PR's links, and on `sendBack`, `adopt` and `adopting` items. No command or reason changes.
+
+### Cloud: text changed in transit is flagged
+
+A cloud session's GitHub egress deletes a `!` directly before a `[` when a `]` follows later in the
+body, and nothing noticed, so a vet could grade changed text as what the builder wrote. Every plugin
+write now reads its text back and compares it with what it sent, tolerating line endings, trailing
+whitespace and one trailing cloud footer only. New result keys: `transit` and `transitLine` on
+`cloud_builder.py post` and `edit`, the new `readback` verb and `pr_comment.py upsert`; `transit`,
+`transitChecks` and `transitLine` on `review_record.py write`; `transit` on `reserve_extra_audit` and
+`reservationTransit` on the extra-audit verb; `transit` on a refused PR-body publish receipt. A
+review record carries `sentSha256`, and `read` adds `transitDamage.sentHashMatches: false` when the
+stored record no longer matches it. `vet_slot.py write` now accepts a read-back with one trailing
+cloud footer, and its `write-unconfirmed` detail names the changed spans. The vet grades flagged text
+from its source (`skills/showrunner/reference/vet-receipt.md`).
 
 ### Cloud check: an identity from git config alone carries a warning
 
