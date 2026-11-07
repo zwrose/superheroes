@@ -584,7 +584,9 @@ class _Parser:
         self.tip = container
 
     def _add_text_line(self, block, rest, matched):
-        if matched and block.kind == "para" and block.lines and "|" in rest and _TABLE_DELIM.match(rest):
+        if (matched and block.kind == "para" and block.lines and "|" in rest and _TABLE_DELIM.match(rest)
+                and _cell_count(block.lines[-1]) == _cell_count(rest)):
+            # axis: cmark-gfm makes a table only when the header row and the delimiter row hold the same cell count
             block.table = True  # axis: a GFM delimiter row turns on the table-row unsure rule
         block.lines.append(rest)
         self._check_line(rest)
@@ -632,17 +634,107 @@ _INLINE_CLOSE_TAG = re.compile(r"</[A-Za-z][A-Za-z0-9-]*" + _IWS + r"*>")
 _INLINE_COMMENT = re.compile(r"<!--.*?-->", re.S)
 _INLINE_PI = re.compile(r"<\?.*?\?>", re.S)
 _INLINE_CDATA = re.compile(r"<!\[CDATA\[.*?\]\]>", re.S)
-_INLINE_DECL = re.compile(r"<![A-Z][^>]*>")
+# cmark-gfm's declaration: <! then an uppercase name, whitespace, anything but >, then >
+_INLINE_DECL = re.compile(r"<![A-Z]+" + _IWS + r"+[^>]*>")
+_REF_DEF = re.compile(r"(?m)^[ ]{0,3}\[[^\]\n]+\]:")  # a line that may be a link reference definition
+_MAX_BACKTICKS = 80  # cmark-gfm: a backtick run longer than this opens no code span (scan_to_closing_backticks)
+
+
+def _link_regions(text):
+    """``(start, end)`` ranges that may be a link's destination and title, or a link reference definition: from any
+    ``](`` (whether or not a ``[`` precedes it) to the ``)`` that closes it (an angle-bracket destination ``<…>``
+    skipped whole; quoted ``"…"`` and ``'…'`` skipped; parentheses counted; an unclosed one runs to the end of the
+    text), and from a ``]:`` on a line that starts with ``[`` to the end of the next line. The ranges are an
+    over-approximation of cmark's, used only to add unsure points: wider is safe, narrower is not."""
+    regions = []
+    at = text.find("](")
+    while at >= 0:
+        regions.append((at + 2, _destination_end(text, at + 2)))
+        at = text.find("](", at + 2)
+    for m in _REF_DEF.finditer(text):
+        nl = text.find("\n", m.end())
+        nl2 = text.find("\n", nl + 1) if nl >= 0 else -1
+        regions.append((m.end(), len(text) if nl2 < 0 else nl2))
+    return regions
+
+
+def _destination_end(text, j):
+    """Where a possible link destination and title starting at ``j`` end: just past the closing ``)``, else the end.
+    An angle-bracket destination ends at the first ``>`` that is not backslash-escaped. The result is an
+    over-approximation used only to add unsure points."""
+    while j < len(text) and text[j] in " \t\n":
+        j += 1
+    if j < len(text) and text[j] == "<":
+        j += 1
+        while j < len(text) and text[j] != ">":
+            j += 2 if text[j] == "\\" else 1
+        if j >= len(text):
+            return len(text)
+        j += 1
+    depth, quote = 1, None
+    while j < len(text):
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return len(text)
+
+
+def _cell_count(row):
+    """The number of cells in a GFM table row: split on unescaped ``|``, one leading and one trailing pipe dropped."""
+    text = row.strip(" \t")
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|") and not text.endswith("\\|"):
+        text = text[:-1]
+    count, j = 1, 0
+    while j < len(text):
+        if text[j] == "\\":
+            j += 2
+            continue
+        if text[j] == "|":
+            count += 1
+        j += 1
+    return count
+
+
+def _cell_end(text, i):
+    """The index of the next unescaped ``|`` or line break at or after ``i`` (the end of a GFM table cell), else the
+    text's length."""
+    j = i
+    while j < len(text):
+        if text[j] == "\\":
+            j += 2
+            continue
+        if text[j] in "|\n":
+            return j
+        j += 1
+    return len(text)
+
+
 _INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI, _INLINE_CDATA, _INLINE_DECL)
 _ASCII_WS = " \t\n\v\f\r"
 
 
-def _inline_constructs(text):
+def _inline_constructs(text, cells=False):
     """The raw-HTML constructs of a text block, left to right as cmark-gfm's inline parser finds them: a list of
     ``(start, end)`` (end exclusive). A backslash escapes an ASCII punctuation character; a backtick run opens a code
     span that closes at the next run of exactly its length (nothing inside is raw HTML; with no such run the backticks
     are literal); at ``<`` an autolink is text, otherwise one of the six raw-HTML grammars either matches there or the
-    ``<`` is literal."""
+    ``<`` is literal. With ``cells`` (a GFM table block, whose cells cmark-gfm inline-parses one by one) a code span
+    closes only before the next unescaped ``|`` or line break."""
     found = []
     i = 0
     n = len(text)
@@ -657,14 +749,20 @@ def _inline_constructs(text):
             width = end - i
             at = end
             closed = -1
-            while at < n:
+            # axis: a run longer than cmark-gfm's 80 backticks is literal text
+            if width > _MAX_BACKTICKS:
+                at = n
+            limit = n
+            if cells:
+                limit = _cell_end(text, end)
+            while at < limit:
                 at = text.find("`", at)
                 if at < 0:
                     break
                 run = at
                 while run < n and text[run] == "`":
                     run += 1
-                if run - at == width:
+                if run - at == width and run <= limit:
                     closed = run
                     break
                 at = run
@@ -697,7 +795,7 @@ def _comment_line_state(line):
     return HIDDEN
 
 
-def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure):
+def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, cells=False):
     """Run the inline raw-HTML pass over one text block (``lines``: its lines after container prefixes; source line
     ``first + k`` is ``lines[k]``).
 
@@ -721,7 +819,18 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure):
                 hi = mid - 1
         return lo
 
-    for begin, end in _inline_constructs(joined):
+    constructs = _inline_constructs(joined, cells)
+    if "<" in joined:
+        # axis: cmark reads a link's destination and title (and a reference definition) apart from the inline text, so
+        # a backtick there opens no code span and can change how every later backtick pairs; rather than parse links,
+        # a block that holds a backtick inside a possible link range and also a "<" reads unsure from its first line
+        # (the ranges are an over-approximation used only to add this unsure point; the rule decides no line)
+        regions = _link_regions(joined)
+        ticks = [i for i, ch in enumerate(joined) if ch == "`"]
+        if any(r0 <= i < r1 for i in ticks for r0, r1 in regions):
+            sure_points.add((first, "backtick in possible link metadata in a block that holds raw HTML"))
+    # axis: a GFM table block's code spans stay inside one cell, as cmark-gfm parses each cell on its own
+    for begin, end in constructs:
         construct = joined[begin:end]
         first_line = line_of(begin)
         last_line = line_of(end - 1)
@@ -798,7 +907,7 @@ def _scan(body):
                     unsure[(offsets[i], "text inside a comment holds < and a later -->")] = None
             else:
                 # axis (C1): the inline raw-HTML pass over the text block's content
-                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure)
+                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure, text_block[i].table)
 
     for line_index, why in inline_points:
         if line_index < len(offsets):

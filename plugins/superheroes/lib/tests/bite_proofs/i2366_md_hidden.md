@@ -1487,3 +1487,105 @@ FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_review_s2_r2_a
 
 - C5 and C7 share one condition (`:745`); `test_vet845_f3a_*` is red only when both are removed, so no test in the order's list proves the `state != _DATA` clause through a vertical-tab tag. The `f3b` and `..._ended_early_by_html` tests prove it through a bogus comment.
 - C1 and C3 turn the same five tests red; the tests cannot tell a skipped pass from a dropped comment-line result.
+
+## Link-metadata rule (park ruling, option a)
+
+The rule: a text block that holds a backtick inside a possible link range (`_link_regions`) and also a `<` adds an unsure
+point at the block's first line (`_inline_pass`). The park ruling (option a, #2388's STATE) accepts that the
+`linkref_div` fixture rows (`[a]: <div>` then `` `<!--` `` on the next line, a `builder` and a `bot` form) read unsure; the
+order authorised one assertion change, `"linkref_div"` added to `_UNSURE_SHAPES` in `test_md_hidden_2366.py`. Each
+neutralization is a targeted edit of `plugins/superheroes/lib/md_hidden.py`, undone by the inverse edit. Node ids are
+relative to `plugins/superheroes/lib/tests/test_md_hidden_2366.py::`. Raw reds are cut to the assertion lines (source
+listings of the parametrize decorators left out); the harness also truncated 2896 characters from the middle of the D1 red
+output (inside the `displaced-span` / `fake-tag` / `angle-destination` failures), so the D1 capture below is incomplete:
+it quotes only the assertion lines that were shown, plus the closing summary, which was shown whole.
+
+### D1: the link-metadata rule adds its unsure point
+
+- **Guarded element / axis:** `md_hidden.py:830-831`, the `sure_points.add((first, "backtick in possible link metadata
+  in a block that holds raw HTML"))` guarded by `if any(r0 <= i < r1 ...)` in `_inline_pass` (axis: a backtick in link
+  metadata changes cmark's backtick pairing, so the block reads unsure from its first line).
+- **Neutralization:** `:830` `if any(r0 <= i < r1 for i in ticks for r0, r1 in regions):` became
+  `if False and any(r0 <= i < r1 for i in ticks for r0, r1 in regions):  # D1 NEUTRALIZED` (the unsure point is never added).
+- **Raw red** (the nine named node ids, one command; 9 failed; incomplete, see above):
+
+```
+FFFFFFFFF                                                                [100%]
+>       assert _line_state(body, "ZQ1") != V
+E       AssertionError: assert 'visible' != 'visible'
+E        +  where 'visible' = _line_state('[a](<u\\>)`v>) <!-- b\nZQ1\n--> c`\n', 'ZQ1')
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:1221: AssertionError
+E        +  where 'visible' = _line_state('[bad](x `` ) `` [a](x`y) <!-- b\nZQ1\n--> c ` ``\n', 'ZQ1')
+E        +  where 'visible' = _line_state('[a](x`y)\n[r]: /u\n``one\ntwo`` <!-- b\nZQ1\n--> tail `` `\n', 'ZQ1')
+E        +  where 'visible' = _line_state('[a](<u)`v>) <!-- b\nZQ1\n--> c`\n', 'ZQ1')
+E       assert 'visible' != 'visible'
+E        +  where 'visible' = _line_state('[r]: /u "`"\n`x` <!-- b\nZQ1\n--> c `\n', 'ZQ1')
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:1203: AssertionError
+>       assert _line_state(body, "[a]") == U
+E       AssertionError: assert 'visible' == 'unsure'
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:1238: AssertionError
+>       assert got == _UNSURE_SHAPES
+E       AssertionError: assert {'decl_block'...256_cap', ...} == frozenset({'d...56_cap', ...})
+E         Extra items in the right set:
+E         'linkref_div'
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:166: AssertionError
+FAILED test_link_metadata_rule_round4_shapes_read_not_visible[escaped-angle-close]
+FAILED test_link_metadata_rule_round4_shapes_read_not_visible[malformed-metadata]
+FAILED test_link_metadata_rule_round4_shapes_read_not_visible[ref-def-shaped-line-in-paragraph]
+FAILED test_review_s3_r3_link_metadata_that_changes_backtick_pairing_reads_unsure[displaced-span]
+FAILED test_review_s3_r3_link_metadata_that_changes_backtick_pairing_reads_unsure[fake-tag]
+FAILED test_review_s3_r3_link_metadata_that_changes_backtick_pairing_reads_unsure[angle-destination]
+FAILED test_review_s3_r3_link_metadata_that_changes_backtick_pairing_reads_unsure[reference-definition]
+FAILED test_link_metadata_rule_puts_the_unsure_point_at_the_blocks_first_line
+FAILED test_oracle_rows_with_an_unsure_point_are_the_expected_ones
+9 failed in 0.65s
+```
+
+  (In the summary lines the path prefix `plugins/superheroes/lib/tests/test_md_hidden_2366.py::` is dropped here; the run
+  printed it. The `displaced-span` and `fake-tag` assertion lines were not shown, being in or near the truncated span;
+  the summary lists both as FAILED.) All nine named tests went red; none stayed green.
+- **Restore:** inverse Edit, `False and ` removed and the `# D1 NEUTRALIZED` comment dropped.
+- **Restore receipt:** a file search for `NEUTRALIZED|if any\(r0 <= i` returned only
+  `830:        if any(r0 <= i < r1 for i in ticks for r0, r1 in regions):` (no marker left).
+- **Raw green** (same nine node ids):
+
+```
+.........                                                                [100%]
+9 passed in 0.59s
+```
+
+### D2: the escaped `>` widening in `_destination_end`
+
+- **Guarded element / axis:** `md_hidden.py:670`, `j += 2 if text[j] == "\\" else 1` in `_destination_end` (axis: an
+  angle-bracket destination ends at the first `>` that is not backslash-escaped; a wider range is safe, a narrower one is not).
+- **Neutralization:** `:670` became `j += 1  # D2 NEUTRALIZED` (the angle destination ends at the first `>` again).
+- **Raw red** (`test_link_metadata_rule_round4_shapes_read_not_visible[escaped-angle-close]`), source listing cut to the
+  failing line:
+
+```
+F                                                                        [100%]
+>       assert _line_state(body, "ZQ1") != V
+E       AssertionError: assert 'visible' != 'visible'
+E        +  where 'visible' = _line_state('[a](<u\\>)`v>) <!-- b\nZQ1\n--> c`\n', 'ZQ1')
+/home/user/wt-2366/plugins/superheroes/lib/tests/test_md_hidden_2366.py:1221: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_link_metadata_rule_round4_shapes_read_not_visible[escaped-angle-close]
+1 failed in 0.60s
+```
+
+- **Restore:** inverse Edit, `j += 1  # D2 NEUTRALIZED` back to `j += 2 if text[j] == "\\" else 1`.
+- **Restore receipt:** a file search for `NEUTRALIZED|j \+= 2 if text\[j\]` returned only
+  `670:            j += 2 if text[j] == "\\" else 1` (no marker left).
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.31s
+```
+
+  The order names only `[escaped-angle-close]` red for D2; no other node was run under D2.
+
+**Orchestrator re-run (D1).** The orchestrator applied the same D1 neutralization in a separate probe worktree at
+`983b4bed` with this file's `test_md_hidden_2366.py`, ran the whole file, and saw `11 failed, 474 passed, 28 skipped`:
+the nine named node ids, plus `test_review_s3_a_backtick_in_a_link_destination_opens_no_code_span` and
+`test_review_s3_r2_a_quoted_title_parenthesis_does_not_end_the_link_check`, which also rest on the rule. The probe was
+restored by the inverse edit.

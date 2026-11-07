@@ -155,6 +155,9 @@ _UNSURE_SHAPES = frozenset({
     # vet 845 F2: a line that starts inside a tag or a bogus comment reads unsure (the declaration and processing-
     # instruction blocks; the stored CDATA row holds no such line, only the sent form does).
     "decl_block", "pi_block",
+    # park ruling option (a): a reference definition's range holds the next line's backtick and the block holds a `<`,
+    # so it reads unsure (the accepted refusal cost)
+    "linkref_div",
 })
 
 
@@ -1121,3 +1124,116 @@ def test_f8_a_closer_with_nothing_after_it_stays_hidden_and_a_bang_closer_counts
     closes a comment for GitHub too."""
     assert _state("<div>\n<!-- a\nZQ1 -->\n</div>\n\n## H\n", "ZQ1 -->") == H
     assert _state("<div>\n<!-- a\nZQ1 --!> ZQ2\n</div>\n\n## H\n", "ZQ1 --!> ZQ2") == U
+
+
+# --- Returning review after vet 846, round 1 (PR #2390) -----------------------------------------------------------
+
+def _line_state(body, needle):
+    offset = 0
+    for item in md_fence.split_lines(body):
+        if needle in item:
+            return md.scan(body).state_at(offset)
+        offset += len(item)
+    raise AssertionError("no line holds %r" % needle)
+
+
+def test_review_s3_a_backtick_run_over_80_opens_no_code_span():
+    """cmark-gfm's scan_to_closing_backticks refuses an opener longer than 80, so the comment between two 81-runs is
+    raw and hides ZQ1; an 80-run still makes a code span (ZQ1 shown)."""
+    ticks = "`" * 81
+    assert _line_state("x %s <!-- b\nZQ1\nc --> %s y\n\n## ZQ2\n" % (ticks, ticks), "ZQ1") != V
+    ticks = "`" * 80
+    assert _line_state("x %s <!-- b\nZQ1\nc --> %s y\n\n## ZQ2\n" % (ticks, ticks), "ZQ1") == V
+
+
+def test_review_s3_a_declaration_needs_an_uppercase_name_then_whitespace():
+    """cmark-gfm's inline declaration is <!, an uppercase name, whitespace, then up to >: <!X< is literal text, so the
+    later <a title="…"> spans the lines and hides ZQ1."""
+    assert _line_state('x <!X<a title=">\nZQ1\n"> y\n\n## ZQ2\n', "ZQ1") != V
+    assert _line_state("x <!DOCTYPE html> y\nZQ1\n\n## ZQ2\n", "ZQ1") == V
+
+
+def test_review_s3_a_backtick_in_a_link_destination_opens_no_code_span():
+    """cmark reads a link's destination when it closes the link, so its backtick opens no code span and the comment
+    after it is raw and hides ZQ1."""
+    assert _line_state("[a](x`y) <!-- b\nZQ1\n--> c `\n\n## ZQ2\n", "ZQ1") != V
+    assert _line_state("[a](xy) `<!-- b`\nZQ1\n--> c\n\n## ZQ2\n", "ZQ1") == V
+
+
+def test_review_s3_a_code_span_stays_inside_one_table_cell():
+    """GFM inline-parses each table cell on its own, so the backticks in the first and last cells open no code span
+    across the middle cell; its <? … ?> is raw HTML that GitHub's HTML parse ends at the first >, and the <!-- after it
+    hides the rest (the finding's shape). Outside a table the same backticks do make one code span."""
+    body = "| a | b | c |\n| - | - | - |\n| `x | <? > <!-- ?> | y` |\n\n## ZQ1\n"
+    assert _line_state(body, "## ZQ1") != V
+    assert _line_state("`x | <? > <!-- ?> | y`\n\n## ZQ1\n", "## ZQ1") == V
+
+
+def test_review_s3_r2_a_quoted_title_parenthesis_does_not_end_the_link_check():
+    """Round-2 audit and scoped finder: a ) inside a quoted title, or a ( inside one, must not end or widen the link
+    reading wrongly. GitHub hides ZQ1 in both (cmark consumes the whole title before inline parsing resumes)."""
+    assert _line_state('[a](/u "a) `b") <!-- hidden\nZQ1\n--> c`\n\n## H\n', "ZQ1") != V
+    assert _line_state('[a](u "(") `one)two` <!-- b\nZQ1\n--> tail `\n', "ZQ1") != V
+
+
+def test_review_s3_r2_a_link_and_a_code_quoted_opener_in_one_paragraph_stay_visible():
+    """The link check flags only a code span that opens inside a link's destination or title, so an ordinary link
+    beside a code-quoted opener does not refuse the body (the #2366 inline-code case)."""
+    assert _line_state("Text with a [link](https://x) and `<!--` code here.\nZQ1\n\n## H\n", "ZQ1") == V
+    assert md.scan("Text with a [link](https://x) and `<!--` code here.\n\n## H\n").unsure == ()
+
+
+def test_review_s3_r2_a_delimiter_row_whose_cell_count_differs_is_no_table():
+    """cmark-gfm makes a table only when the header and delimiter rows hold the same cell count; otherwise the lines
+    stay one paragraph, its code span spans lines, and the PI after it leaves a comment that hides ZQ1."""
+    assert _line_state("a `one\n| - | - |\ntwo` <? > <!-- ?> `\n\n## ZQ1\n", "## ZQ1") != V
+    assert md._cell_count("| a | b |") == 2 and md._cell_count("a | b | c") == 3 and md._cell_count("| a \\| b |") == 1
+
+
+@pytest.mark.parametrize("body", [
+    "[a](x`y) `one` <!-- b\nZQ1\n--> tail `\n",                    # a later span re-paired by the metadata backtick
+    '[a](x`y) `<a title="` <!-- b">\nZQ1\n--> c\n\n## H\n',        # a fake tag the shifted pairing exposes
+    "[a](<u)`v>) <!-- b\nZQ1\n--> c`\n",                           # an angle-bracket destination holding a )
+    '[r]: /u "`"\n`x` <!-- b\nZQ1\n--> c `\n',                     # a reference definition's title
+], ids=["displaced-span", "fake-tag", "angle-destination", "reference-definition"])
+def test_review_s3_r3_link_metadata_that_changes_backtick_pairing_reads_unsure(body):
+    """Round-3 audits and scoped finder: cmark consumes a link's destination and title (or a reference definition)
+    before inline parsing, so a backtick there changes how every later backtick pairs; GitHub hides ZQ1 in each. The
+    comparison reading turns every construct the two pairings disagree on into an unsure point."""
+    assert _line_state(body, "ZQ1") != V
+
+
+# --- Link-metadata rule (park ruling, option a, issue #2388) -------------------------------------------------------
+# A text block that holds a backtick inside a possible link destination, title or reference definition, and also holds
+# a "<", reads unsure from the block's first line on. The ranges are an over-approximation used only to add that point.
+
+@pytest.mark.parametrize("body", [
+    # round-4 audit and scoped finder (PR #2390, comment 6713049081): an escaped > does not end an angle destination
+    "[a](<u\\>)`v>) <!-- b\nZQ1\n--> c`\n",
+    # round-4 audit (PR #2390, comment 6713049081): malformed metadata, the backtick pairing cmark reads differs
+    "[bad](x `` ) `` [a](x`y) <!-- b\nZQ1\n--> c ` ``\n",
+    # round-4 scoped finder (PR #2390, comment 6713049081): a reference-definition-shaped line inside a paragraph
+    "[a](x`y)\n[r]: /u\n``one\ntwo`` <!-- b\nZQ1\n--> tail `` `\n",
+], ids=["escaped-angle-close", "malformed-metadata", "ref-def-shaped-line-in-paragraph"])
+def test_link_metadata_rule_round4_shapes_read_not_visible(body):
+    """Each shape is one GitHub renders with ZQ1 hidden (checked against the round-4 audits and scoped finder of the
+    returning review on PR #2390, raw output comment 6713049081); ZQ1's line must not read visible."""
+    assert _line_state(body, "ZQ1") != V
+
+
+def test_link_metadata_rule_controls_keep_their_answers():
+    """Controls (checked against: control): no backtick in link metadata, a backtick after the link, and a backtick in
+    metadata with no "<" anywhere in the block (no unsure point)."""
+    assert _line_state("Text with a [link](https://x) and `<!--` code here.\nZQ1\n", "ZQ1") == V
+    assert _line_state("[a](xy) `<!-- b`\nZQ1\n--> c\n\n## ZQ2\n", "ZQ1") == V
+    body = "[a](x`y) no raw html here\nZQ1\n"
+    assert _line_state(body, "ZQ1") == V
+    assert md.scan(body).unsure == ()
+
+
+def test_link_metadata_rule_puts_the_unsure_point_at_the_blocks_first_line():
+    """The rule's point sits on the block's first source line (checked against: control, the rule as ruled): the block's
+    own first line reads unsure, the paragraph before it stays visible."""
+    body = "intro\n\n[a](x`y)\nmid <b>\nZQ1\n"
+    assert _line_state(body, "[a]") == U
+    assert _line_state(body, "intro") == V
