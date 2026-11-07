@@ -1263,3 +1263,12 @@ def test_table_cells_controls_keep_their_answers(body):
     opener in another, or a comment that opens and closes inside one cell, leave ZQ1 visible with no unsure point."""
     assert _line_state(body, "ZQ1") == V
     assert md.scan(body).unsure == ()
+
+
+def test_reference_link_label_backtick_reads_unsure():
+    """Final returning review on 68394b12 (finding "Include reference-link labels in the metadata uncertainty rule"):
+    cmark reads a full reference link's second label apart from the text, so its backtick cannot pair with a later one
+    and the comment after it hides ZQ1 on GitHub; ZQ1's line must not read visible. Control: a reference link with no
+    backtick in its label next to a code-quoted opener keeps its answer."""
+    assert _line_state("[a][x`y] <!-- b\nZQ1\n--> c`\n\n[x`y]: /u\n", "ZQ1") != V
+    assert _line_state("[a][r] and `<!--` code\nZQ1\n\n[r]: /u\n", "ZQ1") == V
