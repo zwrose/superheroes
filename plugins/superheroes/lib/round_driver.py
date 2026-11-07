@@ -432,6 +432,7 @@ SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 # share the same one home.
 ORDER_EMISSION_DISCLOSURE_CHANNELS = (
     "orderVendorProvenanceGaps", "priorCommentsUnavailable", "gateGuidanceRowCarried",
+    "focusNotesNotCarried",
 )
 
 # Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
@@ -14073,6 +14074,13 @@ def _normalize_focus_notes(value):
     return str(value)
 
 
+def _session_focus_notes(meta, cfg):
+    """The session's focus notes (``meta.focusNotes`` or ``config.focusNotes``), normalized."""
+    meta = meta if isinstance(meta, dict) else {}
+    cfg = cfg if isinstance(cfg, dict) else {}
+    return _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes"))
+
+
 def _calibration_path_placeholder(path, label, root_refusal=None):
     if root_refusal:
         return "(%s calibration refused — %s)" % (label, root_refusal)
@@ -14345,6 +14353,27 @@ def _disclose_order_vendor_provenance_gaps(state, gaps):
         merged.append(row)
         seen.add(key)
     _record_round(state, "orderVendorProvenanceGaps", merged)
+
+
+def _disclose_focus_notes_not_carried(state, phase, seats):
+    """Record that ``phase``'s order(s) were emitted while focus notes were set but from a template
+    with no focus line. One row per phase, ``{"phase", "seats"}``; a phase emitted again in the
+    same round unions its seats into its row, and an earlier row is never dropped."""
+    if not seats:
+        return
+    rnd_key = str(state["round"])
+    rec = state["rounds"].get(rnd_key) or {}
+    prior = rec.get("focusNotesNotCarried")
+    merged = [dict(row) for row in prior if isinstance(row, dict)] if isinstance(prior, list) else []
+    for row in merged:
+        if row.get("phase") == phase:
+            existing = row.get("seats")
+            existing = [s for s in existing if isinstance(s, str)] if isinstance(existing, list) else []
+            row["seats"] = sorted(set(existing) | set(seats))
+            break
+    else:
+        merged.append({"phase": phase, "seats": sorted(set(seats))})
+    _record_round(state, "focusNotesNotCarried", merged)
 
 
 def _journal_transport_fields(envelope):
@@ -15099,7 +15128,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PRIOR_COMMENTS_PATH": prior_comments_path,
-            "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
+            "FOCUS_NOTES": _session_focus_notes(meta, cfg),
             "DIMENSION": dim_label,
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
@@ -15222,6 +15251,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "scoped-findings.json"),
             "CHANNEL": channel,
             "CLAUDE_MD_PATH": claude_md_path,
+            "FOCUS_NOTES": _session_focus_notes(meta, cfg),
         }
     return ph
 
@@ -15515,6 +15545,9 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     rendered = []
     unfilled_slots = []
     vendor_gaps = []
+    focus_uncarried = []
+    # Read once per emission: whether the session has focus notes at all (whitespace only is none).
+    session_focus = _session_focus_notes(_session_meta(session_dir), state.get("config") or {}).strip()
     for seat_key, occurrence in round_records.roster_slots(roster):
         if seat_key in unfilled:
             # No candidate outside the makers' families: nothing is dispatched for this slot and no
@@ -15558,6 +15591,10 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
         order_sha = round_records.sha256_text(order_text)
         order_hashes[skey] = order_sha
+        # Notes set and this order's template has no focus line: the seat did not see them, and
+        # that is disclosed rather than silent (a template that cannot be read cannot carry).
+        if session_focus and round_orders.order_carries_focus(phase, context)[0] is not True:
+            focus_uncarried.append(skey)
         seats[skey] = {
             "storeKey": skey,
             "seat": seat_key,
@@ -15584,6 +15621,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
 
     if vendor_gaps:
         _disclose_order_vendor_provenance_gaps(state, vendor_gaps)
+    if focus_uncarried:
+        _disclose_focus_notes_not_carried(state, phase, focus_uncarried)
 
     certified_head = _session_certified_head(session_dir, state)
     manifest = {"schema": ORDERS_MANIFEST_SCHEMA, "session": _meta_session_id(session_dir),
