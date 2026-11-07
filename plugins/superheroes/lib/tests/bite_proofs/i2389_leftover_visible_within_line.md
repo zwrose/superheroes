@@ -167,6 +167,33 @@ E   AssertionError: assert [] == [{'id': 'F-1'...r backs off'}]        <- the BR
 
 The seven-file scoped command of the order (`-q -n auto`): `1261 passed in 26.70s`.
 
+## Review fixes (#2389 returning review, scoped finder 001-003), proven by the builder
+
+The build session applied these at review-code's `apply-fixes` step, commit `10b1c1b3`. It ran the probes itself in a detached probe worktree at the same tree, with targeted edits each reverted by the inverse edit, and confirmed `git diff --stat` was empty after restore. The command was `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-probe -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=no -k test_gN_`. G4's expectations changed with G7: a fenced line holding an opener is now blanked whole, not shortened.
+
+### G5: a comment the cut tail opens and does not close still opens the comment state
+
+- **Guarded element / axis:** the `if opened >= 0 and tail.find("-->", opened + 4) < 0: inside = True` check after the char loop in `_visible`. Axis: a cut at `<!X>` must not skip a later unclosed `<!--`, which hides the following lines of the paragraph (scoped-finder-001).
+- **Neutralization:** the condition became `if False and opened >= 0 and …`.
+- **Raw red:** `1 failed, 1 passed, 105 deselected in 0.44s`. `test_g5_tail_comment_a_comment_the_cut_tail_opens_still_hides_later_lines` failed: F-1 was kept and counted accepted.
+- **Raw green (restored):** `2 passed, 105 deselected in 0.39s`.
+
+### G6: a cut tail holding a fixed-above claim blanks the whole line
+
+- **Guarded element / axis:** `if FIXED_ABOVE_RE.search(tail): kept = []`. Axis: an acceptance never counts while the `fixed-above` claim that needs stack verification is cut away (scoped-finder-002).
+- **Neutralization:** `if False and FIXED_ABOVE_RE.search(tail):`.
+- **Raw red:** `1 failed, 1 passed, 105 deselected in 0.45s`. `test_g6_fixed_above_tail_a_claim_cut_from_the_line_blanks_the_whole_acceptance` failed.
+- **Raw green (restored):** `2 passed, 105 deselected in 0.37s`.
+
+### G7: a fenced line holding an opener is blanked whole, never shortened
+
+- **Guarded element / axis:** `out.append(line if opener is None else term)` in the fenced-line branch. Axis: a shortened content line (a backtick fence line followed by ` <!-- note -->`) must never become a fence closer when the section reader re-reads it (scoped-finder-003).
+- **Neutralization:** `term` became `line[:opener.start()] + term`, which is WO-C's shortening.
+- **Raw red:** `1 failed, 106 deselected in 1.85s`. `test_g7_fence_delimiter_a_shortened_fenced_line_never_closes_the_fence` failed.
+- **Raw green (restored):** `1 passed, 106 deselected in 0.38s`.
+
+The builder also re-ran G1 to G4 at `611668d2`, before these fixes. Red and green matched the implementer's counts above (G1 9 failed, G2 12 failed, G3 16 failed, G4 8 failed; all green restored).
+
 ## Elements in no class
 
 None: G1 to G4 each have their own neutralization and red. Unproven elements: none of the four; FU3 is outside the declared set (see Disclosures).
