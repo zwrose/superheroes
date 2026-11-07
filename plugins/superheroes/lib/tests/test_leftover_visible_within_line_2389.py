@@ -270,18 +270,20 @@ def test_g3_pi_declaration_model_only_an_acceptance_before_the_opener_still_coun
 # --- G4: a line md_fence calls fenced ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("source, expected", [
-    ("```\nkeep <!-- cut -->\n```\n", "```\nkeep \n```\n"),
-    ("```\nkeep <? cut ?>\n```\n", "```\nkeep \n```\n"),
-    ("~~~\nkeep <!X cut>\n~~~\n", "~~~\nkeep \n~~~\n"),
-    ("```\nkeep <![CDATA[ cut ]]>\n```\n", "```\nkeep \n```\n"),
-    ("```\n<!-- first --> and <? second ?>\n```\n", "```\n\n```\n"),  # the first opener of any kind decides
-    ("```\nkeep <!-- cut\n```\nafter\n", "```\nkeep \n```\nafter\n"),  # no comment state carried past the fence
-    ("```\nkeep <!-- cut", "```\nkeep "),  # a last fenced line with no terminator
+    # #2389 review (scoped-finder-003): a fenced line holding an opener is blanked whole, never shortened
+    ("```\nkeep <!-- cut -->\n```\n", "```\n\n```\n"),
+    ("```\nkeep <? cut ?>\n```\n", "```\n\n```\n"),
+    ("~~~\nkeep <!X cut>\n~~~\n", "~~~\n\n~~~\n"),
+    ("```\nkeep <![CDATA[ cut ]]>\n```\n", "```\n\n```\n"),
+    ("```\n<!-- first --> and <? second ?>\n```\n", "```\n\n```\n"),
+    ("```\nkeep <!-- cut\n```\nafter\n", "```\n\n```\nafter\n"),  # no comment state carried past the fence
+    ("```\nkeep <!-- cut", "```\n"),  # a last fenced line with no terminator leaves nothing (the known exception)
 ])
 def test_g4_fenced_line_opener_cuts_a_fenced_line_at_its_first_opener(source, expected):
     out = la._visible(source)
     assert out == expected
-    assert line_count(out) == line_count(source)
+    if source.endswith("\n"):
+        assert line_count(out) == line_count(source)
 
 
 @pytest.mark.parametrize("source", [
@@ -343,3 +345,42 @@ def test_edge_an_internal_md_hidden_error_still_blanks_every_non_marker_line(mon
     monkeypatch.setattr(la.md_hidden, "_scan", fail)
     source = "keep\n<!-- superheroes:build-record -->\n```\nfenced <?x\n```\nlast"
     assert la._visible(source) == "\n<!-- superheroes:build-record -->\n\n\n\n"
+
+
+# --- Review fixes (#2389 returning review, scoped finder): G5 tail comment state, G6 fixed-above tail, G7 fence delimiter ---
+
+def test_g5_tail_comment_a_comment_the_cut_tail_opens_still_hides_later_lines():
+    # scoped-finder-001: the cut at <!X> must not skip the later unclosed <!--, which hides the next lines in the paragraph
+    body = ("## What we're accepting\n\nNote <!X> <!--\nF-1 The retry loop never backs off\n-->\n\n"
+            "## How to see it\n\nN/A\n")
+    assert "F-1" not in la._visible(body)
+    assert missing(body), "F-1 must not count as accepted"
+
+
+def test_g5_tail_comment_a_tail_comment_that_closes_on_its_line_opens_nothing():
+    body = "## What we're accepting\n\nNote <!X> <!-- a -->\n- F-1 The retry loop never backs off\n"
+    assert "F-1 The retry loop never backs off" in la._visible(body)
+    assert missing(body) == []
+
+
+def test_g6_fixed_above_tail_a_claim_cut_from_the_line_blanks_the_whole_acceptance():
+    # scoped-finder-002: the fixed-above claim after a quoted opener must not be dropped while the acceptance counts
+    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99 abcdef0\n\n"
+            "## How to see it\n\nN/A\n")
+    assert "F-1" not in la._visible(body)
+    assert missing(body), "F-1 must not count as accepted without its fixed-above claim"
+
+
+def test_g6_fixed_above_tail_a_tail_without_a_claim_keeps_the_acceptance():
+    body = "## What we're accepting\n\n- F-1 The retry loop never backs off; quoting `<!--`; more text\n"
+    assert missing(body) == []
+
+
+def test_g7_fence_delimiter_a_shortened_fenced_line_never_closes_the_fence():
+    # scoped-finder-003: "``` <!-- note -->" inside a backtick fence is content; shortening it to "``` " would close the
+    # fence and make the sample heading below it the live acceptance section
+    body = ("## What we're accepting\n\nNone.\n\n## How to see it\n\n````\n```\n``` <!-- note -->\n"
+            "## What we're accepting\n\n- F-1 The retry loop never backs off\n```\n````\n")
+    out = la._visible(body)
+    assert "``` \n" not in out
+    assert missing(body), "the fenced sample acceptance must not count"

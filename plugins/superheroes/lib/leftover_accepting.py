@@ -112,7 +112,11 @@ def _visible(body):
       span stays), an unescaped, unquoted processing instruction, declaration or CDATA opener (``<?``, ``<!`` + an
       ASCII letter, ``<![``), and, on a line ``md_fence`` calls fenced, the first opener of any of these kinds or
       ``<!--`` (a raw HTML block such as ``<pre>`` makes a tilde line text, not a fence, so a fenced line is not
-      trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole.
+      trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole. A fenced line
+      holding an opener is blanked whole, never shortened, so the shortened text cannot read as a fence delimiter when
+      the section reader re-reads it. A cut tail that holds a ``fixed-above`` claim blanks its whole line, so the
+      acceptance is not counted without the claim that needs verifying. A comment the cut tail opens and does not close
+      still opens the comment state for later lines.
     * Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so U+2028, U+2029, U+0085, VT, FF,
       FS, GS and RS are ordinary characters inside one.
 
@@ -144,10 +148,11 @@ def _visible(body):
                 out.append(term)
                 continue
             # axis: on a fenced line the first opener (comment, PI, declaration, CDATA) cuts the rest of the line, as a raw HTML block makes a tilde line text, not a fence — see bite-proof record i2389_leftover_visible_within_line.md
+            # axis: such a line is blanked whole, never shortened, so a shortened content line cannot become a fence delimiter when the section reader re-reads it — see bite-proof record i2389_leftover_visible_within_line.md
             opener = _OPENER.search(line)
-            out.append(line if opener is None else line[:opener.start()] + term)
+            out.append(line if opener is None else term)
             continue
-        kept, i = [], 0
+        kept, i, cut = [], 0, None
         while i < len(line):
             if inside:
                 # axis: text inside a comment, up to its closer on any later line, never counts
@@ -162,6 +167,7 @@ def _visible(body):
                 escaped = _OPENER.match(line, i + 1)
                 if escaped is not None:
                     kept.append(line[i:i + 1 + len(escaped.group(0))])
+                    cut = i + 1 + len(escaped.group(0))
                     break
                 kept.append(line[i:i + 2])
                 i += 2
@@ -174,15 +180,26 @@ def _visible(body):
                 quoted = _OPENER.search(line, i + run, end - run) if end is not None else None
                 i = end if end is not None else i + run
                 if quoted is not None:
+                    cut = i
                     break
             elif line.startswith("<!--", i):
                 inside, i = True, i + 4
             # axis: an unescaped, unquoted processing instruction, declaration or CDATA opener cuts the rest of the line, GitHub's parser reads it as a bogus comment — see bite-proof record i2389_leftover_visible_within_line.md
             elif _PI_OPENER.match(line, i):
+                cut = i
                 break
             else:
                 kept.append(line[i])
                 i += 1
+        if cut is not None:
+            tail = line[cut:]
+            # axis: a cut tail that holds a fixed-above claim blanks the whole line, so a claim that needs stack verification is never dropped while its acceptance still counts — see bite-proof record i2389_leftover_visible_within_line.md
+            if FIXED_ABOVE_RE.search(tail):
+                kept = []
+            # axis: a comment the cut tail opens and does not close still opens the comment state for later lines (fails closed: an over-read only cuts more) — see bite-proof record i2389_leftover_visible_within_line.md
+            opened = tail.rfind("<!--")
+            if opened >= 0 and tail.find("-->", opened + 4) < 0:
+                inside = True
         text = "".join(kept)
         # axis: a line md_hidden does not read VISIBLE keeps only its terminator (the loop above still ran, so `inside` carries on)
         # — see bite-proof record i2389_scanner_line_boundaries.md
