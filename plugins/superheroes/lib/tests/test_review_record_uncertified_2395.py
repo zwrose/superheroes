@@ -134,6 +134,18 @@ def test_a_reason_naming_a_forbidden_claim_still_writes_and_keeps_its_cause_in_t
     assert out["ok"] is False and out["reason"] == "review-record-forbidden-claim", out
 
 
+def test_a_long_reason_shortened_by_redaction_still_writes_and_keeps_the_line(tmp_path):
+    """axis: E-displayed — the exemption is the entry as displayed (clipped before the scrub), not a line regenerated from the scrubbed reason."""
+    # a token shape the record's scrub replaces in place (an assignment shape would be withheld whole), built from pieces
+    secret = "gh" + "p_" + "A" * 36
+    reason = "the kept bug-free check errored at setup " + secret + " " + "y" * 400
+    assert len(reason) > 300
+    out, rec = _record(tmp_path, "cannot-certify", _cert(reason))
+    assert out["status"] == rec["status"] == "not-reviewed" and not rr.cleared(rec["status"])
+    (line,) = [m for m in rec["whatIsMissing"] if m.startswith(rr.UNCERTIFIED_OPENING)]
+    assert len(rec["whatIsMissing"]) == 1 and "bug-free" in line
+
+
 def test_a_missing_reason_reads_no_reason_recorded_and_a_long_one_is_clipped(tmp_path):
     """axis: E1/E2/E6 — the reason falls back to the last decision's detail, then to none; the cause is clipped."""
     _, rec = _record(_sub(tmp_path, "none"), "cannot-certify", None)  # no certification, no decisions
@@ -199,9 +211,19 @@ def test_the_sheet_holds_the_line_in_its_history_beside_the_owners_go_ahead_card
     records = [copy.deepcopy(load("record-small.json"))]
     records[0].update(status=rec["status"], whatIsMissing=rec["whatIsMissing"])
     advisor = copy.deepcopy(load("input-small.json"))
-    advisor["items"] = copy.deepcopy(load("input-big.json")["items"])
+    # one item about the withheld certificate, in the shape the fixture's items use
+    advisor["items"] = [{
+        "id": "uncertified-go-ahead", "kind": "Behavior change", "title": "Proceed without the withheld certificate?",
+        "ifLeft": line,
+        "options": [
+            {"id": "proceed", "label": "Proceed", "consequence": "The PR goes ahead without a review certificate.",
+             "sendsBack": False},
+            {"id": "send-back", "label": "Send it back", "consequence": "The PR goes back for another review session.",
+             "sendsBack": True}],
+        "recommendation": {"text": "Send it back", "reason": "The review never converged.", "optionId": "send-back"}}]
     sheet = pr_sheet.build(records, advisor, WORDS)
     expected = pr_sheet._fill(WORDS["historyIncomplete"], what=line)
     assert expected == f"The review record is incomplete: {line}."
     assert expected in sheet["prSheet"]["history"]
-    assert any("Retry for ten minutes" in json.dumps(c) for c in sheet["cards"])
+    (card,) = [c for c in sheet["cards"] if c["question"] == "Proceed without the withheld certificate?"]
+    assert line in json.dumps(card)

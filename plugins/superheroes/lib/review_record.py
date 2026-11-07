@@ -1621,12 +1621,15 @@ def _lane_lines(rec):
     return lines
 
 
+UNCERTIFIED_OPENING = "the review session ended "
+
+
 def uncertified_line(u):
     """The one home of the withheld-certificate wording: the terminal a non-converged session ended on and the driver's
     reason (clipped; its literal text), or that none was recorded. The summary leaves this line's text out of the claim check."""
     reason = u.get("reason")
     cause = _clip(reason.strip()) if isinstance(reason, str) and reason.strip() else "no reason recorded"
-    return f"the review session ended {u['terminal']}, not converged, so its certificate was withheld: {cause}"
+    return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"
 
 
 def _status(rec, unread=(), finding_lines=()):
@@ -2705,8 +2708,9 @@ def _summary(r, level):
     watchdog_line = _watchdog_line(r.get("silenceWatchdogEnds"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
+    first_line = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + "."
     lines = [
-        f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
+        first_line,
         waits_text,
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
@@ -2744,13 +2748,20 @@ def _summary(r, level):
     # axis: the watchdog line carries session seat names, so it is left out of the claim check, by line object — see bite-proof record i2375_c_watchdog_ends
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
     # axis: the findings block and the outside list are left out of the claim check, by line object — see bite-proof record c1l1_wo_a_record_seam
-    checked_text = "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
+    # The withheld-certificate line carries the driver's literal reason, so exactly that one `whatIsMissing` entry, as it
+    # is displayed, is taken out of the first line's `Left:` text (the first line is recomposed without it); every other
+    # part of that line, every other occurrence of the same text, and every other line is still checked. Compact mode
+    # shows no `whatIsMissing` text, so nothing is removed there; a record with no such entry removes nothing.
+    # axis: only the displayed withheld-certificate entry in the first line's `Left:` text is left out of the claim check — see bite-proof record i2395_uncertified_record
+    checked_first = first_line
+    if r.get("uncertified") and not compact:
+        at = next((i for i, m in enumerate(missing) if m.startswith(UNCERTIFIED_OPENING)), None)
+        if at is not None:
+            kept = "; ".join(missing[:at] + missing[at + 1:]) or "nothing"
+            checked_first = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + kept + "."
+    checked_text = "\n".join((checked_first if l is first_line else l) for l in lines
+                             if l is not floor_line and l is not withheld_line and l is not refusals_line
                              and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines))
-    # The withheld-certificate line carries the driver's literal reason, so exactly that one line's text is taken out of
-    # the first line (where `Left:` joins it); every other part of that line and every other line is still checked.
-    # axis: the withheld-certificate line's literal cause is left out of the claim check, by its exact text — see bite-proof record i2395_uncertified_record
-    if r.get("uncertified"):
-        checked_text = checked_text.replace(uncertified_line(r["uncertified"]), "")
     _assert_no_bug_free_claim(checked_text)
     return "\n".join(lines)
 
