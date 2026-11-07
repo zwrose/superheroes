@@ -56,7 +56,7 @@ CHAIN = frozenset({
     "_resolve_empty_fix_batch_convergence", "_fold_verify", "_after_audits",
     "_skip_empty_scoped_surface", "_fold_scoped", "_settle_delta", "_settle_delta_converged",
     "_settle_extra_audit", "_route_stall_self_recovery", "_handle_stall", "_terminal_converged",
-    "_break_it_kept_step",
+    "_queue_fix_batch", "_break_it_kept_step",
 })
 
 
@@ -292,19 +292,39 @@ def test_t6_census_a_the_kept_step_and_the_certified_head_read_through_the_resol
     assert "FIX_FOLD_HEAD_KEY" not in _names(certified)
 
 
+def _passed_session_dir(node, callee):
+    """The expression a call passes as the callee's `session_dir`, or None when it passes none."""
+    for keyword in node.keywords:
+        if keyword.arg == "session_dir":
+            return keyword.value
+    args = callee.args
+    positional = [a.arg for a in args.posonlyargs + args.args]
+    if "session_dir" in positional and len(node.args) > positional.index("session_dir"):
+        return node.args[positional.index("session_dir")]
+    return None
+
+
 def test_t6_census_b_every_chain_call_made_where_a_session_dir_is_held_passes_it():
+    # axis: every call into a function that takes a session_dir, made where one is held, passes that
+    # session_dir itself (never None, never omitted), so no route to the kept step loses it — see
+    # bite-proof record wo_1_2393_kept_head
     tree = _round_driver_tree()
-    missing, seen = [], 0
-    for func in tree.body:
-        if not isinstance(func, ast.FunctionDef) or "session_dir" not in _params(func):
+    defined = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    takes = {name for name, func in defined.items() if "session_dir" in _params(func)}
+    missing, seen = [], set()
+    for func in defined.values():
+        if "session_dir" not in _params(func):
             continue
         for node in ast.walk(func):
             if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
-                    and node.func.id in CHAIN):
-                seen += 1
-                if "session_dir" not in [k.arg for k in node.keywords]:
-                    missing.append("%s:%d calls %s without session_dir" % (func.name, node.lineno, node.func.id))
-    assert seen >= len(CHAIN), "the census saw too few chain calls (%d): the walk is not reaching them" % seen
+                    and node.func.id in takes):
+                seen.add(node.func.id)
+                passed = _passed_session_dir(node, defined[node.func.id])
+                if not (isinstance(passed, ast.Name) and passed.id == "session_dir"):
+                    missing.append("%s:%d calls %s without its session_dir (%s)" % (
+                        func.name, node.lineno, node.func.id,
+                        "omitted" if passed is None else ast.unparse(passed)))
+    assert sorted(CHAIN - seen) == [], "the census is not reaching every chain call"
     assert missing == []
 
 

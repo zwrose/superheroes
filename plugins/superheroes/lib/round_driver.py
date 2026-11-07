@@ -3946,7 +3946,7 @@ def _break_it_scope(session_dir, state, config):
     runner turns into a `head-unresolved` not-run."""
     if session_dir:
         return _resolve_repo_root(session_dir, state), _session_certified_head(session_dir, state)
-    return config.get("repoRoot"), _session_head(None, config)
+    return config.get("repoRoot"), _session_head(session_dir, config)
 
 
 def _outside_anchors(drops):
@@ -6179,10 +6179,11 @@ def _after_findings_settled(state, config, session_dir=None):
         batch = _close_batch_over_fix_groups(state, blocking, _hold_owner_choice(state, blocking))
         # A round whose only blockers are held for the owner has nothing to fix: it settles, and the
         # convergence chokepoint hands the held findings back open.
-        if _queue_fix_batch(state, config, [dict(f) for f in batch]) == "empty":
+        if _queue_fix_batch(state, config, [dict(f) for f in batch],
+                            session_dir=session_dir) == "empty":
             _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
                             session_dir=session_dir)
-    elif _queue_fix_batch(state, config, []) == "empty":
+    elif _queue_fix_batch(state, config, [], session_dir=session_dir) == "empty":
         _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
                             session_dir=session_dir)
 
@@ -7596,7 +7597,8 @@ def _fold_apply_fixes(state, config, artifact, changed_subjects_seam=None, sessi
         done = len(slice_)
         queued = len(queue) - min(cap, len(queue))
         status = _queue_fix_batch(
-            state, config, queue, reset_accumulator=False, batch_index=index + 1)
+            state, config, queue, reset_accumulator=False, batch_index=index + 1,
+            session_dir=session_dir)
         if status == "queued":
             _decision(state, "fix-batch-split",
                       "fix batch slice %d of this round dispatched (%d findings; %d queued)"
@@ -9799,11 +9801,11 @@ def _settle_delta(state, config, session_dir=None):
         batch = _hold_owner_choice(state, _union_open_blockers(new_blocking, nd_targets))
         # Only owner-choice blockers were open: nothing to fix, so the delta settles as a clean one
         # and the convergence chokepoint hands the held findings back open.
-        if _queue_fix_batch(state, config, batch) == "empty":
+        if _queue_fix_batch(state, config, batch, session_dir=session_dir) == "empty":
             _settle_delta_converged(state, config, session_dir=session_dir)
         return
 
-    if _queue_fix_batch(state, config, []) != "empty":
+    if _queue_fix_batch(state, config, [], session_dir=session_dir) != "empty":
         return
     _settle_delta_converged(state, config, session_dir=session_dir)
 
@@ -10430,7 +10432,8 @@ def _compose_stall_fix_batch(state, breaker):
 def _route_stall_self_recovery(state, config, batch, refusal, breaker, session_dir=None):
     """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
     if batch:
-        if _queue_fix_batch(state, config, _hold_owner_choice(state, batch)) == "empty":
+        if _queue_fix_batch(state, config, _hold_owner_choice(state, batch),
+                            session_dir=session_dir) == "empty":
             _settle_delta_converged(state, config, session_dir=session_dir)
     elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
         _park_cannot_certify(
