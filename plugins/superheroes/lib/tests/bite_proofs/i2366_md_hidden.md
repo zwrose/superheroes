@@ -1589,3 +1589,132 @@ FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_link_metadata_
 the nine named node ids, plus `test_review_s3_a_backtick_in_a_link_destination_opens_no_code_span` and
 `test_review_s3_r2_a_quoted_title_parenthesis_does_not_end_the_link_check`, which also rest on the rule. The probe was
 restored by the inverse edit.
+
+## Table ruling and vet-849 amendment
+
+The rulings: the advisor's TABLE RULING (parse each GFM table cell on its own, as cmark-gfm does) and the vet-849
+AMENDMENT (a text block whose first line starts with `[` and holds `]:` reads unsure; `[ZQ1]: /u` becomes a passing
+case), both in issue #2388's STATE, plus the cmark-shaped `_destination_end`. Each neutralization is a targeted edit of
+`plugins/superheroes/lib/md_hidden.py`, undone by the inverse edit. Node ids are relative to
+`plugins/superheroes/lib/tests/`. Command prefix (worktree root):
+`scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest <node ids> -q`. Captures are verbatim except
+uv's `UV_NATIVE_TLS` deprecation warning line, dropped. Nothing was redacted. Guarded-element set: F1, F2, F3.
+
+### F1: the per-cell inline pass
+
+- **Guarded element / axis:** `md_hidden.py:836`, `if header is None:` in `_inline_pass` (axis: a table's cells are
+  parsed one at a time, so a tag opened in one cell cannot absorb a raw comment opener in the next).
+- **Neutralization:** `if header is None:` became `if True:` (the table is parsed joined).
+- **Raw red** (node ids `test_md_hidden_review_s1_table_raw_boundaries.py::test_cross_cell_tag_cannot_mask_a_raw_comment_opener`
+  and `test_md_hidden_review_w2u1_cells.py::test_a_tag_cannot_hide_raw_html_in_another_table_cell`), source listing cut to
+  the failing assertion lines:
+
+```
+FF                                                                       [100%]
+>           assert rendering.state_at(body.index("## ZQ1")) in (md.HIDDEN, md.UNSURE), (
+E           AssertionError: ('"', ((0, 'visible'), (10, 'visible'), (20, 'visible'), (55, 'visible'), (56, 'visible')), ())
+E           assert 'visible' in ('hidden', 'unsure')
+test_md_hidden_review_s1_table_raw_boundaries.py:22: AssertionError
+>       assert rendering.state_at(body.index("## ZQ1")) in (md.HIDDEN, md.UNSURE), (
+E       AssertionError: (((0, 'visible'), (14, 'visible'), (28, 'visible'), (63, 'visible'), (64, 'visible')), ())
+E       assert 'visible' in ('hidden', 'unsure')
+test_md_hidden_review_w2u1_cells.py:22: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_s1_table_raw_boundaries.py::test_cross_cell_tag_cannot_mask_a_raw_comment_opener
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_w2u1_cells.py::test_a_tag_cannot_hide_raw_html_in_another_table_cell
+2 failed in 0.33s
+```
+
+- **Restore:** inverse Edit, `if True:` back to `if header is None:`.
+- **Restore receipt:** a file search for `if header is None:|if True:` returned only `836:    if header is None:`.
+- **Raw green** (same two node ids):
+
+```
+..                                                                       [100%]
+2 passed in 0.17s
+```
+
+### F2: the reference-definition rule
+
+- **Guarded element / axis:** `md_hidden.py:848`, `if lines and _REF_DEF_START.match(lines[0]) and "]:" in joined:` in
+  `_inline_pass` (axis: a block whose first line starts with `[` and holds `]:` reads unsure from its first line).
+- **Neutralization:** that line became `    if False:`.
+- **Raw red** (one command: the three node ids `test_md_hidden_2366.py::test_amendment_link_reference_definition_lines_read_unsure`,
+  `test_md_hidden_2366.py::test_corpus_no_line_github_hides_reads_visible`,
+  `test_md_hidden_2366.py::test_unsure_footnote_definition_inside_a_quote_and_not_a_link_label`, plus the whole files
+  `test_md_hidden_review_s1_reference_extents.py` and `test_md_hidden_review_w2u1_references.py`). The harness truncated
+  10132 characters from the middle of the output (inside the `test_unsure_footnote_definition_inside_a_quote_and_not_a_link_label`
+  and `s1_reference_extents` failures), so the capture is **incomplete**: below are the assertion lines that were shown, and
+  the closing summary, which was shown whole:
+
+```
+FFFFFFFFFFFFF                                                            [100%]
+>       assert _line_state(body, needle) == U
+E       AssertionError: assert 'visible' == 'unsure'
+test_md_hidden_2366.py:1243: AssertionError
+E       AssertionError: 1 fail-open (body, line index, line):
+E         ('x\n\n[ZQ1]: /u\n\n## ZQ2\n', 2, '[ZQ1]: /u\n')
+test_md_hidden_2366.py:940: AssertionError
+E       AssertionError: ('[r\nx]: /u`v\n', ((0, 'visible'), (3, 'visible'), (12, 'visible'), (29, 'visible'), (33, 'visible')), ())
+test_md_hidden_review_w2u1_references.py:25: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_amendment_link_reference_definition_lines_read_unsure[titled-definition]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_amendment_link_reference_definition_lines_read_unsure[label-with-spaces]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_amendment_link_reference_definition_lines_read_unsure[bare-definition]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_corpus_no_line_github_hides_reads_visible
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_unsure_footnote_definition_inside_a_quote_and_not_a_link_label
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_s1_reference_extents.py::test_consumed_reference_backtick_cannot_mask_a_comment[label]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_s1_reference_extents.py::test_consumed_reference_backtick_cannot_mask_a_comment[third-line-title]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_s1_reference_extents.py::test_consumed_reference_backtick_cannot_mask_a_comment[escaped-label]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_s1_reference_extents.py::test_consumed_reference_backtick_cannot_mask_a_comment[multiline-label]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_w2u1_references.py::test_reference_metadata_cannot_mask_an_inline_comment[label-backtick]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_w2u1_references.py::test_reference_metadata_cannot_mask_an_inline_comment[escaped-bracket-label]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_w2u1_references.py::test_reference_metadata_cannot_mask_an_inline_comment[multiline-label]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_review_w2u1_references.py::test_reference_metadata_cannot_mask_an_inline_comment[multiline-title]
+13 failed in 0.67s
+```
+
+  (The `:1243` assertion was shown for all three parametrized cases; the `:25` assertion was shown for the
+  `multiline-label` and `multiline-title` cases.) All three named test functions went red (five items: three parametrized cases, the corpus test, the footnote test). Every
+  reference break-it test in the two whole files went red as well: the summary has `13 failed` and no passed item, so none
+  of the four `s1_reference_extents` cases nor the four `w2u1_references` cases stayed green; the link-metadata rule
+  (`_link_regions` through `_destination_end`) does not cover any of them on its own.
+- **Restore:** inverse Edit, `if False:` back to the `_REF_DEF_START` line.
+- **Restore receipt:** a file search for `_REF_DEF_START.match|^    if False:` returned only
+  `848:    if lines and _REF_DEF_START.match(lines[0]) and "]:" in joined:`.
+- **Raw green** (same command):
+
+```
+.............                                                            [100%]
+13 passed in 0.75s
+```
+
+### F3: the bare destination's parenthesis count
+
+- **Guarded element / axis:** `md_hidden.py:687`, `while j < n and text[j] not in " \t\n":` in `_destination_end` (axis: a
+  bare destination runs to whitespace, so a quote does not stop the parenthesis count).
+- **Neutralization:** it became `while j < n and text[j] not in " \t\n\"'":`.
+- **Raw red** (`test_md_hidden_2366.py::test_destination_quotes_do_not_stop_the_parenthesis_count`):
+
+```
+F                                                                        [100%]
+>       assert _line_state('[a](u"(x")y`z) <!-- b\nZQ1\n--> c`\n', "ZQ1") != V
+E       assert 'visible' != 'visible'
+E        +  where 'visible' = _line_state('[a](u"(x")y`z) <!-- b\nZQ1\n--> c`\n', 'ZQ1')
+test_md_hidden_2366.py:1251: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_destination_quotes_do_not_stop_the_parenthesis_count
+1 failed in 0.32s
+```
+
+- **Restore:** inverse Edit, the `\"'` removed.
+- **Restore receipt:** a file search for `while j < n and text\[j\] not in` returned only
+  `687:        while j < n and text[j] not in " \t\n":`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.31s
+```
+
+**Orchestrator re-run (F1).** The orchestrator applied the same F1 neutralization in a separate probe worktree holding a
+byte-identical `md_hidden.py` and the same break-it files, ran the two table break-it files whole, and saw `2 failed, 1
+passed` (the two named nodes red; the paragraph control green). The probe was restored by the inverse edit and compared
+byte-identical with the build tree's file.

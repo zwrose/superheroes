@@ -271,6 +271,7 @@ class _Block:
         self.fence_offset = 0
         self.html_type = 0
         self.table = False  # paragraph: a GFM delimiter row followed its header row
+        self.header = None  # paragraph with a table: the index in ``lines`` of the table's header row
 
 
 def _can_contain(parent_kind, kind):
@@ -588,6 +589,7 @@ class _Parser:
                 and _cell_count(block.lines[-1]) == _cell_count(rest)):
             # axis: cmark-gfm makes a table only when the header row and the delimiter row hold the same cell count
             block.table = True  # axis: a GFM delimiter row turns on the table-row unsure rule
+            block.header = len(block.lines) - 1
         block.lines.append(rest)
         self._check_line(rest)
 
@@ -637,6 +639,7 @@ _INLINE_CDATA = re.compile(r"<!\[CDATA\[.*?\]\]>", re.S)
 # cmark-gfm's declaration: <! then an uppercase name, whitespace, anything but >, then >
 _INLINE_DECL = re.compile(r"<![A-Z]+" + _IWS + r"+[^>]*>")
 _REF_DEF = re.compile(r"(?m)^[ ]{0,3}\[[^\]\n]+\]:")  # a line that may be a link reference definition
+_REF_DEF_START = re.compile(r"[ ]{0,3}\[")  # a block's first line that may open a link reference definition
 _MAX_BACKTICKS = 80  # cmark-gfm: a backtick run longer than this opens no code span (scan_to_closing_backticks)
 
 
@@ -660,36 +663,51 @@ def _link_regions(text):
 
 def _destination_end(text, j):
     """Where a possible link destination and title starting at ``j`` end: just past the closing ``)``, else the end.
-    An angle-bracket destination ends at the first ``>`` that is not backslash-escaped. The result is an
-    over-approximation used only to add unsure points."""
-    while j < len(text) and text[j] in " \t\n":
+    Read as cmark-gfm reads an inline link: an angle-bracket destination ends at the first ``>`` that is not
+    backslash-escaped; a bare one counts its parentheses (quotes are ordinary characters there) and ends at
+    whitespace; then an optional ``"…"``, ``'…'`` or ``(…)`` title, then ``)``. Anything this reading cannot follow
+    runs to the end of the text, so the result is an over-approximation used only to add unsure points."""
+    n = len(text)
+
+    def blank(k):
+        while k < n and text[k] in " \t\n":
+            k += 1
+        return k
+
+    j = blank(j)
+    if j < n and text[j] == "<":
         j += 1
-    if j < len(text) and text[j] == "<":
-        j += 1
-        while j < len(text) and text[j] != ">":
+        while j < n and text[j] != ">":
             j += 2 if text[j] == "\\" else 1
-        if j >= len(text):
-            return len(text)
+        if j >= n:
+            return n
         j += 1
-    depth, quote = 1, None
-    while j < len(text):
-        c = text[j]
-        if c == "\\":
-            j += 2
-            continue
-        if quote:
-            if c == quote:
-                quote = None
-        elif c in "\"'":
-            quote = c
-        elif c == "(":
-            depth += 1
-        elif c == ")":
-            depth -= 1
-            if depth == 0:
-                return j + 1
+    else:
+        depth = 0
+        while j < n and text[j] not in " \t\n":
+            c = text[j]
+            if c == "\\":
+                j += 2
+                continue
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                if depth == 0:
+                    return j + 1
+                depth -= 1
+            j += 1
+    j = blank(j)
+    if j < n and text[j] in "\"'(":
+        close = ")" if text[j] == "(" else text[j]
         j += 1
-    return len(text)
+        while j < n and text[j] != close:
+            j += 2 if text[j] == "\\" else 1
+        if j >= n:
+            return n
+        j = blank(j + 1)
+    if j < n and text[j] == ")":
+        return j + 1
+    return n
 
 
 def _cell_count(row):
@@ -728,13 +746,12 @@ _INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI,
 _ASCII_WS = " \t\n\v\f\r"
 
 
-def _inline_constructs(text, cells=False):
+def _inline_constructs(text):
     """The raw-HTML constructs of a text block, left to right as cmark-gfm's inline parser finds them: a list of
     ``(start, end)`` (end exclusive). A backslash escapes an ASCII punctuation character; a backtick run opens a code
     span that closes at the next run of exactly its length (nothing inside is raw HTML; with no such run the backticks
     are literal); at ``<`` an autolink is text, otherwise one of the six raw-HTML grammars either matches there or the
-    ``<`` is literal. With ``cells`` (a GFM table block, whose cells cmark-gfm inline-parses one by one) a code span
-    closes only before the next unescaped ``|`` or line break."""
+    ``<`` is literal."""
     found = []
     i = 0
     n = len(text)
@@ -752,17 +769,14 @@ def _inline_constructs(text, cells=False):
             # axis: a run longer than cmark-gfm's 80 backticks is literal text
             if width > _MAX_BACKTICKS:
                 at = n
-            limit = n
-            if cells:
-                limit = _cell_end(text, end)
-            while at < limit:
+            while at < n:
                 at = text.find("`", at)
                 if at < 0:
                     break
                 run = at
                 while run < n and text[run] == "`":
                     run += 1
-                if run - at == width and run <= limit:
+                if run - at == width:
                     closed = run
                     break
                 at = run
@@ -795,7 +809,7 @@ def _comment_line_state(line):
     return HIDDEN
 
 
-def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, cells=False):
+def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=None):
     """Run the inline raw-HTML pass over one text block (``lines``: its lines after container prefixes; source line
     ``first + k`` is ``lines[k]``).
 
@@ -819,7 +833,23 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, cells=Fal
                 hi = mid - 1
         return lo
 
-    constructs = _inline_constructs(joined, cells)
+    if header is None:
+        constructs = _inline_constructs(joined)
+    else:
+        # axis: cmark-gfm inline-parses each GFM table cell on its own (the lines above the header row stay one
+        # paragraph), so no code span or raw-HTML construct runs from one cell into the next
+        constructs = _inline_constructs("\n".join(lines[:header]))
+        for k in range(header, len(lines)):
+            at, end = starts[k], starts[k] + len(lines[k])
+            while at <= end:
+                stop = min(_cell_end(joined, at), end)
+                constructs += [(at + b, at + e) for b, e in _inline_constructs(joined[at:stop])]
+                at = stop + 1
+    if lines and _REF_DEF_START.match(lines[0]) and "]:" in joined:
+        # axis: cmark consumes link reference definitions at a block's start and GitHub renders nothing for them, so
+        # a block that may open with one (a "[" line and a "]:" anywhere: labels may hold escapes and span lines)
+        # reads unsure from its first line
+        sure_points.add((first, "possible link reference definition"))
     if "<" in joined:
         # axis: cmark reads a link's destination and title (and a reference definition) apart from the inline text, so
         # a backtick there opens no code span and can change how every later backtick pairs; rather than parse links,
@@ -829,7 +859,6 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, cells=Fal
         ticks = [i for i, ch in enumerate(joined) if ch == "`"]
         if any(r0 <= i < r1 for i in ticks for r0, r1 in regions):
             sure_points.add((first, "backtick in possible link metadata in a block that holds raw HTML"))
-    # axis: a GFM table block's code spans stay inside one cell, as cmark-gfm parses each cell on its own
     for begin, end in constructs:
         construct = joined[begin:end]
         first_line = line_of(begin)
@@ -907,7 +936,7 @@ def _scan(body):
                     unsure[(offsets[i], "text inside a comment holds < and a later -->")] = None
             else:
                 # axis (C1): the inline raw-HTML pass over the text block's content
-                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure, text_block[i].table)
+                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure, text_block[i].header)
 
     for line_index, why in inline_points:
         if line_index < len(offsets):
