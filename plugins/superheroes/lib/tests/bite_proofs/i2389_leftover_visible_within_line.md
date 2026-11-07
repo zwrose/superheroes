@@ -202,6 +202,13 @@ These fixes update G6 and G7 above and add G8. The probes ran in a detached prob
 - **G6 block (audit of scoped-finder-002).** Guarded element: the `for m in range(first, last + 1)` loop that blanks a claimed line's whole block. Neutralization: `range(n, n + 1)`, which blanks only the claim line. Red: `1 failed, 113 deselected` (`test_g6_fixed_above_tail_a_claim_on_a_continuation_line_blanks_the_whole_item`). Green: `1 passed, 113 deselected`.
 - **G8 comment-state end (round-2 finder v1).** Guarded element: `if inside and shown[n] and (not line.strip() or _ATX_LINE.match(line)): inside = False`. Neutralization: `if False and …`. Red: `2 failed, 1 passed, 111 deselected` (the quoted-tail heading test and the blank-line test; the raw-block test stays green as designed). Green: `3 passed, 111 deselected`.
 
+## Review round 3 fixes (fix audits and round-3 scoped finder), proven by the builder at `981e39c6`
+
+These were probed the same way as round 2: a detached probe worktree, targeted edits reverted by their inverse, and `git diff --stat` empty after restore.
+
+- **G9 heading boundary (round-3 audits of all four targets, and the round-3 finder).** Guarded element: `_ATX_LINE.match(lines[m])` in the `_boundary` helper of the claimed-block walk. The block stops at, and never blanks, an ATX heading. Neutralization: drop that term, so the walk crosses headings. Red: `2 failed, 115 deselected` (`-k test_g9_`). Green: `2 passed, 115 deselected`.
+- **G6 wrapped claim (round-3 audit of scoped-finder-002).** Guarded element: `_FIXED_ABOVE_TOKEN.search(tail)`, the token rather than the whole claim. Neutralization: `FIXED_ABOVE_RE.search(tail)`. Red: `1 failed, 116 deselected` (`test_g6_fixed_above_tail_a_claim_wrapped_onto_the_next_line_is_still_seen`). Green: `1 passed, 116 deselected`.
+
 ## Elements in no class
 
-None: G1 to G8 each have their own neutralization and red. Unproven elements: none; FU3 is outside the declared set (see Disclosures).
+None: G1 to G9 each have their own neutralization and red. Unproven elements: none; FU3 is outside the declared set (see Disclosures).
