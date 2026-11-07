@@ -152,6 +152,9 @@ _UNSURE_SHAPES = frozenset({
     "footnote_div", "div_open_then_inline_comment", "div_open_then_inline_dashdash", "textarea_block",
     "script_attr_opener", "unclosed_attr", "div_title_unclosed_mid", "source_tag", "search_tag",
     "fence_tilde_256_cap", "fence_tick_256_cap", "fence_tilde_300_close_256",
+    # vet 845 F2: a line that starts inside a tag or a bogus comment reads unsure (the declaration and processing-
+    # instruction blocks; the stored CDATA row holds no such line, only the sent form does).
+    "decl_block", "pi_block",
 })
 
 
@@ -205,7 +208,9 @@ _HIDDEN_SHAPES = [
 def test_named_shape_hides_the_owner_heading(shape, form):
     """The sent body (the egress normalised U+2028, U+0085, form feed, CR and <![CDATA[ in transit)."""
     row = _ROW_BY_KEY[(shape, form)]
-    _reads(row["sent"], OWNER[form], H)
+    # vet 845 F2: the line after "<![CDATA[" starts inside a bogus comment, which reads UNSURE (a ">" early in the line
+    # can end the state), so the CDATA shape's owner heading is UNSURE; every other shape is HIDDEN.
+    _reads(row["sent"], OWNER[form], U if shape == "cdata_block" else H)
 
 
 @pytest.mark.parametrize("form", ["builder", "bot"])
@@ -673,7 +678,8 @@ def test_guard_g11_type7_cannot_interrupt_a_paragraph():
 
 def test_guard_g12_type4_needs_an_uppercase_letter():
     assert _state("x\n\n<!x\nfoo > <!--\n\n## H\n", "## H") == V  # lowercase: paragraph text, GitHub shows no block
-    assert _state("x\n\n<!X\nfoo > <!--\n\n## H\n", "## H") == H  # uppercase: a declaration block
+    # uppercase: a declaration block; vet 845 F2 reads its `## H` UNSURE (a line starting inside a bogus comment)
+    assert _state("x\n\n<!X\nfoo > <!--\n\n## H\n", "## H") == U
 
 
 # --- Review round 1 (PR #2390): cmark whitespace, closing version tags, a leading byte-order mark ------------------
