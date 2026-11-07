@@ -529,7 +529,8 @@ writes only between the two slot markers, and reads the result back. A refusal n
 the PR's edit history, never re-stamp into it),
 `followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`,
 `slot-span-foreign-content` (another `superheroes:` marker, such as the DoD table, sits in the slot
-span and the write would delete it), or `read-failed`) with a detail
+span and the write would delete it), `slot-span-builder-text` (builder text sits in the slot span:
+move it out or ask the builder to; nothing was written), or `read-failed`) with a detail
 that says what was wrong, and writes nothing, except `write-unconfirmed`: the edit call was made (even
 one that failed or timed out) but the readback failed or differed from the pushed body. `check --pr <n> --repo <owner/name>` runs the same
 comparison with no write. The command exists because a hand-rolled write fails silently: a shell

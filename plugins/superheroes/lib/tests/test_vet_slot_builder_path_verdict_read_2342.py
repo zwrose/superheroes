@@ -19,7 +19,8 @@ READY_LINE = "**Verdict: READY** · " + HEAD
 NOT_READY_LINE = "**Verdict: NOT-READY** · " + HEAD + " (old)"
 NOT_READY_SLOT = "**Verdict: NOT-READY** · " + HEAD + "\n\nNew owner half.\n"
 READY_SLOT = "**Verdict: READY** · " + HEAD + "\n\nNew owner half.\n"
-OLD_SLOT = MARKER + "\nold slot text\n"
+# the earlier slot in test_vet_slot.BODY: a verdict-form slot, so the write reads it as the advisor's own (#2352)
+OLD_SLOT = MARKER + "\n**Verdict: NOT-READY** · abc\n\nold slot text\n"
 
 # the seven measured separators: each ends the marker's own splitlines() line, and none is "\n"
 SEPARATORS = ["\r", " ", " ", "\x85", "\x0b", "\x0c", "\x1c"]
