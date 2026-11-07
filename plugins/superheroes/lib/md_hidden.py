@@ -37,16 +37,18 @@ _BLOCK_TAGS = (
 
 # cmark's HTML scanners treat a vertical tab and a form feed as whitespace too (``spacechar`` in scanners.re)
 _WS = "[ \t\v\f]"
-_HTML_T1 = re.compile(r"<(?:script|pre|style)(?:[ \t\v\f>]|\Z)", re.I)
+# cmark is ASCII-only: re.A keeps Unicode case folding (U+017F, the Kelvin sign U+212A, U+0130, U+0131) from matching an
+# ASCII tag letter
+_HTML_T1 = re.compile(r"<(?:script|pre|style)(?:[ \t\v\f>]|\Z)", re.I | re.A)
 _HTML_T4 = re.compile(r"<![A-Z]")
-_HTML_T6 = re.compile(r"</?(?:" + "|".join(_BLOCK_TAGS) + r")(?:[ \t\v\f>]|/>|\Z)", re.I)
+_HTML_T6 = re.compile(r"</?(?:" + "|".join(_BLOCK_TAGS) + r")(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)
 _ATTR = (r"(?:" + _WS + r"+[A-Za-z_:][A-Za-z0-9_.:-]*(?:" + _WS + r"*=" + _WS
          + r"""*(?:[^ \t\v\f"'=<>`]+|'[^']*'|"[^"]*"))?)""")
 _HTML_T7 = re.compile(
     r"(?:<([A-Za-z][A-Za-z0-9-]*)" + _ATTR + r"*" + _WS + r"*/?>|</([A-Za-z][A-Za-z0-9-]*)" + _WS + r"*>)"
-    + _WS + r"*\Z"
+    + r"[ \t\f]*\Z"  # cmark-gfm's type 7 ends in [\t\n\f ]: a vertical tab after the tag is not whitespace here
 )
-_T1_END = re.compile(r"</(?:script|pre|style)>", re.I)
+_T1_END = re.compile(r"</(?:script|pre|style)>", re.I | re.A)
 
 _ATX_START = re.compile(r"#{1,6}(?:[ ]+|\Z)")
 _SETEXT = re.compile(r"(?:=+|-+)[ ]*\Z")
@@ -58,8 +60,9 @@ _ORDERED = re.compile(r"([0-9]{1,9})[.)](?=[ ]|\Z)")
 _LIST_START = re.compile(r"(?:[-+*]|[0-9]{1,9}[.)])(?:[ ]|\Z)")
 _TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z")
 _FOOTNOTE = re.compile(r"[ ]{0,3}\[\^[^\]\s]+\]:")
-_VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I)
-_TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I)
+_VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)
+_TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I | re.A)
+_VTAB_TAG = re.compile(r"</?[A-Za-z][^>]*\v")  # an inline tag opener whose run up to the next > holds a vertical tab
 
 _COMMENT_RUN = re.compile(r"<!--.*?(?:-->|--!>)", re.S)
 _TAG_RUN = re.compile(r"<[^>]*>")
@@ -453,8 +456,8 @@ class _Parser:
         if _HTML_T6.match(rest):
             return 6
         if kind != "para" and not maybe_lazy:
-            m = _HTML_T7.match(rest)
-            if m and (m.group(1) or m.group(2)).lower() not in ("script", "style", "pre"):
+            # no tag-name exclusion: cmark-gfm's type-7 scanner has none, and type 1 already took <script, <pre and <style
+            if _HTML_T7.match(rest):
                 return 7
         return 0
 
@@ -613,15 +616,27 @@ def _closer_after_lt(text):
 
 
 def _runs_past_its_end(text):
-    """True when an inline processing instruction or CDATA section is followed by a ``>`` and then a ``<!--``: the
-    HTML parser ends such a chunk at the first ``>``, earlier than the Markdown parser does."""
+    """True when an inline processing instruction or CDATA section is followed by a ``>`` and then any ``<``: the
+    HTML parser ends such a chunk (a bogus comment) at the first ``>``, earlier than the Markdown parser does, and a
+    later ``<`` can open a comment or an unclosed attribute quote.
+
+    A narrow check, not an inline tokenizer pass."""
     for opener in ("<?", "<![CDATA["):
         at = text.find(opener)
         if at >= 0:
             close = text.find(">", at)
-            if close >= 0 and text.find("<!--", close) >= 0:
+            if close >= 0 and text.find("<", close) >= 0:
                 return True
     return False
+
+
+def _tag_holds_vtab(text):
+    """True when ``text`` holds an inline tag opener (``<``, an optional ``/``, an ASCII letter) with a vertical tab
+    before the next ``>``: cmark counts ``\\v`` as tag whitespace and passes the tag through raw, HTML parsing does not,
+    so the tag can end at an earlier ``>`` inside a quoted value.
+
+    A narrow check, not an inline tokenizer pass."""
+    return _VTAB_TAG.search(text) is not None
 
 
 def _scan(body):
@@ -654,6 +669,9 @@ def _scan(body):
     for i in range(len(texts)):
         hidden = state == _COMMENT
         raw.append(HIDDEN if hidden else VISIBLE)
+        if state not in _OPEN_STATES:
+            # unsure, never hidden: a > early in this line can end the tag or bogus comment, and the rest of the line shows
+            unsure[(offsets[i], "line starts inside a tag or a bogus comment")] = None
         if i in html_line:
             state = _tokenize(state, html_line[i] + "\n")
             if i in html_last and state not in _OPEN_STATES:
@@ -666,6 +684,8 @@ def _scan(body):
                 unsure[(offsets[i], "text inside a comment holds < and a later -->")] = None
             if _runs_past_its_end(joined):
                 unsure[(offsets[i], "inline processing instruction or CDATA that HTML parsing ends early")] = None
+            if _tag_holds_vtab(joined):
+                unsure[(offsets[i], "inline tag with a vertical tab that HTML parsing ends at an earlier >")] = None
 
     first_unsure = min((at for at, _ in unsure), default=None)
     lines = []
