@@ -655,9 +655,12 @@ def _link_regions(text):
         regions.append((at + 2, _destination_end(text, at + 2)))
         at = text.find("](", at + 2)
     at = text.find("][")
-    while at >= 0:  # a full reference link's second label: cmark reads it apart from the text
-        end = text.find("]", at + 2)
-        regions.append((at + 2, len(text) if end < 0 else end))
+    while at >= 0:  # a full reference link's second label: cmark reads it apart from the text, to its first
+        # unescaped "]" (a label may span lines); an unclosed one runs to the end of the text
+        end = at + 2
+        while end < len(text) and text[end] != "]":
+            end += 2 if text[end] == "\\" else 1
+        regions.append((at + 2, min(end, len(text))))
         at = text.find("][", at + 2)
     for m in _REF_DEF.finditer(text):
         nl = text.find("\n", m.end())
