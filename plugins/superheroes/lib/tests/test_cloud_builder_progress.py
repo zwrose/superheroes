@@ -47,6 +47,19 @@ class _Run:
         return SimpleNamespace(returncode=self.code, stdout=self.out, stderr="")
 
 
+class _WriteThenRead(_Run):
+    """Answers the write (`-X`) with `out`, and the read-back with the body GitHub holds (`held`)."""
+
+    def __init__(self, out, held):
+        super().__init__(0, out)
+        self.held = held
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+        stdout = self.out if "-X" in argv else json.dumps({"body": self.held})
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+
 # ---------------------------------------------------------------- the header
 
 
@@ -245,19 +258,32 @@ def test_terminal_kind_is_none_for_a_progress_comment():
 # ---------------------------------------------------------------- edit_comment
 
 
-def test_edit_comment_runs_exactly_one_patch_and_returns_the_url():
+def test_edit_comment_runs_exactly_one_patch_and_returns_the_url(tmp_path):
     # axis: edit_comment makes exactly one gh PATCH of the body file and returns the url; a second call or other verb would post or duplicate
-    run = _Run(0, json.dumps({"html_url": "https://github.com/o/r/issues/5#issuecomment-9"}))
-    assert cb.edit_comment("o/r", 9, "/tmp/b", run=run, env={}) == {
-        "ok": True, "reason": None, "url": "https://github.com/o/r/issues/5#issuecomment-9"}
+    body = tmp_path / "b"
+    body.write_text("hello", encoding="utf-8")
+    run = _WriteThenRead(json.dumps({"html_url": "https://github.com/o/r/issues/5#issuecomment-9"}), "hello")
+    # the fake answers the read-back with the exact body written, so transit is matched with no line
+    assert cb.edit_comment("o/r", 9, str(body), run=run, env={}) == {
+        "ok": True, "reason": None, "url": "https://github.com/o/r/issues/5#issuecomment-9",
+        "transit": {"transit": "matched"}}
+    # one PATCH, then the one read-back GET of the same comment; no other write
     assert run.calls == [["gh", "api", "-X", "PATCH", "repos/o/r/issues/comments/9",
-                          "-F", "body=@/tmp/b"]]
+                          "-F", "body=@%s" % body],
+                         ["gh", "api", "repos/o/r/issues/comments/9"]]
+    assert len([argv for argv in run.calls if "-X" in argv]) == 1
 
 
-def test_edit_comment_with_unparseable_success_output_has_no_url():
+def test_edit_comment_with_unparseable_success_output_has_no_url(tmp_path):
     # axis: a successful write with unparseable output is ok with no url; claiming a url would invent a link
-    assert cb.edit_comment("o/r", 9, "/b", run=_Run(0, "ok"), env={}) == {
-        "ok": True, "reason": None, "url": None}
+    body = tmp_path / "b"
+    body.write_text("hello", encoding="utf-8")
+    # the fake answers the read-back with the same unparseable output, so transit is not-checked (read back)
+    assert cb.edit_comment("o/r", 9, str(body), run=_Run(0, "ok"), env={}) == {
+        "ok": True, "reason": None, "url": None,
+        "transit": {"transit": "not-checked", "why": "the text could not be read back"},
+        "transitLine": "Transit check: not checked (the text could not be read back), "
+                       "so it is not known whether the text arrived intact."}
 
 
 def test_edit_comment_non_zero_exit_is_the_write_failure():
@@ -311,15 +337,20 @@ def test_progress_cli_refusals_exit_one(capsys):
     assert json.loads(capsys.readouterr().out) == {"ok": False, "reason": "usage"}
 
 
-def test_edit_cli_runs_the_patch_through_gh(monkeypatch, capsys):
+def test_edit_cli_runs_the_patch_through_gh(monkeypatch, capsys, tmp_path):
     # axis: the edit CLI patches through gh and prints the url; a CLI that skipped the patch would report a write it never made
-    run = _Run(0, json.dumps({"html_url": "https://github.com/o/r/issues/5#issuecomment-9"}))
+    body = tmp_path / "b"
+    body.write_text("hello", encoding="utf-8")
+    run = _WriteThenRead(json.dumps({"html_url": "https://github.com/o/r/issues/5#issuecomment-9"}), "hello")
     monkeypatch.setattr(cb.subprocess, "run", run)
-    assert cb.main(["edit", "--repo", "o/r", "--comment-id", "9", "--body-file", "/tmp/b"]) == 0
+    assert cb.main(["edit", "--repo", "o/r", "--comment-id", "9", "--body-file", str(body)]) == 0
+    # the fake answers the read-back with the exact body written, so transit is matched with no line
     assert json.loads(capsys.readouterr().out) == {
-        "ok": True, "reason": None, "url": "https://github.com/o/r/issues/5#issuecomment-9"}
+        "ok": True, "reason": None, "url": "https://github.com/o/r/issues/5#issuecomment-9",
+        "transit": {"transit": "matched"}}
     assert run.calls == [["gh", "api", "-X", "PATCH", "repos/o/r/issues/comments/9",
-                          "-F", "body=@/tmp/b"]]
+                          "-F", "body=@%s" % body],
+                         ["gh", "api", "repos/o/r/issues/comments/9"]]
 
 
 def test_edit_cli_refuses_a_bad_id_and_a_failing_exit(monkeypatch, capsys):

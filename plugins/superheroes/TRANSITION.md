@@ -22,6 +22,7 @@ switching, never a lane already running.
 
 ### Before you upgrade
 
+- **After switching.** **Plugin writes to GitHub are read back, and their results and the review record carry new transit keys; a caller matching an exact result dict adds them, and a cloud builder runs the new `cloud_builder.py readback` verb after a write through its own GitHub tools.** Nothing else is owed. See [Cloud: text changed in transit is flagged](#cloud-text-changed-in-transit-is-flagged).
 Check these in a consuming project when it adopts this release. Each step names the note it comes from.
 
 - **After switching.** **`vet_slot.py handback --pr` refuses three new reasons, `calibration-disclosure-contradicted`, `calibration-disclosure-unknown-seat` and `calibration-disclosure-unmarked`; a caller matching on reasons adds them. A build discloses a seat's missing calibration only with the marker `` `calibration-lacked[<row name>]: <files>` `` in a degradation bullet, and builds must use it, because, outside the marker, a degradation bullet clause that names calibration or a calibration file together with a negation or removal word is refused.** Nothing else is owed. See [Handback: a calibration disclosure is checked against the review record](#handback-a-calibration-disclosure-is-checked-against-the-review-record).
@@ -84,6 +85,20 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Plain prose lines only.** The fallback masks whole lines and can only over-mask: a line holding ```` ``` ````, `~~~` or `$$` masks to the end of the body; an HTML comment, a processing instruction (`<?`), CDATA, a declaration (`<!` and a letter), or a `<pre>`, `<script>`, `<style>` or `<textarea>` block, masks from its line to the line that ends it (or the end); and a run of non-blank lines is masked whole when any line of it is masked, holds a backtick, `<` or `[`, is indented four columns, has a list marker followed by two or more spaces or a tab, or starts with `>` after any list markers. A close link written beside such a line is missed. In rare HTML or whitespace shapes (an element GitHub renders as code or link text around a blank-line paragraph, or a "blank" line holding a no-break space or form feed), this read can take an extra issue. Such an issue never supplies the lane call the record certifies against, which is read only from the issues the description's first line closes; it only takes part in the build-lane marker match.
 - **Kept.** The non-closing fallback in `cloud_parked` (a bare `#N` on the first line when nothing closes) still reads the first line only.
 - **Result key.** `linkSource` (`github` or `body`) is new on a cleanup plan, on a parked-lane `lapsed-pass` notice that read the PR's links, and on `sendBack`, `adopt` and `adopting` items. No command or reason changes.
+
+### Cloud: text changed in transit is flagged
+
+A cloud session's GitHub egress deletes a `!` directly before a `[` when a `]` follows later in the
+body, and nothing noticed, so a vet could grade changed text as what the builder wrote. Every plugin
+write now reads its text back and compares it with what it sent, tolerating line endings, trailing
+whitespace and one trailing cloud footer only. New result keys: `transit` and `transitLine` on
+`cloud_builder.py post` and `edit`, the new `readback` verb and `pr_comment.py upsert`; `transit`,
+`transitChecks` and `transitLine` on `review_record.py write`; `transit` on `reserve_extra_audit` and
+`reservationTransit` on the extra-audit verb; `transit` on a refused PR-body publish receipt. A
+review record carries `sentSha256`, and `read` adds `transitDamage.sentHashMatches: false` when the
+stored record no longer matches it. `vet_slot.py write` now accepts a read-back with one trailing
+cloud footer, and its `write-unconfirmed` detail names the changed spans. The vet grades flagged text
+from its source (`skills/showrunner/reference/vet-receipt.md`).
 
 ### Cloud check: an identity from git config alone carries a warning
 

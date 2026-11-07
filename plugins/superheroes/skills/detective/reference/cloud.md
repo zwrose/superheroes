@@ -65,7 +65,9 @@ scan, each reproduction or A/B, receipt.
 
 Post each on the incident issue after the receipt comment, composed with
 `python3 -B <plugin root>/lib/cloud_builder.py terminal --kind <kind> --text-file <file>`, and link
-the receipt comment in the text.
+the receipt comment in the text. Read back the receipt and each note you post as
+`skills/workhorse/reference/cloud.md` § Text changed in transit says, and put any `transitLine` it
+prints in the note.
 
 - `handback`: the receipt with a demonstrated root cause is posted.
 - `park`: an honest not-demonstrated receipt is posted (the named budget was reached, or hypotheses

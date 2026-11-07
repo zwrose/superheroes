@@ -213,7 +213,9 @@ def list_comments(pr):
 
 def upsert(pr, family, key, body, plans_dir=None):
     """Edit-else-create the marker-managed comment; preserve plan checkboxes;
-    delete the local fallback file once posted. Returns {"action", "id"}."""
+    delete the local fallback file once posted. Returns {"action", "id", "transit"} (plus "transitLine"
+    when the comment GitHub holds differs from the body sent, or could not be read back)."""
+    import cloud_builder  # imported here so the modules that import pr_comment (readout, and through it engine_adapter) keep their pinned closure
     marker = render_marker(family, key)
     body = scrub(body)
     if marker not in body:
@@ -234,7 +236,17 @@ def upsert(pr, family, key, body, plans_dir=None):
         action, cid = "created", json.loads(out)["id"]
     if plans_dir:
         delete_fallback(plans_dir, key, family)
-    return {"action": action, "id": cid}
+    # axis: the final body sent is read back by comment id and compared, a failed read-back is not-checked — see bite-proof record i2383_transit_compare
+    try:
+        held = json.loads(_gh("api", f"repos/{{owner}}/{{repo}}/issues/comments/{cid}"))
+        found = held.get("body") if isinstance(held, dict) else None
+    except Exception:
+        found = None
+    result = {"action": action, "id": cid, "transit": cloud_builder.transit_compare(body, found)}
+    line = cloud_builder.transit_line(result["transit"])
+    if line is not None:
+        result["transitLine"] = line
+    return result
 
 
 def _arg(args, flag, default=None):

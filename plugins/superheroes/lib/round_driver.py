@@ -12735,7 +12735,8 @@ def _cmd_extra_audit_locked(session_dir, order_file, by, pr, repo=None, readers=
         c.run()
     except round_commit.CommitRefused as exc:
         return _commit_refused_response(session_dir, EXTRA_AUDIT_CMD, exc)
-    return {"ok": True, "round": new_round, "supersededReceipt": superseded}
+    return {"ok": True, "round": new_round, "supersededReceipt": superseded,
+            "reservationTransit": reserved.get("transit")}
 
 
 def _fetch_ci_run(repo_root, run_id):
