@@ -7,7 +7,8 @@ Detector file: `plugins/superheroes/lib/tests/test_kept_head_resolver_2393.py`, 
 **Guarded-element set (the order declared two; none grouped):**
 
 - **K1** — the kept step's head read (`_break_it_kept_step`, `head = _session_head(session_dir, config)`). Detectors: T1 and T2.
-- **K2** — the `session_dir` forwarding down the chain that reaches the kept step (all `session_dir=session_dir` forwards, plus the chain functions' `session_dir` parameters). Detector: T6 census, representative element: the forward at the `_after_findings_settled` call in `_fold_synthesis`. The T6 census walks every chain call from every top-level function that holds a `session_dir`, so any one dropped forward fails it by the same failure mode (a chain call that does not pass the session directory); this one forward stands for the class, and the other forwards were not each neutralized.
+- **K2** — the `session_dir` forwarding down the chain that reaches the kept step (all `session_dir=session_dir` forwards, plus the chain functions' `session_dir` parameters). Detector: T6 census, representative element: the forward at the `_after_findings_settled` call in `_fold_synthesis`. The T6 census walks every chain call from every top-level function that holds a `session_dir`, so any one dropped forward fails it by the same failure mode (a chain call that does not pass the session directory); this one forward stands for the class, and the other forwards were not each neutralized. (This was the first version of the census. K3 replaces it.)
+- **K3**: the repaired census added after review round 1. It checks that every call into any function that takes a `session_dir`, made where one is held, passes that `session_dir` itself, never `None` and never omitted. Detectors: T6 (b) and the test role's break-it test `test_kept_head_forwarding_regression_2393.py`.
 
 ## K1. The kept step's head read
 
@@ -78,6 +79,8 @@ exit=0
 
 ## K2. The `session_dir` forward down the chain (representative: `_fold_synthesis` -> `_after_findings_settled`)
 
+> **Superseded detector.** The census quoted in K2's red below is the implementer's first version, at head `3b1c8d94`. It checked only that a keyword named `session_dir` was present, over a hand-kept chain set that left out `_queue_fix_batch`. Review round 1 found that gap. The census was then rewritten to check the forwarded value across every function that takes a `session_dir`. K2's receipts stand as the record of that earlier detector, and K3 below is the record for the current one.
+
 - **Axis:** every call to a chain function made where a `session_dir` is held passes it down, so the kept step receives the session directory from every route that reaches it.
 - **Detector:** `test_kept_head_resolver_2393.py::test_t6_census_b_every_chain_call_made_where_a_session_dir_is_held_passes_it`.
 - **Neutralization:** in `_fold_synthesis`, `_after_findings_settled(state, config, session_dir=session_dir)` became `_after_findings_settled(state, config)`.
@@ -137,12 +140,48 @@ exit=1
 exit=0
 ```
 
+## K3. The repaired forwarding census (value-checked, every session-dir callee), after review round 1
+
+Recorded by the builder at head `f8f0cd68`, in a detached probe worktree. Each neutralization is a targeted Edit-tool edit to `plugins/superheroes/lib/round_driver.py`, restored by the inverse edit. The probe tree read clean (`git status --short` empty) before the green run. Runs, from the probe root: `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-probe -m pytest plugins/superheroes/lib/tests/test_kept_head_resolver_2393.py plugins/superheroes/lib/tests/test_kept_head_forwarding_regression_2393.py -q -p no:cacheprovider`. Captures are filtered to the decisive lines with `grep -E`. Nothing was redacted.
+
+- **Axis:** every call into a function that takes a `session_dir`, made where one is held, passes that `session_dir` itself, never `None` and never omitted.
+- **Detectors:** `test_kept_head_resolver_2393.py::test_t6_census_b_every_chain_call_made_where_a_session_dir_is_held_passes_it`, plus the test role's break-it test `test_kept_head_forwarding_regression_2393.py` (both of its tests).
+
+**Neutralization 1, the omitted forward.** At the `_after_findings_settled` call into `_queue_fix_batch`, `session_dir=session_dir` was dropped. Raw red (exit 1):
+
+```
+E         Left contains one more item: '_after_findings_settled:6182 calls _queue_fix_batch without its session_dir (omitted)'
+E       AssertionError: {'shape': None, 'reason': 'break-it test not kept: tests/test_charge_once.py (unresolved: input-missing)'}
+E       assert 'cannot-certify' == 'converged'
+E         + cannot-certify
+FAILED plugins/superheroes/lib/tests/test_kept_head_resolver_2393.py::test_t6_census_b_every_chain_call_made_where_a_session_dir_is_held_passes_it
+FAILED plugins/superheroes/lib/tests/test_kept_head_forwarding_regression_2393.py::test_discharge_exclusion_preserves_the_meta_only_head
+2 failed, 8 passed in 4.46s
+exit=1
+```
+
+**Neutralization 2, a `None`-valued forward.** At the `_fold_synthesis` call, `session_dir=session_dir` was changed to `session_dir=None`. Raw red (exit 1):
+
+```
+E         Left contains one more item: '_fold_synthesis:5435 calls _after_findings_settled without its session_dir (None)'
+FAILED plugins/superheroes/lib/tests/test_kept_head_resolver_2393.py::test_t6_census_b_every_chain_call_made_where_a_session_dir_is_held_passes_it
+1 failed, 9 passed in 20.29s
+exit=1
+```
+
+**Raw green** after both inverse edits (exit 0):
+
+```
+10 passed in 2.73s
+exit=0
+```
+
 ## Not neutralized (named, so the record does not read broader than it is)
 
 - T3, T4 and T5 and T6 (a) and (c) were each seen green on the final source (the whole-module run and the final file-set run below) but were not each driven red; the order named red-then-green for the kept step's head read (K1) and for the census (K2) only. T3 was not run against the base read, so this record does not claim it fails there.
 - The other `session_dir=session_dir` forwards in the chain were not each dropped; the T6 (b) walk covers all of them by the same failure mode, with the `_fold_synthesis` forward as the one proven representative.
 
-Final-source file-set run (the new module, `test_break_it_loop.py`, the five updated-double files, `test_stall_decomposition.py`, `test_breaker_reason_census.py`):
+Implementer-head (`3b1c8d94`) file-set run (the new module, `test_break_it_loop.py`, the five updated-double files, `test_stall_decomposition.py`, `test_breaker_reason_census.py`):
 
 ```
 ........................................................................ [ 29%]
