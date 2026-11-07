@@ -637,6 +637,20 @@ _INLINE_DECL = re.compile(r"<![A-Z]+" + _IWS + r"+[^>]*>")
 _MAX_BACKTICKS = 80  # cmark-gfm: a backtick run longer than this opens no code span (scan_to_closing_backticks)
 
 
+def _cell_end(text, i):
+    """The index of the next unescaped ``|`` or line break at or after ``i`` (the end of a GFM table cell), else the
+    text's length."""
+    j = i
+    while j < len(text):
+        if text[j] == "\\":
+            j += 2
+            continue
+        if text[j] in "|\n":
+            return j
+        j += 1
+    return len(text)
+
+
 def _link_destination_end(text, i):
     """When ``text[i:i + 2]`` is ``](``, the index just past the parenthesis that closes it (nested parentheses counted,
     backslash escapes skipped), else -1. Backticks there belong to a link's destination or title, which cmark reads when
@@ -662,12 +676,13 @@ _INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI,
 _ASCII_WS = " \t\n\v\f\r"
 
 
-def _inline_constructs(text):
+def _inline_constructs(text, cells=False):
     """The raw-HTML constructs of a text block, left to right as cmark-gfm's inline parser finds them: a list of
     ``(start, end)`` (end exclusive). A backslash escapes an ASCII punctuation character; a backtick run opens a code
     span that closes at the next run of exactly its length (nothing inside is raw HTML; with no such run the backticks
     are literal); at ``<`` an autolink is text, otherwise one of the six raw-HTML grammars either matches there or the
-    ``<`` is literal."""
+    ``<`` is literal. With ``cells`` (a GFM table block, whose cells cmark-gfm inline-parses one by one) a code span
+    closes only before the next unescaped ``|`` or line break."""
     found = []
     i = 0
     n = len(text)
@@ -690,14 +705,17 @@ def _inline_constructs(text):
             # axis: a run longer than cmark-gfm's 80 backticks, or one inside a link destination, is literal text
             if width > _MAX_BACKTICKS or i < ticks_literal_until:
                 at = n
-            while at < n:
+            limit = n
+            if cells:
+                limit = _cell_end(text, end)
+            while at < limit:
                 at = text.find("`", at)
                 if at < 0:
                     break
                 run = at
                 while run < n and text[run] == "`":
                     run += 1
-                if run - at == width:
+                if run - at == width and run <= limit:
                     closed = run
                     break
                 at = run
@@ -730,7 +748,7 @@ def _comment_line_state(line):
     return HIDDEN
 
 
-def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure):
+def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, cells=False):
     """Run the inline raw-HTML pass over one text block (``lines``: its lines after container prefixes; source line
     ``first + k`` is ``lines[k]``).
 
@@ -754,7 +772,8 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure):
                 hi = mid - 1
         return lo
 
-    for begin, end in _inline_constructs(joined):
+    # axis: a GFM table block's code spans stay inside one cell, as cmark-gfm parses each cell on its own
+    for begin, end in _inline_constructs(joined, cells):
         construct = joined[begin:end]
         first_line = line_of(begin)
         last_line = line_of(end - 1)
@@ -831,7 +850,7 @@ def _scan(body):
                     unsure[(offsets[i], "text inside a comment holds < and a later -->")] = None
             else:
                 # axis (C1): the inline raw-HTML pass over the text block's content
-                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure)
+                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure, text_block[i].table)
 
     for line_index, why in inline_points:
         if line_index < len(offsets):

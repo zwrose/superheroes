@@ -1155,3 +1155,12 @@ def test_review_s3_a_backtick_in_a_link_destination_opens_no_code_span():
     after it is raw and hides ZQ1."""
     assert _line_state("[a](x`y) <!-- b\nZQ1\n--> c `\n\n## ZQ2\n", "ZQ1") != V
     assert _line_state("[a](xy) `<!-- b`\nZQ1\n--> c\n\n## ZQ2\n", "ZQ1") == V
+
+
+def test_review_s3_a_code_span_stays_inside_one_table_cell():
+    """GFM inline-parses each table cell on its own, so the backticks in the first and last cells open no code span
+    across the middle cell; its <? … ?> is raw HTML that GitHub's HTML parse ends at the first >, and the <!-- after it
+    hides the rest (the finding's shape). Outside a table the same backticks do make one code span."""
+    body = "| a | b | c |\n| - | - | - |\n| `x | <? > <!-- ?> | y` |\n\n## ZQ1\n"
+    assert _line_state(body, "## ZQ1") != V
+    assert _line_state("`x | <? > <!-- ?> | y`\n\n## ZQ1\n", "## ZQ1") == V
