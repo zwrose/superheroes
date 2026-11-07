@@ -122,7 +122,7 @@ def _visible_claim(body):
     * Within a line that is kept (#2389 V847-1, BR684-2, BR684-3), the rest of the line is cut, with no comment state
       carried to later lines, starting at the first of: a backslash escaping an opener (``\\<!--``, ``\\<?``,
       ``\\<!X``, ``\\<![``; the backslash and the opener stay), an inline code span whose content holds an opener (the
-      span stays), an unescaped, unquoted processing instruction, declaration or CDATA opener (``<?``, ``<!`` + an
+      span is kept only up to that opener; the tail read for comment state starts after the span), an unescaped, unquoted processing instruction, declaration or CDATA opener (``<?``, ``<!`` + an
       ASCII letter, ``<![``), and, on a line ``md_fence`` calls fenced, the first opener of any of these kinds or
       ``<!--`` (a raw HTML block such as ``<pre>`` makes a tilde line text, not a fence, so a fenced line is not
       trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole. A fence content
@@ -135,7 +135,10 @@ def _visible_claim(body):
       the source (case-insensitive) or fewer whole ``FIXED_ABOVE_RE`` matches (over the whole text, so a claim wrapped
       across lines counts). ``_accepting_items`` then returns no acceptance, whichever path removed the claim, so every
       leftover reads missing. A body whose hidden text merely mentions ``fixed-above`` is voided too, which fails toward
-      a refusal.
+      a refusal. The body is also void when a changed line that holds "fixed" and "above" carries different whole
+      claims before and after the cut (a claim joined from fragments cannot balance one removed), and when a cut changed
+      the block role (fence kind, or ATX heading or not) of a line ``md_hidden`` reads VISIBLE, because the section
+      reader re-parses the cut text.
     * Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so U+2028, U+2029, U+0085, VT, FF,
       FS, GS and RS are ordinary characters inside one.
 
