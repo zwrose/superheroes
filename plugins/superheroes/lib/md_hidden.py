@@ -58,7 +58,7 @@ _FENCE_TILDE = re.compile(r"(~{3,})")
 _BULLET = re.compile(r"[-+*](?=[ ]|\Z)")
 _ORDERED = re.compile(r"([0-9]{1,9})[.)](?=[ ]|\Z)")
 _LIST_START = re.compile(r"(?:[-+*]|[0-9]{1,9}[.)])(?:[ ]|\Z)")
-_TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z")
+_TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z", re.A)  # cmark: ASCII whitespace only
 _FOOTNOTE = re.compile(r"[ ]{0,3}\[\^[^\]\s]+\]:")
 _VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)
 _TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I | re.A)
@@ -585,7 +585,7 @@ class _Parser:
         self.tip = container
 
     def _add_text_line(self, block, rest, matched):
-        if (matched and block.kind == "para" and block.lines and "|" in rest and _TABLE_DELIM.match(rest)
+        if (matched and block.kind == "para" and not block.table and block.lines and "|" in rest and _TABLE_DELIM.match(rest)
                 and _cell_count(block.lines[-1]) == _cell_count(rest)):
             # axis: cmark-gfm makes a table only when the header row and the delimiter row hold the same cell count
             block.table = True  # axis: a GFM delimiter row turns on the table-row unsure rule
