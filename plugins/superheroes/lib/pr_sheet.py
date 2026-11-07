@@ -330,6 +330,13 @@ def _closes(rest, level):
     return False
 
 
+def _markdown_lines(body):
+    """The Markdown lines of ``body`` (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), each with its one terminator
+    removed. U+2028, U+2029, U+0085, VT, FF, FS, GS and RS stay inside a line."""
+    return [line[:-2] if line.endswith("\r\n") else line[:-1] if line.endswith(("\n", "\r")) else line
+            for line in md_fence.split_lines(body)]
+
+
 def accepting_listed(body):
     """The acceptances a PR body lists under its What we're accepting heading, in order; [] for no such heading, no
     acceptance, or anything that is not a string. An item is a top-level list item with its nested lines, or a paragraph;
@@ -339,7 +346,8 @@ def accepting_listed(body):
     one) is never an acceptance and needs no card, while a costly one, listed under What we're accepting, must still be accounted for."""
     if not isinstance(body, str):
         return []
-    lines = _outside_comments(body.splitlines())
+    # axis: lines break only on Markdown endings (a U+2028 cannot make a synthetic heading) — see bite-proof record i2389_scanner_line_boundaries.md
+    lines = _outside_comments(_markdown_lines(body))
     start = next((n for n, (line, fenced) in enumerate(lines) if not fenced and _ACCEPTING.match(line)), None)
     if start is None:
         return []
@@ -393,7 +401,8 @@ def degradations_listed(body):
     (case-insensitive; the label and the spaces after it are dropped from text), else None."""
     if not isinstance(body, str):
         return []
-    lines = body.splitlines()
+    # axis: lines break only on Markdown endings (a U+2028 cannot end the list or hide a bullet) — see bite-proof record i2389_scanner_line_boundaries.md
+    lines = _markdown_lines(body)
     inert = md_fence.scan(lines).inert  # a marker inside a code fence is an example, not the section
     start = next((n for n, line in enumerate(lines) if not inert[n] and line.rstrip() == _DEGRADATIONS_MARKER), None)
     if start is None:
