@@ -632,7 +632,7 @@ def _runs_past_its_end(text):
 
 def _tag_holds_vtab(text):
     """True when ``text`` holds an inline tag opener (``<``, an optional ``/``, an ASCII letter) with a vertical tab
-    before the tag's own closing ``>``: cmark counts ``\\v`` as tag whitespace and passes the tag through raw, HTML
+    before the tag's own closing ``>``, a vertical tab inside a quoted value included: cmark counts ``\\v`` as tag whitespace and passes the tag through raw, HTML
     parsing does not, so the tag can end at an earlier ``>``. The walk to the closing ``>`` skips a ``>`` inside a
     quoted value (``title=">"``), and a quote that never closes runs to the end of the text.
 
@@ -640,6 +640,9 @@ def _tag_holds_vtab(text):
     for m in _TAG_OPENER.finditer(text):
         quote = None
         for c in text[m.end():]:
+            if c == "\v":
+                # axis: a vertical tab before the tag's own closing > reads unsure, inside a quoted value or after a quoted >
+                return True
             if quote:
                 if c == quote:
                     quote = None
@@ -647,9 +650,6 @@ def _tag_holds_vtab(text):
                 quote = c
             elif c == ">":
                 break
-            elif c == "\v":
-                # axis: a vertical tab before the tag's own closing > reads unsure, a quoted > before it included
-                return True
     return False
 
 

@@ -842,3 +842,12 @@ def test_review_s2_a_quoted_gt_before_the_vertical_tab_still_reads_unsure(body):
     """The scoped finder's shape: cmark passes the whole tag through raw, HTML parsing ends it at the > after the
     vertical tab and the <!-- then hides ## H (the same mechanism as vet 845 F3(a), which GitHub hid)."""
     assert _state(body, "## H") == U
+
+
+def test_review_s2_r2_a_vertical_tab_inside_a_quoted_value_still_reads_unsure():
+    """The round-2 audit: the quote-aware walk keeps the earlier conservative reading of a vertical tab inside a quoted
+    value (no GitHub render separates it; over-reading it unsure only refuses), and a complete tag followed by a
+    vertical tab stays a paragraph (vet 845 F4(b))."""
+    assert _state('x <a title="p\vq"> y\n\n## H\n', "## H") == U
+    assert _state("x <a title='p\vq'> y\n\n## H\n", "## H") == U
+    assert _state("x <a b=\"c\">\v y\n\n## H\n", "## H") == V
