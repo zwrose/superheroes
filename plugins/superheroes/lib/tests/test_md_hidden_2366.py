@@ -1198,3 +1198,39 @@ def test_review_s3_r3_link_metadata_that_changes_backtick_pairing_reads_unsure(b
     before inline parsing, so a backtick there changes how every later backtick pairs; GitHub hides ZQ1 in each. The
     comparison reading turns every construct the two pairings disagree on into an unsure point."""
     assert _line_state(body, "ZQ1") != V
+
+
+# --- Link-metadata rule (park ruling, option a, issue #2388) -------------------------------------------------------
+# A text block that holds a backtick inside a possible link destination, title or reference definition, and also holds
+# a "<", reads unsure from the block's first line on. The ranges are an over-approximation used only to add that point.
+
+@pytest.mark.parametrize("body", [
+    # round-4 audit and scoped finder (PR #2390, comment 6713049081): an escaped > does not end an angle destination
+    "[a](<u\\>)`v>) <!-- b\nZQ1\n--> c`\n",
+    # round-4 audit (PR #2390, comment 6713049081): malformed metadata, the backtick pairing cmark reads differs
+    "[bad](x `` ) `` [a](x`y) <!-- b\nZQ1\n--> c ` ``\n",
+    # round-4 scoped finder (PR #2390, comment 6713049081): a reference-definition-shaped line inside a paragraph
+    "[a](x`y)\n[r]: /u\n``one\ntwo`` <!-- b\nZQ1\n--> tail `` `\n",
+], ids=["escaped-angle-close", "malformed-metadata", "ref-def-shaped-line-in-paragraph"])
+def test_link_metadata_rule_round4_shapes_read_not_visible(body):
+    """Each shape is one GitHub renders with ZQ1 hidden (checked against the round-4 audits and scoped finder of the
+    returning review on PR #2390, raw output comment 6713049081); ZQ1's line must not read visible."""
+    assert _line_state(body, "ZQ1") != V
+
+
+def test_link_metadata_rule_controls_keep_their_answers():
+    """Controls (checked against: control): no backtick in link metadata, a backtick after the link, and a backtick in
+    metadata with no "<" anywhere in the block (no unsure point)."""
+    assert _line_state("Text with a [link](https://x) and `<!--` code here.\nZQ1\n", "ZQ1") == V
+    assert _line_state("[a](xy) `<!-- b`\nZQ1\n--> c\n\n## ZQ2\n", "ZQ1") == V
+    body = "[a](x`y) no raw html here\nZQ1\n"
+    assert _line_state(body, "ZQ1") == V
+    assert md.scan(body).unsure == ()
+
+
+def test_link_metadata_rule_puts_the_unsure_point_at_the_blocks_first_line():
+    """The rule's point sits on the block's first source line (checked against: control, the rule as ruled): the block's
+    own first line reads unsure, the paragraph before it stays visible."""
+    body = "intro\n\n[a](x`y)\nmid <b>\nZQ1\n"
+    assert _line_state(body, "[a]") == U
+    assert _line_state(body, "intro") == V
