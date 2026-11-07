@@ -65,7 +65,8 @@ def test_g1_visible_split_comment_cut_is_the_same_under_every_line_ending(ending
 def test_g1_visible_split_a_line_cut_to_nothing_keeps_its_own_terminator(ending):
     source = eol("a <!-- x\nb --> c\nlast <!-- y", ending)
     out = la._visible(source)
-    assert out == eol("a \n c\nlast ", ending)
+    # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
+    assert out == eol("a \n\nlast ", ending)
     assert line_count(out) == line_count(source)
 
 

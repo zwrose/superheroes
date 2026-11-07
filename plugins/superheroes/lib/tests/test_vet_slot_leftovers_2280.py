@@ -313,7 +313,8 @@ def test_visible_keeps_fenced_text_and_marker_lines_and_drops_an_unclosed_commen
     # #2389 V847-1: a fenced line is cut at its first opener (a tilde line inside a raw <pre> block is not a fence), so the fenced `<!-- shown -->` is cut
     assert la._visible("```\n<!-- shown -->\n```\n") == "```\n\n```\n"
     assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
-    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "a \n\n e\nf "
+    # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
+    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "a \n\n\nf "
 
 
 # --- review round 3 fixes ---------------------------------------------------------------------------

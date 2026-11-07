@@ -212,3 +212,17 @@ These were probed the same way as round 2: a detached probe worktree, targeted e
 ## Elements in no class
 
 None: G1 to G9 each have their own neutralization and red. Unproven elements: none; FU3 is outside the declared set (see Disclosures).
+
+## #2389 second rework (WO-D2): G10, a removed fixed-above claim voids the body (rule B)
+
+The probe ran in the worktree itself, one targeted edit reverted by its inverse. Command for both halves: `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k test_g10_`.
+
+- **G10 (rule B).** Guarded element: the `if claim_removed: return []` in `_accepting_items`. Axis: a body whose visible text lost a `fixed-above` claim accepts nothing, whichever path removed the claim, so a claim that needs stack verification is never dropped while its acceptance still counts.
+- **Neutralization:** `if claim_removed:` became `if False and claim_removed:`.
+- **Raw red:** `6 failed, 3 passed, 111 deselected in 1.72s`. The five `test_g10_claim_removed_voids_the_body_so_every_leftover_reads_missing[...]` cases (single_line, continuation_line, wrapped, inside_comment, subheading) and `test_g10_claim_removed_the_exact_bodies_of_the_order_without_the_section_frame` failed with `assert [] == [{'id': 'F-1', ...}]`: F-1 was counted accepted. The three control tests stayed green.
+- **Restore:** `if False and claim_removed:` became `if claim_removed:` (the inverse edit). Restored lines (`leftover_accepting.py:329-330`): `if claim_removed:` / `        return []`.
+- **Raw green:** `9 passed, 111 deselected in 1.82s`.
+
+Replaced elements. The block-machinery parts of G6 (the `claimed` list and the cut-tail `_FIXED_ABOVE_TOKEN.search(tail)` blanking of the whole line) and of G9 (the `_boundary` helper and the heading boundary of the claimed-block walk) are deleted from `_visible`. G10 replaces them: the whole body is voided when a claim is removed, so there is no block to bound. The G6 and G9 records above describe code that no longer exists. The G6 no-claim test (`test_g6_fixed_above_tail_a_tail_without_a_claim_keeps_the_acceptance`) is kept.
+
+Rule A proposed, then dropped. WO-D proposed rule A (a closed comment's tail survives: on a line whose start md_hidden reads HIDDEN while `_visible`'s own comment state is open, keep the text after the closer, as in `a <!-- x` / `b --> c` showing ` c`). It was dropped on layer 1's F8 (vet 846): `md_hidden._comment_line_state` marks as UNSURE a line that starts inside a comment and holds a closer with text after it, and WO-D measured `b --> c` in `a <!-- x\nb --> c\n` as UNSURE, not HIDDEN. The leftover check does not overrule layer 1's fail-closed call, so there is no rule A, no G11, and no bite-proof for it. Five existing tests whose expected output kept such a tail now expect the blanked line.

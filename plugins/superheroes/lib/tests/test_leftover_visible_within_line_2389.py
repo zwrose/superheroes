@@ -363,13 +363,7 @@ def test_g5_tail_comment_a_tail_comment_that_closes_on_its_line_opens_nothing():
     assert missing(body) == []
 
 
-def test_g6_fixed_above_tail_a_claim_cut_from_the_line_blanks_the_whole_acceptance():
-    # scoped-finder-002: the fixed-above claim after a quoted opener must not be dropped while the acceptance counts
-    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99 abcdef0\n\n"
-            "## How to see it\n\nN/A\n")
-    assert "F-1" not in la._visible(body)
-    assert missing(body), "F-1 must not count as accepted without its fixed-above claim"
-
+# (#2389: the claim-cut tests that pinned the per-block blanking are replaced by the G10 tests at the end of this file)
 
 def test_g6_fixed_above_tail_a_tail_without_a_claim_keeps_the_acceptance():
     body = "## What we're accepting\n\n- F-1 The retry loop never backs off; quoting `<!--`; more text\n"
@@ -387,22 +381,6 @@ def test_g7_fence_delimiter_a_shortened_fenced_line_never_closes_the_fence():
 
 
 # --- Fix-audit round 2 (#2389): the two not-discharged audits ---------------------------------------------------------
-
-def test_g6_fixed_above_tail_a_claim_on_a_continuation_line_blanks_the_whole_item():
-    # audit of scoped-finder-002: the claim on the item's continuation line must take the item's first line with it
-    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off\n  quoting `<!--`; fixed-above #99 abcdef0\n\n"
-            "## How to see it\n\nN/A\n")
-    assert "F-1" not in la._visible(body)
-    assert missing(body), "F-1 must not count as accepted without its fixed-above claim"
-
-
-def test_g6_fixed_above_tail_the_blanked_block_stops_at_blank_lines():
-    body = ("## What we're accepting\n\n- F-2 Another\n\n- F-1 The retry loop never backs off\n"
-            "  quoting `<!--`; fixed-above #99 abcdef0\n")
-    out = la._visible(body)
-    assert "F-2 Another" in out and "F-1" not in out
-    assert line_count(out) == line_count(body)
-
 
 def test_g7_fence_delimiter_an_opener_line_holding_an_opener_stays_an_opener():
     # audit of scoped-finder-003: blanking an opener line would unfence the sample below it; it is shortened instead
@@ -438,27 +416,56 @@ def test_g8_comment_state_a_raw_comment_block_across_a_blank_line_still_hides():
     assert missing(body)
 
 
-# --- Fix-audit round 3 (#2389): the claimed block never crosses a heading; a wrapped claim is still seen -------------
+# --- #2389 second rework: a removed fixed-above claim voids the body (G10) ---
 
-def test_g9_claimed_block_a_heading_next_to_the_claim_survives_and_bounds_the_section():
-    # round-3 audits and scoped finder: blanking a claimed block must not erase the How to see it heading, or text under it
-    # would become an acceptance
-    body = ("## What we're accepting\n\nNone.\n## How to see it\n- F-1 The retry loop never backs off `<!--` fixed-above #99 abcdef0\n"
-            "- F-1 The retry loop never backs off\n")
-    out = la._visible(body)
-    assert "## How to see it" in out
-    assert missing(body), "text under How to see it must not count as an acceptance"
+ACCEPTING = "## What we're accepting\n\n"
+HOW = "\n\n## How to see it\n\nN/A\n"
 
 
-def test_g9_claimed_block_stops_at_a_heading_above_it():
-    body = ("## What we're accepting\n- F-1 The retry loop never backs off `<!--` fixed-above #99 abcdef0\n\n## How to see it\n")
-    out = la._visible(body)
-    assert "## What we're accepting" in out and "F-1" not in out
+@pytest.mark.parametrize("accepting", [
+    # 1. the single-line cut claim
+    "- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99 abcdef0",
+    # 2. the claim on a continuation line
+    "- F-1 The retry loop never backs off\n  quoting `<!--`; fixed-above #99 abcdef0",
+    # 3. the wrapped claim, cut on its first line
+    "- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99\n  abcdef0",
+    # 4. removed by the inside-comment branch, not by a tail cut
+    "- F-1 The retry loop never backs off; quoting `<?` and `<!--`\n  fixed-above #99 abcdef0\n",
+    # 5. on an ATX subheading
+    "### F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99 abcdef0",
+], ids=["single_line", "continuation_line", "wrapped", "inside_comment", "subheading"])
+def test_g10_claim_removed_voids_the_body_so_every_leftover_reads_missing(accepting):
+    text = ACCEPTING + accepting + HOW
+    assert la._visible_claim(text)[1] is True
+    assert missing(text) == GAP
+    assert la._accepting_items(text) == []
 
 
-def test_g6_fixed_above_tail_a_claim_wrapped_onto_the_next_line_is_still_seen():
-    # round-3 audit of scoped-finder-002: "fixed-above #99" on the cut line, its commit on the continuation line
-    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99\n  abcdef0\n\n"
-            "## How to see it\n\nN/A\n")
-    assert "F-1" not in la._visible(body)
-    assert missing(body), "F-1 must not count as accepted without its fixed-above claim"
+def test_g10_claim_removed_the_exact_bodies_of_the_order_without_the_section_frame():
+    for text in ["- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99 abcdef0",
+                 "- F-1 The retry loop never backs off; quoting `<?` and `<!--`\n  fixed-above #99 abcdef0\n",
+                 "### F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99 abcdef0"]:
+        text = body(text)
+        assert missing(text) == GAP
+        assert la._accepting_items(text) == []
+
+
+def test_g10_claim_removed_control_an_unhidden_claim_keeps_its_acceptance():
+    text = body("- F-1 The retry loop never backs off; fixed-above #99 abcdef0\n")
+    assert la._visible_claim(text)[1] is False
+    assert missing(text) == []
+    assert [item for item in la._accepting_items(text) if "fixed-above #99 abcdef0" in item]
+
+
+def test_g10_claim_removed_a_tail_without_a_claim_does_not_void_the_body():
+    text = ACCEPTING + "- F-1 The retry loop never backs off; quoting `<!--`; more text" + HOW
+    assert la._visible_claim(text)[1] is False
+    assert missing(text) == []
+
+
+def test_g10_claim_removed_the_text_and_the_flag_come_from_one_helper():
+    source = "- F-1 x `<!--` fixed-above #99 abcdef0\n"
+    text, removed = la._visible_claim(source)
+    assert removed is True and text == la._visible(source) == "- F-1 x `<!--`\n"
+
+

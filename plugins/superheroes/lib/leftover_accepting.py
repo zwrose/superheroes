@@ -78,7 +78,7 @@ _TICKS = re.compile(r"`+")
 # the openers GitHub's HTML parser reads as a comment-like run that hides the rest of the line (#2389 V847-1, BR684-2/3):
 # a comment, a processing instruction, a declaration (`<!` + an ASCII letter) or a CDATA section
 _OPENER = re.compile(r"<!--|<\?|<![A-Za-z]|<!\[")
-# the token that starts a fixed-above claim, matched on its own so a claim wrapped across lines is still seen in a cut tail
+# the token that starts a fixed-above claim, counted on its own (case-insensitive) so a claim a cut removed is seen even when it wraps across lines
 _FIXED_ABOVE_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])fixed-above(?![A-Za-z0-9_])", re.IGNORECASE)
 # an ATX heading line (CommonMark: up to three spaces, one to six #, then a space, a tab or the line's end)
 _ATX_LINE = re.compile(r" {0,3}#{1,6}(?:[ \t\r\n]|\Z)")
@@ -103,8 +103,14 @@ def _terminator(line):
 
 
 def _visible(body):
-    """The body reduced to text the leftover check may count; every change below only removes text, so a miss fails toward
-    a ``leftover-not-accepted`` refusal and never toward a pass.
+    """The body reduced to text the leftover check may count (``_visible_claim`` returns it with the claim flag)."""
+    return _visible_claim(body)[0]
+
+
+def _visible_claim(body):
+    """``(text, claim_removed)``: the body reduced to text the leftover check may count, and whether that removed a
+    ``fixed-above`` claim. Every change below only removes text, so a miss fails toward a ``leftover-not-accepted``
+    refusal and never toward a pass.
 
     * Every HTML comment (one that spans lines included) is cut out. A whole-line ``superheroes:`` marker is kept, so the
       section reader still finds the build-record boundary.
@@ -119,11 +125,14 @@ def _visible(body):
       trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole. A fence content
       line holding an opener is blanked whole, never shortened, so the shortened text cannot read as a fence delimiter
       when the section reader re-reads it; a fence delimiter line is shortened, so it stays the opener or closer it was.
-      A cut tail that holds the ``fixed-above`` token (a whole claim or the start of a wrapped one) blanks its whole block
-      (the run of non-blank lines around it, stopping at and never blanking an ATX heading or a marker line), so the
-      acceptance is not counted without the claim that needs verifying. A comment the cut tail opens and does not close
-      still opens the comment state for later lines. An open comment state ends at a blank line or an ATX heading that
-      ``md_hidden`` reads VISIBLE (an inline comment cannot cross either; a raw HTML comment that does is md_hidden's).
+      A comment the cut tail opens and does not close still opens the comment state for later lines. An open comment
+      state ends at a blank line or an ATX heading that ``md_hidden`` reads VISIBLE (an inline comment cannot cross
+      either; a raw HTML comment that does is md_hidden's).
+    * A removed claim voids the body (B): ``claim_removed`` is true when the text holds fewer ``fixed-above`` tokens than
+      the source (case-insensitive) or fewer whole ``FIXED_ABOVE_RE`` matches (over the whole text, so a claim wrapped
+      across lines counts). ``_accepting_items`` then returns no acceptance, whichever path removed the claim, so every
+      leftover reads missing. A body whose hidden text merely mentions ``fixed-above`` is voided too, which fails toward
+      a refusal.
     * Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so U+2028, U+2029, U+0085, VT, FF,
       FS, GS and RS are ordinary characters inside one.
 
@@ -143,7 +152,7 @@ def _visible(body):
         except ValueError:
             shown.append(False)  # a line start md_hidden does not report reads as not visible: the cut fails closed
         offset += len(line)
-    out, inside, claimed = [], False, []
+    out, inside = [], False
     for n, line in enumerate(lines):
         term = _terminator(line)
         # axis: an open comment state ends at a blank line or an ATX heading that md_hidden reads VISIBLE: an inline comment cannot
@@ -211,9 +220,6 @@ def _visible(body):
                 i += 1
         if cut is not None:
             tail = line[cut:]
-            # axis: a cut tail that holds the fixed-above token (a whole claim, or the start of one wrapped onto the next line) blanks its whole block (below), so a claim that needs stack verification is never dropped while its acceptance still counts — see bite-proof record i2389_leftover_visible_within_line.md
-            if _FIXED_ABOVE_TOKEN.search(tail):
-                claimed.append(n)
             # axis: a comment the cut tail opens and does not close still opens the comment state for later lines (fails closed: an over-read only cuts more) — see bite-proof record i2389_leftover_visible_within_line.md
             opened = tail.rfind("<!--")
             if opened >= 0 and tail.find("-->", opened + 4) < 0:
@@ -225,24 +231,12 @@ def _visible(body):
             text = term
         # the line keeps its own terminator (\r\n, \n or lone \r) even when a comment cut it, so the line count never changes
         out.append(text if not term or text.endswith(term) else text + term)
-    # axis: a line whose cut tail held a fixed-above claim blanks every line of its block (the run of non-blank lines around it, so a list
-    # item's first line and its continuation lines alike); the block stops at, and never blanks, an ATX heading or a marker line, so the
-    # heading that bounds the acceptance section always survives; this over-cuts a tight list, failing toward a refusal
-    # — see bite-proof record i2389_leftover_visible_within_line.md
-    def _boundary(m):
-        return not lines[m].strip() or _ATX_LINE.match(lines[m]) or _MARKER_LINE.match(lines[m])
-
-    for n in claimed:
-        first = n
-        while first > 0 and not _boundary(first - 1):
-            first -= 1
-        last = n
-        while last + 1 < len(lines) and not _boundary(last + 1):
-            last += 1
-        for m in range(first, last + 1):
-            if not _boundary(m):
-                out[m] = _terminator(lines[m])
-    return "".join(out)
+    text = "".join(out)
+    # axis: a ``fixed-above`` claim the cuts removed (fewer tokens, or fewer whole claims over the whole text, so a wrapped one counts)
+    # voids the body, whichever path removed it; the caller then accepts nothing — see bite-proof record i2389_leftover_visible_within_line.md
+    claim_removed = (len(_FIXED_ABOVE_TOKEN.findall(text)) < len(_FIXED_ABOVE_TOKEN.findall(body))
+                     or len(FIXED_ABOVE_RE.findall(text)) < len(FIXED_ABOVE_RE.findall(body)))
+    return text, claim_removed
 
 
 def normalise_id(text):
@@ -330,7 +324,11 @@ def _collisions(leftovers):
 
 
 def _accepting_items(body):
-    return pr_sheet.accepting_listed(_visible(body if isinstance(body, str) else ""))
+    text, claim_removed = _visible_claim(body if isinstance(body, str) else "")
+    # axis: a body whose visible text lost a fixed-above claim accepts nothing, so a claim needing stack verification is never dropped while its acceptance counts — see bite-proof record i2389_leftover_visible_within_line.md
+    if claim_removed:
+        return []
+    return pr_sheet.accepting_listed(text)
 
 
 FIXED_ABOVE_RE = re.compile(
