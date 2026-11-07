@@ -1164,3 +1164,24 @@ def test_review_s3_a_code_span_stays_inside_one_table_cell():
     body = "| a | b | c |\n| - | - | - |\n| `x | <? > <!-- ?> | y` |\n\n## ZQ1\n"
     assert _line_state(body, "## ZQ1") != V
     assert _line_state("`x | <? > <!-- ?> | y`\n\n## ZQ1\n", "## ZQ1") == V
+
+
+def test_review_s3_r2_a_quoted_title_parenthesis_does_not_end_the_link_check():
+    """Round-2 audit and scoped finder: a ) inside a quoted title, or a ( inside one, must not end or widen the link
+    reading wrongly. GitHub hides ZQ1 in both (cmark consumes the whole title before inline parsing resumes)."""
+    assert _line_state('[a](/u "a) `b") <!-- hidden\nZQ1\n--> c`\n\n## H\n', "ZQ1") != V
+    assert _line_state('[a](u "(") `one)two` <!-- b\nZQ1\n--> tail `\n', "ZQ1") != V
+
+
+def test_review_s3_r2_a_link_and_a_code_quoted_opener_in_one_paragraph_stay_visible():
+    """The link check flags only a code span that opens inside a link's destination or title, so an ordinary link
+    beside a code-quoted opener does not refuse the body (the #2366 inline-code case)."""
+    assert _line_state("Text with a [link](https://x) and `<!--` code here.\nZQ1\n\n## H\n", "ZQ1") == V
+    assert md.scan("Text with a [link](https://x) and `<!--` code here.\n\n## H\n").unsure == ()
+
+
+def test_review_s3_r2_a_delimiter_row_whose_cell_count_differs_is_no_table():
+    """cmark-gfm makes a table only when the header and delimiter rows hold the same cell count; otherwise the lines
+    stay one paragraph, its code span spans lines, and the PI after it leaves a comment that hides ZQ1."""
+    assert _line_state("a `one\n| - | - |\ntwo` <? > <!-- ?> `\n\n## ZQ1\n", "## ZQ1") != V
+    assert md._cell_count("| a | b |") == 2 and md._cell_count("a | b | c") == 3 and md._cell_count("| a \\| b |") == 1
