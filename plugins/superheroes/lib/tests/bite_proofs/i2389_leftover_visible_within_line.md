@@ -194,6 +194,14 @@ The build session applied these at review-code's `apply-fixes` step, commit `10b
 
 The builder also re-ran G1 to G4 at `611668d2`, before these fixes. Red and green matched the implementer's counts above (G1 9 failed, G2 12 failed, G3 16 failed, G4 8 failed; all green restored).
 
+## Review round 2 fixes (fix audits and round-2 scoped finder), proven by the builder at `4f495de6`
+
+These fixes update G6 and G7 above and add G8. The probes ran in a detached probe worktree at `4f495de6`, each targeted edit reverted by its inverse, with `git diff --stat` empty after restore. The command is the same as above, with `-k` naming the test.
+
+- **G7 delimiter (audit of scoped-finder-003, round-2 finder v2/v0).** Guarded element: `elif fence_kinds[n] == md_fence.KIND_CONTENT:` in the fenced-line branch. A fence content line is blanked; a delimiter line is shortened, so it stays an opener or closer. Neutralization: `elif True or fence_kinds[n] == …`, which blanks every fenced line. Red: `1 failed, 113 deselected` (`test_g7_fence_delimiter_an_opener_line_holding_an_opener_stays_an_opener`). Green: `1 passed, 113 deselected`.
+- **G6 block (audit of scoped-finder-002).** Guarded element: the `for m in range(first, last + 1)` loop that blanks a claimed line's whole block. Neutralization: `range(n, n + 1)`, which blanks only the claim line. Red: `1 failed, 113 deselected` (`test_g6_fixed_above_tail_a_claim_on_a_continuation_line_blanks_the_whole_item`). Green: `1 passed, 113 deselected`.
+- **G8 comment-state end (round-2 finder v1).** Guarded element: `if inside and shown[n] and (not line.strip() or _ATX_LINE.match(line)): inside = False`. Neutralization: `if False and …`. Red: `2 failed, 1 passed, 111 deselected` (the quoted-tail heading test and the blank-line test; the raw-block test stays green as designed). Green: `3 passed, 111 deselected`.
+
 ## Elements in no class
 
-None: G1 to G4 each have their own neutralization and red. Unproven elements: none of the four; FU3 is outside the declared set (see Disclosures).
+None: G1 to G8 each have their own neutralization and red. Unproven elements: none; FU3 is outside the declared set (see Disclosures).
