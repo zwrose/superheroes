@@ -632,7 +632,32 @@ _INLINE_CLOSE_TAG = re.compile(r"</[A-Za-z][A-Za-z0-9-]*" + _IWS + r"*>")
 _INLINE_COMMENT = re.compile(r"<!--.*?-->", re.S)
 _INLINE_PI = re.compile(r"<\?.*?\?>", re.S)
 _INLINE_CDATA = re.compile(r"<!\[CDATA\[.*?\]\]>", re.S)
-_INLINE_DECL = re.compile(r"<![A-Z][^>]*>")
+# cmark-gfm's declaration: <! then an uppercase name, whitespace, anything but >, then >
+_INLINE_DECL = re.compile(r"<![A-Z]+" + _IWS + r"+[^>]*>")
+_MAX_BACKTICKS = 80  # cmark-gfm: a backtick run longer than this opens no code span (scan_to_closing_backticks)
+
+
+def _link_destination_end(text, i):
+    """When ``text[i:i + 2]`` is ``](``, the index just past the parenthesis that closes it (nested parentheses counted,
+    backslash escapes skipped), else -1. Backticks there belong to a link's destination or title, which cmark reads when
+    it closes the link, so they open no code span; with no closing parenthesis the rest of the block counts."""
+    if not text.startswith("](", i):
+        return -1
+    depth = 0
+    j = i + 1
+    while j < len(text):
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return len(text)
 _INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI, _INLINE_CDATA, _INLINE_DECL)
 _ASCII_WS = " \t\n\v\f\r"
 
@@ -646,10 +671,15 @@ def _inline_constructs(text):
     found = []
     i = 0
     n = len(text)
+    ticks_literal_until = -1  # inside a link destination or title, backticks open no code span
     while i < n:
         c = text[i]
         if c == "\\":
             i += 2 if text[i + 1:i + 2] in _ASCII_PUNCT and i + 1 < n else 1
+        elif c == "]" and text.startswith("](", i):
+            # axis: backticks in a link's destination or title open no code span (over-reading raw HTML there fails safe)
+            ticks_literal_until = max(ticks_literal_until, _link_destination_end(text, i))
+            i += 1
         elif c == "`":
             end = i
             while end < n and text[end] == "`":
@@ -657,6 +687,9 @@ def _inline_constructs(text):
             width = end - i
             at = end
             closed = -1
+            # axis: a run longer than cmark-gfm's 80 backticks, or one inside a link destination, is literal text
+            if width > _MAX_BACKTICKS or i < ticks_literal_until:
+                at = n
             while at < n:
                 at = text.find("`", at)
                 if at < 0:

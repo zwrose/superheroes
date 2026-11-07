@@ -1121,3 +1121,37 @@ def test_f8_a_closer_with_nothing_after_it_stays_hidden_and_a_bang_closer_counts
     closes a comment for GitHub too."""
     assert _state("<div>\n<!-- a\nZQ1 -->\n</div>\n\n## H\n", "ZQ1 -->") == H
     assert _state("<div>\n<!-- a\nZQ1 --!> ZQ2\n</div>\n\n## H\n", "ZQ1 --!> ZQ2") == U
+
+
+# --- Returning review after vet 846, round 1 (PR #2390) -----------------------------------------------------------
+
+def _line_state(body, needle):
+    offset = 0
+    for item in md_fence.split_lines(body):
+        if needle in item:
+            return md.scan(body).state_at(offset)
+        offset += len(item)
+    raise AssertionError("no line holds %r" % needle)
+
+
+def test_review_s3_a_backtick_run_over_80_opens_no_code_span():
+    """cmark-gfm's scan_to_closing_backticks refuses an opener longer than 80, so the comment between two 81-runs is
+    raw and hides ZQ1; an 80-run still makes a code span (ZQ1 shown)."""
+    ticks = "`" * 81
+    assert _line_state("x %s <!-- b\nZQ1\nc --> %s y\n\n## ZQ2\n" % (ticks, ticks), "ZQ1") != V
+    ticks = "`" * 80
+    assert _line_state("x %s <!-- b\nZQ1\nc --> %s y\n\n## ZQ2\n" % (ticks, ticks), "ZQ1") == V
+
+
+def test_review_s3_a_declaration_needs_an_uppercase_name_then_whitespace():
+    """cmark-gfm's inline declaration is <!, an uppercase name, whitespace, then up to >: <!X< is literal text, so the
+    later <a title="…"> spans the lines and hides ZQ1."""
+    assert _line_state('x <!X<a title=">\nZQ1\n"> y\n\n## ZQ2\n', "ZQ1") != V
+    assert _line_state("x <!DOCTYPE html> y\nZQ1\n\n## ZQ2\n", "ZQ1") == V
+
+
+def test_review_s3_a_backtick_in_a_link_destination_opens_no_code_span():
+    """cmark reads a link's destination when it closes the link, so its backtick opens no code span and the comment
+    after it is raw and hides ZQ1."""
+    assert _line_state("[a](x`y) <!-- b\nZQ1\n--> c `\n\n## ZQ2\n", "ZQ1") != V
+    assert _line_state("[a](xy) `<!-- b`\nZQ1\n--> c\n\n## ZQ2\n", "ZQ1") == V
