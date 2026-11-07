@@ -384,3 +384,55 @@ def test_g7_fence_delimiter_a_shortened_fenced_line_never_closes_the_fence():
     out = la._visible(body)
     assert "``` \n" not in out
     assert missing(body), "the fenced sample acceptance must not count"
+
+
+# --- Fix-audit round 2 (#2389): the two not-discharged audits ---------------------------------------------------------
+
+def test_g6_fixed_above_tail_a_claim_on_a_continuation_line_blanks_the_whole_item():
+    # audit of scoped-finder-002: the claim on the item's continuation line must take the item's first line with it
+    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off\n  quoting `<!--`; fixed-above #99 abcdef0\n\n"
+            "## How to see it\n\nN/A\n")
+    assert "F-1" not in la._visible(body)
+    assert missing(body), "F-1 must not count as accepted without its fixed-above claim"
+
+
+def test_g6_fixed_above_tail_the_blanked_block_stops_at_blank_lines():
+    body = ("## What we're accepting\n\n- F-2 Another\n\n- F-1 The retry loop never backs off\n"
+            "  quoting `<!--`; fixed-above #99 abcdef0\n")
+    out = la._visible(body)
+    assert "F-2 Another" in out and "F-1" not in out
+    assert line_count(out) == line_count(body)
+
+
+def test_g7_fence_delimiter_an_opener_line_holding_an_opener_stays_an_opener():
+    # audit of scoped-finder-003: blanking an opener line would unfence the sample below it; it is shortened instead
+    body = ("## What we're accepting\n\nNone.\n\n## How to see it\n\n```md <!-- note -->\n"
+            "## What we're accepting\n\n- F-1 The retry loop never backs off\n```\n")
+    out = la._visible(body)
+    assert "```md \n" in out
+    assert missing(body), "the fenced sample acceptance must not count"
+
+
+def test_g7_fence_delimiter_a_content_line_holding_an_opener_is_blanked_whole():
+    assert la._visible("````\n``` <!-- note -->\n````\n") == "````\n\n````\n"
+
+
+def test_g8_comment_state_a_quoted_tail_opener_never_swallows_the_next_heading():
+    # round-2 scoped finder (v1): a code-spanned `<!--` in a cut tail over-sets the comment state; it must end at the
+    # visible heading that bounds the acceptance section, so text under How to see it never counts as an acceptance
+    body = ("## What we're accepting\n\nNote `<?` and `<!--`\n## How to see it\n\n- F-1 The retry loop never backs off\n"
+            "-->\n")
+    out = la._visible(body)
+    assert "## How to see it" in out
+    assert missing(body), "text under How to see it must not count as an acceptance"
+
+
+def test_g8_comment_state_an_inline_comment_never_crosses_a_blank_line():
+    body = "## What we're accepting\n\nx <!--\n\n- F-1 The retry loop never backs off -->\n"
+    assert "F-1 The retry loop never backs off" in la._visible(body)
+
+
+def test_g8_comment_state_a_raw_comment_block_across_a_blank_line_still_hides():
+    body = "## What we're accepting\n\n<!--\n\n- F-1 The retry loop never backs off\n-->\n"
+    assert "F-1" not in la._visible(body)
+    assert missing(body)

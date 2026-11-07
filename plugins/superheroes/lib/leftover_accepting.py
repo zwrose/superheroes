@@ -78,6 +78,8 @@ _TICKS = re.compile(r"`+")
 # the openers GitHub's HTML parser reads as a comment-like run that hides the rest of the line (#2389 V847-1, BR684-2/3):
 # a comment, a processing instruction, a declaration (`<!` + an ASCII letter) or a CDATA section
 _OPENER = re.compile(r"<!--|<\?|<![A-Za-z]|<!\[")
+# an ATX heading line (CommonMark: up to three spaces, one to six #, then a space, a tab or the line's end)
+_ATX_LINE = re.compile(r" {0,3}#{1,6}(?:[ \t\r\n]|\Z)")
 # the same minus the comment, which keeps the multi-line comment state below
 _PI_OPENER = re.compile(r"<\?|<![A-Za-z]|<!\[")
 
@@ -112,11 +114,13 @@ def _visible(body):
       span stays), an unescaped, unquoted processing instruction, declaration or CDATA opener (``<?``, ``<!`` + an
       ASCII letter, ``<![``), and, on a line ``md_fence`` calls fenced, the first opener of any of these kinds or
       ``<!--`` (a raw HTML block such as ``<pre>`` makes a tilde line text, not a fence, so a fenced line is not
-      trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole. A fenced line
-      holding an opener is blanked whole, never shortened, so the shortened text cannot read as a fence delimiter when
-      the section reader re-reads it. A cut tail that holds a ``fixed-above`` claim blanks its whole line, so the
+      trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole. A fence content
+      line holding an opener is blanked whole, never shortened, so the shortened text cannot read as a fence delimiter
+      when the section reader re-reads it; a fence delimiter line is shortened, so it stays the opener or closer it was.
+      A cut tail that holds a ``fixed-above`` claim blanks its whole block (the run of non-blank lines around it), so the
       acceptance is not counted without the claim that needs verifying. A comment the cut tail opens and does not close
-      still opens the comment state for later lines.
+      still opens the comment state for later lines. An open comment state ends at a blank line or an ATX heading that
+      ``md_hidden`` reads VISIBLE (an inline comment cannot cross either; a raw HTML comment that does is md_hidden's).
     * Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so U+2028, U+2029, U+0085, VT, FF,
       FS, GS and RS are ordinary characters inside one.
 
@@ -126,7 +130,8 @@ def _visible(body):
     lines = md_fence.split_lines(body)
     # axis: lines break only on Markdown endings (never U+2028 and the other str.splitlines breaks), and the fence scan
     # reads each line with exactly one terminator removed — see bite-proof record i2389_scanner_line_boundaries.md
-    fenced = md_fence.scan([line[:len(line) - len(_terminator(line))] for line in lines]).inert
+    fence_scan = md_fence.scan([line[:len(line) - len(_terminator(line))] for line in lines])
+    fenced, fence_kinds = fence_scan.inert, fence_scan.kinds
     rendering = md_hidden.scan(body)
     offset, shown = 0, []
     for line in lines:
@@ -135,9 +140,14 @@ def _visible(body):
         except ValueError:
             shown.append(False)  # a line start md_hidden does not report reads as not visible: the cut fails closed
         offset += len(line)
-    out, inside = [], False
+    out, inside, claimed = [], False, []
     for n, line in enumerate(lines):
         term = _terminator(line)
+        # axis: an open comment state ends at a blank line or an ATX heading that md_hidden reads VISIBLE: an inline comment cannot
+        # cross either (a paragraph ends there), and a raw HTML comment that does is md_hidden's, which then reads the line hidden;
+        # so an over-read comment never swallows the heading that bounds the acceptance section — see bite-proof record i2389_leftover_visible_within_line.md
+        if inside and shown[n] and (not line.strip() or _ATX_LINE.match(line)):
+            inside = False
         if not inside and _MARKER_LINE.match(line):
             out.append(line)
             continue
@@ -148,9 +158,14 @@ def _visible(body):
                 out.append(term)
                 continue
             # axis: on a fenced line the first opener (comment, PI, declaration, CDATA) cuts the rest of the line, as a raw HTML block makes a tilde line text, not a fence — see bite-proof record i2389_leftover_visible_within_line.md
-            # axis: such a line is blanked whole, never shortened, so a shortened content line cannot become a fence delimiter when the section reader re-reads it — see bite-proof record i2389_leftover_visible_within_line.md
+            # axis: a fence content line holding an opener is blanked whole, never shortened, so it cannot become a fence delimiter when the section reader re-reads it; a delimiter line is shortened, so it stays the opener or closer it was — see bite-proof record i2389_leftover_visible_within_line.md
             opener = _OPENER.search(line)
-            out.append(line if opener is None else term)
+            if opener is None:
+                out.append(line)
+            elif fence_kinds[n] == md_fence.KIND_CONTENT:
+                out.append(term)
+            else:
+                out.append(line[:opener.start()] + term)
             continue
         kept, i, cut = [], 0, None
         while i < len(line):
@@ -193,9 +208,9 @@ def _visible(body):
                 i += 1
         if cut is not None:
             tail = line[cut:]
-            # axis: a cut tail that holds a fixed-above claim blanks the whole line, so a claim that needs stack verification is never dropped while its acceptance still counts — see bite-proof record i2389_leftover_visible_within_line.md
+            # axis: a cut tail that holds a fixed-above claim blanks its whole block (below), so a claim that needs stack verification is never dropped while its acceptance still counts — see bite-proof record i2389_leftover_visible_within_line.md
             if FIXED_ABOVE_RE.search(tail):
-                kept = []
+                claimed.append(n)
             # axis: a comment the cut tail opens and does not close still opens the comment state for later lines (fails closed: an over-read only cuts more) — see bite-proof record i2389_leftover_visible_within_line.md
             opened = tail.rfind("<!--")
             if opened >= 0 and tail.find("-->", opened + 4) < 0:
@@ -207,6 +222,19 @@ def _visible(body):
             text = term
         # the line keeps its own terminator (\r\n, \n or lone \r) even when a comment cut it, so the line count never changes
         out.append(text if not term or text.endswith(term) else text + term)
+    # axis: a line whose cut tail held a fixed-above claim blanks every line of its block (the run of non-blank lines around it, so a list
+    # item's first line and its continuation lines alike), a marker line excepted; this over-cuts a tight list, failing toward a refusal
+    # — see bite-proof record i2389_leftover_visible_within_line.md
+    for n in claimed:
+        first = n
+        while first > 0 and lines[first - 1].strip():
+            first -= 1
+        last = n
+        while last + 1 < len(lines) and lines[last + 1].strip():
+            last += 1
+        for m in range(first, last + 1):
+            if not _MARKER_LINE.match(lines[m]):
+                out[m] = _terminator(lines[m])
     return "".join(out)
 
 
