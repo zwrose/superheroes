@@ -334,7 +334,8 @@ def test_a_comment_outside_any_real_code_span_or_fence_stays_hidden(accepting, t
 
 def test_an_escaped_comment_opener_is_shown_text():
     # #2389 V847-1: the escaped opener and the backslash stay as text, then the rest of the line is cut (inside an HTML block GitHub honours no escape)
-    assert la._visible("a \\<!-- b --> c\n") == "a \\<!--\n"
+    # #2389 V849-1: an escaped entry `<` is cut from the backslash, so neither the backslash nor the opener stays (was "a \\<!--\n")
+    assert la._visible("a \\<!-- b --> c\n") == "a \n"
 
 
 def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():

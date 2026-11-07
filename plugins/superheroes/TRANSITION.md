@@ -59,6 +59,7 @@ Check these in a consuming project when it adopts this release. Each step names 
 - **Refuses more.** A heading, marker line or verdict line GitHub renders hidden is refused. A builder body refuses `write-failed` when the marker or the slot's first line would render hidden, and an image heading (`## ![What's changing, and why](x.png)`) is never the owner heading.
 - **Unsure refuses.** Where the parse cannot be sure, the text counts as not visible. A body-emptied detail that says the render could not be decided means the advisor moves the text by hand; it is not the edit-history remedy.
 - **Unchanged.** Setext headings still never count. No reason, result key or argument changes. A marker that shares its Markdown line with other text (after U+2028, say) is no standalone marker, so such a body refuses `markers-invalid` or `write-failed`.
+- **The leftover check reads less of a line.** An acceptance written on a line after a `<` that opens markup is not counted: a comment, a processing instruction, a declaration, a bogus opener or a tag, whether the `<` is escaped, in a code span, on a fenced line or plain. A body is voided when a cut changes a visible line's block role, cuts a visible heading, or touches a `fixed-above` claim (wrapped ones included) or manufactures one. A voided body accepts nothing, so the READY write refuses `leftover-not-accepted`, and the advisor rewrites that text.
 
 ### Vet slot: write refuses builder text in the slot
 

@@ -22,6 +22,7 @@ Two callers, no second copy of the rule: ``vet_slot.py handback --pr`` (the buil
 ``vet_slot.py write`` (the advisor's slot write, for a READY verdict only). ``missing`` takes the latest record exactly as
 ``review_record.py read --pr <n>`` returns it and the PR body; it returns the leftovers the section does not name, and
 raises ``Unreadable`` for a record it cannot read, which a caller reports as unreadable, never as a pass."""
+import bisect
 import os
 import re
 import sys
@@ -75,9 +76,9 @@ def _leftovers(record):
 
 _MARKER_LINE = re.compile(r"^<!-- superheroes:[^>]*-->\s*$")
 _TICKS = re.compile(r"`+")
-# the openers GitHub's HTML parser reads as a comment-like run that hides the rest of the line (#2389 V847-1, BR684-2/3):
-# a comment, a processing instruction, a declaration (`<!` + an ASCII letter) or a CDATA section
-_OPENER = re.compile(r"<!--|<\?|<![A-Za-z]|<!\[")
+# a `<` GitHub's HTML tokenizer leaves data state on (#2389 V849-1): `<` + `!`, `?`, `/` not followed by `>`, or an ASCII
+# letter. These are exactly the entries out of `_DATA` in `md_hidden._tokenize`; the text after one may be hidden markup.
+_TAG_ENTRY = re.compile(r"<(?:[!?]|/(?!>)|[A-Za-z])")
 # the token that starts a fixed-above claim, counted on its own (case-insensitive) so a claim a cut removed is seen even when it wraps across lines
 _FIXED_ABOVE_TOKEN = re.compile(r"(?<![A-Za-z0-9_-])fixed-above(?![A-Za-z0-9_])", re.IGNORECASE)
 # the two words of a fixed-above claim, matched apart, so a line that holds a claim split by a comment is still seen
@@ -85,8 +86,6 @@ _FIXED_WORD = re.compile(r"fixed", re.IGNORECASE)
 _ABOVE_WORD = re.compile(r"above", re.IGNORECASE)
 # an ATX heading line (CommonMark: up to three spaces, one to six #, then a space, a tab or the line's end)
 _ATX_LINE = re.compile(r" {0,3}#{1,6}(?:[ \t\r\n]|\Z)")
-# the same minus the comment, which keeps the multi-line comment state below
-_PI_OPENER = re.compile(r"<\?|<![A-Za-z]|<!\[")
 
 
 def _code_span_end(line, i):
@@ -119,32 +118,48 @@ def _visible_claim(body):
       section reader still finds the build-record boundary.
     * A line whose start ``md_hidden.scan`` does not read VISIBLE (hidden or unsure) keeps only its line terminator, a
       marker line excepted (#2389).
-    * Within a line that is kept (#2389 V847-1, BR684-2, BR684-3), the rest of the line is cut, with no comment state
-      carried to later lines, starting at the first of: a backslash escaping an opener (``\\<!--``, ``\\<?``,
-      ``\\<!X``, ``\\<![``; the backslash and the opener stay), an inline code span whose content holds an opener (the
-      span is kept only up to that opener; the tail read for comment state starts after the span), an unescaped, unquoted processing instruction, declaration or CDATA opener (``<?``, ``<!`` + an
-      ASCII letter, ``<![``), and, on a line ``md_fence`` calls fenced, the first opener of any of these kinds or
-      ``<!--`` (a raw HTML block such as ``<pre>`` makes a tilde line text, not a fence, so a fenced line is not
-      trusted). A fenced line holding no opener, and an ordinary code span or escape, are kept whole. A fence content
-      line holding an opener is blanked whole, never shortened, so the shortened text cannot read as a fence delimiter
-      when the section reader re-reads it; a fence delimiter line is shortened, so it stays the opener or closer it was.
-      A comment the cut tail opens and does not close still opens the comment state for later lines. An open comment
-      state ends at a blank line or an ATX heading that ``md_hidden`` reads VISIBLE (an inline comment cannot cross
-      either; a raw HTML comment that does is md_hidden's).
+    * V849-1, one entry condition (#2389 V847-1, BR684-2, BR684-3, vet 849): on a line that is kept, the rest of the line
+      is cut, with no comment state carried to later lines, at the first ``<`` that GitHub's HTML tokenizer leaves data
+      state on (``_TAG_ENTRY``, the entries out of ``_DATA`` in ``md_hidden._tokenize``): a ``<`` followed by ``!``,
+      ``?``, ``/`` and anything but ``>``, or an ASCII letter. A ``<`` followed by anything else (``a < b``, ``<3``, an
+      empty end tag ``</>``) is text. It applies wherever the ``<`` sits. Plain: ``<!--`` keeps opening the multi-line
+      comment state (its branch comes first); any other entry ``<`` cuts the rest of the line and sets no comment state
+      itself. Escaped: a backslash before an entry ``<`` keeps the text before the backslash and cuts from the backslash
+      (inside an HTML block GitHub honours no escape). Code span: a span whose content holds an entry ``<`` is kept only
+      up to that ``<``; the tail read for comment state starts after the span. Fenced: a line ``md_fence`` calls fenced
+      is not trusted (a raw HTML block such as ``<pre>`` makes a tilde line text, not a fence), so one holding an entry
+      ``<`` anywhere is blanked whole when it is a fence content line, never shortened, so the shortened text cannot
+      read as a fence delimiter when the section reader re-reads it, and shortened at that ``<`` when it is a fence
+      delimiter line, so it stays the opener or closer it was. A fenced line with no entry ``<`` is kept whole.
+    * A comment the cut tail opens and does not close (an unclosed ``<!--`` in the tail of any cut kind: plain, escaped,
+      code span) still opens the comment state for later lines. An open comment state ends at a blank line or an ATX
+      heading that ``md_hidden`` reads VISIBLE (an inline comment cannot cross either; a raw HTML comment that does is
+      md_hidden's).
     * A removed claim voids the body (B): ``claim_removed`` is true when the text holds fewer ``fixed-above`` tokens than
       the source (case-insensitive) or fewer whole ``FIXED_ABOVE_RE`` matches (over the whole text, so a claim wrapped
       across lines counts). ``_accepting_items`` then returns no acceptance, whichever path removed the claim, so every
       leftover reads missing. A body whose hidden text merely mentions ``fixed-above`` is voided too, which fails toward
-      a refusal. The body is also void when a changed line that holds "fixed" and "above" carries different whole
-      claims before and after the cut (a claim joined from fragments cannot balance one removed), and when a cut changed
-      the block role (fence kind, or ATX heading or not) of a line ``md_hidden`` reads VISIBLE, because the section
-      reader re-parses the cut text.
+      a refusal.
+    * BR684-E-1, a cut heading voids the body: it is void when any line ``md_hidden`` reads VISIBLE that is an ATX
+      heading in its source changes in the output at all.
+    * Rule 3, a body is voided when a cut changes a visible line's block role, cuts a visible heading, or touches a
+      ``fixed-above`` claim (wrapped ones included) or manufactures one. (a) Removal: a ``FIXED_ABOVE_RE`` match in the
+      whole source body (run over the joined source, so a claim wrapped across lines is one match) that touches a line the
+      cuts changed voids the body, unless it lies on one line and that line's sorted whole claims are identical before
+      and after the cut (so an inline comment on a claim line keeps the claim). (b) Manufacture: a line the cuts changed
+      that could join a claim from fragments, and whose sorted whole claims differ before and after the cut, voids the
+      body (the per-line guard kept from the earlier leg, so a claim joined from fragments cannot balance one a cut
+      removed). A placeholder that is no claim matches neither.
+    * The block-role guard: the body is void when a cut changed the block role (fence kind, or ATX heading or not) of a
+      line ``md_hidden`` reads VISIBLE, because the section reader re-parses the cut text.
+    * Kept as they were: a whole-line ``superheroes:`` marker is kept; a line ``md_hidden`` blanks stays blanked;
+      ``md_hidden`` failing on a str blanks every non-marker line; the output keeps the input's line count (the last
+      line without a terminator excepted); ``_visible`` never raises on a str; every change only removes text, or voids.
     * Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so U+2028, U+2029, U+0085, VT, FF,
       FS, GS and RS are ordinary characters inside one.
 
-    Not modelled: the cut over-reaches where GitHub would show the tail (an opener in a plain paragraph, or in a real
-    fenced block), which is accepted because it fails toward a refusal; and an inline raw tag other than these openers
-    is not read, so a tail such a tag hides within a line is kept."""
+    Not modelled: the cut over-reaches where GitHub would show the tail (inline markup, autolinks, ``a <b`` in prose),
+    which is accepted because it fails toward a refusal."""
     lines = md_fence.split_lines(body)
     # axis: lines break only on Markdown endings (never U+2028 and the other str.splitlines breaks), and the fence scan
     # reads each line with exactly one terminator removed — see bite-proof record i2389_scanner_line_boundaries.md
@@ -175,9 +190,9 @@ def _visible_claim(body):
             if not shown[n]:
                 out.append(term)
                 continue
-            # axis: on a fenced line the first opener (comment, PI, declaration, CDATA) cuts the rest of the line, as a raw HTML block makes a tilde line text, not a fence — see bite-proof record i2389_leftover_visible_within_line.md
-            # axis: a fence content line holding an opener is blanked whole, never shortened, so it cannot become a fence delimiter when the section reader re-reads it; a delimiter line is shortened, so it stays the opener or closer it was — see bite-proof record i2389_leftover_visible_within_line.md
-            opener = _OPENER.search(line)
+            # axis: a fenced line holding an entry `<` anywhere is treated as holding an opener, as a raw HTML block makes a tilde line text, not a fence — see bite-proof record i2389_leftover_visible_within_line.md
+            # axis: a fence content line holding an entry `<` is blanked whole, never shortened, so it cannot become a fence delimiter when the section reader re-reads it; a delimiter line is shortened at that `<`, so it stays the opener or closer it was — see bite-proof record i2389_leftover_visible_within_line.md
+            opener = _TAG_ENTRY.search(line)
             if opener is None:
                 out.append(line)
             elif fence_kinds[n] == md_fence.KIND_CONTENT:
@@ -196,11 +211,9 @@ def _visible_claim(body):
                 inside, i = False, end + 3
             elif line[i] == "\\" and i + 1 < len(line):
                 # axis: an escaped character (a backtick or a `<`) is literal text, never a delimiter
-                # axis: a backslash before an opener keeps both as text, then cuts the rest of the line (inside an HTML block GitHub honours no escape) — see bite-proof record i2389_leftover_visible_within_line.md
-                escaped = _OPENER.match(line, i + 1)
-                if escaped is not None:
-                    kept.append(line[i:i + 1 + len(escaped.group(0))])
-                    cut = i + 1 + len(escaped.group(0))
+                # axis: a backslash before an entry `<` keeps the text before the backslash, then cuts the rest of the line from the backslash (inside an HTML block GitHub honours no escape) — see bite-proof record i2389_leftover_visible_within_line.md
+                if _TAG_ENTRY.match(line, i + 1) is not None:
+                    cut = i + 2  # the tail read for comment state starts after the entry `<`: it sets no comment state itself
                     break
                 kept.append(line[i:i + 2])
                 i += 2
@@ -208,8 +221,8 @@ def _visible_claim(body):
                 # axis: a code span closes only on a backtick run of exactly its own length
                 end = _code_span_end(line, i)
                 run = len(_TICKS.match(line, i).group(0))
-                # axis: a code span whose content holds an opener keeps the span only up to that opener, then cuts the rest of the line, so text inside the span after the opener (which GitHub hides inside an HTML block, honouring no code span) never counts — see bite-proof record i2389_leftover_visible_within_line.md
-                quoted = _OPENER.search(line, i + run, end - run) if end is not None else None
+                # axis: a code span whose content holds an entry `<` keeps the span only up to that `<`, then cuts the rest of the line, so text inside the span after it (which GitHub hides inside an HTML block, honouring no code span) never counts — see bite-proof record i2389_leftover_visible_within_line.md
+                quoted = _TAG_ENTRY.search(line, i + run, end - run) if end is not None else None
                 if quoted is not None:
                     kept.append(line[i:quoted.start()])
                     cut = end  # the tail read for comment state starts after the span: a quoted opener opens nothing
@@ -218,8 +231,8 @@ def _visible_claim(body):
                 i = end if end is not None else i + run
             elif line.startswith("<!--", i):
                 inside, i = True, i + 4
-            # axis: an unescaped, unquoted processing instruction, declaration or CDATA opener cuts the rest of the line, GitHub's parser reads it as a bogus comment — see bite-proof record i2389_leftover_visible_within_line.md
-            elif _PI_OPENER.match(line, i):
+            # axis: any other unescaped, unquoted entry `<` (a tag, an end tag, a PI, a declaration, a bogus opener) cuts the rest of the line: GitHub's tokenizer leaves data state there and hides what follows — see bite-proof record i2389_leftover_visible_within_line.md
+            elif _TAG_ENTRY.match(line, i):
                 cut = i
                 break
             else:
@@ -243,12 +256,31 @@ def _visible_claim(body):
     # voids the body, whichever path removed it; the caller then accepts nothing — see bite-proof record i2389_leftover_visible_within_line.md
     void = (len(_FIXED_ABOVE_TOKEN.findall(text)) < len(_FIXED_ABOVE_TOKEN.findall(body))
             or len(FIXED_ABOVE_RE.findall(text)) < len(FIXED_ABOVE_RE.findall(body)))
-    # axis: so does any line the cuts changed that holds both "fixed" and "above" in its source and whose whole claims differ before and
-    # after the cut (one removed, or one joined from fragments), so a joined claim elsewhere cannot balance the counts of one the cuts
-    # removed — see bite-proof record i2389_leftover_visible_within_line.md
+    # axis: (b) manufacture: a line the cuts changed that holds both the word "fixed" and the word "above" in its source and whose
+    # whole claims differ before and after the cut (one removed, or one joined from fragments) voids the body, so a joined claim
+    # elsewhere cannot balance the counts of one the cuts removed — see bite-proof record i2389_leftover_visible_within_line.md
     void = void or any(out[n] != lines[n] and _FIXED_WORD.search(lines[n]) and _ABOVE_WORD.search(lines[n])
                        and sorted(FIXED_ABOVE_RE.findall(out[n])) != sorted(FIXED_ABOVE_RE.findall(lines[n]))
                        for n in range(len(lines)))
+    # axis: (a) removal: a ``fixed-above`` claim in the source body (matched over the whole joined source, so one wrapped across
+    # lines is one match) that touches a line the cuts changed voids the body, unless it lies on one line and that line's sorted
+    # whole claims are the same before and after the cut; a placeholder that is no claim (``fixed-above #<layer PR> <commit>``)
+    # matches nothing here, so cutting it voids nothing — see bite-proof record i2389_leftover_visible_within_line.md
+    if not void:
+        starts = [0]
+        for line in lines:
+            starts.append(starts[-1] + len(line))
+        for claim in FIXED_ABOVE_RE.finditer("".join(lines)):
+            first = bisect.bisect_right(starts, claim.start()) - 1
+            last = bisect.bisect_right(starts, claim.end() - 1) - 1
+            if any(out[n] != lines[n] for n in range(first, last + 1)) and not (
+                    first == last
+                    and sorted(FIXED_ABOVE_RE.findall(out[first])) == sorted(FIXED_ABOVE_RE.findall(lines[first]))):
+                void = True
+                break
+    # axis: so does a cut that changes a heading md_hidden reads VISIBLE and that is an ATX heading in its source, in any way, because
+    # the section reader finds the acceptance section by its heading — see bite-proof record i2389_leftover_visible_within_line.md
+    void = void or any(shown[n] and _ATX_LINE.match(lines[n]) and out[n] != lines[n] for n in range(len(lines)))
     # axis: and so does a cut that changes the block role of any line md_hidden reads VISIBLE (its fence kind, or whether it is an
     # ATX heading), because the section reader re-parses the cut text and a manufactured or lost fence or heading moves what it
     # reads as the acceptance section — see bite-proof record i2389_leftover_visible_within_line.md

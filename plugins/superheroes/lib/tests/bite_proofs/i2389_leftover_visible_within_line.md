@@ -226,3 +226,49 @@ The probe ran in the worktree itself, one targeted edit reverted by its inverse.
 Replaced elements. The block-machinery parts of G6 (the `claimed` list and the cut-tail `_FIXED_ABOVE_TOKEN.search(tail)` blanking of the whole line) and of G9 (the `_boundary` helper and the heading boundary of the claimed-block walk) are deleted from `_visible`. G10 replaces them: the whole body is voided when a claim is removed, so there is no block to bound. The G6 and G9 records above describe code that no longer exists. The G6 no-claim test (`test_g6_fixed_above_tail_a_tail_without_a_claim_keeps_the_acceptance`) is kept.
 
 Rule A proposed, then dropped. WO-D proposed rule A (a closed comment's tail survives: on a line whose start md_hidden reads HIDDEN while `_visible`'s own comment state is open, keep the text after the closer, as in `a <!-- x` / `b --> c` showing ` c`). It was dropped on layer 1's F8 (vet 846): `md_hidden._comment_line_state` marks as UNSURE a line that starts inside a comment and holds a closer with text after it, and WO-D measured `b --> c` in `a <!-- x\nb --> c\n` as UNSURE, not HIDDEN. The leftover check does not overrule layer 1's fail-closed call, so there is no rule A, no G11, and no bite-proof for it. Five existing tests whose expected output kept such a tail now expect the blanked line.
+
+## #2389 fix leg 2 (vet 849, WO-E2): G12 to G16
+
+Each probe ran in the worktree itself: one targeted edit with the edit tool, run red, the inverse edit, run green. After the last restore the guard lines read `leftover_accepting.py:262` `void = void or any(out[n] != lines[n] and _FIXED_WORD.search(lines[n]) and _ABOVE_WORD.search(lines[n])`, `:283` `void = void or any(shown[n] and _ATX_LINE.match(lines[n]) and out[n] != lines[n] for n in range(len(lines)))`, `:290` `void = any(shown[n] and (out_kinds[n] != fence_kinds[n]`, `:81` `_TAG_ENTRY = re.compile(r"<(?:[!?]|/(?!>)|[A-Za-z])")`, and the (a) block opens with `if not void:` (`:269`). Command for every half, with `N` the guard number: `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k test_gN_`. No receipt holds a secret, token or private URL; nothing is redacted.
+
+### G12: the block-role guard
+
+- **Guarded element / axis:** the `void = any(shown[n] and (out_kinds[n] != fence_kinds[n] or bool(_ATX_LINE.match(out[n])) != bool(_ATX_LINE.match(lines[n]))) …)` statement under `if not void:` in `_visible_claim`. Axis: a cut that changes the fence kind or the ATX-heading status of a line `md_hidden` reads VISIBLE accepts nothing, because the section reader re-parses the cut text.
+- **Neutralization:** `void = any(shown[n] and (…` became `void = any(False and shown[n] and (…`.
+- **Raw red:** `3 failed, 1 passed, 174 deselected in 0.88s`. Failed: `test_g12_structure_a_fence_opener_swallowed_by_a_tail_comment_voids_the_body` (`assert ['Note `'] == []`), `test_g12_structure_a_cut_that_manufactures_a_fence_opener_voids_the_body` (`assert ['None. ```md...acks off ```'] == []`) and `test_g12_structure_heading_half_a_cut_that_makes_a_line_an_atx_heading_voids_the_body` (`assert False is True`). Both halves of the guard (fence kind, heading status) bite: the first two are the fence half, the third is the heading half.
+- **Restore:** `void = any(False and shown[n] and (…` became `void = any(shown[n] and (…` (the inverse edit).
+- **Raw green:** `4 passed, 174 deselected in 0.44s`.
+
+### G13: the per-line claim guard (b), kept as at `3b85582c`
+
+- **Guarded element / axis:** the statement `void = void or any(out[n] != lines[n] and _FIXED_WORD.search(lines[n]) and _ABOVE_WORD.search(lines[n]) and sorted(FIXED_ABOVE_RE.findall(out[n])) != sorted(FIXED_ABOVE_RE.findall(lines[n])) …)`, restored to exactly the statement at `3b85582c` (lines 249-251 there). Axis: a line the cuts changed whose whole claims differ before and after the cut (a claim manufactured from fragments) voids the body. Guard (b) of rule 3; G16 supersedes only WO-E's bare-word trigger, not this guard.
+- **Neutralization:** `any(out[n] != lines[n] and …` became `any(False and out[n] != lines[n] and …`.
+- **Raw red:** `1 failed, 2 passed, 175 deselected in 0.39s`. Failed: `test_g13_claim_join_a_claim_manufactured_by_a_comment_cut_alone_voids_the_body` (`assert False is True`).
+- **Restore:** `any(False and out[n] != lines[n] and …` became `any(out[n] != lines[n] and …`.
+- **Raw green:** `3 passed, 175 deselected in 0.94s`.
+- **Why a test was added.** `test_g13_claim_join_a_claim_joined_from_fragments_cannot_balance_a_removed_one` stays green with (b) neutralized: its removed `#98` claim sits on the same changed line, so the new removal guard (a) voids it too. The added test has no removed claim (`fixed-<!-- note -->above #99 abcdef0` alone), so only (b) voids it.
+
+### G14: the one entry condition
+
+- **Guarded element / axis:** `_TAG_ENTRY = re.compile(r"<(?:[!?]|/(?!>)|[A-Za-z])")`, the `<` that GitHub's tokenizer leaves data state on (the entries out of `_DATA` in `md_hidden._tokenize`). Axis: text after such a `<` is hidden whatever the opener (bogus comment, tag, end tag), raw, escaped, code-spanned or on a fenced line.
+- **Neutralization:** `r"<(?:…` became `r"<(?!)(?:…`, so the pattern never matches (the plain `<!--` branch is separate and unaffected).
+- **Raw red:** `35 failed, 2 passed, 141 deselected in 0.55s`. The tool truncated the middle of the failure listing (8588 characters), so the failure list is incomplete here; the first line of each failure read `assert [] == [{'id': 'F-1', 'title': 'The retry loop never backs off'}]` and the last failing test was `test_g14_tag_entry_the_entry_itself_sets_no_comment_state_but_the_cut_tail_is_read`. The two that stayed green are the two controls (`a < b`, `</>`).
+- **Restore:** `r"<(?!)(?:…` became `r"<(?:…`.
+- **Raw green:** `37 passed, 141 deselected in 0.51s`.
+
+### G15: the cut-heading guard
+
+- **Guarded element / axis:** `void = void or any(shown[n] and _ATX_LINE.match(lines[n]) and out[n] != lines[n] …)`. Axis: a cut that changes a visible ATX heading in any way voids the body, because the section reader finds the acceptance section by its heading.
+- **Neutralization:** `any(shown[n] and …` became `any(False and shown[n] and …`.
+- **Raw red:** `2 failed, 1 passed, 175 deselected in 0.41s`. Failed: `test_g15_cut_heading_a_cut_in_a_later_heading_voids_the_body` and `test_g15_cut_heading_a_cut_in_the_accepting_heading_voids_the_body_and_reports_f1_missing` (`assert False is True` each). The control (a heading with no cut) stayed green.
+- **Restore:** `any(False and shown[n] and …` became `any(shown[n] and …`.
+- **Raw green:** `3 passed, 175 deselected in 0.39s`.
+
+### G16: the claim removal guard (a)
+
+- **Guarded element / axis:** the `if not void:` block that runs `FIXED_ABOVE_RE.finditer("".join(lines))` and voids when a match touches a changed line, unless it lies on one line whose sorted whole claims are unchanged. Axis: a `fixed-above` claim the cuts touch (a wrapped one included) voids the body, so a claim joined elsewhere cannot balance one a cut removed. (a) supersedes WO-E's bare-word trigger (a changed line holding the word "fixed" or "above" voided the body unless its claims were whole and unchanged). That trigger over-refused: the real PR #2348 body quotes the placeholder `` `fixed-above #<layer PR> <commit>` `` in a code span, rule 1 cuts it at `<layer`, and the line changed, so a placeholder that is no claim voided the body. (a) keys on a real `FIXED_ABOVE_RE` match, which a placeholder is not.
+- **Neutralization:** `if not void:` became `if False and not void:` on the (a) block.
+- **Raw red:** `1 failed, 4 passed, 173 deselected in 0.40s`. Failed: `test_g16_claim_fragment_a_wrapped_claim_cut_on_its_first_line_voids_though_a_joined_wrapped_one_balances_the_counts` (`assert False is True`).
+- **Restore:** `if False and not void:` became `if not void:`.
+- **Raw green:** `5 passed, 173 deselected in 0.48s`.
+- **Why a test was added.** The BR684-E-2 counterexample test (`test_g16_claim_fragment_the_counts_balance_but_the_changed_line_voids_the_body`) stays green with (a) neutralized, because its comment-joined `#99` claim sits on one changed line, which guard (b) voids by itself. The added test joins `#99` across two lines (`fixed-<!-- x -->above #99` / `abcdef0`), so no changed line holds a whole claim on its own, the counts balance, and only (a) voids it. The control `test_g16_claim_fragment_a_quoted_placeholder_cut_by_rule_1_keeps_the_acceptances` stayed green in every run.

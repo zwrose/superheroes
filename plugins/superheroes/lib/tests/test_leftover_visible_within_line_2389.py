@@ -9,6 +9,13 @@ advisor's renders). Guards (bite-proof record ``bite_proofs/i2389_leftover_visib
   G2 test_g2_code_span_opener_*   a code span holding an opener is kept, then the rest of the line is cut
   G3 test_g3_pi_declaration_*     an unescaped, unquoted ``<?``, ``<!X`` or ``<![`` cuts from the ``<``
   G4 test_g4_fenced_line_opener_* a line md_fence calls fenced is cut at its first opener
+  (#2389 V849-1 turned the opener list of G1-G4 into one entry condition, G14, so the four guards now cut at any entry ``<``)
+  G12 test_g12_structure_*        a cut that changes a visible line's block role (fence kind, ATX heading or not) voids the body
+  G13 test_g13_claim_join_*       the per-line claim guard, superseded by G16 (kept: both tests still pass)
+  G14 test_g14_tag_entry_*        the one entry condition: a ``<`` + ``!``, ``?``, ``/`` (not ``/>``) or an ASCII letter
+  G15 test_g15_cut_heading_*      a cut that changes a visible ATX heading voids the body
+  G16 test_g16_claim_fragment_*   a whole claim (wrapped ones included) touching a changed line voids the body unless its one line's
+                                  whole claims are unchanged; a placeholder that is no claim voids nothing
 Rows with no GitHub render ("model-only") say so. No real gh: every call the vet-slot tests make is faked by
 test_vet_slot_leftovers_2280's Fake."""
 import json
@@ -104,20 +111,26 @@ def test_g1_escaped_opener_github_hides_f1_so_the_check_reports_it_missing(name)
 
 
 @pytest.mark.parametrize("source, expected", [
-    ("a \\<!-- tail\n", "a \\<!--\n"),
-    ("a \\<? tail\n", "a \\<?\n"),
-    ("a \\<!X tail\n", "a \\<!X\n"),
-    ("a \\<![CDATA[ tail\n", "a \\<![\n"),
-    ("a \\<!-- tail\nnext -->\nz\n", "a \\<!--\nnext -->\nz\n"),  # no comment state carried to the next line
-    ("a \\<!-- tail", "a \\<!--"),  # a last line with no terminator
+    # #2389 V849-1: a backslash before an entry `<` is no longer kept; the line is cut from the backslash
+    ("a \\<!-- tail\n", "a \n"),
+    ("a \\<? tail\n", "a \n"),
+    ("a \\<!X tail\n", "a \n"),
+    ("a \\<![CDATA[ tail\n", "a \n"),
+    ("a \\<!-- tail\nnext -->\nz\n", "a \nnext -->\nz\n"),  # no comment state carried to the next line
+    ("a \\<!-- tail", "a "),  # a last line with no terminator
+    # #2389 V849-1: these three were "an escape that is not an opener" and kept whole; `<b`, `<!-` and `<! ` are entries
+    ("a \\* b \\` c \\< d \\<b> e\n", "a \\* b \\` c \\< d \n"),
+    ("a \\<!- not an opener\n", "a \n"),
+    ("a \\<! also not\n", "a \n"),
 ])
-def test_g1_escaped_opener_keeps_the_backslash_and_opener_then_cuts_the_line(source, expected):
+def test_g1_escaped_opener_cuts_the_line_from_the_backslash(source, expected):
     out = la._visible(source)
     assert out == expected
     assert line_count(out) == line_count(source)
 
 
-@pytest.mark.parametrize("source", ["a \\* b \\` c \\< d \\<b> e\n", "a \\<!- not an opener\n", "a \\<! also not\n"])
+# #2389 V849-1: the `\\<b>` and the two bogus openers moved to the cut test above; what stays is an escape before a `<` that is no entry
+@pytest.mark.parametrize("source", ["a \\* b \\` c \\< d e\n", "a \\< b \\<3 \\</> \\<\n"])
 def test_g1_escaped_opener_an_escape_that_is_not_an_opener_changes_nothing(source):
     assert la._visible(source) == source
 
@@ -161,6 +174,7 @@ def test_g2_code_span_opener_github_hides_f1_so_the_check_reports_it_missing(nam
     ("a ``<!-- ` -->`` tail\n", "a ``\n"),  # a double-backtick span
     ("a `<!--` tail\nnext -->\nz\n", "a `\nnext -->\nz\n"),  # no comment state carried to the next line
     ("a `<!--` tail", "a `"),  # a last line with no terminator
+    ("a `<b>` and `<` and `!` c\n", "a `\n"),  # #2389 V849-1: was "a span without an opener, kept whole"; `<b` is an entry
 ])
 def test_g2_code_span_opener_keeps_the_span_then_cuts_the_line(source, expected):
     out = la._visible(source)
@@ -168,7 +182,8 @@ def test_g2_code_span_opener_keeps_the_span_then_cuts_the_line(source, expected)
     assert line_count(out) == line_count(source)
 
 
-@pytest.mark.parametrize("source", ["a `x` b `y z` c\n", "a ``x ` y`` b\n", "a `<b>` and `<` and `!` c\n", "a ` b\n"])
+# #2389 V849-1: `<b>` left this list (it is cut above); `a < b` and `</>` are no entry
+@pytest.mark.parametrize("source", ["a `x` b `y z` c\n", "a ``x ` y`` b\n", "a `<` and `!` c `a < b` `</>`\n", "a ` b\n"])
 def test_g2_code_span_opener_a_span_without_an_opener_changes_nothing(source):
     assert la._visible(source) == source
 
@@ -234,8 +249,10 @@ def test_g3_pi_declaration_class_oracle_text_github_hides_inside_the_opener_is_n
     ("keep <!DOCTYPE hide>\n", "keep \n"),
     ("keep <?\n", "keep \n"),
     ("- list <?x hide", "- list "),  # a last line with no terminator
-    ("a <b> c < d <3 e\n", "a <b> c < d <3 e\n"),  # a plain `<`, a tag and `<3` are not openers
-    ("a <!- b <! c <!1 d\n", "a <!- b <! c <!1 d\n"),  # `<!` not followed by a letter, `-` once, or `[` is not an opener
+    # #2389 V849-1: a tag, and `<!` followed by anything, are entries now (they were kept whole)
+    ("a <b> c < d <3 e\n", "a \n"),
+    ("a <!- b <! c <!1 d\n", "a \n"),
+    ("a < b <3 <> </> <\n", "a < b <3 <> </> <\n"),  # a `<` followed by a space, a digit, `>`, `/>` or a line end is no entry
 ])
 def test_g3_pi_declaration_cuts_from_the_opener_and_keeps_what_is_not_one(source, expected):
     out = la._visible(source)
@@ -279,6 +296,8 @@ def test_g3_pi_declaration_model_only_an_acceptance_before_the_opener_still_coun
     ("```\n<!-- first --> and <? second ?>\n```\n", "```\n\n```\n"),
     ("```\nkeep <!-- cut\n```\nafter\n", "```\n\n```\nafter\n"),  # no comment state carried past the fence
     ("```\nkeep <!-- cut", "```\n"),  # a last fenced line with no terminator leaves nothing (the known exception)
+    # #2389 V849-1: was in the "no opener, kept whole" list below; `<b` is an entry, so the fence content line is blanked
+    ("~~~\nplain <b> text < 3 `x` \\* y\n~~~\n", "~~~\n\n~~~\n"),
 ])
 def test_g4_fenced_line_opener_cuts_a_fenced_line_at_its_first_opener(source, expected):
     out = la._visible(source)
@@ -289,7 +308,7 @@ def test_g4_fenced_line_opener_cuts_a_fenced_line_at_its_first_opener(source, ex
 
 @pytest.mark.parametrize("source", [
     "```\n- F-1 The retry loop never backs off\n```\n",
-    "~~~\nplain <b> text < 3 `x` \\* y\n~~~\n",
+    "~~~\nplain < 3 `x` \\* y </>\n~~~\n",  # #2389 V849-1: `<b>` replaced by `</>`, which is no entry
     "```\n\n```\n",
 ])
 def test_g4_fenced_line_opener_a_fenced_line_holding_no_opener_is_kept_whole(source):
@@ -506,6 +525,16 @@ def test_g13_claim_join_a_claim_joined_from_fragments_cannot_balance_a_removed_o
     assert missing(body)
 
 
+def test_g13_claim_join_a_claim_manufactured_by_a_comment_cut_alone_voids_the_body():
+    # #2389 fix leg 2: with the removal guard (G16 (a)) in place, the test above is also voided by it (the #98 claim is cut on the
+    # same line); this one has no removed claim, so only the per-line manufacture guard (b) voids it
+    body_ = "## What we're accepting\n\n- F-1 The retry loop never backs off; fixed-<!-- note -->above #99 abcdef0\n"
+    assert "fixed-above #99 abcdef0" in la._visible(body_)
+    assert la._visible_claim(body_)[1] is True
+    assert la._accepting_items(body_) == []
+    assert missing(body_) == GAP
+
+
 def test_g13_claim_join_an_inline_comment_on_a_claim_line_keeps_the_claim():
     body = "## What we're accepting\n\n- F-1 The retry loop never backs off <!-- a note --> fixed-above #99 abcdef0\n"
     assert la._accepting_items(body) != []
@@ -516,3 +545,140 @@ def test_g2_code_span_opener_text_inside_the_span_after_the_opener_never_counts(
     body = "## What we're accepting\n\n<div>Quoting `<!-- F-1 The retry loop never backs off -->`\n</div>\n"
     assert "F-1" not in la._visible(body)
     assert missing(body)
+
+
+# --- #2389 fix leg 2 (vet 849): G14 the one entry condition, G15 the cut heading, G16 the claim fragment, G12's heading half ---
+
+TITLE = "F-1 The retry loop never backs off"
+
+
+# model-only (no render of these exact bodies in the repository). Vet receipt
+# https://github.com/zwrose/superheroes/pull/2391#issuecomment-6713800197 rendered 36 of these shapes on GitHub: each bogus
+# opener below, raw, escaped and code-spanned, on a `<div>` line, hides the rest of the line.
+@pytest.mark.parametrize("opener", ["<! ", "<!-x", "<!1", "</ ", "</1"])
+@pytest.mark.parametrize("form", ["raw", "escaped", "code_span"])
+@pytest.mark.parametrize("lead", ["<div>Accepting ", "Accepting "], ids=["div_line", "plain_line"])
+def test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line(opener, form, lead):
+    quoted = {"raw": opener, "escaped": "\\" + opener, "code_span": "`" + opener + "`"}[form]
+    text = body(lead + quoted + " " + TITLE + "\n</div>\n")
+    assert missing(text) == GAP
+    assert TITLE not in la._visible(text)
+
+
+@pytest.mark.parametrize("item", [
+    "- F-1 <The retry loop never backs off>",
+    "- Accepting <a F-1 The retry loop never backs off>",
+    "- <F-1 The retry loop never backs off>",
+    "- <span title=\" F-1 The retry loop never backs off\"></span>",
+], ids=["tag_before_title", "tag_before_id", "tag_before_item_text", "attribute_value"])
+def test_g14_tag_entry_an_inline_tag_hides_the_acceptance_written_after_it(item):
+    assert missing(body(item + "\n")) == GAP
+
+
+@pytest.mark.parametrize("item", [
+    "- F-1 The retry loop never backs off; see a < b",  # a `<` followed by a space is text
+    "- F-1 The retry loop never backs off </>",  # an empty end tag is nothing
+], ids=["less_than_space", "empty_end_tag"])
+def test_g14_tag_entry_controls_a_less_than_that_is_no_entry_still_counts(item):
+    text = body(item + "\n")
+    assert item in la._visible(text)
+    assert missing(text) == []
+
+
+def test_g14_tag_entry_the_entry_itself_sets_no_comment_state_but_the_cut_tail_is_read():
+    # the escaped `\<!--` is cut from the backslash and opens nothing; an unclosed `<!--` later in the cut tail opens the state
+    assert la._visible("a \\<!-- c\nnext\n") == "a \nnext\n"
+    assert la._visible("a \\<b> <!-- c\nnext\n") == "a \n\n"
+    assert la._visible("a <b> <!-- c\nnext\n") == "a \n\n"
+    assert la._visible("a <b> <!-- c --> d\nnext\n") == "a \nnext\n"
+
+
+# --- G15: a cut heading voids the body (BR684-E-1) ---
+
+def test_g15_cut_heading_a_cut_in_a_later_heading_voids_the_body():
+    text = "## What we're accepting\n\nNone.\n\n## How to see it <kbd>x</kbd>\n- F-1 The retry loop never backs off\n"
+    assert la._visible_claim(text)[1] is True
+    assert la._accepting_items(text) == []
+
+
+def test_g15_cut_heading_a_cut_in_the_accepting_heading_voids_the_body_and_reports_f1_missing():
+    # without the guard the cut heading still reads as the accepting heading, and the item below it counts
+    text = "## What we're accepting <kbd>example only</kbd>\n- F-1 The retry loop never backs off\n"
+    assert la._visible_claim(text)[1] is True
+    assert la._accepting_items(text) == []
+    assert missing(text) == GAP
+
+
+def test_g15_cut_heading_control_a_heading_with_no_cut_is_not_void():
+    text = "## What we're accepting\n\n- F-1 The retry loop never backs off <kbd>x</kbd>\n\n## How to see it\n\nN/A\n"
+    assert la._visible_claim(text)[1] is False
+    assert missing(text) == []
+
+
+# --- G12, the heading half of the block-role guard (no new code: this test is its owner) ---
+
+def test_g12_structure_heading_half_a_cut_that_makes_a_line_an_atx_heading_voids_the_body():
+    # `#<?x` is no heading in its source (the `#` is followed by `<`); the cut leaves `#`, an ATX heading
+    text = "## What we're accepting\n\nNone.\n\n#<?x\n- F-1 The retry loop never backs off\n"
+    assert la._visible(text).splitlines()[4] == "#"
+    assert la._visible_claim(text)[1] is True
+    assert la._accepting_items(text) == []
+    assert missing(text) == GAP
+
+
+# --- G16: a claim fragment voids the body (BR684-E-2) ---
+
+def claim_fragment_body():
+    """BR684-E-2's counterexample: the #98 claim wraps across two lines and an inline tag cuts its first line, while a
+    comment-joined #99 claim sits below the build-record marker, so the token and claim counts balance."""
+    text = body("- F-1 The retry loop never backs off <b>x</b> fixed-above #98\n  1234567\n")
+    return text.replace("<details><summary>Build record</summary>\n\n",
+                        "<details><summary>Build record</summary>\n\nfixed-<!-- x -->above #99 abcdef0\n\n", 1)
+
+
+def test_g16_claim_fragment_the_counts_balance_but_the_changed_line_voids_the_body(tmp_path):
+    text = claim_fragment_body()
+    assert "fixed-<!-- x -->above #99 abcdef0" in text
+    assert la._visible_claim(text)[1] is True
+    assert la._accepting_items(text) == []
+    assert missing(text) == GAP
+    result, fake = write(text, [RECEIPT, record_comment([FINDING])], tmp_path)
+    assert result["ok"] is False and result["reason"] == "leftover-not-accepted", result
+    assert fake.edited == []
+
+
+def test_g16_claim_fragment_control_an_inline_comment_on_a_claim_line_keeps_its_acceptance():
+    text = body("- F-1 The retry loop never backs off <!-- a note --> fixed-above #99 abcdef0\n")
+    assert la._visible_claim(text)[1] is False
+    assert la._accepting_items(text) != []
+    assert missing(text) == []
+
+
+def test_g16_claim_fragment_a_wrapped_claim_cut_on_its_first_line_voids_though_a_joined_wrapped_one_balances_the_counts():
+    # only guard (a) sees this: no changed line holds a whole claim on its own (the wrapped claims are whole only across two
+    # lines), so the per-line guard (b) compares empty claim lists, and the token and claim counts balance
+    text = body("- F-1 The retry loop never backs off <b>x</b> fixed-above #98\n  1234567\n")
+    text = text.replace("<details><summary>Build record</summary>\n\n",
+                        "<details><summary>Build record</summary>\n\nfixed-<!-- x -->above #99\nabcdef0\n\n", 1)
+    assert "fixed-<!-- x -->above #99\nabcdef0" in text
+    assert la._visible_claim(text)[1] is True
+    assert la._accepting_items(text) == []
+    assert missing(text) == GAP
+
+
+def test_g16_claim_fragment_a_quoted_placeholder_cut_by_rule_1_keeps_the_acceptances():
+    # the PR #2348 body quotes the syntax `fixed-above #<layer PR> <commit>` in a code span; rule 1 cuts it at `<layer`, but
+    # a placeholder is no claim, so it can neither hide nor manufacture one and the F-1 acceptance still counts
+    text = body("- F-1 The retry loop never backs off\n").replace(
+        "A change.\n", "A change. Syntax: `fixed-above #<layer PR> <commit>`\n", 1)
+    visible = la._visible(text)
+    assert "Syntax: `fixed-above #\n" in visible and "<layer" not in visible
+    assert la._visible_claim(text)[1] is False
+    assert la._accepting_items(text) != []
+    assert missing(text) == []
+
+
+def test_g16_claim_fragment_control_the_plain_words_without_a_claim_do_not_void_the_body():
+    text = body("- F-1 The retry loop never backs off; fixed above <b>x</b>\n")
+    assert la._visible_claim(text)[1] is False
+    assert missing(text) == []
