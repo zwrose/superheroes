@@ -257,7 +257,7 @@ def extra_round(world, monkeypatch):
     state["extraAudit"] = {"round": state["round"]}
     state["_auditOutcome"] = {"notDischarged": []}
     calls = []
-    monkeypatch.setattr(RD, "_terminal_converged", lambda s, c, full_panel: calls.append("converged"))
+    monkeypatch.setattr(RD, "_terminal_converged", lambda s, c, full_panel, session_dir=None: calls.append("converged"))
     return state, calls
 
 

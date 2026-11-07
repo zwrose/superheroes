@@ -180,7 +180,7 @@ def _ruling(key, ruling="discharged"):
 @pytest.fixture
 def folded_only(monkeypatch):
     """Stop after the audits fold: the scoped-finder routing that follows is not under test."""
-    monkeypatch.setattr(RD, "_after_audits", lambda state, config: None)
+    monkeypatch.setattr(RD, "_after_audits", lambda state, config, session_dir=None: None)
 
 
 def _settled(state):
