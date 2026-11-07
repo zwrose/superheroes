@@ -636,38 +636,56 @@ _INLINE_PI = re.compile(r"<\?.*?\?>", re.S)
 _INLINE_CDATA = re.compile(r"<!\[CDATA\[.*?\]\]>", re.S)
 # cmark-gfm's declaration: <! then an uppercase name, whitespace, anything but >, then >
 _INLINE_DECL = re.compile(r"<![A-Z]+" + _IWS + r"+[^>]*>")
+_REF_DEF = re.compile(r"(?m)^[ ]{0,3}\[[^\]\n]+\]:")  # a line that may be a link reference definition
 _MAX_BACKTICKS = 80  # cmark-gfm: a backtick run longer than this opens no code span (scan_to_closing_backticks)
 
 
 def _link_regions(text):
-    """``(start, end)`` for each possible inline-link destination and title: from a ``](`` that follows a ``[`` to the
-    unquoted ``)`` that closes it (parentheses counted; ``"…"``, ``'…'`` skipped; an unclosed one runs to the end). The
-    region may be wider than cmark's, never narrower, so the check that reads it can only add unsure points."""
+    """``(start, end)`` ranges that may be a link's destination and title, or a link reference definition: from a
+    ``](`` that follows a ``[`` to the ``)`` that closes it (an angle-bracket destination ``<…>`` skipped whole; quoted
+    ``"…"`` and ``'…'`` skipped; parentheses counted; an unclosed one runs to the end of the text), and from a ``]:``
+    on a line that starts with ``[`` to the end of the next line. The ranges are never narrower than cmark's."""
     regions = []
     at = text.find("](")
     while at >= 0:
         if "[" in text[:at]:
-            j, depth, quote = at + 2, 1, None
-            while j < len(text):
-                c = text[j]
-                if c == "\\":
-                    j += 2
-                    continue
-                if quote:
-                    if c == quote:
-                        quote = None
-                elif c in "\"'":
-                    quote = c
-                elif c == "(":
-                    depth += 1
-                elif c == ")":
-                    depth -= 1
-                    if depth == 0:
-                        break
-                j += 1
-            regions.append((at + 2, j))
+            regions.append((at + 2, _destination_end(text, at + 2)))
         at = text.find("](", at + 2)
+    for m in _REF_DEF.finditer(text):
+        nl = text.find("\n", m.end())
+        nl2 = text.find("\n", nl + 1) if nl >= 0 else -1
+        regions.append((m.end(), len(text) if nl2 < 0 else nl2))
     return regions
+
+
+def _destination_end(text, j):
+    """Where a possible link destination and title starting at ``j`` end: just past the closing ``)``, else the end."""
+    while j < len(text) and text[j] in " \t\n":
+        j += 1
+    if j < len(text) and text[j] == "<":
+        close = text.find(">", j)
+        if close < 0:
+            return len(text)
+        j = close + 1
+    depth, quote = 1, None
+    while j < len(text):
+        c = text[j]
+        if c == "\\":
+            j += 2
+            continue
+        if quote:
+            if c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+        j += 1
+    return len(text)
 
 
 def _cell_count(row):
@@ -706,15 +724,14 @@ _INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI,
 _ASCII_WS = " \t\n\v\f\r"
 
 
-def _inline_constructs(text, cells=False, spans=True, code_spans=None):
+def _inline_constructs(text, cells=False, literal=()):
     """The raw-HTML constructs of a text block, left to right as cmark-gfm's inline parser finds them: a list of
     ``(start, end)`` (end exclusive). A backslash escapes an ASCII punctuation character; a backtick run opens a code
     span that closes at the next run of exactly its length (nothing inside is raw HTML; with no such run the backticks
     are literal); at ``<`` an autolink is text, otherwise one of the six raw-HTML grammars either matches there or the
     ``<`` is literal. With ``cells`` (a GFM table block, whose cells cmark-gfm inline-parses one by one) a code span
-    closes only before the next unescaped ``|`` or line break. With ``spans`` false no backtick run opens a code span
-    (the reading the link check below compares against). ``code_spans``, when a list, receives each code span as
-    ``(start, end)``."""
+    closes only before the next unescaped ``|`` or line break. A backtick run that starts inside one of the ``literal``
+    ranges ``(start, end)`` opens no code span (the comparison reading of a possible link's destination or title)."""
     found = []
     i = 0
     n = len(text)
@@ -729,8 +746,8 @@ def _inline_constructs(text, cells=False, spans=True, code_spans=None):
             width = end - i
             at = end
             closed = -1
-            # axis: a run longer than cmark-gfm's 80 backticks is literal text
-            if width > _MAX_BACKTICKS or not spans:
+            # axis: a run longer than cmark-gfm's 80 backticks, or one inside a literal range, is literal text
+            if width > _MAX_BACKTICKS or any(r0 <= i < r1 for r0, r1 in literal):
                 at = n
             limit = n
             if cells:
@@ -747,8 +764,6 @@ def _inline_constructs(text, cells=False, spans=True, code_spans=None):
                     break
                 at = run
             # axis (C2): a code span is skipped whole, so a <!-- inside one is no comment
-            if closed >= 0 and code_spans is not None:
-                code_spans.append((i, closed))
             i = closed if closed >= 0 else end
         elif c == "<":
             m = _AUTOLINK_URI.match(text, i) or _AUTOLINK_EMAIL.match(text, i)
@@ -801,18 +816,16 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, cells=Fal
                 hi = mid - 1
         return lo
 
-    code_spans = []
-    constructs = _inline_constructs(joined, cells, code_spans=code_spans)
+    constructs = _inline_constructs(joined, cells)
     regions = _link_regions(joined)
     if regions:
-        # axis: cmark reads a link's destination and title when it closes the link, so a backtick there opens no code
-        # span; rather than parse links, a raw construct hidden by a code span that opens inside a possible link
-        # destination or title is unsure
-        seen = set(constructs)
-        opened_in_link = [(s, e) for s, e in code_spans if any(r0 <= s < r1 for r0, r1 in regions)]
-        for begin, end in _inline_constructs(joined, cells, spans=False):
-            if (begin, end) not in seen and any(s <= begin < e for s, e in opened_in_link):
-                sure_points.add((first + line_of(begin), "raw HTML a link destination or title may expose"))
+        # axis: cmark reads a link's destination and title (and a reference definition) apart from the inline text, so
+        # a backtick there opens no code span and can change how every later backtick pairs; rather than parse links,
+        # read the block again with the backticks in those possible ranges literal, and every raw construct the two
+        # readings disagree on is unsure (the ranges are never narrower than cmark's, so a disagreement is never missed)
+        other = set(_inline_constructs(joined, cells, literal=regions))
+        for begin, _end in set(constructs) ^ other:
+            sure_points.add((first + line_of(begin), "raw HTML a link destination or title may change"))
     # axis: a GFM table block's code spans stay inside one cell, as cmark-gfm parses each cell on its own
     for begin, end in constructs:
         construct = joined[begin:end]

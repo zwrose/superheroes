@@ -1185,3 +1185,16 @@ def test_review_s3_r2_a_delimiter_row_whose_cell_count_differs_is_no_table():
     stay one paragraph, its code span spans lines, and the PI after it leaves a comment that hides ZQ1."""
     assert _line_state("a `one\n| - | - |\ntwo` <? > <!-- ?> `\n\n## ZQ1\n", "## ZQ1") != V
     assert md._cell_count("| a | b |") == 2 and md._cell_count("a | b | c") == 3 and md._cell_count("| a \\| b |") == 1
+
+
+@pytest.mark.parametrize("body", [
+    "[a](x`y) `one` <!-- b\nZQ1\n--> tail `\n",                    # a later span re-paired by the metadata backtick
+    '[a](x`y) `<a title="` <!-- b">\nZQ1\n--> c\n\n## H\n',        # a fake tag the shifted pairing exposes
+    "[a](<u)`v>) <!-- b\nZQ1\n--> c`\n",                           # an angle-bracket destination holding a )
+    '[r]: /u "`"\n`x` <!-- b\nZQ1\n--> c `\n',                     # a reference definition's title
+], ids=["displaced-span", "fake-tag", "angle-destination", "reference-definition"])
+def test_review_s3_r3_link_metadata_that_changes_backtick_pairing_reads_unsure(body):
+    """Round-3 audits and scoped finder: cmark consumes a link's destination and title (or a reference definition)
+    before inline parsing, so a backtick there changes how every later backtick pairs; GitHub hides ZQ1 in each. The
+    comparison reading turns every construct the two pairings disagree on into an unsure point."""
+    assert _line_state(body, "ZQ1") != V
