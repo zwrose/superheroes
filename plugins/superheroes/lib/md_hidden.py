@@ -62,7 +62,7 @@ _TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z")
 _FOOTNOTE = re.compile(r"[ ]{0,3}\[\^[^\]\s]+\]:")
 _VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)
 _TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I | re.A)
-_VTAB_TAG = re.compile(r"</?[A-Za-z][^>]*\v")  # an inline tag opener whose run up to the next > holds a vertical tab
+_TAG_OPENER = re.compile(r"</?[A-Za-z]")
 
 _COMMENT_RUN = re.compile(r"<!--.*?(?:-->|--!>)", re.S)
 _TAG_RUN = re.compile(r"<[^>]*>")
@@ -632,11 +632,25 @@ def _runs_past_its_end(text):
 
 def _tag_holds_vtab(text):
     """True when ``text`` holds an inline tag opener (``<``, an optional ``/``, an ASCII letter) with a vertical tab
-    before the next ``>``: cmark counts ``\\v`` as tag whitespace and passes the tag through raw, HTML parsing does not,
-    so the tag can end at an earlier ``>`` inside a quoted value.
+    before the tag's own closing ``>``: cmark counts ``\\v`` as tag whitespace and passes the tag through raw, HTML
+    parsing does not, so the tag can end at an earlier ``>``. The walk to the closing ``>`` skips a ``>`` inside a
+    quoted value (``title=">"``), and a quote that never closes runs to the end of the text.
 
     A narrow check, not an inline tokenizer pass."""
-    return _VTAB_TAG.search(text) is not None
+    for m in _TAG_OPENER.finditer(text):
+        quote = None
+        for c in text[m.end():]:
+            if quote:
+                if c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+            elif c == ">":
+                break
+            elif c == "\v":
+                # axis: a vertical tab before the tag's own closing > reads unsure, a quoted > before it included
+                return True
+    return False
 
 
 def _scan(body):
