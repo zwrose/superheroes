@@ -273,3 +273,31 @@ def scan_contexts(lines):
     return ContextScan(
         tuple(kinds), inert, unterminated_opener_line, unterminated_html_line,
     )
+
+
+def split_lines(text):
+    """``text`` split on Markdown line endings only: ``\\r\\n``, a lone ``\\r``, or ``\\n``. Each item keeps its
+    terminator; the last item has none when ``text`` does not end with one; ``""`` gives ``[]``.
+    U+2028, U+2029, U+0085, VT, FF, FS, GS and RS are ordinary characters here (``str.splitlines`` breaks on them;
+    Markdown does not)."""
+    out = []
+    n = len(text)
+    start = 0
+    i = 0
+    # axis: line-break set — only CR, LF and CRLF end a Markdown line (never the other str.splitlines breaks).
+    while i < n:
+        ch = text[i]
+        if ch == "\n":
+            i += 1
+        elif ch == "\r":
+            i += 1
+            if i < n and text[i] == "\n":
+                i += 1
+        else:
+            i += 1
+            continue
+        out.append(text[start:i])
+        start = i
+    if start < n:
+        out.append(text[start:])
+    return out
