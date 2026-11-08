@@ -1520,3 +1520,12 @@ def test_link_title_after_form_feed_or_vertical_tab_reads_unsure(sep):
     either before an inline link's title, so ZQ1 shows only as the title attribute and its line must not read visible."""
     body = "[](<https://example.com>" + sep + '"ZQ1")\n\n## ZQ2\n'
     assert _line_state(body, "[](") == U
+
+
+def test_atx_heading_tag_with_a_quoted_bracket_reads_unsure():
+    """Final returning review on 10ed80c6 (seams check, "Handle quoted tag boundaries before exempting ATX attributes"):
+    ``heading_text`` drops a tag only up to its first ``>``, so a quoted ``>`` inside an attribute would leave attribute
+    text as heading text GitHub never shows; such a heading reads unsure. Control: an ordinary attribute keeps the
+    exemption."""
+    assert _line_state('## <span title=">Advisor vet<"></span>\n', "## <span") == U
+    assert _line_state('## <span title="x">Advisor vet</span>\n', "## <span") == V
