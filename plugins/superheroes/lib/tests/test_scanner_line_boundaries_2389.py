@@ -1,6 +1,6 @@
 """#2389 (layer 2 of #2366): the PR-body line scanners of leftover_accepting.py and pr_sheet.py read Markdown line
 boundaries (md_fence.split_lines: CRLF, lone CR, LF), never str.splitlines(), and leftover_accepting._visible never
-keeps text GitHub renders hidden (md_hidden's reading intersected with the comment cut).
+keeps text GitHub renders hidden (md_hidden's reading; the within-line cut is per item, ``_item_cut``).
 
 Guards (bite-proof record bite_proofs/i2389_scanner_line_boundaries.md; select one with ``-k test_gN_``):
   G1 test_g1_visible_split_*              _visible's line split
@@ -22,6 +22,7 @@ from test_vet_slot_leftovers_2280 import (  # noqa: F401
 
 FIXTURE = pathlib.Path(__file__).parent / "fixtures" / "md_hidden_github_renders_2366.json"
 EOLS = ["\n", "\r", "\r\n"]
+HEAD = "## What we're accepting\n\n"
 
 
 def eol(text, ending):
@@ -32,12 +33,22 @@ def line_count(text):
     return len(md_fence.split_lines(text))
 
 
+def cut_items(source, ending="\n"):
+    """The cut item texts (before the claim guards) of ``source`` placed under the accepting heading."""
+    return la._cut_items(eol(HEAD + source, ending))[0]
+
+
 # --- G1: _visible splits on Markdown line endings ---------------------------------------------------------------
+# #2389 redesign: `_visible` only blanks the lines md_hidden does not read VISIBLE and cuts nothing within a line. A fail-open split
+# would give a line start md_hidden does not report (a U+2028 is no line start), which reads as not visible and is blanked, so the
+# equality with the source below is what bites; the within-line cut is per item (``_item_cut``) and asserted through ``cut_items``.
 
 def test_g1_visible_split_u2028_does_not_make_a_fence_line():
     # str.splitlines would read ``` as its own line and open a fence that shows the comment under it
     source = "x ```\n<!-- c -->\n"
-    assert la._visible(source) == "x ```\n\n"
+    assert la._visible(source) == source
+    # the whole-line comment is dropped by the section reader and stops the item
+    assert cut_items(source) == ["x ```"]
 
 
 def test_g1_visible_split_u2028_does_not_make_a_marker_line():
@@ -53,15 +64,19 @@ def test_g1_visible_split_u2028_does_not_make_a_marker_line():
 def test_g1_visible_split_every_other_str_splitlines_break_is_an_ordinary_character(char):
     source = "x" + char + "```\n<!-- c -->\n"
     out = la._visible(source)
-    assert out == "x" + char + "```\n\n"
+    assert out == source
     assert line_count(out) == line_count(source) == 2
+    assert cut_items(source) == ["x" + char + "```"]
 
 
 @pytest.mark.parametrize("ending", EOLS)
 def test_g1_visible_split_comment_cut_is_the_same_under_every_line_ending(ending):
     source = eol("keep\n<!-- a\nhidden\n-->\nafter\n", ending)
-    assert la._visible(source) == eol("keep\n\n\n\nafter\n", ending)
+    # md_hidden reads `<!-- a` VISIBLE and the two lines inside the comment hidden: only those two are blanked
+    assert la._visible(source) == eol("keep\n<!-- a\n\n\nafter\n", ending)
     assert line_count(la._visible(source)) == line_count(source)
+    # the item cut stops at the unclosed `<!--` (a cut runs to the item's end) and at the blanked lines; `after` is a paragraph of its own
+    assert cut_items("keep\n<!-- a\nhidden\n-->\nafter\n", ending) == ["keep", "after"]
 
 
 @pytest.mark.parametrize("ending", EOLS)
@@ -70,16 +85,19 @@ def test_g1_visible_split_a_line_cut_to_nothing_keeps_its_own_terminator(ending)
     out = la._visible(source)
     # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
     # #2389 catch-up 66130a25: md_hidden now reads the first line ("a <!-- x", whose comment closes on the next line and hides text) UNSURE and
-    # blanks it whole, so it keeps only its own terminator (was "a " + terminator); the third line stays visible and is still cut at its comment
-    assert out == eol("\n\nlast ", ending)
+    # blanks it whole, so it keeps only its own terminator (was "a " + terminator); the third line stays visible
+    # #2389 redesign: the third line is no longer cut by `_visible`; the item cut of it is "last"
+    assert out == eol("\n\nlast <!-- y", ending)
     assert line_count(out) == line_count(source)
+    assert cut_items(source) == ["last"]
 
 
 @pytest.mark.parametrize("ending", EOLS)
 def test_g1_visible_split_a_fence_opens_and_closes_under_every_line_ending(ending):
-    source = eol("```\n<!-- shown -->\n```\n<!-- cut -->\nz\n", ending)
-    # #2389 V847-1: a fenced line is cut at its first opener (rule 4), so the fenced `<!-- shown -->` is now cut too, as a tilde line inside a raw <pre> block is not a fence
-    assert la._visible(source) == eol("```\n\n```\n\nz\n", ending)
+    source = eol("```\nshown\n```\n<!-- cut -->\nz\n", ending)
+    # #2389 redesign: a fenced line is literal; the closed fence is one item `\`\`\` shown \`\`\``, and the whole-line comment after it stops the item
+    assert la._visible(source) == source
+    assert cut_items("```\nshown\n```\n<!-- cut -->\nz\n", ending) == ["``` shown ```"]
 
 
 # --- G2: _visible keeps nothing md_hidden does not read VISIBLE ------------------------------------------------

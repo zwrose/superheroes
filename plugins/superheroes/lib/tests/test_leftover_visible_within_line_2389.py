@@ -1,24 +1,25 @@
-"""#2389 V847-1, BR684-2, BR684-3 (fix leg of vet 847): ``leftover_accepting._visible`` never keeps text GitHub hides
-within a line. It is the one place the leftover check that guards a READY write reads rendered text, and every cut only
-removes text, so a miss fails toward a ``leftover-not-accepted`` refusal.
+"""#2389 V847-1, BR684-2, BR684-3 (fix leg of vet 847), redesigned segment-first (vet 853): the leftover check never counts text
+GitHub hides within a line. The section and its items are read once from the body with the lines md_hidden does not read
+VISIBLE blanked (``leftover_accepting._blanked``, ``pr_sheet.accepting_item_spans``); only then is each item cut, to the item's
+end (``leftover_accepting._item_cut``). Every cut only removes text, so a miss fails toward a ``leftover-not-accepted`` refusal.
 
 Oracle: ``fixtures/leftover_visible_github_renders_2389.json`` (GitHub's own render of 18 PR-body shapes, copied from the
 advisor's renders). Guards (bite-proof record ``bite_proofs/i2389_leftover_visible_within_line.md``; select one with
 ``-k test_gN_``):
-  G1 test_g1_escaped_opener_*     a backslash before an opener keeps both, then cuts the rest of the line
-  G2 test_g2_code_span_opener_*   a code span holding an opener is kept, then the rest of the line is cut
+  G1 test_g1_escaped_opener_*     a backslash before an opener keeps both, then cuts the rest of the item
+  G2 test_g2_code_span_opener_*   a code span holding an opener is kept, then the rest of the item is cut
   G3 test_g3_pi_declaration_*     an unescaped, unquoted ``<?``, ``<!X`` or ``<![`` cuts from the ``<``
-  G4 test_g4_fenced_line_opener_* a line md_fence calls fenced is cut at its first opener
-  (#2389 V849-1 turned the opener list of G1-G4 into one entry condition, G14, so the four guards now cut at any entry ``<``)
-  G12 test_g12_structure_*        a cut that changes a visible line's block role (fence kind, ATX heading or not) voids the body
-  G13 test_g13_claim_join_*       the per-line claim guard, superseded by G16 (kept: both tests still pass)
+  G4 test_g4_fenced_line_opener_* a fenced line is literal and is cut at its first entry ``<``
+  G10 test_g10_claim_removed_*    a removed fixed-above claim voids the body (guards (a) and (c) of ``_cut_items``)
   G14 test_g14_tag_entry_*        the one entry condition: a ``<`` + ``!``, ``?``, ``/`` (not ``/>``) or an ASCII letter
-  G15 test_g15_cut_heading_*      a cut that changes a visible ATX heading voids the body
-  G16 test_g16_claim_fragment_*   a whole claim (wrapped ones included) touching a changed line voids the body unless its one line's
-                                  whole claims are unchanged; a placeholder that is no claim voids nothing
-  G17 test_g17_fence_shape_*      the section reader's own fence reading (pr_sheet.fence_line_shape, pr_sheet.fenced_lines): a cut
-                                  that changes a visible line's shape (G17a) or the walk's fenced flag of a visible line (G17b) voids the body
-  G18 test_g18_whole_text_claims_* the sorted whole claims of the whole cut text must equal those of the whole source body
+  G17 test_g17_fence_shape_*      vet 852's list-fence forms: F-1 stays missing (regressions of the retired fence guards)
+  G18 test_g18_whole_text_claims_* vet 852's whole-text claims
+  G19 test_g19_item_cut_*         vet 853: a cut runs to the item's end, so it cannot join words GitHub separates
+  G20 test_g20_*                  vet 853: the hidden or dropped stop point (``test_g20_stop_*``) and literal fenced lines
+                                  (``test_g20_fenced_literal_*``)
+  G21 test_g21_source_span_claims_* vet 853: the claim guards compare the cut item with the source lines of its span
+Retired with the redesign (their tests below are kept as regressions of the outcome): G12 block role, G13 and G16 per-line
+claim guards, G15 cut heading, G17a and G17b fence-shape and fenced-state guards.
 Rows with no GitHub render ("model-only") say so. No real gh: every call the vet-slot tests make is faked by
 test_vet_slot_leftovers_2280's Fake."""
 import json
@@ -42,6 +43,7 @@ CLASS_ROWS = [row for row in ROWS if not row["id"].startswith("f1_")]
 
 FINDING = {"id": "F-1", "title": "The retry loop never backs off", "outcome": "left-for-owner"}
 GAP = [{"id": "F-1", "title": "The retry loop never backs off"}]
+HEAD = "## What we're accepting\n\n"
 
 
 class _Rendered(HTMLParser):
@@ -81,6 +83,27 @@ def ids(rows):
     return [row["id"] for row in rows]
 
 
+def cuts(text):
+    """The cut text of every item of ``text``'s What we're accepting (``_cut_items``, before the claim guards)."""
+    return la._cut_items(text)[0]
+
+
+def item_cut(source):
+    """The cut text of the first item that ``source`` makes under the accepting heading ("" when it makes none)."""
+    items = cuts(HEAD + source)
+    return items[0] if items else ""
+
+
+def source_texts(text):
+    """The source text (before blanking) of every item span of ``text``, as the claim guards read it."""
+    spans = pr_sheet.accepting_item_spans(la._blanked(text)[0])
+    return [la._span_source(md_fence.split_lines(text), span) for span in spans]
+
+
+def f1_counted(text):
+    return any("F-1" in item for item in la._accepting_items(text))
+
+
 def check_f1_row(row):
     """``missing`` reports F-1 exactly when GitHub hides it."""
     gaps = missing(row["body"])
@@ -115,28 +138,29 @@ def test_g1_escaped_opener_github_hides_f1_so_the_check_reports_it_missing(name)
 
 
 @pytest.mark.parametrize("source, expected", [
-    # #2389 V849-1: a backslash before an entry `<` is no longer kept; the line is cut from the backslash
-    ("a \\<!-- tail\n", "a \n"),
-    ("a \\<? tail\n", "a \n"),
-    ("a \\<!X tail\n", "a \n"),
-    ("a \\<![CDATA[ tail\n", "a \n"),
-    ("a \\<!-- tail\nnext -->\nz\n", "a \nnext -->\nz\n"),  # no comment state carried to the next line
-    ("a \\<!-- tail", "a "),  # a last line with no terminator
+    # #2389 V849-1: a backslash before an entry `<` is no longer kept; the item is cut from the backslash
+    # #2389 redesign: the cut runs to the item's end and `_visible` cuts nothing, so the expected value is the item's cut text
+    ("a \\<!-- tail\n", "a"),
+    ("a \\<? tail\n", "a"),
+    ("a \\<!X tail\n", "a"),
+    ("a \\<![CDATA[ tail\n", "a"),
+    ("a \\<!-- tail\nnext -->\nz\n", "a"),  # the lines after the cut are the item's, and are cut with it
+    ("a \\<!-- tail", "a"),  # a last line with no terminator
     # #2389 V849-1: these three were "an escape that is not an opener" and kept whole; `<b`, `<!-` and `<! ` are entries
-    ("a \\* b \\` c \\< d \\<b> e\n", "a \\* b \\` c \\< d \n"),
-    ("a \\<!- not an opener\n", "a \n"),
-    ("a \\<! also not\n", "a \n"),
+    ("a \\* b \\` c \\< d \\<b> e\n", "a \\* b \\` c \\< d"),
+    ("a \\<!- not an opener\n", "a"),
+    ("a \\<! also not\n", "a"),
 ])
-def test_g1_escaped_opener_cuts_the_line_from_the_backslash(source, expected):
-    out = la._visible(source)
-    assert out == expected
-    assert line_count(out) == line_count(source)
+def test_g1_escaped_opener_cuts_the_item_from_the_backslash(source, expected):
+    assert item_cut(source) == expected
+    assert line_count(la._visible(source)) == line_count(source)
 
 
 # #2389 V849-1: the `\\<b>` and the two bogus openers moved to the cut test above; what stays is an escape before a `<` that is no entry
 @pytest.mark.parametrize("source", ["a \\* b \\` c \\< d e\n", "a \\< b \\<3 \\</> \\<\n"])
 def test_g1_escaped_opener_an_escape_that_is_not_an_opener_changes_nothing(source):
     assert la._visible(source) == source
+    assert item_cut(source) == source.strip()
 
 
 def test_g1_escaped_opener_ready_write_refuses_leftover_not_accepted(tmp_path):
@@ -170,26 +194,26 @@ def test_g2_code_span_opener_github_hides_f1_so_the_check_reports_it_missing(nam
 
 @pytest.mark.parametrize("source, expected", [
     # #2389 review (test-role s1): the span is kept only up to its opener, so text inside the span after the opener never counts
-    ("a `<!--` tail\n", "a `\n"),
-    ("a `<?` tail\n", "a `\n"),
-    ("a `<!X` tail\n", "a `\n"),
-    ("a `<![` tail\n", "a `\n"),
-    ("a `see <?x` tail\n", "a `see \n"),  # the opener is anywhere in the span's content
-    ("a ``<!-- ` -->`` tail\n", "a ``\n"),  # a double-backtick span
-    ("a `<!--` tail\nnext -->\nz\n", "a `\nnext -->\nz\n"),  # no comment state carried to the next line
+    ("a `<!--` tail\n", "a `"),
+    ("a `<?` tail\n", "a `"),
+    ("a `<!X` tail\n", "a `"),
+    ("a `<![` tail\n", "a `"),
+    ("a `see <?x` tail\n", "a `see"),  # the opener is anywhere in the span's content
+    ("a ``<!-- ` -->`` tail\n", "a ``"),  # a double-backtick span
+    ("a `<!--` tail\nnext -->\nz\n", "a `"),  # the lines after the cut are the item's, and are cut with it
     ("a `<!--` tail", "a `"),  # a last line with no terminator
-    ("a `<b>` and `<` and `!` c\n", "a `\n"),  # #2389 V849-1: was "a span without an opener, kept whole"; `<b` is an entry
+    ("a `<b>` and `<` and `!` c\n", "a `"),  # #2389 V849-1: was "a span without an opener, kept whole"; `<b` is an entry
 ])
-def test_g2_code_span_opener_keeps_the_span_then_cuts_the_line(source, expected):
-    out = la._visible(source)
-    assert out == expected
-    assert line_count(out) == line_count(source)
+def test_g2_code_span_opener_keeps_the_span_then_cuts_the_item(source, expected):
+    assert item_cut(source) == expected
+    assert line_count(la._visible(source)) == line_count(source)
 
 
 # #2389 V849-1: `<b>` left this list (it is cut above); `a < b` and `</>` are no entry
 @pytest.mark.parametrize("source", ["a `x` b `y z` c\n", "a ``x ` y`` b\n", "a `<` and `!` c `a < b` `</>`\n", "a ` b\n"])
 def test_g2_code_span_opener_a_span_without_an_opener_changes_nothing(source):
     assert la._visible(source) == source
+    assert item_cut(source) == source.strip()
 
 
 def test_g2_code_span_opener_ready_write_refuses_leftover_not_accepted(tmp_path):
@@ -240,47 +264,49 @@ def test_g3_pi_declaration_the_class_rows_are_the_eleven_taken_from_the_advisor_
 def test_g3_pi_declaration_class_oracle_text_github_hides_inside_the_opener_is_not_kept(row):
     hidden = hidden_tails(row)
     assert hidden, "the row must hold text GitHub hides after an opener, else it proves nothing"
-    kept = md_fence.split_lines(la._visible(row["body"]))
-    for n, tokens in hidden.items():
-        line = kept[n] if n < len(kept) else ""  # a last line cut to nothing leaves no line
-        assert not tokens & set(line.split()), "line %d of %r kept %r" % (n, row["id"], tokens & set(line.split()))
+    # #2389 redesign: the row is placed under the accepting heading and read as items; no hidden token may survive in any cut item
+    kept = set(" ".join(cuts(HEAD + row["body"])).split())
+    tokens = set().union(*hidden.values())
+    assert not tokens & kept, "%r kept %r" % (row["id"], tokens & kept)
 
 
 @pytest.mark.parametrize("source, expected", [
     # #2389 catch-up 66130a25: md_hidden now reads a line where a PI, declaration or CDATA section hides text UNSURE, so the leftover
-    # check blanks it whole and it keeps only its terminator (was "keep " + terminator); the blanking removes at least what the cut did
-    ("keep <? hide ?> x\n", "\n"),
-    ("keep <!X hide>\n", "\n"),
-    ("keep <![CDATA[ hide ]]>\n", "\n"),
-    ("keep <!DOCTYPE hide>\n", "\n"),
+    # check blanks it whole, and the line makes no item at all (was "keep " + terminator)
+    ("keep <? hide ?> x\n", ""),
+    ("keep <!X hide>\n", ""),
+    ("keep <![CDATA[ hide ]]>\n", ""),
+    ("keep <!DOCTYPE hide>\n", ""),
     # #2389 catch-up 66130a25: the same cut-from-the-opener rule, on lines md_hidden still reads VISIBLE (the closer is absent, so no
     # text is hidden within the line): the cut still runs and keeps the text before the opener
-    ("keep <? hide x\n", "keep \n"),
-    ("keep <!X hide\n", "keep \n"),
-    ("keep <![CDATA[ hide ]]\n", "keep \n"),
-    ("keep <!DOCTYPE hide\n", "keep \n"),
-    ("keep <?\n", "keep \n"),
-    ("- list <?x hide", "- list "),  # a last line with no terminator
+    ("keep <? hide x\n", "keep"),
+    ("keep <!X hide\n", "keep"),
+    ("keep <![CDATA[ hide ]]\n", "keep"),
+    ("keep <!DOCTYPE hide\n", "keep"),
+    ("keep <?\n", "keep"),
+    ("- list <?x hide", "list"),  # a last line with no terminator
     # #2389 V849-1: a tag, and `<!` followed by anything, are entries now (they were kept whole)
-    ("a <b> c < d <3 e\n", "a \n"),
-    ("a <!- b <! c <!1 d\n", "a \n"),
-    ("a < b <3 <> </> <\n", "a < b <3 <> </> <\n"),  # a `<` followed by a space, a digit, `>`, `/>` or a line end is no entry
+    ("a <b> c < d <3 e\n", "a"),
+    ("a <!- b <! c <!1 d\n", "a"),
+    ("a < b <3 <> </> <\n", "a < b <3 <> </> <"),  # a `<` followed by a space, a digit, `>`, `/>` or a line end is no entry
 ])
 def test_g3_pi_declaration_cuts_from_the_opener_and_keeps_what_is_not_one(source, expected):
-    out = la._visible(source)
-    assert out == expected
-    assert line_count(out) == line_count(source)
+    assert item_cut(source) == expected
+    assert line_count(la._visible(source)) == line_count(source)
 
 
-def test_g3_pi_declaration_a_plain_comment_still_opens_the_multi_line_state():
-    # #2389 catch-up 66130a25: md_hidden now reads the last line (`after <!-- b --> c`, a comment that hides text) UNSURE and the leftover
-    # check blanks it whole (was "after  c"); the multi-line comment state on the lines above is unchanged
+def test_g3_pi_declaration_a_plain_comment_stops_the_item_at_the_unclosed_opener_and_at_blanked_lines():
+    # #2389 redesign: there is no comment state to carry. The `<!-- a` line is read VISIBLE by md_hidden and its unclosed comment cuts
+    # the item; the two lines inside the comment are hidden and blanked, so they stop it too. The last line (a comment that hides text)
+    # is blanked whole by md_hidden (#2389 catch-up 66130a25)
     source = "keep\n<!-- a\nhidden\n-->\nafter <!-- b --> c\n"
-    assert la._visible(source) == "keep\n\n\n\n\n"
-    # #2389 catch-up 66130a25: the same shape with an empty comment, which hides no text, so md_hidden reads the last line VISIBLE
-    # and the within-line cut still keeps the text on both sides of it
+    assert la._visible(source) == "keep\n<!-- a\n\n\n\n"
+    assert cuts(HEAD + source) == ["keep"]
+    # #2389 catch-up 66130a25: the same shape with an empty comment, which hides no text, so md_hidden reads the last line VISIBLE. The
+    # section reader finds the `-->` and drops the `<!-- a` line and the blanked lines under it: each is a stop point of the item `keep`
     source = "keep\n<!-- a\nhidden\n-->\nafter <!----> c\n"
-    assert la._visible(source) == "keep\n\n\n\nafter  c\n"
+    assert la._visible(source) == "keep\n<!-- a\n\n\nafter <!----> c\n"
+    assert cuts(HEAD + source) == ["keep"]
 
 
 def test_g3_pi_declaration_br684_3_a_processing_instruction_line_is_not_an_acceptance():
@@ -312,31 +338,30 @@ def test_g3_pi_declaration_model_only_an_acceptance_before_the_opener_still_coun
 # --- G4: a line md_fence calls fenced ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("source, expected", [
-    # #2389 review (scoped-finder-003): a fenced line holding an opener is blanked whole, never shortened
-    ("```\nkeep <!-- cut -->\n```\n", "```\n\n```\n"),
-    ("```\nkeep <? cut ?>\n```\n", "```\n\n```\n"),
-    ("~~~\nkeep <!X cut>\n~~~\n", "~~~\n\n~~~\n"),
-    ("```\nkeep <![CDATA[ cut ]]>\n```\n", "```\n\n```\n"),
-    ("```\n<!-- first --> and <? second ?>\n```\n", "```\n\n```\n"),
-    ("```\nkeep <!-- cut\n```\nafter\n", "```\n\n```\nafter\n"),  # no comment state carried past the fence
-    ("```\nkeep <!-- cut", "```\n"),  # a last fenced line with no terminator leaves nothing (the known exception)
-    # #2389 V849-1: was in the "no opener, kept whole" list below; `<b` is an entry, so the fence content line is blanked
-    ("~~~\nplain <b> text < 3 `x` \\* y\n~~~\n", "~~~\n\n~~~\n"),
+    # #2389 redesign: a fenced line is kept literally and cut at its first entry `<`, and the cut runs to the item's end (the fence's
+    # closing line is the item's too). Was: a fenced line holding an opener was blanked whole.
+    ("```\nkeep <!-- cut -->\n```\n", "``` keep"),
+    ("```\nkeep <? cut ?>\n```\n", "``` keep"),
+    ("~~~\nkeep <!X cut>\n~~~\n", "~~~ keep"),
+    ("```\nkeep <![CDATA[ cut ]]>\n```\n", "``` keep"),
+    ("```\n<!-- first --> and <? second ?>\n```\n", "```"),
+    ("```\nkeep <!-- cut\n```\nafter\n", "``` keep"),
+    ("```\nkeep <!-- cut", "``` keep"),
+    ("~~~\nplain <b> text < 3 `x` \\* y\n~~~\n", "~~~ plain"),
 ])
 def test_g4_fenced_line_opener_cuts_a_fenced_line_at_its_first_opener(source, expected):
-    out = la._visible(source)
-    assert out == expected
-    if source.endswith("\n"):
-        assert line_count(out) == line_count(source)
+    assert la._visible(source) == source  # md_hidden reads fence content VISIBLE: `_visible` blanks nothing here
+    assert item_cut(source) == expected
 
 
-@pytest.mark.parametrize("source", [
-    "```\n- F-1 The retry loop never backs off\n```\n",
-    "~~~\nplain < 3 `x` \\* y </>\n~~~\n",  # #2389 V849-1: `<b>` replaced by `</>`, which is no entry
-    "```\n\n```\n",
+@pytest.mark.parametrize("source, expected", [
+    ("```\n- F-1 The retry loop never backs off\n```\n", ["```", "F-1 The retry loop never backs off ```"]),
+    ("~~~\nplain < 3 `x` \\* y </>\n~~~\n", ["~~~ plain < 3 `x` \\* y </> ~~~"]),  # #2389 V849-1: `<b>` replaced by `</>`, which is no entry
+    ("```\n\n```\n", ["```", "```"]),  # the walk's grouping: a blank line inside a fence ends a paragraph item (segmentation is unchanged)
 ])
-def test_g4_fenced_line_opener_a_fenced_line_holding_no_opener_is_kept_whole(source):
+def test_g4_fenced_line_opener_a_fenced_line_holding_no_opener_is_kept_whole(source, expected):
     assert la._visible(source) == source
+    assert cuts(HEAD + source) == expected
 
 
 def test_g4_fenced_line_opener_model_only_a_real_fenced_block_with_no_opener_is_unchanged_under_the_heading():
@@ -370,6 +395,11 @@ def test_edge_visible_on_a_str_never_raises_and_only_removes_text(source):
     assert isinstance(out, str)
     assert len(out) <= len(source)  # text is only ever removed
     assert line_count(out) <= line_count(source)
+    # the item readers never raise on a str either, and their answers are lists
+    assert isinstance(la._accepting_items(source), list)
+    assert isinstance(la._accepting_items(HEAD + source), list)
+    assert isinstance(la._cut_items(HEAD + source)[0], list)
+    assert la.missing(read_ok(FINDING), HEAD + source) in (GAP, [])
 
 
 @pytest.mark.parametrize("ending", ["\n", "\r", "\r\n"])
@@ -414,29 +444,31 @@ def test_g6_fixed_above_tail_a_tail_without_a_claim_keeps_the_acceptance():
     assert missing(body) == []
 
 
-def test_g7_fence_delimiter_a_shortened_fenced_line_never_closes_the_fence():
-    # scoped-finder-003: "``` <!-- note -->" inside a backtick fence is content; shortening it to "``` " would close the
-    # fence and make the sample heading below it the live acceptance section
+def test_g7_fence_delimiter_a_fenced_line_holding_an_opener_never_closes_the_fence():
+    # scoped-finder-003: "``` <!-- note -->" inside a backtick fence is content; the fence stays open and the sample heading below
+    # it is not the live acceptance section. #2389 redesign: nothing is shortened, so no cut can make it a closer
     body = ("## What we're accepting\n\nNone.\n\n## How to see it\n\n````\n```\n``` <!-- note -->\n"
             "## What we're accepting\n\n- F-1 The retry loop never backs off\n```\n````\n")
-    out = la._visible(body)
-    assert "``` \n" not in out
+    assert "``` <!-- note -->\n" in la._visible(body)
+    assert not f1_counted(body)
     assert missing(body), "the fenced sample acceptance must not count"
 
 
 # --- Fix-audit round 2 (#2389): the two not-discharged audits ---------------------------------------------------------
 
 def test_g7_fence_delimiter_an_opener_line_holding_an_opener_stays_an_opener():
-    # audit of scoped-finder-003: blanking an opener line would unfence the sample below it; it is shortened instead
+    # audit of scoped-finder-003: an opener line holding an opener is left whole, so the sample below it stays fenced
     body = ("## What we're accepting\n\nNone.\n\n## How to see it\n\n```md <!-- note -->\n"
             "## What we're accepting\n\n- F-1 The retry loop never backs off\n```\n")
-    out = la._visible(body)
-    assert "```md \n" in out
+    assert "```md <!-- note -->\n" in la._visible(body)
+    assert not f1_counted(body)
     assert missing(body), "the fenced sample acceptance must not count"
 
 
-def test_g7_fence_delimiter_a_content_line_holding_an_opener_is_blanked_whole():
-    assert la._visible("````\n``` <!-- note -->\n````\n") == "````\n\n````\n"
+def test_g7_fence_delimiter_a_content_line_holding_an_opener_is_cut_at_it_to_the_items_end():
+    # #2389 redesign: was `_visible(...) == "````\n\n````\n"`; the item cut keeps the fence run and cuts the content line at the `<`
+    assert la._visible("````\n``` <!-- note -->\n````\n") == "````\n``` <!-- note -->\n````\n"
+    assert item_cut("````\n``` <!-- note -->\n````\n") == "```` ```"
 
 
 def test_g8_comment_state_a_quoted_tail_opener_never_swallows_the_next_heading():
@@ -452,6 +484,8 @@ def test_g8_comment_state_a_quoted_tail_opener_never_swallows_the_next_heading()
 def test_g8_comment_state_an_inline_comment_never_crosses_a_blank_line():
     body = "## What we're accepting\n\nx <!--\n\n- F-1 The retry loop never backs off -->\n"
     assert "F-1 The retry loop never backs off" in la._visible(body)
+    # #2389 redesign: the list item after the blank line is its own item, and the cut of `x <!--` is that paragraph's alone
+    assert missing(body) == []
 
 
 def test_g8_comment_state_a_raw_comment_block_across_a_blank_line_still_hides():
@@ -473,14 +507,14 @@ HOW = "\n\n## How to see it\n\nN/A\n"
     "- F-1 The retry loop never backs off\n  quoting `<!--`; fixed-above #99 abcdef0",
     # 3. the wrapped claim, cut on its first line
     "- F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99\n  abcdef0",
-    # 4. removed by the inside-comment branch, not by a tail cut
+    # 4. removed by the cut of an earlier line of the item
     "- F-1 The retry loop never backs off; quoting `<?` and `<!--`\n  fixed-above #99 abcdef0\n",
     # 5. on an ATX subheading
     "### F-1 The retry loop never backs off; quoting `<!--`; fixed-above #99 abcdef0",
 ], ids=["single_line", "continuation_line", "wrapped", "inside_comment", "subheading"])
 def test_g10_claim_removed_voids_the_body_so_every_leftover_reads_missing(accepting):
     text = ACCEPTING + accepting + HOW
-    assert la._visible_claim(text)[1] is True
+    assert la._cut_items(text)[1] is True
     assert missing(text) == GAP
     assert la._accepting_items(text) == []
 
@@ -496,42 +530,45 @@ def test_g10_claim_removed_the_exact_bodies_of_the_order_without_the_section_fra
 
 def test_g10_claim_removed_control_an_unhidden_claim_keeps_its_acceptance():
     text = body("- F-1 The retry loop never backs off; fixed-above #99 abcdef0\n")
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert missing(text) == []
     assert [item for item in la._accepting_items(text) if "fixed-above #99 abcdef0" in item]
 
 
 def test_g10_claim_removed_a_tail_without_a_claim_does_not_void_the_body():
     text = ACCEPTING + "- F-1 The retry loop never backs off; quoting `<!--`; more text" + HOW
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert missing(text) == []
 
 
 def test_g10_claim_removed_the_text_and_the_flag_come_from_one_helper():
-    source = "- F-1 x `<!--` fixed-above #99 abcdef0\n"
-    text, removed = la._visible_claim(source)
-    assert removed is True and text == la._visible(source) == "- F-1 x `\n"
+    source = HEAD + "- F-1 x `<!--` fixed-above #99 abcdef0\n"
+    items, removed = la._cut_items(source)
+    assert removed is True and items == ["F-1 x `"]
+    assert la._accepting_items(source) == []
 
 
+# --- Review session 3 round 1 (#2389): the structural guard (G12, retired), the per-line claim check (G13), the in-span cut (G2) ---
 
-
-# --- Review session 3 round 1 (#2389): the structural guard (G12), the per-line claim check (G13), the in-span cut (G2) ---
-
-def test_g12_structure_a_fence_opener_swallowed_by_a_tail_comment_voids_the_body():
-    # cr-s1-001: the quoted tail opener sets the comment state, which swallows the fence opener below it; the fenced sample
-    # heading would then read as the live acceptance section, so a cut that changes a visible line's fence kind accepts nothing
+def test_g12_structure_a_fenced_f1_after_a_quoted_tail_opener_is_accepted_as_shown_code():
+    # cr-s1-001: the quoted tail opener sets the comment state, which swallowed the fence opener below it in the old walk
+    # #2389 redesign (loosened, BR853-5 ruling): the old answer was a void body (F-1 missing); the new answer is F-1 accepted.
+    # GitHub shows the fenced `- F-1 The retry loop never backs off` line as code, and base 66130a25 reads fenced text as acceptance
+    # text the same way (accepting_listed counts visible fenced text); the block-role guard that voided it is retired
     body = ("## What we're accepting\n\nNone.\n\nNote `<?` and `<!--`\n```\n## What we're accepting\n"
             "- F-1 The retry loop never backs off\n```\n")
-    assert la._accepting_items(body) == []
-    assert missing(body)
+    assert f1_counted(body)
+    assert missing(body) == []
 
 
 def test_g12_structure_a_cut_that_manufactures_a_fence_opener_voids_the_body():
     # seams-check: "```md <? ...`note" is text (a backtick in a backtick fence's info string); cutting at <? would make it a
     # fence opener that fences the How to see it heading into the acceptance section
-    body = ("## What we're accepting\n\nNone.\n```md <?  `note\n## How to see it\n\n```\n"
+    # #2389 redesign: the block-role guard is retired and the section is read before any cut, so the cut cannot manufacture the opener.
+    # `None.` (with the `\`\`\`md` line, cut at `<?`) is the only item; F-1 sits under How to see it and is not an acceptance
+    body = ("## What we're accepting\n\nNone.\n```md <? \u2028`note\n## How to see it\n\n```\n"
             "- F-1 The retry loop never backs off\n```\n")
-    assert la._accepting_items(body) == []
+    assert not f1_counted(body)
     assert missing(body)
 
 
@@ -548,28 +585,29 @@ def test_g12_structure_an_ordinary_inline_comment_cut_keeps_the_acceptances():
 
 def test_g13_claim_join_a_claim_joined_from_fragments_cannot_balance_a_removed_one():
     # cr-s1-002 / tr-s1-002: the comment cut joins "fixed-" and "above #99" into a new claim while the cut after `<?` removes
-    # the real #98 claim; the counts balance, the per-line claim comparison does not
+    # the real #98 claim; the counts balance, the whole-text claim comparison does not
     # #2389 review session 8: the joining comment is empty (`<!---->`, it hides no text), so md_hidden keeps the line VISIBLE
     # and the join happens (a `<!-- note -->` comment would make md_hidden blank the line whole); the balance is asserted
     body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; fixed-<!---->above #99 abcdef0; "
             "`<?` fixed-above #98 1234567\n")
-    cut = la._visible(body)
+    cut = " ".join(cuts(body))
     assert "fixed-above #99 abcdef0" in cut and "#98" not in cut
-    assert len(la._FIXED_ABOVE_TOKEN.findall(cut)) == len(la._FIXED_ABOVE_TOKEN.findall(body))
+    token = re.compile(r"(?<![A-Za-z0-9_-])fixed-above(?![A-Za-z0-9_])", re.IGNORECASE)
+    assert len(token.findall(cut)) == len(token.findall(body))
     assert len(la.FIXED_ABOVE_RE.findall(cut)) == len(la.FIXED_ABOVE_RE.findall(body))
-    assert la._visible_claim(body)[1] is True
+    assert la._cut_items(body)[1] is True
     assert la._accepting_items(body) == []
     assert missing(body)
 
 
 def test_g13_claim_join_a_claim_manufactured_by_a_comment_cut_alone_voids_the_body():
-    # #2389 fix leg 2: with the removal guard (G16 (a)) in place, the test above is also voided by it (the #98 claim is cut on the
-    # same line); this one has no removed claim, so only the per-line manufacture guard (b) voids it
-    # #2389 catch-up 66130a25: the comment here is empty (`<!---->`), which hides no text, so md_hidden reads the line VISIBLE and the
-    # per-line manufacture guard (b) is still reached (a `<!-- note -->` comment makes md_hidden read the line UNSURE; see the next test)
+    # #2389 fix leg 2: the test above is also voided by the removal guard (the #98 claim is cut on the same line); this one has no removed
+    # claim, so only the whole-text comparison (c) voids it. #2389 redesign: the per-line manufacture guard (b) is retired
+    # #2389 catch-up 66130a25: the comment here is empty (`<!---->`), which hides no text, so md_hidden reads the line VISIBLE
+    # (a `<!-- note -->` comment makes md_hidden read the line UNSURE; see the next test)
     body_ = "## What we're accepting\n\n- F-1 The retry loop never backs off; fixed-<!---->above #99 abcdef0\n"
-    assert "fixed-above #99 abcdef0" in la._visible(body_)
-    assert la._visible_claim(body_)[1] is True
+    assert "fixed-above #99 abcdef0" in " ".join(cuts(body_))
+    assert la._cut_items(body_)[1] is True
     assert la._accepting_items(body_) == []
     assert missing(body_) == GAP
 
@@ -597,8 +635,11 @@ def test_g2_code_span_opener_text_inside_the_span_after_the_opener_never_counts(
     # tr-s1-001: inside a raw HTML line GitHub hides the comment inside the apparent code span
     # #2389 FU8: the `<div>` sits on a line of its own before the `Quoting` line, so the acceptance line reaches the code-span cut
     body = "## What we're accepting\n\n<div>\nQuoting `<!-- F-1 The retry loop never backs off -->`\n</div>\n"
-    assert "F-1" not in la._visible(body)
+    # #2389 redesign: `_visible` keeps the VISIBLE lines; the `<div>` entry already cuts the item to its end, so no cut item holds F-1
+    assert "F-1" not in " ".join(cuts(body))
     assert missing(body)
+    # the code-span cut on its own: the span is kept up to its opener, and the rest of the item is cut
+    assert item_cut("Quoting `<!-- F-1 The retry loop never backs off -->`\n</div>\n") == "Quoting `"
 
 
 # --- #2389 fix leg 2 (vet 849): G14 the one entry condition, G15 the cut heading, G16 the claim fragment, G12's heading half ---
@@ -616,7 +657,7 @@ def test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line(opener,
     quoted = {"raw": opener, "escaped": "\\" + opener, "code_span": "`" + opener + "`"}[form]
     text = body(lead + quoted + " " + TITLE + "\n</div>\n")
     assert missing(text) == GAP
-    assert TITLE not in la._visible(text)
+    assert TITLE not in " ".join(cuts(text))
 
 
 @pytest.mark.parametrize("item", [
@@ -639,52 +680,57 @@ def test_g14_tag_entry_controls_a_less_than_that_is_no_entry_still_counts(item):
     assert missing(text) == []
 
 
-def test_g14_tag_entry_the_entry_itself_sets_no_comment_state_but_the_cut_tail_is_read():
-    # the escaped `\<!--` is cut from the backslash and opens nothing; an unclosed `<!--` later in the cut tail opens the state
-    assert la._visible("a \\<!-- c\nnext\n") == "a \nnext\n"
-    assert la._visible("a \\<b> <!-- c\nnext\n") == "a \n\n"
-    assert la._visible("a <b> <!-- c\nnext\n") == "a \n\n"
+def test_g14_tag_entry_the_cut_runs_to_the_items_end_whatever_the_tail_holds():
+    # #2389 redesign: there is no comment state to set or carry (was: the entry itself sets none but the cut tail is read). Every entry
+    # cuts the rest of the item, so the lines under it are cut with it, and a tail comment changes nothing
+    assert item_cut("a \\<!-- c\nnext\n") == "a"
+    assert item_cut("a \\<b> <!-- c\nnext\n") == "a"
+    assert item_cut("a <b> <!-- c\nnext\n") == "a"
     # #2389 catch-up 66130a25: md_hidden now reads the line `a <b> <!-- c --> d` (a comment that hides text) UNSURE, so it is blanked
-    # whole (was "a "); the closed tail comment still opens no state for the next line
-    assert la._visible("a <b> <!-- c --> d\nnext\n") == "\nnext\n"
-    # #2389 catch-up 66130a25: the same shape with an empty tail comment, which hides no text, so the line stays VISIBLE and the cut tail is read
-    assert la._visible("a <b> <!----> d\nnext\n") == "a \nnext\n"
+    # whole (was "a "); `next` is then a paragraph of its own
+    assert cuts(HEAD + "a <b> <!-- c --> d\nnext\n") == ["next"]
+    # #2389 catch-up 66130a25: the same shape with an empty tail comment, which hides no text, so the line stays VISIBLE and is cut at `<b>`
+    assert item_cut("a <b> <!----> d\nnext\n") == "a"
 
 
-# --- G15: a cut heading voids the body (BR684-E-1) ---
+# --- G15: a cut heading voids the body (BR684-E-1; the guard is retired, the section is read before any cut) ---
 
 def test_g15_cut_heading_a_cut_in_a_later_heading_voids_the_body():
     text = "## What we're accepting\n\nNone.\n\n## How to see it <kbd>x</kbd>\n- F-1 The retry loop never backs off\n"
-    assert la._visible_claim(text)[1] is True
+    # #2389 redesign: the heading is read from the source, so it ends the section before any cut; F-1 is under it and is no acceptance
+    assert la._cut_items(text) == (["None."], False)
     assert la._accepting_items(text) == []
 
 
 def test_g15_cut_heading_a_cut_in_the_accepting_heading_voids_the_body_and_reports_f1_missing():
     # without the guard the cut heading still reads as the accepting heading, and the item below it counts
+    # #2389 redesign: the heading is read from the source, where it is not the accepting heading, so there is no section at all
     text = "## What we're accepting <kbd>example only</kbd>\n- F-1 The retry loop never backs off\n"
-    assert la._visible_claim(text)[1] is True
     assert la._accepting_items(text) == []
     assert missing(text) == GAP
 
 
 def test_g15_cut_heading_control_a_heading_with_no_cut_is_not_void():
     text = "## What we're accepting\n\n- F-1 The retry loop never backs off <kbd>x</kbd>\n\n## How to see it\n\nN/A\n"
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert missing(text) == []
 
 
-# --- G12, the heading half of the block-role guard (no new code: this test is its owner) ---
+# --- G12, the heading half of the block-role guard (retired) ---
 
 def test_g12_structure_heading_half_a_cut_that_makes_a_line_an_atx_heading_voids_the_body():
     # `#<?x` is no heading in its source (the `#` is followed by `<`); the cut leaves `#`, an ATX heading
+    # #2389 redesign (BR853-5 (ii), loosened answer: F-1 was missing, is now accepted): the section is read before the cut, so `#<?x` stays
+    # a paragraph and the cut cannot make it a heading. The F-1 item is clean: it starts at its own `- ` marker (a bullet interrupts the
+    # paragraph, and md_hidden reads both lines VISIBLE, so GitHub shows it as its own list item), and its span holds one line with
+    # no entry `<`, no hidden line and no dropped line, so nothing hidden and no joined words reach it
     text = "## What we're accepting\n\nNone.\n\n#<?x\n- F-1 The retry loop never backs off\n"
-    assert la._visible(text).splitlines()[4] == "#"
-    assert la._visible_claim(text)[1] is True
-    assert la._accepting_items(text) == []
-    assert missing(text) == GAP
+    assert item_cut("#<?x\n") == "#"
+    assert la._cut_items(text)[1] is False
+    assert missing(text) == []
 
 
-# --- G16: a claim fragment voids the body (BR684-E-2) ---
+# --- G16: a claim fragment voids the body (BR684-E-2; the per-line half is retired, the whole-text guards stay) ---
 
 def claim_fragment_body():
     """BR684-E-2's counterexample: the #98 claim wraps across two lines and an inline tag cuts its first line, while a
@@ -697,14 +743,14 @@ def claim_fragment_body():
                         "<details><summary>Build record</summary>\n\nfixed-<!---->above #99 abcdef0\n\n", 1)
 
 
-def test_g16_claim_fragment_the_counts_balance_but_the_changed_line_voids_the_body(tmp_path):
+def test_g16_claim_fragment_a_claim_outside_the_section_cannot_balance_the_removed_one_so_the_body_is_void(tmp_path):
     text = claim_fragment_body()
     assert "fixed-<!---->above #99 abcdef0" in text
-    # the precondition the name claims: the token and whole-claim counts balance, so the count guard (B) does not void it
-    cut = la._visible(text)
-    assert len(la._FIXED_ABOVE_TOKEN.findall(cut)) == len(la._FIXED_ABOVE_TOKEN.findall(text))
-    assert len(la.FIXED_ABOVE_RE.findall(cut)) == len(la.FIXED_ABOVE_RE.findall(text))
-    assert la._visible_claim(text)[1] is True
+    # #2389 redesign: the guards compare each cut item with the source lines of its own span, so the #99 claim in the build record (outside
+    # the section) cannot balance the #98 claim the cut removed from the item
+    assert la.FIXED_ABOVE_RE.findall(" ".join(source_texts(text))) == [("98", "1234567")]
+    assert la.FIXED_ABOVE_RE.findall(" ".join(cuts(text))) == []
+    assert la._cut_items(text)[1] is True
     assert la._accepting_items(text) == []
     assert missing(text) == GAP
     result, fake = write(text, [RECEIPT, record_comment([FINDING])], tmp_path)
@@ -715,33 +761,45 @@ def test_g16_claim_fragment_the_counts_balance_but_the_changed_line_voids_the_bo
 def test_g16_claim_fragment_control_an_inline_comment_on_a_claim_line_keeps_its_acceptance():
     # #2389 catch-up 66130a25: the comment is empty (`<!---->`), which hides no text, so md_hidden reads the line VISIBLE and the claim stays
     text = body("- F-1 The retry loop never backs off <!----> fixed-above #99 abcdef0\n")
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert la._accepting_items(text) != []
     assert missing(text) == []
     # #2389 catch-up 66130a25 (over-refusal, disclosed): with a `<!-- a note -->` comment GitHub shows the claim line, but md_hidden now
-    # reads it UNSURE, the leftover check blanks it whole, the claim is removed, and the body is void (was no void, acceptance counted)
+    # reads it UNSURE, the leftover check blanks it whole, and the line makes no item (was a void body)
     text = body("- F-1 The retry loop never backs off <!-- a note --> fixed-above #99 abcdef0\n")
-    assert la._visible_claim(text)[1] is True
+    assert "fixed-above #99" not in la._visible(text)
     assert la._accepting_items(text) == []
     assert missing(text) == GAP
 
 
 def test_g16_claim_fragment_a_wrapped_claim_cut_on_its_first_line_voids_though_a_joined_wrapped_one_balances_the_counts():
-    # only guard (a) sees this: no changed line holds a whole claim on its own (the wrapped claims are whole only across two
-    # lines), so the per-line guard (b) compares empty claim lists, and the token and claim counts balance
-    # #2389 review session 8: the joined claim is the identical wrapped #98 1234567 claim, joined by an empty comment
-    # (`<!---->` hides no text, so md_hidden keeps its line VISIBLE). The token counts, the claim counts and the sorted
-    # whole-text claims (G18) all balance, so only the removal guard (a) can catch the cut that removes F-1's claim.
+    # the claim is whole only across two lines of the item, and the inline tag cuts the first
+    # #2389 review session 8: the joined claim is the identical wrapped #98 1234567 claim, joined by an empty comment in the build record
+    # (`<!---->` hides no text, so md_hidden keeps its line VISIBLE). #2389 redesign: the build record is outside the section, so it cannot
+    # balance the item's own removed claim
     text = body("- F-1 The retry loop never backs off <b>x</b> fixed-above #98\n  1234567\n")
     text = text.replace("<details><summary>Build record</summary>\n\n",
                         "<details><summary>Build record</summary>\n\nfixed-<!---->above #98\n1234567\n\n", 1)
     assert "fixed-<!---->above #98\n1234567" in text
-    cut = la._visible(text)
-    assert la.FIXED_ABOVE_RE.findall(text) == la.FIXED_ABOVE_RE.findall(cut) == [("98", "1234567")]
-    assert len(la._FIXED_ABOVE_TOKEN.findall(cut)) == len(la._FIXED_ABOVE_TOKEN.findall(text))
-    assert la._visible_claim(text)[1] is True
+    assert la.FIXED_ABOVE_RE.findall(" ".join(source_texts(text))) == [("98", "1234567")]
+    assert la.FIXED_ABOVE_RE.findall(" ".join(cuts(text))) == []
+    assert la._cut_items(text)[1] is True
     assert la._accepting_items(text) == []
     assert missing(text) == GAP
+
+
+def test_g21_source_span_claims_a_prose_mention_after_a_cut_does_not_void_the_body():
+    # #2389 WO-H3 (the real body of PR #2391): the item's cut removes the bare word "fixed-above" after a code span holding `<`, but the
+    # word is not a claim (no PR, no commit), so the guards, which compare whole claims only, do not void the body
+    text = body("- F-1 The retry loop never backs off\n"
+                "- The check refuses text after an autolink (`<https://x>`), and a\n"
+                "  fixed-above bullet whose line holds a comment\n")
+    bare = re.compile(r"(?<![A-Za-z0-9_-])fixed-above(?![A-Za-z0-9_])", re.IGNORECASE)
+    # the precondition: the cut really removes a bare mention that the source span holds, and neither holds a whole claim
+    assert len(bare.findall(" ".join(cuts(text)))) < len(bare.findall(" ".join(source_texts(text))))
+    assert la.FIXED_ABOVE_RE.findall(" ".join(source_texts(text))) == []
+    assert la._cut_items(text)[1] is False
+    assert missing(text) == []
 
 
 def test_g16_claim_fragment_a_quoted_placeholder_cut_by_rule_1_keeps_the_acceptances():
@@ -749,46 +807,46 @@ def test_g16_claim_fragment_a_quoted_placeholder_cut_by_rule_1_keeps_the_accepta
     # a placeholder is no claim, so it can neither hide nor manufacture one and the F-1 acceptance still counts
     text = body("- F-1 The retry loop never backs off\n").replace(
         "A change.\n", "A change. Syntax: `fixed-above #<layer PR> <commit>`\n", 1)
-    visible = la._visible(text)
-    assert "Syntax: `fixed-above #\n" in visible and "<layer" not in visible
-    assert la._visible_claim(text)[1] is False
+    # #2389 redesign: that line is outside the section, so nothing cuts it; the same quoted placeholder inside the item is cut at `<layer`
+    assert "Syntax: `fixed-above #<layer PR> <commit>`\n" in la._visible(text)
+    assert la._cut_items(text)[1] is False
     assert la._accepting_items(text) != []
     assert missing(text) == []
+    inside = body("- F-1 The retry loop never backs off; Syntax: `fixed-above #<layer PR> <commit>`\n")
+    assert la._cut_items(inside) == (["F-1 The retry loop never backs off; Syntax: `fixed-above #"], False)
+    assert missing(inside) == []
 
 
 def test_g16_claim_fragment_control_the_plain_words_without_a_claim_do_not_void_the_body():
     text = body("- F-1 The retry loop never backs off; fixed above <b>x</b>\n")
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert missing(text) == []
 
 
 # --- #2389 fix leg 3 (vet 852): G17 the fence reading, G18 the whole-text claim comparison ---
 # model-only (no render of these exact bodies in the repository). Vet receipt
 # https://github.com/zwrose/superheroes/pull/2391#issuecomment-6715314903 (V852-1, BR852-1, V852-2).
+# #2389 redesign (vet 853, receipt https://github.com/zwrose/superheroes/pull/2391#issuecomment-6717053345): the fence guards G17a and G17b
+# are retired, because the section reader reads the source structure and no cut can manufacture or move a fence. The void assertions
+# became "F-1 is missing", which is the outcome each guard protected.
 
-HEAD = "## What we're accepting\n\n"
 # #2389 catch-up 66130a25: `<?x?>` is a PI that holds text, so md_hidden reads a line holding it UNSURE and the leftover check blanks
-# the line whole (no cut, so no list fence opener is manufactured); `<??>` is a PI that holds no text, so the line stays VISIBLE and the
-# cut still manufactures the opener and the body is void. Both are listed: `<??>` keeps the void assertions, `<?x?>` gets the blanking ones.
+# the line whole (no cut, so no list fence opener is manufactured); `<??>` is a PI that holds no text, so the line stays VISIBLE.
 G17_ENTRIES = ["<??>", "<?x?>", "<b>", "<!x>", "\\<b>", "<br>", "</x>"]
 G17_BLANKED_ENTRIES = {"<?x?>"}
 
 
-def assert_void_and_missing(text):
-    assert la._visible_claim(text)[1] is True
-    assert la._accepting_items(text) == []
+def assert_f1_missing(text):
+    # #2389 redesign: the clean read finds no acceptance naming F-1 (the indented heading ends the section before it)
+    assert not f1_counted(text)
     assert missing(text) == GAP
 
 
 def assert_void_or_blanked_and_missing(entry, text):
-    if entry not in G17_BLANKED_ENTRIES:
-        assert_void_and_missing(text)
-        return
-    # #2389 catch-up 66130a25: the line is blanked whole, so no fence opener `- ```md ` is manufactured and no void fires; what the void
-    # guarded still holds: the indented heading ends the section, so F-1 below it reads missing (the fail-open this protects against)
-    assert "```md" not in la._visible(text)
-    assert la._accepting_items(text) == []
-    assert missing(text) == GAP
+    if entry in G17_BLANKED_ENTRIES:
+        # #2389 catch-up 66130a25: the line is blanked whole, so no fence opener `- ```md ` is manufactured
+        assert "```md" not in la._visible(text)
+    assert_f1_missing(text)
 
 
 @pytest.mark.parametrize("entry", G17_ENTRIES)
@@ -813,7 +871,7 @@ def test_g17_fence_shape_closer_a_cut_that_turns_a_content_line_into_the_closer_
     # `  ``` <b>` is content in the list fence (text after the run); the cut leaves `  ``` `, a closer, and the next run opens
     # a new fence over the heading. md_fence and the opener shape read the delimiter lines alike: only the walk's flags differ
     text = HEAD + "None.\n- %smd\n  %s <b>\n  %s\n  ## How to see it\n  - %s\n" % (fence, fence, fence + fence[0], TITLE)
-    assert_void_and_missing(text)
+    assert_f1_missing(text)
 
 
 def test_g17_fence_shape_only_the_shape_a_manufactured_opener_inside_a_list_fence_voids_the_body():
@@ -822,14 +880,18 @@ def test_g17_fence_shape_only_the_shape_a_manufactured_opener_inside_a_list_fenc
     text = HEAD + "None.\n- ```md\n  - ```x <b> `y`\n  ```\n- %s\n" % TITLE
     assert pr_sheet.fence_line_shape("  - ```x <b> `y`") is None
     assert pr_sheet.fence_line_shape("  - ```x ")[0] == "open"
-    assert pr_sheet.fenced_lines(text.split("\n")) == pr_sheet.fenced_lines(
-        text.replace("<b> `y`", "").split("\n"))
-    assert_void_and_missing(text)
+    # #2389 redesign (BR853-5 (i), loosened answer: F-1 was missing, is now accepted). The item holding the cut list fence is
+    # `- ```md` through its closing `  ```` and is cut at the `<b>`; the F-1 item after it is clean: it starts at its own `- ` marker at
+    # column 0 (not indented to the fence item's content column, so it does not nest in it), md_hidden reads every line VISIBLE, and its
+    # span holds one line with no entry `<`, no hidden line and no dropped line, so GitHub shows it as its own list item
+    assert cuts(text) == ["None.", "```md - ```x", TITLE]
+    assert la._cut_items(text)[1] is False
+    assert missing(text) == []
 
 
 def test_g17_fence_shape_control_a_list_fence_with_no_cut_keeps_the_acceptance():
     text = HEAD + "None.\n- ```md\n  F-1 example\n  ````\n- %s\n" % TITLE
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert missing(text) == []
 
 
@@ -837,11 +899,11 @@ def test_g17_fence_shape_control_an_invalid_list_fence_opener_with_no_entry_read
     # no `<`, so no cut and no void; `- ```md `note` opens no fence, so the indented heading ends the section and F-1 below it
     # is missing (the same answer as at fbc879bd)
     text = HEAD + "None.\n- ```md `note`\n  ## How to see it\n  - %s\n" % TITLE
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert missing(text) == GAP
 
 
-def test_g17_fence_shape_fence_line_shape_and_fenced_lines_read_the_walk():
+def test_g17_fence_shape_fence_line_shape_reads_the_walk():
     assert pr_sheet.fence_line_shape("- ```md") == ("open", "`", 3, "- ")
     assert pr_sheet.fence_line_shape("1. ~~~~") == ("open", "~", 4, "1. ")
     assert pr_sheet.fence_line_shape("```") == ("open", "`", 3, None)
@@ -853,67 +915,79 @@ def test_g17_fence_shape_fence_line_shape_and_fenced_lines_read_the_walk():
     assert pr_sheet.fence_line_shape("") is None
     assert pr_sheet.fence_line_shape(None) is None
     assert hash(pr_sheet.fence_line_shape("- ```md")) == hash(("open", "`", 3, "- "))
-    lines = ["## What we're accepting", "", "<!-- c -->", "```", "x", "```", "- a", "<!-- superheroes:build-record -->", "```"]
-    assert pr_sheet.fenced_lines(lines) == [False, False, False, True, True, True, False, False, False]
-    assert pr_sheet.fenced_lines([]) == []
 
 
-def test_g17_fence_shape_br852_1_a_comment_that_ends_the_item_before_a_fence_voids_the_body():
-    # BR852-1: the comment line ends the list item in the source walk, but the cut text has a blank line there, so the walk
-    # reads the fence as inside the item and the fence ends at `## What we're accepting`. The two readings of the fence differ
-    # at that heading (fenced in the source, a heading in the cut text)
+def test_g17_fence_shape_br852_1_a_fenced_f1_after_a_separator_comment_is_accepted_as_shown_code():
+    # BR852-1: the comment line ends the list item in the source walk, but the cut text had a blank line there, so the old walk
+    # read the fence differently in the two texts
+    # #2389 redesign (loosened, BR853-5 ruling): the old answer was a void body (F-1 missing); the new answer is F-1 accepted.
+    # GitHub shows the fenced `- F-1 The retry loop never backs off` line as code, and base 66130a25 reads fenced text as acceptance
+    # text the same way (accepting_listed counts visible fenced text). The section is now read once, from the source, and the
+    # fence-shape guard that voided it is retired
     text = ("## What we're accepting\n\n- Example\n\n<!-- separator -->\n\n  ```\n## What we're accepting\n"
             "- F-1 The retry loop never backs off\n  ```\n")
-    assert pr_sheet.fenced_lines(text.split("\n"))[7] is True
-    assert pr_sheet.fenced_lines(la._visible(text).split("\n"))[7] is False
-    assert_void_and_missing(text)
+    assert f1_counted(text)
+    assert missing(text) == []
 
 
-def test_g17_fence_shape_br852_1_f1_reads_missing_whether_or_not_the_fence_guard_fires():
-    # regression kept as asked: the BR852-1 body already reads F-1 missing without guard (ii), because the cut text's walk ends
-    # the fence at the second accepting heading and that heading ends the section; the guard makes it a void, not a mere miss
+def test_g17_fence_shape_br852_1_f1_is_accepted_with_the_fence_guard_retired():
+    # #2389 redesign (loosened, BR853-5 ruling): the old answer was F-1 missing (a void body); the new answer is F-1 accepted.
+    # GitHub shows the fenced F-1 line as code, base 66130a25 reads it the same way, and the fence-shape guard that voided it is retired
     text = ("## What we're accepting\n\n- Example\n\n<!-- separator -->\n\n  ```\n## What we're accepting\n"
             "- F-1 The retry loop never backs off\n  ```\n")
-    assert missing(text) == GAP
+    assert missing(text) == []
 
 
-def test_g17_fence_shape_outside_comments_is_unchanged_and_fenced_lines_agree_with_it():
+def test_g17_fence_shape_outside_comments_and_item_spans_read_the_one_walk():
+    # #2389 redesign (V853-4): replaces the test that compared `fenced_lines` with the walk; `fenced_lines` is retired. `_outside_comments`
+    # is the walk's kept lines, and `accepting_listed` is the join of the item spans of `accepting_item_spans` over every oracle body
     bodies = [row["body"] for row in ROWS]
     bodies.append((pathlib.Path(__file__).parent / "fixtures" / "i2332_pr2348_body.md").read_text(encoding="utf-8"))
-    assert len(bodies) == len(ROWS) + 1 and ROWS
+    assert len(ROWS) == 18 and len(bodies) == 19
+    listed_total = 0
     for text in bodies:
         lines = pr_sheet._markdown_lines(text)
-        flags = pr_sheet.fenced_lines(lines)
-        assert len(flags) == len(lines)
-        kept = pr_sheet._outside_comments(lines)
         walked = [(n, line, fenced) for n, line, fenced, keep in pr_sheet._fence_walk(lines) if keep]
-        assert kept == [(line, fenced) for _n, line, fenced in walked]
-        assert all(flags[n] is fenced and lines[n] == line for n, line, fenced in walked)
-        assert [n for n in range(len(lines)) if flags[n]] == [n for n, _line, fenced in walked if fenced]
+        assert pr_sheet._outside_comments(lines) == [(line, fenced) for _n, line, fenced in walked]
+        spans = pr_sheet.accepting_item_spans(text)
+        joined = []
+        for span in spans:
+            assert [n for n, _kind in span] == sorted({n for n, _kind in span})
+            assert {kind for _n, kind in span} <= {"text", "fenced", "blank", "dropped"}
+            assert span[0][1] in ("text", "fenced")
+            parts = [lines[n][pr_sheet.item_text_start(lines[n]) if k == 0 else 0:].strip()
+                     for k, (n, kind) in enumerate(span) if kind in ("text", "fenced")]
+            joined.append(" ".join(part for part in parts if part))
+        assert pr_sheet.accepting_listed(text) == pr_sheet.acceptance_texts(joined)
+        listed_total += len(pr_sheet.accepting_listed(text))
+    assert listed_total > 0, "the oracle bodies list no acceptance, so the join proves nothing"
 
 
-def test_g18_whole_text_claims_a_claim_manufactured_across_lines_by_a_cut_voids_the_body():
+def test_g18_whole_text_claims_a_cut_across_lines_forms_no_claim_and_f1_is_a_plain_acceptance():
     # V852-2: the source holds no whole claim (`fixed-above #98 <b> #99`); the cut at `<b>` leaves `fixed-above #98 ` and the next
-    # line's hex commit, which the whole-text regex joins into a claim. No source claim is removed and no changed line holds
-    # a claim by itself, so only the whole-text comparison sees it
+    # line's hex commit, which the old whole-text regex would have joined into a claim
+    # #2389 redesign (loosened, BR853-5 ruling): the old answer was a void body (F-1 missing); the new answer is F-1 accepted, with
+    # no claim. GitHub shows `- F-1 The retry loop never backs off fixed-above #98` as plain text beside the `<b>` tag, and base
+    # 66130a25 reads it the same way; the guard that voided it is retired. The cut runs to the item's end, so the next line is cut
+    # with it and no claim is formed: F-1 is a plain acceptance, not a fixed-above one
     text = HEAD + "- %s fixed-above #98 <b> #99\n  `def5678`\n" % TITLE
     assert la.FIXED_ABOVE_RE.findall(text) == []
-    assert la.FIXED_ABOVE_RE.findall(la._visible(text)) == [("98", "def5678")]
-    assert la._visible_claim(text)[1] is True
-    assert la._accepting_items(text) == []
-    assert missing(text) == GAP
+    assert f1_counted(text)
+    assert missing(text) == []
+    # the danger V852-2 named, a manufactured claim, stays absent
+    assert la.fixed_above(read_ok(FINDING), text) == []
+    assert [c for c in la.assigned_fixed_above(read_ok(FINDING), text) if c["id"] == "F-1"] == []
 
 
 def test_g18_whole_text_claims_control_an_inline_comment_on_a_claim_line_keeps_its_acceptance():
     # #2389 catch-up 66130a25: the comment is empty (`<!---->`), which hides no text, so md_hidden reads the line VISIBLE and the claim stays
     text = HEAD + "- %s <!----> fixed-above #99 abcdef0\n" % TITLE
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert la._accepting_items(text) != []
     assert missing(text) == []
     # #2389 catch-up 66130a25 (over-refusal, disclosed): with a `<!-- a note -->` comment GitHub shows the claim line, but md_hidden now
-    # reads it UNSURE, the leftover check blanks it whole, the claim is removed, and the body is void (was no void, acceptance counted)
+    # reads it UNSURE, the leftover check blanks it whole, and the line makes no item (was a void body)
     text = HEAD + "- %s <!-- a note --> fixed-above #99 abcdef0\n" % TITLE
-    assert la._visible_claim(text)[1] is True
     assert la._accepting_items(text) == []
     assert missing(text) == GAP
 
@@ -921,6 +995,77 @@ def test_g18_whole_text_claims_control_an_inline_comment_on_a_claim_line_keeps_i
 def test_g18_whole_text_claims_control_a_quoted_placeholder_keeps_the_acceptances():
     text = body("- F-1 The retry loop never backs off\n").replace(
         "A change.\n", "A change. Syntax: `fixed-above #<layer PR> <commit>`\n", 1)
-    assert la._visible_claim(text)[1] is False
+    assert la._cut_items(text)[1] is False
     assert la._accepting_items(text) != []
     assert missing(text) == []
+
+
+# --- #2389 vet 853 (segment-first redesign): G19 the cut to the item's end, G20 the stop point and literal fences, G21 the claim guards ---
+# model-only (no render of these exact bodies). Vet receipt https://github.com/zwrose/superheroes/pull/2391#issuecomment-6717053345 (V853-1,
+# BR853-1 to BR853-4). GFM block rules (https://github.github.com/gfm/): a list item's continuation lines (indented to its content column,
+# or lazy paragraph continuation at column 0) belong to the item and to its paragraph, so GitHub shows "The retry loop XYZ never backs off";
+# a fenced code block's content is literal (spec 4.5); an HTML comment on its own line is a block that ends a paragraph only where no
+# lazy continuation applies. A cut that stopped at the line's end would join "The retry loop" and "never backs off" across the hidden XYZ.
+
+@pytest.mark.parametrize("accepting, cut", [
+    ("- F-1 The retry loop <span>XYZ</span>\n  never backs off\n", "F-1 The retry loop"),
+    ("- F-1 The retry loop <https://example.com>\n  never backs off\n", "F-1 The retry loop"),
+    ("- F-1 The retry loop \\<b>XYZ\n  never backs off\n", "F-1 The retry loop"),
+    ("- F-1 The retry loop `<b>` XYZ\n  never backs off\n", "F-1 The retry loop `"),
+    ("- F-1 The retry loop <span>XYZ</span>\nnever backs off\n", "F-1 The retry loop"),
+    ("F-1 The retry loop <em>really</em>\nnever backs off\n", "F-1 The retry loop"),
+], ids=["inline_tag", "autolink", "escaped_tag", "code_span_tag", "lazy_column_0", "paragraph"])
+def test_g19_item_cut_a_cut_runs_to_the_items_end_so_it_cannot_join_the_words_around_it(accepting, cut):
+    text = body(accepting)
+    assert cuts(text) == [cut]  # the line after the cut is the item's, and is cut with it
+    assert missing(text) == GAP
+
+
+@pytest.mark.parametrize("accepting", [
+    "- F-1 The retry loop never backs off\n",
+    "- F-1 The retry loop\n  never backs off\n",
+    "- F-1 The retry loop\nnever backs off\n",
+    "F-1 The retry loop\nnever backs off\n",
+], ids=["one_line", "wrapped", "lazy_wrapped", "paragraph_wrapped"])
+def test_g19_item_cut_controls_an_item_with_no_cut_still_accepts_across_its_lines(accepting):
+    text = body(accepting)
+    assert missing(text) == []
+    assert cuts(text) == ["F-1 The retry loop never backs off"]
+
+
+def test_g20_stop_a_hidden_line_inside_the_item_stops_it():
+    # BR853-1: md_hidden does not read `  XYZ <!-- note -->` VISIBLE (its comment hides text), so it is blanked; it sits inside the item,
+    # so it is a stop point, and "never backs off" is not joined to "The retry loop" across the hidden XYZ
+    text = body("- F-1 The retry loop\n  XYZ <!-- note -->\n  never backs off\n")
+    assert "XYZ" not in la._visible(text)
+    assert cuts(text) == ["F-1 The retry loop"]
+    assert missing(text) == GAP
+
+
+def test_g20_stop_a_dropped_line_inside_the_item_stops_it():
+    # BR853-2: the whole-line comment is read VISIBLE by md_hidden but the section reader drops it (kind "dropped"); the lazy line under
+    # it still belongs to the item, and the dropped line is a stop point, so the two halves are not joined
+    text = body("- F-1 The retry loop\n<!-- separator -->\nnever backs off\n")
+    assert "<!-- separator -->" in la._visible(text)
+    assert cuts(text) == ["F-1 The retry loop"]
+    assert missing(text) == GAP
+
+
+def test_g20_fenced_literal_a_fenced_line_is_kept_literally_and_never_dropped_as_a_comment():
+    # BR853-3: inside the item's fence, `<!-- XYZ -->` is literal text (a code block shows it), not a comment to drop: the item is
+    # cut there, so "never backs off" after the fence is not joined to "The retry loop"
+    text = body("- F-1 The retry loop\n  ~~~\n  <!-- XYZ -->\n  ~~~\n  never backs off\n")
+    assert cuts(text) == ["F-1 The retry loop ~~~"]
+    assert missing(text) == GAP
+
+
+def test_g21_source_span_claims_a_claim_on_a_hidden_line_of_the_item_voids_the_body():
+    # BR853-4: md_hidden does not read the claim line VISIBLE (its comment hides text), so it is blanked and, in the item's span, is a stop
+    # point: the cut item loses the claim. The source span, read before blanking, still holds it, so the claim guards void the body
+    text = body("- F-1 The retry loop never backs off\n  fixed-above #99 abcdef0 <!-- note -->\n")
+    assert "fixed-above" not in la._visible(text)  # the precondition: the claim line is blanked
+    assert cuts(text) == ["F-1 The retry loop never backs off"]
+    assert la.FIXED_ABOVE_RE.findall(" ".join(source_texts(text))) == [("99", "abcdef0")]
+    assert la._cut_items(text)[1] is True
+    assert la._accepting_items(text) == []
+    assert missing(text) == GAP

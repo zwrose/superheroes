@@ -255,7 +255,7 @@ def test_id_and_title_only_inside_an_html_comment_are_not_named():
     assert handback(hidden, [record_comment([F1])])["reason"] == "leftover-not-accepted"
 
 
-def test_visible_text_beside_a_comment_still_names_it():
+def test_an_inline_comment_that_hides_text_blanks_the_line_so_the_leftover_reads_missing():
     shown = body("- f-1 the retry loop never backs off <!-- builder note -->: merging accepts it.\n")
     # #2389 catch-up 66130a25 (over-refusal, disclosed): GitHub shows this acceptance, but md_hidden now reads a line where an inline comment
     # hides text UNSURE and the leftover check blanks it whole, so f-1 now reads missing (was []). It fails closed; a refusal, never a pass.
@@ -311,14 +311,22 @@ def test_a_comment_opener_inside_a_code_span_is_shown_text(tmp_path):
     assert result["reason"] == "leftover-not-accepted" and fake.edited == []
 
 
-def test_visible_keeps_fenced_text_and_marker_lines_and_drops_an_unclosed_comment():
-    # #2389 V847-1: a fenced line is cut at its first opener (a tilde line inside a raw <pre> block is not a fence), so the fenced `<!-- shown -->` is cut
-    assert la._visible("```\n<!-- shown -->\n```\n") == "```\n\n```\n"
+def cut_items(source):
+    """The cut item texts (before the claim guards) of ``source`` placed under the accepting heading."""
+    return la._cut_items("## What we're accepting\n\n" + source)[0]
+
+
+def test_visible_blanks_hidden_lines_keeps_marker_lines_and_the_item_cut_stops_at_a_fenced_opener():
+    # #2389 redesign: `_visible` only blanks lines md_hidden does not read VISIBLE, so the fenced `<!-- shown -->` stays in it; the item
+    # cut keeps a fenced line literally and cuts it at its first entry `<` (a tilde line inside a raw <pre> block is not a fence)
+    assert la._visible("```\n<!-- shown -->\n```\n") == "```\n<!-- shown -->\n```\n"
+    assert cut_items("```\n<!-- shown -->\n```\n") == ["```"]
     assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
     # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
     # #2389 catch-up 66130a25: md_hidden now reads the first line ("a <!-- b", whose comment hides text) UNSURE, so it is blanked whole
-    # and keeps only its terminator (was "a " + terminator); the unclosed comment on the last line is still cut
-    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "\n\n\nf "
+    # and keeps only its terminator (was "a " + terminator); #2389 redesign: the unclosed comment on the last line is no longer cut by `_visible`, the item cut is
+    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "\n\n\nf <!-- g"
+    assert cut_items("a <!-- b\nc\nd --> e\nf <!-- g") == ["f"]
 
 
 # --- review round 3 fixes ---------------------------------------------------------------------------
@@ -339,13 +347,17 @@ def test_a_comment_outside_any_real_code_span_or_fence_stays_hidden(accepting, t
 def test_an_escaped_comment_opener_is_shown_text():
     # #2389 V847-1: the escaped opener and the backslash stay as text, then the rest of the line is cut (inside an HTML block GitHub honours no escape)
     # #2389 V849-1: an escaped entry `<` is cut from the backslash, so neither the backslash nor the opener stays (was "a \\<!--\n")
-    assert la._visible("a \\<!-- b --> c\n") == "a \n"
+    # #2389 redesign: `_visible` keeps the line (it cuts nothing within a line); the item cut ends at the backslash
+    assert la._visible("a \\<!-- b --> c\n") == "a \\<!-- b --> c\n"
+    assert cut_items("a \\<!-- b --> c\n") == ["a"]
 
 
 def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
     # #2389 V847-1: the span stays one span (no comment opens inside it), then the rest of the line is cut because the span holds `<!--`
     # #2389 review (test-role s1): the span is kept only up to its opener, so the text inside it after the opener never counts
-    assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` \n"
+    # #2389 redesign: `_visible` keeps the line; the item cut keeps the span up to its opener and cuts the rest of the item
+    assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` <!-- b --> c`` y\n"
+    assert cut_items("x ``a ` <!-- b --> c`` y\n") == ["x ``a `"]
 
 
 def test_ready_write_checks_the_body_it_will_publish(tmp_path):

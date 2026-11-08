@@ -387,3 +387,133 @@ None. Unproven elements: none.
 ### Whole scoped run after the last restore
 
 The eight-file scoped command of the order (`-q -n auto`): `1369 passed in 28.24s`.
+
+## #2389 vet 853 (WO-H): the segment-first redesign. Entries G19, G20a, G20b, G21; retired entries
+
+Vet 853 receipt: https://github.com/zwrose/superheroes/pull/2391#issuecomment-6717053345. Guarded code: `plugins/superheroes/lib/leftover_accepting.py`
+(`_item_cut`, `_cut_items`) over the item spans of `pr_sheet.accepting_item_spans`. Base head `ab0ca80f`. Each neutralization was one targeted
+Edit, undone by the inverse Edit before the next; no `git checkout`, `restore`, `reset`, `stash` or `sed`. Captures drop uv's one
+`UV_NATIVE_TLS` warning line; nothing was redacted; each is far under the 32 KiB ceiling. Command prefix (worktree root), `-k` per entry:
+`timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k test_gNN_`
+The restore receipts are Grep-tool reads of the restored lines.
+
+### Retired entries (the guard's code and axis comments are removed; its tests stay as regressions of the outcome)
+
+- G12, the block-role guard: retired, because the section is read once from the source structure, so no cut can change a line's fence kind or heading role.
+- G13, the per-line claim guard (b): retired, because the claim guards now compare each cut item with the source lines of its own span.
+- G15, the cut-heading guard: retired, because a heading is read from the source before any cut, so a cut cannot change it.
+- G16, the per-line half (the removal guard (a) over changed lines): retired and replaced by the item-level guards (a) and (c) of `_cut_items` (proven as G21).
+- G17a, the fence-shape guard (1c-i): retired, because no cut re-parses the text, so no opener is manufactured or lost.
+- G17b, the fenced-state guard (1c-ii): retired with `pr_sheet.fenced_lines`, for the same reason.
+
+### G19: a cut runs to the item's end
+
+- **Guarded element / axis:** `_item_cut`, the `if cut:` / `break` after `_scan_line` (`leftover_accepting.py:206-207`). Axis: a cut inside a line cuts the rest of the item, so a later line of the item cannot join the kept text across the hidden part (V853-1).
+- **Neutralization:** the `break` after `if cut:` became `continue` (the scan carries on at the next line after a cut).
+- **Raw red** (`-k test_g19_`):
+
+```
+FFFFFF....                                                               [100%]
+E   AssertionError: assert ['F-1 The ret...er backs off'] == ['F-1 The retry loop']
+      At index 0 diff: 'F-1 The retry loop never backs off' != 'F-1 The retry loop'
+E   AssertionError: assert ['F-1 The ret...er backs off'] == ['F-1 The retry loop `']
+      At index 0 diff: 'F-1 The retry loop ` never backs off' != 'F-1 The retry loop `'
+6 failed, 4 passed, 220 deselected in 2.03s
+```
+
+(all six V853-1 forms fail with the same assertion; the four controls stay green)
+- **Restore:** the inverse Edit (`continue` back to `break`). **Restore receipt:** a Grep read of `parts.append(kept.strip())` printed `205:            parts.append(kept.strip())` / `206:            if cut:` / `207:                break`.
+- **Raw green:**
+
+```
+..........                                                               [100%]
+10 passed, 220 deselected in 1.58s
+```
+
+### G20a: a hidden or dropped line inside the item is a stop point
+
+- **Guarded element / axis:** `_item_cut`, `if n >= len(lines) or n >= len(shown) or not shown[n] or kind == "dropped":` / `break` (`leftover_accepting.py:191-192`). Axis: a line md_hidden does not read VISIBLE, or one the reader drops, stops the item, so the lines after it are not joined to the lines before it (BR853-1, BR853-2).
+- **Neutralization:** the `break` under that condition became `continue`.
+- **Raw red** (`-k test_g20_stop_`):
+
+```
+FF                                                                       [100%]
+E   AssertionError: assert ['F-1 The ret...er backs off'] == ['F-1 The retry loop']
+      At index 0 diff: 'F-1 The retry loop never backs off' != 'F-1 The retry loop'
+2 failed, 228 deselected in 1.11s
+```
+
+- **Restore:** the inverse Edit. **Restore receipt:** a Grep read of `kind == "dropped":` printed `191:        if n >= len(lines) or n >= len(shown) or not shown[n] or kind == "dropped":` / `192:            break`.
+- **Raw green:**
+
+```
+..                                                                       [100%]
+2 passed, 228 deselected in 0.47s
+```
+
+### G20b: fenced lines are literal
+
+- **Guarded element / axis:** `_item_cut`, `if kind == "fenced":` (`leftover_accepting.py:197`). Axis: a fenced line is kept literally and no comment is dropped on it (a code block shows `<!-- XYZ -->`), so the fence's content cannot be skipped to join the text around it (BR853-3).
+- **Neutralization:** `if kind == "fenced":` became `if kind == "fenced" and False:` (a fenced line goes through the text-line scan, which drops a closed comment and goes on).
+- **Raw red** (`-k test_g20_fenced_literal_`):
+
+```
+F                                                                        [100%]
+E   AssertionError: assert ['F-1 The ret...er backs off'] == ['F-1 The retry loop ~~~']
+      At index 0 diff: 'F-1 The retry loop ~~~ ~~~ never backs off' != 'F-1 The retry loop ~~~'
+1 failed, 229 deselected in 0.45s
+```
+
+- **Restore:** the inverse Edit. **Restore receipt:** a Grep read of `if kind == "fenced"` printed `197:        if kind == "fenced":`.
+- **Raw green:**
+
+```
+.                                                                        [100%]
+1 passed, 229 deselected in 0.57s
+```
+
+### G21: the claim guards read the source lines of the item's span
+
+- **Guarded element / axis:** `_cut_items`, `blanked_lines, source_lines = md_fence.split_lines(blanked), md_fence.split_lines(body)` (`leftover_accepting.py:337`). Axis: the guards compare each cut item with the lines of its span as they stand before blanking, hidden and dropped lines included, so a claim on a hidden line of the item is seen as removed (BR853-4).
+- **Neutralization:** `md_fence.split_lines(body)` became `md_fence.split_lines(blanked)` (the span's source is read from the blanked body).
+- **Raw red** (`-k test_g21_`):
+
+```
+F                                                                        [100%]
+E   assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1044: assert False is True
+1 failed, 229 deselected in 0.51s
+```
+
+(the guard no longer sees the claim, so the item reads accepted with the claim lost)
+- **Restore:** the inverse Edit. **Restore receipt:** a Grep read of `blanked_lines, source_lines` printed `337:    blanked_lines, source_lines = md_fence.split_lines(blanked), md_fence.split_lines(body)`.
+- **Raw green:**
+
+```
+.                                                                        [100%]
+1 passed, 229 deselected in 0.44s
+```
+
+**WO-H3 re-run (#2389; the token count dropped from guard (a), so (a) and (c) compare whole claims only; the line is now `leftover_accepting.py:338`).** Same neutralization (`md_fence.split_lines(body)` became `md_fence.split_lines(blanked)`). The `-k test_g21_` run now selects two tests: the claim-on-a-hidden-line test (the one that bites) and `test_g21_source_span_claims_a_prose_mention_after_a_cut_does_not_void_the_body` (the over-refusal guard, which passes under the neutralization because its body holds no claim).
+
+- **Raw red** (`-k test_g21_`):
+
+```
+.F                                                                       [100%]
+E   assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1069: assert False is True
+FAILED plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py::test_g21_source_span_claims_a_claim_on_a_hidden_line_of_the_item_voids_the_body
+1 failed, 1 passed, 229 deselected in 1.06s
+```
+
+- **Restore:** the inverse Edit. **Restore receipt:** a Grep read of `blanked_lines, source_lines` printed `338:    blanked_lines, source_lines = md_fence.split_lines(blanked), md_fence.split_lines(body)`.
+- **Raw green:**
+
+```
+..                                                                       [100%]
+2 passed, 229 deselected in 1.52s
+```
+
+### Elements in no class (WO-H)
+
+None. Unproven elements: none. The earlier entries G1 to G4, G10, G14 and G18 name line numbers of the code before WO-H and were not re-run here (the order named only the four entries above).
