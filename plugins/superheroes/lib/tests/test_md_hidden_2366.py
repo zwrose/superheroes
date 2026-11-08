@@ -1512,3 +1512,47 @@ def test_vet851_table_detection_matches_github():
         checked += 1
         assert _md_makes_table(body) == ("<table" in rendered), body
     assert checked >= 150, checked
+
+
+@pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
+def test_link_title_after_form_feed_or_vertical_tab_reads_unsure(sep):
+    """Final returning review on 10ed80c6 ("Recognize form feed and vertical tab before link titles"): cmark-gfm accepts
+    either before an inline link's title, so ZQ1 shows only as the title attribute and its line must not read visible."""
+    body = "[](<https://example.com>" + sep + '"ZQ1")\n\n## ZQ2\n'
+    assert _line_state(body, "[](") == U
+
+
+def test_atx_heading_tag_with_a_quoted_bracket_reads_unsure():
+    """Final returning review on 10ed80c6 (seams check, "Handle quoted tag boundaries before exempting ATX attributes"):
+    ``heading_text`` drops a tag only up to its first ``>``, so a quoted ``>`` inside an attribute would leave attribute
+    text as heading text GitHub never shows; such a heading reads unsure. Control: an ordinary attribute keeps the
+    exemption."""
+    assert _line_state('## <span title=">Advisor vet<"></span>\n', "## <span") == U
+    assert _line_state('## <span title="x">Advisor vet</span>\n', "## <span") == V
+
+
+@pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
+def test_bare_destination_then_title_after_form_feed_or_vertical_tab_reads_unsure(sep):
+    """Final returning review on 10ed80c6, round-2 audit: the link cursor skips cmark-gfm's whitespace too, so a bare
+    destination ends at a form feed or vertical tab and the title after it is found (GitHub shows ZQ1 only as the title
+    attribute). A quoted ``<`` alone in an ATX heading's attribute keeps the exemption (control)."""
+    body = "[](https://example.com" + sep + '"ZQ1")\n\n## ZQ2\n'
+    assert _line_state(body, "[](") == U
+    assert _line_state('## <span title="<">Advisor vet</span>\n', "## <span") == V
+
+
+@pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
+def test_link_cursor_whitespace_finds_a_multiline_title_holding_a_paren(sep):
+    """Final returning review on 10ed80c6, round-3 audit: with the link cursor reading form feed and vertical tab as
+    whitespace, the bare destination ends there and the title (which holds a ``)`` and runs onto the next line) is read
+    whole; GitHub shows ZQ1 only as the title attribute. Without the cursor fix the range ends at that ``)`` and the ZQ1
+    line reads visible (checked on e96abd35)."""
+    body = "[](https://example.com" + sep + '"a)\nZQ1")\n\n## ZQ2\n'
+    assert _line_state(body, "ZQ1") != V
+
+
+def test_atx_heading_tag_with_a_quoted_comment_opener_reads_unsure():
+    """Final returning review on 10ed80c6, round-3 scoped finder ("Keep comment openers in attributes outside the ATX
+    exemption"): ``heading_text`` removes comments before tags without regard to attribute quotes, so a quoted ``<!--``
+    would make the heading text differ from GitHub's; such a heading reads unsure."""
+    assert _line_state('## <span title="<!--">Other</span> --> <b>Advisor vet</b>\n', "## <span") == U

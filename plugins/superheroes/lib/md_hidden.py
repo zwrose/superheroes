@@ -650,7 +650,7 @@ _REF_DEF_START = re.compile(r"[ ]{0,3}\[")  # a block's first line that may open
 _MAX_BACKTICKS = 80  # cmark-gfm: a backtick run longer than this opens no code span (scan_to_closing_backticks)
 
 
-_TITLE_START = re.compile(r"""[ \t\n]["'(]""")  # a possible link title after the destination
+_TITLE_START = re.compile(r"""[ \t\n\v\f]["'(]""")  # cmark-gfm's whitespace, then a title opener  # a possible link title after the destination
 
 
 def _inline_link_regions(text):
@@ -663,21 +663,27 @@ def _inline_link_regions(text):
     return regions
 
 
+def _reference_label_regions(text):
+    """``(start, end)`` of each possible full reference link's second label: cmark reads it apart from the text, to its
+    first unescaped ``]`` (a label may span lines); an unclosed one runs to the end of the text."""
+    regions = []
+    at = text.find("][")
+    while at >= 0:
+        end = at + 2
+        while end < len(text) and text[end] != "]":
+            end += 2 if text[end] == "\\" else 1
+        regions.append((at + 2, min(end, len(text))))
+        at = text.find("][", at + 2)
+    return regions
+
+
 def _link_regions(text):
     """``(start, end)`` ranges that may be a link's destination and title, or a link reference definition: from any
     ``](`` (whether or not a ``[`` precedes it) to the ``)`` that closes it (an angle-bracket destination ``<…>``
     skipped whole; quoted ``"…"`` and ``'…'`` skipped; parentheses counted; an unclosed one runs to the end of the
     text), and from a ``]:`` on a line that starts with ``[`` to the end of the next line. The ranges are an
     over-approximation of cmark's, used only to add unsure points: wider is safe, narrower is not."""
-    regions = _inline_link_regions(text)
-    at = text.find("][")
-    while at >= 0:  # a full reference link's second label: cmark reads it apart from the text, to its first
-        # unescaped "]" (a label may span lines); an unclosed one runs to the end of the text
-        end = at + 2
-        while end < len(text) and text[end] != "]":
-            end += 2 if text[end] == "\\" else 1
-        regions.append((at + 2, min(end, len(text))))
-        at = text.find("][", at + 2)
+    regions = _inline_link_regions(text) + _reference_label_regions(text)
     regions.extend(_image_regions(text))
     for m in _REF_DEF.finditer(text):
         nl = text.find("\n", m.end())
@@ -732,7 +738,7 @@ def _destination_end(text, j):
     n = len(text)
 
     def blank(k):
-        while k < n and text[k] in " \t\n":
+        while k < n and text[k] in " \t\n\v\f":  # cmark-gfm's whitespace
             k += 1
         return k
 
@@ -746,7 +752,7 @@ def _destination_end(text, j):
         j += 1
     else:
         depth = 0
-        while j < n and text[j] not in " \t\n":
+        while j < n and text[j] not in " \t\n\v\f":
             c = text[j]
             if c == "\\":
                 j += 2
@@ -868,7 +874,7 @@ def _inline_constructs(text):
 _BLOCK_HIDING = re.compile(r"<!--(?:>|->|.*?(?:-->|--!>|\Z))|<(?:[?!]|/(?![A-Za-z>]))[^>]*(?:>|\Z)", re.S)
 
 
-_ATTR_VALUE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*[ \t\n\v\f\r][^>]*=")  # a tag that may hold an attribute value
+_ATTR_VALUE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*[ \t\n\v\f\r][^>]*=")  # a tag that may hold an attribute value
 
 
 def _block_line_state(line):
@@ -945,6 +951,10 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         if _TITLE_START.search(joined[r0:r1]):
             # vet 854: a link or image title shows only as an attribute, so the lines it may span read unsure
             line_unsure.update(first + k for k in range(line_of(r0), line_of(max(r1 - 1, r0)) + 1))
+    for r0, r1 in _reference_label_regions(joined):
+        if joined[r0:r1].strip(_ASCII_WS):
+            # final review: a full reference link's second label renders as no text, so its lines read unsure
+            line_unsure.update(first + k for k in range(line_of(r0), line_of(max(r1 - 1, r0)) + 1))
     for r0, r1 in _image_regions(joined):
         if joined[r0:r1].strip(_ASCII_WS):
             # final review: an image description's text shows only as an attribute, so its line reads unsure
@@ -982,7 +992,9 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # axis (C5): the HTML parse disagrees with cmark about where the construct ends
         # (a vertical tab in a tag also counts, as the earlier conservative reading: cmark takes \v as tag whitespace)
         is_tag = _INLINE_OPEN_TAG.fullmatch(construct) or _INLINE_CLOSE_TAG.fullmatch(construct)
-        if not atx and is_tag and "=" in construct:
+        if is_tag and "=" in construct and (not atx or ">" in construct[:-1] or "<!--" in construct):
+            # (an ATX heading's text drops comments, then tags up to their first ">"; a tag holding a quoted ">" or "<!--"
+            # is not dropped whole, so it gets no exemption)
             # vet 854: an attribute value shows only as an attribute, so the tag's lines read unsure (not sticky)
             line_unsure.update(first + k for k in range(first_line, last_line + 1))
         # axis (vet 851 renders): a comment, PI, CDATA or declaration hides the text it holds, so the line it starts on
