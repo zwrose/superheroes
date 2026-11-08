@@ -31,7 +31,8 @@ ACCEPT_PARAPHRASED = ("- f-1 the retry loop never backs off: merging accepts slo
 def body(accepting):
     return ("Closes #1.\n\n## What's changing, and why\n\nA change.\n\n## What we're accepting\n\n" + accepting
             + "\n## How to see it\n\nN/A — nothing to see.\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n"
-            "old slot text\n\n<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n"
+            "**Verdict: NOT-READY** · abc\n\nold slot text\n\n"
+            "<!-- superheroes:build-record -->\n<details><summary>Build record</summary>\n\n"
             "<!-- superheroes:followups none -->\n</details>\n")
 
 
@@ -254,9 +255,11 @@ def test_id_and_title_only_inside_an_html_comment_are_not_named():
     assert handback(hidden, [record_comment([F1])])["reason"] == "leftover-not-accepted"
 
 
-def test_visible_text_beside_a_comment_still_names_it():
+def test_an_inline_comment_that_hides_text_blanks_the_line_so_the_leftover_reads_missing():
     shown = body("- f-1 the retry loop never backs off <!-- builder note -->: merging accepts it.\n")
-    assert la.missing(read_ok(F1), shown) == []
+    # #2389 catch-up 66130a25 (over-refusal, disclosed): GitHub shows this acceptance, but md_hidden now reads a line where an inline comment
+    # hides text UNSURE and the leftover check blanks it whole, so f-1 now reads missing (was []). It fails closed; a refusal, never a pass.
+    assert la.missing(read_ok(F1), shown) == [{"id": "f-1", "title": F1["title"]}]
 
 
 def test_two_findings_sharing_an_id_are_each_checked_with_their_own_title(tmp_path):
@@ -301,16 +304,29 @@ def test_a_comment_opener_inside_a_code_span_is_shown_text(tmp_path):
     """code-005: a title that quotes the comment opener in a code span can still be named."""
     literal = dict(F1, title="Handle `<!--` literally")
     shown = body("- f-1 Handle `<!--` literally: merging accepts it.\n")
-    assert la.missing(read_ok(literal), shown) == []
-    assert handback(shown, [record_comment([literal])])["ok"] is True
-    result, _fake = write(shown, [RECEIPT, record_comment([literal])], tmp_path)
-    assert result["ok"] is True
+    # #2389 V847-1: a code span holding `<!--` keeps the span and cuts the rest of the line (over-cut accepted, fails toward a refusal), so the title's tail is lost
+    assert [g["id"] for g in la.missing(read_ok(literal), shown)] == ["f-1"]
+    assert handback(shown, [record_comment([literal])])["reason"] == "leftover-not-accepted"
+    result, fake = write(shown, [RECEIPT, record_comment([literal])], tmp_path)
+    assert result["reason"] == "leftover-not-accepted" and fake.edited == []
 
 
-def test_visible_keeps_fenced_text_and_marker_lines_and_drops_an_unclosed_comment():
+def cut_items(source):
+    """The item texts (``""`` for an item that counts as nothing) of ``source`` placed under the accepting heading."""
+    return la._cut_items("## What we're accepting\n\n" + source)[0]
+
+
+def test_visible_blanks_hidden_lines_keeps_marker_lines_and_the_item_cut_stops_at_a_fenced_opener():
+    # #2389 redesign: `_visible` only blanks lines md_hidden does not read VISIBLE, so the fenced `<!-- shown -->` stays in it; the item
+    # cut keeps a fenced line literally and cuts it at its first entry `<` (a tilde line inside a raw <pre> block is not a fence)
     assert la._visible("```\n<!-- shown -->\n```\n") == "```\n<!-- shown -->\n```\n"
+    assert cut_items("```\n<!-- shown -->\n```\n") == [""]  # #2389 vet 856: was ["```"]; an entry `<` on a fenced line makes the item count as nothing
     assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
-    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "a \n\n e\nf "
+    # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
+    # #2389 catch-up 66130a25: md_hidden now reads the first line ("a <!-- b", whose comment hides text) UNSURE, so it is blanked whole
+    # and keeps only its terminator (was "a " + terminator); #2389 redesign: the unclosed comment on the last line is no longer cut by `_visible`, the item cut is
+    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "\n\n\nf <!-- g"
+    assert cut_items("a <!-- b\nc\nd --> e\nf <!-- g") == [""]  # #2389 vet 856: was ["f"]; the unclosed `<!--` is a cut, so the item counts as nothing
 
 
 # --- review round 3 fixes ---------------------------------------------------------------------------
@@ -329,17 +345,26 @@ def test_a_comment_outside_any_real_code_span_or_fence_stays_hidden(accepting, t
 
 
 def test_an_escaped_comment_opener_is_shown_text():
+    # #2389 V847-1: the escaped opener and the backslash stay as text, then the rest of the line is cut (inside an HTML block GitHub honours no escape)
+    # #2389 V849-1: an escaped entry `<` is cut from the backslash, so neither the backslash nor the opener stays (was "a \\<!--\n")
+    # #2389 redesign: `_visible` keeps the line (it cuts nothing within a line); the item cut ends at the backslash
     assert la._visible("a \\<!-- b --> c\n") == "a \\<!-- b --> c\n"
+    assert cut_items("a \\<!-- b --> c\n") == [""]  # #2389 vet 856: was ["a"]; the escaped entry `<` is a cut, so the item counts as nothing
 
 
 def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
+    # #2389 V847-1: the span stays one span (no comment opens inside it), then the rest of the line is cut because the span holds `<!--`
+    # #2389 review (test-role s1): the span is kept only up to its opener, so the text inside it after the opener never counts
+    # #2389 redesign: `_visible` keeps the line; the item cut keeps the span up to its opener and cuts the rest of the item
     assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` <!-- b --> c`` y\n"
+    assert cut_items("x ``a ` <!-- b --> c`` y\n") == [""]  # #2389 vet 856: was ["x ``a `"]; the span holds an entry `<`, a cut, so the item counts as nothing
 
 
 def test_ready_write_checks_the_body_it_will_publish(tmp_path):
     """code-008: an id named only in the old slot text, which the write replaces, does not count."""
     shaped = ("Closes #1.\n\n## What's changing, and why\n\nA change.\n\n## What we're accepting\n\nNone\n\n"
               "<!-- superheroes:advisor-vet -->\n"
+              "**Verdict: READY** · abc\n\n"
               "- f-1 the retry loop never backs off: merging accepts it.\n\n<!-- superheroes:build-record -->\n"
               "<details><summary>Build record</summary>\n\n<!-- superheroes:followups none -->\n</details>\n")
     result, fake = write(shaped, [RECEIPT, record_comment([F1])], tmp_path)

@@ -248,6 +248,13 @@ receipt names the row that held it.
 | **No leftover skipped the owner's review** | every entry of `findings` (its `title`, `body`, `consequence`, `outcome` and `reason`), `leftForOwner`, and the PR's owner half | a finding with a real consequence has outcome `craft`, or has no outcome; or has outcome `ruling` and its `reason` names no ruling the vet can follow to a record; or has outcome `left-for-owner` and is shown to the owner neither as a card on the PR's sheet, nor as an entry of the sheet's decided-for-you list, nor, on a stack sheet, in its caught list as fixed above in a higher layer of that stack, nor, where no sheet is built, under the owner half's `## What we're accepting`; or is shown as fixed above and the vet cannot follow the named layer and commit to a higher PR of the same stack whose history holds that commit; or is an entry of the sheet's decided-for-you list and has a real consequence that none of the template's three grounds covers (another card on the same sheet carries it; a fix in another layer of the same stack, named in the ground, removed it; a Canon entry, cited by id, answers it), names no ground, or re-grades a finding the owner already answered or took back on this PR |
 | **The proven copies match their source** | the record's `provenCopies` (each `{file, source, sha256}`) | the record carries `provenCopies` and the vet has not read each named `source` where the proof names it and compared its sha256 with the entry's `sha256`, or a source cannot be read, or its sha256 does not match (the receipt says, per copy, what was found) |
 
+**A text flagged as changed in transit is graded from its source, never from the GitHub copy.**
+A flag is a record's `transitDamage` (`sentHashMatches: false`, the parts' `hashMatches: false`, or
+`redactedFields`), or a `Transit damage:` or `Transit check: not checked` line in the build record
+or the handback. Grade that text from the committed file, the engine artifact or the run directory
+it was made from, and say in the receipt which source you read. A flagged text you cannot reach
+holds the PR as the row it belongs to says.
+
 **Whether a seat read its calibration is read from the record's own fields.** Read it from that reviewer row's `calibrationRead`, and, for the test lens, from the record's `testLens`. Never read it from the seat's `investigated` array: the sanitized view tells every seat never to list those absolute paths there, so "no calibration file in `investigated`" holds of every seat, calibrated or not, and is not evidence of anything. A `calibrationRead` entry of `unknown`, and a row or record that reads unmeasured, are not "did not read". The review record checks have no row for the calibration read, and this paragraph holds no PR on its own.
 
 **The receipts-only exception, worked.** The latest record was written on commit A, and CI was green there. **Not holding:** the builder then pushes commit B, graded docs / comments / mechanical under workhorse §12, whose only hunk rewords a code comment and changes no claim. The vet reads that hunk, finds it changes no meaning, and CI is green on B: the row does not hold, and the receipt names A and B and lists the comment hunk as non-semantic. **Holding:** commit B, graded the same way, changes the expected value in one of a test's assertions. A test's assertion is behaviour-bearing, so the vet cannot call the hunk non-semantic: the row holds as written, whatever the builder graded it, until a review record is written on B (workhorse §12's second row).
@@ -287,7 +294,7 @@ every PR, and a go-ahead covers a planned reviewer that did not run, never the l
 for once CI is green on that commit now, or, when the final-commit row's receipts-only exception
 lets the record count, once CI is green on the PR's head now. The line saying a finding waits for the owner's decision is
 accounted for when the third row finds that finding shown to the owner, or shown as fixed above. Any other line of
-`whatIsMissing` holds the PR, and the receipt names the line.
+`whatIsMissing` holds the PR, and the receipt names the line. The line naming a withheld certificate ("the review session ended <terminal>, not converged, so its certificate was withheld: <cause>") is accounted for only by the owner's go-ahead over it, which the vet follows as it follows any go-ahead, and the receipt names it.
 
 **A go-ahead is followed, not trusted.** The record proves only that the go-ahead's citation is a
 non-blank string. Resolve it yourself: open the standing ruling's canon entry, or the place the owner's
@@ -515,14 +522,18 @@ python3 -B "$ROOT_DIR/lib/vet_slot.py" write --pr <n> --repo <owner/name> --slot
 
 The command reads the body and the latest vet receipt and checks the read, a non-empty body that
 still holds the builder's owner half (a live `What's changing, and why` heading above the
-`advisor-vet` marker), both the `advisor-vet` and `build-record` markers, the build record's
+`advisor-vet` marker: live means GitHub renders it, decided by a CommonMark parse of the body in
+`lib/md_hidden.py`, and where the parse cannot be sure the write refuses `body-emptied`), both the
+`advisor-vet` and `build-record` markers, the build record's
 followups marker, and the receipt's dispositions marker. It re-reads the body before the push,
 writes only between the two slot markers, and reads the result back. A refusal names its reason
 (for example `body-emptied` (the body is empty or lost the builder's owner half: restore it from
-the PR's edit history, never re-stamp into it),
+the PR's edit history, never re-stamp into it; the one exception is a detail saying the parse could
+not decide the render, where you move the text by hand instead of restoring),
 `followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`,
 `slot-span-foreign-content` (another `superheroes:` marker, such as the DoD table, sits in the slot
-span and the write would delete it), or `read-failed`) with a detail
+span and the write would delete it), `slot-span-builder-text` (builder text sits in the slot span:
+move it out or ask the builder to; nothing was written), or `read-failed`) with a detail
 that says what was wrong, and writes nothing, except `write-unconfirmed`: the edit call was made (even
 one that failed or timed out) but the readback failed or differed from the pushed body. `check --pr <n> --repo <owner/name>` runs the same
 comparison with no write. The command exists because a hand-rolled write fails silently: a shell

@@ -1,0 +1,486 @@
+{
+ "source": "GitHub POST /markdown, mode gfm, context zwrose/superheroes, 2026-11-08, vet 859",
+ "synthetic": true,
+ "leftover": "F-1 'The retry loop never backs off'; verdict = missing | plain-accepted | claim#<PR>",
+ "rows": [
+  {
+   "id": "e1_eof_unsure_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  fixed-above #99 abcdef0 at <commit>",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at </li>\n</ul>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "e1n_same_with_newline",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  fixed-above #99 abcdef0 at <commit>\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at </li>\n</ul>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "e2_eof_hidden_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  <!-- fixed-above #99 abcdef0 -->",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off\n\n</li>\n</ul>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "hidden"
+   ]
+  },
+  {
+   "id": "e2n_same_with_newline",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  <!-- fixed-above #99 abcdef0 -->\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off\n\n</li>\n</ul>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "hidden"
+   ]
+  },
+  {
+   "id": "e3_eof_custom_el_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  fixed-above #99 abcdef0 <my-el>x</my-el>",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 x</li>\n</ul>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "e3n_same_with_newline",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  fixed-above #99 abcdef0 <my-el>x</my-el>\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 x</li>\n</ul>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "e4_eof_lazy_unsure_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\nfixed-above #99 abcdef0 (merged as <sha>)",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 (merged as )</li>\n</ul>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "e5_eof_control_visible",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  fixed-above #99 abcdef0",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>",
+   "head_94ba12e7": "claim#99",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "s1_lazy_unsure_then_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\nsee <commit>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "s2_paragraph_unsure_then_claim",
+   "body": "## What we're accepting\n\nF-1 The retry loop never backs off, accepted\nsince <commit>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<p dir=\"auto\">F-1 The retry loop never backs off, accepted<br>\nsince <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "s3_hidden_comment_then_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n<!-- c -->\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off</li>\n</ul>\n\n<p dir=\"auto\">fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "hidden",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "s4_indented_unsure_then_lazy_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "s5_control_lazy_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "claim#99",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "s6_unsure_custom_el_then_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\nsee <my-el>x</my-el>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee x<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m1_lone_cr_then_unsure_lf",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\rsee <commit>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m2_crlf_and_lf_no_lone_cr",
+   "body": "## What we're accepting\r\n\r\n- F-1 The retry loop never backs off\r\n  see <commit>\n  fixed-above #99 abcdef0\r\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m3_lone_cr_then_hidden_lf",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\r  <!-- c -->\n  fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off\n\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "hidden",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m4_lone_cr_control_no_hidden",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\rfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "claim#99",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m5_lone_cr_unsure_claim_then_next_item",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\r  see <commit>\n  fixed-above #99 abcdef0 <my-el>y</my-el>\n- Another item, no id.\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 y</li>\n<li>Another item, no id.</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m5n_same_lf_only",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n  fixed-above #99 abcdef0 <my-el>y</my-el>\n- Another item, no id.\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 y</li>\n<li>Another item, no id.</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m6_crlf_body_unsure_claim_then_next_item",
+   "body": "## What we're accepting\r\n\r\n- F-1 The retry loop never backs off\r\n  see <commit>\r\n  fixed-above #99 abcdef0 <my-el>y</my-el>\r\n- Another item, no id.\r\n\r\n## How to see it\r\n\r\nN/A, nothing to see.\r\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 y</li>\n<li>Another item, no id.</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "e6_eof_realistic_wrapped",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off: accepted for now, the fix landed above as\n  fixed-above #99 abcdef0 (see <commit> for the diff)",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off: accepted for now, the fix landed above as<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 (see  for the diff)</li>\n</ul>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "s7_realistic_wrapped_lazy",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off: accepted for now; the fix is in the layer above, see\n<commit-sha> and\nfixed-above #99 abcdef0.\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off: accepted for now; the fix is in the layer above, see<br>\n and<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0.</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "s8_inline_comment_line_then_lazy_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\nsee note <!-- internal -->\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee note <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "c1_control_two_items_comment_between",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n<!-- c -->\n- F-2 Another finding accepted\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off</li>\n</ul>\n\n<ul dir=\"auto\">\n<li>F-2 Another finding accepted</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "hidden",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "c2_control_paragraphs_comment_between",
+   "body": "## What we're accepting\n\nF-1 The retry loop never backs off, accepted.\n<!-- c -->\nAnother paragraph accepted.\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<p dir=\"auto\">F-1 The retry loop never backs off, accepted.</p>\n\n<p dir=\"auto\">Another paragraph accepted.</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "hidden",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "c3_control_unsure_then_blank_then_para_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\nsee <commit>\n\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee </li>\n</ul>\n<p dir=\"auto\">fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "g7_bare",
+   "body": "Bumps requests from 2.31.0 to 2.32.3.\n\n- [Release notes](https://example.invalid/r)\n\nDependabot will resolve any conflicts with this PR.\n\n## Advisor vet\n<!-- superheroes:advisor-vet -->\n\n**Verdict: NOT-READY** \u00b7 abc\n\nNew owner half.\n",
+   "html": "<p dir=\"auto\">Bumps requests from 2.31.0 to 2.32.3.</p>\n<ul dir=\"auto\">\n<li><a href=\"https://example.invalid/r\" rel=\"nofollow\">Release notes</a></li>\n</ul>\n<p dir=\"auto\">Dependabot will resolve any conflicts with this PR.</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n\n<p dir=\"auto\"><strong>Verdict: NOT-READY</strong> \u00b7 abc</p>\n<p dir=\"auto\">New owner half.</p>",
+   "note": "composed vet-slot write body at 94ba12e7 (evaluate ok); the verdict line shows on the render"
+  },
+  {
+   "id": "g7_after_div_attr_block",
+   "body": "Bumps requests from 2.31.0 to 2.32.3.\n\n- [Release notes](https://example.invalid/r)\n\nDependabot will resolve any conflicts with this PR.\n\n## Advisor vet\n<div class=\"x\">\n\n<!-- superheroes:advisor-vet -->\n\n**Verdict: NOT-READY** \u00b7 abc\n\nNew owner half.\n",
+   "html": "<p dir=\"auto\">Bumps requests from 2.31.0 to 2.32.3.</p>\n<ul dir=\"auto\">\n<li><a href=\"https://example.invalid/r\" rel=\"nofollow\">Release notes</a></li>\n</ul>\n<p dir=\"auto\">Dependabot will resolve any conflicts with this PR.</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n<div dir=\"auto\">\n\n<p dir=\"auto\"><strong>Verdict: NOT-READY</strong> \u00b7 abc</p>\n<p dir=\"auto\">New owner half.</p></div>",
+   "note": "composed vet-slot write body at 94ba12e7 (evaluate ok); the verdict line shows on the render"
+  },
+  {
+   "id": "g7_after_details_summary",
+   "body": "Bumps requests from 2.31.0 to 2.32.3.\n\n- [Release notes](https://example.invalid/r)\n\nDependabot will resolve any conflicts with this PR.\n\n## Advisor vet\n<details><summary>s</summary>\n\n<!-- superheroes:advisor-vet -->\n\n**Verdict: NOT-READY** \u00b7 abc\n\nNew owner half.\n",
+   "html": "<p dir=\"auto\">Bumps requests from 2.31.0 to 2.32.3.</p>\n<ul dir=\"auto\">\n<li><a href=\"https://example.invalid/r\" rel=\"nofollow\">Release notes</a></li>\n</ul>\n<p dir=\"auto\">Dependabot will resolve any conflicts with this PR.</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n<details><summary>s</summary>\n\n<p dir=\"auto\"><strong>Verdict: NOT-READY</strong> \u00b7 abc</p>\n<p dir=\"auto\">New owner half.</p></details>",
+   "note": "composed vet-slot write body at 94ba12e7 (evaluate ok); the verdict line shows on the render"
+  },
+  {
+   "id": "g7_inside_div_no_blank",
+   "body": "Bumps requests from 2.31.0 to 2.32.3.\n\n- [Release notes](https://example.invalid/r)\n\nDependabot will resolve any conflicts with this PR.\n\n## Advisor vet\n<div>\n<!-- superheroes:advisor-vet -->\n\n**Verdict: NOT-READY** \u00b7 abc\n\nNew owner half.\n",
+   "html": "<p dir=\"auto\">Bumps requests from 2.31.0 to 2.32.3.</p>\n<ul dir=\"auto\">\n<li><a href=\"https://example.invalid/r\" rel=\"nofollow\">Release notes</a></li>\n</ul>\n<p dir=\"auto\">Dependabot will resolve any conflicts with this PR.</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n<div dir=\"auto\">\n\n<p dir=\"auto\"><strong>Verdict: NOT-READY</strong> \u00b7 abc</p>\n<p dir=\"auto\">New owner half.</p></div>",
+   "note": "composed vet-slot write body at 94ba12e7 (evaluate ok); the verdict line shows on the render"
+  },
+  {
+   "id": "g7_after_custom_el_line",
+   "body": "Bumps requests from 2.31.0 to 2.32.3.\n\n- [Release notes](https://example.invalid/r)\n\nDependabot will resolve any conflicts with this PR.\n\n## Advisor vet\nsee <commit>\n<!-- superheroes:advisor-vet -->\n\n**Verdict: NOT-READY** \u00b7 abc\n\nNew owner half.\n",
+   "html": "<p dir=\"auto\">Bumps requests from 2.31.0 to 2.32.3.</p>\n<ul dir=\"auto\">\n<li><a href=\"https://example.invalid/r\" rel=\"nofollow\">Release notes</a></li>\n</ul>\n<p dir=\"auto\">Dependabot will resolve any conflicts with this PR.</p>\n<h2 dir=\"auto\">Advisor vet</h2>\n<p dir=\"auto\">see </p>\n\n<p dir=\"auto\"><strong>Verdict: NOT-READY</strong> \u00b7 abc</p>\n<p dir=\"auto\">New owner half.</p>",
+   "note": "composed vet-slot write body at 94ba12e7 (evaluate ok); the verdict line shows on the render"
+  },
+  {
+   "id": "g7_atx_heading_comment_before",
+   "body": "Bumps requests from 2.31.0 to 2.32.3.\n\n- [Release notes](https://example.invalid/r)\n\nDependabot will resolve any conflicts with this PR.\n\n## Advisor vet <!-- x -->\n<!-- superheroes:advisor-vet -->\n\n**Verdict: NOT-READY** \u00b7 abc\n\nNew owner half.\n",
+   "html": "<p dir=\"auto\">Bumps requests from 2.31.0 to 2.32.3.</p>\n<ul dir=\"auto\">\n<li><a href=\"https://example.invalid/r\" rel=\"nofollow\">Release notes</a></li>\n</ul>\n<p dir=\"auto\">Dependabot will resolve any conflicts with this PR.</p>\n<h2 dir=\"auto\">Advisor vet </h2>\n\n<p dir=\"auto\"><strong>Verdict: NOT-READY</strong> \u00b7 abc</p>\n<p dir=\"auto\">New owner half.</p>",
+   "note": "composed vet-slot write body at 94ba12e7 (evaluate ok); the verdict line shows on the render"
+  }
+ ]
+}

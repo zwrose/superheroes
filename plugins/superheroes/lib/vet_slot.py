@@ -14,13 +14,18 @@ receipt's ``<!-- superheroes:dispositions FU1 FU2 -->`` marker (or ``none``).
 marker line and the build-record marker line, and only when the two lists name the
 same ids. The followups marker is the builder's own declaration; the writer trusts
 it and does not re-derive it from the prose; the vet reads both. Any failed read or
-check is a refusal with one of nineteen reasons (``bad-argument``, ``read-failed``,
+check is a refusal with one of twenty reasons (``bad-argument``, ``read-failed``,
 ``body-emptied`` (``write`` only, before any marker check: the body is empty or whitespace, or no live
-``What's changing, and why`` heading sits above the advisor-vet marker, so the builder's owner half is lost and
-the body is restored from the PR's edit history rather than re-stamped),
+``What's changing, and why`` heading sits above the advisor-vet marker (live: GitHub renders it, decided by
+``md_hidden.scan``), so the builder's owner half is lost and the body is restored from the PR's edit history rather
+than re-stamped; when the parse could not decide the render the detail says so and the advisor moves the text by hand),
 ``markers-invalid``, ``slot-span-foreign-content`` (another ``superheroes:`` marker line
-inside the slot span, which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
-``disposition-unknown``, ``none-over-list``, ``write-failed``,
+inside the slot span, which the write would delete),
+``slot-span-builder-text`` (``write`` only, builder body: the slot span holds text other than the builder's reminder
+and the advisor's own earlier verdict - a builder section, prose above the verdict line, or any other HTML
+comment - which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
+``disposition-unknown``, ``none-over-list``, ``write-failed`` (also: the marker or the slot's first line would render
+hidden, or ``md_hidden`` cannot be sure it renders),
 ``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
 names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
@@ -43,6 +48,7 @@ marker other than advisor-vet, the ``Build record`` wrapper, or a builder sectio
 the build-record path described before this paragraph, unchanged. ``handback`` is unchanged: it is the builder's
 verb, and a builder body keeps needing its build record."""
 import argparse
+import bisect
 import json
 import os
 import re
@@ -50,7 +56,6 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import unicodedata
 import urllib.parse
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -60,7 +65,9 @@ if _LIB_DIR not in sys.path:
 import calibration_disclosure  # noqa: E402
 import gh_pages  # noqa: E402
 import leftover_accepting  # noqa: E402
+import cloud_builder  # noqa: E402
 import md_fence  # noqa: E402
+import md_hidden  # noqa: E402
 import pr_body_regions  # noqa: E402
 import review_record  # noqa: E402
 import stack_check  # noqa: E402
@@ -95,19 +102,13 @@ _DATABASE_TOOL_RE = re.compile(
 _FENCE_OPEN_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _LIST_MARKER_RE = re.compile(r"^(?:[-*+]|[0-9]{1,9}[.)])[ \t]+")
 _ATX_HEADING_RE = re.compile(r"^ {0,3}#{1,6} (.*)$")
+# the slot-span guard's own heading pattern: a space or a tab after the hashes, or a bare hash run (_ATX_HEADING_RE stays as is)
+_SLOT_HEADING_RE = re.compile(r"^ {0,3}#{1,6}(?:[ \t]|$)")
+_REMINDER_OPENER = "<!-- advisor: BEFORE writing this slot"
 # no_build_record's own patterns: wider than the module's on purpose (over-matching reads as builder-shaped)
 _SUPERHEROES_OPEN_RE = re.compile(r"<!--\s*superheroes:")
 _BUILD_RECORD_WRAPPER_RE = re.compile(r"<summary[^>]*>\s*build\s+record", re.IGNORECASE)
 _ANY_HEADING_RE = re.compile(r"^[ \t>*+\-0-9.)]*#{1,6}[ \t]+(.*)$")
-# _could_open_html_block: the characters a line may start with (container marks and indentation) before its first
-# real character, and what that character may begin: "<" then a letter, "/", "?" or "!" (a tag, a closing tag, a
-# processing instruction, a declaration, CDATA, a comment). An autolink (<https://…>) is not a block start.
-_BLOCK_LEAD_ASCII = " \t>*+-0123456789.)"
-_BLOCK_START_RE = re.compile(r"<[A-Za-z/?!]")
-_AUTOLINK_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.\-]{1,31}:[^\s<>]*>")
-# _comment_scan: the eight characters str.splitlines() breaks a line on that Markdown does not (U+2028, U+2029, U+0085,
-# VT, FF, FS, GS, RS). A body holding any of them gets no escape or code-span exemption.
-_SPLITLINES_ONLY_BREAKS = "\N{LINE SEPARATOR}\N{PARAGRAPH SEPARATOR}\x85\x0b\x0c\x1c\x1d\x1e"
 _ACCEPTING_KEY = "what were accepting"
 _BUILDER_HEADING_KEYS = ("whats changing", _ACCEPTING_KEY, "how to see it", "build record", "build brief",
                          "dispatch provenance", "disclosed degradations", "followups for the advisor",
@@ -130,13 +131,44 @@ def _refusal(reason, detail):
     return {"ok": False, "reason": reason, "detail": detail}
 
 
+def _bare(whole):
+    """``whole`` (one item of ``md_fence.split_lines``) without its one terminator: ``\\r\\n``, ``\\n`` or ``\\r``."""
+    if whole.endswith("\r\n"):
+        return whole[:-2]
+    if whole.endswith(("\n", "\r")):
+        return whole[:-1]
+    return whole
+
+
+def _bare_lines(text):
+    """The Markdown lines of ``text`` (``md_fence.split_lines``), each without its terminator."""
+    return [_bare(whole) for whole in md_fence.split_lines(text)]
+
+
+def _line_state(rendering, offset):
+    """The ``md_hidden`` state of the Markdown line HOLDING ``offset``: the last ``rendering.lines`` entry at or before it.
+
+    The one chokepoint for a visibility read at an offset that may sit inside a line (``_find_live_standalone_markers``
+    returns ``offset + leading``, and a Markdown line can begin with U+2028 or other Unicode whitespace). ``state_at``
+    is never called here: it raises for an offset that is not a line start. No line at or before ``offset`` (a negative
+    offset, an empty body) reads ``UNSURE``, which every caller treats as not visible."""
+    # axis: a visibility read at an offset inside a Markdown line reads the line holding it, never raising on a non-line-start — see bite-proof record i2389_vet_slot_md_hidden.md
+    starts = [at for at, _state in rendering.lines]
+    index = bisect.bisect_right(starts, offset) - 1
+    if index < 0:
+        return md_hidden.UNSURE
+    return rendering.lines[index][1]
+
+
 def _live_lines(text):
-    """Yield ``(offset, line)`` for every line outside a code fence.
+    """Yield ``(offset, line)`` for every line outside a code fence, lines read as Markdown reads them
+    (``md_fence.split_lines``: ``\\r\\n``, a lone ``\\r`` or ``\\n``; U+2028 and the other ``str.splitlines`` breaks
+    are ordinary characters).
 
     HTML comments are not modelled: a marker line always counts, whether or not it sits inside
     what looks like an HTML comment."""
-    raw = text.splitlines(keepends=True)
-    bare = [line.rstrip("\r\n") for line in raw]
+    raw = md_fence.split_lines(text)
+    bare = [_bare(line) for line in raw]
     inert = md_fence.scan_contexts(bare).inert
     offset = 0
     for line, dead, whole in zip(bare, inert, raw):
@@ -188,100 +220,16 @@ def _find_live_standalone_markers(body, marker):
     return found
 
 
-def _could_open_html_block(body):
-    """True when any line of ``body`` could open a CommonMark HTML block (doubt reads as yes: over-match refuses more).
-
-    Such a line, after a leading run of spaces, tabs, quote and list marks, digits, any whitespace character and any
-    format character (a byte-order mark, a zero-width space), starts with ``<`` and an ASCII letter, ``/``, ``?`` or
-    ``!``. A comment opener is left to the comment state and an autolink (``<https://example.com>``) is not a tag.
-    Lines are ``str.splitlines()`` lines, a superset of Markdown's, so a tag after any line break counts."""
-    for line in body.splitlines():
-        start = 0
-        # axis: a byte-order mark, a zero-width space or any other whitespace before the tag is skipped, so the line still counts — see bite-proof record i2342_comment_scan_inline_code.md
-        while start < len(line) and (line[start] in _BLOCK_LEAD_ASCII
-                                     or line[start].isspace() or unicodedata.category(line[start]) == "Cf"):
-            start += 1
-        text = line[start:]
-        if not _BLOCK_START_RE.match(text):
-            continue
-        # axis: a comment-opener line is left to the comment state and is not an HTML-block line — see bite-proof record i2342_comment_scan_inline_code.md
-        if text.startswith("<!--"):
-            continue
-        # axis: an autolink line is not an HTML-block line — see bite-proof record i2342_comment_scan_inline_code.md
-        if _AUTOLINK_RE.match(text):
-            continue
-        return True
-    return False
-
-
-def _comment_scan(body):
-    """Yield ``(offset, line, dead, starts_in_comment)`` for every line of ``body``.
-
-    ``dead`` is inside a code fence (``md_fence``); ``starts_in_comment`` is inside an HTML comment span: ``<!--``
-    through the next ``-->``, across lines, a comment never closed running to the end of the body; inside a comment the
-    first ``-->`` closes it wherever it sits, backticks there being plain characters. Outside a comment on an unfenced
-    line, a ``<!--`` after a backslash escape or inside an inline code span (``leftover_accepting``'s
-    ``_code_span_end``) opens nothing, but only in a body with no line that could open an HTML block
-    (``_could_open_html_block``) and none of the eight characters ``str.splitlines()`` breaks a line on that Markdown
-    does not (``_SPLITLINES_ONLY_BREAKS``). In every other body, and in the rest of any line on which a comment
-    closes (raw HTML may follow it), each ``<!--`` outside a fenced code block opens a comment, as a plain search
-    finds it."""
-    raw = body.splitlines(keepends=True)
-    bare = [line.rstrip("\r\n") for line in raw]
-    inert = md_fence.scan_contexts(bare).inert
-    in_comment = False
-    # axis: a body with a line that could open an HTML block gets no escape or code-span exemption — see bite-proof record i2342_comment_scan_inline_code.md
-    # axis: a body holding a splitlines-only line break (U+2028, U+0085, a form feed, and five more) gets no exemption, the closing-line state resetting where Markdown has no line break — see bite-proof record i2342_comment_scan_inline_code.md
-    exempt = not _could_open_html_block(body) and not any(ch in body for ch in _SPLITLINES_ONLY_BREAKS)
-    offset = 0
-    for line, dead, whole in zip(bare, inert, raw):
-        starts_in_comment = in_comment
-        plain = not exempt
-        pos = 0
-        while True:
-            if in_comment:
-                # axis: a closer inside backticks still closes a comment, comment text not being Markdown — see bite-proof record i2342_comment_scan_inline_code.md
-                at = line.find("-->", pos)
-                if at < 0:
-                    break
-                pos = at + 3
-                in_comment = False
-                # axis: after a comment closes, the rest of its line is matched plainly, raw HTML possibly following it — see bite-proof record i2342_comment_scan_inline_code.md
-                plain = True
-            else:
-                if dead or pos >= len(line):
-                    break
-                if plain:
-                    at = line.find("<!--", pos)
-                    if at < 0:
-                        break
-                    pos = at + 4
-                    in_comment = True
-                elif line[pos] == "\\" and pos + 1 < len(line):
-                    # axis: a backslash-escaped character is literal, so an escaped opener opens no comment — see bite-proof record i2342_comment_scan_inline_code.md
-                    pos += 2
-                elif line[pos] == "`":
-                    # axis: an inline code span (a run closed by a run of its own length) hides an opener inside it — see bite-proof record i2342_comment_scan_inline_code.md
-                    end = leftover_accepting._code_span_end(line, pos)
-                    # axis: a backtick run with no closing run is literal backticks, scanning continues after it — see bite-proof record i2342_comment_scan_inline_code.md
-                    pos = end if end is not None else leftover_accepting._TICKS.match(line, pos).end()
-                elif line.startswith("<!--", pos):
-                    pos += 4
-                    in_comment = True
-                else:
-                    pos += 1
-        yield offset, line, dead, starts_in_comment
-        offset += len(whole)
-
-
 def _live_heading_offsets(body):
-    """Offsets of the live ATX headings of ``body``, each with its text (marks and closing hashes included).
+    """``(offset, text)`` of the live ATX headings of ``body``: the document-level headings ``md_hidden.scan`` reads as
+    ``VISIBLE`` (``text`` as ``md_hidden`` gives it, comment and tag runs removed).
 
-    Live is outside a code fence and outside an HTML comment span (``_comment_scan``)."""
-    for offset, line, dead, starts_in_comment in _comment_scan(body):
-        heading = _ATX_HEADING_RE.match(line)
-        if heading and not dead and not starts_in_comment:
-            yield offset, heading.group(1)
+    Live means GitHub renders it. A heading ``md_hidden`` reads ``HIDDEN`` or ``UNSURE`` is never live, and a setext
+    heading is never in ``Rendering.headings``, so it never counts."""
+    # axis: only a heading md_hidden reads VISIBLE is live; hidden and unsure headings are skipped — see bite-proof record i2389_vet_slot_md_hidden.md
+    for offset, text, state in md_hidden.scan(body).headings:
+        if state == md_hidden.VISIBLE:
+            yield offset, text
 
 
 def _heading_key(text):
@@ -293,6 +241,11 @@ def _heading_key(text):
 def check_not_emptied(body):
     """Refuse ``body-emptied`` when ``body`` is empty or whitespace, or has lost the owner half: no live
     ``What's changing, and why`` heading sits above the advisor-vet marker (anywhere, when that marker is absent).
+
+    Live means GitHub renders it, decided by ``md_hidden.scan`` (``_live_heading_offsets``): a heading read ``hidden`` or
+    ``unsure`` is not held, and neither is an image heading (its text holds ``![``). When no heading is held and the
+    parse holds an unsure point above the marker, the detail says the render could not be decided and that the advisor
+    moves the text by hand, never the edit-history remedy.
 
     The single chokepoint of the ``write`` path, called before any marker check. A non-string body is left to
     ``analyze_body``, which refuses it ``read-failed``."""
@@ -306,12 +259,92 @@ def check_not_emptied(body):
     limit = min(markers) if markers else len(body) + 1
     # axis: a heading inside an HTML comment span does not count — see bite-proof record i2323_vet_slot_emptied.md
     # axis: a heading not above the advisor-vet marker does not count — see bite-proof record i2323_vet_slot_emptied.md
+    # axis: only a heading md_hidden reads VISIBLE is the owner half (G1), and an image heading (its text holds "![") never is (G2) — see bite-proof record i2389_vet_slot_md_hidden.md
     held = [at for at, text in _live_heading_offsets(body)
-            if at < limit and _heading_key(text).startswith("whats changing")]
+            if at < limit and "![" not in text and _heading_key(text).startswith("whats changing")]
     # axis: a body with no live owner-half heading above the marker refuses body-emptied, before any marker check — see bite-proof record i2323_vet_slot_emptied.md
     if not held:
+        unsure = [(at, why) for at, why in md_hidden.scan(body).unsure if at < limit]
+        # axis: an undecided render above the marker (G3) says so and sends the advisor to move the text by hand, with no edit-history remedy — see bite-proof record i2389_vet_slot_md_hidden.md
+        if unsure:
+            raise _Refusal("body-emptied", 'PR body has no "What\'s changing, and why" heading%s that GitHub is sure to'
+                           " render: the render could not be decided (%s); the advisor moves the text by hand"
+                           % (" above the advisor-vet marker" if markers else "", unsure[0][1]))
         raise _Refusal("body-emptied", 'PR body has no "What\'s changing, and why" heading%s%s'
                        % (" above the advisor-vet marker" if markers else "", remedy))
+
+
+def _span_owned_problem(span):
+    """Why the slot ``span`` is not the advisor's own, as ``(line_number, line, sign, why)``, or None when it is.
+
+    The advisor's own span, after the builder's reminder comments and the blank lines are removed, is nothing, or a
+    run of lines that (a) opens with a verdict token of the canonical form, (b) holds no HTML comment opener or
+    closer, and (c) holds no live ATX heading (outside a code fence; a space or a tab after the hashes, or none)."""
+    # axis: the span is read as Markdown lines (md_fence.split_lines), so text after a U+2028 or other splitlines-only break stays inside its line — see bite-proof record i2389_vet_slot_md_hidden.md
+    kept = list(enumerate(_bare_lines(span), 1))
+    while True:  # reminders go first, one at a time, so a fence mark inside one cannot hide a later heading
+        inert = md_fence.scan_contexts([text for _n, text in kept]).inert
+        opening = next((i for i, (_n, text) in enumerate(kept)
+                        if not inert[i] and " ".join(text.split()).startswith(_REMINDER_OPENER)), None)
+        if opening is None:
+            break
+        number, first = kept[opening]
+        closing = None
+        for j in range(opening, len(kept)):
+            text = kept[j][1]
+            at = text.find("-->", len(text) - len(text.lstrip()) + len("<!--") if j == opening else 0)
+            if at >= 0:
+                closing = (j, text, at)
+                break
+        # axis: a reminder with no closing --> before the build-record marker is not the advisor's — see bite-proof record i2352_vet_slot_builder_text.md
+        if closing is None:
+            return number, first, "(b) no comment", "a reminder comment is never closed"
+        j, text, at = closing
+        # axis: text after a reminder's closing --> on the same line is span content, not the advisor's — see bite-proof record i2352_vet_slot_builder_text.md
+        if text[at + 3:].strip():
+            return kept[j][0], text, "(b) no comment", "text follows the reminder's closing -->"
+        del kept[opening:j + 1]
+    inert = md_fence.scan_contexts([text for _n, text in kept]).inert
+    rest = [(number, text, dead) for (number, text), dead in zip(kept, inert) if text.strip()]
+    if not rest:
+        return None
+    form, error = stack_check._load_vet_verdict_form()
+    # axis: an unreadable verdict form refuses a non-empty span, failing closed — see bite-proof record i2352_vet_slot_builder_text.md
+    if form is None:
+        return rest[0][0], rest[0][1], "(a) verdict first", "the verdict form cannot be read (%s)" % error
+    tokens = [token for token, _verdict in form[1]]
+    for index, (number, text, dead) in enumerate(rest):
+        # axis: the first remaining line must open with a verdict token — see bite-proof record i2352_vet_slot_builder_text.md
+        if index == 0 and not any(text.startswith(token) for token in tokens):
+            return number, text, "(a) verdict first", "the span does not open with a verdict line"
+        # axis: no remaining line may hold an HTML comment opener or closer — see bite-proof record i2352_vet_slot_builder_text.md
+        if "<!--" in text or "-->" in text:
+            return number, text, "(b) no comment", "an HTML comment other than the builder's reminder"
+        # axis: no remaining line outside a code fence may be an ATX heading, tab-separated or bare too — see bite-proof record i2352_vet_slot_builder_text.md
+        if not dead and _SLOT_HEADING_RE.match(text):
+            return number, text, "(c) no heading", "a heading (a builder section)"
+    return None
+
+
+def check_span_owned(body, advisor_at, build_at):
+    """Refuse ``slot-span-builder-text`` when the slot span of ``body`` holds anything but the advisor's own content.
+
+    The span is the one ``evaluate`` replaces: from the line after the advisor-vet marker line to the build-record
+    marker line. Called on the ``write`` path of a builder body only, after ``analyze_body``, and again over the
+    composed body (emitter ⊆ recogniser)."""
+    # axis: the checked span is exactly the span the write replaces: it starts after the marker's own str.splitlines() line (the shared helper) and ends at the build-record marker, so builder text after a lone CR or U+2028 on the marker line is checked, never deleted unread — see bite-proof record i2352_vet_slot_builder_text.md
+    start = _after_marker_line(body, advisor_at)
+    if start < 0:  # the marker is the last line: there is no span (the write refuses this body itself)
+        return
+    problem = _span_owned_problem(body[start:build_at])
+    if problem is None:
+        return
+    number, text, sign, why = problem
+    raise _Refusal("slot-span-builder-text",
+                   "the slot span holds text that is not the advisor's own: line %d of the span, %r, fails sign %s: %s;"
+                   " write replaces only the builder's reminder and the advisor's own verdict; move that text above"
+                   " the ## Advisor vet heading or below the build-record marker, or ask the builder to, then write"
+                   " again" % (number, text[:60], sign, why))
 
 
 def no_build_record(body):
@@ -342,7 +375,8 @@ def no_build_record(body):
         # axis: headings below the advisor-vet marker are scanned too — see bite-proof record i2342_vet_slot_no_build_record.md
         heading = _ANY_HEADING_RE.match(line)
         if heading:
-            key = _heading_key(heading.group(1))
+            # axis: a tab inside a heading separates its words here, so a tab-separated builder heading is still a builder sign — see bite-proof record i2352_vet_slot_builder_text.md
+            key = _heading_key(" ".join(heading.group(1).split()))
             # axis: a builder-section heading is a builder sign, in a quote, list, fence or comment too — see bite-proof record i2342_vet_slot_no_build_record.md
             if key.startswith(_BUILDER_HEADING_KEYS):
                 # axis: What we're accepting below the live advisor-vet marker is the advisor's slot, not a builder sign — see bite-proof record i2342_vet_slot_no_build_record.md
@@ -407,23 +441,29 @@ def _compose_no_build_record(body, advisor_at, slot_text):
         new_body = prefix + "\n\n## Advisor vet\n" + marker + "\n\n" + slot + "\n"
         heading_at = len(prefix) + 2
         marker_at = heading_at + len("## Advisor vet\n")
+        slot_at = marker_at + len(marker) + len("\n\n")
     else:
         line_end = _after_marker_line(body, advisor_at)
         if line_end >= 0:
             prefix = body[:line_end]
             new_body = prefix + "\n" + slot + "\n"
+            slot_at = len(prefix) + len("\n")
         else:  # the marker is the last line, with no terminator after it
             prefix = body
             new_body = body + "\n\n" + slot + "\n"
+            slot_at = len(body) + len("\n\n")
         marker_at = advisor_at
+    # the offset at which the slot text begins is known from the composition above, never searched for
+    if new_body[slot_at:slot_at + len(slot)] != slot:
+        raise _Refusal("write-failed", "span invariant violated")
     if not new_body.startswith(prefix):
         raise _Refusal("write-failed", "span invariant violated")
     # axis: a slot text that carries a builder heading or the Build record wrapper makes the composed body builder-shaped, refused write-failed — see bite-proof record i2342_vet_slot_no_build_record.md
     if not no_build_record(new_body):
         raise _Refusal("write-failed", "the slot text carries a builder heading or build-record wrapper; the composed"
                        " body would read as a builder body")
-    problem = _unrendered_slot(new_body, marker_at, heading_at)
-    # axis: a composed body whose advisor-vet marker sits in an HTML comment, or whose appended heading is inside an unclosed fence or comment, refuses write-failed — see bite-proof record i2342_vet_slot_no_build_record.md
+    problem = _unrendered_slot(new_body, marker_at, heading_at, slot_at)
+    # axis: a composed body whose marker line, verdict line or appended heading GitHub hides (or md_hidden is unsure of) refuses write-failed (G4) — see bite-proof record i2389_vet_slot_md_hidden.md
     if problem:
         raise _Refusal("write-failed", problem)
     if _find_live_standalone_markers(new_body, marker) != [marker_at]:
@@ -432,16 +472,55 @@ def _compose_no_build_record(body, advisor_at, slot_text):
     return new_body
 
 
-def _unrendered_slot(new_body, marker_at, heading_at):
-    """Why the composed slot would not render, or None: the advisor-vet marker line starts inside an HTML comment,
-    or (marker absent) the appended ``## Advisor vet`` heading is not among the live headings."""
-    for offset, _line, _dead, in_comment in _comment_scan(new_body):
-        if offset == marker_at and in_comment:
-            return "the advisor-vet marker sits inside an unclosed HTML comment, so the slot would not render"
-    if heading_at is not None and heading_at not in [at for at, _text in _live_heading_offsets(new_body)]:
-        return ("the appended Advisor vet heading sits inside an unclosed code fence or HTML comment,"
-                " so the slot would not render")
+_PLAIN_LINE = "marker"  # a plain text line: no "<", ">", backtick or "#"
+
+
+def _marker_hidden_by_itself(rendering, body, marker_at):
+    """True only when the ``HIDDEN`` line holding ``marker_at`` is hidden by its own text: ``body`` with that line made a
+    plain line (terminator kept) reads ``VISIBLE`` there. False for a non-str body, an unlocatable line; never raises."""
+    try:
+        starts = [at for at, _state in rendering.lines]
+        index = bisect.bisect_right(starts, marker_at) - 1
+        if not isinstance(body, str) or index < 0 or rendering.lines[index][1] != md_hidden.HIDDEN:
+            return False
+        start, end = starts[index], (starts + [len(body)])[index + 1]
+        plain = _PLAIN_LINE + body[start:end][len(_bare(body[start:end])):]
+        # G7a: a HIDDEN marker line passes only when the re-scan with that one line made plain reads VISIBLE at the same line start
+        return dict(md_hidden.scan(body[:start] + plain + body[end:]).lines).get(start) == md_hidden.VISIBLE
+    except Exception:
+        return False
+
+
+def _visibility_problem(rendering, marker_at, slot_at, heading_at=None, body=None):
+    """Why the composed slot would not render, or None. The one visibility check of both write paths, on one
+    ``md_hidden.scan`` (``rendering``): the line holding the advisor-vet marker (``marker_at``), the line holding the
+    slot's first character (``slot_at``, the verdict line) and, when given, the appended ``## Advisor vet`` heading
+    (``heading_at``) must each read ``VISIBLE``. ``hidden`` and ``unsure`` are both a problem; the sentence says which.
+    A ``hidden`` marker line passes when only its own text hides it (``_marker_hidden_by_itself`` of ``body``, if given)."""
+    def why(state):
+        return "the render could not be decided" if state == md_hidden.UNSURE else "GitHub hides it"
+
+    # axis: the marker line must read VISIBLE, or HIDDEN only by itself (a whole comment line); hidden by a region or unsure refuses, decided by md_hidden — see bite-proof record i2389_vet_slot_md_hidden.md (G7b)
+    state = _line_state(rendering, marker_at)
+    if state != md_hidden.VISIBLE and not (state == md_hidden.HIDDEN and _marker_hidden_by_itself(rendering, body, marker_at)):
+        return "the advisor-vet marker line reads %s (%s), so the slot would not render" % (state, why(state))
+    # axis: the verdict line (the slot's first line) must read VISIBLE (hidden or unsure refuses), decided by md_hidden — see bite-proof record i2389_vet_slot_md_hidden.md
+    state = _line_state(rendering, slot_at)
+    if state != md_hidden.VISIBLE:
+        return "the slot's verdict line reads %s (%s), so the slot would not render" % (state, why(state))
+    # axis: the appended Advisor vet heading must be a heading md_hidden reads VISIBLE — see bite-proof record i2389_vet_slot_md_hidden.md
+    if heading_at is not None:
+        state = {at: st for at, _text, st in rendering.headings}.get(heading_at)
+        if state != md_hidden.VISIBLE:
+            return ("the appended Advisor vet heading reads %s (%s), so the slot would not render"
+                    % (state or "not a heading", why(state) if state else "GitHub does not render it as a heading"))
     return None
+
+
+def _unrendered_slot(new_body, marker_at, heading_at, slot_at):
+    """Why the composed slot of the bot path would not render, or None: one ``md_hidden.scan`` of ``new_body``, read by
+    ``_visibility_problem``. ``slot_at`` is the offset in ``new_body`` at which the slot text begins."""
+    return _visibility_problem(md_hidden.scan(new_body), marker_at, slot_at, heading_at, new_body)
 
 
 def analyze_body(body):
@@ -516,8 +595,8 @@ def _owner_shell_blocks(body):
     A line inside an HTML comment opens no fence."""
     fence = None
     in_comment = False
-    for number, raw in enumerate(body.splitlines(), 1):
-        line = raw.rstrip("\r")
+    # axis: the body is read as Markdown lines (md_fence.split_lines), so a fence opener after a U+2028 or other splitlines-only break opens no fence — see bite-proof record i2389_vet_slot_md_hidden.md
+    for number, line in enumerate(_bare_lines(body), 1):
         text, depth = _strip_containers(line)
         # axis: a line with fewer blockquote markers than the opener ends a quoted fence, then is re-read
         if fence is not None and depth < fence["depth"]:
@@ -791,6 +870,9 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
             if verb == "write":
                 check_not_emptied(body)
             advisor_at, build_at, ids = analyze_body(body)
+            # axis: the evaluate chokepoint refuses builder text in the slot span on write, after analyze_body — see bite-proof record i2352_vet_slot_builder_text.md
+            if verb == "write":
+                check_span_owned(body, advisor_at, build_at)
         if verb == "write":
             check_slot_text(slot_text)
         if not isinstance(advisor_login, str) or not advisor_login.strip():
@@ -845,11 +927,22 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         return _refusal("write-failed", "composed body broke markers: %s" % exc.detail)
     if new_ids != ids or new_advisor_at != advisor_at or new_body[new_build_at:] != body[build_at:]:
         return _refusal("write-failed", "composed body moved or shadowed slot markers")
+    # the composed body is body[:a] + "\n" + slot + ...: the slot text begins at a + 1, known from the composition
+    # axis: the builder path refuses write-failed unless the marker line and the slot's first line both read VISIBLE on md_hidden.scan (G5, BRIEF-1) — see bite-proof record i2389_vet_slot_md_hidden.md
+    problem = _visibility_problem(md_hidden.scan(new_body), new_advisor_at, a + 1, None, new_body)
+    if problem:
+        return _refusal("write-failed", problem)
     try:
         # axis: the builder path refuses write-failed unless the composed region's first line, as the merge train reads it, is the slot's — see bite-proof record i2342_vet_slot_no_build_record.md
         _check_verdict_reads_first(new_body, slot_text)
     except _Refusal as exc:
         return _refusal(exc.reason, exc.detail)
+    try:
+        # axis: the composed slot must itself read as the advisor's own, so a later write is never refused — see bite-proof record i2352_vet_slot_builder_text.md
+        check_span_owned(new_body, new_advisor_at, new_build_at)
+    except _Refusal as exc:
+        return _refusal("write-failed", "the composed slot would not read as the advisor's own on the next write: %s"
+                        % exc.detail)
     result["newBody"] = new_body
     return result
 
@@ -1023,7 +1116,10 @@ def _run_verb(verb, pr, repo, slot_file, run):
     else:
         if verb == "write":
             check_not_emptied(body)
-        analyze_body(body)
+        advisor_at, build_at, _ids = analyze_body(body)
+        # axis: the _run_verb chokepoint refuses builder text in the slot span before the slot file is read or any further gh call — see bite-proof record i2352_vet_slot_builder_text.md
+        if verb == "write":
+            check_span_owned(body, advisor_at, build_at)
     slot_text = None
     if verb == "write":
         try:
@@ -1065,8 +1161,11 @@ def _run_verb(verb, pr, repo, slot_file, run):
         readback = _read_body(run, pr, repo)
     except _Refusal as exc:
         raise _Refusal("write-unconfirmed", "%s; readback: %s" % (pushed, exc.detail))
-    if _normalize(readback) != _normalize(new_body):
-        raise _Refusal("write-unconfirmed", "%s; readback differs from the pushed body" % pushed)
+    # axis: the read-back is compared through the one transit comparison; one trailing cloud footer is tolerated, a lost character or a second footer is not — see bite-proof record i2383_transit_record
+    compared = cloud_builder.transit_compare(new_body, readback)
+    if compared["transit"] != cloud_builder.TRANSIT_MATCHED:
+        raise _Refusal("write-unconfirmed", "%s; readback differs from the pushed body: %s"
+                       % (pushed, cloud_builder.transit_line(compared)))
     return result
 
 

@@ -465,6 +465,35 @@ def _test_role_derived_placeholders(ph: dict) -> dict[str, str]:
     return ph
 
 
+def focus_context_line(ph: dict) -> str:
+    """The order's ``- Focus: …`` line from ``ph["FOCUS_NOTES"]``, or ``""`` when there are no
+    notes (empty or whitespace only). The notes are quoted owner data, so placeholder syntax in
+    them is escaped and renders rather than refusing the order."""
+    notes = ph.get("FOCUS_NOTES", "")
+    if not isinstance(notes, str):
+        return ""
+    notes = notes.strip()
+    if not notes:
+        return ""
+    return "- Focus: %s" % escape_placeholder_syntax(notes)
+
+
+def order_carries_focus(phase: str, context: dict) -> tuple[bool, str | None]:
+    """Whether the template ``render_order`` reads for ``phase`` carries the focus line.
+
+    Derived from the template text, never a phase list. Returns ``(True, None)`` or
+    ``(False, reason)``; a template that cannot be read cannot carry. Never raises."""
+    try:
+        template, reason = _read_template(_template_name(phase, context if isinstance(context, dict) else {}))
+        if reason:
+            return False, reason
+        if "FOCUS_CONTEXT_LINE" in set(_PLACEHOLDER_RE.findall(template or "")):
+            return True, None
+        return False, "template-has-no-focus-line:%s" % phase
+    except Exception as exc:  # noqa: BLE001 — must never raise
+        return False, "carries-focus-error:%s:%s" % (type(exc).__name__, exc)
+
+
 def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
@@ -499,10 +528,7 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
         )
     else:
         ph["PRIOR_COMMENTS_INSTRUCTION_BLOCK"] = ""
-    focus = ph.get("FOCUS_NOTES", "").strip()
-    ph["FOCUS_CONTEXT_LINE"] = (
-        "- Focus: %s" % focus if focus else ""
-    )
+    ph["FOCUS_CONTEXT_LINE"] = focus_context_line(ph)
     risk_text = ph.get("RISK_AREAS_TEXT", "").strip()
     ph["RISK_AREAS_LINE"] = (
         "- Risk areas this change touches: %s" % risk_text if risk_text else ""
@@ -565,6 +591,10 @@ def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
         ph = _channel_derived_placeholders(phase, context)
         if phase == round_phases.P_SECOND_TEST:
             ph = _test_role_derived_placeholders(ph)
+        if phase == round_phases.P_SCOPED:
+            # The scoped template carries the line at the end of the conventions line, so a session with no notes renders byte-identically.
+            focus_line = focus_context_line(ph)
+            ph["FOCUS_CONTEXT_LINE"] = "\n" + focus_line if focus_line else ""
     return ph
 
 

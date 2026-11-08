@@ -19,7 +19,8 @@ READY_LINE = "**Verdict: READY** · " + HEAD
 NOT_READY_LINE = "**Verdict: NOT-READY** · " + HEAD + " (old)"
 NOT_READY_SLOT = "**Verdict: NOT-READY** · " + HEAD + "\n\nNew owner half.\n"
 READY_SLOT = "**Verdict: READY** · " + HEAD + "\n\nNew owner half.\n"
-OLD_SLOT = MARKER + "\nold slot text\n"
+# the earlier slot in test_vet_slot.BODY: a verdict-form slot, so the write reads it as the advisor's own (#2352)
+OLD_SLOT = MARKER + "\n**Verdict: NOT-READY** · abc\n\nold slot text\n"
 
 # the seven measured separators: each ends the marker's own splitlines() line, and none is "\n"
 SEPARATORS = ["\r", " ", " ", "\x85", "\x0b", "\x0c", "\x1c"]
@@ -34,6 +35,14 @@ def _gh_on_path(monkeypatch):
 def _body(separator, old_line):
     assert BODY.count(OLD_SLOT) == 1
     return BODY.replace(OLD_SLOT, MARKER + separator + old_line + "\n")
+
+
+def _assert_marker_not_standalone(result, which="advisor-vet"):
+    # #2389: only a lone CR still ends a Markdown line (md_fence.split_lines); after U+2028, U+2029, U+0085, VT, FF or FS
+    # the marker shares its line with the verdict, GitHub renders that one line, and no standalone marker is found: the
+    # write refuses markers-invalid and pushes nothing (it used to read the marker's str.splitlines() line)
+    assert result["ok"] is False and result["reason"] == "markers-invalid", result
+    assert "%s marker appears 0 times" % which in result["detail"], result
 
 
 def _vet(body):
@@ -62,6 +71,9 @@ def test_b1_a_not_ready_write_over_an_old_ready_reads_not_ready_through_evaluate
     body = _body(separator, READY_LINE)
     assert _vet(body) == stack_check.VERDICT_READY  # the old READY is what the merge train reads before the write
     result = _evaluate_write(body, NOT_READY_SLOT)
+    if separator != "\r":
+        _assert_marker_not_standalone(result)
+        return
     assert result["ok"] is True, result
     new_body = result["newBody"]
     assert _vet(new_body) == stack_check.VERDICT_NOT_READY
@@ -79,6 +91,10 @@ def test_b1_a_not_ready_write_over_an_old_ready_reads_not_ready_through_run_verb
     body = _body(separator, READY_LINE)
     fake = _raw_fake(body)
     result = _run_write(fake, tmp_path, NOT_READY_SLOT)
+    if separator != "\r":
+        _assert_marker_not_standalone(result)
+        assert fake.edit_calls() == []
+        return
     assert result["ok"] is True, result
     assert len(fake.edited) == 1
     assert _vet(fake.edited[0]) == stack_check.VERDICT_NOT_READY
@@ -91,6 +107,9 @@ def test_b2_a_ready_write_over_an_old_not_ready_reads_ready_through_evaluate(sep
     body = _body(separator, NOT_READY_LINE)
     assert _vet(body) == stack_check.VERDICT_NOT_READY
     result = _evaluate_write(body, READY_SLOT)
+    if separator != "\r":
+        _assert_marker_not_standalone(result)
+        return
     assert result["ok"] is True, result
     assert _vet(result["newBody"]) == stack_check.VERDICT_READY
 
@@ -100,6 +119,10 @@ def test_b2_a_ready_write_over_an_old_not_ready_reads_ready_through_run_verb(sep
     body = _body(separator, NOT_READY_LINE)
     fake = _raw_fake(body)
     result = _run_write(fake, tmp_path, READY_SLOT)
+    if separator != "\r":
+        _assert_marker_not_standalone(result)
+        assert fake.edit_calls() == []
+        return
     assert result["ok"] is True, result
     assert len(fake.edited) == 1
     assert _vet(fake.edited[0]) == stack_check.VERDICT_READY
@@ -156,6 +179,9 @@ def _dod_body(separator):
 @pytest.mark.parametrize("separator", I_SEPARATORS, ids=I_SEPARATOR_IDS)
 def test_i1_i2_a_foreign_marker_after_the_marker_line_refuses_through_evaluate(separator):
     result = _evaluate_write(_dod_body(separator), NOT_READY_SLOT)
+    if separator not in ("\n", "\r"):
+        _assert_marker_not_standalone(result)  # #2389: see there (the dod marker shares the advisor-vet marker's line)
+        return
     assert result["ok"] is False and result["reason"] == "slot-span-foreign-content", result
     assert "superheroes:dod-table" in result["detail"], result
 
@@ -164,7 +190,10 @@ def test_i1_i2_a_foreign_marker_after_the_marker_line_refuses_through_evaluate(s
 def test_i1_i2_a_foreign_marker_after_the_marker_line_refuses_and_pushes_nothing_through_run_verb(separator, tmp_path):
     fake = _raw_fake(_dod_body(separator))
     result = _run_write(fake, tmp_path, NOT_READY_SLOT)
-    assert result["ok"] is False and result["reason"] == "slot-span-foreign-content", result
+    if separator not in ("\n", "\r"):
+        _assert_marker_not_standalone(result)  # #2389: see there (the dod marker shares the advisor-vet marker's line)
+    else:
+        assert result["ok"] is False and result["reason"] == "slot-span-foreign-content", result
     assert fake.edit_calls() == []
 
 
@@ -172,7 +201,9 @@ def test_i1_i2_a_foreign_marker_after_the_marker_line_refuses_and_pushes_nothing
 def test_i3_analyze_body_refuses_a_foreign_marker_after_the_marker_line(separator):
     with pytest.raises(vs._Refusal) as raised:
         vs.analyze_body(_dod_body(separator))
-    assert raised.value.reason == "slot-span-foreign-content"
+    # #2389: after U+2028 or a form feed the dod marker shares the advisor-vet marker's Markdown line: no marker is found
+    expected = "slot-span-foreign-content" if separator in ("\n", "\r") else "markers-invalid"
+    assert raised.value.reason == expected
 
 
 @pytest.mark.parametrize("separator", ["\r", " ", "\x0c"], ids=["cr", "u2028", "ff"])
@@ -181,6 +212,10 @@ def test_i4_the_old_slot_text_before_the_build_record_marker_is_replaced_not_kep
     assert BODY.count("old slot text\n\n<!-- superheroes:build-record -->") == 1
     body = BODY.replace("old slot text\n\n<!-- superheroes:build-record -->", old)
     result = _evaluate_write(body, NOT_READY_SLOT)
+    if separator != "\r":
+        # #2389: after U+2028 or a form feed the build-record marker is no standalone Markdown line: it is not found
+        _assert_marker_not_standalone(result, which="build-record")
+        return
     assert result["ok"] is True, result
     new_body = result["newBody"]
     assert "old slot text" not in new_body

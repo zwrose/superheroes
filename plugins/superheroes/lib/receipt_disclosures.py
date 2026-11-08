@@ -91,6 +91,7 @@ CARRIED_DISCLOSURE_CHANNELS = {
     "recordOrphansIgnored": str_list,
     "orderVendorProvenanceGaps": order_vendor_provenance_gaps_shape,
     "priorCommentsUnavailable": bool_value,
+    "focusNotesNotCarried": dict_list,
     "verifyPasses": dict_list,
     "verifierProvenance": dict_list,
     "synthesisUnseatable": dict_list,
@@ -682,6 +683,24 @@ def build_degraded_prose(state, form, journal=None):
                 "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
                 "that prior comments were considered is not supported for this round"
                 % rkey)
+        fnn = declared.get("focusNotesNotCarried")
+        if isinstance(fnn, list) and fnn:
+            fnn_phases, fnn_seats = [], []
+            for row in fnn:
+                if not isinstance(row, dict):
+                    continue
+                row_phase, row_seats = row.get("phase"), row.get("seats")
+                if not (isinstance(row_phase, str) and row_phase):
+                    continue
+                if not (isinstance(row_seats, list) and all(isinstance(s, str) for s in row_seats)):
+                    continue
+                fnn_phases.append(row_phase)
+                fnn_seats.extend(row_seats)
+            if fnn_phases:
+                degraded_out.append(
+                    "focus-notes-not-carried (round %s): the %s order(s) cannot carry the session's "
+                    "focus notes — seat(s) %s did not see them"
+                    % (rkey, ", ".join(fnn_phases), ", ".join(fnn_seats)))
         jd = declared.get("judgmentDispositions")
         if isinstance(jd, list) and jd:
             fail_closed = [e for e in jd if isinstance(e, dict) and e.get("failClosed")]

@@ -325,7 +325,7 @@ def test_i3_a_round_whose_fixes_touched_only_proven_copies_skips_the_scoped_find
     RD._enter_delta_round(state, cfg)
     assert state["_newSurface"] == {} and state["_fixDeltaDiff"] == ""
     folded = []
-    monkeypatch.setattr(RD, "_fold_scoped", lambda st, config, artifact: folded.append(artifact))
+    monkeypatch.setattr(RD, "_fold_scoped", lambda st, config, artifact, session_dir=None: folded.append(artifact))
     RD._after_audits(state, cfg)
     assert state["rounds"]["2"]["scopedFinder"] == "skipped-empty-surface" and folded == [{}]
     assert state["step"] == RD.P_AUDITS  # no scoped dispatch was scheduled

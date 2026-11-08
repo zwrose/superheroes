@@ -94,6 +94,18 @@ def test_headings_in_tabs_quotes_and_lists_are_builder_signs(line):
     assert vs.no_build_record(BOT_BODY + "\n" + line + "\n") is False
 
 
+@pytest.mark.parametrize("title", ["Build\trecord", "Definition\tof Done", "Size\t\ttripwire", "What's\tchanging, and why"])
+def test_a_tab_inside_a_builder_heading_separates_its_words(title):
+    assert vs.no_build_record(BOT_BODY + "\n## " + title + "\n") is False
+
+
+def test_a_builder_section_with_a_tab_in_its_heading_below_the_marker_is_never_written_over(tmp_path):
+    body = "Bumps x.\n\n" + MARKER + "\n\n## Build\trecord\n\nKeep this.\n"
+    fake = _fake(body)
+    _refused(_write(fake, tmp_path), fake, "body-emptied")
+    assert fake.calls == [list(VIEW)]
+
+
 def test_the_accepting_exemption_is_below_a_live_marker_only():
     below = BOT_BODY + "\n## Advisor vet\n" + MARKER + "\n\nslot\n" + ACCEPTING
     above = BOT_BODY + ACCEPTING + "\n## Advisor vet\n" + MARKER + "\n"
@@ -458,6 +470,14 @@ def _evaluate_write(body, slot=V_NOT_READY_SLOT):
     return vs.evaluate("write", body, [_comment(RECEIPT_NONE)], slot, advisor_login="advisor")
 
 
+def _assert_marker_not_standalone_refused(result):
+    # #2389: U+2028 (and the other str.splitlines-only breaks) is no Markdown line end (md_fence.split_lines), so the marker
+    # shares its line with the verdict, is not found, and the composed body would hold the marker twice: the merge train's
+    # reader refuses the region (region-marker-duplicated), the write refuses write-failed and pushes nothing
+    assert result["ok"] is False and result["reason"] == "write-failed", result
+    assert "region-marker-duplicated" in result["detail"], result
+
+
 def _marker_line_end(body):
     """The offset just past the marker's own str.splitlines() line (the formula the fix writes)."""
     offset = 0
@@ -473,6 +493,9 @@ def test_f1_f2_a_not_ready_write_over_an_old_ready_reads_not_ready_through_evalu
     body = V_OLD_VERDICT_BODIES[name]
     assert _vet(body) == stack_check.VERDICT_READY  # the old READY is what the merge train reads before the write
     result = _evaluate_write(body)
+    if name == "f2-u2028":
+        _assert_marker_not_standalone_refused(result)
+        return
     assert result["ok"] is True, result
     new_body = result["newBody"]
     assert _vet(new_body) == stack_check.VERDICT_NOT_READY
@@ -488,6 +511,10 @@ def test_f1_f2_a_not_ready_write_over_an_old_ready_reads_not_ready_through_run_v
     body = V_OLD_VERDICT_BODIES[name]
     fake = _raw_fake(body)
     result = _write(fake, tmp_path, V_NOT_READY_SLOT)
+    if name == "f2-u2028":
+        _assert_marker_not_standalone_refused(result)
+        assert fake.edit_calls() == []
+        return
     assert result["ok"] is True, result
     assert len(fake.edited) == 1
     pushed = fake.edited[0]
@@ -500,6 +527,12 @@ def test_f3_the_reverse_direction_stays_not_ready_through_evaluate_and_run_verb(
     body = V_OLD_NOT_READY_BODIES[name]
     assert _vet(body) == stack_check.VERDICT_NOT_READY
     result = _evaluate_write(body)
+    if name == "f2-u2028":
+        _assert_marker_not_standalone_refused(result)
+        fake = _raw_fake(body)
+        _assert_marker_not_standalone_refused(_write(fake, tmp_path, V_NOT_READY_SLOT))
+        assert fake.edit_calls() == []
+        return
     assert result["ok"] is True, result
     assert _vet(result["newBody"]) == stack_check.VERDICT_NOT_READY
     fake = _raw_fake(body)
@@ -511,6 +544,9 @@ def test_f3_the_reverse_direction_stays_not_ready_through_evaluate_and_run_verb(
 def test_f1_every_splitlines_separator_after_the_marker_writes_cleanly(separator):
     body = "Bumps x.\n\n" + MARKER + separator + V_READY_LINE + separator
     result = _evaluate_write(body)
+    if separator not in ("\r", "\r\n", "\n"):
+        _assert_marker_not_standalone_refused(result)
+        return
     assert result["ok"] is True, result
     assert result["newBody"] == (body[:body.index(MARKER) + len(MARKER) + len(separator)]
                                  + "\n" + V_NOT_READY_SLOT.strip("\n") + "\n")

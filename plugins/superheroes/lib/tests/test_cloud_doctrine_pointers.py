@@ -64,6 +64,34 @@ def test_size_names_the_builder_note():
     assert _CLOUD_REF in match.group(0)
 
 
+_DETECTIVE_CLOUD_REF = "skills/detective/reference/cloud.md"
+_TRANSIT = "Text changed in transit"
+
+
+def _section_of(rel, heading):
+    chunks = re.split(r"(?m)^## ", _read_plugin(rel))
+    found = [chunk for chunk in chunks if chunk.split("\n", 1)[0] == heading]
+    assert len(found) == 1, "%s: expected one '## %s' heading, found %d" % (rel, heading, len(found))
+    return found[0]
+
+
+@pytest.mark.parametrize(
+    "rel, heading",
+    [
+        pytest.param(_CLOUD_REF, "Preflight", id="preflight"),
+        pytest.param(_CLOUD_REF, "Review", id="review"),
+        pytest.param(_CLOUD_REF, "Terminal comments: handback, stop, park", id="terminal-comments"),
+        pytest.param(_CLOUD_REF, "Handback", id="handback"),
+        pytest.param(_DETECTIVE_CLOUD_REF, "Terminal notes", id="detective-terminal-notes"),
+    ],
+)
+def test_each_write_section_names_the_transit_read_back(rel, heading):
+    # axis: transit pointers; a section where a builder writes to GitHub that no longer names the read-back section — see bite-proof record i2383_transit_compare
+    assert _TRANSIT in _section_of(rel, heading), (
+        "%s '## %s' does not name '%s'" % (rel, heading, _TRANSIT))
+    _section_of(_CLOUD_REF, _TRANSIT)  # the section the pointers name must itself exist, exactly once
+
+
 def test_verb_census_reads_whole_tokens():
     # axis: whole tokens; a misspelled verb that merely starts with a real one read as the real one
     named = _named_verbs("cloud_builder.py intake2 --repo-root /repo --launch-file /launch")

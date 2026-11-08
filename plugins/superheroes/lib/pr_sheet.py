@@ -251,6 +251,7 @@ _HEADING = re.compile(r"^ {0,3}(#{1,6})[ \t]")
 # A backtick fence's info string holds no backtick, so ```x``` opens none; group 1 is a list marker the fence may open behind
 # (a fence in a list item), group 2 the fence itself.
 _FENCE = re.compile(r"^ {0,3}((?:[-*+]|\d{1,9}[.)])[ \t]+)?(`{3,}(?=[^`]*$)|~{3,})")
+_FENCE_RUN = re.compile(r"^ *(`{3,}|~{3,})[ \t]*$")  # a line that is only a fence run: a closer, or an opener with no info string
 _ITEM = re.compile(r"^( {0,3})([-*+]|\d{1,9}[.)])([ \t]+)(.*)")
 _NO_ACCEPTANCE = ("none", "n/a", "na", "nothing")
 
@@ -259,16 +260,31 @@ _WHOLE_COMMENT = re.compile(r"^\s*<!--(?:(?!-->).)*-->\s*$")  # one comment, thr
 _BUILD_RECORD_MARKER = "<!-- superheroes:build-record -->"  # the line that opens the body's build record, below the owner half
 
 
-def _outside_comments(lines):
-    """(line, fenced) for each line of a body that is not inside an HTML comment, tracking code fences as it goes.
+def fence_line_shape(line):
+    """The one reading of whether ``line`` (one Markdown line, terminator removed) opens a code fence or is a bare fence run:
+    None for a line that is neither; else a hashable ``(kind, char, length, marker)``. ``kind`` is ``"open"`` when the line
+    matches ``_FENCE`` (a fence opener, with the list marker group, possibly None, as ``marker``), else ``"run"`` when it is
+    only a fence run (a closer; ``marker`` is None). ``char`` is the fence character and ``length`` the run length. A line that
+    matches both is ``"open"``. Never raises: anything that is not a str is None. ``_outside_comments``' walk reads fences
+    through this one function."""
+    if not isinstance(line, str):
+        return None
+    opening = _FENCE.match(line)
+    if opening:
+        return ("open", opening.group(2)[0], len(opening.group(2)), opening.group(1))
+    bare = _FENCE_RUN.match(line)
+    if bare:
+        return ("run", bare.group(1)[0], len(bare.group(1)), None)
+    return None
 
-    Only two shapes are dropped: a line that is wholly a comment, and a block that opens on a line starting with `<!--`
-    and holding no `-->`, through the first later line holding `-->`, and only when such a line exists in the same section
-    (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
-    A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
-    outside fences only. The first build-record marker line at column 0 after the What we're accepting heading ends the body
-    (a marker above the heading, indented, fenced or inside a comment is plain text): nothing after it is kept."""
-    kept, fence, column, inside, level, item_column = [], None, 0, False, None, 0
+
+def _fence_walk(lines):
+    """The one walk over the lines of a body: yields ``(n, line, fenced, kept)`` for each line it reaches. ``fenced`` is
+    whether the walk treats the line as inside a code fence (a fence opener line counts); ``kept`` is whether the line is
+    kept (a comment line, or the lines inside a comment, are yielded with ``kept`` False and ``fenced`` False). The walk
+    ends at the build-record marker, so no later line is yielded. ``_outside_comments`` and ``accepting_item_spans`` both
+    read it."""
+    fence, column, inside, level, item_column = None, 0, False, None, 0
     for n, line in enumerate(lines):
         if fence is not None:
             spaced = line.expandtabs(4)  # a tab reaches the next multiple of four columns
@@ -276,15 +292,15 @@ def _outside_comments(lines):
             if column and line.strip() and lead < column:
                 fence = None  # a fence opened in a list item ends where the item does: this line is outside it
             else:
-                kept.append((line, True))
+                yield n, line, True, True
                 # the closing fence sits 0-3 columns past the container's content column (column 0 outside a list)
-                closing = lead - column <= 3 and re.match(" *" + re.escape(fence[0]) + "{" + str(len(fence)) + r",}[ \t]*$", spaced)
+                closer = _FENCE_RUN.match(spaced)
+                closing = lead - column <= 3 and closer and closer.group(1)[0] == fence[0] and len(closer.group(1)) >= len(fence)
                 fence = None if closing else fence
                 continue
         if inside:
             inside = "-->" not in line
-            if not inside and line.split("-->", 1)[1].strip():
-                kept.append((line, False))
+            yield n, line, False, (not inside and bool(line.split("-->", 1)[1].strip()))
             continue
         # bite-axis: build-record boundary — an unindented marker line after the accepting heading ends the body.
         if level is not None and line.rstrip() == _BUILD_RECORD_MARKER:
@@ -293,12 +309,15 @@ def _outside_comments(lines):
         if line.strip() and len(spaced) - len(spaced.lstrip(" ")) < item_column and not _ITEM.match(line):
             item_column = 0  # a non-blank line left of the item's content ends the item, comments included
         if _WHOLE_COMMENT.match(line):
+            yield n, line, False, False
             continue
         if line.lstrip(" ").startswith("<!--") and "-->" not in line and _closes(lines[n + 1:], level):
             inside = True
+            yield n, line, False, False
             continue
-        opening = _FENCE.match(line)
-        fence = opening.group(2) if opening else None
+        shape = fence_line_shape(line)
+        opening = _FENCE.match(line) if shape is not None and shape[0] == "open" else None
+        fence = shape[1] * shape[2] if opening else None
         spaced = line.expandtabs(4)
         lead = len(spaced) - len(spaced.lstrip(" "))
         if opening and opening.group(1):
@@ -315,8 +334,19 @@ def _outside_comments(lines):
                 item_column = 0  # a non-blank line left of the item's content ends the item
         accepting = None if opening else _ACCEPTING.match(line)
         level = len(accepting.group(1)) if accepting else level
-        kept.append((line, opening is not None))
-    return kept
+        yield n, line, opening is not None, True
+
+
+def _outside_comments(lines):
+    """(line, fenced) for each line of a body that is not inside an HTML comment, tracking code fences as it goes.
+
+    Only two shapes are dropped: a line that is wholly a comment, and a block that opens on a line starting with `<!--`
+    and holding no `-->`, through the first later line holding `-->`, and only when such a line exists in the same section
+    (before a heading at or above the What we're accepting level); otherwise the opener and what follows are plain text.
+    A closing line with text after its `-->` is kept whole. Any other `<!--` is plain text and stays. Comments are read
+    outside fences only. The first build-record marker line at column 0 after the What we're accepting heading ends the body
+    (a marker above the heading, indented, fenced or inside a comment is plain text): nothing after it is kept."""
+    return [(line, fenced) for _n, line, fenced, kept in _fence_walk(lines) if kept]
 
 
 def _closes(rest, level):
@@ -330,6 +360,20 @@ def _closes(rest, level):
     return False
 
 
+def _markdown_lines(body):
+    """The Markdown lines of ``body`` (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), each with its one terminator
+    removed. U+2028, U+2029, U+0085, VT, FF, FS, GS and RS stay inside a line."""
+    return [line[:-2] if line.endswith("\r\n") else line[:-1] if line.endswith(("\n", "\r")) else line
+            for line in md_fence.split_lines(body)]
+
+
+def item_text_start(line):
+    """Where the text of an item's first line starts: after the list marker and the spaces behind it when ``line`` opens a
+    list item, else 0 (a paragraph item's first line is its whole text)."""
+    item = _ITEM.match(line)
+    return item.start(4) if item else 0
+
+
 def accepting_listed(body):
     """The acceptances a PR body lists under its What we're accepting heading, in order; [] for no such heading, no
     acceptance, or anything that is not a string. An item is a top-level list item with its nested lines, or a paragraph;
@@ -339,19 +383,53 @@ def accepting_listed(body):
     one) is never an acceptance and needs no card, while a costly one, listed under What we're accepting, must still be accounted for."""
     if not isinstance(body, str):
         return []
-    lines = _outside_comments(body.splitlines())
-    start = next((n for n, (line, fenced) in enumerate(lines) if not fenced and _ACCEPTING.match(line)), None)
+    lines = _markdown_lines(body)
+    texts = []
+    for span in accepting_item_spans(body):
+        parts = []
+        for k, (n, kind) in enumerate(span):
+            if kind in ("text", "fenced"):
+                parts.append(lines[n][item_text_start(lines[n]) if k == 0 else 0:].strip())
+        texts.append(" ".join(part for part in parts if part))
+    return acceptance_texts(texts)
+
+
+def acceptance_texts(texts):
+    """``texts`` without the empty ones and the ones that read None, N/A, NA or Nothing (no acceptance), in order. The one
+    filter ``accepting_listed`` and ``leftover_accepting`` share."""
+    return [t for t in texts if t and (t[:-1] if t.endswith(".") else t).strip().lower() not in _NO_ACCEPTANCE]
+
+
+def accepting_item_spans(body):
+    """``accepting_item_spans_of(_markdown_lines(body))``; [] for anything that is not a string (see there)."""
+    if not isinstance(body, str):
+        return []
+    return accepting_item_spans_of(_markdown_lines(body))
+
+
+def accepting_item_spans_of(lines):
+    """The items listed under the What we're accepting heading of ``lines`` (Markdown lines without terminators, as
+    ``_markdown_lines`` returns them), in order, each as the list of every source line in the item's span, as ``(n, kind)``
+    with ``n`` indexing ``lines``; [] for no such heading or no item. ``kind`` is ``"text"`` (a kept line the item appends),
+    ``"fenced"`` (a kept line the walk reads as fenced), ``"blank"`` (a blank line inside the span) or ``"dropped"`` (a line the walk does not keep, a whole-line
+    comment or a line inside one, between the item's first line and the next item, or the section's last kept line for the
+    last item). The first entry is the item's first line, whose text starts at ``item_text_start``. Items are grouped as
+    ``accepting_listed`` always grouped them: a top-level list item with its nested lines, or a paragraph."""
+    # axis: lines break only on Markdown endings (a U+2028 cannot make a synthetic heading) — see bite-proof record i2389_scanner_line_boundaries.md
+    walk = list(_fence_walk(lines))
+    lines = [(n, line, fenced) for n, line, fenced, kept in walk if kept]
+    start = next((i for i, (_n, line, fenced) in enumerate(lines) if not fenced and _ACCEPTING.match(line)), None)
     if start is None:
         return []
-    level = len(_ACCEPTING.match(lines[start][0]).group(1))
+    level = len(_ACCEPTING.match(lines[start][1]).group(1))
     section = []
-    for line, fenced in lines[start + 1:]:
+    for n, line, fenced in lines[start + 1:]:
         heading = None if fenced else _HEADING.match(line)
         if heading and len(heading.group(1)) <= level:
             break
-        section.append(line)
-    items, open_item, is_list, blank, column = [], None, False, False, 0
-    for line in section:
+        section.append((n, line))
+    firsts, open_item, is_list, blank, column = [], None, False, False, 0
+    for n, line in section:
         if not line.strip():
             blank = True
             continue
@@ -363,16 +441,20 @@ def accepting_listed(body):
             gap = len(started.group(3))
             # CommonMark: the content column is indent + marker + the spaces after it (one when five or more).
             column = len(started.group(1)) + len(started.group(2)) + (gap if gap <= 4 else 1)
-            open_item, is_list = [started.group(4)], True
-            items.append(open_item)
+            open_item, is_list = n, True
+            firsts.append(n)
         elif open_item is not None and not (blank and (not is_list or not indented)):
-            open_item.append(line)
+            pass  # the line joins the open item
         else:
-            open_item, is_list = [line], False
-            items.append(open_item)
+            open_item, is_list = n, False
+            firsts.append(n)
         blank = False
-    texts = (" ".join(part for part in (line.strip() for line in item) if part) for item in items)
-    return [t for t in texts if t and (t[:-1] if t.endswith(".") else t).strip().lower() not in _NO_ACCEPTANCE]
+    if not firsts:
+        return []
+    ends = firsts[1:] + [section[-1][0] + 1]
+    kinds = {n: "dropped" if not kept else "blank" if not line.strip() else "fenced" if fenced else "text"
+             for n, line, fenced, kept in walk}
+    return [[(n, kinds[n]) for n in range(first, end) if n in kinds] for first, end in zip(firsts, ends)]
 
 
 _DEGRADATIONS_MARKER = "<!-- superheroes:degradations -->"  # the line that opens the body's degradations list, in the build record
@@ -393,7 +475,8 @@ def degradations_listed(body):
     (case-insensitive; the label and the spaces after it are dropped from text), else None."""
     if not isinstance(body, str):
         return []
-    lines = body.splitlines()
+    # axis: lines break only on Markdown endings (a U+2028 cannot end the list or hide a bullet) — see bite-proof record i2389_scanner_line_boundaries.md
+    lines = _markdown_lines(body)
     inert = md_fence.scan(lines).inert  # a marker inside a code fence is an example, not the section
     start = next((n for n, line in enumerate(lines) if not inert[n] and line.rstrip() == _DEGRADATIONS_MARKER), None)
     if start is None:

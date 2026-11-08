@@ -1,0 +1,628 @@
+{
+ "source": "GitHub POST /markdown, mode gfm, context zwrose/superheroes, 2026-11-08, vet 860",
+ "synthetic": true,
+ "leftover": "F-1 'The retry loop never backs off'; verdict = missing | plain-accepted | claim#<PR>",
+ "rows": [
+  {
+   "id": "j1_list_claim_head_unsure_then_lazy_f1",
+   "body": "## What we're accepting\n\n- Accepted as fixed-above #99 abcdef0, see\n  the diff at <commit>\nF-1 The retry loop never backs off\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>Accepted as fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0, see<br>\nthe diff at <br>\nF-1 The retry loop never backs off</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "j2_para_claim_head_unsure_then_f1",
+   "body": "## What we're accepting\n\nAccepted as fixed-above #99 abcdef0, see\nthe diff at <commit>\nF-1 The retry loop never backs off\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<p dir=\"auto\">Accepted as fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0, see<br>\nthe diff at <br>\nF-1 The retry loop never backs off</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "j3_chain_f1_middle_claim_head",
+   "body": "## What we're accepting\n\n- Accepted as fixed-above #99 abcdef0 for\n  <commit>\nF-1 The retry loop never backs off\nmore at <sha>\nlast words\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>Accepted as fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 for<br>\n<br>\nF-1 The retry loop never backs off<br>\nmore at <br>\nlast words</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "j4_chain_claim_last_f1_middle",
+   "body": "## What we're accepting\n\n- Other words first\n  see <commit>\nF-1 The retry loop never backs off\n  more at <sha>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>Other words first<br>\nsee <br>\nF-1 The retry loop never backs off<br>\nmore at <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "j5_control_claim_and_f1_in_head",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off, fixed-above #99 abcdef0\n  see <commit>\nmore words\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off, fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0<br>\nsee <br>\nmore words</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "claim#99",
+   "head_94ba12e7": "claim#99",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "n1_unsure_first_line_holds_claim_f1_next",
+   "body": "## What we're accepting\n\n- fixed-above #99 abcdef0 at <commit>\n  F-1 The retry loop never backs off\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at <br>\nF-1 The retry loop never backs off</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "n2_unsure_first_line_holds_claim_f1_lazy",
+   "body": "## What we're accepting\n\n- fixed-above #99 abcdef0 at <commit>\nF-1 The retry loop never backs off\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at <br>\nF-1 The retry loop never backs off</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "n3_para_unsure_first_line_claim_then_f1",
+   "body": "## What we're accepting\n\nfixed-above #99 abcdef0 (see <commit>):\nF-1 The retry loop never backs off\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<p dir=\"auto\">fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 (see ):<br>\nF-1 The retry loop never backs off</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "n4_second_item_unsure_first_line_claim",
+   "body": "## What we're accepting\n\n- Another item, no id.\n- fixed-above #99 abcdef0 at <commit>\n  F-1 The retry loop never backs off\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>Another item, no id.</li>\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at <br>\nF-1 The retry loop never backs off</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "n5_unsure_first_line_f1_claim_next",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off <my-el>x</my-el>\n  fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off x<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "n6_hidden_comment_first_line_claim",
+   "body": "## What we're accepting\n\n- <!-- fixed-above #99 abcdef0 -->\n  F-1 The retry loop never backs off\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>\n\nF-1 The retry loop never backs off</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "hidden",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "k1_ordered_2_after_f1_no_hidden",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n2. fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off</li>\n</ul>\n<ol start=\"2\" dir=\"auto\">\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ol>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "prototype_source_items": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "k2_ordered_2_after_unsure_line",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n2. fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee </li>\n</ul>\n<ol start=\"2\" dir=\"auto\">\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ol>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "prototype_source_items": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "k3_para_item_then_ordered_2",
+   "body": "## What we're accepting\n\nF-1 The retry loop never backs off\n2) fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<p dir=\"auto\">F-1 The retry loop never backs off<br>\n2) fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "prototype_source_items": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "k4_empty_bullet_cannot_interrupt",
+   "body": "## What we're accepting\n\nF-1 The retry loop never backs off\n-\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<h2 dir=\"auto\">F-1 The retry loop never backs off</h2>\n<p dir=\"auto\">fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</p>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "claim#99",
+   "head_94ba12e7": "claim#99",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "claim#99",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "k5_ordered_1_control_interrupts",
+   "body": "## What we're accepting\n\nF-1 The retry loop never backs off\n1. fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<p dir=\"auto\">F-1 The retry loop never backs off</p>\n<ol dir=\"auto\">\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ol>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "prototype_source_items": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m7_lone_cr_ends_unsure_line",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\r  fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m8_lone_cr_body_end_unsure_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  fixed-above #99 abcdef0 at <commit>\r",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at </li>\n</ul>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "m9_crlf_body_unterminated_unsure_claim",
+   "body": "## What we're accepting\r\n\r\n- F-1 The retry loop never backs off\r\n  fixed-above #99 abcdef0 at <commit>",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at </li>\n</ul>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  },
+  {
+   "id": "m10_cr_then_crlf_blank_then_indented_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\r\r\n  fixed-above #99 abcdef0 at <commit>\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>\n<p dir=\"auto\">F-1 The retry loop never backs off</p>\n<p dir=\"auto\">fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 at </p>\n</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m11_cr_only_body",
+   "body": "## What we're accepting\r\r- F-1 The retry loop never backs off\r  see <commit>\rfixed-above #99 abcdef0\r\r## How to see it\r\rN/A, nothing to see.\r",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "m12_crlf_then_lone_cr_mid",
+   "body": "## What we're accepting\r\n\r\n- F-1 The retry loop never backs off\r\n  see <commit>\rfixed-above #99 abcdef0\r\n\r\n## How to see it\r\n\r\nN/A, nothing to see.\r\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "p1_two_unsure_then_lazy_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n  and <sha>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nand <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "p2_unsure_then_nested_item_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n  - fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee \n<ul dir=\"auto\">\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "p3_unsure_then_new_item_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n- fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee </li>\n<li>fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "plain-accepted",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "plain-accepted",
+   "prototype_source_items": "plain-accepted",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "p4_unsure_hidden_unsure_then_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n  <!-- x -->\n  and <sha>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee \n\nand <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "hidden",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "p5_nested_f1_unsure_then_lazy_claim",
+   "body": "## What we're accepting\n\n- Group\n  - F-1 The retry loop never backs off\n    see <commit>\nfixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>Group\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "p6_indented_comment_block_then_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  <!--\n  note\n  -->\n  fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off\n\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "hidden",
+    "hidden",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "p7_unsure_blank_indented_claim",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n\n  fixed-above #99 abcdef0\n\n## How to see it\n\nN/A, nothing to see.\n",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>\n<p dir=\"auto\">F-1 The retry loop never backs off<br>\nsee </p>\n<p dir=\"auto\">fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</p>\n</li>\n</ul>\n<h2 dir=\"auto\">How to see it</h2>\n<p dir=\"auto\">N/A, nothing to see.</p>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible",
+    "visible"
+   ]
+  },
+  {
+   "id": "e7_unterminated_visible_claim_after_unsure",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\n  fixed-above #99 abcdef0",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible"
+   ]
+  },
+  {
+   "id": "e8_unterminated_lazy_claim_after_unsure",
+   "body": "## What we're accepting\n\n- F-1 The retry loop never backs off\n  see <commit>\nfixed-above #99 abcdef0",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>F-1 The retry loop never backs off<br>\nsee <br>\nfixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0</li>\n</ul>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "plain-accepted",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure",
+    "visible"
+   ]
+  },
+  {
+   "id": "e9_unterminated_unsure_f1_line",
+   "body": "## What we're accepting\n\n- Other\n- F-1 The retry loop never backs off fixed-above #99 abcdef0 <commit>",
+   "html": "<h2 dir=\"auto\">What we're accepting</h2>\n<ul dir=\"auto\">\n<li>Other</li>\n<li>F-1 The retry loop never backs off fixed-above <a class=\"issue-link js-issue-link\" data-error-text=\"Failed to load title\" data-id=\"4713083449\" data-permission-text=\"Title is private\" data-url=\"https://github.com/zwrose/superheroes/issues/99\" data-hovercard-type=\"pull_request\" data-hovercard-url=\"/zwrose/superheroes/pull/99/hovercard\" href=\"https://github.com/zwrose/superheroes/pull/99\">#99</a> abcdef0 </li>\n</ul>",
+   "head_6f0aec06": "missing",
+   "head_94ba12e7": "missing",
+   "base_e4294ef7": "claim#99",
+   "prototype_source_items": "missing",
+   "md_hidden_states_head": [
+    "visible",
+    "visible",
+    "visible",
+    "unsure"
+   ]
+  }
+ ],
+ "note": "Synthetic sentinel bodies only. Verdicts: missing = F-1 not accepted; plain-accepted = accepted with no claim read; claim#99 = accepted with the fixed-above claim read. prototype_source_items = the vet-860 prototype (each item compared against the claims of every source item it shares a line with), measured and reverted."
+}

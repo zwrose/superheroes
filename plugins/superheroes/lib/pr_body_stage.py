@@ -251,8 +251,7 @@ def _publish(session_dir, pr, runner):
         return done(OUTCOME_UNCHANGED, None if _same_body(live, original) else REASON_LIVE_MOVED)
     audited = receipt["stagedSha256"] == _audited_sha(session_dir)
     # axis: a retried publish recognizes its own earlier success even when cloud egress appended its footer to the live body — see bite-proof record c1l10b_wo3_verify_rerun_seam
-    if _same_body(live, staged) or _same_body(cloud_builder.strip_cloud_footer(live),
-                                              cloud_builder.strip_cloud_footer(staged)):
+    if cloud_builder.transit_compare(staged, live)["transit"] == cloud_builder.TRANSIT_MATCHED:
         if not audited:
             return done(OUTCOME_REFUSED, REASON_PUBLISHED_UNAUDITED)
         prior = _json(p["published"])
@@ -269,8 +268,10 @@ def _publish(session_dir, pr, runner):
         return done(OUTCOME_REFUSED, REASON_PUBLISH_FAILED)
     after = _read_live(runner, pr_text)
     # axis: a cloud session's egress appends its footer to a PATCHed body, so the read-back is compared without one footer — see bite-proof record c1l10b_wo3_verify_rerun_seam
-    if after is None or not _same_body(cloud_builder.strip_cloud_footer(after),
-                                       cloud_builder.strip_cloud_footer(staged)):
+    # axis: the read-back is compared through the one transit comparison, so a lost character or a lost leading indent refuses and the receipt names it — see bite-proof record i2383_transit_record
+    compared = cloud_builder.transit_compare(staged, after)
+    if compared["transit"] != cloud_builder.TRANSIT_MATCHED:
+        receipt["transit"] = compared
         return done(OUTCOME_REFUSED, REASON_PUBLISH_UNVERIFIED)
     return done(OUTCOME_PUBLISHED, None)
 
@@ -303,6 +304,11 @@ def record_line(session_dir):
         if outcome == OUTCOME_REFUSED and isinstance(reason, str):
             if not _has_fix_to_copy(session_dir):
                 return None
+            transit = receipt.get("transit")
+            # axis: a refused publish whose read-back was compared says what the comparison found, changed spans or not checked — see bite-proof record i2383_transit_record
+            if reason == REASON_PUBLISH_UNVERIFIED and isinstance(transit, dict):
+                return ("The review did not copy its PR-body fix onto the PR: "
+                        + cloud_builder.transit_line(transit))
             phrase = _REFUSAL_PHRASES.get(reason, "the copy was refused (%s)" % reason)
             return "The review did not copy its PR-body fix onto the PR: %s." % phrase
         return None

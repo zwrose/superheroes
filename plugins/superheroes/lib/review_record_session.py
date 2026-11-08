@@ -1267,6 +1267,20 @@ def _command_refusals(rounds):
     return out
 
 
+_ATTESTED_FIELDS = (("kind", "kind"), ("class", "class"), ("phase", "phase"), ("failure", "failure"))
+
+
+def _attested_stamp(state):
+    """The `uncertified` stamp of a session the driver ended on the attested manual terminal: fixed prose over the
+    attestation's own non-blank text fields (None when it has none), and the human's note kept as data, never as prose."""
+    att = state.get("_attestation")
+    att = att if isinstance(att, dict) else {}
+    parts = [f"{label} {att[key].strip()}" for label, key in _ATTESTED_FIELDS if isinstance(att.get(key), str) and att[key].strip()]
+    reason = "attested by hand over a driver failure (" + ", ".join(parts) + ")" if parts else None
+    note = att.get("note")
+    return {"terminal": decision_kinds.ATTESTED_VERDICT, "reason": reason, "note": note if isinstance(note, str) else None}
+
+
 def account_from_session(session_dir, extras, readers=None, raw_dir=None, abandoned=None):
     _check_extras(extras)
     if abandoned is not None and not (isinstance(abandoned, str) and abandoned.strip()):
@@ -1284,16 +1298,19 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     if not (isinstance(meta, dict) and _text(meta.get("sessionId"))):
         raise Refusal(UNREADABLE, "meta.json sessionId")
     rows = _journal(session_dir)
-    if abandoned is None and state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS:
-        raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not a certified verdict")
+    if abandoned is None and state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS + (decision_kinds.ATTESTED_VERDICT,):
+        raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not one of the driver's verdicts")
     by_hand = not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows)
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings, merged = _findings_and_merges(state)
-    recovered_outside = []  # outside hits found in stored seat results the loop never folded (abandoned sessions only)
+    recovered_outside = []  # outside hits found in stored seat results the loop never folded (abandoned or attested sessions)
     swept_outside = []  # the same for a repository sweep's stored hits: `(sweep id, file, line, title)`
-    if abandoned is not None:  # the loop never took these in: each is listed open rather than only in a raw file
+    # an attested session ends by the owner's hand mid-loop, as an abandoned one does, so results stored before it may never have been folded
+    interrupted = abandoned is not None or state.get("terminal") == decision_kinds.ATTESTED_VERDICT
+    # axis: an attested session's stored but never-folded findings are listed open, as an abandoned session's are — see bite-proof record i2395_uncertified_record
+    if interrupted:  # the loop never took these in: each is listed open rather than only in a raw file
         # axis: in an abandoned session a finding recorded in a stored seat result but never folded is listed open — see bite-proof record c1l1_wo_b_session_seam
         ledger, _ = sc.read_disposition_ledger(state, required=False)
         by_key = {sc.finding_identity_key(r): r for r in ledger or [] if isinstance(r, dict)}
@@ -1344,6 +1361,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     checked += _verify_via_checked(rounds)
     if abandoned is not None:
         checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
+    elif interrupted:
+        checked.append(UNFOLDED_FINDINGS_CHECKED)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
     # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not
@@ -1380,6 +1399,16 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     # the extra audit round is labelled, never counted: it is a round of `rounds` the cap did not allow
     # axis: the extra audit round does not count toward rounds.count — see bite-proof record c1l4b_wo_a
     counted = len(rounds) - (1 if isinstance(extra, dict) and str(extra.get("round")) in rounds else 0)
+    uncertified = None
+    # axis: a session that ended on any terminal but converged carries the terminal and the driver's reason, so its record never reads reviewed — see bite-proof record i2395_uncertified_record
+    if abandoned is None and state["terminal"] == decision_kinds.ATTESTED_VERDICT:
+        # axis: an attested manual session is stamped here from the driver's own state, never from an extras key, so its record reads not-reviewed whatever else is written — see bite-proof record i2395_uncertified_record
+        uncertified = _attested_stamp(state)
+    elif abandoned is None and state["terminal"] != "converged":
+        cert = state.get("certification")
+        reason = next((v for v in (cert.get("reason") if isinstance(cert, dict) else None, last.get("detail"))
+                       if isinstance(v, str) and v.strip()), None)
+        uncertified = {"terminal": state["terminal"], "reason": reason}
     account = {"schema": review_record.ACCOUNT_SCHEMA, "pr": extras["pr"], "repo": extras.get("repo"), "lane": "full",
             "laneReason": extras.get("laneReason"), "ci": extras.get("ci"), "sessionId": meta["sessionId"],
             "finalCommit": _text(meta.get(sc.FIX_FOLD_HEAD_KEY), cfg.get(sc.FIX_FOLD_HEAD_KEY), meta.get("headSha"),
@@ -1399,7 +1428,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             "refused": _refused(rounds), "commandRefusals": _command_refusals(rounds), "sheetAnswers": extras.get("sheetAnswers"), "baseRef": extras.get("baseRef") or (cfg["baseRef"] if isinstance(cfg.get("baseRef"), str) else None),
             "goAheads": extras.get("goAheads", []), "carriedChecks": extras.get("carriedChecks", []),
             "ownerRulings": _owner_rulings(extras.get("ownerRulings", []), findings, merged), "checked": checked,
-            **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {})}
+            **({"abandoned": {"reason": abandoned.strip()}} if abandoned is not None else {}),
+            **({"uncertified": uncertified} if uncertified is not None else {})}
     if carry is not None:
         account["_carry"] = carry  # private: `write_from_session` settles it and strips it before the account is dumped
         # axis: the carry check reads the session's pinned review base (the driver's full sha), never extras.baseRef, which may be a symbolic ref — see bite-proof record c1l11d_wo_c_fold
@@ -1599,7 +1629,8 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)
-        return review_record.write(path, repo_root, readers, verifier_closed=verifier_closed)
+        return review_record.write(path, repo_root, readers, verifier_closed=verifier_closed,
+                                   session_uncertified=account.get("uncertified"))
     try:
         return review_record._guarded(go)
     finally:
