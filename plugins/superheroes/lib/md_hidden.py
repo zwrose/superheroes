@@ -679,8 +679,9 @@ def _link_regions(text):
 
 def _image_regions(text):
     """``(start, end)`` of each possible image description (vet 851: its text shows only as an attribute): from ``![`` to
-    its closing ``]``, bracket depth counted and escapes skipped; a backtick or ``<`` inside (a code span or tag could
-    hold a ``]``) or no closer runs it to the end of the text. The ``<![`` of a CDATA section is no image."""
+    its closing ``]``, bracket depth counted and escapes skipped; a code span or raw-HTML construct inside is skipped
+    whole, as cmark-gfm parses them before it closes the brackets (an unmatched backtick run or ``<`` is literal);
+    with no closer the range runs to the end of the text. The ``<![`` of a CDATA section is no image."""
     regions = []
     at = text.find("![")
     while at >= 0:
@@ -690,9 +691,20 @@ def _image_regions(text):
                 if text[end] == "\\":
                     end += 2
                     continue
-                if text[end] in "`<":
-                    end = len(text)
-                    break
+                if text[end] == "`":
+                    run = end
+                    while run < len(text) and text[run] == "`":
+                        run += 1
+                    width = run - end
+                    close = text.find(text[end:run], run)
+                    while close >= 0 and (text[close - 1] == "`" or text[close + width:close + width + 1] == "`"):
+                        close = text.find(text[end:run], close + 1)
+                    end = close + width if close >= 0 and width <= _MAX_BACKTICKS else run
+                    continue
+                if text[end] == "<":
+                    m = next((m for m in (p.match(text, end) for p in _INLINE_RAW) if m), None)
+                    end = m.end() if m else end + 1
+                    continue
                 depth += {"[": 1, "]": -1}.get(text[end], 0)
                 if depth == 0:
                     break
