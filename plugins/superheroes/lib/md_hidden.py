@@ -669,24 +669,36 @@ def _link_regions(text):
             end += 2 if text[end] == "\\" else 1
         regions.append((at + 2, min(end, len(text))))
         at = text.find("][", at + 2)
+    regions.extend(_image_regions(text))
+    for m in _REF_DEF.finditer(text):
+        nl = text.find("\n", m.end())
+        nl2 = text.find("\n", nl + 1) if nl >= 0 else -1
+        regions.append((m.end(), len(text) if nl2 < 0 else nl2))
+    return regions
+
+
+def _image_regions(text):
+    """``(start, end)`` of each possible image description (vet 851: its text shows only as an attribute): from ``![`` to
+    its closing ``]``, bracket depth counted and escapes skipped; a backtick or ``<`` inside (a code span or tag could
+    hold a ``]``) or no closer runs it to the end of the text. The ``<![`` of a CDATA section is no image."""
+    regions = []
     at = text.find("![")
-    while at >= 0:  # vet 851: an image's alt text shows only as an attribute (never the <![ of CDATA)
-        if not (at and text[at - 1] == "<"):
+    while at >= 0:
+        if not (at and text.startswith("<![CDATA[", at - 1)):
             end, depth = at + 2, 1
             while end < len(text):
                 if text[end] == "\\":
                     end += 2
                     continue
+                if text[end] in "`<":
+                    end = len(text)
+                    break
                 depth += {"[": 1, "]": -1}.get(text[end], 0)
                 if depth == 0:
                     break
                 end += 1
             regions.append((at + 2, min(end, len(text))))
         at = text.find("![", at + 2)
-    for m in _REF_DEF.finditer(text):
-        nl = text.find("\n", m.end())
-        nl2 = text.find("\n", nl + 1) if nl >= 0 else -1
-        regions.append((m.end(), len(text) if nl2 < 0 else nl2))
     return regions
 
 
@@ -883,6 +895,10 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # reads unsure from its first line
         sure_points.add((first, "possible link reference definition"))
     regions = _link_regions(joined)
+    for r0, r1 in _image_regions(joined):
+        if joined[r0:r1].strip(_ASCII_WS):
+            # final review: an image description's text shows only as an attribute, so its line reads unsure
+            line_unsure.add(first + line_of(r0))
     if any("\n" in joined[r0:r1] for r0, r1 in regions):
         # axis: a link title (or label, or destination) may span lines, and GitHub shows its text only as an attribute,
         # so a block with a possible link range that crosses a line break reads unsure from its first line
