@@ -859,13 +859,12 @@ _BLOCK_HIDING = re.compile(r"<!--(?:>|->|.*?(?:-->|--!>|\Z))|<[?!][^>]*(?:>|\Z)"
 
 
 def _block_line_state(line):
-    """The state of an HTML-block line that starts in data: ``VISIBLE`` unless a construct hides text, then ``HIDDEN``
-    when no other text is left on the line (tags hold none), else ``UNSURE``."""
+    """The state of an HTML-block line that starts in data: ``VISIBLE`` unless a construct hides text; then ``HIDDEN``
+    only when the whole line is that one construct, else ``UNSURE`` (what else the line holds is not parsed here)."""
     hidden = "".join(_BLOCK_HIDING.findall(line))
     if not re.sub(r"[-<>!?\[\]\s]", "", hidden):
         return VISIBLE
-    rest = re.sub(r"<[^>]*>", "", _BLOCK_HIDING.sub("", line))
-    return UNSURE if rest.strip(_ASCII_WS) else HIDDEN
+    return HIDDEN if _BLOCK_HIDING.fullmatch(line.strip(_ASCII_WS)) else UNSURE
 
 
 def _comment_line_state(line):

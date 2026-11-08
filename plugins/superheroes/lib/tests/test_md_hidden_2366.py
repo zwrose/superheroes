@@ -1357,3 +1357,13 @@ def test_vet851_controls_keep_their_answers():
     assert md.scan(body).unsure == ()
     assert _line_state('![alt](x.png)\nZQ1\n', "ZQ1") == V
     assert _line_state('## Title <!-- note --> more\n\nZQ1\n', "## Title") == V
+
+
+def test_html_block_line_reads_hidden_only_when_it_is_one_hiding_construct():
+    """Final returning review on 66130a25 (scoped finder, round 2, "Preserve literal angle-bracket text when deciding
+    HIDDEN"): ``<3 ZQ1>`` beside a comment is literal text GitHub shows, so that line must not read hidden; a line that is
+    one whole comment reads hidden, as GitHub renders nothing for it (checked against: control, GitHub's HTML parsing)."""
+    body = "<div>\n<3 ZQ1> <!-- note -->\n</div>\n"
+    assert _line_state(body, "<3 ZQ1>") == U
+    assert _line_state("<!-- ZQ1 -->\n\n## ZQ2\n", "<!-- ZQ1") == H
+    assert _line_state("<!-- ZQ1 -->\n\n## ZQ2\n", "## ZQ2") == V
