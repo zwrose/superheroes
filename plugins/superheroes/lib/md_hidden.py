@@ -738,7 +738,9 @@ def _destination_end(text, j):
     n = len(text)
 
     def blank(k):
-        while k < n and text[k] in " \t\n\v\f":  # cmark-gfm's whitespace
+        while k < n and text[k] in " \t\n\v\f":  # cmark-gfm's whitespace before a title or after an angle destination
+            # (a bare destination keeps \f and \v inside the address on GitHub, vet 857 renders t3-t7; ending it there
+            # instead only reads more lines unsure)
             k += 1
         return k
 
@@ -874,7 +876,44 @@ def _inline_constructs(text):
 _BLOCK_HIDING = re.compile(r"<!--(?:>|->|.*?(?:-->|--!>|\Z))|<(?:[?!]|/(?![A-Za-z>]))[^>]*(?:>|\Z)", re.S)
 
 
-_ATTR_VALUE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*[ \t\n\v\f\r][^>]*=")  # a tag that may hold an attribute value
+# vet 857: the HTML standard's element index, plus the obsolete names this module already knows
+_HTML_ELEMENTS = frozenset((
+    "a abbr address area article aside audio b base bdi bdo blockquote body br button canvas caption cite code col "
+    "colgroup data datalist dd del details dfn dialog div dl dt em embed fieldset figcaption figure footer form h1 h2 "
+    "h3 h4 h5 h6 head header hgroup hr html i iframe img input ins kbd label legend li link main map mark math menu "
+    "meta meter nav noscript object ol optgroup option output p picture pre progress q rp rt ruby s samp script search "
+    "section select slot small source span strong style sub summary sup svg table tbody td template textarea tfoot th "
+    "thead time title tr track u ul var video wbr xmp noembed noframes plaintext"
+).split()) | frozenset(_BLOCK_TAGS)
+_TAG_PARTS = re.compile(r"</?([A-Za-z][A-Za-z0-9-]*)(.*?)/?>\Z", re.S)
+
+
+def _tag_hides_text(tag):
+    """vet 857, the one chokepoint for raw tags: True when GitHub drops words written inside ``tag`` (an element name it
+    does not know, or anything but whitespace and ``/`` after the name: an attribute name, with or without a value)."""
+    m = _TAG_PARTS.match(tag)
+    if not m or m.group(1).lower() not in _HTML_ELEMENTS:
+        return True
+    return bool(m.group(2).strip(_ASCII_WS + "/"))
+
+
+_ANY_END_TAG = re.compile(r"""</[A-Za-z][A-Za-z0-9-]*(?:[^>"']|"[^"]*"|'[^']*')*>""")  # HTML reads attributes here too
+_TAG_START = re.compile(r"</?[A-Za-z]")
+
+
+def _line_tags(line):
+    """The raw tags in one line, left to right: open tags, end tags (attributes included, as HTML reads them), and a
+    tag left open at the line's end (its rest of the line)."""
+    found, at = [], line.find("<")
+    while at >= 0:
+        m = _INLINE_OPEN_TAG.match(line, at) or _ANY_END_TAG.match(line, at)
+        if m:
+            found.append(m.group())
+        elif _TAG_START.match(line, at) and ">" not in line[at:]:
+            found.append(line[at:])
+            break
+        at = line.find("<", m.end() if m else at + 1)
+    return found
 
 
 def _block_line_state(line):
@@ -935,6 +974,13 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
                 stop = min(_cell_end(joined, at), end)
                 constructs += [(at + b, at + e) for b, e in _inline_constructs(joined[at:stop])]
                 at = stop + 1
+    if atx:
+        # vet 857: heading_text drops every <!-- ... --> run; one the inline pass found no comment construct at (inside a
+        # tag's attribute, a PI, a declaration, CDATA, a code span or after an escape) is text GitHub may show, so the
+        # heading reads unsure
+        comment_starts = {begin for begin, _end in constructs if joined.startswith("<!--", begin)}
+        if any(m.start() not in comment_starts for m in _COMMENT_RUN.finditer(joined)):
+            line_unsure.add(first)
     if lines and _REF_DEF_START.match(lines[0]) and "]:" in joined:
         # axis: cmark consumes link reference definitions at a block's start and GitHub renders nothing for them, so
         # a block that may open with one (a "[" line and a "]:" anywhere: labels may hold escapes and span lines)
@@ -992,10 +1038,9 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # axis (C5): the HTML parse disagrees with cmark about where the construct ends
         # (a vertical tab in a tag also counts, as the earlier conservative reading: cmark takes \v as tag whitespace)
         is_tag = _INLINE_OPEN_TAG.fullmatch(construct) or _INLINE_CLOSE_TAG.fullmatch(construct)
-        if is_tag and "=" in construct and (not atx or ">" in construct[:-1] or "<!--" in construct):
-            # (an ATX heading's text drops comments, then tags up to their first ">"; a tag holding a quoted ">" or "<!--"
-            # is not dropped whole, so it gets no exemption)
-            # vet 854: an attribute value shows only as an attribute, so the tag's lines read unsure (not sticky)
+        if is_tag and _tag_hides_text(construct) and (not atx or ">" in construct[:-1]):
+            # (an ATX heading's text drops tags up to their first ">"; a tag holding a quoted ">" is not dropped whole)
+            # vet 854, 857: words inside a raw tag show only as attributes, or not at all, so its lines read unsure
             line_unsure.update(first + k for k in range(first_line, last_line + 1))
         # axis (vet 851 renders): a comment, PI, CDATA or declaration hides the text it holds, so the line it starts on
         # shows only part of itself; that line reads unsure (that line only, not sticky). An ATX heading is exempt: its
@@ -1051,8 +1096,8 @@ def _scan(body):
                 # final review: an HTML-block line that starts in data and holds a comment, PI, CDATA or declaration
                 # hides that construct's text; text only there reads hidden, text on both sides reads unsure
                 raw[-1] = _block_line_state(html_line[i])
-                if raw[-1] == VISIBLE and _ATTR_VALUE.search(html_line[i]):
-                    raw[-1] = UNSURE  # vet 854: an attribute value shows only as an attribute
+                if raw[-1] == VISIBLE and any(_tag_hides_text(t) for t in _line_tags(html_line[i])):
+                    raw[-1] = UNSURE  # vet 854, 857: words inside a raw tag show only as attributes, or not at all
             state = _tokenize(state, html_line[i] + "\n")
             if i in html_last and state not in _OPEN_STATES:
                 at = offsets[i + 1] if i + 1 < len(texts) else len(body)
