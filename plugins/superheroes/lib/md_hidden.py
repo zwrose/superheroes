@@ -61,6 +61,7 @@ _LIST_START = re.compile(r"(?:[-+*]|[0-9]{1,9}[.)])(?:[ ]|\Z)")
 _TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z", re.A)  # cmark: ASCII whitespace only
 _FOOTNOTE = re.compile(r"[ ]{0,3}\[\^[^\]\s]+\]:")
 _VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)
+_DROPPED_TAGS = re.compile(r"</?video(?![A-Za-z0-9-])", re.I | re.A)  # vet 851: GitHub drops a video element's content
 _TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I | re.A)
 
 _COMMENT_RUN = re.compile(r"<!--.*?(?:-->|--!>)", re.S)
@@ -428,6 +429,9 @@ class _Parser:
         rest = self.text[self.fns:]
         if rest.startswith("<") or _LIST_START.match(rest) or _SETEXT.match(rest):
             self._note("GFM table row that starts with <, a list marker or a setext underline")
+        elif _cell_count(rest) > _cell_count(tip.lines[tip.header]):
+            # vet 851: GitHub drops the cells past the header's count
+            self._note("GFM table row with more cells than its header")
 
     def _open_blocks(self, container, all_matched):
         maybe_lazy = self.tip.kind == "para"
@@ -585,7 +589,8 @@ class _Parser:
         self.tip = container
 
     def _add_text_line(self, block, rest, matched):
-        if (matched and block.kind == "para" and not block.table and block.lines and "|" in rest and _TABLE_DELIM.match(rest)
+        if (matched and block.kind == "para" and not block.table and block.lines and ("|" in rest or ":" in rest)
+                and _TABLE_DELIM.match(rest)
                 and _cell_count(block.lines[-1]) == _cell_count(rest)):
             # axis: cmark-gfm makes a table only when the header row and the delimiter row hold the same cell count
             block.table = True  # axis: a GFM delimiter row turns on the table-row unsure rule
@@ -600,6 +605,8 @@ class _Parser:
             self._note("tag whose block kind differs between CommonMark versions")
         if _TAGFILTER.search(rest):
             self._note("tag that GitHub's tagfilter escapes")
+        if _DROPPED_TAGS.search(rest):
+            self._note("tag whose content GitHub drops")
 
 
 # --- The comment pass and the public entry point ------------------------------------------------------------------
@@ -662,6 +669,20 @@ def _link_regions(text):
             end += 2 if text[end] == "\\" else 1
         regions.append((at + 2, min(end, len(text))))
         at = text.find("][", at + 2)
+    at = text.find("![")
+    while at >= 0:  # vet 851: an image's alt text shows only as an attribute (never the <![ of CDATA)
+        if not (at and text[at - 1] == "<"):
+            end, depth = at + 2, 1
+            while end < len(text):
+                if text[end] == "\\":
+                    end += 2
+                    continue
+                depth += {"[": 1, "]": -1}.get(text[end], 0)
+                if depth == 0:
+                    break
+                end += 1
+            regions.append((at + 2, min(end, len(text))))
+        at = text.find("![", at + 2)
     for m in _REF_DEF.finditer(text):
         nl = text.find("\n", m.end())
         nl2 = text.find("\n", nl + 1) if nl >= 0 else -1
@@ -721,6 +742,8 @@ def _destination_end(text, j):
 def _cell_count(row):
     """The number of cells in a GFM table row: split on unescaped ``|``, one leading and one trailing pipe dropped."""
     text = row.strip(" \t")
+    if text == "|":  # vet 851: a lone pipe holds no cells, so cmark-gfm makes no table
+        return 0
     if text.startswith("|"):
         text = text[1:]
     if text.endswith("|") and not text.endswith("\\|"):
@@ -750,6 +773,7 @@ def _cell_end(text, i):
     return len(text)
 
 
+_HIDING_OPENER = re.compile(r"\A<(?:!--|\?|!\[CDATA\[|!)")
 _INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI, _INLINE_CDATA, _INLINE_DECL)
 _ASCII_WS = " \t\n\v\f\r"
 
@@ -817,7 +841,7 @@ def _comment_line_state(line):
     return HIDDEN
 
 
-def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=None):
+def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=None, atx=False):
     """Run the inline raw-HTML pass over one text block (``lines``: its lines after container prefixes; source line
     ``first + k`` is ``lines[k]``).
 
@@ -892,6 +916,11 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # axis (C5): the HTML parse disagrees with cmark about where the construct ends
         # (a vertical tab in a tag also counts, as the earlier conservative reading: cmark takes \v as tag whitespace)
         is_tag = _INLINE_OPEN_TAG.fullmatch(construct) or _INLINE_CLOSE_TAG.fullmatch(construct)
+        # axis (vet 851 renders): a comment, PI, CDATA or declaration hides the text it holds, so the line it starts on
+        # shows only part of itself; that line reads unsure (that line only, not sticky). An ATX heading is exempt: its
+        # visible text is read through ``heading_text``, which drops the comment
+        if not atx and not is_tag and _HIDING_OPENER.sub("", pieces[0]).strip(_ASCII_WS + "-?]>"):
+            line_unsure.add(first + first_line)
         if state != _DATA or (is_tag and "\v" in construct):
             sure_points.add((first + last_line, "inline construct that HTML parsing ends differently than cmark"))
 
@@ -948,7 +977,8 @@ def _scan(body):
                     unsure[(offsets[i], "text inside a comment holds < and a later -->")] = None
             else:
                 # axis (C1): the inline raw-HTML pass over the text block's content
-                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure, text_block[i].header)
+                _inline_pass(text_block[i].lines, i, inline_hidden, inline_points, inline_unsure, text_block[i].header,
+                             text_block[i].kind == "atx")
 
     for line_index, why in inline_points:
         if line_index < len(offsets):
