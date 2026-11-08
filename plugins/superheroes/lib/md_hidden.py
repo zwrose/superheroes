@@ -897,22 +897,29 @@ def _tag_hides_text(tag):
     return bool(m.group(2).strip(_ASCII_WS + "/"))
 
 
-_ANY_END_TAG = re.compile(r"""</[A-Za-z][A-Za-z0-9-]*(?:[^>"']|"[^"]*"|'[^']*')*>""")  # HTML reads attributes here too
 _TAG_START = re.compile(r"</?[A-Za-z]")
 
 
 def _line_tags(line):
-    """The raw tags in one line, left to right: open tags, end tags (attributes included, as HTML reads them), and a
-    tag left open at the line's end (its rest of the line)."""
-    found, at = [], line.find("<")
-    while at >= 0:
-        m = _INLINE_OPEN_TAG.match(line, at) or _ANY_END_TAG.match(line, at)
-        if m:
-            found.append(m.group())
-        elif _TAG_START.match(line, at) and ">" not in line[at:]:
-            found.append(line[at:])
-            break
-        at = line.find("<", m.end() if m else at + 1)
+    """The raw tags in one HTML-block line, left to right, read as HTML reads them: from ``<`` or ``</`` and a letter
+    to the first ``>`` outside quotes (error recovery included), or to the line's end when the tag stays open."""
+    found, at = [], 0
+    for m in _TAG_START.finditer(line):
+        if m.start() < at:
+            continue
+        j, quote = m.start(), None
+        while j < len(line):
+            c = line[j]
+            if quote:
+                if c == quote:
+                    quote = None
+            elif c in "\"'":
+                quote = c
+            elif c == ">":
+                break
+            j += 1
+        found.append(line[m.start():j + 1])
+        at = j + 1
     return found
 
 
@@ -978,8 +985,14 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # vet 857: heading_text drops every <!-- ... --> run; one the inline pass found no comment construct at (inside a
         # tag's attribute, a PI, a declaration, CDATA, a code span or after an escape) is text GitHub may show, so the
         # heading reads unsure
-        comment_starts = {begin for begin, _end in constructs if joined.startswith("<!--", begin)}
-        if any(m.start() not in comment_starts for m in _COMMENT_RUN.finditer(joined)):
+        # (and, review on 17046c62: every <...> run heading_text strips must be one inline construct exactly, or the
+        # heading's text is not GitHub's)
+        blanked = _COMMENT_RUN.sub(lambda m: " " * len(m.group()), joined)
+        stripped = {(m.start(), m.end()) for m in _COMMENT_RUN.finditer(joined)}
+        stripped |= {(m.start(), m.end()) for m in _TAG_RUN.finditer(blanked)}
+        abrupt = any(joined.startswith(opener, b) and e - b > len(opener)
+                     for b, e in constructs for opener in ("<!-->", "<!--->"))  # HTML ends that comment at once
+        if stripped - set(constructs) or abrupt:
             line_unsure.add(first)
     if lines and _REF_DEF_START.match(lines[0]) and "]:" in joined:
         # axis: cmark consumes link reference definitions at a block's start and GitHub renders nothing for them, so
