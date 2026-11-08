@@ -738,7 +738,7 @@ def _destination_end(text, j):
     n = len(text)
 
     def blank(k):
-        while k < n and text[k] in " \t\n":
+        while k < n and text[k] in " \t\n\v\f":  # cmark-gfm's whitespace
             k += 1
         return k
 
@@ -752,7 +752,7 @@ def _destination_end(text, j):
         j += 1
     else:
         depth = 0
-        while j < n and text[j] not in " \t\n":
+        while j < n and text[j] not in " \t\n\v\f":
             c = text[j]
             if c == "\\":
                 j += 2
@@ -992,8 +992,8 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # axis (C5): the HTML parse disagrees with cmark about where the construct ends
         # (a vertical tab in a tag also counts, as the earlier conservative reading: cmark takes \v as tag whitespace)
         is_tag = _INLINE_OPEN_TAG.fullmatch(construct) or _INLINE_CLOSE_TAG.fullmatch(construct)
-        if is_tag and "=" in construct and (not atx or "<" in construct[1:] or ">" in construct[:-1]):
-            # (an ATX heading's text drops the tag; one holding a quoted < or > is not dropped whole, so no exemption)
+        if is_tag and "=" in construct and (not atx or ">" in construct[:-1]):
+            # (an ATX heading's text drops the tag up to its first ">"; one holding a quoted ">" is not dropped whole)
             # vet 854: an attribute value shows only as an attribute, so the tag's lines read unsure (not sticky)
             line_unsure.update(first + k for k in range(first_line, last_line + 1))
         # axis (vet 851 renders): a comment, PI, CDATA or declaration hides the text it holds, so the line it starts on

@@ -1529,3 +1529,13 @@ def test_atx_heading_tag_with_a_quoted_bracket_reads_unsure():
     exemption."""
     assert _line_state('## <span title=">Advisor vet<"></span>\n', "## <span") == U
     assert _line_state('## <span title="x">Advisor vet</span>\n', "## <span") == V
+
+
+@pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
+def test_bare_destination_then_title_after_form_feed_or_vertical_tab_reads_unsure(sep):
+    """Final returning review on 10ed80c6, round-2 audit: the link cursor skips cmark-gfm's whitespace too, so a bare
+    destination ends at a form feed or vertical tab and the title after it is found (GitHub shows ZQ1 only as the title
+    attribute). A quoted ``<`` alone in an ATX heading's attribute keeps the exemption (control)."""
+    body = "[](https://example.com" + sep + '"ZQ1")\n\n## ZQ2\n'
+    assert _line_state(body, "[](") == U
+    assert _line_state('## <span title="<">Advisor vet</span>\n', "## <span") == V
