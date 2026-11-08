@@ -314,8 +314,273 @@ The inverse Edit put `m.startswith(UNCERTIFIED_OPENING)` back in place of `m == 
 1 passed in 0.73s
 ```
 
+## Work order C2 entries: the attested session and the hand account's terminal, source and note
+
+**Provenance:** claude / sonnet (implementer, work order C2). Detectors are the tests work order C wrote in `plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py`. Every command below is `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2395c2 -m pytest "<node id>" -q -p no:xdist`. Each neutralization is one Edit-tool edit inside the named production function, restored by the inverse Edit-tool edit; no `git checkout`, `git restore`, `git reset` or `git stash` was used.
+
+## E-attested: `account_from_session`'s `uncertified-manual` branch
+
+- **guarded element:** `plugins/superheroes/lib/review_record_session.py`, `account_from_session`, the condition `if abandoned is None and state["terminal"] == decision_kinds.ATTESTED_VERDICT:` (line 1399).
+- **axis:** an attested manual session is stamped by the session writer from the driver's own state, never from an extras key, so its record reads not-reviewed whatever else is written (the `# axis:` comment on line 1400).
+- **neutralization:** replaced
+  `    if abandoned is None and state["terminal"] == decision_kinds.ATTESTED_VERDICT:`
+  with
+  `    if abandoned is None and state["terminal"] == decision_kinds.ATTESTED_VERDICT and False:`
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_an_attested_session_writes_not_reviewed_with_the_drivers_text`
+- **command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2395c2 -m pytest "plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_an_attested_session_writes_not_reviewed_with_the_drivers_text" -q -p no:xdist`
+
+### raw red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+______ test_an_attested_session_writes_not_reviewed_with_the_drivers_text ______
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-21/test_an_attested_session_write0')
+
+    def test_an_attested_session_writes_not_reviewed_with_the_drivers_text(tmp_path):
+        """axis: E-attested — the session writer stamps an uncertified-manual session itself, so its record reads not-reviewed whatever the extras say."""
+        session, fake, body = _attested(tmp_path, "att")
+        out = _write(tmp_path, session, fake, body)
+        assert out["ok"] is True and out["status"] == "not-reviewed", out
+        rec = rr.read(7, readers=fake.readers())
+        (line,) = rec["whatIsMissing"]
+        assert rec["status"] == "not-reviewed" and not rr.cleared(rec["status"])
+>       assert line == rr.uncertified_line({"terminal": "uncertified-manual", "reason": DRIVER_TEXT})
+E       AssertionError: assert 'the review s...ason recorded' == 'the review s...s unreadable)'
+E         
+E         Skipping 83 identical leading characters in diff, use -v to show
+E         - withheld: attested by hand over a driver failure (kind driver-error, class seat-defect, phase dispatch-panel, failure the seat result was unreadable)
+E         + withheld: no reason recorded
+
+/home/user/wt-2395/plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py:129: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_an_attested_session_writes_not_reviewed_with_the_drivers_text
+1 failed in 0.84s
+```
+
+### restore
+
+The inverse Edit removed ` and False` from the condition.
+
+### restore receipt (restored lines quoted from the file)
+
+```
+1399:    if abandoned is None and state["terminal"] == decision_kinds.ATTESTED_VERDICT:
+```
+
+### raw green
+
+```
+.                                                                        [100%]
+1 passed in 2.00s
+```
+
+## E-vocab: `_validate`'s `uncertified` terminal check
+
+- **guarded element:** `plugins/superheroes/lib/review_record.py`, `_validate`, the `uncertified` check's `unc.get("terminal") in decision_kinds.ALL_VERDICTS` (line 832).
+- **axis:** the withheld-certificate entry's terminal is one of the driver's own verdicts but converged, so no free text enters the record as a driver's word (the `# axis:` comment on line 830).
+- **neutralization:** replaced
+  `unc.get("terminal") in decision_kinds.ALL_VERDICTS`
+  with
+  `isinstance(unc.get("terminal"), str)`
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged` (free-text ids `bug-free`, `mystery` and the empty string `""`; non-string ids `None` and `5`)
+- **ids that go red:** `[bug-free]`, `[mystery]`, `[]` (the empty string). `[None]` and `[5]` stay green, as expected: the `isinstance` check still refuses a non-string terminal, so those two ids do not discriminate this neutralization.
+- **command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2395c2 -m pytest "plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged" -q -p no:xdist`
+
+### raw red
+
+```
+FFF..                                                                    [100%]
+=================================== FAILURES ===================================
+_ test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged[bug-free] _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-23/test_a_hand_account_terminal_i0')
+bad = 'bug-free'
+
+    @pytest.mark.parametrize("bad", ["bug-free", "mystery", "", None, 5])
+    def test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged(tmp_path, bad):
+        """axis: E-vocab — a terminal that is not a driver verdict is refused; each verdict but converged is accepted."""
+        out, fake = _hand(tmp_path, "bad", {"terminal": bad, "reason": None})
+>       assert out["ok"] is False and out["reason"] == "review-account-invalid" and out["detail"] == "uncertified", out
+E       AssertionError: {'ok': False, 'reason': 'review-record-forbidden-claim', 'detail': 'bug-free'}
+E       assert (False is False and 'review-recor...rbidden-claim' == 'review-account-invalid'
+E         
+E         - review-account-invalid
+E         + review-record-forbidden-claim)
+
+/home/user/wt-2395/plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py:170: AssertionError
+_ test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged[mystery] _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-23/test_a_hand_account_terminal_i1')
+bad = 'mystery'
+
+    @pytest.mark.parametrize("bad", ["bug-free", "mystery", "", None, 5])
+    def test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged(tmp_path, bad):
+        """axis: E-vocab — a terminal that is not a driver verdict is refused; each verdict but converged is accepted."""
+        out, fake = _hand(tmp_path, "bad", {"terminal": bad, "reason": None})
+>       assert out["ok"] is False and out["reason"] == "review-account-invalid" and out["detail"] == "uncertified", out
+E       AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/1', 'parts': 0, ...}
+E       assert (True is False)
+
+/home/user/wt-2395/plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py:170: AssertionError
+_ test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged[] __
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-23/test_a_hand_account_terminal_i2')
+bad = ''
+
+    @pytest.mark.parametrize("bad", ["bug-free", "mystery", "", None, 5])
+    def test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged(tmp_path, bad):
+        """axis: E-vocab — a terminal that is not a driver verdict is refused; each verdict but converged is accepted."""
+        out, fake = _hand(tmp_path, "bad", {"terminal": bad, "reason": None})
+>       assert out["ok"] is False and out["reason"] == "review-account-invalid" and out["detail"] == "uncertified", out
+E       AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/1', 'parts': 0, ...}
+E       assert (True is False)
+
+/home/user/wt-2395/plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py:170: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged[bug-free]
+FAILED plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged[mystery]
+FAILED plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_account_terminal_is_one_of_the_drivers_verdicts_but_converged[]
+3 failed, 2 passed in 1.00s
+```
+
+### restore
+
+The inverse Edit put `unc.get("terminal") in decision_kinds.ALL_VERDICTS` back in place of `isinstance(unc.get("terminal"), str)`.
+
+### restore receipt (restored lines quoted from the file)
+
+```
+832:                        and unc.get("terminal") in decision_kinds.ALL_VERDICTS and unc["terminal"] != "converged"
+```
+
+### raw green
+
+```
+.....                                                                    [100%]
+5 passed in 0.73s
+```
+
+## E-source: `_summary`'s exemption condition
+
+- **guarded element:** `plugins/superheroes/lib/review_record.py`, `_summary`, the condition `if r.get("uncertified") and r["uncertified"].get("source") == "session" and not compact:` (line 2762).
+- **axis:** only an entry the session writer stamped is left out of the claim check; a hand account's entry is claim-checked (the `# axis:` comment on line 2760).
+- **neutralization:** replaced
+  `    if r.get("uncertified") and r["uncertified"].get("source") == "session" and not compact:`
+  with
+  `    if r.get("uncertified") and not compact:`
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_accounts_withheld_entry_is_claim_checked_but_the_sessions_is_not`
+- **command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2395c2 -m pytest "plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_accounts_withheld_entry_is_claim_checked_but_the_sessions_is_not" -q -p no:xdist`
+
+### raw red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_hand_accounts_withheld_entry_is_claim_checked_but_the_sessions_is_not _
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-25/test_a_hand_accounts_withheld_0')
+
+    def test_a_hand_accounts_withheld_entry_is_claim_checked_but_the_sessions_is_not(tmp_path):
+        """axis: E-source — only an entry the session writer stamped is exempt from the claim check."""
+        cause = "the kept bug-free check errored at setup"
+        out, fake = _hand(tmp_path, "hand", {"terminal": "cannot-certify", "reason": cause})
+>       assert out["ok"] is False and out["reason"] == "review-record-forbidden-claim", out
+E       AssertionError: {'ok': True, 'action': 'created', 'url': 'http://c/1', 'parts': 0, ...}
+E       assert (True is False)
+
+/home/user/wt-2395/plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py:199: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_a_hand_accounts_withheld_entry_is_claim_checked_but_the_sessions_is_not
+1 failed in 0.73s
+```
+
+### restore
+
+The inverse Edit put ` and r["uncertified"].get("source") == "session"` back into the condition.
+
+### restore receipt (restored lines quoted from the file)
+
+```
+2762:    if r.get("uncertified") and r["uncertified"].get("source") == "session" and not compact:
+```
+
+### raw green
+
+```
+.                                                                        [100%]
+1 passed in 0.76s
+```
+
+## E-note: `uncertified_line` never carries the attestation note
+
+- **guarded element:** `plugins/superheroes/lib/review_record.py`, `uncertified_line`, the returned line `return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"` (line 1635).
+- **axis:** the human's attestation note is kept in the record's `uncertified.note` as data and enters no summary line.
+- **neutralization:** replaced
+  `    return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"`
+  with
+  `    return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}" + (f"; note: {u['note']}" if isinstance(u.get("note"), str) else "")`
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_the_attestation_note_is_kept_as_data_and_never_enters_the_summary`
+- **command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2395c2 -m pytest "plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_the_attestation_note_is_kept_as_data_and_never_enters_the_summary" -q -p no:xdist`
+
+### raw red
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_the_attestation_note_is_kept_as_data_and_never_enters_the_summary ____
+
+tmp_path = PosixPath('/tmp/claude-0/pytest-of-root/pytest-27/test_the_attestation_note_is_k0')
+
+    def test_the_attestation_note_is_kept_as_data_and_never_enters_the_summary(tmp_path):
+        """axis: E-note — the human's attestation note is in the record's uncertified.note and in no summary line."""
+        note = "the owner says it is bug-free"
+        session, fake, body = _attested(tmp_path, "att", dict(ATTESTATION, note=note))
+        out = _write(tmp_path, session, fake, body)
+        assert out["ok"] is True and out["status"] == "not-reviewed", out
+        rec = rr.read(7, readers=fake.readers())
+        assert rec["uncertified"]["note"] == note and rec["uncertified"]["source"] == "session"
+        for level in (0, 1):
+>           assert note not in rr._summary(rec, level), level
+E           AssertionError: 0
+E           assert 'the owner s... is bug-free' not in '**Review re...tant · fixed'
+E             
+E             'the owner says it is bug-free' is contained here:
+E               e); note: the owner says it is bug-free.
+E               Nothing waits for the owner.
+E               Lane: full (reported by the session).
+E               Risk floor: full — risk-unclear-not-set: the project's risk areas are not set (missing: core-md-absent); proposal-taken: full is at or above the floor.
+E               Withheld from reviewers: none....
+E             
+E             ...Full output truncated, use '-vv' to show
+
+/home/user/wt-2395/plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py:143: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_the_attestation_note_is_kept_as_data_and_never_enters_the_summary
+1 failed in 0.77s
+```
+
+### restore
+
+The inverse Edit removed the appended `+ (f"; note: ...")` expression from the returned line.
+
+### restore receipt (restored lines quoted from the file)
+
+```
+1635:    return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"
+```
+
+### raw green
+
+```
+.                                                                        [100%]
+1 passed in 0.70s
+```
+
 ## Disclosures
 
+- Work order C2 redaction: the `/tmp/claude-0/...` pytest temp paths are kept as printed; the `UV_NATIVE_TLS` deprecation warning that `scripts/pinned-python` prints first was left out of the quoted captures; every other line is as printed.
 - Captures are well under the 32 KiB per-element ceiling; nothing was moved outside the repository.
 - Redaction: the `/tmp/claude-0/...` pytest temp path is kept as printed. In the E-displayed red capture, pytest printed the credential-shaped test token whole inside the `certification = ...` line; that token and the run of padding characters after it are replaced there by the bracketed notes, and the line is shortened accordingly. Every other line is as printed. The `UV_NATIVE_TLS` deprecation warning that `scripts/pinned-python` prints first was left out of the quoted captures. The `^^^` marker lines under `_record(...)` in the E-mask and E-displayed captures were retyped and their caret counts may differ from pytest's own.
 - The E-line and E-account entries are work order A's captures (pycache prefix `/tmp/superheroes-pyc-2395`), not re-run in work order B; their guarded lines are unchanged except that `uncertified_line` now spells its opening through `UNCERTIFIED_OPENING`.

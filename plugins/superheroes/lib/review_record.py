@@ -3165,7 +3165,7 @@ def _transit_summary(checks):
     return out
 
 
-def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), session_uncertified=None):
+def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *, session_uncertified=None):
     def go():
         try:
             with open(account_path, encoding="utf-8") as fh:
