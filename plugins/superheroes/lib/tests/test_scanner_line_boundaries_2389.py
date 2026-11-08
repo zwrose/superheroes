@@ -43,7 +43,10 @@ def test_g1_visible_split_u2028_does_not_make_a_fence_line():
 def test_g1_visible_split_u2028_does_not_make_a_marker_line():
     # str.splitlines would read the marker as a whole line and keep it
     source = "a <!-- superheroes:x -->\n"
-    assert la._visible(source) == "a \n"
+    # #2389 catch-up 66130a25: md_hidden now reads the line UNSURE (an inline comment hides text on it), so the leftover check blanks it
+    # whole and it keeps only its terminator. A fail-open split would keep the marker line "<!-- superheroes:x -->" whole.
+    assert la._visible(source) == "\n"
+    assert "superheroes" not in la._visible(source)  # the old value, "a \n"
 
 
 @pytest.mark.parametrize("char", [" ", " ", "\u0085", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e"])
@@ -66,7 +69,9 @@ def test_g1_visible_split_a_line_cut_to_nothing_keeps_its_own_terminator(ending)
     source = eol("a <!-- x\nb --> c\nlast <!-- y", ending)
     out = la._visible(source)
     # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
-    assert out == eol("a \n\nlast ", ending)
+    # #2389 catch-up 66130a25: md_hidden now reads the first line ("a <!-- x", whose comment closes on the next line and hides text) UNSURE and
+    # blanks it whole, so it keeps only its own terminator (was "a " + terminator); the third line stays visible and is still cut at its comment
+    assert out == eol("\n\nlast ", ending)
     assert line_count(out) == line_count(source)
 
 

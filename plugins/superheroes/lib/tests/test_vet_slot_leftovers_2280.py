@@ -257,7 +257,9 @@ def test_id_and_title_only_inside_an_html_comment_are_not_named():
 
 def test_visible_text_beside_a_comment_still_names_it():
     shown = body("- f-1 the retry loop never backs off <!-- builder note -->: merging accepts it.\n")
-    assert la.missing(read_ok(F1), shown) == []
+    # #2389 catch-up 66130a25 (over-refusal, disclosed): GitHub shows this acceptance, but md_hidden now reads a line where an inline comment
+    # hides text UNSURE and the leftover check blanks it whole, so f-1 now reads missing (was []). It fails closed; a refusal, never a pass.
+    assert la.missing(read_ok(F1), shown) == [{"id": "f-1", "title": F1["title"]}]
 
 
 def test_two_findings_sharing_an_id_are_each_checked_with_their_own_title(tmp_path):
@@ -314,7 +316,9 @@ def test_visible_keeps_fenced_text_and_marker_lines_and_drops_an_unclosed_commen
     assert la._visible("```\n<!-- shown -->\n```\n") == "```\n\n```\n"
     assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
     # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
-    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "a \n\n\nf "
+    # #2389 catch-up 66130a25: md_hidden now reads the first line ("a <!-- b", whose comment hides text) UNSURE, so it is blanked whole
+    # and keeps only its terminator (was "a " + terminator); the unclosed comment on the last line is still cut
+    assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "\n\n\nf "
 
 
 # --- review round 3 fixes ---------------------------------------------------------------------------
