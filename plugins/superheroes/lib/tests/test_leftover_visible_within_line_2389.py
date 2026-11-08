@@ -681,15 +681,22 @@ def test_g12_structure_heading_half_a_cut_that_makes_a_line_an_atx_heading_voids
 
 def claim_fragment_body():
     """BR684-E-2's counterexample: the #98 claim wraps across two lines and an inline tag cuts its first line, while a
-    comment-joined #99 claim sits below the build-record marker, so the token and claim counts balance."""
+    comment-joined #99 claim sits below the build-record marker, so the token and claim counts balance.
+
+    #2389 review session 8: the joining comment is empty (`<!---->`, it hides no text), so md_hidden (layer 1 at 66130a25)
+    reads its line VISIBLE and the join happens; a non-empty comment would blank the line whole and unbalance the counts."""
     text = body("- F-1 The retry loop never backs off <b>x</b> fixed-above #98\n  1234567\n")
     return text.replace("<details><summary>Build record</summary>\n\n",
-                        "<details><summary>Build record</summary>\n\nfixed-<!-- x -->above #99 abcdef0\n\n", 1)
+                        "<details><summary>Build record</summary>\n\nfixed-<!---->above #99 abcdef0\n\n", 1)
 
 
 def test_g16_claim_fragment_the_counts_balance_but_the_changed_line_voids_the_body(tmp_path):
     text = claim_fragment_body()
-    assert "fixed-<!-- x -->above #99 abcdef0" in text
+    assert "fixed-<!---->above #99 abcdef0" in text
+    # the precondition the name claims: the token and whole-claim counts balance, so the count guard (B) does not void it
+    cut = la._visible(text)
+    assert len(la._FIXED_ABOVE_TOKEN.findall(cut)) == len(la._FIXED_ABOVE_TOKEN.findall(text))
+    assert len(la.FIXED_ABOVE_RE.findall(cut)) == len(la.FIXED_ABOVE_RE.findall(text))
     assert la._visible_claim(text)[1] is True
     assert la._accepting_items(text) == []
     assert missing(text) == GAP
@@ -715,10 +722,16 @@ def test_g16_claim_fragment_control_an_inline_comment_on_a_claim_line_keeps_its_
 def test_g16_claim_fragment_a_wrapped_claim_cut_on_its_first_line_voids_though_a_joined_wrapped_one_balances_the_counts():
     # only guard (a) sees this: no changed line holds a whole claim on its own (the wrapped claims are whole only across two
     # lines), so the per-line guard (b) compares empty claim lists, and the token and claim counts balance
+    # #2389 review session 8: the joined claim is the identical wrapped #98 1234567 claim, joined by an empty comment
+    # (`<!---->` hides no text, so md_hidden keeps its line VISIBLE). The token counts, the claim counts and the sorted
+    # whole-text claims (G18) all balance, so only the removal guard (a) can catch the cut that removes F-1's claim.
     text = body("- F-1 The retry loop never backs off <b>x</b> fixed-above #98\n  1234567\n")
     text = text.replace("<details><summary>Build record</summary>\n\n",
-                        "<details><summary>Build record</summary>\n\nfixed-<!-- x -->above #99\nabcdef0\n\n", 1)
-    assert "fixed-<!-- x -->above #99\nabcdef0" in text
+                        "<details><summary>Build record</summary>\n\nfixed-<!---->above #98\n1234567\n\n", 1)
+    assert "fixed-<!---->above #98\n1234567" in text
+    cut = la._visible(text)
+    assert la.FIXED_ABOVE_RE.findall(text) == la.FIXED_ABOVE_RE.findall(cut) == [("98", "1234567")]
+    assert len(la._FIXED_ABOVE_TOKEN.findall(cut)) == len(la._FIXED_ABOVE_TOKEN.findall(text))
     assert la._visible_claim(text)[1] is True
     assert la._accepting_items(text) == []
     assert missing(text) == GAP
