@@ -1587,7 +1587,7 @@ def _with_build_session_vendor(config_overrides):
     return overrides or None
 
 
-def new_state(config=None):
+def new_state(config=None, session_dir=None):
     cfg = _default_config(config)
     seeded_seat_map = cfg.get("seatMap")
     state = {
@@ -1637,7 +1637,7 @@ def new_state(config=None):
     _reevaluate_lane_dimensions(state, cfg, state["reviewedDiff"])
     _plan_slices(state, cfg)
     if not state["terminal"]:
-        _seed_returning_round(state, cfg)
+        _seed_returning_round(state, cfg, session_dir=session_dir)
     return state
 
 
@@ -2087,7 +2087,7 @@ def _move_audit_spawned(state, old_keys, new_key):
         spawned.pop(new_key, None)
 
 
-def _seed_returning_round(state, cfg):
+def _seed_returning_round(state, cfg, session_dir=None):
     """Round 1 of a fresh session whose config holds a returning-review decision. A ``changed`` decision makes
     round 1 a returning round: no panel, the scoped finder over what changed since the last reviewed commit (an
     empty change converges as a later round with an empty fix delta does). Any other decision, and a ``changed``
@@ -2127,7 +2127,7 @@ def _seed_returning_round(state, cfg):
         _decision(state, "scoped-finder-skipped",
                   "scopedFinder: skipped-empty-surface — the change since the last reviewed commit left an empty "
                   "surface; the scoped new-finding scan was skipped")
-        _fold_scoped(state, cfg, {})
+        _fold_scoped(state, cfg, {}, session_dir=session_dir)
 
 
 def _finding_identity_key(finding):
@@ -3804,10 +3804,10 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None, session_di
     elif phase == P_AUDITS:
         _fold_audits(state, config, artifact, session_dir=session_dir)
     elif phase == P_SCOPED:
-        _fold_scoped(state, config, artifact)
+        _fold_scoped(state, config, artifact, session_dir=session_dir)
     elif phase == P_VERIFY:
         _fold_verify(state, config, artifact, resolution=verified_head_resolution,
-                     panel_diff_seam=panel_diff_seam)
+                     panel_diff_seam=panel_diff_seam, session_dir=session_dir)
     elif phase == P_APPLY_FIXES:
         if isinstance(state.get(TEST_RESTORE_FIELD), dict):
             # a restore-only step is no fix: the entry point's check rides in `fix_commits`
@@ -3946,7 +3946,7 @@ def _break_it_scope(session_dir, state, config):
     runner turns into a `head-unresolved` not-run."""
     if session_dir:
         return _resolve_repo_root(session_dir, state), _session_certified_head(session_dir, state)
-    return config.get("repoRoot"), config.get("headSha")
+    return config.get("repoRoot"), _session_head(session_dir, config)
 
 
 def _outside_anchors(drops):
@@ -5432,7 +5432,7 @@ def _fold_synthesis(state, config, artifact, session_dir=None, exact_only=None):
     _stamp_fix_groups(state, merged.get("fixGroups"), kept)
     _sync_merged_consequences(state, kept)
     _apply_repeat_marks(state, plan)
-    _after_findings_settled(state, config)
+    _after_findings_settled(state, config, session_dir=session_dir)
 
 
 def _round_is_sliced(state):
@@ -6163,7 +6163,7 @@ def _unsettled_owner_choices(state):
     return unsettled
 
 
-def _after_findings_settled(state, config):
+def _after_findings_settled(state, config, session_dir=None):
     """After the round's findings are verified + merged + justification-filtered: route to the fix
     leg when there is a blocking finding, else to the terminal decision (round 1 clean = certify).
 
@@ -6171,7 +6171,7 @@ def _after_findings_settled(state, config):
     verify+synthesis, so when the delta settle is armed it must re-settle the delta (audit breaker)
     rather than the round-1 fix/terminal path."""
     if state.get("_settleDelta"):
-        _settle_delta(state, config)
+        _settle_delta(state, config, session_dir=session_dir)
         return
     blocking = _blocking(state.get("findings") or [])
     _record_round(state, "blockingCount", len(blocking))
@@ -6179,10 +6179,13 @@ def _after_findings_settled(state, config):
         batch = _close_batch_over_fix_groups(state, blocking, _hold_owner_choice(state, blocking))
         # A round whose only blockers are held for the owner has nothing to fix: it settles, and the
         # convergence chokepoint hands the held findings back open.
-        if _queue_fix_batch(state, config, [dict(f) for f in batch]) == "empty":
-            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
-    elif _queue_fix_batch(state, config, []) == "empty":
-        _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+        if _queue_fix_batch(state, config, [dict(f) for f in batch],
+                            session_dir=session_dir) == "empty":
+            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                            session_dir=session_dir)
+    elif _queue_fix_batch(state, config, [], session_dir=session_dir) == "empty":
+        _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                            session_dir=session_dir)
 
 
 # ---- fix + verify legs ----------------------------------------------------------------------
@@ -6339,13 +6342,14 @@ def _drop_spent_out_of_scope_rows(state, rows):
     return kept, [key for key, _row, _rnd in spent]
 
 
-def _resolve_empty_fix_batch_convergence(state, config):
+def _resolve_empty_fix_batch_convergence(state, config, session_dir=None):
     """Route an exclusion-emptied batch through the path's own resolver (A2)."""
     round_rec = state.get("rounds", {}).get(str(state["round"]), {})
     if round_rec.get("roundKind") in ("delta", RETURNING_KIND):
-        _settle_delta_converged(state, config)
+        _settle_delta_converged(state, config, session_dir=session_dir)
         return
-    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+    _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                            session_dir=session_dir)
 
 
 def _fix_row_roots(state, rows, ledger_by_key=None):
@@ -6647,7 +6651,7 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
         if batch_index == 0:
             _decision(state, "fix-batch-excluded",
                       "fix batch emptied by %s — no fixes to apply" % why)
-            _resolve_empty_fix_batch_convergence(state, config)
+            _resolve_empty_fix_batch_convergence(state, config, session_dir=session_dir)
         else:
             _decision(state, "fix-batch-excluded",
                       "fix batch emptied by %s — remaining queue exhausted, the round proceeds "
@@ -7593,7 +7597,8 @@ def _fold_apply_fixes(state, config, artifact, changed_subjects_seam=None, sessi
         done = len(slice_)
         queued = len(queue) - min(cap, len(queue))
         status = _queue_fix_batch(
-            state, config, queue, reset_accumulator=False, batch_index=index + 1)
+            state, config, queue, reset_accumulator=False, batch_index=index + 1,
+            session_dir=session_dir)
         if status == "queued":
             _decision(state, "fix-batch-split",
                       "fix batch slice %d of this round dispatched (%d findings; %d queued)"
@@ -8028,7 +8033,7 @@ def _verify_rerun_entry(first, artifact, head, head_source, moved, force_head_mo
     return entry, moved_heads
 
 
-def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
+def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None, session_dir=None):
     """Fold the verify result. FAIL-CLOSED (#507 v10): advance ONLY on an explicit `pass` or — WHEN NO
     verify command is configured — an explicit unverified skip (`skipped`/`none`/`unverified`). A
     `fail`, a `timeout`, a missing/None result, any unrecognized value, OR a skip result while a real
@@ -8167,7 +8172,7 @@ def _fold_verify(state, config, artifact, *, resolution, panel_diff_seam=None):
     then = state.pop("_verifyThen", None)
     state.pop("_restoredHead", None)
     if then == VERIFY_THEN_POST_AUDITS:
-        _after_audits(state, config)
+        _after_audits(state, config, session_dir=session_dir)
         return
     # VERIFY_THEN_CAP, and the legacy position (a gate pending with no flag): the round advance is
     # here — past the cap it hands back `round-cap`; otherwise it enters the delta round.
@@ -9499,14 +9504,14 @@ def _fold_audits(state, config, artifact, session_dir=None):
     if state.get("_verifyThen") == VERIFY_THEN_POST_AUDITS:
         state["step"] = P_VERIFY
         return
-    _after_audits(state, config)
+    _after_audits(state, config, session_dir=session_dir)
 
 
-def _after_audits(state, config):
+def _after_audits(state, config, session_dir=None):
     """Scoped-finder routing after audits fold — or after the post-audits verify gate passes."""
     # axis: the extra audit round runs no scoped finder, seams check, fixer or verify after its audits — see bite-proof record c1l4b_wo_a
     if _is_extra_audit_round(state):
-        _settle_extra_audit(state, config)
+        _settle_extra_audit(state, config, session_dir=session_dir)
         return
     if state.pop("_auditFirst", False):
         # a returning round 1 that reads in full: the carried findings were audited first, and the panel round 1 always ran
@@ -9538,17 +9543,17 @@ def _after_audits(state, config):
     if state.get("_newSurface"):
         state["step"] = P_SCOPED
         return
-    _skip_empty_scoped_surface(state, config)
+    _skip_empty_scoped_surface(state, config, session_dir=session_dir)
 
 
-def _skip_empty_scoped_surface(state, config):
+def _skip_empty_scoped_surface(state, config, session_dir=None):
     """The one home of the empty-surface decision: the scoped new-finding scan is skipped with a
     receipt-visible note and the audits' own new-issue candidates go through the same fold."""
     _record_round(state, "scopedFinder", "skipped-empty-surface")
     _decision(state, "scoped-finder-skipped",
               "scopedFinder: skipped-empty-surface — the fixes' own diff left an empty "
               "surface; the scoped new-finding scan was skipped (audit new-issues still routed)")
-    _fold_scoped(state, config, {})
+    _fold_scoped(state, config, {}, session_dir=session_dir)
 
 
 def _saved_delta_stretch(state):
@@ -9700,7 +9705,7 @@ def _bind_audit_spawned(state, new_issues, compiled):
         spawned.update(bound)
 
 
-def _fold_scoped(state, config, artifact):
+def _fold_scoped(state, config, artifact, session_dir=None):
     """Fold the scoped new-finding scan over the fix's new surface; its candidates + the audits'
     new-issue candidates route through the same stage/cluster/verify fold."""
     candidates = artifact.get("findings") if isinstance(artifact.get("findings"), list) else []
@@ -9729,10 +9734,10 @@ def _fold_scoped(state, config, artifact):
         state["_settleDelta"] = True
         return
     _set_findings(state, [])
-    _settle_delta(state, config)
+    _settle_delta(state, config, session_dir=session_dir)
 
 
-def _settle_delta(state, config):
+def _settle_delta(state, config, session_dir=None):
     """Delta-round terminal logic: audit-keyed breaker → self-recovery → hand back; open-work →
     fix leg; else the converged decision."""
     state.pop("_settleDelta", None)
@@ -9760,7 +9765,7 @@ def _settle_delta(state, config):
     new_blocking = _blocking(state.get("findings") or [])
 
     if breaker.get("halt") and breaker.get("reason") == "audit-stall":
-        _handle_stall(state, config, breaker)
+        _handle_stall(state, config, breaker, session_dir=session_dir)
         return
     if breaker.get("halt"):
         _park_cannot_certify(
@@ -9796,19 +9801,19 @@ def _settle_delta(state, config):
         batch = _hold_owner_choice(state, _union_open_blockers(new_blocking, nd_targets))
         # Only owner-choice blockers were open: nothing to fix, so the delta settles as a clean one
         # and the convergence chokepoint hands the held findings back open.
-        if _queue_fix_batch(state, config, batch) == "empty":
-            _settle_delta_converged(state, config)
+        if _queue_fix_batch(state, config, batch, session_dir=session_dir) == "empty":
+            _settle_delta_converged(state, config, session_dir=session_dir)
         return
 
-    if _queue_fix_batch(state, config, []) != "empty":
+    if _queue_fix_batch(state, config, [], session_dir=session_dir) != "empty":
         return
-    _settle_delta_converged(state, config)
+    _settle_delta_converged(state, config, session_dir=session_dir)
 
 
-def _settle_delta_converged(state, config):
+def _settle_delta_converged(state, config, session_dir=None):
     """Converged candidate tail shared by `_settle_delta` and stall self-recovery when no open work
     remains: the review ends on this round's audit and scoped finder, never on a further panel."""
-    _terminal_converged(state, config, full_panel=False)
+    _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
 
 
 def _cap_blocks(state, config, next_round, refused_at):
@@ -9931,7 +9936,7 @@ def _route_outside_new_issues(state, new_issues):
     return inside
 
 
-def _settle_extra_audit(state, config):
+def _settle_extra_audit(state, config, session_dir=None):
     """The extra audit round's end: its audits folded, and nothing else runs after them.
 
     No scoped finder, seams check, fixer, stall recovery or verify follows. When
@@ -9966,7 +9971,7 @@ def _settle_extra_audit(state, config):
                    "is withheld." % "; ".join(pending),
                    cap=True)
         return
-    _terminal_converged(state, config, full_panel=False)
+    _terminal_converged(state, config, full_panel=False, session_dir=session_dir)
 
 
 def _pending_owner_rulings(state):
@@ -10234,7 +10239,7 @@ def _finish_retired_extra_pass(state, session_dir=None):
               "The review was waiting at an extra pass over a big change that this version no longer "
               "runs. Round %s's findings were already verified and settled, so the review continues "
               "from there." % state["round"])
-    _after_findings_settled(state, config)
+    _after_findings_settled(state, config, session_dir=session_dir)
     return True
 
 
@@ -10424,11 +10429,12 @@ def _compose_stall_fix_batch(state, breaker):
     return batch, None
 
 
-def _route_stall_self_recovery(state, config, batch, refusal, breaker):
+def _route_stall_self_recovery(state, config, batch, refusal, breaker, session_dir=None):
     """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
     if batch:
-        if _queue_fix_batch(state, config, _hold_owner_choice(state, batch)) == "empty":
-            _settle_delta_converged(state, config)
+        if _queue_fix_batch(state, config, _hold_owner_choice(state, batch),
+                            session_dir=session_dir) == "empty":
+            _settle_delta_converged(state, config, session_dir=session_dir)
     elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
         _park_cannot_certify(
             state,
@@ -10461,12 +10467,13 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
         # branch cannot manufacture a full-panel claim (pinned by
         # test_empty_resolution_converge_never_claims_an_unrun_panel).
         if open_set.kind == "empty":
-            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"),
+                            session_dir=session_dir)
         else:
-            _settle_delta_converged(state, config)
+            _settle_delta_converged(state, config, session_dir=session_dir)
 
 
-def _handle_stall(state, config, breaker):
+def _handle_stall(state, config, breaker, session_dir=None):
     """audit-stall → ONE invisible self-recovery (the build session applies a recomposed fix batch,
     once, journaled). Still stalled → the PR is
     handed back (`fix-keeps-failing`); nothing is put to the owner mid-review. A stall found in the
@@ -10480,7 +10487,8 @@ def _handle_stall(state, config, breaker):
     if not state.get("selfRecovered"):
         _commit_stall_self_recovery(state, config, breaker)
         batch, refusal = _compose_stall_fix_batch(state, breaker)
-        _route_stall_self_recovery(state, config, batch, refusal, breaker)
+        _route_stall_self_recovery(state, config, batch, refusal, breaker,
+                                   session_dir=session_dir)
         return
     _hand_back(state, "fix-keeps-failing",
                breaker.get("detail") or "audit-stall persists after self-recovery", cap=False)
@@ -10545,7 +10553,7 @@ def _restored_run_record(state, key, run, run_round, row):
     return dict(run, sha256=_sha256(block["content"]), content=block["content"])
 
 
-def _break_it_kept_step(state, config):
+def _break_it_kept_step(state, config, session_dir=None):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
     parked (certification withheld). A finding ruled out of scope and cleared by the audit owes no
@@ -10610,7 +10618,8 @@ def _break_it_kept_step(state, config):
         # axis: the latest run per finding key wins, passed ones included, by round order and then list order, so a changed test's run is the one checked
         latest[run["findingKey"]] = run
         latest_round[run["findingKey"]] = run_round
-    head = config.get(FIX_FOLD_HEAD_KEY) or config.get("headSha")
+    # axis: the kept check reads the session head through the one resolver, meta.json first, so a round-1 session whose head only meta.json records is never headless — see bite-proof record wo_1_2393_kept_head
+    head = _session_head(session_dir, config)
     rows, failed = list(exempt_rows), []
     for key in list(latest) + [k for k in skipped if k not in latest]:
         run = latest.get(key)
@@ -10675,7 +10684,7 @@ def _break_it_kept_step(state, config):
     return False
 
 
-def _terminal_converged(state, config, full_panel, note=None):
+def _terminal_converged(state, config, full_panel, note=None, session_dir=None):
     """Certify: last round's fixes all discharged + verify pass. Shape is full-panel-confirmed (a
     round-1 panel converged with no fixes) or audited-chain (a review that needed fixes ends on a
     round's audit and scoped finder, with no final panel — say so). Degraded independence appends
@@ -10706,7 +10715,7 @@ def _terminal_converged(state, config, full_panel, note=None):
             "recovered the coverage; certification withheld")
         return
     # axis: the converge gate calls the kept check; without it a dropped break-it test certifies
-    if _break_it_kept_step(state, config):
+    if _break_it_kept_step(state, config, session_dir=session_dir):
         return
     base = "full-panel-confirmed" if full_panel else "audited-chain"
     shape = _cert_shape(state, base)
@@ -11367,29 +11376,25 @@ def _resolve_fix_fold_head_sha(session_dir, state):
     return head, None
 
 
+def _session_head(session_dir, config):
+    """The ONE resolver of the session's head SHA: fix-fold head, then session-setup head, from
+    meta.json then ``config``. Each counts only as a non-empty string; None when none is recorded.
+    A falsy ``session_dir`` reads ``config`` only; a non-dict ``config`` reads as empty."""
+    # axis: every read of the session head in the kept-check path goes through this one resolver, meta.json first, so a round-1 session whose head only meta.json records is never headless — see bite-proof record wo_1_2393_kept_head
+    meta = _session_meta(session_dir) if session_dir else {}
+    cfg = config if isinstance(config, dict) else {}
+    for source, key in ((meta, FIX_FOLD_HEAD_KEY), (meta, "headSha"),
+                        (cfg, FIX_FOLD_HEAD_KEY), (cfg, "headSha")):
+        head = source.get(key)
+        if isinstance(head, str) and head:
+            return head
+    return None
+
+
 def _session_certified_head(session_dir, state):
     """The session's head SHA: fix-fold head, then session-setup head, from meta.json then config."""
-    meta_path = os.path.join(session_dir, round_records.META_FILE)
-    if os.path.isfile(meta_path):
-        try:
-            with open(meta_path, encoding="utf-8") as fh:
-                meta = json.load(fh)
-            head = (meta or {}).get(FIX_FOLD_HEAD_KEY)
-            if isinstance(head, str) and head:
-                return head
-            head = (meta or {}).get("headSha")
-            if isinstance(head, str) and head:
-                return head
-        except (OSError, ValueError):
-            pass
-    cfg = (state.get("config") or {}) if isinstance(state, dict) else {}
-    head = cfg.get(FIX_FOLD_HEAD_KEY)
-    if isinstance(head, str) and head:
-        return head
-    head = cfg.get("headSha")
-    if isinstance(head, str) and head:
-        return head
-    return None
+    cfg = state.get("config") if isinstance(state, dict) else None
+    return _session_head(session_dir, cfg if isinstance(cfg, dict) else {})
 
 
 def _resolve_repo_root(session_dir, state):
@@ -11642,7 +11647,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             overrides = dict({k: v for k, v in overrides.items()
                               if k not in ("returning", "returningBaselineDiff", "returningCarried", "returningAuditBase")},
                              **_returning_overrides(session_dir, overrides))
-            state = new_state(overrides or None)
+            state = new_state(overrides or None, session_dir=session_dir)
         except MaxRoundsRefusal as refusal:
             _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
                                           "attempt": None, "outcome": "refused-max-rounds",
