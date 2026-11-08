@@ -116,8 +116,9 @@ needs the owner goes to the owner through the merge-word conversation, not the f
 **The breakdown pin.** The spec hash does not cover the breakdown, so the record also pins what you
 vetted. Just above the `Vet done:` line, add a line `Breakdown pins:` followed by one
 `<path> <content hash>` pair for each breakdown artifact, each hash from the same `content-hash`
-command run on that file as vetted. The artifacts are the coverage map, the contract register, the
-package-read audit trail and every body the filing creates, which is the inventory of
+command run on that file as vetted. The artifacts are the coverage map (`coverage-map.md`), the
+contract register (`register.md`), the package-read audit trail (`package-read-audit.md`) and every
+body the filing creates, which is the inventory of
 [the filing dry-run](decomposition.md#the-verification-pass): each child body, the epic body and
 every planned layer body, each as a file. A single-issue spec has no
 register and no package read, so its pins are the bodies its filing creates: the child's proposed
