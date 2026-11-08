@@ -58,7 +58,7 @@ _FENCE_TILDE = re.compile(r"(~{3,})")
 _BULLET = re.compile(r"[-+*](?=[ ]|\Z)")
 _ORDERED = re.compile(r"([0-9]{1,9})[.)](?=[ ]|\Z)")
 _LIST_START = re.compile(r"(?:[-+*]|[0-9]{1,9}[.)])(?:[ ]|\Z)")
-_TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z")
+_TABLE_DELIM = re.compile(r"[ ]{0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*\Z", re.A)  # cmark: ASCII whitespace only
 _FOOTNOTE = re.compile(r"[ ]{0,3}\[\^[^\]\s]+\]:")
 _VERSION_TAGS = re.compile(r"[ ]{0,3}</?(?:textarea|search|source)(?:[ \t\v\f>]|/>|\Z)", re.I | re.A)
 _TAGFILTER = re.compile(r"</?(?:script|style|title|textarea|xmp|iframe|noembed|noframes|plaintext)", re.I | re.A)
@@ -585,7 +585,7 @@ class _Parser:
         self.tip = container
 
     def _add_text_line(self, block, rest, matched):
-        if (matched and block.kind == "para" and block.lines and "|" in rest and _TABLE_DELIM.match(rest)
+        if (matched and block.kind == "para" and not block.table and block.lines and "|" in rest and _TABLE_DELIM.match(rest)
                 and _cell_count(block.lines[-1]) == _cell_count(rest)):
             # axis: cmark-gfm makes a table only when the header row and the delimiter row hold the same cell count
             block.table = True  # axis: a GFM delimiter row turns on the table-row unsure rule
@@ -654,6 +654,14 @@ def _link_regions(text):
     while at >= 0:
         regions.append((at + 2, _destination_end(text, at + 2)))
         at = text.find("](", at + 2)
+    at = text.find("][")
+    while at >= 0:  # a full reference link's second label: cmark reads it apart from the text, to its first
+        # unescaped "]" (a label may span lines); an unclosed one runs to the end of the text
+        end = at + 2
+        while end < len(text) and text[end] != "]":
+            end += 2 if text[end] == "\\" else 1
+        regions.append((at + 2, min(end, len(text))))
+        at = text.find("][", at + 2)
     for m in _REF_DEF.finditer(text):
         nl = text.find("\n", m.end())
         nl2 = text.find("\n", nl + 1) if nl >= 0 else -1
@@ -719,7 +727,7 @@ def _cell_count(row):
         text = text[:-1]
     count, j = 1, 0
     while j < len(text):
-        if text[j] == "\\":
+        if text[j] == "\\" and text[j + 1:j + 2] == "|":  # cmark-gfm: only \| escapes a pipe
             j += 2
             continue
         if text[j] == "|":
@@ -733,7 +741,7 @@ def _cell_end(text, i):
     text's length."""
     j = i
     while j < len(text):
-        if text[j] == "\\":
+        if text[j] == "\\" and text[j + 1:j + 2] == "|":  # cmark-gfm: only \| escapes a pipe
             j += 2
             continue
         if text[j] in "|\n":
@@ -850,12 +858,16 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # a block that may open with one (a "[" line and a "]:" anywhere: labels may hold escapes and span lines)
         # reads unsure from its first line
         sure_points.add((first, "possible link reference definition"))
+    regions = _link_regions(joined)
+    if any("\n" in joined[r0:r1] for r0, r1 in regions):
+        # axis: a link title (or label, or destination) may span lines, and GitHub shows its text only as an attribute,
+        # so a block with a possible link range that crosses a line break reads unsure from its first line
+        sure_points.add((first, "possible link metadata spans lines"))
     if "<" in joined:
         # axis: cmark reads a link's destination and title (and a reference definition) apart from the inline text, so
         # a backtick there opens no code span and can change how every later backtick pairs; rather than parse links,
         # a block that holds a backtick inside a possible link range and also a "<" reads unsure from its first line
         # (the ranges are an over-approximation used only to add this unsure point; the rule decides no line)
-        regions = _link_regions(joined)
         ticks = [i for i, ch in enumerate(joined) if ch == "`"]
         if any(r0 <= i < r1 for i in ticks for r0, r1 in regions):
             sure_points.add((first, "backtick in possible link metadata in a block that holds raw HTML"))

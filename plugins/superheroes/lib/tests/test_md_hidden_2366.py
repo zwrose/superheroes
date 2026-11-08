@@ -1263,3 +1263,23 @@ def test_table_cells_controls_keep_their_answers(body):
     opener in another, or a comment that opens and closes inside one cell, leave ZQ1 visible with no unsure point."""
     assert _line_state(body, "ZQ1") == V
     assert md.scan(body).unsure == ()
+
+
+def test_reference_link_label_backtick_reads_unsure():
+    """Final returning review on 68394b12 (finding "Include reference-link labels in the metadata uncertainty rule"):
+    cmark reads a full reference link's second label apart from the text, so its backtick cannot pair with a later one
+    and the comment after it hides ZQ1 on GitHub; ZQ1's line must not read visible. Control: a reference link with no
+    backtick in its label next to a code-quoted opener keeps its answer."""
+    assert _line_state("[a][x`y] <!-- b\nZQ1\n--> c`\n\n[x`y]: /u\n", "ZQ1") != V
+    assert _line_state("[a][r] and `<!--` code\nZQ1\n\n[r]: /u\n", "ZQ1") == V
+
+
+@pytest.mark.parametrize("body", [
+    "[a][x\\]y`z] <!-- b\nZQ1\n--> c`\n\n[x\\]y`z]: /u\n",   # round-2 audit: an escaped ] inside the label
+    "[a][x\\]\nZQ1\n]\n\n[x\\] ZQ1]: /u\n",                   # round-2 scoped finder: the label spans lines
+], ids=["escaped-bracket-backtick", "escaped-bracket-multiline"])
+def test_reference_link_label_with_an_escaped_bracket_reads_not_visible(body):
+    """Final returning review on 68394b12, round 2 (audit and scoped finder, finding "Skip escaped closing brackets in
+    reference labels"): a reference label holds escaped brackets and may span lines, so its range runs to the end of
+    the block; GitHub hides or attribute-only renders ZQ1 in each body, which must not read visible."""
+    assert _line_state(body, "ZQ1") != V
