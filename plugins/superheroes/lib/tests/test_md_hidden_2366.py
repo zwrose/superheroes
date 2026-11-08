@@ -1386,3 +1386,12 @@ def test_html_block_line_with_text_after_a_closed_comment_reads_unsure():
     hidden. Checked against: GitHub's HTML parsing (control)."""
     assert _line_state("<div>\n<!-- note --> ZQ1\n</div>\n", "<!-- note") == U
     assert _line_state("<!-- a --> b -->\n\n## H\n", "<!-- a") == U
+
+
+def test_image_after_an_escaped_cdata_opener_reads_not_visible():
+    """Final returning review on 66130a25, round-4 audit ("Restrict the image exclusion to actual CDATA"): an escaped
+    ``\\<`` opens no CDATA section, so the image after it stands and ZQ1 shows only in its alt attribute on GitHub. A real
+    CDATA section is still no image (control)."""
+    assert _line_state("x \\<![CDATA[alt]\nZQ1](x.png)]]>\n", "ZQ1") != V
+    assert md._image_regions("<![CDATA[ a ]]>") == []
+    assert md._image_regions("\\\\<![CDATA[ a ]]>") == []

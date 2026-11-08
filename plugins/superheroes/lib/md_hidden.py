@@ -685,7 +685,8 @@ def _image_regions(text):
     regions = []
     at = text.find("![")
     while at >= 0:
-        if not (at and _INLINE_CDATA.match(text, at - 1)):
+        slashes = len(text[:max(at - 1, 0)]) - len(text[:max(at - 1, 0)].rstrip("\\"))
+        if not (at and _INLINE_CDATA.match(text, at - 1) and slashes % 2 == 0):  # an escaped < opens no CDATA
             end, depth = at + 2, 1
             while end < len(text):
                 if text[end] == "\\":
