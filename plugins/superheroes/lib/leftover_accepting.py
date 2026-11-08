@@ -111,8 +111,8 @@ def _visible(body):
 
 def _visible_claim(body):
     """``(text, claim_removed)``: the body reduced to text the leftover check may count, and whether that removed a
-    ``fixed-above`` claim. Every change below only removes text, so a miss fails toward a ``leftover-not-accepted``
-    refusal and never toward a pass.
+    ``fixed-above`` claim. Every change below only removes text, or voids the body. The guards are meant to fail toward a
+    ``leftover-not-accepted`` refusal; the gaps known to remain are listed under Not modelled.
 
     * Every HTML comment (one that spans lines included) is cut out. A whole-line ``superheroes:`` marker is kept, so the
       section reader still finds the build-record boundary.
@@ -150,8 +150,17 @@ def _visible_claim(body):
       that could join a claim from fragments, and whose sorted whole claims differ before and after the cut, voids the
       body (the per-line guard kept from the earlier leg, so a claim joined from fragments cannot balance one a cut
       removed). A placeholder that is no claim matches neither.
+    * Whole-text claims (V852-2): beside (a) and (b), the body is void when the sorted ``FIXED_ABOVE_RE.findall`` of the
+      whole cut text differs from that of the whole source body (a claim a cut joined from fragments across lines, or
+      removed, or changed).
     * The block-role guard: the body is void when a cut changed the block role (fence kind, or ATX heading or not) of a
       line ``md_hidden`` reads VISIBLE, because the section reader re-parses the cut text.
+    * The fence reading (V852-1, BR852-1): the section reader's own fence reading is ``pr_sheet.fence_line_shape`` (a line's
+      opener or bare-run shape) and ``pr_sheet.fenced_lines`` (the per-line flags of the walk ``accepting_listed`` reads
+      through ``_outside_comments``). The body is also void when (i) a line ``md_hidden`` reads VISIBLE that a cut changed
+      has a different ``fence_line_shape`` before and after the cut, or (ii) ``fenced_lines`` of the source lines and of the
+      cut lines differ at any line ``md_hidden`` reads VISIBLE. ``md_fence`` does not model a list item's fence the way the
+      section reader does, so these two compare under the reading the consumer uses.
     * Kept as they were: a whole-line ``superheroes:`` marker is kept; a line ``md_hidden`` blanks stays blanked;
       ``md_hidden`` failing on a str blanks every non-marker line; the output keeps the input's line count (the last
       line without a terminator excepted); ``_visible`` never raises on a str; every change only removes text, or voids.
@@ -159,7 +168,8 @@ def _visible_claim(body):
       FS, GS and RS are ordinary characters inside one.
 
     Not modelled: the cut over-reaches where GitHub would show the tail (inline markup, autolinks, ``a <b`` in prose),
-    which is accepted because it fails toward a refusal."""
+    which is accepted because it fails toward a refusal. Markdown link and image titles, and image alt text, are counted as
+    text, though GitHub renders them only as attributes (V852-4, disclosed)."""
     lines = md_fence.split_lines(body)
     # axis: lines break only on Markdown endings (never U+2028 and the other str.splitlines breaks), and the fence scan
     # reads each line with exactly one terminator removed — see bite-proof record i2389_scanner_line_boundaries.md
@@ -262,6 +272,10 @@ def _visible_claim(body):
     void = void or any(out[n] != lines[n] and _FIXED_WORD.search(lines[n]) and _ABOVE_WORD.search(lines[n])
                        and sorted(FIXED_ABOVE_RE.findall(out[n])) != sorted(FIXED_ABOVE_RE.findall(lines[n]))
                        for n in range(len(lines)))
+    # axis: (c) whole-text claims: the sorted whole ``FIXED_ABOVE_RE`` claims of the whole cut text differ from those of the whole
+    # source body (one removed, joined from fragments across lines, or changed) voids the body, so no claim a cut made or unmade
+    # reaches the section reader — see bite-proof record i2389_leftover_visible_within_line.md
+    void = void or sorted(FIXED_ABOVE_RE.findall(text)) != sorted(FIXED_ABOVE_RE.findall(body))
     # axis: (a) removal: a ``fixed-above`` claim in the source body (matched over the whole joined source, so one wrapped across
     # lines is one match) that touches a line the cuts changed voids the body, unless it lies on one line and that line's sorted
     # whole claims are the same before and after the cut; a placeholder that is no claim (``fixed-above #<layer PR> <commit>``)
@@ -286,10 +300,25 @@ def _visible_claim(body):
     # reads as the acceptance section — see bite-proof record i2389_leftover_visible_within_line.md
     if not void:
         out_bare = [item[:len(item) - len(_terminator(item))] for item in out]
+        src_bare = [item[:len(item) - len(_terminator(item))] for item in lines]
         out_kinds = md_fence.scan(out_bare).kinds
         void = any(shown[n] and (out_kinds[n] != fence_kinds[n]
                                  or bool(_ATX_LINE.match(out[n])) != bool(_ATX_LINE.match(lines[n])))
                    for n in range(len(lines)))
+        # axis: (i) a visible line a cut changed that the section reader's own fence reading (pr_sheet.fence_line_shape, the one
+        # the walk of _outside_comments uses) reads as a different shape before and after the cut (an opener manufactured, lost
+        # or changed, a bare run changed) voids the body, because md_fence's list-item fence rules are not the section reader's
+        # — see bite-proof record i2389_leftover_visible_within_line.md
+        void = void or any(shown[n] and out[n] != lines[n]
+                           and pr_sheet.fence_line_shape(src_bare[n]) != pr_sheet.fence_line_shape(out_bare[n])
+                           for n in range(len(lines)))
+        # axis: (ii) a visible line the section reader's walk (pr_sheet.fenced_lines, the walk accepting_listed reads through
+        # _outside_comments) treats as fenced in the source but not in the cut text, or the other way, voids the body, because
+        # a fence moved anywhere above it re-parses what follows as the acceptance section — see bite-proof record
+        # i2389_leftover_visible_within_line.md
+        if not void:
+            src_fenced, out_fenced = pr_sheet.fenced_lines(src_bare), pr_sheet.fenced_lines(out_bare)
+            void = any(shown[n] and src_fenced[n] != out_fenced[n] for n in range(len(lines)))
     return text, void
 
 

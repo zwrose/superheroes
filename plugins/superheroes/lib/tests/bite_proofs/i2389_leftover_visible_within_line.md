@@ -6,7 +6,7 @@ Every neutralization was one targeted edit made with the Edit tool and undone by
 No `git checkout`, `restore`, `reset`, `stash` or `sed` was used.
 Command prefix for every run (worktree root), `-k` as per entry:
 `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k test_gN_`
-Restore receipts are the restored lines, quoted back by a `grep -n` after each inverse Edit.
+Restore receipts are the restored lines, quoted back by a `grep -n` after each inverse Edit (the fix leg 3 entries below were read back with the Grep tool).
 
 Guarded-element set (declared by the order): G1 rule 1 (a backslash before an opener); G2 rule 2 (a code span holding an opener);
 G3 rule 3 (an unescaped, unquoted `<?`, `<!` + letter or `<![`); G4 rule 4 (a line `md_fence` calls fenced). No others.
@@ -272,3 +272,118 @@ Each probe ran in the worktree itself: one targeted edit with the edit tool, run
 - **Restore:** `if False and not void:` became `if not void:`.
 - **Raw green:** `5 passed, 173 deselected in 0.48s`.
 - **Why a test was added.** The BR684-E-2 counterexample test (`test_g16_claim_fragment_the_counts_balance_but_the_changed_line_voids_the_body`) stays green with (a) neutralized, because its comment-joined `#99` claim sits on one changed line, which guard (b) voids by itself. The added test joins `#99` across two lines (`fixed-<!-- x -->above #99` / `abcdef0`), so no changed line holds a whole claim on its own, the counts balance, and only (a) voids it. The control `test_g16_claim_fragment_a_quoted_placeholder_cut_by_rule_1_keeps_the_acceptances` stayed green in every run.
+
+## #2389 fix leg 3 (vet 852, WO-F): G17a, G17b, G18, and G2 re-run for FU8
+
+Base head `fbc879bd`. Vet receipt: https://github.com/zwrose/superheroes/pull/2391#issuecomment-6715314903. Each probe ran in the worktree itself: one targeted edit with the edit tool, run red, the exact inverse edit, run green. No `git checkout`, `restore`, `reset`, `stash` or `sed`. Command for every half, with `SEL` the selector: `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k SEL`. Captures drop uv's one `UV_NATIVE_TLS` warning line; nothing else is dropped or redacted. After the last restore the guard lines read `leftover_accepting.py:235` `quoted = _TAG_ENTRY.search(line, i + run, end - run) if end is not None else None`, `:278` `void = void or sorted(FIXED_ABOVE_RE.findall(text)) != sorted(FIXED_ABOVE_RE.findall(body))`, `:312` `void = void or any(shown[n] and out[n] != lines[n]` and `:321` `void = any(shown[n] and src_fenced[n] != out_fenced[n] for n in range(len(lines)))`.
+
+Guarded-element set (declared by the order): G17a (i), the `fence_line_shape` comparison; G17b (ii), the `fenced_lines` comparison; G18, the whole-text claim comparison; G2, re-run for the FU8 test. No others. `pr_sheet.fence_line_shape` and `pr_sheet.fenced_lines` are the consumer's reading, not detectors; they are covered by `test_g17_fence_shape_fence_line_shape_and_fenced_lines_read_the_walk` and by the `_outside_comments` agreement test.
+
+### G17a: a visible changed line with a different `fence_line_shape` voids the body (1c-i)
+
+- **Guarded element / axis:** the `void = void or any(shown[n] and out[n] != lines[n] and pr_sheet.fence_line_shape(src_bare[n]) != pr_sheet.fence_line_shape(out_bare[n]) …)` statement in `_visible_claim` (`leftover_accepting.py:312`). Axis: a cut that gives a visible line another fence opener/run shape under the section reader's own reading voids the body.
+- **Neutralization:** `void = void or any(shown[n] and out[n] != lines[n]` became `void = void or any(False and shown[n] and out[n] != lines[n]`.
+- **Raw red** (`-k test_g17_`):
+
+```
+....................F.....                                               [100%]
+E   assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:701: assert False is True
+FAILED ...::test_g17_fence_shape_only_the_shape_a_manufactured_opener_inside_a_list_fence_voids_the_body
+1 failed, 25 passed, 181 deselected in 0.97s
+```
+
+- **Restore:** the inverse edit, `any(False and shown[n] and out[n] != lines[n]` back to `any(shown[n] and out[n] != lines[n]`. **Restore receipt:** a Grep-tool read of the line printed `312:        void = void or any(shown[n] and out[n] != lines[n]`.
+- **Raw green:**
+
+```
+..........................                                               [100%]
+26 passed, 181 deselected in 0.61s
+```
+
+- **What it shows.** Only the (i)-only test bites: it cuts `  - ```x <b> `y`` (no fence: a backtick in the info string) to the opener `  - ```x ` while the walk is already inside the list fence, so no fenced flag changes. The nested, column-0 and ordered forms stay green with (i) off: (ii) also voids them, because the manufactured opener line itself is fenced in the cut text and not in the source. This run was made before one added regression test (`..._br852_1_f1_reads_missing_whether_or_not_the_fence_guard_fires`, which passes either way) joined the file, so the green count is 26 here and 27 in the G17b green.
+
+### G17b: a visible line whose `fenced_lines` flag differs between the source and the cut voids the body (1c-ii)
+
+- **Guarded element / axis:** `void = any(shown[n] and src_fenced[n] != out_fenced[n] for n in range(len(lines)))` (`leftover_accepting.py:321`). Axis: a cut that moves a fence in the walk `accepting_listed` reads, so that a visible line is fenced in one text and not in the other, voids the body.
+- **Neutralization:** `void = any(shown[n] and src_fenced[n] != out_fenced[n] …` became `void = any(False and shown[n] and src_fenced[n] != out_fenced[n] …`.
+- **Raw red** (`-k test_g17_`, run on the final test file; an earlier red of the same neutralization, run before the added regression test, failed the same three tests and is superseded):
+
+```
+..................FF....F..                                              [100%]
+E   assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:701: assert False is True      (x3)
+FAILED ...::test_g17_fence_shape_closer_a_cut_that_turns_a_content_line_into_the_closer_voids_the_body[backtick]
+FAILED ...::test_g17_fence_shape_closer_a_cut_that_turns_a_content_line_into_the_closer_voids_the_body[tilde]
+FAILED ...::test_g17_fence_shape_br852_1_a_comment_that_ends_the_item_before_a_fence_voids_the_body
+3 failed, 24 passed, 181 deselected in 0.52s
+```
+
+- **Restore:** the inverse edit, `any(False and shown[n] and src_fenced[n] …` back to `any(shown[n] and src_fenced[n] …`. **Restore receipt:** a Grep-tool read of the line printed `321:            void = any(shown[n] and src_fenced[n] != out_fenced[n] for n in range(len(lines)))`.
+- **Raw green:**
+
+```
+...........................                                              [100%]
+27 passed, 181 deselected in 0.49s
+```
+
+- **What it shows.** The two closer forms (`  ``` <b>` becomes the closer `  ``` `, and the tilde twin) are read alike by `md_fence` and by `fence_line_shape` (both are openers before and after), so only the walk's flags differ: this is the case (i) cannot see. The BR852-1 body is voided by (ii) alone (its heading line is fenced in the source and a heading in the cut text).
+- **BR852-1 already read F-1 missing without the guard (reported, test kept).** With (ii) neutralized, the scoped command with `-k br852` gave `1 failed, 1 passed`: `test_g17_fence_shape_br852_1_f1_reads_missing_whether_or_not_the_fence_guard_fires` passed (F-1 reads missing with no void) and `test_g17_fence_shape_br852_1_a_comment_that_ends_the_item_before_a_fence_voids_the_body` failed at `assert la._visible_claim(text)[1] is True` (`assert False is True`). The cut text's blank line (the cut comment) leaves the list item open, so the walk ends the fence at the second accepting heading and that heading ends the section. The guard turns a miss by accident into a void by rule; both tests stay.
+
+### G18: the whole-text claim comparison (V852-2)
+
+- **Guarded element / axis:** `void = void or sorted(FIXED_ABOVE_RE.findall(text)) != sorted(FIXED_ABOVE_RE.findall(body))` (`leftover_accepting.py:278`). Axis: a claim a cut manufactured across lines (or removed or changed) anywhere in the text voids the body, even when no changed line holds a claim on its own and the counts balance.
+- **Neutralization:** `void = void or sorted(…` became `void = void or False and sorted(…`.
+- **Raw red** (`-k test_g18_`):
+
+```
+F..                                                                      [100%]
+E   assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:814: assert False is True
+FAILED ...::test_g18_whole_text_claims_a_claim_manufactured_across_lines_by_a_cut_voids_the_body
+1 failed, 2 passed, 205 deselected in 0.45s
+```
+
+- **Restore:** the inverse edit, `void or False and sorted(…` back to `void or sorted(…`. **Restore receipt:** a Grep-tool read of the line printed `278:    void = void or sorted(FIXED_ABOVE_RE.findall(text)) != sorted(FIXED_ABOVE_RE.findall(body))`.
+- **Raw green:**
+
+```
+...                                                                      [100%]
+3 passed, 205 deselected in 0.46s
+```
+
+The two controls (an inline comment on a claim line, and the quoted placeholder) stayed green in the red run.
+
+### G2, re-run for FU8 (`test_g2_code_span_opener_text_inside_the_span_after_the_opener_never_counts`)
+
+- **Guarded element / axis:** `quoted = _TAG_ENTRY.search(line, i + run, end - run) if end is not None else None` (`leftover_accepting.py:235`). Axis (as in G2 above): a code span whose content holds an entry `<` is kept only up to that `<` and the rest of the line is cut. FU8 puts the `<div>` on its own line so that the `Quoting` acceptance line is a visible line that reaches this branch.
+- **Neutralization:** the `quoted = …` line became `quoted = None`.
+- **Raw red** (`-k test_g2_`; the nine parametrized cut cases fail as in G2 above, and the FU8 test now fails on the axis):
+
+```
+...FFFFFFFFF........F                                                    [100%]
+E   assert 'F-1' not in "## What we'...off -->`\n\n"
+      'F-1' is contained here:
+        ## What we're accepting
+        Quoting `<!-- F-1 The retry loop never backs off -->`
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:551: assert 'F-1' not in "## What we'...off -->`\n\n"
+FAILED ...::test_g2_code_span_opener_text_inside_the_span_after_the_opener_never_counts
+10 failed, 11 passed, 187 deselected in 0.50s
+```
+
+- **Restore:** the inverse edit, `quoted = None` back to the search expression. **Restore receipt:** a Grep-tool read of `quoted = ` printed `235:                quoted = _TAG_ENTRY.search(line, i + run, end - run) if end is not None else None`.
+- **Raw green:**
+
+```
+.....................                                                    [100%]
+21 passed, 187 deselected in 0.49s
+```
+
+- **What it shows.** md_hidden reads the `Quoting` line VISIBLE after a `<div>` line of its own, so the line reaches the code-span cut, and the FU8 test now fails when that cut is off.
+### Elements in no class
+
+None. Unproven elements: none.
+
+### Whole scoped run after the last restore
+
+The eight-file scoped command of the order (`-q -n auto`): `1369 passed in 28.24s`.
