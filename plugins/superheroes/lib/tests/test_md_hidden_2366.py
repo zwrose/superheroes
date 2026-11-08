@@ -1539,3 +1539,13 @@ def test_bare_destination_then_title_after_form_feed_or_vertical_tab_reads_unsur
     body = "[](https://example.com" + sep + '"ZQ1")\n\n## ZQ2\n'
     assert _line_state(body, "[](") == U
     assert _line_state('## <span title="<">Advisor vet</span>\n', "## <span") == V
+
+
+@pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
+def test_link_cursor_whitespace_finds_a_multiline_title_holding_a_paren(sep):
+    """Final returning review on 10ed80c6, round-3 audit: with the link cursor reading form feed and vertical tab as
+    whitespace, the bare destination ends there and the title (which holds a ``)`` and runs onto the next line) is read
+    whole; GitHub shows ZQ1 only as the title attribute. Without the cursor fix the range ends at that ``)`` and the ZQ1
+    line reads visible (checked on e96abd35)."""
+    body = "[](https://example.com" + sep + '"a)\nZQ1")\n\n## ZQ2\n'
+    assert _line_state(body, "ZQ1") != V
