@@ -105,7 +105,7 @@ def empty_batch_calls(monkeypatch):
     """Record each time the empty-batch resolver runs (it needs a whole loop behind it to run)."""
     calls = []
     monkeypatch.setattr(RD, "_resolve_empty_fix_batch_convergence",
-                        lambda state, config: calls.append(state["round"]))
+                        lambda state, config, session_dir=None: calls.append(state["round"]))
     return calls
 
 
