@@ -377,9 +377,10 @@ def test_unreadable_raw_output_file_is_named_not_fatal(tmp_path):
 def test_a_secret_named_field_is_redacted_whole_in_the_record(secret):
     # axis: structured credentials; a value scrubbed without its field name keeping a password or header credential
     f = finding("a-1", outcome="fixed", reason="r")
-    f["evidence"] = {secret: "hunter2", "Nested": {"API_KEY": "abc", "note": "ok"}}
+    # the nested secret is not hex: the record carries a sha256 of a timestamped body, which can hold any short hex run
+    f["evidence"] = {secret: "hunter2", "Nested": {"API_KEY": "KEYLEAK", "note": "ok"}}
     body = rr.render(build(account(findings=[f])))
-    assert "hunter2" not in body and "abc" not in body and '"note":"ok"' in body
+    assert "hunter2" not in body and "KEYLEAK" not in body and '"note":"ok"' in body
 
 
 def test_unknown_model_takes_the_one_family_of_its_vendor(monkeypatch):
@@ -1577,11 +1578,12 @@ def test_numeric_values_under_secret_keys_stay_withheld_or_redacted():
     # axis: value type; a number under a secret-shaped key exempted from withholding or redaction
     assert rr.render_raw("f.json", '"access_token": "1234"')[1] is True
     assert rr.render_raw("f.json", "password: 1234")[1] is True
-    for evidence in ({"password": 4321}, {"api key": 4321}):
+    # a long number: the record's sha256 of a timestamped body can hold any short digit run
+    for evidence in ({"password": 987654321098}, {"api key": 987654321098}):
         f = finding("a-1", outcome="fixed", reason="r")
         f["evidence"] = evidence
         posted = rr.render(build(account(findings=[f])))
-        assert "4321" not in posted
+        assert "987654321098" not in posted
         assert rr._parse_body(posted)["findings"][0]["evidence"] == {next(iter(evidence)): "[REDACTED]"}
 
 

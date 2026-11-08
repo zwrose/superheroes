@@ -36,7 +36,9 @@ The machinery produces three artifacts:
    file.
 
 All three live **beside the spec in the work item's own folder** — one canonical file home each, no
-size ceiling, no edit races. The epic body links to each; it does not duplicate them.
+size ceiling, no edit races. Their file names are fixed: `coverage-map.md`, `register.md` and
+`package-read-audit.md`. The spec PR's merge sheet accepts a breakdown artifact under these names
+only. The epic body links to each; it does not duplicate them.
 
 ## The epic's short tag
 
