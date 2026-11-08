@@ -1,0 +1,394 @@
+{
+ "b1_endtag_open_then_newline": {
+  "body": "<div>\n</\nZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "b2_endtag_bogus_spans": {
+  "body": "<div>\n</ ZQ1\nZQ2>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "b3_endtag_dash": {
+  "body": "<div>\n</-ZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "b4_endtag_tab": {
+  "body": "<div>\n</\tZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "b5_endtag_underscore": {
+  "body": "<div>\n</_ZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "b6_endtag_nonascii_letter": {
+  "body": "<div>\n</éZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "b7_inline_bogus_endtag_mid_block": {
+  "body": "<div>\nx </ ZQ1> y </div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\nx  y </div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "b8_endtag_bang": {
+  "body": "<div>\n</!ZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c1_plain_link": {
+  "body": "ZQ1 see [docs](https://example.com) here\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">ZQ1 see <a href=\"https://example.com\" rel=\"nofollow\">docs</a> here</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c2_plain_tags": {
+  "body": "ZQ1 <b>bold</b> text\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">ZQ1 <b>bold</b> text</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c3_brackets": {
+  "body": "ZQ1 [a] [b] c\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">ZQ1 [a] [b] c</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c4_bang_bracket_no_close": {
+  "body": "ZQ1 text]\nZQ2 more ![\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">ZQ1 text]<br>\nZQ2 more ![</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c5_div_text": {
+  "body": "<div>\nZQ1\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\nZQ1\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c6_collapsed": {
+  "body": "ZQ1 [a][]\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">ZQ1 [a][]</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c7_endtag_plain": {
+  "body": "<div>\nZQ1\n</div >\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\nZQ1\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "c8_bare_link_with_paren": {
+  "body": "ZQ1 [a](https://example.com/(x)) y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">ZQ1 <a href=\"https://example.com/(x)\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e10_inline_tag_name": {
+  "body": "x <ZQ1> y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x  y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e11_block_endtag_attr_next_line": {
+  "body": "</div\ntitle=\"ZQ1\">\n\n## ZQ9\n",
+  "html": "\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e12_block_mid_endtag_attr": {
+  "body": "<p>x</p title=\"ZQ1\">\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e13_type7_tag_name_alone": {
+  "body": "<ZQ1>\n\n## ZQ9\n",
+  "html": "\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e14_block_three_attr_names": {
+  "body": "<div ZQ1 ZQ2 ZQ3>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e15_inline_data_attr_name": {
+  "body": "x <span data-ZQ1>y</span> z\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <span>y</span> z</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e16_block_endtag_name_attr": {
+  "body": "<div>\n</ZQ1 x>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e17_inline_selfclose_attr_name": {
+  "body": "x <span ZQ1/> y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <span> y</span></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e1_block_endtag_attr_after_div": {
+  "body": "<div>\n</div title=\"ZQ1\">\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e2_block_endtag_attr_start": {
+  "body": "</div title=\"ZQ1\">\n\n## ZQ9\n",
+  "html": "\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e3_block_endtag_ff_attr": {
+  "body": "</div\ftitle=\"ZQ1\">\n\n## ZQ9\n",
+  "html": "\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e4_block_endtag_unquoted": {
+  "body": "</div title=ZQ1>\n\n## ZQ9\n",
+  "html": "\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e5_block_endtag_attr_name_only": {
+  "body": "</div ZQ1>\n\n## ZQ9\n",
+  "html": "\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e6_block_opentag_attr_name_only": {
+  "body": "<div ZQ1>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n<h2 dir=\"auto\">ZQ9</h2></div>"
+ },
+ "e7_inline_attr_name_only": {
+  "body": "x <span ZQ1>y</span> z\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <span>y</span> z</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e8_inline_endtag_attr_ctrl": {
+  "body": "x </span title=\"ZQ1\"> y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x &lt;/span title=\"ZQ1\"&gt; y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "e9_block_tag_name": {
+  "body": "<div>\n<ZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "h10_quoted_gt_via_comment_closer": {
+  "body": "## <a href=\"x\" title=\"-->ZQ1\">y</a>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><a href=\"x\" title=\"--&gt;ZQ1\">y</a></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h11_comment_then_attr_closer": {
+  "body": "## <!-- a <span title=\"-->\">ZQ1</span>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">\"&gt;ZQ1</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h12_unclosed_comment_ctrl": {
+  "body": "## x <!-- ZQ1\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">x &lt;!-- ZQ1</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h13_pi_quoted_gt": {
+  "body": "## <?x \">ZQ1\"?> y\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ1\"?&gt; y</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h14_quoted_lt_ctrl": {
+  "body": "## <span title=\"<\">ZQ1</span>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span title=\"&lt;\">ZQ1</span></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h15_attr_ctrl": {
+  "body": "## <span title=\"x\">ZQ1</span>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span title=\"x\">ZQ1</span></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h16_pi_comment_opener_tail": {
+  "body": "## <?x <!-- ?>ZQ1 -->\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ1 --&gt;</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h17_tag_name_in_heading": {
+  "body": "## <ZQ1>Advisor vet\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">Advisor vet</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h18_attr_name_in_heading": {
+  "body": "## <span ZQ1>Advisor vet</span>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span>Advisor vet</span></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h1_quoted_gt": {
+  "body": "## <span title=\">ZQ1<\"></span>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span title=\"&gt;ZQ1&lt;\"></span></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h2_sq_quoted_gt": {
+  "body": "## <span title='>ZQ1'>x</span>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span title=\"&gt;ZQ1\">x</span></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h3_quoted_comment_opener": {
+  "body": "## <span title=\"<!--\">ZQ1</span> --> x\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span title=\"&lt;!--\">ZQ1</span> --&gt; x</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h4_review_shape": {
+  "body": "## <span title=\"<!--\">ZQ1</span> --> <b>Advisor vet</b>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span title=\"&lt;!--\">ZQ1</span> --&gt; <b>Advisor vet</b></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h5_pi_holding_comment_opener": {
+  "body": "## <?x \"<!--\" ?>ZQ1 --> <b>Advisor vet</b>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ1 --&gt; <b>Advisor vet</b></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h6_decl_holding_comment_opener": {
+  "body": "## <!DOCTYPE \"<!--\">ZQ1 --> <b>Advisor vet</b>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ1 --&gt; <b>Advisor vet</b></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h7_cdata_holding_comment_opener": {
+  "body": "## <![CDATA[<!--]]>ZQ1 --> <b>Advisor vet</b>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ1 --&gt; <b>Advisor vet</b></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h8_codespan_comment_opener": {
+  "body": "## `<!--`ZQ1 --> <b>Advisor vet</b>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><code class=\"notranslate\">&lt;!--</code>ZQ1 --&gt; <b>Advisor vet</b></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "h9_escaped_comment_opener": {
+  "body": "## \\<!--ZQ1 --> <b>Advisor vet</b>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">&lt;!--ZQ1 --&gt; <b>Advisor vet</b></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "i10_inline_img_attr_multiline": {
+  "body": "x <img alt=\"a\nZQ1\"> y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a target=\"_blank\" rel=\"noopener noreferrer\" href=\"\"><img alt=\"a\nZQ1\" style=\"max-width: 100%;\"></a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i11_list_lazy_image": {
+  "body": "- ![a\nZQ1](https://example.com/x.png)\n\n## ZQ9\n",
+  "html": "<ul dir=\"auto\">\n<li><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"a ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></li>\n</ul>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i1_escaped_bang": {
+  "body": "\\![a\nZQ1](https://example.com/x.png)\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">!<a href=\"https://example.com/x.png\" rel=\"nofollow\">a<br>\nZQ1</a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i2_blank_line_split_ctrl": {
+  "body": "![a\n\nZQ1](https://example.com/x.png)\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">![a</p>\n<p dir=\"auto\">ZQ1](<a href=\"https://example.com/x.png\" rel=\"nofollow\">https://example.com/x.png</a>)</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i3_quote_image": {
+  "body": "> ![a\n> ZQ1](https://example.com/x.png)\n\n## ZQ9\n",
+  "html": "<blockquote>\n<p dir=\"auto\"><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"a ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></p>\n</blockquote>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i4_ref_image_multiline": {
+  "body": "![a\nZQ1][r]\n\n[r]: https://example.com/x.png\n",
+  "html": "<p dir=\"auto\"><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"a ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></p>"
+ },
+ "i5_second_image_multiline": {
+  "body": "x ![a](https://example.com/b.png) ![c\nZQ1](https://example.com/x.png)\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/f873810044c64b76bf631bf74d5db8b71695c5f036816922c365a4c2efde7c2c/68747470733a2f2f6578616d706c652e636f6d2f622e706e67\"><img src=\"https://camo.githubusercontent.com/f873810044c64b76bf631bf74d5db8b71695c5f036816922c365a4c2efde7c2c/68747470733a2f2f6578616d706c652e636f6d2f622e706e67\" alt=\"a\" data-canonical-src=\"https://example.com/b.png\" style=\"max-width: 100%;\"></a> <a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"c ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i6_cell_image": {
+  "body": "| a |\n| - |\n| ![ZQ1](https://example.com/x.png) |\n\n## ZQ9\n",
+  "html": "<markdown-accessiblity-table><table role=\"table\">\n<thead>\n<tr>\n<th>a</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></td>\n</tr>\n</tbody>\n</table></markdown-accessiblity-table>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i7_image_in_link": {
+  "body": "x [![ZQ1](https://example.com/x.png)](https://example.com) y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com\" rel=\"nofollow\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i8_u2028_image": {
+  "body": "![a ZQ1](https://example.com/x.png)\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\"><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"a ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "i9_cr_image": {
+  "body": "![a\rZQ1](https://example.com/x.png)\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\"><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"a ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "k10_list_item_attr_name": {
+  "body": "- x <span ZQ1>y</span>\n\n## ZQ9\n",
+  "html": "<ul dir=\"auto\">\n<li>x <span>y</span></li>\n</ul>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "k11_quote_block_attr_name": {
+  "body": "> <div ZQ1>\n\n## ZQ9\n",
+  "html": "<blockquote>\n<div dir=\"auto\">\n</div></blockquote>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "k12_inline_attr_names_sentence": {
+  "body": "I accept <span ZQ1 ZQ2 ZQ3>this</span>.\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">I accept <span>this</span>.</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "k1_atx_attr_value": {
+  "body": "## <span title=\"ZQ1\">x</span>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><span title=\"ZQ1\">x</span></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "k2_atx_img_alt": {
+  "body": "## x <img alt=\"ZQ1\" src=\"https://example.com/x.png\">\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">x <a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img alt=\"ZQ1\" src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "k3_atx_link_title": {
+  "body": "## [x](https://example.com \"ZQ1\")\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><a href=\"https://example.com\" title=\"ZQ1\" rel=\"nofollow\">x</a></h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "k4_atx_image": {
+  "body": "## ![ZQ1](https://example.com/x.png) y\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\"><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"ZQ1\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a> y</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "k5_endtag_underscore_sep": {
+  "body": "<div>\n</_ ZQ1>\n</div>\n\n## ZQ9\n",
+  "html": "<div dir=\"auto\">\n\n</div>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "k6_details_open_ctrl": {
+  "body": "<details open>\n<summary>ZQ1</summary>\n\nZQ2\n</details>\n\n## ZQ9\n",
+  "html": "<details open=\"\">\n<summary>ZQ1</summary>\n<p dir=\"auto\">ZQ2</p>\n</details>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "k7_atx_pi_tail_text": {
+  "body": "## ZQ0 <?x ZQ1 ?>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ0 </h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "k8_atx_decl_text": {
+  "body": "## ZQ0 <!X ZQ1>\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ0 </h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "k9_atx_pi_with_gt": {
+  "body": "## <?x a>ZQ1 ?> y\n\nZQ9\n",
+  "html": "<h2 dir=\"auto\">ZQ1 ?&gt; y</h2>\n<p dir=\"auto\">ZQ9</p>"
+ },
+ "r10_table_cell_full_ref": {
+  "body": "| a | b |\n| - | - |\n| [x][ZQ1] | y |\n\n[ZQ1]: /u\n",
+  "html": "<markdown-accessiblity-table><table role=\"table\">\n<thead>\n<tr>\n<th>a</th>\n<th>b</th>\n</tr>\n</thead>\n<tbody>\n<tr>\n<td><a href=\"/u\">x</a></td>\n<td>y</td>\n</tr>\n</tbody>\n</table></markdown-accessiblity-table>"
+ },
+ "r11_two_word_label": {
+  "body": "x [a][ZQ1 ZQ2] y\n\n[ZQ1 ZQ2]: /u\n",
+  "html": "<p dir=\"auto\">x <a href=\"/u\">a</a> y</p>"
+ },
+ "r12_label_with_backtick": {
+  "body": "x [a][`ZQ1`] y\n\n[`ZQ1`]: /u\n",
+  "html": "<p dir=\"auto\">x <a href=\"/u\">a</a> y</p>"
+ },
+ "r1_full_ref_defined": {
+  "body": "x [a][ZQ1] y\n\n[zq1]: https://example.com\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com\" rel=\"nofollow\">a</a> y</p>"
+ },
+ "r2_full_ref_undefined": {
+  "body": "x [a][ZQ1] y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x [a][ZQ1] y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "r3_image_full_ref": {
+  "body": "x ![a][ZQ1] y\n\n[ZQ1]: https://example.com/x.png\n",
+  "html": "<p dir=\"auto\">x <a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\"><img src=\"https://camo.githubusercontent.com/cba515991a229edb29ab4afc03f446817e853f2896328b03209b12e175f8d36a/68747470733a2f2f6578616d706c652e636f6d2f782e706e67\" alt=\"a\" data-canonical-src=\"https://example.com/x.png\" style=\"max-width: 100%;\"></a> y</p>"
+ },
+ "r4_label_spaces": {
+  "body": "x [a][ ZQ1 ] y\n\n[ZQ1]: /u\n",
+  "html": "<p dir=\"auto\">x <a href=\"/u\">a</a> y</p>"
+ },
+ "r5_label_escaped_bracket": {
+  "body": "x [a][\\[ZQ1] y\n\n[\\[ZQ1]: /u\n",
+  "html": "<p dir=\"auto\">x <a href=\"/u\">a</a> y</p>"
+ },
+ "r6_collapsed_ctrl": {
+  "body": "x [ZQ1][] y\n\n[ZQ1]: /u\n",
+  "html": "<p dir=\"auto\">x <a href=\"/u\">ZQ1</a> y</p>"
+ },
+ "r7_two_shortcuts_ctrl": {
+  "body": "x [a] [ZQ1] y\n\n[ZQ1]: /u\n",
+  "html": "<p dir=\"auto\">x [a] <a href=\"/u\">ZQ1</a> y</p>"
+ },
+ "r8_block_starts_with_full_ref": {
+  "body": "[a][ZQ1]\n\n[ZQ1]: /u\n",
+  "html": "<p dir=\"auto\"><a href=\"/u\">a</a></p>"
+ },
+ "r9_split_shortcuts_ctrl": {
+  "body": "x [a]\n[ZQ1] y\n\n[ZQ1]: /u\n",
+  "html": "<p dir=\"auto\">x [a]<br>\n<a href=\"/u\">ZQ1</a> y</p>"
+ },
+ "t10_ff_ff_title": {
+  "body": "x [a](<https://example.com>\f\f\"ZQ1\") y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com\" title=\"ZQ1\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t11_ctrl_ff_no_title": {
+  "body": "x [a](https://example.com\fZQ1) y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com%0CZQ1\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t12_refdef_ff_title": {
+  "body": "[r]: https://example.com\f\"ZQ1\"\n\nx [a][r]\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com%0C%22ZQ1%22\" rel=\"nofollow\">a</a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t1_angle_ff_title": {
+  "body": "[](<https://example.com>\f\"ZQ1\")\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\"><a href=\"https://example.com\" title=\"ZQ1\" rel=\"nofollow\"></a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t2_angle_vt_title": {
+  "body": "[](<https://example.com>\u000b\"ZQ1\")\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\"><a href=\"https://example.com\" title=\"ZQ1\" rel=\"nofollow\"></a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t3_bare_ff_title": {
+  "body": "x [a](https://example.com\f\"ZQ1\") y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com%0C%22ZQ1%22\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t4_bare_vt_sq_title": {
+  "body": "x [a](https://example.com\u000b'ZQ1') y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com%0B'ZQ1'\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t5_bare_ff_paren_title": {
+  "body": "x [a](https://example.com\f(ZQ1)) y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com%0C(ZQ1)\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t6_img_ff_title": {
+  "body": "![](https://example.com/x.png\f\"ZQ1\")\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\"><a target=\"_blank\" rel=\"noopener noreferrer nofollow\" href=\"https://camo.githubusercontent.com/63d3ef7a4a80270cdfd89955e0cfea326443ea68baf3a16b1772102e92e7944a/68747470733a2f2f6578616d706c652e636f6d2f782e706e672530432532325a5131253232\"><img src=\"https://camo.githubusercontent.com/63d3ef7a4a80270cdfd89955e0cfea326443ea68baf3a16b1772102e92e7944a/68747470733a2f2f6578616d706c652e636f6d2f782e706e672530432532325a5131253232\" alt=\"\" data-canonical-src=\"https://example.com/x.png%0C%22ZQ1%22\" style=\"max-width: 100%;\"></a></p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t7_ff_multiline_title": {
+  "body": "[a](https://example.com\f\"b)\nZQ1\")\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\"><a href=\"https://example.com%0C%22b\" rel=\"nofollow\">a</a><br>\nZQ1\")</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t8_mixed_ws_title": {
+  "body": "x [a](https://example.com \f \u000b \"ZQ1\") y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com\" title=\"ZQ1\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ },
+ "t9_cr_title_next_line": {
+  "body": "x [a](https://example.com\r\"ZQ1\") y\n\n## ZQ9\n",
+  "html": "<p dir=\"auto\">x <a href=\"https://example.com\" title=\"ZQ1\" rel=\"nofollow\">a</a> y</p>\n<h2 dir=\"auto\">ZQ9</h2>"
+ }
+}
