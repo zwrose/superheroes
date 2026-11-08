@@ -549,8 +549,15 @@ def test_g12_structure_an_ordinary_inline_comment_cut_keeps_the_acceptances():
 def test_g13_claim_join_a_claim_joined_from_fragments_cannot_balance_a_removed_one():
     # cr-s1-002 / tr-s1-002: the comment cut joins "fixed-" and "above #99" into a new claim while the cut after `<?` removes
     # the real #98 claim; the counts balance, the per-line claim comparison does not
-    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; fixed-<!-- note -->above #99 abcdef0; "
+    # #2389 review session 8: the joining comment is empty (`<!---->`, it hides no text), so md_hidden keeps the line VISIBLE
+    # and the join happens (a `<!-- note -->` comment would make md_hidden blank the line whole); the balance is asserted
+    body = ("## What we're accepting\n\n- F-1 The retry loop never backs off; fixed-<!---->above #99 abcdef0; "
             "`<?` fixed-above #98 1234567\n")
+    cut = la._visible(body)
+    assert "fixed-above #99 abcdef0" in cut and "#98" not in cut
+    assert len(la._FIXED_ABOVE_TOKEN.findall(cut)) == len(la._FIXED_ABOVE_TOKEN.findall(body))
+    assert len(la.FIXED_ABOVE_RE.findall(cut)) == len(la.FIXED_ABOVE_RE.findall(body))
+    assert la._visible_claim(body)[1] is True
     assert la._accepting_items(body) == []
     assert missing(body)
 
