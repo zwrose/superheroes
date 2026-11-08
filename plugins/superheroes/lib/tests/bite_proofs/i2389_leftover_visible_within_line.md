@@ -633,3 +633,101 @@ E   Failed: DID NOT RAISE _Refusal
 ### Elements in no class (WO-J)
 
 None. Unproven elements: none. The G22 neutralization covers the `text`-line cut (`_scan_line`'s cuts: plain, escaped, code-spanned entry `<`, unclosed `<!--`, all reached through `if cut:`); the fenced branch is G22b.
+
+## #2389 vet 859 (WO-K): one line list (G24), a blanked line never detaches a claim (G25), G14 isolation
+
+Guarded code: `plugins/superheroes/lib/leftover_accepting.py` (`_cut_items`, `_TAG_ENTRY`). Base head `94ba12e7`. Each neutralization was one targeted Edit, undone by the
+exact inverse Edit before the next; no `git checkout`, `restore`, `reset`, `stash` or `sed`. Captures drop uv's one `UV_NATIVE_TLS` warning line and the repeated
+per-failure `+`/`-` diff lines of `--tb=line`; nothing was redacted; each is far under the 32 KiB ceiling. Command (worktree root), `-k` per entry:
+`timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k <selector>`
+The restore receipts are Grep-tool reads of the restored lines.
+
+### G24: one line list
+
+- **Guarded element / axis:** `_cut_items`, the `spans = pr_sheet.accepting_item_spans_of([...])` / `cuts = [_item_cut(blanked, span, shown) ...]` pair (`leftover_accepting.py:385-386`). Axis: the spans, the cuts and the sources all index the one `_blanked_lines` list, so blanked line `n` is source line `n`; a blanked unterminated last line keeps its place (EOF) and a lone `\r` before a blanked `\n` line does not join into `\r\n` (`m5`).
+- **Neutralization:** the two lines became `spans = pr_sheet.accepting_item_spans("".join(blanked))` / `cuts = [_item_cut(md_fence.split_lines("".join(blanked)), span, shown) for span in spans]` (the blanked lines joined and split again).
+- **Raw red** (`-k test_g24_`; the first run of this neutralization, before the position tests were made to read what `_cut_items` passes to `_item_cut`, left the `m5` position test green, so the tests were changed and the red re-run; this is the re-run):
+
+```
+FFFF.FFFFF                                                               [100%]
+E   assert 9 == 10  (m5_lone_cr: len(lines) 9, len(source) 10)
+E   assert 3 == 4   (e1_unterminated_blanked_last_line: len(lines) 3, len(source) 4)
+E   assert 5 == 7   (both: len(lines) 5, len(source) 7)
+E   assert (4 - 1) in [2]
+FAILED ...::test_g24_one_line_list_github_hides_the_claim_so_the_check_reports_f1_missing[e1_eof_unsure_claim]
+FAILED ...::test_g24_one_line_list_github_hides_the_claim_so_the_check_reports_f1_missing[e3_eof_custom_el_claim]
+FAILED ...::test_g24_one_line_list_github_hides_the_claim_so_the_check_reports_f1_missing[e4_eof_lazy_unsure_claim]
+FAILED ...::test_g24_one_line_list_github_hides_the_claim_so_the_check_reports_f1_missing[e6_eof_realistic_wrapped]
+FAILED ...::test_g24_one_line_list_hidden_last_line_claim_is_the_first_over_refusal[e2_eof_hidden_claim]
+FAILED ...::test_g24_one_line_list_every_span_index_names_the_same_line_in_the_source_and_the_blanked_list[m5_lone_cr]
+FAILED ...::test_g24_one_line_list_every_span_index_names_the_same_line_in_the_source_and_the_blanked_list[e1_unterminated_blanked_last_line]
+FAILED ...::test_g24_one_line_list_every_span_index_names_the_same_line_in_the_source_and_the_blanked_list[both]
+FAILED ...::test_g24_one_line_list_an_unterminated_blanked_last_line_stays_an_entry_and_its_item_keeps_it
+9 failed, 1 passed, 275 deselected in 0.58s
+```
+
+(The one pass is the `m5` rendered-row verdict `test_g24_one_line_list_github_hides_the_claim_so_the_check_reports_f1_missing[m5_...]`: under this neutralization the shifted indices happen to fail closed on that body, so the row stays `missing`. The `m5` position test is what bites for the lone-CR shape. The EOF tests and the `m5` position test are among the failures, as the order required.)
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read printed `385:    spans = pr_sheet.accepting_item_spans_of([line[:len(line) - len(_terminator(line))] for line in blanked])` / `386:    cuts = [_item_cut(blanked, span, shown) for span in spans]`.
+- **Raw green** (`-k test_g24_`):
+
+```
+..........                                                               [100%]
+10 passed, 275 deselected in 0.49s
+```
+
+### G25: the join
+
+- **Guarded element / axis:** `_cut_items`, the join condition `if k > 0 and first > 0 and not shown[first - 1] and pr_sheet._ITEM.match(opener) is None:` (`leftover_accepting.py:393`). Axis: an item with no list marker right after a line md_hidden does not read VISIBLE joins the item before it, and the head is compared against the claims of the whole group's source.
+- **Neutralization:** `if k > 0 and first > 0 and ...` became `if False and k > 0 and first > 0 and ...` (no item joins).
+- **Raw red** (`-k test_g25_`):
+
+```
+FFFFFFFF                                                                 [100%]
+E   AssertionError: assert 'plain-accepted' == 'missing'   (seven times: s1, s2, s4, s6, s7, s8 and s3)
+E   assert (3 == 3 and 'F-1 The retr...ver backs off' == ''   (the transitive chain)
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s1_lazy_unsure_then_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s2_paragraph_unsure_then_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s4_indented_unsure_then_lazy_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s6_unsure_custom_el_then_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s7_realistic_wrapped_lazy]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s8_inline_comment_line_then_lazy_claim]
+FAILED ...::test_g25_blanked_line_join_paragraph_after_a_hidden_line_is_the_second_over_refusal[s3_hidden_comment_then_claim]
+FAILED ...::test_g25_blanked_line_join_a_transitive_chain_refuses
+8 failed, 277 deselected in 0.54s
+```
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read printed `393:        if k > 0 and first > 0 and not shown[first - 1] and pr_sheet._ITEM.match(opener) is None:`.
+- **Raw green** (`-k test_g25_`):
+
+```
+........                                                                 [100%]
+8 passed, 277 deselected in 0.53s
+```
+
+### G14 isolation (session 13's Minor): the plain-line cases drop the `</div>` line, so a bogus opener is the only cut
+
+- **Guarded element / axis:** `_TAG_ENTRY`'s `/(?!>)` branch (`leftover_accepting.py:94`), through `test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line` (`plain_line` cases: body `lead + quoted + " " + TITLE + "\n"`, no `</div>`). Axis: a `</` + non-`>` bogus end-tag opener (`</ `, `</1`) is itself an entry, with no other cut in the body to refuse it.
+- **Neutralization:** `r"<(?:[!?]|/(?!>)|[A-Za-z])"` became `r"<(?:[!?]|/[A-Za-z]|[A-Za-z])"`.
+- **Raw red** (`-k test_g14_tag_entry_a_bogus`):
+
+```
+..................FF...FF...FF                                           [100%]
+E   AssertionError: assert [] == [{'id': 'F-1', ... 'The retry loop never backs off'}]   (six times)
+FAILED ...::test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line[plain_line-raw-</ ]
+FAILED ...::test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line[plain_line-raw-</1]
+FAILED ...::test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line[plain_line-escaped-</ ]
+FAILED ...::test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line[plain_line-escaped-</1]
+FAILED ...::test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line[plain_line-code_span-</ ]
+FAILED ...::test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line[plain_line-code_span-</1]
+6 failed, 24 passed, 255 deselected in 2.80s
+```
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read printed `94:_TAG_ENTRY = re.compile(r"<(?:[!?]|/(?!>)|[A-Za-z])")`.
+- **Raw green** (`-k test_g14_tag_entry_a_bogus`):
+
+```
+..............................                                           [100%]
+30 passed, 255 deselected in 1.63s
+```
+
+### Elements in no class (WO-K)
+
+None. The two new over-refusals are asserted by `test_g24_one_line_list_hidden_last_line_claim_is_the_first_over_refusal` (G24's neutralization turns it red) and `test_g25_blanked_line_join_paragraph_after_a_hidden_line_is_the_second_over_refusal` (G25's does). The transitive chain is model-only.

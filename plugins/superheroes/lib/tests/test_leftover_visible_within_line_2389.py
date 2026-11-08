@@ -22,6 +22,11 @@ advisor's renders). Guards (bite-proof record ``bite_proofs/i2389_leftover_visib
   G22 test_g22_cut_item_counts_nothing_*  vet 856: an item where a within-line cut fires counts as nothing, so the words before
                                   the cut never read as whole (``f-1<span>-other</span>`` shows ``f-1-other``)
   G23 test_g23_per_item_claims_*  vet 856: claims are compared per item, so equal claims in two items cannot cancel
+  G24 test_g24_one_line_list_*    vet 859: blanked line n is source line n for every n (no join-and-split), so a blanked last line
+                                  keeps its place and a lone CR before a blanked line does not join two lines
+  G25 test_g25_blanked_line_join_* vet 859: an item with no list marker right after a line md_hidden does not read VISIBLE joins
+                                  the item before it, so a blanked line never detaches a claim
+  test_vet859_controls_*          vet 859: the control rows keep their answers (``fixtures/leftover_vet859_github_renders_2389.json``)
 Retired with the redesign (their tests below are kept as regressions of the outcome): G12 block role, G13 and G16 per-line
 claim guards, G15 cut heading, G17a and G17b fence-shape and fenced-state guards.
 Rows with no GitHub render ("model-only") say so. No real gh: every call the vet-slot tests make is faked by
@@ -92,11 +97,16 @@ def cuts(text):
     return la._cut_items(text)[0]
 
 
+def stripped_lines(lines):
+    """``lines`` (entries of ``_blanked_lines``) with their one line terminator removed, as ``accepting_item_spans_of`` reads them."""
+    return [line[:len(line) - len(la._terminator(line))] for line in lines]
+
+
 def raw_cuts(text):
     """The text of every item as ``_item_cut`` reads it, before the per-item claim check of ``_cut_items``."""
-    blanked, shown = la._blanked(text)
-    lines = md_fence.split_lines(blanked)
-    return [la._item_cut(lines, span, shown) for span in pr_sheet.accepting_item_spans(blanked)]
+    # #2389 vet 859: this reads the one line list `_cut_items` reads (``_blanked_lines`` and ``accepting_item_spans_of``), never the blanked text split again
+    blanked, shown = la._blanked_lines(text)
+    return [la._item_cut(blanked, span, shown) for span in pr_sheet.accepting_item_spans_of(stripped_lines(blanked))]
 
 
 def item_cut(source):
@@ -107,7 +117,8 @@ def item_cut(source):
 
 def source_texts(text):
     """The source text (before blanking) of every item span of ``text``, as the claim guards read it."""
-    spans = pr_sheet.accepting_item_spans(la._blanked(text)[0])
+    # #2389 vet 859: the spans are read from the `_blanked_lines` list, as `_cut_items` reads them
+    spans = pr_sheet.accepting_item_spans_of(stripped_lines(la._blanked_lines(text)[0]))
     return [la._span_source(md_fence.split_lines(text), span) for span in spans]
 
 
@@ -706,7 +717,8 @@ TITLE = "F-1 The retry loop never backs off"
 @pytest.mark.parametrize("lead", ["<div>Accepting ", "Accepting "], ids=["div_line", "plain_line"])
 def test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line(opener, form, lead):
     quoted = {"raw": opener, "escaped": "\\" + opener, "code_span": "`" + opener + "`"}[form]
-    text = body(lead + quoted + " " + TITLE + "\n</div>\n")
+    # #2389 vet 859 (session 13 Minor, isolate the bogus opener): a plain-line body drops the `</div>` line, so the opener is the only cut
+    text = body(lead + quoted + " " + TITLE + ("\n</div>\n" if lead.startswith("<div>") else "\n"))
     assert missing(text) == GAP
     assert TITLE not in " ".join(cuts(text))
 
@@ -1221,3 +1233,133 @@ def test_g23_per_item_claims_equal_claims_cancel_with_no_cut_in_the_item_refuse(
 def test_healthy_item_controls_keep_counting(accepting):
     # #2389 vet 856: an item GitHub shows whole, with no entry `<` in it, still counts (the rule removes only items a cut touches)
     assert missing(body(accepting)) == []
+
+
+# --- #2389 vet 859: G24 one line list, G25 a blanked line never detaches a claim ---------------------------------------
+# Oracle: ``fixtures/leftover_vet859_github_renders_2389.json`` (GitHub's own render, POST /markdown gfm, of 33 synthetic rows; the six
+# ``g7_*`` rows are vet-slot shapes and are not part of this order).
+
+FIXTURE_859 = pathlib.Path(__file__).parent / "fixtures" / "leftover_vet859_github_renders_2389.json"
+ROWS_859 = [row for row in json.loads(FIXTURE_859.read_text(encoding="utf-8"))["rows"] if not row["id"].startswith("g7_")]
+BY_ID_859 = {row["id"]: row for row in ROWS_859}
+
+G24_MISSING = ["e1_eof_unsure_claim", "e3_eof_custom_el_claim", "e4_eof_lazy_unsure_claim", "e6_eof_realistic_wrapped",
+               "m5_lone_cr_unsure_claim_then_next_item"]
+G24_OVER_REFUSED = ["e2_eof_hidden_claim"]
+G25_MISSING = ["s1_lazy_unsure_then_claim", "s2_paragraph_unsure_then_claim", "s4_indented_unsure_then_lazy_claim",
+               "s6_unsure_custom_el_then_claim", "s7_realistic_wrapped_lazy", "s8_inline_comment_line_then_lazy_claim"]
+G25_OVER_REFUSED = ["s3_hidden_comment_then_claim"]
+CONTROL_CLAIM = ["e5_eof_control_visible", "s5_control_lazy_claim", "m4_lone_cr_control_no_hidden"]
+CONTROL_PLAIN = ["c1_control_two_items_comment_between", "c2_control_paragraphs_comment_between",
+                 "c3_control_unsure_then_blank_then_para_claim"]
+CONTROL_MISSING = [row["id"] for row in ROWS_859
+                   if row["head_94ba12e7"] == "missing"]  # every other non-g7 row that already gave `missing`
+
+
+def verdict(text):
+    """``missing`` when the leftover F-1 is not accepted, ``claim#99`` when ``fixed_above`` holds one entry with layer 99, else ``plain-accepted``."""
+    if missing(text) == GAP:
+        return "missing"
+    found = la.fixed_above(read_ok(FINDING), text)
+    return "claim#99" if len(found) == 1 and found[0]["layer"] == 99 else "plain-accepted"
+
+
+def test_vet859_fixture_rows_are_the_27_non_g7_rows_and_each_is_covered_once():
+    covered = (G24_MISSING + G24_OVER_REFUSED + G25_MISSING + G25_OVER_REFUSED + CONTROL_CLAIM + CONTROL_PLAIN
+               + CONTROL_MISSING)
+    assert len(ROWS_859) == 27
+    assert sorted(covered) == sorted(ids(ROWS_859))  # every non-g7 row exactly once: no row twice, none left out
+
+
+@pytest.mark.parametrize("name", G24_MISSING, ids=G24_MISSING)
+def test_g24_one_line_list_github_hides_the_claim_so_the_check_reports_f1_missing(name):
+    assert verdict(BY_ID_859[name]["body"]) == "missing"
+
+
+@pytest.mark.parametrize("name", G24_OVER_REFUSED, ids=G24_OVER_REFUSED)
+def test_g24_one_line_list_hidden_last_line_claim_is_the_first_over_refusal(name):
+    # #2389 vet 859, the first new over-refusal: a hidden last line holding a claim makes its item count as nothing, as the same
+    # line ending in a newline does (e2n): the line is blanked and its source holds a claim, so the item's claims differ from its source's
+    assert verdict(BY_ID_859[name]["body"]) == "missing"
+    assert verdict(BY_ID_859["e2n_same_with_newline"]["body"]) == "missing"
+
+
+def positions(text, monkeypatch):
+    """``(source, blanked, shown, reads)``: ``source`` is ``md_fence.split_lines(text)``, ``blanked`` and ``shown`` are
+    ``_blanked_lines(text)``, and ``reads`` is every ``(lines, n, kind)`` that ``_cut_items`` hands to ``_item_cut`` (the line
+    list it passed and each ``(n, kind)`` of the span it passed), so the test reads what ``_cut_items`` reads."""
+    reads, real = [], la._item_cut
+
+    def spy(lines, span, shown):
+        reads.extend((list(lines), n, kind) for n, kind in span)
+        return real(lines, span, shown)
+
+    monkeypatch.setattr(la, "_item_cut", spy)
+    la._cut_items(text)
+    blanked, shown = la._blanked_lines(text)
+    return md_fence.split_lines(text), blanked, shown, reads
+
+
+G24_BOTH = ("## What we're accepting\n\n- F-1 The retry loop never backs off\r  see <commit>\n  fixed-above #99 abcdef0\n"
+            "- Another item, no id.\n  fixed-above #98 abcdef1 at <commit>")
+
+
+@pytest.mark.parametrize("text", [
+    BY_ID_859["m5_lone_cr_unsure_claim_then_next_item"]["body"],
+    BY_ID_859["e1_eof_unsure_claim"]["body"],
+    G24_BOTH,
+], ids=["m5_lone_cr", "e1_unterminated_blanked_last_line", "both"])
+def test_g24_one_line_list_every_span_index_names_the_same_line_in_the_source_and_the_blanked_list(text, monkeypatch):
+    source, blanked, shown, reads = positions(text, monkeypatch)
+    assert len(blanked) == len(source) == len(shown)
+    assert reads, "the section holds no item"
+    for lines, n, _kind in reads:
+        # the list `_cut_items` passed to `_item_cut` is the `_blanked_lines` list: as long as the source, and entry n is line n
+        assert len(lines) == len(source), (len(lines), len(source))
+        assert n < len(source)
+        # lines[n] is source[n] when line n is read VISIBLE, else only its terminator
+        assert lines[n] == blanked[n] == (source[n] if shown[n] else la._terminator(source[n])), (n, lines[n], source[n])
+    # a blanked line keeps its place: the lines md_hidden does not read VISIBLE are still in the list
+    assert not all(shown)
+
+
+def test_g24_one_line_list_an_unterminated_blanked_last_line_stays_an_entry_and_its_item_keeps_it(monkeypatch):
+    text = BY_ID_859["e1_eof_unsure_claim"]["body"]
+    source, blanked, shown, reads = positions(text, monkeypatch)
+    assert not text.endswith("\n") and blanked[-1] == "" and shown[-1] is False
+    assert len(source) - 1 in [n for _lines, n, _kind in reads]
+    assert cuts(text) == [""]  # the claim on the blanked last line is compared, so the item counts as nothing
+
+
+@pytest.mark.parametrize("name", G25_MISSING, ids=G25_MISSING)
+def test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing(name):
+    assert verdict(BY_ID_859[name]["body"]) == "missing"
+
+
+@pytest.mark.parametrize("name", G25_OVER_REFUSED, ids=G25_OVER_REFUSED)
+def test_g25_blanked_line_join_paragraph_after_a_hidden_line_is_the_second_over_refusal(name):
+    # #2389 vet 859, the second new over-refusal: a paragraph that opens right after a hidden line and holds a claim makes the
+    # item before it count as nothing, even where GitHub shows that paragraph apart (the join reads the hidden line as a seam)
+    assert verdict(BY_ID_859[name]["body"]) == "missing"
+
+
+def test_g25_blanked_line_join_a_transitive_chain_refuses():
+    # model-only (no GitHub render): two blanked lines, each followed by a marker-less paragraph, the claim in the last paragraph
+    text = body("- F-1 The retry loop never backs off\nsee <commit>\nsecond paragraph\nmore <commit>\nfixed-above #99 abcdef0\n")
+    assert len(cuts(text)) == 3 and cuts(text)[0] == ""  # the head (F-1) is compared against the whole chain's claims
+    assert verdict(text) == "missing"
+
+
+@pytest.mark.parametrize("name", CONTROL_CLAIM, ids=CONTROL_CLAIM)
+def test_vet859_controls_a_visible_claim_still_resolves_the_leftover(name):
+    assert verdict(BY_ID_859[name]["body"]) == "claim#99"
+
+
+@pytest.mark.parametrize("name", CONTROL_PLAIN, ids=CONTROL_PLAIN)
+def test_vet859_controls_a_plain_acceptance_still_counts_without_a_claim(name):
+    assert verdict(BY_ID_859[name]["body"]) == "plain-accepted"
+
+
+@pytest.mark.parametrize("name", CONTROL_MISSING, ids=CONTROL_MISSING)
+def test_vet859_controls_every_other_row_that_was_missing_stays_missing(name):
+    assert verdict(BY_ID_859[name]["body"]) == "missing"

@@ -401,17 +401,23 @@ def acceptance_texts(texts):
 
 
 def accepting_item_spans(body):
-    """The items a PR body lists under its What we're accepting heading, in order, each as the list of every source line in
-    the item's span, as ``(n, kind)``; [] for no such heading, no item, or anything that is not a string. ``n`` indexes
-    ``_markdown_lines(body)``. ``kind`` is ``"text"`` (a kept line the item appends), ``"fenced"`` (a kept line the walk reads
+    """``accepting_item_spans_of(_markdown_lines(body))``; [] for anything that is not a string (see there)."""
+    if not isinstance(body, str):
+        return []
+    return accepting_item_spans_of(_markdown_lines(body))
+
+
+def accepting_item_spans_of(lines):
+    """The items listed under the What we're accepting heading of ``lines`` (a list of Markdown lines with their terminators
+    removed, as ``_markdown_lines`` returns them), in order, each as the list of every source line in the item's span, as
+    ``(n, kind)``; [] for no such heading or no item. ``n`` indexes ``lines``, so a caller that holds one line list reads every
+    ``n`` as the same line in it. ``kind`` is ``"text"`` (a kept line the item appends), ``"fenced"`` (a kept line the walk reads
     as fenced), ``"blank"`` (a blank line inside the span) or ``"dropped"`` (a line the walk does not keep, a whole-line
     comment or a line inside one, between the item's first line and the next item, or the section's last kept line for the
     last item). The first entry is the item's first line, whose text starts at ``item_text_start``. Items are grouped as
     ``accepting_listed`` always grouped them: a top-level list item with its nested lines, or a paragraph."""
-    if not isinstance(body, str):
-        return []
     # axis: lines break only on Markdown endings (a U+2028 cannot make a synthetic heading) — see bite-proof record i2389_scanner_line_boundaries.md
-    walk = list(_fence_walk(_markdown_lines(body)))
+    walk = list(_fence_walk(lines))
     lines = [(n, line, fenced) for n, line, fenced, kept in walk if kept]
     start = next((i for i, (_n, line, fenced) in enumerate(lines) if not fenced and _ACCEPTING.match(line)), None)
     if start is None:
