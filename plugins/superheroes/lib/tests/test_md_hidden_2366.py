@@ -884,6 +884,11 @@ with open(_CORPUS_854_PATH, encoding="utf-8") as _fh:
     _CORPUS_854_ROWS = json.load(_fh)
 _CORPUS_854 = {row["body"]: row["html"] for row in _CORPUS_854_ROWS.values()}
 
+_CORPUS_857_PATH = os.path.join(_HERE, "fixtures", "md_hidden_github_renders_vet857.json")
+with open(_CORPUS_857_PATH, encoding="utf-8") as _fh:
+    _CORPUS_857_ROWS = json.load(_fh)
+_CORPUS_857 = {row["body"]: row["html"] for row in _CORPUS_857_ROWS.values()}
+
 _SENTINEL = re.compile(r"\bZQ\d+\b")
 
 
@@ -1477,6 +1482,7 @@ def test_vet854_4_attribute_and_title_text_reads_unsure():
                    "b5_link_title_inline", "b6_img_inline", "g1_img_empty_desc_title"):
         body = _CORPUS_854_ROWS[row_id]["body"]
         assert _corpus_fail_open(body, _CORPUS_854) == [], row_id
+        assert _line_state(body, "## ZQ2") == V, row_id
 
 
 def test_vet854_h2_a_lone_pipe_header_with_pipeless_rows():
@@ -1533,9 +1539,12 @@ def test_atx_heading_tag_with_a_quoted_bracket_reads_unsure():
 
 @pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
 def test_bare_destination_then_title_after_form_feed_or_vertical_tab_reads_unsure(sep):
-    """Final returning review on 10ed80c6, round-2 audit: the link cursor skips cmark-gfm's whitespace too, so a bare
-    destination ends at a form feed or vertical tab and the title after it is found (GitHub shows ZQ1 only as the title
-    attribute). A quoted ``<`` alone in an ATX heading's attribute keeps the exemption (control)."""
+    """Final returning review on 10ed80c6, round-2 audit: the link cursor skips cmark-gfm's whitespace too, so
+    ``md_hidden`` ends a bare destination at a form feed or vertical tab and finds the title after it. GitHub does not:
+    for a bare destination it keeps ``\\f`` and ``\\v`` inside the address (vet 857 renders ``t3_bare_ff_title``,
+    ``t4_bare_vt_sq_title`` and ``t5_bare_ff_paren_title`` put ZQ1 in ``href``, and ``t7_ff_multiline_title`` shows
+    ``ZQ1")`` as text). Ending the address early only reads more lines unsure, so it fails closed. A quoted ``<`` alone in
+    an ATX heading's attribute keeps the exemption (control)."""
     body = "[](https://example.com" + sep + '"ZQ1")\n\n## ZQ2\n'
     assert _line_state(body, "[](") == U
     assert _line_state('## <span title="<">Advisor vet</span>\n', "## <span") == V
@@ -1544,9 +1553,12 @@ def test_bare_destination_then_title_after_form_feed_or_vertical_tab_reads_unsur
 @pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
 def test_link_cursor_whitespace_finds_a_multiline_title_holding_a_paren(sep):
     """Final returning review on 10ed80c6, round-3 audit: with the link cursor reading form feed and vertical tab as
-    whitespace, the bare destination ends there and the title (which holds a ``)`` and runs onto the next line) is read
-    whole; GitHub shows ZQ1 only as the title attribute. Without the cursor fix the range ends at that ``)`` and the ZQ1
-    line reads visible (checked on e96abd35)."""
+    whitespace, ``md_hidden`` ends the bare destination there and reads the title (which holds a ``)`` and runs onto the
+    next line) whole. GitHub does not end the address there: for a bare destination it keeps ``\\f`` and ``\\v`` inside the
+    address (vet 857 renders ``t3_bare_ff_title``, ``t4_bare_vt_sq_title`` and ``t5_bare_ff_paren_title`` put ZQ1 in
+    ``href``, and ``t7_ff_multiline_title`` shows ``ZQ1")`` as text). Reading the title anyway only reads more lines
+    unsure, so it fails closed. Without the cursor fix the range ends at that ``)`` and the ZQ1 line reads visible (checked
+    on e96abd35)."""
     body = "[](https://example.com" + sep + '"a)\nZQ1")\n\n## ZQ2\n'
     assert _line_state(body, "ZQ1") != V
 
@@ -1556,3 +1568,105 @@ def test_atx_heading_tag_with_a_quoted_comment_opener_reads_unsure():
     exemption"): ``heading_text`` removes comments before tags without regard to attribute quotes, so a quoted ``<!--``
     would make the heading text differ from GitHub's; such a heading reads unsure."""
     assert _line_state('## <span title="<!--">Other</span> --> <b>Advisor vet</b>\n', "## <span") == U
+
+
+# --- Vet 857 fix leg (issue #2388): V857-1, V857-2, test strength and honesty, the fourth renders corpus ------------------------
+
+# Vet 857 bodies the advisor declined (each key is a row id of the fourth corpus, each value the ruling). An exception never
+# outlives its cause: the test below asserts each declined body still fails the plain check.
+_CORPUS_857_DECLINED = {
+    "t11_ctrl_ff_no_title": "a link's address, the accepted limit",
+    "k1_atx_attr_value": "an ATX heading's tag, whose text is read through heading_text",
+    "k2_atx_img_alt": "an ATX heading's tag, whose text is read through heading_text",
+    "h17_tag_name_in_heading": "an ATX heading's tag, whose text is read through heading_text",
+    "h18_attr_name_in_heading": "an ATX heading's tag, whose text is read through heading_text",
+    "k7_atx_pi_tail_text": "an ATX heading's PI, disclosed in the owner half",
+    "k8_atx_decl_text": "an ATX heading's declaration, disclosed in the owner half",
+}
+
+
+def _body_states(body):
+    """(line, state) for every line of ``body``, in order."""
+    rendering = md.scan(body)
+    out = []
+    offset = 0
+    for item in md_fence.split_lines(body):
+        out.append((item, rendering.state_at(offset)))
+        offset += len(item)
+    return out
+
+
+def _heading_line_state(body):
+    """The state of the one ATX heading line (the line that starts with ``#``) of ``body``."""
+    found = [state for item, state in _body_states(body) if item.lstrip().startswith("#")]
+    assert len(found) == 1, "expected one heading line in %r, found %d" % (body, len(found))
+    return found[0]
+
+
+def test_vet857_corpus_no_line_github_hides_reads_visible():
+    """The invariant over the fourth corpus: vet 857 renders, ``md_hidden_github_renders_vet857.json`` (98 bodies, GitHub's
+    own renders taken by the advisor). A line with a sentinel word that GitHub's visible text lacks is hidden by GitHub and
+    must not read VISIBLE. Every body must pass except the seven the advisor declined (``_CORPUS_857_DECLINED``), each of
+    which must still fail the check."""
+    assert len(_CORPUS_857_ROWS) == 98
+    assert sorted(_CORPUS_857_DECLINED) == sorted([
+        "t11_ctrl_ff_no_title", "k1_atx_attr_value", "k2_atx_img_alt", "h17_tag_name_in_heading",
+        "h18_attr_name_in_heading", "k7_atx_pi_tail_text", "k8_atx_decl_text"])
+    for row_id in _CORPUS_857_DECLINED:
+        assert row_id in _CORPUS_857_ROWS, "declined row is not in the vet 857 corpus: %r" % (row_id,)
+        assert _corpus_fail_open(_CORPUS_857_ROWS[row_id]["body"], _CORPUS_857) != [], (
+            "declined body no longer fails: drop it from _CORPUS_857_DECLINED: %r" % (row_id,))
+    failing = []
+    for row_id, row in _CORPUS_857_ROWS.items():
+        if row_id in _CORPUS_857_DECLINED:
+            continue
+        failing.extend(_corpus_fail_open(row["body"], _CORPUS_857))
+    assert failing == [], "%d fail-open (body, line index, line):\n%s" % (
+        len(failing), "\n".join(repr(entry) for entry in failing))
+
+
+def test_vet857_1_words_inside_a_raw_tag_read_unsure():
+    """V857-1, vet 857 renders, ``md_hidden_github_renders_vet857.json``: a raw tag whose name is off the HTML element list,
+    or that holds anything but whitespace and ``/`` after its name, hides words GitHub never shows; its line reads
+    unsure, in an HTML block and inline alike. Ids: e5_block_endtag_attr_name_only, e6_block_opentag_attr_name_only,
+    e7_inline_attr_name_only, e9_block_tag_name, e10_inline_tag_name, e13_type7_tag_name_alone, e14_block_three_attr_names,
+    e15_inline_data_attr_name, e16_block_endtag_name_attr, e17_inline_selfclose_attr_name, k10_list_item_attr_name,
+    k11_quote_block_attr_name, k12_inline_attr_names_sentence."""
+    for row_id in ("e5_block_endtag_attr_name_only", "e6_block_opentag_attr_name_only", "e7_inline_attr_name_only",
+                   "e9_block_tag_name", "e10_inline_tag_name", "e13_type7_tag_name_alone", "e14_block_three_attr_names",
+                   "e15_inline_data_attr_name", "e16_block_endtag_name_attr", "e17_inline_selfclose_attr_name",
+                   "k10_list_item_attr_name", "k11_quote_block_attr_name", "k12_inline_attr_names_sentence"):
+        body = _CORPUS_857_ROWS[row_id]["body"]
+        assert _corpus_fail_open(body, _CORPUS_857) == [], row_id
+
+
+def test_vet857_1_controls_stay_visible():
+    """V857-1 controls, vet 857 renders, ``md_hidden_github_renders_vet857.json``: text that GitHub shows keeps reading
+    VISIBLE. Ids: c1_plain_link, c2_plain_tags, c3_brackets, c4_bang_bracket_no_close, c5_div_text, c6_collapsed,
+    c7_endtag_plain, c8_bare_link_with_paren (every line), and k6_details_open_ctrl (its ``<summary>ZQ1</summary>`` and
+    ``ZQ2`` lines)."""
+    for row_id in ("c1_plain_link", "c2_plain_tags", "c3_brackets", "c4_bang_bracket_no_close", "c5_div_text",
+                   "c6_collapsed", "c7_endtag_plain", "c8_bare_link_with_paren"):
+        body = _CORPUS_857_ROWS[row_id]["body"]
+        for item, state in _body_states(body):
+            assert state == V, (row_id, item)
+    body = _CORPUS_857_ROWS["k6_details_open_ctrl"]["body"]
+    assert _line_state(body, "<summary>ZQ1</summary>") == V
+    assert _line_state(body, "ZQ2") == V
+
+
+def test_vet857_2_a_heading_comment_opener_without_a_comment_reads_unsure():
+    """V857-2, vet 857 renders, ``md_hidden_github_renders_vet857.json``: an ATX heading holding a ``<!-- … -->`` run that
+    ``heading_text`` drops, where the inline pass found no comment at its opener, reads unsure. Ids: h4_review_shape,
+    h5_pi_holding_comment_opener, h6_decl_holding_comment_opener, h8_codespan_comment_opener,
+    h9_escaped_comment_opener, h16_pi_comment_opener_tail. Controls (one heading reading VISIBLE, with the text GitHub
+    renders): h11_comment_then_attr_closer (``">ZQ1``), h12_unclosed_comment_ctrl (``x <!-- ZQ1``), h14_quoted_lt_ctrl
+    (``ZQ1``), h15_attr_ctrl (``ZQ1``)."""
+    for row_id in ("h4_review_shape", "h5_pi_holding_comment_opener", "h6_decl_holding_comment_opener",
+                   "h8_codespan_comment_opener", "h9_escaped_comment_opener", "h16_pi_comment_opener_tail"):
+        body = _CORPUS_857_ROWS[row_id]["body"]
+        assert _heading_line_state(body) == U, row_id
+    for row_id, text in (("h11_comment_then_attr_closer", '">ZQ1'), ("h12_unclosed_comment_ctrl", "x <!-- ZQ1"),
+                         ("h14_quoted_lt_ctrl", "ZQ1"), ("h15_attr_ctrl", "ZQ1")):
+        body = _CORPUS_857_ROWS[row_id]["body"]
+        assert [(heading, state) for _, heading, state in md.scan(body).headings] == [(text, V)], row_id

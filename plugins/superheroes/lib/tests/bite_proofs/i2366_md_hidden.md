@@ -2126,3 +2126,146 @@ byte-identical `md_hidden.py`, this file's tests and the vet 854 fixture, ran th
 passed, 30 skipped` (the two named nodes); the probe was restored and compared byte-identical. E3's `git apply
 --reverse --check` was refused to the implementer by the permission layer; the orchestrator ran it on the build tree:
 exit 0.
+
+## Vet 857 fix leg
+
+The fix leg (work order WO-9, issue #2388): V857-1 (one chokepoint, `_tag_hides_text`), V857-2 (an ATX heading comment
+opener with no comment construct reads unsure), the removal of the 9ea0f138 clause, and a comment correction in
+`_destination_end`, applied to `plugins/superheroes/lib/md_hidden.py` with `git apply` of the builder's diff; the new
+fixture `fixtures/md_hidden_github_renders_vet857.json` (98 renders, GitHub's renders taken by the advisor) is checked by
+the same fail-open judge in `test_vet857_corpus_no_line_github_hides_reads_visible`. Each neutralization is a targeted edit
+of `md_hidden.py`, undone by the inverse edit. Node ids are relative to
+`plugins/superheroes/lib/tests/test_md_hidden_2366.py::`.
+Command prefix (worktree root): `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest <node ids> -q`.
+Captures are verbatim except uv's `UV_NATIVE_TLS` deprecation warning line (dropped) and the source listing of the test
+bodies and the `Use -v to get more diff` lines (dropped; the assertion lines are kept). Nothing was redacted.
+Guarded-element set: L1, L2, L3, L4. Result: all four bite. `test_vet857_1_words_inside_a_raw_tag_read_unsure` loops over
+its ids and stops at its first assertion, so each of L2 and L3 shows one id, not every id the element covers.
+
+### L1: V857-1, HTML-block site: a line holding a tag that hides text reads unsure
+
+- **Guarded element / axis:** `md_hidden.py:1099`, `if raw[-1] == VISIBLE and any(_tag_hides_text(t) for t in _line_tags(html_line[i])):`
+  (axis: an HTML-block line holding a tag with a non-element name, or anything but whitespace and `/` after the name, reads
+  unsure, on that line only).
+- **Neutralization:** that condition became `if False:`.
+- **Raw red** (`test_vet857_1_words_inside_a_raw_tag_read_unsure` and `test_vet857_corpus_no_line_github_hides_reads_visible`):
+
+```
+FF                                                                       [100%]
+E           AssertionError: e5_block_endtag_attr_name_only
+E           assert [('</div ZQ1>.../div ZQ1>\n')] == []
+E             Left contains one more item: ('</div ZQ1>\n\n## ZQ9\n', 0, '</div ZQ1>\n')
+test_md_hidden_2366.py:1640: AssertionError
+E       AssertionError: 12 fail-open (body, line index, line):
+E         ('<p>x</p title="ZQ1">\n\n## ZQ9\n', 0, '<p>x</p title="ZQ1">\n')
+E         ('<ZQ1>\n\n## ZQ9\n', 0, '<ZQ1>\n')
+E         ('<div ZQ1 ZQ2 ZQ3>\n</div>\n\n## ZQ9\n', 0, '<div ZQ1 ZQ2 ZQ3>\n')
+E         ('<div>\n</ZQ1 x>\n</div>\n\n## ZQ9\n', 1, '</ZQ1 x>\n')
+E         ('<div>\n</div title="ZQ1">\n\n## ZQ9\n', 1, '</div title="ZQ1">\n')
+E         ('</div title="ZQ1">\n\n## ZQ9\n', 0, '</div title="ZQ1">\n')
+E         ('</div\x0ctitle="ZQ1">\n\n## ZQ9\n', 0, '</div\x0ctitle="ZQ1">\n')
+E         ('</div title=ZQ1>\n\n## ZQ9\n', 0, '</div title=ZQ1>\n')
+E         ('</div ZQ1>\n\n## ZQ9\n', 0, '</div ZQ1>\n')
+E         ('<div ZQ1>\n\n## ZQ9\n', 0, '<div ZQ1>\n')
+E         ('<div>\n<ZQ1>\n</div>\n\n## ZQ9\n', 1, '<ZQ1>\n')
+E         ('> <div ZQ1>\n\n## ZQ9\n', 0, '> <div ZQ1>\n')
+test_md_hidden_2366.py:1624: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet857_1_words_inside_a_raw_tag_read_unsure
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet857_corpus_no_line_github_hides_reads_visible
+2 failed in 0.55s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if raw[-1] == VISIBLE and any(_tag_hides_text(t) for t in _line_tags(html_line[i])):`.
+- **Restore receipt:** a file search for `if raw\[-1\] == VISIBLE and any\(_tag_hides_text|if False:` returned only `1099:                if raw[-1] == VISIBLE and any(_tag_hides_text(t) for t in _line_tags(html_line[i])):`.
+- **Raw green** (same two node ids):
+
+```
+..                                                                       [100%]
+2 passed in 0.54s
+```
+
+### L2: V857-1, inline site: an inline tag that hides text puts its lines in the unsure set
+
+- **Guarded element / axis:** `md_hidden.py:1041`, `if is_tag and _tag_hides_text(construct) and (not atx or ">" in construct[:-1]):`
+  (axis: an inline tag holding an attribute name or a non-element name puts its lines in the unsure set).
+- **Neutralization:** that condition became `if False:`.
+- **Raw red** (`test_vet857_1_words_inside_a_raw_tag_read_unsure`):
+
+```
+F                                                                        [100%]
+E           AssertionError: e7_inline_attr_name_only
+E           assert [('x <span ZQ...</span> z\n')] == []
+E             Left contains one more item: ('x <span ZQ1>y</span> z\n\n## ZQ9\n', 0, 'x <span ZQ1>y</span> z\n')
+test_md_hidden_2366.py:1640: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet857_1_words_inside_a_raw_tag_read_unsure
+1 failed in 0.59s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if is_tag and _tag_hides_text(construct) and (not atx or ">" in construct[:-1]):`.
+- **Restore receipt:** a file search for `if is_tag and _tag_hides_text|if False:` returned only `1041:        if is_tag and _tag_hides_text(construct) and (not atx or ">" in construct[:-1]):`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.38s
+```
+
+### L3: V857-1, the element list: a name off `_HTML_ELEMENTS` hides text
+
+- **Guarded element / axis:** `md_hidden.py:895`, `if not m or m.group(1).lower() not in _HTML_ELEMENTS:` in `_tag_hides_text`
+  (axis: a bare tag whose name GitHub does not know hides the words written as its name).
+- **Neutralization:** that condition became `if not m:`.
+- **Raw red** (`test_vet857_1_words_inside_a_raw_tag_read_unsure`):
+
+```
+F                                                                        [100%]
+E           AssertionError: e9_block_tag_name
+E           assert [('<div>\n<ZQ...1, '<ZQ1>\n')] == []
+E             Left contains one more item: ('<div>\n<ZQ1>\n</div>\n\n## ZQ9\n', 1, '<ZQ1>\n')
+test_md_hidden_2366.py:1640: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet857_1_words_inside_a_raw_tag_read_unsure
+1 failed in 0.46s
+```
+
+- **Restore:** inverse Edit, `if not m:` back to `if not m or m.group(1).lower() not in _HTML_ELEMENTS:` (the first inverse
+  Edit matched two sites and was refused; the second, with the surrounding `m = _TAG_PARTS.match(tag)` line, applied).
+- **Restore receipt:** a file search for `if not m or m.group\(1\)` returned only `895:    if not m or m.group(1).lower() not in _HTML_ELEMENTS:`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.33s
+```
+
+### L4: V857-2, an ATX heading with a comment-opener run and no comment construct there reads unsure
+
+- **Guarded element / axis:** `md_hidden.py:982`, `if any(m.start() not in comment_starts for m in _COMMENT_RUN.finditer(joined)):`
+  (axis: a `<!-- … -->` run that `heading_text` drops, where the inline pass found no comment, makes the heading unsure).
+- **Neutralization:** that condition became `if False:`.
+- **Raw red** (`test_vet857_2_a_heading_comment_opener_without_a_comment_reads_unsure`):
+
+```
+F                                                                        [100%]
+E           AssertionError: h4_review_shape
+E           assert 'visible' == 'unsure'
+E             - unsure
+E             + visible
+test_md_hidden_2366.py:1668: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet857_2_a_heading_comment_opener_without_a_comment_reads_unsure
+1 failed in 0.38s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if any(m.start() not in comment_starts for m in _COMMENT_RUN.finditer(joined)):`.
+- **Restore receipt:** a file search for `if any\(m.start\(\) not in comment_starts|if False:` returned only `982:        if any(m.start() not in comment_starts for m in _COMMENT_RUN.finditer(joined)):`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.29s
+```
+
+**Orchestrator re-run (L4, E3).** The orchestrator applied L4's neutralization in a separate probe worktree holding a
+byte-identical `md_hidden.py`, this file's tests and the vet 857 fixture, ran the whole test file and saw `2 failed, 520
+passed, 30 skipped` (the named node and `test_atx_heading_tag_with_a_quoted_comment_opener_reads_unsure`, the
+9ea0f138 case the V857-2 rule now covers); the probe was restored and compared byte-identical. E3's `git apply
+--reverse --check` exits 0 on the build tree.
