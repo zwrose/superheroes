@@ -46,6 +46,7 @@ import cloud_builder  # noqa: E402
 import cloud_pass  # noqa: E402
 import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
+import decision_kinds  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
@@ -825,6 +826,11 @@ def _validate(a):
         chk(sn(a.get(k)), k)
     ab = a.get("abandoned")
     chk(ab is None or (isinstance(ab, dict) and isinstance(ab.get("reason"), str) and bool(ab["reason"].strip())), "abandoned")
+    unc = a.get("uncertified")
+    # axis: the withheld-certificate entry's terminal is one of the driver's own verdicts but converged, and its keys are only terminal, reason and note, so no free text or stray key enters the record as a driver's word — see bite-proof record i2395_uncertified_record
+    chk(unc is None or (isinstance(unc, dict) and set(unc) <= {"terminal", "reason", "note"}
+                        and unc.get("terminal") in decision_kinds.ALL_VERDICTS and unc["terminal"] != "converged"
+                        and sn(unc.get("reason")) and sn(unc.get("note"))), "uncertified")
     # an abandoned session may have run no seat, so only its record may list no reviewer
     chk(isinstance(a.get("reviewers"), list) and (a["reviewers"] or ab is not None), "reviewers")
     for i, r in enumerate(a["reviewers"]):
@@ -1618,6 +1624,17 @@ def _lane_lines(rec):
     return lines
 
 
+UNCERTIFIED_OPENING = "the review session ended "
+
+
+def uncertified_line(u):
+    """The one home of the withheld-certificate wording: the terminal a non-converged session ended on and the driver's
+    reason (clipped; its literal text), or that none was recorded. The summary leaves this line's text out of the claim check."""
+    reason = u.get("reason")
+    cause = _clip(reason.strip()) if isinstance(reason, str) and reason.strip() else "no reason recorded"
+    return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"
+
+
 def _status(rec, unread=(), finding_lines=()):
     fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
@@ -1648,6 +1665,9 @@ def _status(rec, unread=(), finding_lines=()):
     if rec.get("abandoned"):
         # fixed prose: no data enters
         lines.append("session abandoned: the review loop was closed before it ended, so this record cannot read reviewed")
+    # axis: a session that did not converge never reads reviewed, whatever else is clear — see bite-proof record i2395_uncertified_record
+    if rec.get("uncertified"):
+        lines.append(uncertified_line(rec["uncertified"]))
     return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
 
@@ -1808,7 +1828,7 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
     return out, rows
 
 
-def build_record(account, readers, prior=None, history=()):
+def build_record(account, readers, prior=None, history=(), session_uncertified=None):
     a, rd, dis = _validate(account), _readers(readers), []
     read_paths, seen = rd["changed_paths"], {}
 
@@ -1916,6 +1936,9 @@ def build_record(account, readers, prior=None, history=()):
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "withheldFromReviewers": withheld,
         **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
+        # the entry is the driver's own text only when the session writer stamped it: it handed the same dict to `write`
+        **({"uncertified": dict(a["uncertified"], source="session" if isinstance(session_uncertified, dict)
+                                and session_uncertified == a["uncertified"] else "account")} if a.get("uncertified") else {}),
         "ci": ci, "reviewers": reviewers,
         # axis: the test-lens part is computed from the credited reviewer rows and the record's findings, never from the account's own claim — see bite-proof record wo_b_2311_record_calibration
         "testLens": _test_lens(reviewers, findings, fc["sha"], earlier_other),
@@ -2690,8 +2713,9 @@ def _summary(r, level):
     watchdog_line = _watchdog_line(r.get("silenceWatchdogEnds"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
+    first_line = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + "."
     lines = [
-        f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
+        first_line,
         waits_text,
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
@@ -2729,9 +2753,21 @@ def _summary(r, level):
     # axis: the watchdog line carries session seat names, so it is left out of the claim check, by line object — see bite-proof record i2375_c_watchdog_ends
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
     # axis: the findings block and the outside list are left out of the claim check, by line object — see bite-proof record c1l1_wo_a_record_seam
-    _assert_no_bug_free_claim(
-        "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
-                  and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines)))
+    # The withheld-certificate line carries the driver's literal reason, so exactly that one `whatIsMissing` entry, as it
+    # is displayed, is taken out of the first line's `Left:` text (the first line is recomposed without it); every other
+    # part of that line, every other occurrence of the same text, and every other line is still checked. Compact mode
+    # shows no `whatIsMissing` text, so nothing is removed there; a record with no such entry removes nothing.
+    # axis: only the displayed withheld-certificate entry in the first line's `Left:` text is left out of the claim check — see bite-proof record i2395_uncertified_record
+    checked_first = first_line
+    if r.get("uncertified") and r["uncertified"].get("source") == "session" and not compact:
+        at = next((i for i, m in enumerate(missing) if m.startswith(UNCERTIFIED_OPENING)), None)
+        if at is not None:
+            kept = "; ".join(missing[:at] + missing[at + 1:]) or "nothing"
+            checked_first = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + kept + "."
+    checked_text = "\n".join((checked_first if l is first_line else l) for l in lines
+                             if l is not floor_line and l is not withheld_line and l is not refusals_line
+                             and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines))
+    _assert_no_bug_free_claim(checked_text)
     return "\n".join(lines)
 
 
@@ -3129,7 +3165,7 @@ def _transit_summary(checks):
     return out
 
 
-def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
+def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *, session_uncertified=None):
     def go():
         try:
             with open(account_path, encoding="utf-8") as fh:
@@ -3190,7 +3226,7 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
             raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
-        record = build_record(a, rd, prior=prior, history=history)
+        record = build_record(a, rd, prior=prior, history=history, session_uncertified=session_uncertified)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
