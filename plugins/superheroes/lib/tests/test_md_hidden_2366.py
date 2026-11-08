@@ -1367,3 +1367,14 @@ def test_html_block_line_reads_hidden_only_when_it_is_one_hiding_construct():
     assert _line_state(body, "<3 ZQ1>") == U
     assert _line_state("<!-- ZQ1 -->\n\n## ZQ2\n", "<!-- ZQ1") == H
     assert _line_state("<!-- ZQ1 -->\n\n## ZQ2\n", "## ZQ2") == V
+
+
+@pytest.mark.parametrize("body", [
+    "![<https://example.com/]>\nZQ1](image.png)\n",   # round-3 scoped finder: an autolink holds the ]
+    "x <![CDATA[alt]\nZQ1](x.png)\n",                 # round-3 audit: an unclosed CDATA prefix is literal, the image stands
+], ids=["autolink-bracket", "unclosed-cdata-prefix"])
+def test_image_description_skips_autolinks_and_needs_a_closed_cdata(body):
+    """Final returning review on 66130a25, round 3 (scoped finder and audit): cmark-gfm parses an autolink inside an image
+    description before it closes the brackets, and excludes only a complete CDATA section; ZQ1 shows only in the alt
+    attribute on GitHub, so its line must not read visible."""
+    assert _line_state(body, "ZQ1") != V

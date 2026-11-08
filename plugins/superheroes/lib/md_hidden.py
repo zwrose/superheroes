@@ -685,7 +685,7 @@ def _image_regions(text):
     regions = []
     at = text.find("![")
     while at >= 0:
-        if not (at and text.startswith("<![CDATA[", at - 1)):
+        if not (at and _INLINE_CDATA.match(text, at - 1)):
             end, depth = at + 2, 1
             while end < len(text):
                 if text[end] == "\\":
@@ -702,7 +702,7 @@ def _image_regions(text):
                     end = close + width if close >= 0 and width <= _MAX_BACKTICKS else run
                     continue
                 if text[end] == "<":
-                    m = next((m for m in (p.match(text, end) for p in _INLINE_RAW) if m), None)
+                    m = next((m for m in (p.match(text, end) for p in _IMAGE_SKIPS) if m), None)
                     end = m.end() if m else end + 1
                     continue
                 depth += {"[": 1, "]": -1}.get(text[end], 0)
@@ -800,6 +800,7 @@ def _cell_end(text, i):
 _HIDING_OPENER = re.compile(r"\A<(?:!--|\?|!\[CDATA\[|!)")
 _INLINE_RAW = (_INLINE_OPEN_TAG, _INLINE_CLOSE_TAG, _INLINE_COMMENT, _INLINE_PI, _INLINE_CDATA, _INLINE_DECL)
 _ASCII_WS = " \t\n\v\f\r"
+_IMAGE_SKIPS = (_AUTOLINK_URI, _AUTOLINK_EMAIL) + _INLINE_RAW  # what cmark-gfm parses inside an image description
 
 
 def _inline_constructs(text):
