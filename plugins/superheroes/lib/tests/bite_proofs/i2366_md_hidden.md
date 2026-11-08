@@ -1939,3 +1939,190 @@ every lone-pipe body in `md_hidden_github_renders_vet851.json` under the neutral
 sentinel visible, so V851-3 masks V851-2 on every rendered shape. The rule stays, since it matches cmark-gfm. The probe
 was restored and compared byte-identical. E3's `git apply --reverse --check` was refused to the implementer by the
 permission layer; the orchestrator ran it on the build tree after the last restore: exit 0.
+
+## Vet 854 fix leg
+
+The fix leg (work order WO-8, issue #2388): V854-1, V854-2 and V854-4, applied to `plugins/superheroes/lib/md_hidden.py`
+with `git apply` of the builder's diff; the new fixture `fixtures/md_hidden_github_renders_vet854.json` (44 renders, GitHub's
+renders taken by the advisor) is checked by the same fail-open judge in
+`test_vet854_corpus_no_line_github_hides_reads_visible`. Each neutralization is a targeted edit of `md_hidden.py`, undone by
+the inverse edit. Node ids are relative to `plugins/superheroes/lib/tests/test_md_hidden_2366.py::`.
+Command prefix (worktree root): `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest <node ids> -q`.
+Captures are verbatim except uv's `UV_NATIVE_TLS` deprecation warning line (dropped) and the source listing of the test
+bodies and the `Use -v to get more diff` lines (dropped; the assertion lines are kept). Nothing was redacted.
+Guarded-element set: J1, J2, J3, J4, J5, J6. Result: all six bite. Each of J3, J4 and J5 stops at the first failing id of
+`test_vet854_4_attribute_and_title_text_reads_unsure` (the test loops over its ids and stops at the first assertion), so
+one red per neutralization names one id, not every id the element covers.
+
+### J1: V854-1, a text block with `![` and a later `]` reads unsure from its first line
+
+- **Guarded element / axis:** `md_hidden.py:940`, `if nl >= 0 and "]" in joined[nl:]:` (axis: an image description that may
+  close on a later line puts an unsure point at the block's first line).
+- **Neutralization:** that condition became `if False:`.
+- **Raw red** (`test_vet854_1_an_image_closing_on_a_later_line_reads_unsure` and `test_vet854_corpus_no_line_github_hides_reads_visible`):
+
+```
+FF                                                                       [100%]
+E           AssertionError: a1_nested_dest_bracket
+E           assert [('![a [b](c]...om/x.png)\n')] == []
+E             Left contains one more item: ('![a [b](c]d)\nZQ1](https://example.com/x.png)\n\n## ZQ2\n', 1, 'ZQ1](https://example.com/x.png)\n')
+test_md_hidden_2366.py:1458: AssertionError
+E       AssertionError: 7 fail-open (body, line index, line):
+E         ('![a [b](c]d)\nZQ1](https://example.com/x.png)\n\n## ZQ2\n', 1, 'ZQ1](https://example.com/x.png)\n')
+E         ('![a [b](c "]")\nZQ1](https://example.com/x.png)\n\n## ZQ2\n', 1, 'ZQ1](https://example.com/x.png)\n')
+E         ('![a [b](<c]>)\nZQ1](https://example.com/x.png)\n\n## ZQ2\n', 1, 'ZQ1](https://example.com/x.png)\n')
+E         ('- ![a [b](c]d)\n  ZQ1](https://example.com/x.png)\n\n## ZQ2\n', 1, '  ZQ1](https://example.com/x.png)\n')
+E         ("![a [b](c 'x]y')\nZQ1](https://example.com/x.png)\n\n## ZQ2\n", 1, 'ZQ1](https://example.com/x.png)\n')
+E         ('![a ![b](c]d)\nZQ1](https://example.com/x.png)\n\n## ZQ2\n', 1, 'ZQ1](https://example.com/x.png)\n')
+E         ('![a [b](c (]))\nZQ1](https://example.com/x.png)\n\n## ZQ2\n', 1, 'ZQ1](https://example.com/x.png)\n')
+test_md_hidden_2366.py:1445: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet854_1_an_image_closing_on_a_later_line_reads_unsure
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet854_corpus_no_line_github_hides_reads_visible
+2 failed in 0.49s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if nl >= 0 and "]" in joined[nl:]:`.
+- **Restore receipt:** a file search for `if nl >= 0 and "\]" in joined|^\s+if False:` returned only `940:        if nl >= 0 and "]" in joined[nl:]:`.
+- **Raw green** (same two node ids):
+
+```
+..                                                                       [100%]
+2 passed in 0.53s
+```
+
+### J2: V854-2, `</` followed by anything but an ASCII letter or `>` is a bogus comment in an HTML block
+
+- **Guarded element / axis:** `md_hidden.py:868`, `_BLOCK_HIDING`, the alternative `<(?:[?!]|/(?![A-Za-z>]))` (axis: a block
+  end-tag-shaped bogus comment hides its line).
+- **Neutralization:** `<(?:[?!]|/(?![A-Za-z>]))` became `<(?:[?!])`.
+- **Raw red** (`test_vet854_2_a_block_end_tag_bogus_comment_hides_its_text`):
+
+```
+F                                                                        [100%]
+E           AssertionError: h1_block_endtag_bogus
+E           assert [('<div>\n</ ... '</ ZQ1>\n')] == []
+E             Left contains one more item: ('<div>\n</ ZQ1>\n</div>\n\n## ZQ2\n', 1, '</ ZQ1>\n')
+test_md_hidden_2366.py:1467: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet854_2_a_block_end_tag_bogus_comment_hides_its_text
+1 failed in 0.48s
+```
+
+- **Restore:** inverse Edit, `<(?:[?!])` back to `<(?:[?!]|/(?![A-Za-z>]))`.
+- **Restore receipt:** a file search for `^_BLOCK_HIDING = ` returned `868:_BLOCK_HIDING = re.compile(r"<!--(?:>|->|.*?(?:-->|--!>|\Z))|<(?:[?!]|/(?![A-Za-z>]))[^>]*(?:>|\Z)", re.S)`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.59s
+```
+
+### J3: V854-4, an HTML-block tag with an attribute value reads unsure
+
+- **Guarded element / axis:** `md_hidden.py:1042`, `if raw[-1] == VISIBLE and _ATTR_VALUE.search(html_line[i]):` (axis: an
+  HTML-block line holding a tag with an attribute value reads unsure, on that line only).
+- **Neutralization:** that condition became `if False:`.
+- **Raw red** (`test_vet854_4_attribute_and_title_text_reads_unsure`):
+
+```
+F                                                                        [100%]
+E           AssertionError: b2_img_alt_block
+E           assert [('<img src="...lt="ZQ1">\n')] == []
+E             Left contains one more item: ('<img src="https://example.com/x.png" alt="ZQ1">\n\n## ZQ2\n', 0, '<img src="https://example.com/x.png" alt="ZQ1">\n')
+test_md_hidden_2366.py:1479: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet854_4_attribute_and_title_text_reads_unsure
+1 failed in 0.47s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if raw[-1] == VISIBLE and _ATTR_VALUE.search(html_line[i]):`.
+- **Restore receipt:** a file search for `if raw\[-1\] == VISIBLE and _ATTR_VALUE|^\s+if False:` returned only `1042:                if raw[-1] == VISIBLE and _ATTR_VALUE.search(html_line[i]):`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.27s
+```
+
+### J4: V854-4, an inline tag with an attribute value reads unsure (ATX headings exempt)
+
+- **Guarded element / axis:** `md_hidden.py:985`, `if not atx and is_tag and "=" in construct:` (axis: an inline tag holding an
+  attribute value puts its lines in the unsure set).
+- **Neutralization:** that condition became `if False:`.
+- **Raw red** (`test_vet854_4_attribute_and_title_text_reads_unsure`):
+
+```
+F                                                                        [100%]
+E           AssertionError: b1_span_title_alone
+E           assert [('<span titl..."></span>\n')] == []
+E             Left contains one more item: ('<span title="ZQ1"></span>\n\n## ZQ2\n', 0, '<span title="ZQ1"></span>\n')
+test_md_hidden_2366.py:1479: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet854_4_attribute_and_title_text_reads_unsure
+1 failed in 0.35s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if not atx and is_tag and "=" in construct:`.
+- **Restore receipt:** a file search for `if not atx and is_tag and "=" in construct:|^\s+if False:` returned only `985:        if not atx and is_tag and "=" in construct:`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.32s
+```
+
+### J5: V854-4, a possible link or image title reads unsure
+
+- **Guarded element / axis:** `md_hidden.py:945`, `if _TITLE_START.search(joined[r0:r1]):` (axis: the lines a possible link or
+  image title may span read unsure).
+- **Neutralization:** that condition became `if False:`.
+- **Raw red** (`test_vet854_4_attribute_and_title_text_reads_unsure`):
+
+```
+F                                                                        [100%]
+E           AssertionError: b3_empty_link_title
+E           assert [('[](https:/...om "ZQ1")\n')] == []
+E             Left contains one more item: ('[](https://example.com "ZQ1")\n\n## ZQ2\n', 0, '[](https://example.com "ZQ1")\n')
+test_md_hidden_2366.py:1479: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet854_4_attribute_and_title_text_reads_unsure
+1 failed in 0.50s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if _TITLE_START.search(joined[r0:r1]):`.
+- **Restore receipt:** a file search for `if _TITLE_START.search\(joined\[r0:r1\]\):|^\s+if False:` returned only `945:        if _TITLE_START.search(joined[r0:r1]):`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.31s
+```
+
+### J6: the lone-pipe rule (vet 851 H2 re-proven)
+
+- **Guarded element / axis:** `md_hidden.py:778`, `if text == "|":` in `_cell_count` (axis: a lone pipe holds no cells, so a
+  lone-pipe header makes no table). The vet 851 H2 proof was unproven because V851-3 masked it; the f1 and f2 renders hold no
+  pipe in their rows, so V851-3 cannot.
+- **Neutralization:** `if text == "|":` became `if False:`.
+- **Raw red** (`test_vet854_h2_a_lone_pipe_header_with_pipeless_rows`):
+
+```
+F                                                                        [100%]
+E           AssertionError: f1_h2_lone_pipe_no_row_pipes
+E           assert [('|\n|-|\nx ..., 3, 'ZQ1\n')] == []
+E             Left contains one more item: ('|\n|-|\nx <!-- a b\nZQ1\n-->\n\n## ZQ2\n', 3, 'ZQ1\n')
+test_md_hidden_2366.py:1488: AssertionError
+FAILED plugins/superheroes/lib/tests/test_md_hidden_2366.py::test_vet854_h2_a_lone_pipe_header_with_pipeless_rows
+1 failed in 0.35s
+```
+
+- **Restore:** inverse Edit, `if False:` back to `if text == "|":`.
+- **Restore receipt:** a file search for `if text == "\|":|if False:` returned only `778:    if text == "|":  # vet 851: a lone pipe holds no cells, so cmark-gfm makes no table`.
+- **Raw green** (same node id):
+
+```
+.                                                                        [100%]
+1 passed in 0.38s
+```
+
+**Orchestrator re-run (J1, E3).** The orchestrator applied J1's neutralization in a separate probe worktree holding a
+byte-identical `md_hidden.py`, this file's tests and the vet 854 fixture, ran the whole test file and saw `2 failed, 508
+passed, 30 skipped` (the two named nodes); the probe was restored and compared byte-identical. E3's `git apply
+--reverse --check` was refused to the implementer by the permission layer; the orchestrator ran it on the build tree:
+exit 0.

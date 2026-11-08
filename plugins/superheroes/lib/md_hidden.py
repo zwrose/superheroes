@@ -650,17 +650,26 @@ _REF_DEF_START = re.compile(r"[ ]{0,3}\[")  # a block's first line that may open
 _MAX_BACKTICKS = 80  # cmark-gfm: a backtick run longer than this opens no code span (scan_to_closing_backticks)
 
 
+_TITLE_START = re.compile(r"""[ \t\n]["'(]""")  # a possible link title after the destination
+
+
+def _inline_link_regions(text):
+    """``(start, end)`` of each possible inline link destination and title: from any ``](`` to its ``)``."""
+    regions = []
+    at = text.find("](")
+    while at >= 0:
+        regions.append((at + 2, _destination_end(text, at + 2)))
+        at = text.find("](", at + 2)
+    return regions
+
+
 def _link_regions(text):
     """``(start, end)`` ranges that may be a link's destination and title, or a link reference definition: from any
     ``](`` (whether or not a ``[`` precedes it) to the ``)`` that closes it (an angle-bracket destination ``<…>``
     skipped whole; quoted ``"…"`` and ``'…'`` skipped; parentheses counted; an unclosed one runs to the end of the
     text), and from a ``]:`` on a line that starts with ``[`` to the end of the next line. The ranges are an
     over-approximation of cmark's, used only to add unsure points: wider is safe, narrower is not."""
-    regions = []
-    at = text.find("](")
-    while at >= 0:
-        regions.append((at + 2, _destination_end(text, at + 2)))
-        at = text.find("](", at + 2)
+    regions = _inline_link_regions(text)
     at = text.find("][")
     while at >= 0:  # a full reference link's second label: cmark reads it apart from the text, to its first
         # unescaped "]" (a label may span lines); an unclosed one runs to the end of the text
@@ -681,36 +690,35 @@ def _image_regions(text):
     """``(start, end)`` of each possible image description (vet 851: its text shows only as an attribute): from ``![`` to
     its closing ``]``, bracket depth counted and escapes skipped; a code span or raw-HTML construct inside is skipped
     whole, as cmark-gfm parses them before it closes the brackets (an unmatched backtick run or ``<`` is literal);
-    with no closer the range runs to the end of the text. The ``<![`` of a CDATA section is no image."""
+    with no closer the range runs to the end of the text."""
     regions = []
     at = text.find("![")
     while at >= 0:
-        slashes = len(text[:max(at - 1, 0)]) - len(text[:max(at - 1, 0)].rstrip("\\"))
-        if not (at and _INLINE_CDATA.match(text, at - 1) and slashes % 2 == 0):  # an escaped < opens no CDATA
-            end, depth = at + 2, 1
-            while end < len(text):
-                if text[end] == "\\":
-                    end += 2
-                    continue
-                if text[end] == "`":
-                    run = end
-                    while run < len(text) and text[run] == "`":
-                        run += 1
-                    width = run - end
-                    close = text.find(text[end:run], run)
-                    while close >= 0 and (text[close - 1] == "`" or text[close + width:close + width + 1] == "`"):
-                        close = text.find(text[end:run], close + 1)
-                    end = close + width if close >= 0 and width <= _MAX_BACKTICKS else run
-                    continue
-                if text[end] == "<":
-                    m = next((m for m in (p.match(text, end) for p in _IMAGE_SKIPS) if m), None)
-                    end = m.end() if m else end + 1
-                    continue
-                depth += {"[": 1, "]": -1}.get(text[end], 0)
-                if depth == 0:
-                    break
-                end += 1
-            regions.append((at + 2, min(end, len(text))))
+        # vet 854: no CDATA exclusion: a "<![" may still open an image, and a CDATA line then only reads unsure
+        end, depth = at + 2, 1
+        while end < len(text):
+            if text[end] == "\\":
+                end += 2
+                continue
+            if text[end] == "`":
+                run = end
+                while run < len(text) and text[run] == "`":
+                    run += 1
+                width = run - end
+                close = text.find(text[end:run], run)
+                while close >= 0 and (text[close - 1] == "`" or text[close + width:close + width + 1] == "`"):
+                    close = text.find(text[end:run], close + 1)
+                end = close + width if close >= 0 and width <= _MAX_BACKTICKS else run
+                continue
+            if text[end] == "<":
+                m = next((m for m in (p.match(text, end) for p in _IMAGE_SKIPS) if m), None)
+                end = m.end() if m else end + 1
+                continue
+            depth += {"[": 1, "]": -1}.get(text[end], 0)
+            if depth == 0:
+                break
+            end += 1
+        regions.append((at + 2, min(end, len(text))))
         at = text.find("![", at + 2)
     return regions
 
@@ -857,7 +865,10 @@ def _inline_constructs(text):
 
 
 # HTML's own reading: a comment to its first closer (or the line's end), a PI or declaration to its first ">"
-_BLOCK_HIDING = re.compile(r"<!--(?:>|->|.*?(?:-->|--!>|\Z))|<[?!][^>]*(?:>|\Z)", re.S)
+_BLOCK_HIDING = re.compile(r"<!--(?:>|->|.*?(?:-->|--!>|\Z))|<(?:[?!]|/(?![A-Za-z>]))[^>]*(?:>|\Z)", re.S)
+
+
+_ATTR_VALUE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*[ \t\n\v\f\r][^>]*=")  # a tag that may hold an attribute value
 
 
 def _block_line_state(line):
@@ -924,6 +935,16 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # reads unsure from its first line
         sure_points.add((first, "possible link reference definition"))
     regions = _link_regions(joined)
+    for at in (m.start() for m in re.finditer(r"!\[", joined)):
+        nl = joined.find("\n", at)
+        if nl >= 0 and "]" in joined[nl:]:
+            # vet 854: an image description may close on a later line, wherever cmark-gfm closes it; no bracket count
+            sure_points.add((first, "image description that may span lines"))
+            break
+    for r0, r1 in _inline_link_regions(joined):
+        if _TITLE_START.search(joined[r0:r1]):
+            # vet 854: a link or image title shows only as an attribute, so the lines it may span read unsure
+            line_unsure.update(first + k for k in range(line_of(r0), line_of(max(r1 - 1, r0)) + 1))
     for r0, r1 in _image_regions(joined):
         if joined[r0:r1].strip(_ASCII_WS):
             # final review: an image description's text shows only as an attribute, so its line reads unsure
@@ -961,6 +982,9 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # axis (C5): the HTML parse disagrees with cmark about where the construct ends
         # (a vertical tab in a tag also counts, as the earlier conservative reading: cmark takes \v as tag whitespace)
         is_tag = _INLINE_OPEN_TAG.fullmatch(construct) or _INLINE_CLOSE_TAG.fullmatch(construct)
+        if not atx and is_tag and "=" in construct:
+            # vet 854: an attribute value shows only as an attribute, so the tag's lines read unsure (not sticky)
+            line_unsure.update(first + k for k in range(first_line, last_line + 1))
         # axis (vet 851 renders): a comment, PI, CDATA or declaration hides the text it holds, so the line it starts on
         # shows only part of itself; that line reads unsure (that line only, not sticky). An ATX heading is exempt: its
         # visible text is read through ``heading_text``, which drops the comment
@@ -1015,6 +1039,8 @@ def _scan(body):
                 # final review: an HTML-block line that starts in data and holds a comment, PI, CDATA or declaration
                 # hides that construct's text; text only there reads hidden, text on both sides reads unsure
                 raw[-1] = _block_line_state(html_line[i])
+                if raw[-1] == VISIBLE and _ATTR_VALUE.search(html_line[i]):
+                    raw[-1] = UNSURE  # vet 854: an attribute value shows only as an attribute
             state = _tokenize(state, html_line[i] + "\n")
             if i in html_last and state not in _OPEN_STATES:
                 at = offsets[i + 1] if i + 1 < len(texts) else len(body)

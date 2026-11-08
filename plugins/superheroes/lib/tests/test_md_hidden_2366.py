@@ -372,18 +372,26 @@ def test_unsure_tagfilter_in_a_heading_and_other_tags_decided():
 
 def test_unsure_html_block_ending_inside_a_tag():
     body = "<div title=\"\n\n## H\n"
-    _check_unsure(body, 1)  # the blank line that ended the block: from there the rest of the body is swallowed
+    # vet 854: a line holding an HTML-block tag with an attribute value reads U, on that line only
+    rendering = md.scan(body)
+    assert rendering.unsure[0][0] == _off(body, 1)  # the blank line that ended the block: from there the rest of the body is swallowed
+    assert [s for _, s in rendering.lines] == [U, U, U]
     assert "tag" in md.scan(body).unsure[0][1]
 
 
 def test_unsure_html_block_ending_inside_a_bogus_comment():
-    _check_unsure("x\n\n<div>\n</ \n\n## H\n", 4)
+    # vet 854: in an HTML block, "</" followed by anything but an ASCII letter or ">" is a bogus comment to its first ">": the "</ " line reads H
+    body = "x\n\n<div>\n</ \n\n## H\n"
+    rendering = md.scan(body)
+    assert rendering.unsure[0][0] == _off(body, 4)
+    assert [s for _, s in rendering.lines] == [V, V, V, H, U, U]
 
 
 def test_unsure_html_block_ending_inside_a_tag_at_the_end_of_the_body():
     rendering = md.scan("x\n\n<div title=\"")
     assert [offset for offset, _ in rendering.unsure] == [len("x\n\n<div title=\"")]
-    assert {state for _, state in rendering.lines} == {V}
+    # vet 854: a line holding an HTML-block tag with an attribute value reads U, on that line only
+    assert [state for _, state in rendering.lines] == [V, V, U]
 
 
 def test_unsure_comment_state_paragraph_holding_a_lt_and_a_later_closer():
@@ -587,6 +595,9 @@ def test_not_an_atx_heading(line):
 def test_setext_headings_are_not_in_headings_and_do_not_end_the_comment_state():
     assert md.scan("Title\n=====\n\n## H\n").headings == ((_off("Title\n=====\n\n## H\n", 3), "H", V),)
     assert [t for _, t, _ in md.scan("Title\n---\n").headings] == []
+    # vet 854: open a comment first
+    body = "<div>\n<!-- a\n\nTitle\n=====\n\n## H\n"
+    assert [s for _, s in md.scan(body).lines][3:] == [H, H, H, H]
 
 
 def test_tab_expansion_counts_columns_from_the_line_start():
@@ -644,7 +655,7 @@ def test_guard_g5_fence_cap_reads_unsure_where_a_decided_parse_would_read_visibl
 def test_guard_g6_tagfilter_names_make_the_attribute_opener_unsure(name):
     body = "x\n\n<div title=\"x\">\n<%s title=\"<!--\">\n\n## H\n" % name
     assert _state(body, "## H") == U
-    assert _state(body, "<div title=\"x\">") == V
+    assert _state(body, "<div title=\"x\">") == U  # vet 854: a line holding an HTML-block tag with an attribute value reads U
 
 
 def test_guard_g7_footnote_definition_reads_unsure():
@@ -868,6 +879,11 @@ _CORPUS_851_PATH = os.path.join(_HERE, "fixtures", "md_hidden_github_renders_vet
 with open(_CORPUS_851_PATH, encoding="utf-8") as _fh:
     _CORPUS_851 = json.load(_fh)
 
+_CORPUS_854_PATH = os.path.join(_HERE, "fixtures", "md_hidden_github_renders_vet854.json")
+with open(_CORPUS_854_PATH, encoding="utf-8") as _fh:
+    _CORPUS_854_ROWS = json.load(_fh)
+_CORPUS_854 = {row["body"]: row["html"] for row in _CORPUS_854_ROWS.values()}
+
 _SENTINEL = re.compile(r"\bZQ\d+\b")
 
 
@@ -1000,7 +1016,7 @@ def test_f5_a_single_quoted_value_across_paragraph_lines_reads_unsure():
     """Advisor's corpus, ``md_hidden_github_corpus_2388.json``: GitHub hides ``ZQ1`` (inside the single-quoted value)."""
     body = "x <span title='\nZQ1\n'> y\n\n## ZQ2\n"
     _corpus_hides(body, "ZQ1")
-    assert _state(body, "x <span title='") == V
+    assert _state(body, "x <span title='") == U  # vet 854: a line holding an inline tag with an attribute value reads U
     assert _state(body, "ZQ1") == U
     assert md.scan(body).unsure[0][0] == _off(body, 1)
 
@@ -1018,7 +1034,8 @@ def test_f5_an_inline_pi_or_cdata_across_lines_reads_unsure(opener, closer):
     that ends at the first ``>``; the line inside it reads UNSURE, never VISIBLE (this exact body is not in the corpus)."""
     body = "x %s\nZQ1\n%s y\n\n## ZQ2\n" % (opener, closer)
     assert _state(body, "ZQ1") == U
-    assert md.scan(body).unsure[0][0] == _off(body, 1)
+    # vet 854: a text block in which a "![" is followed by a "]" on a later line reads unsure from its first line (cdata only)
+    assert md.scan(body).unsure[0][0] == _off(body, 0 if opener.startswith("<![") else 1)
 
 
 def test_f5_a_setext_heading_paragraph_holding_a_multi_line_comment():
@@ -1393,5 +1410,105 @@ def test_image_after_an_escaped_cdata_opener_reads_not_visible():
     ``\\<`` opens no CDATA section, so the image after it stands and ZQ1 shows only in its alt attribute on GitHub. A real
     CDATA section is still no image (control)."""
     assert _line_state("x \\<![CDATA[alt]\nZQ1](x.png)]]>\n", "ZQ1") != V
-    assert md._image_regions("<![CDATA[ a ]]>") == []
-    assert md._image_regions("\\\\<![CDATA[ a ]]>") == []
+    # vet 854: the CDATA exclusion is removed from _image_regions: a "<![" image range stands, and its line reads U
+    assert md._image_regions("<![CDATA[ a ]]>") == [(3, 13)]
+    assert md._image_regions("\\\\<![CDATA[ a ]]>") == [(5, 15)]
+
+
+# --- Vet 854 fix leg (issue #2388): V854-1, V854-2, V854-4, the third renders corpus, test strength ----------------------------
+
+# Vet 854 bodies the advisor declined (each key is a row id of the third corpus, each value the ruling). An exception never
+# outlives its cause: the test below asserts each declined body still fails the plain check.
+_CORPUS_854_DECLINED = {
+    "b7_link_dest_word": "a link destination's text is not modelled (disclosed)",
+    "d3_atx_comment_only": "the accepted ATX-heading exemption",
+    "d4_atx_comment_tail": "the accepted ATX-heading exemption",
+}
+
+
+def test_vet854_corpus_no_line_github_hides_reads_visible():
+    """The invariant over the third corpus: vet 854 renders, ``md_hidden_github_renders_vet854.json`` (44 bodies, GitHub's
+    own renders taken by the advisor). A line with a sentinel word that GitHub's visible text lacks is hidden by GitHub and
+    must not read VISIBLE. Every body must pass except the three the advisor declined (``_CORPUS_854_DECLINED``), each of
+    which must still fail the check."""
+    assert len(_CORPUS_854_ROWS) == 44
+    assert sorted(_CORPUS_854_DECLINED) == ["b7_link_dest_word", "d3_atx_comment_only", "d4_atx_comment_tail"]
+    for row_id in _CORPUS_854_DECLINED:
+        assert row_id in _CORPUS_854_ROWS, "declined row is not in the vet 854 corpus: %r" % (row_id,)
+        assert _corpus_fail_open(_CORPUS_854_ROWS[row_id]["body"], _CORPUS_854) != [], (
+            "declined body no longer fails: drop it from _CORPUS_854_DECLINED: %r" % (row_id,))
+    failing = []
+    for row_id, row in _CORPUS_854_ROWS.items():
+        if row_id in _CORPUS_854_DECLINED:
+            continue
+        failing.extend(_corpus_fail_open(row["body"], _CORPUS_854))
+    assert failing == [], "%d fail-open (body, line index, line):\n%s" % (
+        len(failing), "\n".join(repr(entry) for entry in failing))
+
+
+def test_vet854_1_an_image_closing_on_a_later_line_reads_unsure():
+    """V854-1, vet 854 renders, ``md_hidden_github_renders_vet854.json``: a text block in which a ``![`` is followed by a
+    ``]`` on a later line reads unsure from its first line. Ids: a1_nested_dest_bracket, a2_nested_title_bracket,
+    a3_nested_angle_dest_bracket, a6_nested_dest_bracket_list, a7_nested_ref_title, g2_nested_img_in_img_dest,
+    g4_inline_link_paren_title, e1_cdata_triple_bracket_end, e4_table_cell_cdata."""
+    for row_id in ("a1_nested_dest_bracket", "a2_nested_title_bracket", "a3_nested_angle_dest_bracket",
+                   "a6_nested_dest_bracket_list", "a7_nested_ref_title", "g2_nested_img_in_img_dest",
+                   "g4_inline_link_paren_title", "e1_cdata_triple_bracket_end", "e4_table_cell_cdata"):
+        body = _CORPUS_854_ROWS[row_id]["body"]
+        assert _corpus_fail_open(body, _CORPUS_854) == [], row_id
+
+
+def test_vet854_2_a_block_end_tag_bogus_comment_hides_its_text():
+    """V854-2, vet 854 renders, ``md_hidden_github_renders_vet854.json``: in an HTML block, ``</`` followed by anything but
+    an ASCII letter or ``>`` is a bogus comment to its first ``>``, so its text is hidden. Ids: h1_block_endtag_bogus,
+    h2_block_endtag_bogus_mid, h3_block_endtag_digit. Control h4_inline_endtag_bogus_ctrl: its ZQ1 line reads VISIBLE."""
+    for row_id in ("h1_block_endtag_bogus", "h2_block_endtag_bogus_mid", "h3_block_endtag_digit"):
+        body = _CORPUS_854_ROWS[row_id]["body"]
+        assert _corpus_fail_open(body, _CORPUS_854) == [], row_id
+    assert _line_state(_CORPUS_854_ROWS["h4_inline_endtag_bogus_ctrl"]["body"], "ZQ1") == V
+
+
+def test_vet854_4_attribute_and_title_text_reads_unsure():
+    """V854-4, vet 854 renders, ``md_hidden_github_renders_vet854.json``: a line reads unsure, on that line only, when it
+    holds an HTML-block tag with an attribute value, an inline tag with an attribute value (ATX headings exempt), or a
+    possible link or image title. Ids: b1_span_title_alone, b2_img_alt_block, b3_empty_link_title, b4_div_title_block,
+    b5_link_title_inline, b6_img_inline, g1_img_empty_desc_title."""
+    for row_id in ("b1_span_title_alone", "b2_img_alt_block", "b3_empty_link_title", "b4_div_title_block",
+                   "b5_link_title_inline", "b6_img_inline", "g1_img_empty_desc_title"):
+        body = _CORPUS_854_ROWS[row_id]["body"]
+        assert _corpus_fail_open(body, _CORPUS_854) == [], row_id
+
+
+def test_vet854_h2_a_lone_pipe_header_with_pipeless_rows():
+    """Vet 851 H2 re-proven (covers no new item), vet 854 renders, ``md_hidden_github_renders_vet854.json``: a lone ``|``
+    header holds 0 cells, so it makes no table (``if text == "|":``); these rows hold no pipe, so V851-3 cannot mask the
+    rule (J6). Ids: f1_h2_lone_pipe_no_row_pipes, f2_h2_lone_pipe_space."""
+    for row_id in ("f1_h2_lone_pipe_no_row_pipes", "f2_h2_lone_pipe_space"):
+        body = _CORPUS_854_ROWS[row_id]["body"]
+        assert _corpus_fail_open(body, _CORPUS_854) == [], row_id
+
+
+_DELIMITER_LINE = re.compile(r"(?m)^[ \t]*\|?[ \t]*:?-+:?[ \t]*(\|[ \t]*:?-*:?[ \t]*)*\|?[ \t]*$")
+
+
+def _md_makes_table(body):
+    offsets, texts, off = [], [], 0
+    for item in md_fence.split_lines(body):
+        offsets.append(off)
+        off += len(item)
+        texts.append(md._terminator_free(item).expandtabs(md._CODE_INDENT))
+    parser = md._Parser(offsets, texts)
+    parser.run()
+    return any(block.table for block in parser.paras)
+
+
+def test_vet851_table_detection_matches_github():
+    """Test strength (vet 851 renders, ``md_hidden_github_renders_vet851.json``): for each body holding a possible delimiter
+    line, the parser's table decision equals GitHub's (the render holds ``<table``)."""
+    checked = 0
+    for body, rendered in _CORPUS_851.items():
+        if not _DELIMITER_LINE.search(body):
+            continue
+        checked += 1
+        assert _md_makes_table(body) == ("<table" in rendered), body
+    assert checked >= 150, checked
