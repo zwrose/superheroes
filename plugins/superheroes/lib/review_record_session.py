@@ -1267,6 +1267,20 @@ def _command_refusals(rounds):
     return out
 
 
+_ATTESTED_FIELDS = (("kind", "kind"), ("class", "class"), ("phase", "phase"), ("failure", "failure"))
+
+
+def _attested_stamp(state):
+    """The `uncertified` stamp of a session the driver ended on the attested manual terminal: fixed prose over the
+    attestation's own non-blank text fields (None when it has none), and the human's note kept as data, never as prose."""
+    att = state.get("_attestation")
+    att = att if isinstance(att, dict) else {}
+    parts = [f"{label} {att[key].strip()}" for label, key in _ATTESTED_FIELDS if isinstance(att.get(key), str) and att[key].strip()]
+    reason = "attested by hand over a driver failure (" + ", ".join(parts) + ")" if parts else None
+    note = att.get("note")
+    return {"terminal": decision_kinds.ATTESTED_VERDICT, "reason": reason, "note": note if isinstance(note, str) else None}
+
+
 def account_from_session(session_dir, extras, readers=None, raw_dir=None, abandoned=None):
     _check_extras(extras)
     if abandoned is not None and not (isinstance(abandoned, str) and abandoned.strip()):
@@ -1284,8 +1298,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     if not (isinstance(meta, dict) and _text(meta.get("sessionId"))):
         raise Refusal(UNREADABLE, "meta.json sessionId")
     rows = _journal(session_dir)
-    if abandoned is None and state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS:
-        raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not a certified verdict")
+    if abandoned is None and state["terminal"] not in decision_kinds.CERTIFIED_VERDICTS + (decision_kinds.ATTESTED_VERDICT,):
+        raise Refusal(UNSUPPORTED, "the session ended on a terminal that is not one of the driver's verdicts")
     by_hand = not any(r.get("outcome") == "recorded" and isinstance(r.get("seat"), str) for r in rows)
     cfg = state.get("config") if isinstance(state.get("config"), dict) else {}
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
@@ -1382,7 +1396,10 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     counted = len(rounds) - (1 if isinstance(extra, dict) and str(extra.get("round")) in rounds else 0)
     uncertified = None
     # axis: a session that ended on any terminal but converged carries the terminal and the driver's reason, so its record never reads reviewed — see bite-proof record i2395_uncertified_record
-    if abandoned is None and state["terminal"] != "converged":
+    if abandoned is None and state["terminal"] == decision_kinds.ATTESTED_VERDICT:
+        # axis: an attested manual session is stamped here from the driver's own state, never from an extras key, so its record reads not-reviewed whatever else is written — see bite-proof record i2395_uncertified_record
+        uncertified = _attested_stamp(state)
+    elif abandoned is None and state["terminal"] != "converged":
         cert = state.get("certification")
         reason = next((v for v in (cert.get("reason") if isinstance(cert, dict) else None, last.get("detail"))
                        if isinstance(v, str) and v.strip()), None)
@@ -1607,7 +1624,8 @@ def write_from_session(session_dir, extras_path, repo_root, readers=None, abando
         path = os.path.join(tmp[0], "review-account.json")
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(account, fh)
-        return review_record.write(path, repo_root, readers, verifier_closed=verifier_closed)
+        return review_record.write(path, repo_root, readers, verifier_closed=verifier_closed,
+                                   session_uncertified=account.get("uncertified"))
     try:
         return review_record._guarded(go)
     finally:

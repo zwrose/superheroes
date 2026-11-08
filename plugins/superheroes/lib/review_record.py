@@ -46,6 +46,7 @@ import cloud_builder  # noqa: E402
 import cloud_pass  # noqa: E402
 import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
+import decision_kinds  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
@@ -826,8 +827,10 @@ def _validate(a):
     ab = a.get("abandoned")
     chk(ab is None or (isinstance(ab, dict) and isinstance(ab.get("reason"), str) and bool(ab["reason"].strip())), "abandoned")
     unc = a.get("uncertified")
-    chk(unc is None or (isinstance(unc, dict) and isinstance(unc.get("terminal"), str) and unc["terminal"].strip() not in ("", "converged")
-                        and sn(unc.get("reason"))), "uncertified")
+    # axis: the withheld-certificate entry's terminal is one of the driver's own verdicts but converged, and its keys are only terminal, reason and note, so no free text or stray key enters the record as a driver's word — see bite-proof record i2395_uncertified_record
+    chk(unc is None or (isinstance(unc, dict) and set(unc) <= {"terminal", "reason", "note"}
+                        and unc.get("terminal") in decision_kinds.ALL_VERDICTS and unc["terminal"] != "converged"
+                        and sn(unc.get("reason")) and sn(unc.get("note"))), "uncertified")
     # an abandoned session may have run no seat, so only its record may list no reviewer
     chk(isinstance(a.get("reviewers"), list) and (a["reviewers"] or ab is not None), "reviewers")
     for i, r in enumerate(a["reviewers"]):
@@ -1825,7 +1828,7 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
     return out, rows
 
 
-def build_record(account, readers, prior=None, history=()):
+def build_record(account, readers, prior=None, history=(), session_uncertified=None):
     a, rd, dis = _validate(account), _readers(readers), []
     read_paths, seen = rd["changed_paths"], {}
 
@@ -1933,7 +1936,9 @@ def build_record(account, readers, prior=None, history=()):
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "withheldFromReviewers": withheld,
         **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
-        **({"uncertified": a["uncertified"]} if a.get("uncertified") else {}),
+        # the entry is the driver's own text only when the session writer stamped it: it handed the same dict to `write`
+        **({"uncertified": dict(a["uncertified"], source="session" if isinstance(session_uncertified, dict)
+                                and session_uncertified == a["uncertified"] else "account")} if a.get("uncertified") else {}),
         "ci": ci, "reviewers": reviewers,
         # axis: the test-lens part is computed from the credited reviewer rows and the record's findings, never from the account's own claim — see bite-proof record wo_b_2311_record_calibration
         "testLens": _test_lens(reviewers, findings, fc["sha"], earlier_other),
@@ -2754,7 +2759,7 @@ def _summary(r, level):
     # shows no `whatIsMissing` text, so nothing is removed there; a record with no such entry removes nothing.
     # axis: only the displayed withheld-certificate entry in the first line's `Left:` text is left out of the claim check — see bite-proof record i2395_uncertified_record
     checked_first = first_line
-    if r.get("uncertified") and not compact:
+    if r.get("uncertified") and r["uncertified"].get("source") == "session" and not compact:
         at = next((i for i, m in enumerate(missing) if m.startswith(UNCERTIFIED_OPENING)), None)
         if at is not None:
             kept = "; ".join(missing[:at] + missing[at + 1:]) or "nothing"
@@ -3160,7 +3165,7 @@ def _transit_summary(checks):
     return out
 
 
-def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
+def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), session_uncertified=None):
     def go():
         try:
             with open(account_path, encoding="utf-8") as fh:
@@ -3221,7 +3226,7 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
             raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
-        record = build_record(a, rd, prior=prior, history=history)
+        record = build_record(a, rd, prior=prior, history=history, session_uncertified=session_uncertified)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
