@@ -1549,3 +1549,10 @@ def test_link_cursor_whitespace_finds_a_multiline_title_holding_a_paren(sep):
     line reads visible (checked on e96abd35)."""
     body = "[](https://example.com" + sep + '"a)\nZQ1")\n\n## ZQ2\n'
     assert _line_state(body, "ZQ1") != V
+
+
+def test_atx_heading_tag_with_a_quoted_comment_opener_reads_unsure():
+    """Final returning review on 10ed80c6, round-3 scoped finder ("Keep comment openers in attributes outside the ATX
+    exemption"): ``heading_text`` removes comments before tags without regard to attribute quotes, so a quoted ``<!--``
+    would make the heading text differ from GitHub's; such a heading reads unsure."""
+    assert _line_state('## <span title="<!--">Other</span> --> <b>Advisor vet</b>\n', "## <span") == U

@@ -992,8 +992,9 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
         # axis (C5): the HTML parse disagrees with cmark about where the construct ends
         # (a vertical tab in a tag also counts, as the earlier conservative reading: cmark takes \v as tag whitespace)
         is_tag = _INLINE_OPEN_TAG.fullmatch(construct) or _INLINE_CLOSE_TAG.fullmatch(construct)
-        if is_tag and "=" in construct and (not atx or ">" in construct[:-1]):
-            # (an ATX heading's text drops the tag up to its first ">"; one holding a quoted ">" is not dropped whole)
+        if is_tag and "=" in construct and (not atx or ">" in construct[:-1] or "<!--" in construct):
+            # (an ATX heading's text drops comments, then tags up to their first ">"; a tag holding a quoted ">" or "<!--"
+            # is not dropped whole, so it gets no exemption)
             # vet 854: an attribute value shows only as an attribute, so the tag's lines read unsure (not sticky)
             line_unsure.update(first + k for k in range(first_line, last_line + 1))
         # axis (vet 851 renders): a comment, PI, CDATA or declaration hides the text it holds, so the line it starts on
