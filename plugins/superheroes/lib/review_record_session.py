@@ -1305,9 +1305,12 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
     decisions = [d for d in state.get("decisions") or [] if isinstance(d, dict)]
     findings, merged = _findings_and_merges(state)
-    recovered_outside = []  # outside hits found in stored seat results the loop never folded (abandoned sessions only)
+    recovered_outside = []  # outside hits found in stored seat results the loop never folded (abandoned or attested sessions)
     swept_outside = []  # the same for a repository sweep's stored hits: `(sweep id, file, line, title)`
-    if abandoned is not None:  # the loop never took these in: each is listed open rather than only in a raw file
+    # an attested session ends by the owner's hand mid-loop, as an abandoned one does, so results stored before it may never have been folded
+    interrupted = abandoned is not None or state.get("terminal") == decision_kinds.ATTESTED_VERDICT
+    # axis: an attested session's stored but never-folded findings are listed open, as an abandoned session's are — see bite-proof record i2395_uncertified_record
+    if interrupted:  # the loop never took these in: each is listed open rather than only in a raw file
         # axis: in an abandoned session a finding recorded in a stored seat result but never folded is listed open — see bite-proof record c1l1_wo_b_session_seam
         ledger, _ = sc.read_disposition_ledger(state, required=False)
         by_key = {sc.finding_identity_key(r): r for r in ledger or [] if isinstance(r, dict)}
@@ -1358,6 +1361,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     checked += _verify_via_checked(rounds)
     if abandoned is not None:
         checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
+    elif interrupted:
+        checked.append(UNFOLDED_FINDINGS_CHECKED)
     makers, fam = list(extras.get("makers", [])), receipt_disclosures.author_family(state)
     baseline = receipt_disclosures.accumulated_maker_families(state)
     # a family a seat map already named a maker faced the whole review: the loop fixer's delayed fromStep must not

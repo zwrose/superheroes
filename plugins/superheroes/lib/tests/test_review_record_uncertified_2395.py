@@ -17,7 +17,7 @@ import review_record as rr  # noqa: E402
 import review_record_session as rs  # noqa: E402
 
 from test_review_record_session import (  # noqa: E402
-    GOOD_RUN, HEAD, OOS, Fake, Session, extras, ledger_row, put_extras,
+    CODEX, GOOD_RUN, HEAD, OOS, Fake, Session, extras, ledger_row, put_envelope, put_extras,
 )
 from test_pr_sheet import WORDS, load  # noqa: E402
 
@@ -129,6 +129,26 @@ def test_an_attested_session_writes_not_reviewed_with_the_drivers_text(tmp_path)
     assert line == rr.uncertified_line({"terminal": "uncertified-manual", "reason": DRIVER_TEXT})
     assert "uncertified-manual" in line and DRIVER_TEXT in line
     assert rec["uncertified"] == {"terminal": "uncertified-manual", "reason": DRIVER_TEXT, "note": None, "source": "session"}
+
+
+def test_an_attested_sessions_stored_but_unfolded_finding_is_listed_open(tmp_path):
+    """axis: E-recover — an attested session ends mid-loop, so a finding in a seat result stored before the attestation
+    and never folded is listed open in its record, as an abandoned session's is, never dropped."""
+    session, fake, body = _attested(tmp_path, "unfolded")
+    put_envelope(session, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
+        {"title": "Unfolded defect", "severity": "Important", "consequence": "a defect stays in the change"}]}})
+    out = _write(tmp_path, session, fake, body)
+    assert out["ok"] is True and out["status"] == "not-reviewed", out
+    rec = rr.read(7, readers=fake.readers())
+    open_rows = [f for f in rec["findings"] if f["title"] == "Unfolded defect"]
+    assert len(open_rows) == 1 and open_rows[0]["outcome"] is None and open_rows[0]["reason"] == rs.UNFOLDED_OPEN
+    assert rs.UNFOLDED_FINDINGS_CHECKED in rec["checked"]
+    # control: the same stored result in a session that ended on any other terminal is folded by the loop, not recovered here
+    ctl, ctl_fake, ctl_body = _ended(_sub(tmp_path, "ctl"), "cannot-certify", _cert(REASON))
+    put_envelope(ctl, "code-reviewer", {"vendor": "codex", "model": CODEX, "payload": {"findings": [
+        {"title": "Unfolded defect", "severity": "Important", "consequence": "a defect stays in the change"}]}})
+    assert _write(tmp_path, ctl, ctl_fake, ctl_body)["ok"] is True
+    assert rs.UNFOLDED_FINDINGS_CHECKED not in rr.read(7, readers=ctl_fake.readers())["checked"]
 
 
 def test_the_attestation_note_is_kept_as_data_and_never_enters_the_summary(tmp_path):

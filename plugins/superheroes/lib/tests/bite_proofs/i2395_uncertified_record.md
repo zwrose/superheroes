@@ -578,6 +578,49 @@ The inverse Edit removed the appended `+ (f"; note: ...")` expression from the r
 1 passed in 0.70s
 ```
 
+## E-recover: an attested session's stored but never-folded findings are listed open
+
+**Provenance:** the build session (orchestrator-typed review fix at review session 3's `apply-fixes` step, maker family claude), answering the scoped finder's confirmed Important finding "Recover stored findings before writing an attested session".
+
+- **guarded element:** `plugins/superheroes/lib/review_record_session.py`, `account_from_session`, the line `interrupted = abandoned is not None or state.get("terminal") == decision_kinds.ATTESTED_VERDICT`, which gates the `_unfolded` / `_unswept` recovery.
+- **axis:** an attested session's stored but never-folded findings are listed open, as an abandoned session's are (the `# axis:` comment above the guard).
+- **neutralization:** one Edit-tool edit replaced that line with `interrupted = abandoned is not None`.
+- **detector:** `plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_an_attested_sessions_stored_but_unfolded_finding_is_listed_open`, run alone.
+- **command:** `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-fix -m pytest "<node id>" -q -p no:xdist`.
+
+### raw red (neutralized; unedited test)
+
+```
+>       assert len(open_rows) == 1 and open_rows[0]["outcome"] is None and open_rows[0]["reason"] == rs.UNFOLDED_OPEN
+E       assert (0 == 1)
+E        +  where 0 = len([])
+
+/home/user/wt-2395/plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py:144: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_review_record_uncertified_2395.py::test_an_attested_sessions_stored_but_unfolded_finding_is_listed_open
+1 failed in 0.79s
+```
+
+The red is on the axis: with the guard narrowed back to abandoned sessions, the attested session's record lists no row for the stored finding.
+
+### restore
+
+The inverse Edit-tool edit put the line back. No `git checkout`, `git restore` or `git stash` was used.
+
+### restore receipt (restored line quoted from the file)
+
+```
+1311:    interrupted = abandoned is not None or state.get("terminal") == decision_kinds.ATTESTED_VERDICT
+```
+
+### raw green
+
+```
+1 passed in 0.74s
+```
+
+The related run after the restore: `1364 passed, 4 warnings in 29.87s` (`-k "review_record or returning_review"`, `-n auto`).
+
 ## Disclosures
 
 - Work order C2 redaction: the `/tmp/claude-0/...` pytest temp paths are kept as printed; the `UV_NATIVE_TLS` deprecation warning that `scripts/pinned-python` prints first was left out of the quoted captures; every other line is as printed.
