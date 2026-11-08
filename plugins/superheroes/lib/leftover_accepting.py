@@ -19,18 +19,14 @@ carries ``fixed-above #<PR> <7-40 hex commit>`` resolves the leftovers it names 
 (``fixed_above``); whether the named PR is a higher member of this PR's stack is the caller's check, not this module's.
 
 What counts as text (#2389, the segment-first model): the section and its items are read once, from the body with the
-lines ``md_hidden`` does not read VISIBLE blanked (``_blanked_lines``: one entry per source line, so blanked line ``n`` is
-source line ``n``, never joined and split again), by the one reader ``pr_sheet.accepting_item_spans_of``. Only then is each
-item read (``_item_cut``), so a cut can never move structure or join words GitHub separates. An item where a
-within-line cut fires (an entry ``<``, an unclosed ``<!--``) counts as nothing, never the words before the cut (#2389 vet
-856); a hidden or dropped line only ends the item at that line. Claims are compared per item (``_cut_items``): an item
-whose whole ``fixed-above #<PR> <commit>`` claims differ from its own source span's counts as nothing, never summed across
-items, and a bare mention of the word is never compared. A blanked line never detaches a claim (#2389 vet 859): an item
-with no list marker right after a line ``md_hidden`` does not read VISIBLE joins the item before it, and the head is
-compared against the claims of the whole group's source. Known over-refusal (not modelled beyond V852-4): an item holding a
-``<`` that can start markup anywhere, or continued by a tag line such as ``</div>``, counts as nothing; so does an item
-whose hidden or unsure last line holds a claim (as the same line ending in a newline does), and so does the item before a
-paragraph that opens right after a hidden or unsure line and holds a claim, even where GitHub shows that paragraph apart.
+lines ``md_hidden`` does not read VISIBLE blanked (``_blanked_lines``), by the one reader ``pr_sheet.accepting_item_spans_of``.
+Only then is each item read (``_item_cut``), so a cut can never move structure or join words GitHub separates. An item where
+a within-line cut fires (an entry ``<``, an unclosed ``<!--``) counts as nothing, never the words before the cut (#2389 vet
+856); a hidden or dropped line only ends the item at that line. Claims are compared per item (``_cut_items``): an item whose
+whole ``fixed-above #<PR> <commit>`` claims differ from its own source span's counts as nothing, never summed across items,
+and a bare mention of the word is never compared. Spans and the claim join: see ``_cut_items``. Known over-refusal (not
+modelled beyond V852-4): an item holding a ``<`` that can start markup anywhere, or continued by a tag line such as
+``</div>``, counts as nothing.
 
 Two callers, no second copy of the rule: ``vet_slot.py handback --pr`` (the builder's check before the ready mark) and
 ``vet_slot.py write`` (the advisor's slot write, for a READY verdict only). ``missing`` takes the latest record exactly as
@@ -111,16 +107,10 @@ def _terminator(line):
 
 
 def _blanked_lines(body):
-    """``(lines, shown)``: one entry per ``md_fence.split_lines(body)`` line, so blanked line ``n`` is source line ``n`` for
-    every ``n`` (#2389 vet 859), and the per-line flags (``shown[n]`` is true when line ``n`` is read VISIBLE). An entry is
-    the line itself, or, for a line ``md_hidden`` does not read VISIBLE (hidden or unsure) that is not a whole-line
-    ``superheroes:`` marker line (kept whatever ``md_hidden`` reads, so the section reader still finds the build-record
-    boundary), only its line terminator: a blanked last line with no terminator stays an entry (``""``), so it keeps its
-    place. Lines are Markdown lines (``md_fence.split_lines``: ``\\r\\n``, ``\\r``, ``\\n``), so U+2028, U+2029, U+0085, VT, FF,
-    FS, GS and RS are ordinary characters inside one. ``md_hidden`` failing on a str reads every line unsure, so every
-    non-marker line is blanked. This only removes text, and cuts nothing within a line: ``_item_cut`` does that, per item.
-    The list is never joined and split again: a blanked ``\\n`` line after a line ending in a lone ``\\r`` would join into
-    ``\\r\\n`` and turn two lines into one."""
+    """``(lines, shown)``: one entry per ``md_fence.split_lines(body)`` line (a blanked line reduced to its terminator, an
+    unterminated blanked last line kept as ``""``), and the flags (``shown[n]`` is true when line ``n`` is read VISIBLE); see
+    ``_cut_items``. A whole-line ``superheroes:`` marker line is kept whatever ``md_hidden`` reads, so the section reader
+    still finds the build-record boundary. ``md_hidden`` failing on a str reads every line unsure: every other line blanks."""
     # axis: lines break only on Markdown endings (never U+2028 and the other str.splitlines breaks) — see bite-proof record i2389_scanner_line_boundaries.md
     lines = md_fence.split_lines(body)
     rendering = md_hidden.scan(body)
@@ -137,9 +127,7 @@ def _blanked_lines(body):
 
 
 def _blanked(body):
-    """``(text, shown)``: ``_blanked_lines``'s lines joined, and its per-line flags. The text has the input's lines, each with
-    its own terminator (a blanked last line with no terminator leaves nothing in it); a caller that needs positions reads
-    ``_blanked_lines``, never this text split again."""
+    """``(text, shown)``: ``_blanked_lines``'s lines joined, and its flags; positions are read from ``_blanked_lines``."""
     lines, shown = _blanked_lines(body)
     return "".join(lines), shown
 
@@ -192,8 +180,8 @@ def _scan_line(line, start):
 
 
 def _item_cut(lines, span, shown):
-    """The text of one item, or ``""`` when the item counts as nothing. ``lines`` are the entries (terminators kept) of
-    ``_blanked_lines``, ``span`` one entry of ``pr_sheet.accepting_item_spans_of`` over them, ``shown`` the per-line flags of
+    """The text of one item, or ``""`` when the item counts as nothing. ``lines`` are the lines (terminators kept) of
+    ``_blanked_lines``, ``span`` one entry of ``pr_sheet.accepting_item_spans_of`` of it, ``shown`` the per-line flags of
     ``_blanked_lines``. The span is walked in order:
 
     * A line ``md_hidden`` does not read VISIBLE, or a ``dropped`` line, is a stop point: the item ends at that line and keeps
@@ -327,10 +315,8 @@ def _accepting_items(body):
     """The acceptances the body lists under What we're accepting, each reduced to the text GitHub shows (#2389): ``[]`` for a
     body that is not a str or has no acceptance. Read once, reduced per item:
 
-    1. The body is blanked (``_blanked_lines``): one entry per source line; a line ``md_hidden`` does not read VISIBLE keeps
-       only its terminator (an unterminated last line becomes ``""`` and keeps its place).
-    2. The section and its items are read once, from those entries, by ``pr_sheet.accepting_item_spans_of``: one line list,
-       so span index ``n`` is source line ``n``.
+    1. The body is blanked (``_blanked_lines``): a line ``md_hidden`` does not read VISIBLE keeps only its terminator.
+    2. The section and its items are read once, from the blanked lines, by ``pr_sheet.accepting_item_spans_of``.
     3. Each item is read by ``_item_cut``: a hidden or dropped line is a stop point that ends the item at that line (the
        item keeps the lines before it); a fenced line is literal; a closed inline comment is dropped; and a cut anywhere in
        the item (an entry ``<`` on a text line, plain, escaped or code-spanned, an unclosed ``<!--``, an entry ``<`` on a
@@ -340,19 +326,15 @@ def _accepting_items(body):
        nothing (a claim removed, joined or changed). Claims are never summed across items, so equal claims in two items
        cannot cancel. Only whole claims are compared: a bare mention of ``fixed-above`` that is not a claim never matters. A
        claim wrapped across lines is one whole match in the source span (an item's lines are joined before the regex runs).
-       A blanked line never detaches a claim from the item before it (#2389 vet 859): an item with no list marker right
-       after a line ``md_hidden`` does not read VISIBLE joins the item before it (chains join transitively), and the head of
-       the group is compared against the claims of the whole group's source.
        The body-wide void is retired: one item that counts as nothing leaves the other items counting.
     5. The empty items, and the None, N/A, NA and Nothing items, are no acceptance (``pr_sheet.acceptance_texts``).
 
     Not modelled: Markdown link and image titles, and image alt text, count as text, though GitHub shows them only as
     attributes (V852-4, disclosed). Known over-refusal: an item holding a ``<`` that can start markup anywhere in it (an
     inline tag, an autolink, a ``<`` + letter, ``!``, ``?`` or ``/``, plain, escaped or code-spanned), or continued by a tag
-    line such as ``</div>``, counts as nothing, though GitHub would show its words. Two more (#2389 vet 859): an item whose
-    hidden or unsure last line holds a claim counts as nothing, as the same line ending in a newline does; and a paragraph
-    that opens right after a hidden or unsure line and holds a claim makes the item before it count as nothing, even where
-    GitHub shows that paragraph apart.
+    line such as ``</div>``, counts as nothing, though GitHub would show its words.
+
+    Steps 1, 2 and 4's vet-859 text and two more over-refusals: see ``_cut_items``.
 
     Every change only removes text, or makes an item count as nothing. Never raises on a str."""
     return pr_sheet.acceptance_texts(_cut_items(body)[0])
@@ -360,23 +342,22 @@ def _accepting_items(body):
 
 def _cut_items(body):
     """``(items, void)``: the text of every item of the section (``_accepting_items`` steps 1 to 4, before the None and N/A
-    filter; ``""`` for an item that counts as nothing), and ``void``, which is always ``False`` (kept so the tests read the
-    same shape: the body-wide void is retired, and ``_accepting_items`` ignores it). ``([], False)`` for anything that is not
-    a str.
+    filter; ``""`` for an item that counts as nothing), and ``void``, always ``False`` (the body-wide void is retired).
+    ``([], False)`` for anything that is not a str.
 
     One line list (#2389 vet 859): ``_blanked_lines`` has one entry per source line, and the spans
-    (``pr_sheet.accepting_item_spans_of`` over those entries with their terminators removed), the cuts (``_item_cut``) and
-    the sources (``md_fence.split_lines(body)``) all index it, so span index ``n`` is source line ``n`` for every ``n``. The
-    blanked lines are never joined and split again (a blanked last line would vanish, and a lone ``\\r`` before a blanked
-    ``\\n`` line would join into ``\\r\\n``).
+    (``pr_sheet.accepting_item_spans_of`` over the entries minus their terminators), the cuts (``_item_cut``) and the sources
+    (``md_fence.split_lines(body)``) all index it, so span index ``n`` is source line ``n``. It is never joined and split
+    again (a blanked last line would vanish; a lone ``\\r`` before a blanked ``\\n`` line would join into ``\\r\\n``).
 
-    A blanked line never detaches a claim from the item before it: an item *joins* the item before it when its first source
-    line opens with no list marker (``pr_sheet._ITEM`` does not match it) and the line right before that first line is one
-    ``md_hidden`` does not read VISIBLE. Joined items chain, so a *group* is a head (an item that does not join) plus the
-    items that join it, transitively. The head's cut text is compared against the claims of the whole group's source (its
-    own ``_span_source`` text, then each joined item's, joined with one space), so a claim GitHub shows in the acceptance
-    but a blank line put in a second item makes the head count as nothing. Each joined item is compared against its own
-    source span. The join only makes the head stricter, never an item count that counted as nothing."""
+    The claim join: an item joins the item before it when its first source line has no list marker (``pr_sheet._ITEM`` does
+    not match it) and the line right before is one ``md_hidden`` does not read VISIBLE. Joins chain, so a group is a head
+    plus the items joining it, transitively. The head's cut text is compared against the claims of the whole group's
+    source (joined with one space), each joined item against its own source; the join only makes the head stricter.
+
+    Two known over-refusals: an item whose hidden or unsure last line holds a claim counts as nothing (as when that line
+    ends in a newline); a paragraph opening right after a hidden or unsure line and holding a claim makes the item before
+    it count as nothing, even where GitHub shows it apart."""
     if not isinstance(body, str):
         return [], False
     blanked, shown = _blanked_lines(body)

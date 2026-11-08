@@ -408,11 +408,10 @@ def accepting_item_spans(body):
 
 
 def accepting_item_spans_of(lines):
-    """The items listed under the What we're accepting heading of ``lines`` (a list of Markdown lines with their terminators
-    removed, as ``_markdown_lines`` returns them), in order, each as the list of every source line in the item's span, as
-    ``(n, kind)``; [] for no such heading or no item. ``n`` indexes ``lines``, so a caller that holds one line list reads every
-    ``n`` as the same line in it. ``kind`` is ``"text"`` (a kept line the item appends), ``"fenced"`` (a kept line the walk reads
-    as fenced), ``"blank"`` (a blank line inside the span) or ``"dropped"`` (a line the walk does not keep, a whole-line
+    """The items listed under the What we're accepting heading of ``lines`` (Markdown lines without terminators, as
+    ``_markdown_lines`` returns them), in order, each as the list of every source line in the item's span, as ``(n, kind)``
+    with ``n`` indexing ``lines``; [] for no such heading or no item. ``kind`` is ``"text"`` (a kept line the item appends),
+    ``"fenced"`` (a kept line the walk reads as fenced), ``"blank"`` (a blank line inside the span) or ``"dropped"`` (a line the walk does not keep, a whole-line
     comment or a line inside one, between the item's first line and the next item, or the section's last kept line for the
     last item). The first entry is the item's first line, whose text starts at ``item_text_start``. Items are grouped as
     ``accepting_listed`` always grouped them: a top-level list item with its nested lines, or a paragraph."""
