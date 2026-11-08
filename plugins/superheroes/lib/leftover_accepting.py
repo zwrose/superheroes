@@ -348,6 +348,12 @@ def _cut_items(body):
     own items, not the blanked reading's. The claim source only grows an item's comparison, so it never makes an item count
     that counted as nothing.
 
+    Source-item coverage (#2389 vet 861): an item with a ``text`` or ``fenced`` line that no source item holds counts as
+    nothing, and its claim compare is skipped. Invariant: wherever the source reading and the blanked reading disagree about
+    which item, or which section, holds a line, the item fails closed and counts as nothing; it never takes the reading that
+    accepts more. Over-refusal: an acceptance below an HTML comment that holds a heading at or above the section's level
+    counts as nothing, though GitHub shows it.
+
     Known over-refusal: an item counts as nothing when a line of the acceptance as written (before hidden lines are blanked)
     holds a claim that the item's shown text lacks. That covers a hidden or unsure first, middle or last line (a hidden last
     line holding a claim counts as nothing, as when it ends in a newline; a hidden first line holding a claim, which GitHub
@@ -365,11 +371,15 @@ def _cut_items(body):
     for span in spans:
         # axis: an item's claims are compared against the source's own items (#2389 vet 860, G25): the claim source is the item's own lines plus every line of each source item that shares a line with it, so a blanked line never moves a claim out of the item that names the finding — see bite-proof record i2389_leftover_visible_within_line.md
         taken = {n for n, _kind in span}
+        # axis: source-item coverage (#2389 vet 861, G26): a text or fenced line that no source item holds (an HTML comment hid a heading that ends the source's section) makes the item count as nothing — see bite-proof record i2389_leftover_visible_within_line.md
+        if any(n not in owner for n, kind in span if kind in ("text", "fenced")):
+            sources.append(None)
+            continue
         for i in {owner[n] for n in taken if n in owner}:
             taken |= {n for n, _kind in src_spans[i]}
         sources.append(" ".join(source_lines[n].strip() for n in sorted(taken) if n < len(source_lines)))
     # axis: claims are compared per item, never summed across items (#2389 vet 856, G23): an item whose cut text holds other whole claims than its claim source (one removed, joined from fragments, or changed) counts as nothing, so equal claims in two items cannot cancel — see bite-proof record i2389_leftover_visible_within_line.md
-    return [cut if sorted(FIXED_ABOVE_RE.findall(cut)) == sorted(FIXED_ABOVE_RE.findall(source)) else ""
+    return [cut if source is not None and sorted(FIXED_ABOVE_RE.findall(cut)) == sorted(FIXED_ABOVE_RE.findall(source)) else ""
             for cut, source in zip(cuts, sources)], False
 
 

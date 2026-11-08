@@ -785,3 +785,57 @@ FAILED ...::test_g14_tag_entry_a_bogus_comment_opener_hides_the_rest_of_the_line
 ### Elements in no class (WO-K)
 
 None. The two new over-refusals are asserted by `test_g24_one_line_list_hidden_last_line_claim_is_the_first_over_refusal` (G24's neutralization turns it red) and `test_g25_blanked_line_join_paragraph_after_a_hidden_line_is_the_second_over_refusal` (G25's does). The transitive chain is model-only.
+
+## #2389 vet 861 (WO-N): source-item coverage (G26)
+
+### G26 (source-item coverage): an item with a line no source item holds counts as nothing
+
+Base head `c23913c7`. The neutralization was one targeted Edit, undone by the exact inverse Edit; no `git checkout`, `restore`, `reset`, `stash` or `sed`.
+Command (worktree root): `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=no -rf -k test_g26_`
+Guarded-element set (declared by the order): the one coverage check. No others.
+
+- **Guarded element / axis:** `_cut_items`, `if any(n not in owner for n, kind in span if kind in ("text", "fenced")):` (`leftover_accepting.py:375`; axis comment at `:374`). Axis: wherever the source reading and the blanked reading disagree about which item, or which section, holds a line, the item fails closed and counts as nothing; the claim compare is skipped (an HTML comment holding a heading at or above the section's level ends the source's section, so the items below it have no source item).
+- **Neutralization:** `if any(n not in owner for n, kind in span if kind in ("text", "fenced")):` became `if False:` (no item is checked for coverage).
+- **Raw red** (`-k test_g26_`):
+
+```
+FFFFFFFFFFFFFFFFFFF                                                      [100%]
+=========================== short test summary info ============================
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[a1_comment_h2_before_para_unsure_between]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[a2_comment_h2_before_list_unsure_lazy_claim]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[a3_comment_h2_before_para_claim_first]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[a4_comment_h1_before_para_unsure_between]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[a8_list_comment_opener_h2_before_unsure_between]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[a12_comment_h2_between_items_then_para]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c1_a1_crlf]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c2_a2_crlf]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c3_a1_lone_cr]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c4_a1_unterminated_claim_at_body_end]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c5_comment_h2_in_earlier_item_indented]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c6_comment_h2_before_two_unsure_lines]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c7_comment_h2_before_nested_f1_lazy_claim]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c8_comment_h2_before_ordered_list]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[c9_comment_h2_before_claim_unsure_first_line]
+FAILED ...::test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[d3_item_comment_h2_after_claim_then_lazy_f1]
+FAILED ...::test_g26_source_item_coverage_an_acceptance_below_a_comment_heading_is_the_new_over_refusal[a6_comment_h2_before_no_unsure_control]
+FAILED ...::test_g26_source_item_coverage_an_acceptance_below_a_comment_heading_is_the_new_over_refusal[h1_comment_h2_before_plain_f1]
+FAILED ...::test_g26_source_item_coverage_an_acceptance_below_a_comment_heading_is_the_new_over_refusal[h2_comment_h2_before_plain_list_f1]
+19 failed, 331 deselected in 2.14s
+```
+
+  The 16 fail-open rows (a1 to a4, a8, a12, c1 to c9, d3) are among the failures, as the order required; the three over-refusal rows (a6, h1, h2) fail too.
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read printed `375:        if any(n not in owner for n, kind in span if kind in ("text", "fenced")):`.
+- **Raw green** (`-k test_g26_`):
+
+```
+...................                                                      [100%]
+19 passed, 331 deselected in 1.14s
+```
+
+### FU11 (G2's isolated `item_cut` call)
+
+`test_g2_code_span_opener_text_inside_the_span_after_the_opener_never_counts` isolated call now reads `"Quoting `<!-- F-1 The retry loop never backs off -->`\n"` (the `\n</div>` line dropped, so a `</div>` entry `<` cannot be the cut). It passes in the scoped run. Probe, with the code-span guard neutralized (`leftover_accepting.py:161`, `quoted = _TAG_ENTRY.search(line, i + run, end - run) if end is not None else None` became `quoted = None`), `_cut_items` of the same input under the accepting heading returned `['Quoting `<!-- F-1 The retry loop never backs off -->`']` (the span's text is read); the inverse Edit restored line 161.
+
+### Elements in no class (WO-N)
+
+None.

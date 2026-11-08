@@ -29,6 +29,9 @@ advisor's renders). Guards (bite-proof record ``bite_proofs/i2389_leftover_visib
   G25 test_g25_source_items_*     vet 860: an item's claims are compared against the source's own items (its lines plus every line of
                                   each source item sharing a line with it), so a blanked line never moves a claim out of the item that
                                   names the finding
+  G26 test_g26_source_item_coverage_* vet 861: an item with a text or fenced line that no source item holds counts as nothing (an
+                                  HTML comment hid a heading that ends the source's section), so its claim compare is skipped
+  test_vet861_controls_*          vet 861: the control rows keep the head's answer (``fixtures/leftover_vet861_github_renders_2389.json``)
   test_vet860_controls_*          vet 860: the control rows keep the head's answer (``fixtures/leftover_vet860_github_renders_2389.json``)
   test_vet859_controls_*          vet 859: the control rows keep their answers (``fixtures/leftover_vet859_github_renders_2389.json``)
 Retired with the redesign (their tests below are kept as regressions of the outcome): G12 block role, G13 and G16 per-line
@@ -707,7 +710,8 @@ def test_g2_code_span_opener_text_inside_the_span_after_the_opener_never_counts(
     assert missing(body)
     # the code-span cut on its own: the span is kept up to its opener, and the rest of the item is cut
     # #2389 vet 856: was "Quoting `"; the code span holds an entry `<`, a cut, so the item counts as nothing
-    assert item_cut("Quoting `<!-- F-1 The retry loop never backs off -->`\n</div>\n") == ""
+    # #2389 vet 861 (FU11): the `\n</div>` line is dropped, so the code-span guard is the only cut that can make the item count as nothing (a `</div>` line is an entry `<` of its own)
+    assert item_cut("Quoting `<!-- F-1 The retry loop never backs off -->`\n") == ""
 
 
 # --- #2389 fix leg 2 (vet 849): G14 the one entry condition, G15 the cut heading, G16 the claim fragment, G12's heading half ---
@@ -1438,3 +1442,76 @@ def test_vet860_controls_a_plain_acceptance_still_counts_without_a_claim(name):
 def test_vet860_controls_every_other_row_that_was_missing_stays_missing(name):
     assert BY_ID_860[name]["head_6f0aec06"] == "missing"
     assert verdict(BY_ID_860[name]["body"]) == "missing"
+
+
+# --- #2389 vet 861: G26 source-item coverage ------------------------------------------------------------------------------
+# Oracle: ``fixtures/leftover_vet861_github_renders_2389.json`` (GitHub's own render of 36 synthetic rows; each row also holds the
+# verdict of head c23913c7 in ``head_c23913c7``). Read with the `verdict` helper above.
+
+FIXTURE_861 = pathlib.Path(__file__).parent / "fixtures" / "leftover_vet861_github_renders_2389.json"
+ROWS_861 = json.loads(FIXTURE_861.read_text(encoding="utf-8"))["rows"]
+BY_ID_861 = {row["id"]: row for row in ROWS_861}
+
+# the 16 rendered fail-opens: an HTML comment holds a line that reads as a heading at or above the section's level, so the source
+# reading's section ends there and the items below it have no source item to compare a claim against
+G26_MISSING = ["a1_comment_h2_before_para_unsure_between", "a2_comment_h2_before_list_unsure_lazy_claim",
+               "a3_comment_h2_before_para_claim_first", "a4_comment_h1_before_para_unsure_between",
+               "a8_list_comment_opener_h2_before_unsure_between", "a12_comment_h2_between_items_then_para",
+               "c1_a1_crlf", "c2_a2_crlf", "c3_a1_lone_cr", "c4_a1_unterminated_claim_at_body_end",
+               "c5_comment_h2_in_earlier_item_indented", "c6_comment_h2_before_two_unsure_lines",
+               "c7_comment_h2_before_nested_f1_lazy_claim", "c8_comment_h2_before_ordered_list",
+               "c9_comment_h2_before_claim_unsure_first_line", "d3_item_comment_h2_after_claim_then_lazy_f1"]
+# the new over-refusal: an acceptance below an HTML comment that holds a heading at or above the section's level counts as nothing,
+# though GitHub shows it (a6 and h1 and h2 carry no unsure line and no lazy claim, so the head's answer was right)
+G26_OVER_REFUSED = ["a6_comment_h2_before_no_unsure_control", "h1_comment_h2_before_plain_f1",
+                    "h2_comment_h2_before_plain_list_f1"]
+CONTROL_861_MISSING = ["a5_comment_h3_before_control", "a7_comment_h2_before_list_indented_claim_control",
+                       "a9_script_block_h2_before_unsure_between", "a10_style_block_h2_before_unsure_between",
+                       "a11_comment_fence_and_h2_before", "c10_comment_closes_on_heading_line",
+                       "c11_inline_comment_text_then_h2_inside", "d1_item_comment_h2_after_f1_unsure_then_lazy_claim",
+                       "d2_item_comment_h2_after_f1_then_indented_claim", "d4_item_comment_no_heading_unsure_then_lazy_claim"]
+CONTROL_861_PLAIN = ["h3_no_comment_plain_f1_unsure_after", "h4_two_items_unsure_between_no_claims",
+                     "h5_item_then_comment_line_then_heading"]
+CONTROL_861_CLAIM = ["b3_empty_star_bullet_between"]
+# no outcome test: b1, b2 and b4 are the pre-existing K860-3 class (a line of only a no-break space, a form feed or an ideographic
+# space), so a test would pin a fail-open
+VET861_EXCLUDED = ["b1_nbsp_line_between", "b2_formfeed_line_between", "b4_ideographic_space_line_between"]
+
+
+def test_vet861_fixture_rows_are_covered_once_except_the_three_named_exclusions():
+    covered = G26_MISSING + G26_OVER_REFUSED + CONTROL_861_MISSING + CONTROL_861_PLAIN + CONTROL_861_CLAIM
+    assert len(ROWS_861) == 36
+    assert sorted(covered + VET861_EXCLUDED) == sorted(ids(ROWS_861))  # every row exactly once: none twice, none left out
+    assert not set(covered) & set(VET861_EXCLUDED)
+
+
+@pytest.mark.parametrize("name", G26_MISSING, ids=G26_MISSING)
+def test_g26_source_item_coverage_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing(name):
+    # #2389 vet 861: GitHub shows the claim and F-1 in one item; the source reading's section ended at a heading inside a comment, so
+    # the item had no source item to compare against and head counted F-1 plain
+    assert BY_ID_861[name]["head_c23913c7"] == "plain-accepted"
+    assert verdict(BY_ID_861[name]["body"]) == "missing"
+
+
+@pytest.mark.parametrize("name", G26_OVER_REFUSED, ids=G26_OVER_REFUSED)
+def test_g26_source_item_coverage_an_acceptance_below_a_comment_heading_is_the_new_over_refusal(name):
+    # #2389 vet 861, the new over-refusal: an acceptance below an HTML comment that holds a heading at or above the section's level
+    # counts as nothing, though GitHub shows it (head: plain-accepted, or claim#99 for a6)
+    assert BY_ID_861[name]["head_c23913c7"] in ("plain-accepted", "claim#99")
+    assert verdict(BY_ID_861[name]["body"]) == "missing"
+
+
+@pytest.mark.parametrize("name", CONTROL_861_MISSING, ids=CONTROL_861_MISSING)
+def test_vet861_controls_every_other_row_that_was_missing_stays_missing(name):
+    assert BY_ID_861[name]["head_c23913c7"] == "missing"
+    assert verdict(BY_ID_861[name]["body"]) == "missing"
+
+
+@pytest.mark.parametrize("name", CONTROL_861_PLAIN, ids=CONTROL_861_PLAIN)
+def test_vet861_controls_a_plain_acceptance_still_counts_without_a_claim(name):
+    assert verdict(BY_ID_861[name]["body"]) == BY_ID_861[name]["head_c23913c7"] == "plain-accepted"
+
+
+@pytest.mark.parametrize("name", CONTROL_861_CLAIM, ids=CONTROL_861_CLAIM)
+def test_vet861_controls_a_claim_still_resolves_the_leftover(name):
+    assert verdict(BY_ID_861[name]["body"]) == BY_ID_861[name]["head_c23913c7"] == "claim#99"
