@@ -863,6 +863,10 @@ _CORPUS_PATH = os.path.join(_HERE, "fixtures", "md_hidden_github_corpus_2388.jso
 with open(_CORPUS_PATH, encoding="utf-8") as _fh:
     _CORPUS = json.load(_fh)
 
+_CORPUS_851_PATH = os.path.join(_HERE, "fixtures", "md_hidden_github_renders_vet851.json")
+with open(_CORPUS_851_PATH, encoding="utf-8") as _fh:
+    _CORPUS_851 = json.load(_fh)
+
 _SENTINEL = re.compile(r"\bZQ\d+\b")
 
 
@@ -893,9 +897,11 @@ def _corpus_hides(body, sentinel):
     assert sentinel not in _visible_sentinels(_CORPUS[body]), "GitHub shows %s in %r" % (sentinel, body)
 
 
-def _corpus_judge(body):
-    """(line index, offset, line, sentinels, GitHub shows all of them) for each line of ``body`` that holds a sentinel."""
-    shown = _visible_sentinels(_CORPUS[body])
+def _corpus_judge(body, renders=None):
+    """(line index, offset, line, sentinels, GitHub shows all of them) for each line of ``body`` that holds a sentinel.
+    ``renders`` is the corpus to read ``body``'s render from (default ``_CORPUS``)."""
+    renders = _CORPUS if renders is None else renders
+    shown = _visible_sentinels(renders[body])
     out = []
     offset = 0
     for index, item in enumerate(md_fence.split_lines(body)):
@@ -906,10 +912,11 @@ def _corpus_judge(body):
     return out
 
 
-def _corpus_fail_open(body):
-    """The (body, line index, line) entries of ``body`` where GitHub hides a sentinel line and md_hidden reads it VISIBLE."""
+def _corpus_fail_open(body, renders=None):
+    """The (body, line index, line) entries of ``body`` where GitHub hides a sentinel line and md_hidden reads it VISIBLE.
+    ``renders`` is the corpus to read ``body``'s render from (default ``_CORPUS``)."""
     rendering = md.scan(body)
-    return [(body, index, item) for index, offset, item, sentinels, shows in _corpus_judge(body)
+    return [(body, index, item) for index, offset, item, sentinels, shows in _corpus_judge(body, renders)
             if not shows and rendering.state_at(offset) == V]
 
 
@@ -963,7 +970,7 @@ def test_f5_a_comment_across_paragraph_lines_hides_the_lines_inside():
     shows the text after the closer, so it reads UNSURE (F8); the heading after it is decided."""
     body = "a <!-- b\nZQ1\n--> c\n\n## ZQ2\n"
     _corpus_hides(body, "ZQ1")
-    assert _state(body, "a <!-- b") == V
+    assert _state(body, "a <!-- b") == U  # vet 851: the comment hides `b`, so this line shows only part of itself and reads unsure
     assert _state(body, "ZQ1") == H
     assert _state(body, "--> c") == U
     assert _state(body, "## ZQ2") == V
@@ -1283,3 +1290,69 @@ def test_reference_link_label_with_an_escaped_bracket_reads_not_visible(body):
     reference labels"): a reference label holds escaped brackets and may span lines, so its range runs to the end of
     the block; GitHub hides or attribute-only renders ZQ1 in each body, which must not read visible."""
     assert _line_state(body, "ZQ1") != V
+
+
+# --- Vet 851 fix leg (issue #2388): V851-1..5 and the per-line hiding rule ---------------------------------------------------
+
+def _corpus_851_clean(body):
+    """The vet 851 corpus holds ``body`` and no line GitHub hides reads VISIBLE."""
+    assert body in _CORPUS_851, "body is not in the vet 851 corpus: %r" % (body,)
+    assert _corpus_fail_open(body, _CORPUS_851) == [], "fail-open lines: %r" % (_corpus_fail_open(body, _CORPUS_851),)
+
+
+def test_vet851_corpus_no_line_github_hides_reads_visible():
+    """The invariant over the second corpus: vet 851 renders, ``md_hidden_github_renders_vet851.json`` (215 bodies, GitHub's
+    own renders by ``POST /markdown``). A line with a sentinel word that GitHub's visible text lacks is hidden by GitHub and
+    must not read VISIBLE. Every one of the 215 bodies must pass."""
+    assert len(_CORPUS_851) == 215
+    failing = []
+    for body in _CORPUS_851:
+        failing.extend(_corpus_fail_open(body, _CORPUS_851))
+    assert failing == [], "%d fail-open (body, line index, line):\n%s" % (
+        len(failing), "\n".join(repr(entry) for entry in failing))
+
+
+def test_vet851_1_a_delimiter_row_without_a_pipe_makes_a_table():
+    """V851-1, vet 851 renders, ``md_hidden_github_renders_vet851.json``: a delimiter row needs a ``|`` or a ``:``, so a
+    dash-only line stays a setext underline; ``:--`` makes a table, whose cell holds the code span's backtick."""
+    _corpus_851_clean('a\n:--\n` <? > <!-- ?>\nx `\n\n## ZQ1\n')
+    _corpus_851_clean('| a\n:--\n` <? > <!-- ?>\nx `\n\n## ZQ1\n')
+
+
+def test_vet851_2_a_lone_pipe_header_makes_no_table():
+    """V851-2, vet 851 renders, ``md_hidden_github_renders_vet851.json``: a lone ``|`` holds 0 cells, so it is no table
+    header and the comment after it runs across the lines."""
+    _corpus_851_clean('|\n|-|\nx <!-- a | b\nZQ1\n-->\n\n## ZQ2\n')
+    _corpus_851_clean(' | \n|-|\nx <!-- a | ZQ1 --> y\n\n## ZQ2\n')
+
+
+def test_vet851_3_cells_past_the_header_count_read_unsure():
+    """V851-3, vet 851 renders, ``md_hidden_github_renders_vet851.json``: a table row with more cells than its header reads
+    unsure."""
+    _corpus_851_clean('| a |\n|---|\n| | ZQ1 |\n| ZQ2 |\n\n## ZQ3\n')
+
+
+def test_vet851_4_image_alt_text_across_lines_reads_not_visible():
+    """V851-4, vet 851 renders, ``md_hidden_github_renders_vet851.json``: an image's alt range is link metadata, so alt
+    text across lines is not read visible."""
+    _corpus_851_clean('x ![ZQ0\nZQ1\nZQ2](https://example.com/a.png) y\n\n## ZQ3\n')
+    _corpus_851_clean('![ZQ1\nZQ2][r]\n\n## ZQ3\n\n[r]: https://example.com/a.png\n')
+
+
+def test_vet851_5_video_reads_unsure():
+    """V851-5, vet 851 renders, ``md_hidden_github_renders_vet851.json``: ``<video`` and ``</video`` read unsure."""
+    _corpus_851_clean('<video>\nZQ1\n</video>\n\n## ZQ2\n')
+    _corpus_851_clean('x <video>\nZQ1\n</video> y\n\n## ZQ2\n')
+
+
+def test_vet851_controls_keep_their_answers():
+    """Controls (vet 851 renders, ``md_hidden_github_renders_vet851.json``, fix leg): shapes the fixes must leave alone."""
+    body = 'a\n---\n\nZQ1\n'  # a dash-only line stays a setext underline, no table
+    assert _line_state(body, "a") == V
+    assert _line_state(body, "ZQ1") == V
+    assert md.scan(body).unsure == ()
+    body = '| a | b |\n| - | - |\n| c | d |\n\nZQ1\n'
+    assert _line_state(body, "ZQ1") == V
+    assert md.scan(body).unsure == ()
+    assert _line_state('![alt](x.png)\nZQ1\n', "ZQ1") == V
+    assert _line_state('## Title <!-- note --> more\n\nZQ1\n', "## Title") == V
