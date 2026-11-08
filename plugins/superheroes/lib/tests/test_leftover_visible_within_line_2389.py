@@ -24,8 +24,12 @@ advisor's renders). Guards (bite-proof record ``bite_proofs/i2389_leftover_visib
   G23 test_g23_per_item_claims_*  vet 856: claims are compared per item, so equal claims in two items cannot cancel
   G24 test_g24_one_line_list_*    vet 859: blanked line n is source line n for every n (no join-and-split), so a blanked last line
                                   keeps its place and a lone CR before a blanked line does not join two lines
-  G25 test_g25_blanked_line_join_* vet 859: an item with no list marker right after a line md_hidden does not read VISIBLE joins
-                                  the item before it, so a blanked line never detaches a claim
+  G25 test_g25_blanked_line_join_* vet 859: a blanked line never detaches a claim; since vet 860 these are regressions of the
+                                  source-items rule (the vet-859 join is retired)
+  G25 test_g25_source_items_*     vet 860: an item's claims are compared against the source's own items (its lines plus every line of
+                                  each source item sharing a line with it), so a blanked line never moves a claim out of the item that
+                                  names the finding
+  test_vet860_controls_*          vet 860: the control rows keep the head's answer (``fixtures/leftover_vet860_github_renders_2389.json``)
   test_vet859_controls_*          vet 859: the control rows keep their answers (``fixtures/leftover_vet859_github_renders_2389.json``)
 Retired with the redesign (their tests below are kept as regressions of the outcome): G12 block role, G13 and G16 per-line
 claim guards, G15 cut heading, G17a and G17b fence-shape and fenced-state guards.
@@ -119,7 +123,9 @@ def source_texts(text):
     """The source text (before blanking) of every item span of ``text``, as the claim guards read it."""
     # #2389 vet 859: the spans are read from the `_blanked_lines` list, as `_cut_items` reads them
     spans = pr_sheet.accepting_item_spans_of(stripped_lines(la._blanked_lines(text)[0]))
-    return [la._span_source(md_fence.split_lines(text), span) for span in spans]
+    # #2389 vet 860: `_span_source` is removed (the claim compare reads the source's own items); this helper joins the span's own source lines itself
+    lines = md_fence.split_lines(text)
+    return [" ".join(lines[n].strip() for n, _kind in span if n < len(lines) and lines[n].strip()) for span in spans]
 
 
 def f1_counted(text):
@@ -1363,3 +1369,72 @@ def test_vet859_controls_a_plain_acceptance_still_counts_without_a_claim(name):
 @pytest.mark.parametrize("name", CONTROL_MISSING, ids=CONTROL_MISSING)
 def test_vet859_controls_every_other_row_that_was_missing_stays_missing(name):
     assert verdict(BY_ID_859[name]["body"]) == "missing"
+
+
+# --- #2389 vet 860: G25 an item's claims are compared against the source's own items ---------------------------------------
+# Oracle: ``fixtures/leftover_vet860_github_renders_2389.json`` (GitHub's own render of 32 synthetic rows; each row also holds the
+# verdicts of head 6f0aec06 and base e4294ef7). Read with the `verdict` helper above.
+
+FIXTURE_860 = pathlib.Path(__file__).parent / "fixtures" / "leftover_vet860_github_renders_2389.json"
+ROWS_860 = json.loads(FIXTURE_860.read_text(encoding="utf-8"))["rows"]
+BY_ID_860 = {row["id"]: row for row in ROWS_860}
+
+# the seven rendered fail-opens: a blanked line moved the claim out of the item that names F-1 (j: the claim sits in the head of a
+# vet-859 join group and F-1 in a joined item; n: an unsure first line holds the claim and F-1 is on the next line)
+G25_SOURCE_ITEMS_MISSING = ["j1_list_claim_head_unsure_then_lazy_f1", "j2_para_claim_head_unsure_then_f1",
+                            "j3_chain_f1_middle_claim_head", "j4_chain_claim_last_f1_middle",
+                            "n1_unsure_first_line_holds_claim_f1_next", "n2_unsure_first_line_holds_claim_f1_lazy",
+                            "n3_para_unsure_first_line_claim_then_f1"]
+G25_SOURCE_ITEMS_OVER_REFUSED = ["n6_hidden_comment_first_line_claim"]
+CONTROL_860_CLAIM = ["j5_control_claim_and_f1_in_head"]
+CONTROL_860_PLAIN = ["k1_ordered_2_after_f1_no_hidden", "k2_ordered_2_after_unsure_line", "k5_ordered_1_control_interrupts",
+                     "p3_unsure_then_new_item_claim"]
+CONTROL_860_MISSING = ["n4_second_item_unsure_first_line_claim", "n5_unsure_first_line_f1_claim_next",
+                       "m7_lone_cr_ends_unsure_line", "m8_lone_cr_body_end_unsure_claim",
+                       "m9_crlf_body_unterminated_unsure_claim", "m10_cr_then_crlf_blank_then_indented_claim",
+                       "m11_cr_only_body", "m12_crlf_then_lone_cr_mid", "p1_two_unsure_then_lazy_claim",
+                       "p2_unsure_then_nested_item_claim", "p4_unsure_hidden_unsure_then_claim",
+                       "p5_nested_f1_unsure_then_lazy_claim", "p6_indented_comment_block_then_claim",
+                       "p7_unsure_blank_indented_claim", "e7_unterminated_visible_claim_after_unsure",
+                       "e8_unterminated_lazy_claim_after_unsure", "e9_unterminated_unsure_f1_line"]
+# no outcome test: k3 is a declined pre-existing row (a test would pin a fail-open), k4 (a setext heading) is not pinned
+VET860_EXCLUDED = ["k3_para_item_then_ordered_2", "k4_empty_bullet_cannot_interrupt"]
+
+
+def test_vet860_fixture_rows_are_covered_once_except_the_two_named_exclusions():
+    covered = (G25_SOURCE_ITEMS_MISSING + G25_SOURCE_ITEMS_OVER_REFUSED + CONTROL_860_CLAIM + CONTROL_860_PLAIN
+               + CONTROL_860_MISSING)
+    assert len(ROWS_860) == 32
+    assert sorted(covered + VET860_EXCLUDED) == sorted(ids(ROWS_860))  # every row exactly once: none twice, none left out
+    assert not set(covered) & set(VET860_EXCLUDED)
+
+
+@pytest.mark.parametrize("name", G25_SOURCE_ITEMS_MISSING, ids=G25_SOURCE_ITEMS_MISSING)
+def test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing(name):
+    # #2389 vet 860: GitHub shows the claim and F-1 in one item; the blanked reading moved the claim out of it, so head counted F-1 plain
+    assert BY_ID_860[name]["head_6f0aec06"] == "plain-accepted"
+    assert verdict(BY_ID_860[name]["body"]) == "missing"
+
+
+@pytest.mark.parametrize("name", G25_SOURCE_ITEMS_OVER_REFUSED, ids=G25_SOURCE_ITEMS_OVER_REFUSED)
+def test_g25_source_items_a_hidden_first_line_holding_a_claim_is_the_new_over_refusal(name):
+    # #2389 vet 860, the new over-refusal: the first line holds a claim inside a comment, which GitHub hides, so the item's shown text
+    # lacks a claim that a line of the acceptance as written holds, and the item counts as nothing (head: plain-accepted)
+    assert BY_ID_860[name]["head_6f0aec06"] == "plain-accepted"
+    assert verdict(BY_ID_860[name]["body"]) == "missing"
+
+
+@pytest.mark.parametrize("name", CONTROL_860_CLAIM, ids=CONTROL_860_CLAIM)
+def test_vet860_controls_a_claim_and_f1_in_one_head_still_resolves_the_leftover(name):
+    assert verdict(BY_ID_860[name]["body"]) == BY_ID_860[name]["head_6f0aec06"] == "claim#99"
+
+
+@pytest.mark.parametrize("name", CONTROL_860_PLAIN, ids=CONTROL_860_PLAIN)
+def test_vet860_controls_a_plain_acceptance_still_counts_without_a_claim(name):
+    assert verdict(BY_ID_860[name]["body"]) == BY_ID_860[name]["head_6f0aec06"] == "plain-accepted"
+
+
+@pytest.mark.parametrize("name", CONTROL_860_MISSING, ids=CONTROL_860_MISSING)
+def test_vet860_controls_every_other_row_that_was_missing_stays_missing(name):
+    assert BY_ID_860[name]["head_6f0aec06"] == "missing"
+    assert verdict(BY_ID_860[name]["body"]) == "missing"

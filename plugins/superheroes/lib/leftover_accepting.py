@@ -24,7 +24,7 @@ Only then is each item read (``_item_cut``), so a cut can never move structure o
 a within-line cut fires (an entry ``<``, an unclosed ``<!--``) counts as nothing, never the words before the cut (#2389 vet
 856); a hidden or dropped line only ends the item at that line. Claims are compared per item (``_cut_items``): an item whose
 whole ``fixed-above #<PR> <commit>`` claims differ from its own source span's counts as nothing, never summed across items,
-and a bare mention of the word is never compared. Spans and the claim join: see ``_cut_items``. Known over-refusal (not
+and a bare mention of the word is never compared. Spans and the claim compare: see ``_cut_items``. Known over-refusal (not
 modelled beyond V852-4): an item holding a ``<`` that can start markup anywhere, or continued by a tag line such as
 ``</div>``, counts as nothing.
 
@@ -217,16 +217,6 @@ def _item_cut(lines, span, shown):
     return " ".join(part for part in parts if part)
 
 
-def _span_source(lines, span):
-    """The source text of one item span: every source line of it (hidden and dropped ones included, read before blanking),
-    stripped and joined with one space, the first line from its text start."""
-    parts = []
-    for k, (n, _kind) in enumerate(span):
-        line = lines[n][:len(lines[n]) - len(_terminator(lines[n]))] if n < len(lines) else ""
-        parts.append(line[pr_sheet.item_text_start(line) if k == 0 else 0:].strip())
-    return " ".join(part for part in parts if part)
-
-
 def normalise_id(text):
     """The one normal form two spellings of a record id are compared in: NFKC, case-folded, every Unicode dash as ``-``."""
     return _DASHES.sub("-", unicodedata.normalize("NFKC", text).casefold())
@@ -322,7 +312,7 @@ def _accepting_items(body):
        the item (an entry ``<`` on a text line, plain, escaped or code-spanned, an unclosed ``<!--``, an entry ``<`` on a
        fenced line) makes the whole item count as nothing, never the words before the cut (#2389 vet 856).
     4. Claims are compared per item (``_cut_items``): the sorted ``FIXED_ABOVE_RE`` claims of an item's text differing from
-       those of its own source span (the lines before blanking, hidden and dropped ones included) make that item count as
+       those of its claim source (the source's own items, read before blanking, hidden and dropped lines included) make that item count as
        nothing (a claim removed, joined or changed). Claims are never summed across items, so equal claims in two items
        cannot cancel. Only whole claims are compared: a bare mention of ``fixed-above`` that is not a claim never matters. A
        claim wrapped across lines is one whole match in the source span (an item's lines are joined before the regex runs).
@@ -334,7 +324,7 @@ def _accepting_items(body):
     inline tag, an autolink, a ``<`` + letter, ``!``, ``?`` or ``/``, plain, escaped or code-spanned), or continued by a tag
     line such as ``</div>``, counts as nothing, though GitHub would show its words.
 
-    Steps 1, 2 and 4's vet-859 text and two more over-refusals: see ``_cut_items``.
+    Steps 1, 2 and 4's rule (the claim source) and its over-refusal: see ``_cut_items``.
 
     Every change only removes text, or makes an item count as nothing. Never raises on a str."""
     return pr_sheet.acceptance_texts(_cut_items(body)[0])
@@ -350,14 +340,18 @@ def _cut_items(body):
     (``md_fence.split_lines(body)``) all index it, so span index ``n`` is source line ``n``. It is never joined and split
     again (a blanked last line would vanish; a lone ``\\r`` before a blanked ``\\n`` line would join into ``\\r\\n``).
 
-    The claim join: an item joins the item before it when its first source line has no list marker (``pr_sheet._ITEM`` does
-    not match it) and the line right before is one ``md_hidden`` does not read VISIBLE. Joins chain, so a group is a head
-    plus the items joining it, transitively. The head's cut text is compared against the claims of the whole group's
-    source (joined with one space), each joined item against its own source; the join only makes the head stricter.
+    The claim compare (#2389 vet 860; it retires vet 859's join): the section's items are also read from the source lines
+    (``src_spans``, the same reader over the lines before blanking). Each item of the blanked reading has a claim source: its
+    own lines, plus every line of each source item that shares a line with it, joined in line order with one space. The item
+    counts as nothing unless the sorted ``FIXED_ABOVE_RE`` claims of its cut text equal those of its claim source. So a
+    blanked line never moves a claim out of the item that names the finding: the claims are compared against the source's
+    own items, not the blanked reading's. The claim source only grows an item's comparison, so it never makes an item count
+    that counted as nothing.
 
-    Two known over-refusals: an item whose hidden or unsure last line holds a claim counts as nothing (as when that line
-    ends in a newline); a paragraph opening right after a hidden or unsure line and holding a claim makes the item before
-    it count as nothing, even where GitHub shows it apart."""
+    Known over-refusal: an item counts as nothing when a line of the acceptance as written (before hidden lines are blanked)
+    holds a claim that the item's shown text lacks. That covers a hidden or unsure first, middle or last line (a hidden last
+    line holding a claim counts as nothing, as when it ends in a newline; a hidden first line holding a claim, which GitHub
+    hides), and a paragraph GitHub shows apart after a column-0 comment line. The two over-refusals of vet 859 are cases of it."""
     if not isinstance(body, str):
         return [], False
     blanked, shown = _blanked_lines(body)
@@ -365,19 +359,18 @@ def _cut_items(body):
     # axis: one line list (#2389 vet 859, G24): the spans, the cuts and the sources all index the entries of `blanked`, one per source line, so every span index names the same line in both; the lines are never joined and split again — see bite-proof record i2389_leftover_visible_within_line.md
     spans = pr_sheet.accepting_item_spans_of([line[:len(line) - len(_terminator(line))] for line in blanked])
     cuts = [_item_cut(blanked, span, shown) for span in spans]
-    sources = [_span_source(source_lines, span) for span in spans]
-    group, head = list(sources), 0
-    for k, span in enumerate(spans):
-        first = span[0][0]
-        opener = source_lines[first][:len(source_lines[first]) - len(_terminator(source_lines[first]))]
-        # axis: a blanked line never detaches a claim (#2389 vet 859, G25): an item with no list marker right after a line md_hidden does not read VISIBLE joins the item before it, and the head of the chain is compared against the claims of the whole group's source — see bite-proof record i2389_leftover_visible_within_line.md
-        if k > 0 and first > 0 and not shown[first - 1] and pr_sheet._ITEM.match(opener) is None:
-            group[head] = " ".join(part for part in (group[head], sources[k]) if part)
-        else:
-            head = k
-    # axis: claims are compared per item, never summed across items (#2389 vet 856, G23): an item whose cut text holds other whole claims than its own source span (one removed, joined from fragments, or changed) counts as nothing, so equal claims in two items cannot cancel — see bite-proof record i2389_leftover_visible_within_line.md
+    src_spans = pr_sheet.accepting_item_spans_of([line[:len(line) - len(_terminator(line))] for line in source_lines])
+    owner = {n: i for i, sp in enumerate(src_spans) for n, _kind in sp}
+    sources = []
+    for span in spans:
+        # axis: an item's claims are compared against the source's own items (#2389 vet 860, G25): the claim source is the item's own lines plus every line of each source item that shares a line with it, so a blanked line never moves a claim out of the item that names the finding — see bite-proof record i2389_leftover_visible_within_line.md
+        taken = {n for n, _kind in span}
+        for i in {owner[n] for n in taken if n in owner}:
+            taken |= {n for n, _kind in src_spans[i]}
+        sources.append(" ".join(source_lines[n].strip() for n in sorted(taken) if n < len(source_lines)))
+    # axis: claims are compared per item, never summed across items (#2389 vet 856, G23): an item whose cut text holds other whole claims than its claim source (one removed, joined from fragments, or changed) counts as nothing, so equal claims in two items cannot cancel — see bite-proof record i2389_leftover_visible_within_line.md
     return [cut if sorted(FIXED_ABOVE_RE.findall(cut)) == sorted(FIXED_ABOVE_RE.findall(source)) else ""
-            for cut, source in zip(cuts, group)], False
+            for cut, source in zip(cuts, sources)], False
 
 
 FIXED_ABOVE_RE = re.compile(

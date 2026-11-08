@@ -675,9 +675,63 @@ FAILED ...::test_g24_one_line_list_an_unterminated_blanked_last_line_stays_an_en
 10 passed, 275 deselected in 0.49s
 ```
 
-### G25: the join
+### G25 (source items, #2389 vet 860, WO-M): an item's claims are compared against the source's own items
 
-- **Guarded element / axis:** `_cut_items`, the join condition `if k > 0 and first > 0 and not shown[first - 1] and pr_sheet._ITEM.match(opener) is None:` (`leftover_accepting.py:393`). Axis: an item with no list marker right after a line md_hidden does not read VISIBLE joins the item before it, and the head is compared against the claims of the whole group's source.
+Base head `6f0aec06` (layer 1 `e4294ef7`). The neutralization was one targeted Edit, undone by the exact inverse Edit; no `git checkout`, `restore`, `reset`, `stash` or `sed`.
+Command (worktree root): `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k test_g25_`
+
+- **Guarded element / axis:** `_cut_items`, `for i in {owner[n] for n in taken if n in owner}:` (`leftover_accepting.py:368`; axis comment at `:366`), which adds to an item's claim source every line of each source item (`src_spans`) that shares a line with it. Axis: an item's claims are compared against the source's own items, so a blanked line never moves a claim out of the item that names the finding (the j rows: the claim in the head of a former join group, F-1 in a joined item; the n rows: an unsure first line holds the claim, F-1 on the next line).
+- **Neutralization:** `for i in {owner[n] for n in taken if n in owner}:` became `for i in set():` (each item is compared against its own span only; no lines are added from source items).
+- **Raw red** (`-k test_g25_`; tail of the run, the first lines of the `--tb=line` output were not captured, the `FAILED` list is complete):
+
+```
+E   AssertionError: assert 'plain-accepted' == 'missing'
+      
+      - missing
+      + plain-accepted
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1424: AssertionError: assert 'plain-accepted' == 'missing'
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s1_lazy_unsure_then_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s2_paragraph_unsure_then_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s4_indented_unsure_then_lazy_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s6_unsure_custom_el_then_claim]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s7_realistic_wrapped_lazy]
+FAILED ...::test_g25_blanked_line_join_github_hides_the_claim_so_the_check_reports_f1_missing[s8_inline_comment_line_then_lazy_claim]
+FAILED ...::test_g25_blanked_line_join_paragraph_after_a_hidden_line_is_the_second_over_refusal[s3_hidden_comment_then_claim]
+FAILED ...::test_g25_blanked_line_join_a_transitive_chain_refuses
+FAILED ...::test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[j1_list_claim_head_unsure_then_lazy_f1]
+FAILED ...::test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[j2_para_claim_head_unsure_then_f1]
+FAILED ...::test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[j3_chain_f1_middle_claim_head]
+FAILED ...::test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[j4_chain_claim_last_f1_middle]
+FAILED ...::test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[n1_unsure_first_line_holds_claim_f1_next]
+FAILED ...::test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[n2_unsure_first_line_holds_claim_f1_lazy]
+FAILED ...::test_g25_source_items_github_shows_the_claim_with_f1_so_the_check_reports_f1_missing[n3_para_unsure_first_line_claim_then_f1]
+FAILED ...::test_g25_source_items_a_hidden_first_line_holding_a_claim_is_the_new_over_refusal[n6_hidden_comment_first_line_claim]
+16 failed, 300 deselected in 1.16s
+```
+
+  The j1 to j4 and n1 to n3 rows are among the failures, as the order required; the vet-859 `test_g25_blanked_line_join_*` regressions fail too, as the run shows.
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read printed `368:        for i in {owner[n] for n in taken if n in owner}:`.
+- **Raw green** (`-k test_g25_`):
+
+```
+................                                                         [100%]
+16 passed, 300 deselected in 1.25s
+```
+
+### G24 after this change
+
+`-k test_g24_` was run once after the vet-860 change and stays green; its entry above is unchanged:
+
+```
+..........                                                               [100%]
+10 passed, 306 deselected in 1.09s
+```
+
+### G25 (the vet-859 join): RETIRED in #2389 vet 860 (WO-M)
+
+Retired: the join (the `group, head` loop and its `pr_sheet._ITEM` test) is replaced by the source-items rule above, which compares each item against the source's own items and made the join's head-only comparison unnecessary (it left F-1 in a joined item counted plain, rows j1 to j4). The entry below is kept as history; its `-k test_g25_` tests are now regressions of the source-items rule.
+
+- **Guarded element / axis (retired):** `_cut_items`, the join condition `if k > 0 and first > 0 and not shown[first - 1] and pr_sheet._ITEM.match(opener) is None:` (`leftover_accepting.py:393`). Axis: an item with no list marker right after a line md_hidden does not read VISIBLE joins the item before it, and the head is compared against the claims of the whole group's source.
 - **Neutralization:** `if k > 0 and first > 0 and ...` became `if False and k > 0 and first > 0 and ...` (no item joins).
 - **Raw red** (`-k test_g25_`):
 
