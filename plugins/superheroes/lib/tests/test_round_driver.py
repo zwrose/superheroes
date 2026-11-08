@@ -2808,6 +2808,7 @@ _ALL_CHANNELS = {
     "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
                                    "storeKey": "architecture-reviewer", "occurrence": 0}],
     "priorCommentsUnavailable": True,
+    "focusNotesNotCarried": [{"phase": "dispatch-verifiers", "seats": ["verifier-c1"]}],
     "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
                       "downgrades": 0, "unverified": 0, "ambiguous": 0}],
     "verifierProvenance": [{"expected": "codex", "ran": "claude", "outcome": "verdicts-ignored"}],

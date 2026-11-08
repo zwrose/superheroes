@@ -9,8 +9,10 @@ import launch_ledger as ll
 import test_adopt_original_session as adoption
 from test_cloud_relay import (
     RELAY_ID,
+    FakeGh,
     _check,
     _ensure_alive,
+    _post,
     _send_lines,
     _write_record,
 )
@@ -45,8 +47,10 @@ def test_delivery_after_a_new_handback_keeps_the_lane(tmp_path, monkeypatch):
     config = tmp_path / "builders-config"
     record = config / "projects" / "fixture" / (RELAY_ID + ".jsonl")
     record.parent.mkdir(parents=True)
+    gh = FakeGh()
     world = SimpleNamespace(
         repo=repo, config=str(config), record=str(record), env=dict(os.environ),
+        gh=gh, comments=gh.comments, next_comment=[1000],
     )
     _ensure_alive(world)
 
@@ -61,11 +65,17 @@ def test_delivery_after_a_new_handback_keeps_the_lane(tmp_path, monkeypatch):
         env=world.env, fix_order=True,
     )
     assert composed["ok"], composed
+    # The message travels as an issue comment; the relay is sent the one-line pointer.
+    _cid, url = _post(world, composed, issue=656)
+    # This repo's origin is a local bare remote, so `point` could not read a GitHub repository from it.
+    monkeypatch.setattr(cloud_relay, "lane_repo", lambda repo_root, **kw: ("acme/widgets", None))
+    pointed = cloud_relay.point(repo, composed["msgId"], url, env=world.env, run=world.gh)
+    assert pointed["ok"] is True, pointed
     handback = original + 180
     _amend_at(monkeypatch, repo, "reoutcome", "handback", handback)
     delivered_at = _stamp(original + 240)
     _write_record(world, _send_lines(
-        "toolu_delayed_fix", adoption.SESSION_TITLE, composed["forward"], delivered_at,
+        "toolu_delayed_fix", adoption.SESSION_TITLE, pointed["forward"], delivered_at,
     ))
     monkeypatch.setattr(cloud_relay, "_now_iso", lambda: delivered_at)
     checked, _ = _check(world, composed["msgId"], wait=0)

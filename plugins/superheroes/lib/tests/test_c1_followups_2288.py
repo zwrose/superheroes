@@ -244,7 +244,7 @@ def test_t2a_a_child_the_full_returning_audit_raised_is_linked_rides_the_parents
     assert [t["id"] for t in targets] == [pk, ck], targets
     assert [t.get("spawnedFrom") for t in targets] == [None, pk]
     # the parent's fix resolves both: the child is recorded fixed, never left unfixed for the owner
-    monkeypatch.setattr(RD, "_after_audits", lambda st, config: None)
+    monkeypatch.setattr(RD, "_after_audits", lambda st, config, session_dir=None: None)
     state["_auditTargets"] = targets
     results = [{"id": t["id"], "ruling": "discharged", "reason": "the fix resolves it", "checks": TRD.audit_checks(),
                 "auditorVendor": t.get("auditorVendor")} for t in targets]

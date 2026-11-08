@@ -261,22 +261,28 @@ on the owner's machine. This section is the one home of how they are cleaned up.
 2. **Plan, then ask.** Run `python3 -B <plugin root>/lib/cloud_cleanup.py plan --repo-root <root>
    --repo <owner/name> --pr <number>`. On `none`, stop. On `cleanup` with `alreadyDelivered`, send
    nothing and go to the branch step. On `cleanup` with `archiveHeld: "stack-open"` (a stack whose layers are not all closed), send nothing and go to the branch step; the plan of the stack's last layer to close carries the archive text. On `archiveHeld: "stack-unreadable"` (the stack could not be read), send nothing and go to the branch step; the archive request is still owed, so re-run `plan` for the same PR later, and until a plan carries the archive text, tell the owner that the session stays listed. On any other `cleanup`, first persist the attempt under the
-   message id the send will carry. For another account, run the relay's `ensure` and `compose` first
-   (`skills/showrunner/reference/wave-watch.md` § Answering a builder note), because `compose` mints
-   the message id itself: take its `msgId`. For the same account by `SendMessage` there is no relay
+   message id the send will carry. For another account, run the relay's `ensure`, `compose` (with the
+   plan's `archiveText` written to a file as the text file), the post of the composed file and `point`
+   first (`skills/showrunner/reference/wave-watch.md` § Answering a builder note has how each is done),
+   because `compose` mints the message id itself: take its `msgId`. An attempt
+   interrupted before the reservation below leaves nothing recorded, and a later run composes afresh.
+   For the same account by `SendMessage` there is no relay
    id, so make one unique to this attempt, `same-account-<pr number>-<UTC timestamp>`, and keep it for
    this attempt's `pending` and final writes (a settlement carrying an older attempt's id then never matches a newer reservation). Then run `cloud_cleanup.py record --repo-root <root> --repo
    <owner/name> --pr <number> --msg-id <id> --outcome pending --launch-id <the plan's launchId>`. That write is the
    reservation to send: when it is refused (`request-in-progress`, `request-uncertain` or
    `request-delivered`), another caller holds or has settled the request, so send nothing and go on. Only when it succeeds, send the plan's
    `archiveText` to the lane's session: on the same account by `SendMessage`, on another account
-   by the relay's send and `check`, as that section says. Then run `record` with the same message id and
-   the outcome: `delivered`, `uncertain` when the check could not confirm the text arrived, or `failed`
-   when nothing can have reached the builder. Pass the plan's `launchId` as `--launch-id` to every `record`
+   by sending the printed `relayMessage` and then `check`, as that section says. Then run
+   `record` with the same message id and the outcome. On another account it is settled by that section's
+   one rule: `delivered`
+   when `check` reads `delivered: true`, `failed` when it reads `nothingReached: true`, otherwise
+   `uncertain`. On the same account it is settled by the `SendMessage` result: `delivered` on
+   `success: true`, `failed` on `success: false`, and `uncertain` when the call returned no result. Pass the plan's `launchId` as `--launch-id` to every `record`
    and to `branch`, so each settles the lane that was planned. A plan whose `request` is already `pending` or
    `uncertain` is a resume after an unconfirmed send: send nothing. When that message id came from the relay (another
    account), first run `cloud_relay.py check --repo-root <root> --msg-id <id>` (as `wave-watch.md` § Answering a
-   builder note describes) and record `delivered` when it reads `delivered: true`, `failed` when its `reason` is `relay-send-failed` (nothing reached the
+   builder note describes) and record `delivered` when it reads `delivered: true`, `failed` when it reads `nothingReached: true` (nothing reached the
    builder, so a later run of this procedure may send again), otherwise `uncertain`. A
    same-account id has no check, so record `uncertain`. Then go on. A `pending` or `uncertain` request is never sent a second time.
 3. **Tell the owner.** On `delivered`, tell the owner the `ownerMessage` as it is. On any other

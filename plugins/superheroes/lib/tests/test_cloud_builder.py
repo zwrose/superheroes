@@ -375,7 +375,11 @@ def test_dod_the_composed_refusal_posts_as_exactly_one_issue_comment(tmp_path):
     run = FakeRun({"gh api -X POST repos/o/r/issues/1747/comments -F body=@%s" % body:
                    (0, json.dumps({"html_url": "https://github.com/o/r/issues/1747#c1"}))})
     result = cb.post_comment("o/r", 1747, str(body), run=run, env={})
-    assert result == {"ok": True, "reason": None, "url": "https://github.com/o/r/issues/1747#c1"}
+    # the fake's POST answer carries no id, so no read-back is made: transit is not-checked (read back)
+    assert result == {"ok": True, "reason": None, "url": "https://github.com/o/r/issues/1747#c1",
+                      "transit": {"transit": "not-checked", "why": "the text could not be read back"},
+                      "transitLine": "Transit check: not checked (the text could not be read back), "
+                                     "so it is not known whether the text arrived intact."}
     assert run.argvs == [["gh", "api", "-X", "POST", "repos/o/r/issues/1747/comments", "-F",
                           "body=@%s" % body]]
 
@@ -562,10 +566,16 @@ def test_repo_json_returns_the_stripped_name():
     assert cb.repo_json("o/r", run=run, env={}) == {"ok": True, "nameWithOwner": "Owner/Repo"}
 
 
-def test_post_comment_with_unparseable_success_output_has_no_url():
-    run = FakeRun({"gh api -X POST repos/o/r/issues/5/comments -F body=@/b": (0, "ok")})
-    assert cb.post_comment("o/r", 5, "/b", run=run, env={}) == {"ok": True, "reason": None,
-                                                                  "url": None}
+def test_post_comment_with_unparseable_success_output_has_no_url(tmp_path):
+    body = tmp_path / "b"
+    body.write_text("hello", encoding="utf-8")
+    run = FakeRun({"gh api -X POST repos/o/r/issues/5/comments -F body=@%s" % body: (0, "ok")})
+    # unparseable output carries no id, so no read-back is made: transit is not-checked (read back)
+    assert cb.post_comment("o/r", 5, str(body), run=run, env={}) == {
+        "ok": True, "reason": None, "url": None,
+        "transit": {"transit": "not-checked", "why": "the text could not be read back"},
+        "transitLine": "Transit check: not checked (the text could not be read back), "
+                       "so it is not known whether the text arrived intact."}
 
 
 @pytest.mark.parametrize("raised", [OSError("no gh"), subprocess.TimeoutExpired("gh", 1)])
