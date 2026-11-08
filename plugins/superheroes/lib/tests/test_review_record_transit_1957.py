@@ -63,7 +63,8 @@ def test_record_json_writes_every_slash_escaped(tmp_path):
     rec["checked"] = odd
     text = block_of(rr.render_plan(rec).head([]))
     assert "://" not in text and not re.search(r"(?<!\\)/", text)
-    assert json.loads(text) == json.loads(json.dumps(rr._scrubbed(rec), sort_keys=True, separators=(",", ":")))
+    expected = json.loads(json.dumps(rr._scrubbed(rec), sort_keys=True, separators=(",", ":")))
+    assert json.loads(text) == {**expected, "sentSha256": rr._sent_sha(expected)}  # #2383: the writer's stamp is the one added key
     assert json.loads(text)["checked"] == odd
     assert json.loads(text)["findings"][0]["body"] == "see https://x/y for the call"
 

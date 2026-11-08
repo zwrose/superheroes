@@ -203,7 +203,8 @@ def _ordered(tmp_path, monkeypatch, **script):
     batch = RD._fix_batch_keys(_state(d))
     assert batch, "the cap round applied no fix batch"
     out = RD.cmd_extra_audit(d, _order(tmp_path), "advisor", PR, readers=_readers())
-    assert out == {"ok": True, "round": CAP + 1, "supersededReceipt": SUPERSEDED}, out
+    assert out == {"ok": True, "round": CAP + 1, "supersededReceipt": SUPERSEDED,
+                   "reservationTransit": {"transit": "not-checked", "why": "no read-back was made"}}, out  # #2383: the fake's create result carries no read-back
     return d, batch
 
 

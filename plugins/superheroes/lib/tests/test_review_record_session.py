@@ -586,7 +586,6 @@ REFUSALS = [
     pytest.param(_extras_are({"schema": rs.EXTRAS_SCHEMA, "pr": True}), rs.BAD_EXTRAS, id="extras-pr-bool"),
     pytest.param(_without("meta.json"), rs.UNREADABLE, id="no-meta"),
     pytest.param(_without("driver-journal.jsonl"), rs.UNSUPPORTED, id="hand-driven-session"),
-    pytest.param(_state_change(terminal="uncertified-manual"), rs.UNSUPPORTED, id="attested-terminal"),
     pytest.param(_state_change(terminal="mystery"), rs.UNSUPPORTED, id="unknown-terminal"),
     pytest.param(_no_session_id, rs.UNREADABLE, id="meta-without-session-id"),
 ]

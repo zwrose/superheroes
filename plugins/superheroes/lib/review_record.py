@@ -42,9 +42,11 @@ if _LIB_DIR not in sys.path:
 
 import build_lane  # noqa: E402
 import calibration_vocab  # noqa: E402
+import cloud_builder  # noqa: E402
 import cloud_pass  # noqa: E402
 import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
+import decision_kinds  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
@@ -455,7 +457,16 @@ def _owner_ruling_comment(repo, comment_id):
 
 
 def _create_comment(pr, repo, body):
-    return _send("POST", _api(repo, f"issues/{pr}/comments"), body)
+    """The new comment as {"id", "url", "transit"} — `transit` is the comparison of `body` with the text GitHub
+    holds when the comment is read back — or None when the comment could not be created."""
+    sent = _send("POST", _api(repo, f"issues/{pr}/comments"), body)
+    if sent is None:
+        return None
+    # axis: every comment this writer creates is read back by id and compared with what was posted; a read-back that cannot be made is not-checked, never matched — see bite-proof record i2383_transit_record
+    held = _gh_json("api", f"repos/{repo}/issues/comments/{sent['id']}")
+    found = held.get("body") if isinstance(held, dict) else None
+    return {"id": sent["id"], "url": sent.get("url"),
+            "transit": cloud_builder.transit_compare(body, found)}
 
 
 def _withheld_paths(repo_root, head_sha, paths):
@@ -815,6 +826,11 @@ def _validate(a):
         chk(sn(a.get(k)), k)
     ab = a.get("abandoned")
     chk(ab is None or (isinstance(ab, dict) and isinstance(ab.get("reason"), str) and bool(ab["reason"].strip())), "abandoned")
+    unc = a.get("uncertified")
+    # axis: the withheld-certificate entry's terminal is one of the driver's own verdicts but converged, and its keys are only terminal, reason and note, so no free text or stray key enters the record as a driver's word — see bite-proof record i2395_uncertified_record
+    chk(unc is None or (isinstance(unc, dict) and set(unc) <= {"terminal", "reason", "note"}
+                        and unc.get("terminal") in decision_kinds.ALL_VERDICTS and unc["terminal"] != "converged"
+                        and sn(unc.get("reason")) and sn(unc.get("note"))), "uncertified")
     # an abandoned session may have run no seat, so only its record may list no reviewer
     chk(isinstance(a.get("reviewers"), list) and (a["reviewers"] or ab is not None), "reviewers")
     for i, r in enumerate(a["reviewers"]):
@@ -1608,6 +1624,17 @@ def _lane_lines(rec):
     return lines
 
 
+UNCERTIFIED_OPENING = "the review session ended "
+
+
+def uncertified_line(u):
+    """The one home of the withheld-certificate wording: the terminal a non-converged session ended on and the driver's
+    reason (clipped; its literal text), or that none was recorded. The summary leaves this line's text out of the claim check."""
+    reason = u.get("reason")
+    cause = _clip(reason.strip()) if isinstance(reason, str) and reason.strip() else "no reason recorded"
+    return f"{UNCERTIFIED_OPENING}{u['terminal']}, not converged, so its certificate was withheld: {cause}"
+
+
 def _status(rec, unread=(), finding_lines=()):
     fc, ci, lines = rec["finalCommit"], rec["ci"], list(unread)
     s7 = lambda sha: (sha or "")[:7] or "unknown"  # noqa: E731
@@ -1638,6 +1665,9 @@ def _status(rec, unread=(), finding_lines=()):
     if rec.get("abandoned"):
         # fixed prose: no data enters
         lines.append("session abandoned: the review loop was closed before it ended, so this record cannot read reviewed")
+    # axis: a session that did not converge never reads reviewed, whatever else is clear — see bite-proof record i2395_uncertified_record
+    if rec.get("uncertified"):
+        lines.append(uncertified_line(rec["uncertified"]))
     return (NOT_REVIEWED if lines else REVIEWED), any(m["goAhead"] is None for m in rec["missingReviews"]), lines
 
 
@@ -1798,7 +1828,7 @@ def _recheck_carried(findings, checks, head, is_ancestor, other=None):
     return out, rows
 
 
-def build_record(account, readers, prior=None, history=()):
+def build_record(account, readers, prior=None, history=(), session_uncertified=None):
     a, rd, dis = _validate(account), _readers(readers), []
     read_paths, seen = rd["changed_paths"], {}
 
@@ -1906,6 +1936,9 @@ def build_record(account, readers, prior=None, history=()):
         "laneBasis": _lane_basis(a, rd, lane["value"], fc["sha"]), "finalCommit": fc,
         "withheldFromReviewers": withheld,
         **({"abandoned": a["abandoned"]} if a.get("abandoned") else {}),
+        # the entry is the driver's own text only when the session writer stamped it: it handed the same dict to `write`
+        **({"uncertified": dict(a["uncertified"], source="session" if isinstance(session_uncertified, dict)
+                                and session_uncertified == a["uncertified"] else "account")} if a.get("uncertified") else {}),
         "ci": ci, "reviewers": reviewers,
         # axis: the test-lens part is computed from the credited reviewer rows and the record's findings, never from the account's own claim — see bite-proof record wo_b_2311_record_calibration
         "testLens": _test_lens(reviewers, findings, fc["sha"], earlier_other),
@@ -2680,8 +2713,9 @@ def _summary(r, level):
     watchdog_line = _watchdog_line(r.get("silenceWatchdogEnds"), level)
     command_refusals_rec = r.get("commandRefusals") or []
     refusals_line = _command_refusals_line(command_refusals_rec, compact) if command_refusals_rec else None
+    first_line = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + "."
     lines = [
-        f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + left_text + ".",
+        first_line,
         waits_text,
         f"Lane: {lane['value']} ({lane['source']})" + (f", because {reason}" if reason else "")
         + (f" ({lane['reasonSource']})" if reason and lane.get("reasonSource") else "") + ".",
@@ -2719,9 +2753,21 @@ def _summary(r, level):
     # axis: the watchdog line carries session seat names, so it is left out of the claim check, by line object — see bite-proof record i2375_c_watchdog_ends
     # axis: the refusals line's literal command text is left out of the claim check — see bite-proof record wo3_2011_record
     # axis: the findings block and the outside list are left out of the claim check, by line object — see bite-proof record c1l1_wo_a_record_seam
-    _assert_no_bug_free_claim(
-        "\n".join(l for l in lines if l is not floor_line and l is not withheld_line and l is not refusals_line
-                  and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines)))
+    # The withheld-certificate line carries the driver's literal reason, so exactly that one `whatIsMissing` entry, as it
+    # is displayed, is taken out of the first line's `Left:` text (the first line is recomposed without it); every other
+    # part of that line, every other occurrence of the same text, and every other line is still checked. Compact mode
+    # shows no `whatIsMissing` text, so nothing is removed there; a record with no such entry removes nothing.
+    # axis: only the displayed withheld-certificate entry in the first line's `Left:` text is left out of the claim check — see bite-proof record i2395_uncertified_record
+    checked_first = first_line
+    if r.get("uncertified") and r["uncertified"].get("source") == "session" and not compact:
+        at = next((i for i, m in enumerate(missing) if m.startswith(UNCERTIFIED_OPENING)), None)
+        if at is not None:
+            kept = "; ".join(missing[:at] + missing[at + 1:]) or "nothing"
+            checked_first = f"**Review record: {head}.** Checked: " + "; ".join(checked) + ". Left: " + kept + "."
+    checked_text = "\n".join((checked_first if l is first_line else l) for l in lines
+                             if l is not floor_line and l is not withheld_line and l is not refusals_line
+                             and l is not transit_line and l is not watchdog_line and l not in wider_lines and all(l is not q for q in quoted_lines))
+    _assert_no_bug_free_claim(checked_text)
     return "\n".join(lines)
 
 
@@ -2769,6 +2815,25 @@ def _record_json(r):
     return json.dumps(r, sort_keys=True, separators=(",", ":")).replace("/", "\\/")
 
 
+def _sent_sha(record):
+    """The sha256 (hex) of the record object as the writer posts it, less its own `sentSha256` key. It covers the
+    record object, never the summary prose, so a reader that parses the stored JSON can recompute it."""
+    body = {k: v for k, v in record.items() if k != "sentSha256"}
+    return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _sent_hash_damage(rec):
+    """`rec` marked `transitDamage.sentHashMatches: False` when it carries a `sentSha256` that is not the hash of
+    the record as read (a number, or any other non-matching value, counts as damaged); `rec` unchanged when the key
+    is absent (a record written before the key existed) or matches."""
+    if "sentSha256" not in rec:
+        return rec  # axis: a record written before the key existed is read unflagged, never damaged — see bite-proof record i2383_transit_record
+    if isinstance(rec["sentSha256"], str) and rec["sentSha256"] == _sent_sha(rec):
+        return rec
+    damage = rec.get("transitDamage")
+    return dict(rec, transitDamage={**(damage if isinstance(damage, dict) else {}), "sentHashMatches": False})
+
+
 def _part_body(piece):
     fence = "`" * max(3, max((len(m) for m in re.findall(r"`+", piece)), default=0) + 1)
     return f"{PART_MARKER}\n{fence}json\n{piece}\n{fence}"
@@ -2806,8 +2871,10 @@ def render_plan(record):
     def single(r):
         # axis: the redacted-field flag is computed on the record as posted, after each shed step — see bite-proof record wo1_2121_redacted
         r = _flag_redactions(r)
+        # axis: the writer's hash is taken of the exact object the JSON is built from, after the redaction flag and every shed step — see bite-proof record i2383_transit_record
+        stamped = dict(r, sentSha256=_sent_sha(r))
         return (f"{MARKER}\n{_summary(r, 0)}\n\n<details><summary>Full record</summary>\n\n```json\n"
-                f"{_record_json(r)}\n```\n</details>")
+                f"{_record_json(stamped)}\n```\n</details>")
 
     # The size bound is on what is posted (the JSON-escaped body), so it is measured here: shed the lane
     # basis's path evidence in a fixed order until the body fits. The floor, lane and proposalTaken never change.
@@ -2832,7 +2899,7 @@ def render_plan(record):
         return _Plan([], lambda part_ids=None: body)
     # Still over the cap after every step: the JSON text goes to part comments, never cut and never refused.
     r = _flag_redactions(r)  # the parts text and the head's summary carry the flag too
-    text = _record_json(r)
+    text = _record_json(dict(r, sentSha256=_sent_sha(r)))  # same stamp as the whole record: the hash of the object the text is built from
     parts = _part_bodies(text)
     digest, chars = hashlib.sha256(text.encode("utf-8")).hexdigest(), len(text)
 
@@ -2940,6 +3007,7 @@ def _resolve_parts(index, by_id):
         return None
     if not (isinstance(rec, dict) and rec.get("schema") == RECORD_SCHEMA):
         return None
+    rec = _sent_hash_damage(rec)  # axis: a parts record whose own stamp no longer matches is flagged before the length and hash merge — see bite-proof record i2383_transit_record
     # axis: parts changed in transit that still parse as a record are read and reported, never refused; the length
     # and hash say only that something changed, so the reader names it for the vet instead of hiding the record
     hash_matches = hashlib.sha256(text.encode("utf-8")).hexdigest() == digest
@@ -2958,7 +3026,7 @@ def _parse_body(body, by_id=None):
     if obj is None:
         return None
     if obj.get("schema") == RECORD_SCHEMA:
-        return obj
+        return _sent_hash_damage(obj)  # axis: a whole record whose own stamp no longer matches is flagged — see bite-proof record i2383_transit_record
     return _resolve_parts(obj, by_id) if obj.get("schema") == PARTS_SCHEMA else None
 
 
@@ -3070,7 +3138,34 @@ def _wrong_ungraded(findings, prior, verifier_closed):
     return out
 
 
-def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
+def _created_transit(sent):
+    """The read-back result a create result carries; not-checked when it carries none (nothing was read back)."""
+    transit = sent.get("transit") if isinstance(sent, dict) else None
+    if isinstance(transit, dict):
+        return transit
+    return {"transit": cloud_builder.TRANSIT_NOT_CHECKED, "why": "no read-back was made"}
+
+
+def _transit_summary(checks):
+    """`transitChecks`, the overall `transit` (changed if any check changed, else not-checked if any was not
+    checked, else matched) and, unless matched, a `transitLine` naming each comment that did not match."""
+    kinds = [c["transit"].get("transit") for c in checks]
+    # axis: the write's overall transit is changed when any comment changed, not-checked when any was not checked, matched only when every comment matched — see bite-proof record i2383_transit_record
+    if cloud_builder.TRANSIT_CHANGED in kinds:
+        overall = cloud_builder.TRANSIT_CHANGED
+    elif any(k != cloud_builder.TRANSIT_MATCHED for k in kinds):
+        overall = cloud_builder.TRANSIT_NOT_CHECKED
+    else:
+        overall = cloud_builder.TRANSIT_MATCHED
+    out = {"transitChecks": checks, "transit": overall}
+    if overall != cloud_builder.TRANSIT_MATCHED:
+        out["transitLine"] = " ".join(
+            f"{c['what']} (comment {c['comment']}): {cloud_builder.transit_line(c['transit'])}"
+            for c in checks if c["transit"].get("transit") != cloud_builder.TRANSIT_MATCHED)
+    return out
+
+
+def write(account_path, repo_root, readers=None, verifier_closed=frozenset(), *, session_uncertified=None):
     def go():
         try:
             with open(account_path, encoding="utf-8") as fh:
@@ -3131,7 +3226,7 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
                           "earlier findings with no outcome in this account: " + ", ".join(missing))
         for i in _wrong_ungraded(a["findings"], prior, verifier_closed):
             raise Refusal("review-account-invalid", f"findings[{i}] is shown-wrong without the verifier's grade")
-        record = build_record(a, rd, prior=prior, history=history)
+        record = build_record(a, rd, prior=prior, history=history, session_uncertified=session_uncertified)
         record["earlierRecordsNotChecked"] = not_checked
         raws = [(os.path.basename(p), *render_raw(os.path.basename(p), read_text(p)))
                 for p in a["rawFindingsFiles"] if str(p) not in record["unreadFiles"]]
@@ -3140,11 +3235,15 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
         # stand-in comment ids, must fit.
         render_plan(dict(record, previousRecord=previous and {"id": 10 ** 15, "url": "u" * 120},
                          rawOutputs=[{"file": n, "id": 10 ** 15, "url": "u" * 120, "withheld": w} for n, _, w in raws]))
-        links = []
+        links, checks = [], []
+
+        def note_transit(sent, what):
+            checks.append({"comment": sent["id"], "what": what, "transit": _created_transit(sent)})
         for name, body, withheld in raws:
             sent = rd["create_comment"](pr, repo, body)
             if sent is None:
                 raise Refusal("review-record-gh-failed", f"the raw output comment for {name} could not be written")
+            note_transit(sent, f"raw output {name}")
             links.append({"file": name, "id": sent["id"], "url": sent.get("url"), "withheld": withheld})
         record.update(rawOutputs=links, previousRecord=previous)
         plan = render_plan(record)
@@ -3154,12 +3253,15 @@ def write(account_path, repo_root, readers=None, verifier_closed=frozenset()):
             sent = rd["create_comment"](pr, repo, body)
             if sent is None:
                 raise Refusal("review-record-gh-failed", f"part {n} of {len(plan.parts)} of the record could not be written")
+            note_transit(sent, f"record part {n}")
             part_ids.append(sent["id"])
         sent = rd["create_comment"](pr, repo, plan.head(part_ids))
         if sent is None:
             raise Refusal("review-record-gh-failed", "the record comment could not be written")
+        note_transit(sent, "record")
         return {"ok": True, "action": "created", "url": sent.get("url"), "parts": len(part_ids),
-                "status": record["status"], "parked": record["parked"], "whatIsMissing": record["whatIsMissing"]}
+                "status": record["status"], "parked": record["parked"], "whatIsMissing": record["whatIsMissing"],
+                **_transit_summary(checks)}
     return _guarded(go)
 
 
@@ -3207,7 +3309,7 @@ def reserve_extra_audit(pr, repo, session_id, why, readers=None):
         sent = rd["create_comment"](pr, repo, body)
         if not (isinstance(sent, dict) and "id" in sent):
             return {"ok": False, "detail": "the reservation comment could not be written"}
-        return {"ok": True, "url": sent.get("url"), "id": sent["id"]}
+        return {"ok": True, "url": sent.get("url"), "id": sent["id"], "transit": _created_transit(sent)}
     except Exception as e:  # nothing raises to the caller
         return {"ok": False, "detail": f"{type(e).__name__}: {e}"}
 
