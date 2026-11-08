@@ -340,11 +340,108 @@ FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g6_li
 29 passed, 251 deselected in 0.78s
 ```
 
-## After the last restore
+## G7: a marker line hidden only by itself (`_marker_hidden_by_itself`; catch-up onto layer 1's `41e75711`)
+
+Catch-up head `fb4e3208` (the merge of `41e75711`), not `3b78f809`; line numbers in this section are the catch-up's, after the
+WO-I2 tightening of `_marker_hidden_by_itself` and `_visibility_problem` (same behaviour, fewer added lines) and re-proved on it. Command, the
+order's: `timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py -q -p no:cacheprovider --tb=line -k test_g7_marker_hidden_by_itself_`
+(41 tests match, 280 deselected). Each neutralization was one Edit, undone by the exact inverse Edit.
+
+### G7a: the re-scan's requirement
+
+- **Guarded element / axis:** `vet_slot.py:488`, the re-scan's `return dict(again.lines).get(start) == md_hidden.VISIBLE` in
+  `_marker_hidden_by_itself`. Axis: a `HIDDEN` marker line passes only when the body re-scanned with that one line made plain
+  reads `VISIBLE` at the same line start, so a marker inside a comment or another hidden region still refuses.
+- **Neutralization:** `        return dict(md_hidden.scan(body[:start] + plain + body[end:]).lines).get(start) == md_hidden.VISIBLE` became `        return True` (a hidden marker always passes).
+- **Raw red** (whole, as the run printed it, less the `+ where` / `+ and` continuation lines under the last three failures, which are elided for the record's size; the leading `UV_NATIVE_TLS` warning line is also omitted):
+
+```
+...FFFF...............................FFF                                [100%]
+=================================== FAILURES ===================================
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+    assert (True is False)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:591: AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1', ...}
+    assert (True is False)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:591: AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1', ...}
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+    assert (True is False)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:591: AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
+E   AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1', ...}
+    assert (True is False)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:591: AssertionError: {'ok': True, 'verb': 'write', 'followups': ['FU1', 'FU2'], 'receipt': 'https://x/c/1', ...}
+E   AssertionError: assert True is False
+     +  where True = <function _marker_hidden_by_itself at 0x7f4a7f81f380>(<md_hidden.Rendering object at 0x7f4a7fba0e30>, '<!--\n<!-- superheroes:advisor-vet -->\n-->\n', 5)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:620: AssertionError: assert True is False
+E   AssertionError: assert True is False
+     +  where True = <function _marker_hidden_by_itself at 0x7f4a7f81f380>(<md_hidden.Rendering object at 0x7f4a7fba1a60>, '<!--\r\n<!-- superheroes:advisor-vet -->\r\n-->\r\n', 6)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:620: AssertionError: assert True is False
+E   AssertionError: assert True is False
+     +  where True = <function _marker_hidden_by_itself at 0x7f4a7f81f380>(<md_hidden.Rendering object at 0x7f4a7fba2750>, '<!--\r<!-- superheroes:advisor-vet -->\r-->\r', 5)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:620: AssertionError: assert True is False
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_a_marker_in_a_hidden_region_or_unsure_refuses_write_failed[hidden-block-bot]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_a_marker_in_a_hidden_region_or_unsure_refuses_write_failed[hidden-block-builder]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_a_marker_in_a_hidden_region_or_unsure_refuses_write_failed[open-comment-bot]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_a_marker_in_a_hidden_region_or_unsure_refuses_write_failed[open-comment-builder]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_the_rescan_keeps_the_line_start_under_every_line_ending[\n]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_the_rescan_keeps_the_line_start_under_every_line_ending[\r\n]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_the_rescan_keeps_the_line_start_under_every_line_ending[\r]
+7 failed, 34 passed, 280 deselected in 0.84s
+```
+
+  The inside-a-comment tests (`open-comment-bot`, `open-comment-builder`) are red, as are the hidden-block ones.
+  The `unsure-*` refusals stay green, since an UNSURE line never reaches the re-scan.
+- **Restore:** inverse Edit, `        return True` back to `        return dict(md_hidden.scan(body[:start] + plain + body[end:]).lines).get(start) == md_hidden.VISIBLE`.
+- **Restore receipt:** the file search returned `488:        return dict(md_hidden.scan(body[:start] + plain + body[end:]).lines).get(start) == md_hidden.VISIBLE`.
+- **Raw green:**
+
+```
+.........................................                                [100%]
+41 passed, 280 deselected in 2.36s
+```
+
+### G7b: the exception
+
+- **Guarded element / axis:** `vet_slot.py:504`, the acceptance `state == md_hidden.HIDDEN and _marker_hidden_by_itself(rendering, body, marker_at)`
+  in `_visibility_problem`. Axis: a marker line that is hidden only by itself passes (a whole-comment marker line writes OK on the bot and the builder path).
+- **Neutralization:** `(state == md_hidden.HIDDEN and _marker_hidden_by_itself(rendering, body, marker_at))` became `(state == md_hidden.HIDDEN and False)` (a hidden marker always refuses).
+- **Raw red** (whole, less the leading `UV_NATIVE_TLS` warning line):
+
+```
+FFF......................................                                [100%]
+=================================== FAILURES ===================================
+E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker line reads hidden (GitHub hides it), so the slot would not render'}
+    assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:551: AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker line reads hidden (GitHub hides it), so the slot would not render'}
+E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker line reads hidden (GitHub hides it), so the slot would not render'}
+    assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:551: AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker line reads hidden (GitHub hides it), so the slot would not render'}
+E   AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker line reads hidden (GitHub hides it), so the slot would not render'}
+    assert False is True
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py:560: AssertionError: {'ok': False, 'reason': 'write-failed', 'detail': 'the advisor-vet marker line reads hidden (GitHub hides it), so the slot would not render'}
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_a_whole_comment_marker_line_writes_ok_on_the_bot_path[marker-absent]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_a_whole_comment_marker_line_writes_ok_on_the_bot_path[marker-present]
+FAILED plugins/superheroes/lib/tests/test_vet_slot_md_hidden_2389.py::test_g7_marker_hidden_by_itself_a_whole_comment_marker_line_writes_ok_on_the_builder_path
+3 failed, 38 passed, 280 deselected in 2.55s
+```
+
+- **Restore:** inverse Edit, `(state == md_hidden.HIDDEN and False)` back to `(state == md_hidden.HIDDEN and _marker_hidden_by_itself(rendering, body, marker_at))`.
+- **Restore receipt:** the file search returned `504:    if state != md_hidden.VISIBLE and not (state == md_hidden.HIDDEN and _marker_hidden_by_itself(rendering, body, marker_at)):`.
+- **Raw green:**
+
+```
+.........................................                                [100%]
+41 passed, 280 deselected in 0.86s
+```
+
+## After the last restore (G1 to G6, at `3b78f809`)
 
 `git diff --stat plugins/superheroes/lib/vet_slot.py` printed nothing: `vet_slot.py` is byte-identical to `3b78f809`.
 
 ## Elements in no class
 
-None: G1 to G6 each have their own neutralization and a red. Partially proven: G4 (red summary lines lost; the red is shown
+None: G1 to G6 each have their own neutralization and a red, and so do G7a and G7b (the UNSURE refusal in G7 is covered by
+the existing `_visibility_problem` check, not by either G7 neutralization). Partially proven: G4 (red summary lines lost; the red is shown
 by the progress lines and the failures that were visible, and the three bot-path checks are not shown biting one at a time).

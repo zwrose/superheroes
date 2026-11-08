@@ -2,7 +2,7 @@
 
 The invariant: ``vet_slot`` never reads as visible any text GitHub renders hidden, and where ``md_hidden`` is unsure the
 write refuses. The oracle is ``fixtures/md_hidden_github_renders_2366.json`` (GitHub's own render of 60 shapes in two
-forms, run here on the ``stored`` bytes GitHub rendered). Guard tests are named ``test_gN_*`` (N = 1..6); the bite-proof
+forms, run here on the ``stored`` bytes GitHub rendered). Guard tests are named ``test_gN_*`` (N = 1..7); the bite-proof
 record is ``bite_proofs/i2389_vet_slot_md_hidden.md``. Fake-runner units; no real gh, no network."""
 import inspect
 
@@ -203,7 +203,12 @@ def test_g4_bot_path_visibility_model_only_bot_on_sent_bytes(row):
     sent = row["sent"]
     marker_at, heading_at, slot_at = _bot_offsets(sent)
     scan = md_hidden.scan(sent)
-    visible = (vs._line_state(scan, marker_at) == V and vs._line_state(scan, slot_at) == V
+    # #2389 catch-up 41e75711: the marker line may now read HIDDEN (it is one whole comment) and still pass, when the same body with
+    # only that marker text made plain reads the line VISIBLE (hidden by itself); an UNSURE marker line, or one a region hides, does not
+    plain = md_hidden.scan(sent[:marker_at] + "marker" + sent[marker_at + len(MARKER):])
+    marker_state = vs._line_state(scan, marker_at)
+    marker_ok = marker_state == V or (marker_state == H and vs._line_state(plain, marker_at) == V)
+    visible = (marker_ok and vs._line_state(scan, slot_at) == V
                and {at: st for at, _t, st in scan.headings}.get(heading_at) == V)
     problem = vs._unrendered_slot(sent, marker_at, heading_at, slot_at)
     assert (problem is None) == visible, (_label(row), problem)
@@ -528,3 +533,88 @@ def test_u2028_owner_shell_blocks_a_fence_opener_after_u2028_opens_no_fence():
     assert vs.owner_command_blocks(body) == []
     control = vs.owner_command_blocks("text\n```bash\nmongosh prod\n```\n")
     assert [b["tool"] for b in control] == ["mongosh"]
+
+
+# --- G7: a marker line hidden only by itself (catch-up onto layer 1's 41e75711) ------------------------------------------
+# md_hidden (layer 1) reads a line that is one whole HTML comment HIDDEN, and every marker line is one. The marker line passes
+# when it is hidden by itself: the composed body with that one line made plain text reads the line VISIBLE. A marker inside a
+# comment or another hidden region still reads hidden in that re-scan, and an UNSURE marker line is not a HIDDEN one.
+
+def _marker_state(body):
+    return vs._line_state(md_hidden.scan(body), body.index(MARKER))
+
+
+@pytest.mark.parametrize("name", sorted(CONTROLS))
+def test_g7_marker_hidden_by_itself_a_whole_comment_marker_line_writes_ok_on_the_bot_path(name, tmp_path):
+    body = CONTROLS[name]
+    result = _evaluate(body)
+    assert result["ok"] is True, result
+    assert _marker_state(result["newBody"]) == H  # the composed marker line is hidden, by itself
+    fake = _fake(body)
+    assert _write(fake, tmp_path)["ok"] is True
+    assert len(fake.edit_calls()) == 1
+
+
+def test_g7_marker_hidden_by_itself_a_whole_comment_marker_line_writes_ok_on_the_builder_path(tmp_path):
+    result = _evaluate(BODY, receipt=RECEIPT)
+    assert result["ok"] is True, result
+    assert _marker_state(result["newBody"]) == H
+    fake = _fake(BODY, receipt=RECEIPT)
+    assert _write(fake, tmp_path)["ok"] is True
+    assert len(fake.edit_calls()) == 1
+
+
+# the marker inside a comment opened on an earlier line, its `-->` after the marker (the write replaces the old slot, so the
+# composed body keeps the comment open through the marker line)
+OPEN_COMMENT_BOT = BOT_BODY + "\n## Advisor vet\n<!--\n" + MARKER + "\n-->\n\nold slot text\n"
+OPEN_COMMENT_BUILDER = BODY.replace(MARKER + "\n", "<!--\n" + MARKER + "\n", 1) + "-->\n"  # the `-->` ends the body, past the slot
+# the marker inside a raw HTML block that hides text (`<pre>` holding a quoted opener, fixture pre_quoted_opener)
+PRE_BLOCK_BOT = PRE_QUOTED + BOT_MARKER_PRESENT
+PRE_BLOCK_BUILDER = BODY.replace("## Advisor vet\n", "<pre>\n\n`<!--`\n</pre>\n\n## Advisor vet\n", 1)
+# the marker line md_hidden reads UNSURE (an unclosed attribute quote in a tag)
+UNSURE_BOT = BOT_BODY + '\n<div title="\n' + BOT_MARKER_PRESENT
+UNSURE_BUILDER = DIV_TITLE_BODY
+_G7_REFUSED = {
+    "open-comment-bot": (OPEN_COMMENT_BOT, RECEIPT_NONE, "advisor-vet marker line reads hidden"),
+    "open-comment-builder": (OPEN_COMMENT_BUILDER, RECEIPT, "advisor-vet marker line reads hidden"),
+    "hidden-block-bot": (PRE_BLOCK_BOT, RECEIPT_NONE, "advisor-vet marker line reads hidden"),
+    "hidden-block-builder": (PRE_BLOCK_BUILDER, RECEIPT, "advisor-vet marker line reads hidden"),
+    "unsure-bot": (UNSURE_BOT, RECEIPT_NONE, "advisor-vet marker line reads unsure"),
+    "unsure-builder": (UNSURE_BUILDER, RECEIPT, "advisor-vet marker line reads unsure"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(_G7_REFUSED))
+def test_g7_marker_hidden_by_itself_a_marker_in_a_hidden_region_or_unsure_refuses_write_failed(name, tmp_path):
+    body, receipt, sentence = _G7_REFUSED[name]
+    result = _evaluate(body, receipt=receipt)
+    assert result["ok"] is False and result["reason"] == "write-failed", result
+    assert sentence in result["detail"], result
+    assert "would not render" in result["detail"], result
+    fake = _fake(body, receipt=receipt)
+    _refused(_write(fake, tmp_path), fake, "write-failed", sentence)
+
+
+def test_g7_marker_hidden_by_itself_a_hidden_marker_line_without_the_body_still_refuses():
+    rendering = md_hidden.Rendering([(0, V), (10, H), (20, V)], [(0, "Advisor vet", V)], [])
+    problem = vs._visibility_problem(rendering, 12, 20, 0)  # no composed body to re-scan
+    assert problem is not None and "advisor-vet marker line reads hidden" in problem
+
+
+@pytest.mark.parametrize("body", [None, 7, b"x", ["x"], "", "\n", "x"])
+@pytest.mark.parametrize("marker_at", [-1, 0, 3, 10 ** 6])
+def test_g7_marker_hidden_by_itself_the_rescan_never_raises_and_fails_closed(body, marker_at):
+    hidden = md_hidden.Rendering([(0, H)], [], [])
+    assert vs._marker_hidden_by_itself(hidden, body, marker_at) in (True, False)
+    if not isinstance(body, str) or marker_at < 0:
+        assert vs._marker_hidden_by_itself(hidden, body, marker_at) is False
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n", "\r"])
+def test_g7_marker_hidden_by_itself_the_rescan_keeps_the_line_start_under_every_line_ending(ending):
+    body = "intro" + ending + ending + MARKER + ending + "after" + ending
+    at = body.index(MARKER)
+    assert _marker_state(body) == H
+    assert vs._marker_hidden_by_itself(md_hidden.scan(body), body, at) is True
+    inside = "<!--" + ending + MARKER + ending + "-->" + ending
+    assert vs._marker_hidden_by_itself(md_hidden.scan(inside), inside, inside.index(MARKER)) is False

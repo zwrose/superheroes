@@ -46,7 +46,8 @@ def cut_items(source, ending="\n"):
 def test_g1_visible_split_u2028_does_not_make_a_fence_line():
     # str.splitlines would read ``` as its own line and open a fence that shows the comment under it
     source = "x ```\n<!-- c -->\n"
-    assert la._visible(source) == source
+    # #2389 catch-up 41e75711: md_hidden now reads the whole-comment line HIDDEN, so `_visible` blanks it (was kept); the first line is kept
+    assert la._visible(source) == source.replace("<!-- c -->", "")
     # the whole-line comment is dropped by the section reader and stops the item
     assert cut_items(source) == ["x ```"]
 
@@ -64,7 +65,9 @@ def test_g1_visible_split_u2028_does_not_make_a_marker_line():
 def test_g1_visible_split_every_other_str_splitlines_break_is_an_ordinary_character(char):
     source = "x" + char + "```\n<!-- c -->\n"
     out = la._visible(source)
-    assert out == source
+    # #2389 catch-up 41e75711: md_hidden now reads the whole-comment line HIDDEN, so `_visible` blanks it (was kept); the first line is kept
+    # whole, so a split on `char` would still show as a missing first line or a changed line count
+    assert out == source.replace("<!-- c -->", "")
     assert line_count(out) == line_count(source) == 2
     assert cut_items(source) == ["x" + char + "```"]
 
@@ -72,8 +75,9 @@ def test_g1_visible_split_every_other_str_splitlines_break_is_an_ordinary_charac
 @pytest.mark.parametrize("ending", EOLS)
 def test_g1_visible_split_comment_cut_is_the_same_under_every_line_ending(ending):
     source = eol("keep\n<!-- a\nhidden\n-->\nafter\n", ending)
-    # md_hidden reads `<!-- a` VISIBLE and the two lines inside the comment hidden: only those two are blanked
-    assert la._visible(source) == eol("keep\n<!-- a\n\n\nafter\n", ending)
+    # #2389 catch-up 41e75711: md_hidden now reads `<!-- a` HIDDEN as well as the two lines inside the comment: all three are blanked
+    # (was only the two inside)
+    assert la._visible(source) == eol("keep\n\n\n\nafter\n", ending)
     assert line_count(la._visible(source)) == line_count(source)
     # the item cut stops at the unclosed `<!--` (a cut runs to the item's end) and at the blanked lines; `after` is a paragraph of its own
     assert cut_items("keep\n<!-- a\nhidden\n-->\nafter\n", ending) == ["keep", "after"]
@@ -96,8 +100,10 @@ def test_g1_visible_split_a_line_cut_to_nothing_keeps_its_own_terminator(ending)
 def test_g1_visible_split_a_fence_opens_and_closes_under_every_line_ending(ending):
     source = eol("```\nshown\n```\n<!-- cut -->\nz\n", ending)
     # #2389 redesign: a fenced line is literal; the closed fence is one item `\`\`\` shown \`\`\``, and the whole-line comment after it stops the item
-    assert la._visible(source) == source
-    assert cut_items("```\nshown\n```\n<!-- cut -->\nz\n", ending) == ["``` shown ```"]
+    # #2389 catch-up 41e75711 (loosened, matches GFM: an HTML comment block interrupts the paragraph and the next line is its own shown block):
+    # md_hidden now reads the `<!-- cut -->` line HIDDEN, so `_visible` blanks it (was kept), and `z` is a block of its own, a second item
+    assert la._visible(source) == eol("```\nshown\n```\n\nz\n", ending)
+    assert cut_items("```\nshown\n```\n<!-- cut -->\nz\n", ending) == ["``` shown ```", "z"]
 
 
 # --- G2: _visible keeps nothing md_hidden does not read VISIBLE ------------------------------------------------

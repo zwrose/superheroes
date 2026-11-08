@@ -143,7 +143,9 @@ def test_g1_escaped_opener_github_hides_f1_so_the_check_reports_it_missing(name)
     ("a \\<!-- tail\n", "a"),
     ("a \\<? tail\n", "a"),
     ("a \\<!X tail\n", "a"),
-    ("a \\<![CDATA[ tail\n", "a"),
+    # #2389 catch-up 41e75711: md_hidden now reads this line UNSURE, so the leftover check blanks it whole and the line makes no item
+    # at all (was "a"): stricter, no text of the line counts
+    ("a \\<![CDATA[ tail\n", ""),
     ("a \\<!-- tail\nnext -->\nz\n", "a"),  # the lines after the cut are the item's, and are cut with it
     ("a \\<!-- tail", "a"),  # a last line with no terminator
     # #2389 V849-1: these three were "an escape that is not an opener" and kept whole; `<b`, `<!-` and `<! ` are entries
@@ -197,7 +199,9 @@ def test_g2_code_span_opener_github_hides_f1_so_the_check_reports_it_missing(nam
     ("a `<!--` tail\n", "a `"),
     ("a `<?` tail\n", "a `"),
     ("a `<!X` tail\n", "a `"),
-    ("a `<![` tail\n", "a `"),
+    # #2389 catch-up 41e75711: md_hidden now reads this line UNSURE (a backtick in possible link metadata in a block that holds raw HTML),
+    # so the leftover check blanks it whole and the line makes no item at all (was "a `"): stricter, no text of the line counts
+    ("a `<![` tail\n", ""),
     ("a `see <?x` tail\n", "a `see"),  # the opener is anywhere in the span's content
     ("a ``<!-- ` -->`` tail\n", "a ``"),  # a double-backtick span
     ("a `<!--` tail\nnext -->\nz\n", "a `"),  # the lines after the cut are the item's, and are cut with it
@@ -281,7 +285,9 @@ def test_g3_pi_declaration_class_oracle_text_github_hides_inside_the_opener_is_n
     # text is hidden within the line): the cut still runs and keeps the text before the opener
     ("keep <? hide x\n", "keep"),
     ("keep <!X hide\n", "keep"),
-    ("keep <![CDATA[ hide ]]\n", "keep"),
+    # #2389 catch-up 41e75711: md_hidden now reads this line UNSURE, so the leftover check blanks it whole (was "keep"): stricter,
+    # no text of the line counts
+    ("keep <![CDATA[ hide ]]\n", ""),
     ("keep <!DOCTYPE hide\n", "keep"),
     ("keep <?\n", "keep"),
     ("- list <?x hide", "list"),  # a last line with no terminator
@@ -300,13 +306,18 @@ def test_g3_pi_declaration_a_plain_comment_stops_the_item_at_the_unclosed_opener
     # the item; the two lines inside the comment are hidden and blanked, so they stop it too. The last line (a comment that hides text)
     # is blanked whole by md_hidden (#2389 catch-up 66130a25)
     source = "keep\n<!-- a\nhidden\n-->\nafter <!-- b --> c\n"
-    assert la._visible(source) == "keep\n<!-- a\n\n\n\n"
+    # #2389 catch-up 41e75711 (loosened, matches GFM: an HTML comment block interrupts the paragraph and the next line is its own shown block):
+    # md_hidden now reads the `<!-- a` line HIDDEN too, so it is blanked with the two lines under it (was kept)
+    assert la._visible(source) == "keep\n\n\n\n\n"
     assert cuts(HEAD + source) == ["keep"]
     # #2389 catch-up 66130a25: the same shape with an empty comment, which hides no text, so md_hidden reads the last line VISIBLE. The
-    # section reader finds the `-->` and drops the `<!-- a` line and the blanked lines under it: each is a stop point of the item `keep`
+    # blanked lines under `keep` are stop points of the item `keep`
     source = "keep\n<!-- a\nhidden\n-->\nafter <!----> c\n"
-    assert la._visible(source) == "keep\n<!-- a\n\n\nafter <!----> c\n"
-    assert cuts(HEAD + source) == ["keep"]
+    # #2389 catch-up 41e75711 (loosened, matches GFM: an HTML comment block interrupts the paragraph and the next line is its own shown block):
+    # `<!-- a` is blanked too (was kept), and `after <!----> c` is a block of its own, so it is a second item (its closed empty
+    # comment is dropped, the text on both sides kept: "after " and " c" joined)
+    assert la._visible(source) == "keep\n\n\n\nafter <!----> c\n"
+    assert cuts(HEAD + source) == ["keep", "after " + " c"]
 
 
 def test_g3_pi_declaration_br684_3_a_processing_instruction_line_is_not_an_acceptance():
@@ -926,16 +937,20 @@ def test_g17_fence_shape_br852_1_a_fenced_f1_after_a_separator_comment_is_accept
     # fence-shape guard that voided it is retired
     text = ("## What we're accepting\n\n- Example\n\n<!-- separator -->\n\n  ```\n## What we're accepting\n"
             "- F-1 The retry loop never backs off\n  ```\n")
-    assert f1_counted(text)
-    assert missing(text) == []
+    # #2389 catch-up 41e75711: md_hidden now reads the `<!-- separator -->` line HIDDEN, so it is blanked and its blank line is a stop
+    # point inside the `- Example` item that the fence line joins: F-1 under it is cut, so it is no longer counted and is missing
+    # (was counted and accepted). Stricter (an over-refusal for text GitHub shows as code, the check's disclosed direction)
+    assert not f1_counted(text)
+    assert missing(text) == GAP
 
 
 def test_g17_fence_shape_br852_1_f1_is_accepted_with_the_fence_guard_retired():
-    # #2389 redesign (loosened, BR853-5 ruling): the old answer was F-1 missing (a void body); the new answer is F-1 accepted.
-    # GitHub shows the fenced F-1 line as code, base 66130a25 reads it the same way, and the fence-shape guard that voided it is retired
+    # #2389 redesign (loosened, BR853-5 ruling): the old answer was F-1 missing (a void body); the new answer was F-1 accepted.
+    # #2389 catch-up 41e75711: md_hidden now reads the `<!-- separator -->` line HIDDEN, so it is blanked and stops the `- Example` item
+    # the fence line joins: F-1 under it is cut and reads missing again (was accepted). Stricter, never looser
     text = ("## What we're accepting\n\n- Example\n\n<!-- separator -->\n\n  ```\n## What we're accepting\n"
             "- F-1 The retry loop never backs off\n  ```\n")
-    assert missing(text) == []
+    assert missing(text) == GAP
 
 
 def test_g17_fence_shape_outside_comments_and_item_spans_read_the_one_walk():
@@ -1043,11 +1058,13 @@ def test_g20_stop_a_hidden_line_inside_the_item_stops_it():
 
 
 def test_g20_stop_a_dropped_line_inside_the_item_stops_it():
-    # BR853-2: the whole-line comment is read VISIBLE by md_hidden but the section reader drops it (kind "dropped"); the lazy line under
-    # it still belongs to the item, and the dropped line is a stop point, so the two halves are not joined
+    # BR853-2: the whole-line comment stops the item, so the two halves are not joined
     text = body("- F-1 The retry loop\n<!-- separator -->\nnever backs off\n")
-    assert "<!-- separator -->" in la._visible(text)
-    assert cuts(text) == ["F-1 The retry loop"]
+    # #2389 catch-up 41e75711 (loosened, matches GFM: an HTML comment block interrupts the paragraph and the next line is its own shown block):
+    # md_hidden now reads the `<!-- separator -->` line HIDDEN, so it is blanked (was kept, then dropped by the section reader); "never
+    # backs off" is a block of its own, a second item. The split title still reads missing.
+    assert "<!-- separator -->" not in la._visible(text)
+    assert cuts(text) == ["F-1 The retry loop", "never backs off"]
     assert missing(text) == GAP
 
 

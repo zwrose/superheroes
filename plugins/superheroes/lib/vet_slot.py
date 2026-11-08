@@ -471,17 +471,37 @@ def _compose_no_build_record(body, advisor_at, slot_text):
     return new_body
 
 
-def _visibility_problem(rendering, marker_at, slot_at, heading_at=None):
+_PLAIN_LINE = "marker"  # a plain text line: no "<", ">", backtick or "#"
+
+
+def _marker_hidden_by_itself(rendering, body, marker_at):
+    """True only when the ``HIDDEN`` line holding ``marker_at`` is hidden by its own text: ``body`` with that line made a
+    plain line (terminator kept) reads ``VISIBLE`` there. False for a non-str body, an unlocatable line; never raises."""
+    try:
+        starts = [at for at, _state in rendering.lines]
+        index = bisect.bisect_right(starts, marker_at) - 1
+        if not isinstance(body, str) or index < 0 or rendering.lines[index][1] != md_hidden.HIDDEN:
+            return False
+        start, end = starts[index], (starts + [len(body)])[index + 1]
+        plain = _PLAIN_LINE + body[start:end][len(_bare(body[start:end])):]
+        # G7a: a HIDDEN marker line passes only when the re-scan with that one line made plain reads VISIBLE at the same line start
+        return dict(md_hidden.scan(body[:start] + plain + body[end:]).lines).get(start) == md_hidden.VISIBLE
+    except Exception:
+        return False
+
+
+def _visibility_problem(rendering, marker_at, slot_at, heading_at=None, body=None):
     """Why the composed slot would not render, or None. The one visibility check of both write paths, on one
     ``md_hidden.scan`` (``rendering``): the line holding the advisor-vet marker (``marker_at``), the line holding the
     slot's first character (``slot_at``, the verdict line) and, when given, the appended ``## Advisor vet`` heading
-    (``heading_at``) must each read ``VISIBLE``. ``hidden`` and ``unsure`` are both a problem; the sentence says which."""
+    (``heading_at``) must each read ``VISIBLE``. ``hidden`` and ``unsure`` are both a problem; the sentence says which.
+    A ``hidden`` marker line passes when only its own text hides it (``_marker_hidden_by_itself`` of ``body``, if given)."""
     def why(state):
         return "the render could not be decided" if state == md_hidden.UNSURE else "GitHub hides it"
 
-    # axis: the marker line must read VISIBLE (hidden or unsure refuses), decided by md_hidden — see bite-proof record i2389_vet_slot_md_hidden.md
+    # axis: the marker line must read VISIBLE, or HIDDEN only by itself (a whole comment line); hidden by a region or unsure refuses, decided by md_hidden — see bite-proof record i2389_vet_slot_md_hidden.md (G7b)
     state = _line_state(rendering, marker_at)
-    if state != md_hidden.VISIBLE:
+    if state != md_hidden.VISIBLE and not (state == md_hidden.HIDDEN and _marker_hidden_by_itself(rendering, body, marker_at)):
         return "the advisor-vet marker line reads %s (%s), so the slot would not render" % (state, why(state))
     # axis: the verdict line (the slot's first line) must read VISIBLE (hidden or unsure refuses), decided by md_hidden — see bite-proof record i2389_vet_slot_md_hidden.md
     state = _line_state(rendering, slot_at)
@@ -499,7 +519,7 @@ def _visibility_problem(rendering, marker_at, slot_at, heading_at=None):
 def _unrendered_slot(new_body, marker_at, heading_at, slot_at):
     """Why the composed slot of the bot path would not render, or None: one ``md_hidden.scan`` of ``new_body``, read by
     ``_visibility_problem``. ``slot_at`` is the offset in ``new_body`` at which the slot text begins."""
-    return _visibility_problem(md_hidden.scan(new_body), marker_at, slot_at, heading_at)
+    return _visibility_problem(md_hidden.scan(new_body), marker_at, slot_at, heading_at, new_body)
 
 
 def analyze_body(body):
@@ -908,7 +928,7 @@ def evaluate(verb, body, comments, slot_text=None, advisor_login=None):
         return _refusal("write-failed", "composed body moved or shadowed slot markers")
     # the composed body is body[:a] + "\n" + slot + ...: the slot text begins at a + 1, known from the composition
     # axis: the builder path refuses write-failed unless the marker line and the slot's first line both read VISIBLE on md_hidden.scan (G5, BRIEF-1) — see bite-proof record i2389_vet_slot_md_hidden.md
-    problem = _visibility_problem(md_hidden.scan(new_body), new_advisor_at, a + 1)
+    problem = _visibility_problem(md_hidden.scan(new_body), new_advisor_at, a + 1, None, new_body)
     if problem:
         return _refusal("write-failed", problem)
     try:
