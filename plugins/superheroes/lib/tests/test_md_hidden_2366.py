@@ -1512,3 +1512,11 @@ def test_vet851_table_detection_matches_github():
         checked += 1
         assert _md_makes_table(body) == ("<table" in rendered), body
     assert checked >= 150, checked
+
+
+@pytest.mark.parametrize("sep", ["\f", "\v"], ids=["form-feed", "vertical-tab"])
+def test_link_title_after_form_feed_or_vertical_tab_reads_unsure(sep):
+    """Final returning review on 10ed80c6 ("Recognize form feed and vertical tab before link titles"): cmark-gfm accepts
+    either before an inline link's title, so ZQ1 shows only as the title attribute and its line must not read visible."""
+    body = "[](<https://example.com>" + sep + '"ZQ1")\n\n## ZQ2\n'
+    assert _line_state(body, "[](") == U
