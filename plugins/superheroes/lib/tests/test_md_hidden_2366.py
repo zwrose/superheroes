@@ -1378,3 +1378,11 @@ def test_image_description_skips_autolinks_and_needs_a_closed_cdata(body):
     description before it closes the brackets, and excludes only a complete CDATA section; ZQ1 shows only in the alt
     attribute on GitHub, so its line must not read visible."""
     assert _line_state(body, "ZQ1") != V
+
+
+def test_html_block_line_with_text_after_a_closed_comment_reads_unsure():
+    """Final returning review on 66130a25, round 3 (scoped finder and audits, "Preserve visible text after a closed
+    comment"): HTML ends a comment at its first closer, so ``ZQ1`` after it shows on GitHub; the line must not read
+    hidden. Checked against: GitHub's HTML parsing (control)."""
+    assert _line_state("<div>\n<!-- note --> ZQ1\n</div>\n", "<!-- note") == U
+    assert _line_state("<!-- a --> b -->\n\n## H\n", "<!-- a") == U

@@ -865,7 +865,9 @@ def _block_line_state(line):
     hidden = "".join(_BLOCK_HIDING.findall(line))
     if not re.sub(r"[-<>!?\[\]\s]", "", hidden):
         return VISIBLE
-    return HIDDEN if _BLOCK_HIDING.fullmatch(line.strip(_ASCII_WS)) else UNSURE
+    text = line.strip(_ASCII_WS)
+    first = _BLOCK_HIDING.match(text)  # HTML ends the construct at its first closer, not at a later one
+    return HIDDEN if first and first.end() == len(text) else UNSURE
 
 
 def _comment_line_state(line):
