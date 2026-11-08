@@ -389,10 +389,11 @@ def test_unsure_html_block_ending_inside_a_tag_at_the_end_of_the_body():
 def test_unsure_comment_state_paragraph_holding_a_lt_and_a_later_closer():
     body = "<div>\n<!-- a\n\nb <!-- c --> e\n\n## H\n"
     rendering = md.scan(body)
-    assert [state for _, state in rendering.lines] == [V, V, H, U, U, U]
+    # final review: the "<!-- a" line holds only the comment's text, which GitHub hides, so it reads hidden
+    assert [state for _, state in rendering.lines] == [V, H, H, U, U, U]
     assert rendering.unsure[0][0] == _off(body, 3)
     body = "<div>\n<!-- a\n\nb <i --!> e\n\n## H\n"
-    assert [state for _, state in md.scan(body).lines] == [V, V, H, U, U, U]
+    assert [state for _, state in md.scan(body).lines] == [V, H, H, U, U, U]
 
 
 def test_unsure_comment_state_inline_rule_needs_comment_state_and_a_lt_before_the_closer():
@@ -661,7 +662,7 @@ def test_guard_g8_table_row_reads_unsure():
 def test_guard_g9_comment_state_inline_closer_reads_unsure():
     body = "<div>\n<!-- a\n\nb <!-- c --> e\n\n## H\n"
     assert _state(body, "## H") == U
-    assert _state(body, "<!-- a") == V
+    assert _state(body, "<!-- a") == H  # final review: the line holds only hidden comment text
 
 
 def test_guard_g10_block_ending_inside_a_tag_reads_unsure():

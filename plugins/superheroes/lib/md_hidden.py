@@ -842,6 +842,20 @@ def _inline_constructs(text):
     return found
 
 
+# HTML's own reading: a comment to its first closer (or the line's end), a PI or declaration to its first ">"
+_BLOCK_HIDING = re.compile(r"<!--(?:>|->|.*?(?:-->|--!>|\Z))|<[?!][^>]*(?:>|\Z)", re.S)
+
+
+def _block_line_state(line):
+    """The state of an HTML-block line that starts in data: ``VISIBLE`` unless a construct hides text, then ``HIDDEN``
+    when no other text is left on the line (tags hold none), else ``UNSURE``."""
+    hidden = "".join(_BLOCK_HIDING.findall(line))
+    if not re.sub(r"[-<>!?\[\]\s]", "", hidden):
+        return VISIBLE
+    rest = re.sub(r"<[^>]*>", "", _BLOCK_HIDING.sub("", line))
+    return UNSURE if rest.strip(_ASCII_WS) else HIDDEN
+
+
 def _comment_line_state(line):
     """The state of a line that starts inside a comment: ``HIDDEN``, or ``UNSURE`` when it holds a closer (``-->`` or
     ``--!>``) with text after the first one, since GitHub shows that text (vet 846 F8)."""
@@ -982,6 +996,10 @@ def _scan(body):
             # unsure, never hidden: a > early in this line can end the tag or bogus comment, and the rest of the line shows
             unsure[(offsets[i], "line starts inside a tag or a bogus comment")] = None
         if i in html_line:
+            if state == _DATA:
+                # final review: an HTML-block line that starts in data and holds a comment, PI, CDATA or declaration
+                # hides that construct's text; text only there reads hidden, text on both sides reads unsure
+                raw[-1] = _block_line_state(html_line[i])
             state = _tokenize(state, html_line[i] + "\n")
             if i in html_last and state not in _OPEN_STATES:
                 at = offsets[i + 1] if i + 1 < len(texts) else len(body)
