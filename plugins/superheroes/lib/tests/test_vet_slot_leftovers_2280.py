@@ -312,7 +312,7 @@ def test_a_comment_opener_inside_a_code_span_is_shown_text(tmp_path):
 
 
 def cut_items(source):
-    """The cut item texts (before the claim guards) of ``source`` placed under the accepting heading."""
+    """The item texts (``""`` for an item that counts as nothing) of ``source`` placed under the accepting heading."""
     return la._cut_items("## What we're accepting\n\n" + source)[0]
 
 
@@ -320,13 +320,13 @@ def test_visible_blanks_hidden_lines_keeps_marker_lines_and_the_item_cut_stops_a
     # #2389 redesign: `_visible` only blanks lines md_hidden does not read VISIBLE, so the fenced `<!-- shown -->` stays in it; the item
     # cut keeps a fenced line literally and cuts it at its first entry `<` (a tilde line inside a raw <pre> block is not a fence)
     assert la._visible("```\n<!-- shown -->\n```\n") == "```\n<!-- shown -->\n```\n"
-    assert cut_items("```\n<!-- shown -->\n```\n") == ["```"]
+    assert cut_items("```\n<!-- shown -->\n```\n") == [""]  # #2389 vet 856: was ["```"]; an entry `<` on a fenced line makes the item count as nothing
     assert la._visible("<!-- superheroes:build-record -->\nx\n") == "<!-- superheroes:build-record -->\nx\n"
     # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
     # #2389 catch-up 66130a25: md_hidden now reads the first line ("a <!-- b", whose comment hides text) UNSURE, so it is blanked whole
     # and keeps only its terminator (was "a " + terminator); #2389 redesign: the unclosed comment on the last line is no longer cut by `_visible`, the item cut is
     assert la._visible("a <!-- b\nc\nd --> e\nf <!-- g") == "\n\n\nf <!-- g"
-    assert cut_items("a <!-- b\nc\nd --> e\nf <!-- g") == ["f"]
+    assert cut_items("a <!-- b\nc\nd --> e\nf <!-- g") == [""]  # #2389 vet 856: was ["f"]; the unclosed `<!--` is a cut, so the item counts as nothing
 
 
 # --- review round 3 fixes ---------------------------------------------------------------------------
@@ -349,7 +349,7 @@ def test_an_escaped_comment_opener_is_shown_text():
     # #2389 V849-1: an escaped entry `<` is cut from the backslash, so neither the backslash nor the opener stays (was "a \\<!--\n")
     # #2389 redesign: `_visible` keeps the line (it cuts nothing within a line); the item cut ends at the backslash
     assert la._visible("a \\<!-- b --> c\n") == "a \\<!-- b --> c\n"
-    assert cut_items("a \\<!-- b --> c\n") == ["a"]
+    assert cut_items("a \\<!-- b --> c\n") == [""]  # #2389 vet 856: was ["a"]; the escaped entry `<` is a cut, so the item counts as nothing
 
 
 def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
@@ -357,7 +357,7 @@ def test_a_double_backtick_span_holding_a_single_backtick_is_one_span():
     # #2389 review (test-role s1): the span is kept only up to its opener, so the text inside it after the opener never counts
     # #2389 redesign: `_visible` keeps the line; the item cut keeps the span up to its opener and cuts the rest of the item
     assert la._visible("x ``a ` <!-- b --> c`` y\n") == "x ``a ` <!-- b --> c`` y\n"
-    assert cut_items("x ``a ` <!-- b --> c`` y\n") == ["x ``a `"]
+    assert cut_items("x ``a ` <!-- b --> c`` y\n") == [""]  # #2389 vet 856: was ["x ``a `"]; the span holds an entry `<`, a cut, so the item counts as nothing
 
 
 def test_ready_write_checks_the_body_it_will_publish(tmp_path):

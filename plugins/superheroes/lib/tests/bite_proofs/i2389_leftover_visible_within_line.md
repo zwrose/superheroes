@@ -474,6 +474,8 @@ E   AssertionError: assert ['F-1 The ret...er backs off'] == ['F-1 The retry loo
 
 ### G21: the claim guards read the source lines of the item's span
 
+**Retired in vet 856 (below): the summed guards (a) the whole-claim count and (c) the sorted whole-text claims, with the whole-body void, are replaced by the per-item comparison (G23), because a sum across items lets a claim lost in one item cancel against the same claim made in another.** The source-span read this entry proves stays, and now feeds the per-item comparison.
+
 - **Guarded element / axis:** `_cut_items`, `blanked_lines, source_lines = md_fence.split_lines(blanked), md_fence.split_lines(body)` (`leftover_accepting.py:337`). Axis: the guards compare each cut item with the lines of its span as they stand before blanking, hidden and dropped lines included, so a claim on a hidden line of the item is seen as removed (BR853-4).
 - **Neutralization:** `md_fence.split_lines(body)` became `md_fence.split_lines(blanked)` (the span's source is read from the blanked body).
 - **Raw red** (`-k test_g21_`):
@@ -517,3 +519,117 @@ FAILED plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py::
 ### Elements in no class (WO-H)
 
 None. Unproven elements: none. The earlier entries G1 to G4, G10, G14 and G18 name line numbers of the code before WO-H and were not re-run here (the order named only the four entries above).
+
+## #2389 vet 856 (WO-J): an item where a cut fires counts as nothing (G22), claims are compared per item (G23)
+
+Guarded code: `plugins/superheroes/lib/leftover_accepting.py` (`_item_cut`, `_cut_items`). Base head `f570ccd9`. Each neutralization was one targeted Edit, undone by the
+exact inverse Edit before the next; no `git checkout`, `restore`, `reset`, `stash` or `sed`. Captures drop uv's one `UV_NATIVE_TLS` warning line; nothing was
+redacted; each is far under the 32 KiB ceiling. Command (worktree root), `-k` per entry:
+`timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py -q -p no:cacheprovider --tb=line -k test_gNN_`
+The restore receipts are Grep-tool reads of the restored lines.
+
+### G22: a cut anywhere in an item makes the item count as nothing
+
+- **Guarded element / axis:** `_item_cut`, the `if cut:` / `return ""` after `_scan_line` (`leftover_accepting.py:210-211`). Axis: an item where an entry `<` (plain, escaped or code-spanned) or an unclosed `<!--` fires reads nothing, never the words before the cut, so `f-1<span>-other</span>` (GitHub shows `f-1-other`) does not read as `f-1`, and a title word cut short does not read whole (V856-2).
+- **Neutralization:** `if cut:` / `return ""` / `parts.append(kept.strip())` became `parts.append(kept.strip())` / `if cut:` / `break` (the pre-change behaviour: the cut item keeps its prefix).
+- **Raw red** (`-k test_g22_`):
+
+```
+FFFFF                                                                    [100%]
+E   assert not True
+     +  where True = any(['f-1'])
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1161: assert not True
+E   assert not True
+     +  where True = any(['f-1'])
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1161: assert not True
+E   assert not True
+     +  where True = any(['f-1`'])
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1161: assert not True
+E   assert not True
+     +  where True = any(['f-1'])
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1161: assert not True
+E   assert not True
+     +  where True = any(['F-1 The retry loop never back'])
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1169: assert not True
+5 failed, 247 deselected in 2.33s
+```
+
+(the `cuts(...)` arguments, which print the whole PR body, are elided from these lines; the four id-glue forms and the title-glue form all fail)
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read of `if cut:` printed `210:            if cut:` / `211:                return ""`.
+- **Raw green:**
+
+```
+.....                                                                    [100%]
+5 passed, 247 deselected in 1.17s
+```
+
+### G22b: an entry `<` on a fenced line makes the item count as nothing
+
+- **Guarded element / axis:** `_item_cut`, the `if _TAG_ENTRY.search(line, start):` / `return ""` in the `fenced` branch (`leftover_accepting.py:204-205`). Axis: a fenced line holding an entry `<` makes the whole item read nothing (a distinct branch from G22; no `test_g22_` test reaches it, the G4 tests do).
+- **Neutralization:** the two lines became `opener = _TAG_ENTRY.search(line, start)` / `parts.append(line[start:opener.start() if opener else len(line)].strip())` / `if opener:` / `break` (the pre-change behaviour: the fenced line keeps the text before its `<`).
+- **Raw red** (`-k test_g4_fenced_line_opener_cuts`):
+
+```
+FFFFFFFF                                                                 [100%]
+E   AssertionError: assert '``` keep' == ''
+E   AssertionError: assert '``` keep' == ''
+E   AssertionError: assert '~~~ keep' == ''
+E   AssertionError: assert '``` keep' == ''
+E   AssertionError: assert '```' == ''
+E   AssertionError: assert '``` keep' == ''
+E   AssertionError: assert '``` keep' == ''
+E   AssertionError: assert '~~~ plain' == ''
+8 failed, 244 deselected in 0.61s
+```
+
+(the per-failure `+ ...` and path lines are elided; all eight fenced-opener rows fail)
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read of `_TAG_ENTRY.search(line, start)` printed `204:            if _TAG_ENTRY.search(line, start):` / `205:                return ""` / `206:            parts.append(line[start:].strip())`.
+- **Raw green** (`-k test_g4_fenced_line_opener_cuts`):
+
+```
+........                                                                 [100%]
+8 passed, 244 deselected in 0.46s
+```
+
+### G23: claims are compared per item
+
+- **Guarded element / axis:** `_cut_items`, `return [cut if sorted(FIXED_ABOVE_RE.findall(cut)) == sorted(FIXED_ABOVE_RE.findall(source)) else "" for cut, source in zip(cuts, sources)], False` (`leftover_accepting.py:350-351`). Axis: an item whose whole claims differ from its own source span's reads nothing, and claims are never summed across items, so equal claims in two items cannot cancel (V856-1).
+- **Neutralization:** `cut if sorted(...) == sorted(...) else ""` became `cut if True or sorted(...) == sorted(...) else ""` (the comparison never fires).
+- **Raw red** (`-k test_g23_`):
+
+```
+..FF                                                                     [100%]
+E   assert not True
+     +  where True = any(<generator object test_g23_per_item_claims_equal_claims_cancel_with_no_cut_in_the_item_refuse.<locals>.<genexpr> at 0x7fd6a3e50e10>)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1202: assert not True
+E   assert not True
+     +  where True = any(<generator object test_g23_per_item_claims_equal_claims_cancel_with_no_cut_in_the_item_refuse.<locals>.<genexpr> at 0x7fd6a3e53100>)
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py:1202: assert not True
+FAILED plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py::test_g23_per_item_claims_equal_claims_cancel_with_no_cut_in_the_item_refuse[claim_item_first]
+FAILED plugins/superheroes/lib/tests/test_leftover_visible_within_line_2389.py::test_g23_per_item_claims_equal_claims_cancel_with_no_cut_in_the_item_refuse[hidden_item_first]
+2 failed, 2 passed, 248 deselected in 1.02s
+```
+
+(Session 9's two bodies, `test_g23_per_item_claims_session_9_claim_cancel_bodies_refuse`, stay green here: their `<b>` item is also blanked by G22, so they are not the bite for G23. The two bodies where the claim is lost to a hidden line, with no entry `<` in the item, are.)
+- **Restore:** the exact inverse Edit. **Restore receipt:** a Grep read of `return [cut if` printed `350:    return [cut if sorted(FIXED_ABOVE_RE.findall(cut)) == sorted(FIXED_ABOVE_RE.findall(source)) else ""`.
+- **Raw green:**
+
+```
+....                                                                     [100%]
+4 passed, 248 deselected in 0.48s
+```
+
+### Session 9's break-it test fails without the change
+
+`test_review_684_claim_relocation.py` with G22 and G23 neutralized together (both Edits above applied, then both inverse Edits):
+
+```
+F                                                                        [100%]
+E   Failed: DID NOT RAISE _Refusal
+/home/user/sh-2389/plugins/superheroes/lib/tests/test_review_684_claim_relocation.py:23: Failed: DID NOT RAISE _Refusal
+1 failed in 0.26s
+```
+
+### Elements in no class (WO-J)
+
+None. Unproven elements: none. The G22 neutralization covers the `text`-line cut (`_scan_line`'s cuts: plain, escaped, code-spanned entry `<`, unclosed `<!--`, all reached through `if cut:`); the fenced branch is G22b.

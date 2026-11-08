@@ -20,9 +20,12 @@ carries ``fixed-above #<PR> <7-40 hex commit>`` resolves the leftovers it names 
 
 What counts as text (#2389, the segment-first model): the section and its items are read once, from the body with the
 lines ``md_hidden`` does not read VISIBLE blanked (``_blanked``), by the one reader ``pr_sheet.accepting_item_spans``. Only
-then is each item cut, to the item's end (``_item_cut``), so a cut can never move structure or join words GitHub
-separates. Two claim guards compare the cut items with the source text of the same spans (``_accepting_items``); only
-whole ``fixed-above #<PR> <commit>`` claims are compared, never a bare mention of the word.
+then is each item read (``_item_cut``), so a cut can never move structure or join words GitHub separates. An item where a
+within-line cut fires (an entry ``<``, an unclosed ``<!--``) counts as nothing, never the words before the cut (#2389 vet
+856); a hidden or dropped line only ends the item at that line. Claims are compared per item (``_cut_items``): an item
+whose whole ``fixed-above #<PR> <commit>`` claims differ from its own source span's counts as nothing, never summed across
+items, and a bare mention of the word is never compared. Known over-refusal (not modelled beyond V852-4): an item holding a
+``<`` that can start markup anywhere, or continued by a tag line such as ``</div>``, counts as nothing.
 
 Two callers, no second copy of the rule: ``vet_slot.py handback --pr`` (the builder's check before the ready mark) and
 ``vet_slot.py write`` (the advisor's slot write, for a READY verdict only). ``missing`` takes the latest record exactly as
@@ -131,11 +134,12 @@ def _visible(body):
 
 
 def _scan_line(line, start):
-    """``(kept, cut)``: the text of one ``text`` line of an item from ``start`` on, and whether a cut ended the scan on it (a
-    cut runs to the item's end, so the caller stops the item). Within-line rules: an escaped entry ``<`` cuts from the
-    backslash; any other escaped character is kept; a code span is kept, unless its content holds an entry ``<`` (kept up to
-    that ``<``, then cut); a ``<!-- ... -->`` closed on the line is dropped and the scan goes on; an unclosed ``<!--`` cuts;
-    any other entry ``<`` (``_TAG_ENTRY``) cuts."""
+    """``(kept, cut)``: the text of one ``text`` line of an item from ``start`` on, and whether a cut fired on it. A cut makes
+    the whole item count as nothing (``_item_cut`` reads ``kept`` only when ``cut`` is false), because the words before an
+    entry ``<`` may be joined by GitHub to hidden or shown text after it (#2389 vet 856). Within-line rules: an escaped entry
+    ``<`` cuts; any other escaped character is kept; a code span is kept, unless its content holds an entry ``<`` (cut); a
+    ``<!-- ... -->`` closed on the line is dropped and the scan goes on (not a cut); an unclosed ``<!--`` cuts; any other
+    entry ``<`` (``_TAG_ENTRY``) cuts."""
     kept, i = [], start
     while i < len(line):
         if line[i] == "\\" and i + 1 < len(line):
@@ -172,18 +176,20 @@ def _scan_line(line, start):
 
 
 def _item_cut(lines, span, shown):
-    """The text of one item, cut. ``lines`` are the Markdown lines (terminators kept) of the blanked body, ``span`` one entry
-    of ``pr_sheet.accepting_item_spans`` of it, ``shown`` the per-line flags of ``_blanked``. The span is walked in order:
+    """The text of one item, or ``""`` when the item counts as nothing. ``lines`` are the Markdown lines (terminators kept) of
+    the blanked body, ``span`` one entry of ``pr_sheet.accepting_item_spans`` of it, ``shown`` the per-line flags of
+    ``_blanked``. The span is walked in order:
 
-    * A line ``md_hidden`` does not read VISIBLE, or a ``dropped`` line, stops the item: everything from it to the item's end
-      is cut. A ``blank`` line is skipped, as the reader skips it.
-    * A ``text`` line is scanned by ``_scan_line``; whatever cuts on it cuts to the item's end, never only to the line's
-      end, so no later line of the item can join the kept text.
-    * A ``fenced`` line is kept literally (GitHub shows a fence's content as it is; no comment is dropped on it), unless it
-      holds an entry ``<``, which cuts there to the item's end.
+    * A line ``md_hidden`` does not read VISIBLE, or a ``dropped`` line, is a stop point: the item ends at that line and keeps
+      the text of the lines before it. It is not a cut. A ``blank`` line is skipped, as the reader skips it.
+    * A ``text`` line is scanned by ``_scan_line``. A closed inline ``<!-- ... -->`` comment is dropped and is not a cut.
+    * A ``fenced`` line is kept literally (GitHub shows a fence's content as it is; no comment is dropped on it).
 
-    The first line of a list item starts after its marker. The result is the kept parts, stripped and joined with one space,
-    as ``pr_sheet.accepting_listed`` joins an item. It only removes text."""
+    A cut anywhere in the walked lines makes the whole item count as nothing (``""``), never the words before the cut:
+    an entry ``<`` on a ``text`` line (plain, escaped or inside a code span), an unclosed ``<!--``, or an entry ``<`` on a
+    ``fenced`` line. The words before such a ``<`` may be joined by GitHub to what follows (``f-1<span>-other</span>`` shows
+    ``f-1-other``; a title word cut short reads whole) (#2389 vet 856). Otherwise the result is the kept parts, stripped and
+    joined with one space, as ``pr_sheet.accepting_listed`` joins an item. It only removes text."""
     parts = []
     for k, (n, kind) in enumerate(span):
         # axis: a line md_hidden does not read VISIBLE, or one the reader drops (a whole-line comment, a line inside one), stops the item — see bite-proof record i2389_leftover_visible_within_line.md
@@ -194,16 +200,16 @@ def _item_cut(lines, span, shown):
         line = lines[n][:len(lines[n]) - len(_terminator(lines[n]))]
         start = pr_sheet.item_text_start(line) if k == 0 else 0
         if kind == "fenced":
-            # axis: a fenced line is literal text; an entry `<` on it cuts to the item's end, and no comment is dropped on it — see bite-proof record i2389_leftover_visible_within_line.md
-            opener = _TAG_ENTRY.search(line, start)
-            parts.append(line[start:opener.start() if opener else len(line)].strip())
-            if opener:
-                break
+            # axis: a fenced line is literal text, no comment is dropped on it; an entry `<` on it makes the whole item count as nothing — see bite-proof record i2389_leftover_visible_within_line.md
+            if _TAG_ENTRY.search(line, start):
+                return ""
+            parts.append(line[start:].strip())
         else:
             kept, cut = _scan_line(line, start)
-            parts.append(kept.strip())
+            # axis: a cut anywhere in the item (entry `<` plain, escaped or code-spanned, unclosed `<!--`) makes the whole item count as nothing, never the words before the cut (#2389 vet 856, G22) — see bite-proof record i2389_leftover_visible_within_line.md
             if cut:
-                break
+                return ""
+            parts.append(kept.strip())
     return " ".join(part for part in parts if part)
 
 
@@ -302,35 +308,37 @@ def _collisions(leftovers):
 
 
 def _accepting_items(body):
-    """The acceptances the body lists under What we're accepting, each cut to the text GitHub shows (#2389): ``[]`` for a
-    body that is not a str, one with no acceptance, or a void one. Read once, cut per item:
+    """The acceptances the body lists under What we're accepting, each reduced to the text GitHub shows (#2389): ``[]`` for a
+    body that is not a str or has no acceptance. Read once, reduced per item:
 
     1. The body is blanked (``_blanked``): a line ``md_hidden`` does not read VISIBLE keeps only its terminator.
     2. The section and its items are read once, from the blanked body, by ``pr_sheet.accepting_item_spans``.
-    3. Each item is cut by ``_item_cut`` to the item's end: a hidden or dropped line stops it, a fenced line is literal, and
-       a cut inside a line cuts the rest of the item, so a cut can neither move structure nor join words GitHub separates.
-    4. Two claim guards compare the cut items with the source text of the same spans (the lines before blanking, hidden and
-       dropped ones included). (a) Removal: fewer whole ``FIXED_ABOVE_RE`` claims in the cut
-       items than in the source spans voids the body. (c) Whole-text claims: the sorted ``FIXED_ABOVE_RE`` claims of the
-       cut item texts differing from those of the source span texts voids the body (a claim removed, joined or changed).
-       A void body accepts nothing, so every leftover reads missing. Only whole claims are compared: a bare mention of
-       ``fixed-above`` that is not a claim never voids a body, cut or not. A claim wrapped across lines is one whole match
-       in the source span (an item's lines are joined before the regex runs), so a cut that removes or truncates it is
-       seen by (a) and (c).
-    5. The None, N/A, NA and Nothing items are no acceptance (``pr_sheet.acceptance_texts``).
+    3. Each item is read by ``_item_cut``: a hidden or dropped line is a stop point that ends the item at that line (the
+       item keeps the lines before it); a fenced line is literal; a closed inline comment is dropped; and a cut anywhere in
+       the item (an entry ``<`` on a text line, plain, escaped or code-spanned, an unclosed ``<!--``, an entry ``<`` on a
+       fenced line) makes the whole item count as nothing, never the words before the cut (#2389 vet 856).
+    4. Claims are compared per item (``_cut_items``): the sorted ``FIXED_ABOVE_RE`` claims of an item's text differing from
+       those of its own source span (the lines before blanking, hidden and dropped ones included) make that item count as
+       nothing (a claim removed, joined or changed). Claims are never summed across items, so equal claims in two items
+       cannot cancel. Only whole claims are compared: a bare mention of ``fixed-above`` that is not a claim never matters. A
+       claim wrapped across lines is one whole match in the source span (an item's lines are joined before the regex runs).
+       The body-wide void is retired: one item that counts as nothing leaves the other items counting.
+    5. The empty items, and the None, N/A, NA and Nothing items, are no acceptance (``pr_sheet.acceptance_texts``).
 
     Not modelled: Markdown link and image titles, and image alt text, count as text, though GitHub shows them only as
-    attributes (V852-4, disclosed). Known over-refusal: text after an inline tag, an autolink or a ``<`` + letter in an item
-    is cut to the item's end, though GitHub would show it.
+    attributes (V852-4, disclosed). Known over-refusal: an item holding a ``<`` that can start markup anywhere in it (an
+    inline tag, an autolink, a ``<`` + letter, ``!``, ``?`` or ``/``, plain, escaped or code-spanned), or continued by a tag
+    line such as ``</div>``, counts as nothing, though GitHub would show its words.
 
-    Every change only removes text, or voids. Never raises on a str."""
-    items, void = _cut_items(body)
-    return [] if void else pr_sheet.acceptance_texts(items)
+    Every change only removes text, or makes an item count as nothing. Never raises on a str."""
+    return pr_sheet.acceptance_texts(_cut_items(body)[0])
 
 
 def _cut_items(body):
-    """``(items, void)``: the cut text of every item of the section (``_accepting_items`` steps 1 to 3, before the None and
-    N/A filter), and whether a claim guard (step 4) voids the body. ``([], False)`` for anything that is not a str."""
+    """``(items, void)``: the text of every item of the section (``_accepting_items`` steps 1 to 4, before the None and N/A
+    filter; ``""`` for an item that counts as nothing), and ``void``, which is always ``False`` (kept so the tests read the
+    same shape: the body-wide void is retired, and ``_accepting_items`` ignores it). ``([], False)`` for anything that is not
+    a str."""
     if not isinstance(body, str):
         return [], False
     blanked, shown = _blanked(body)
@@ -338,14 +346,9 @@ def _cut_items(body):
     blanked_lines, source_lines = md_fence.split_lines(blanked), md_fence.split_lines(body)
     cuts = [_item_cut(blanked_lines, span, shown) for span in spans]
     sources = [_span_source(source_lines, span) for span in spans]
-    # axis: a whole ``fixed-above`` claim the cuts removed (fewer whole claims, never bare mentions of the word) voids the body, so a claim needing stack verification is never dropped while its acceptance counts — see bite-proof record i2389_leftover_visible_within_line.md
-    if sum(len(FIXED_ABOVE_RE.findall(t)) for t in cuts) < sum(len(FIXED_ABOVE_RE.findall(t)) for t in sources):
-        return cuts, True
-    # axis: whole-text claims: the sorted whole claims of the cut items differing from those of the source spans (one removed, joined from fragments, or changed) voids the body — see bite-proof record i2389_leftover_visible_within_line.md
-    if (sorted(claim for t in cuts for claim in FIXED_ABOVE_RE.findall(t))
-            != sorted(claim for t in sources for claim in FIXED_ABOVE_RE.findall(t))):
-        return cuts, True
-    return cuts, False
+    # axis: claims are compared per item, never summed across items (#2389 vet 856, G23): an item whose cut text holds other whole claims than its own source span (one removed, joined from fragments, or changed) counts as nothing, so equal claims in two items cannot cancel — see bite-proof record i2389_leftover_visible_within_line.md
+    return [cut if sorted(FIXED_ABOVE_RE.findall(cut)) == sorted(FIXED_ABOVE_RE.findall(source)) else ""
+            for cut, source in zip(cuts, sources)], False
 
 
 FIXED_ABOVE_RE = re.compile(

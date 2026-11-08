@@ -34,7 +34,7 @@ def line_count(text):
 
 
 def cut_items(source, ending="\n"):
-    """The cut item texts (before the claim guards) of ``source`` placed under the accepting heading."""
+    """The item texts (``""`` for an item that counts as nothing) of ``source`` placed under the accepting heading."""
     return la._cut_items(eol(HEAD + source, ending))[0]
 
 
@@ -93,7 +93,7 @@ def test_g1_visible_split_a_line_cut_to_nothing_keeps_its_own_terminator(ending)
     # #2389 redesign: the third line is no longer cut by `_visible`; the item cut of it is "last"
     assert out == eol("\n\nlast <!-- y", ending)
     assert line_count(out) == line_count(source)
-    assert cut_items(source) == ["last"]
+    assert cut_items(source) == [""]  # #2389 vet 856: was ["last"]; the unclosed `<!--` is a cut, so the item counts as nothing
 
 
 @pytest.mark.parametrize("ending", EOLS)
