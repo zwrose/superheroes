@@ -152,8 +152,13 @@ def test_e5_builder_text_after_a_lone_cr_or_u2028_on_the_marker_line_refuses(end
     line ended by a lone CR or U+2028 holds builder text before the next newline; the write would replace it, so the
     check reads it, and refuses, with nothing pushed."""
     body = HEAD[:-1] + ending + "Builder note: keep this.\n" + VERDICT + "\n" + TAIL
-    fake = assert_refused_both_ways("", tmp_path, "slot-span-builder-text", "Builder note: keep this.", "sign (a)",
-                                    body=body)
+    # #2389: the marker finder reads Markdown lines, so a U+2028 after the marker leaves no standalone marker; the write still refuses with no edit
+    if ending == "\r":
+        fake = assert_refused_both_ways("", tmp_path, "slot-span-builder-text", "Builder note: keep this.", "sign (a)",
+                                        body=body)
+    else:
+        fake = assert_refused_both_ways("", tmp_path, "markers-invalid", "advisor-vet marker appears 0 times",
+                                        body=body)
     assert fake.calls == [list(VIEW)]
     assert fake.bodies == [body]
 

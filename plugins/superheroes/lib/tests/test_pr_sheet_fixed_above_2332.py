@@ -197,12 +197,24 @@ def test_e5_a_carried_sheet_cannot_move_an_earlier_decided_for_you_entry_to_fixe
                for p in caught.value.problems), caught.value.problems
 
 
-def test_a_fixed_above_bullet_with_a_multiline_comment_keeps_its_automatic_accounting():
-    # Bites on: matching the assigned acceptance to its bullet by exact text, which a multiline comment inside the bullet
-    # breaks (cutting the comment before or after the lines are joined leaves one space or two).
-    # Axis: the bullet the whole-body assignment gave a valid claim is accounted by itself whatever comment it carries.
+def test_a_fixed_above_bullet_whose_claim_follows_a_multiline_comment_close_is_no_longer_auto_accounted():
+    # #2389: md_hidden (layer 1, vet 846 F8) reads a line that starts inside a comment and closes it mid-line as unsure, so the leftover check blanks the whole line
+    # Bites on: a fixed-above claim after a multiline comment's close being counted as shown text; the line is blanked, the claim is
+    # removed, the body accepts nothing, and the sheet refuses (fail closed).
+    # Axis: the claim the leftover check cannot read is never auto-accounted; the sheet refuses naming the acceptance as not accounted for.
     bodies = {10: ACCEPTING + f"- f-2 {TITLE} <!-- a note\n  that wraps --> — fixed-above #11 {COMMIT}: the layer above removes it.\n",
               11: NONE_BODY}
-    sheet = make(stack_records(), stack_input(), bodies)
-    assert f"#10: {TITLE} (fixed above in #11 at {COMMIT})" in sheet["prSheet"]["whatChanged"]["caught"]
-    assert sheet["cards"] == [] and sheet["prSheet"].get("nothingListed") is True
+    problems = refused(stack_records(), stack_input(), bodies)
+    assert any("is not accounted for" in p for p in problems), problems
+
+
+def test_a_fixed_above_bullet_with_a_one_line_comment_that_hides_text_is_refused_as_not_accounted_for():
+    # Bites on: matching the assigned acceptance to its bullet by exact text, which a comment inside the bullet breaks.
+    # Axis: the bullet the whole-body assignment gave a valid claim is accounted by itself when its comment opens and closes on one line.
+    # #2389 catch-up 66130a25 (over-refusal, disclosed): GitHub shows this bullet, but md_hidden now reads a line where an inline comment
+    # hides text UNSURE and the leftover check blanks it whole, so the claim is removed, the body accepts nothing, and the sheet refuses
+    # (was: automatic accounting in "caught", no cards). It fails closed; a refusal, never a pass.
+    bodies = {10: ACCEPTING + f"- f-2 {TITLE} <!-- a note --> — fixed-above #11 {COMMIT}: the layer above removes it.\n",
+              11: NONE_BODY}
+    problems = refused(stack_records(), stack_input(), bodies)
+    assert any("is not accounted for" in p for p in problems), problems

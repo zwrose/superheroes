@@ -202,7 +202,8 @@ above your verdict line, any other HTML comment. What you do: move that text abo
 section), or ask the builder to, then write again. The known limit: plain builder prose with no
 heading, added under your existing verdict, still reads as yours and is replaced, so comparing the
 slot with your latest receipt (the check just below) stays the backstop. On a builder PR your slot
-text opens with the verdict line and carries no heading, or the write refuses `write-failed`.
+text opens with the verdict line and carries no heading, or the write refuses `write-failed`. The write also
+refuses `write-failed` when the marker or the slot's first line would render hidden (or the parse cannot be sure).
 
 **Check the slot whenever you next read the PR's body** — a re-vet, a re-review, or the read before
 handing it back, not only a formal re-vet. Compare its text against your **most recent** vet receipt

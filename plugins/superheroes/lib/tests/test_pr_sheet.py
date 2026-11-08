@@ -3301,3 +3301,15 @@ def test_pr_body_on_the_index_command_is_a_parser_error(tmp_path, capsys):
 def test_a_continuation_line_fence_closes_at_the_list_items_content_column():
     body = "Intro\n\n1. Example:\n   ```\n    code\n    ```\n\n## What we're accepting\n\n- A breaking change\n"
     assert pr_sheet.accepting_listed(body) == ["A breaking change"]
+
+
+# Bites on: a fence closed by a run of the other fence character (CommonMark 4.5: the closing fence uses the opening fence's character),
+# so a heading and an acceptance sample inside the fence read as the live section. Vet 853 V853-3, receipt
+# https://github.com/zwrose/superheroes/pull/2391#issuecomment-6717053345.
+@pytest.mark.parametrize("opener, wrong", [("```", "~~~"), ("~~~", "```")], ids=["backtick_fence_tilde_run", "tilde_fence_backtick_run"])
+def test_a_run_of_the_other_fence_character_does_not_close_a_fence(opener, wrong):
+    sample = "- F-1 The retry loop never backs off\n"
+    # the wrong-character run leaves the fence open, so the heading and the F-1 line after it stay inside the fence: no live section
+    assert pr_sheet.accepting_listed("%s\n%s\n## What we're accepting\n%s%s\n" % (opener, wrong, sample, opener)) == []
+    # control: the right run closes it, the heading is live and the F-1 line is its acceptance
+    assert pr_sheet.accepting_listed("%s\n%s\n## What we're accepting\n%s" % (opener, opener, sample)) == ["F-1 The retry loop never backs off"]

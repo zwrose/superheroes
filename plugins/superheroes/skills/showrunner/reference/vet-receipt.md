@@ -522,11 +522,14 @@ python3 -B "$ROOT_DIR/lib/vet_slot.py" write --pr <n> --repo <owner/name> --slot
 
 The command reads the body and the latest vet receipt and checks the read, a non-empty body that
 still holds the builder's owner half (a live `What's changing, and why` heading above the
-`advisor-vet` marker), both the `advisor-vet` and `build-record` markers, the build record's
+`advisor-vet` marker: live means GitHub renders it, decided by a CommonMark parse of the body in
+`lib/md_hidden.py`, and where the parse cannot be sure the write refuses `body-emptied`), both the
+`advisor-vet` and `build-record` markers, the build record's
 followups marker, and the receipt's dispositions marker. It re-reads the body before the push,
 writes only between the two slot markers, and reads the result back. A refusal names its reason
 (for example `body-emptied` (the body is empty or lost the builder's owner half: restore it from
-the PR's edit history, never re-stamp into it),
+the PR's edit history, never re-stamp into it; the one exception is a detail saying the parse could
+not decide the render, where you move the text by hand instead of restoring),
 `followup-undispositioned`, `disposition-unknown`, `none-over-list`, `markers-invalid`,
 `slot-span-foreign-content` (another `superheroes:` marker, such as the DoD table, sits in the slot
 span and the write would delete it), `slot-span-builder-text` (builder text sits in the slot span:
