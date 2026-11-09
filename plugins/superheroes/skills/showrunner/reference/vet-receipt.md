@@ -5,6 +5,7 @@
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
 - [The review record checks](#the-review-record-checks)
 - [A handback with open findings](#a-handback-with-open-findings)
+- [Recording an owner acceptance — the advisor writes it](#recording-an-owner-acceptance--the-advisor-writes-it)
 - [The outside list](#the-outside-list)
 - [The claims check](#the-claims-check)
 - [Project vet checks](#project-vet-checks)
@@ -216,6 +217,7 @@ are never holding the inventory in working memory.
 | the review record carries `commandRefusals`, or the build record's dispatch provenance lists a refusal | a **refusals line**: each refusal was read, and any refusal followed by the same act in another form, as the stop rule defines that, is named as a **finding**, without listing the forms. The rule's one home is `lib/command_refusals.py` |
 | the `vet-checks` verb reports `declared: true`, or any non-null `reason` | one receipt line per declared check, and a finding per malformed entry or unreadable calibration — see [Project vet checks](#project-vet-checks) |
 | the review record shows a finding still **open at handback** (the review stopped at its round cap, or handed back as it does at the cap) | the **handback with open findings** — the craft list and the cap choices, as [A handback with open findings](#a-handback-with-open-findings) says |
+| you wrote PR-body lines recording an owner acceptance, or applied a builder's posted body correction | the **advisor-applied body lines** field, as [Recording an owner acceptance — the advisor writes it](#recording-an-owner-acceptance--the-advisor-writes-it) says |
 | the review record carries `outsideThisPR` | the **outside-list row** — every hit sorted into a proposed follow-up filing or a dismissal with its reason, as [The outside list](#the-outside-list) says |
 | the PR body claims tests ran or passed, carries a definition-of-done table, or claims the verify command passed | the **claims check** — each such claim listed with holds or does not hold and its evidence, as [The claims check](#the-claims-check) says |
 
@@ -370,6 +372,21 @@ the receipt is edited in place: a later vet's choice for the same finding, such 
 an extra audit round that did not settle it, is a new line in that vet's receipt, carrying that
 vet's ordinal. A receipt that records `leftover` for a Critical is a defect in the receipt. A vet
 with no open finding that has a real owner consequence writes no field.
+
+## Recording an owner acceptance — the advisor writes it
+
+When a handback rests on the owner's acceptance of something the builder could not finish (an
+uncertified review, a waived check, a park the owner lifted by their word), **you write the PR-body
+lines that record that acceptance, and you mark the PR ready.** Never order the builder to write them
+or to mark it ready: a builder's permission check judges the edit from its text alone and refuses it
+as merging without review, so the order parks. Each line names the owner's words and links the
+record of the ruling. Any other body correction the builder owes, it posts as text on the issue, and
+you apply it word for word, changing nothing. This is the one exception to never editing the
+builder's prose outside the slot.
+
+**The receipt names it.** Under one field, `**Advisor-applied body lines.**`, list each line you
+wrote with the ruling it records, and each builder correction you applied with a link to the
+comment that carried it. A vet with no such line writes no field.
 
 ## The outside list
 
@@ -568,7 +585,7 @@ it:
   reminder comment beneath it; you write **beneath the marker**, and your write **replaces the
   reminder**. The slot is **append-only and yours**: you edit your own prior text in place, never the
   builder's prose — with exactly one exception, **the reminder**, which is the sole piece of
-  builder-emitted text you are expected to remove, and which you **must** delete once your verdict is
+  builder-emitted text you are expected to remove inside the slot (outside it, see [Recording an owner acceptance — the advisor writes it](#recording-an-owner-acceptance--the-advisor-writes-it)), and which you **must** delete once your verdict is
   there (a verdict sitting beside a standing reminder makes the signal read "owner-half write still
   owed" when it is not). **What the reminder detects is the hidden case:** a body rewrite that
   **re-creates the heading but drops your text** leaves the slot looking present and saying nothing

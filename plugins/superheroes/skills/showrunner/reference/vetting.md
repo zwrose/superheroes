@@ -193,7 +193,9 @@ verdict names the findings the review left for the owner.
 
 **The reminder is the one builder text you remove.** It is not an exception to "never the
 builder's prose". If you find your verdict and the reminder both present, the verdict wins: delete
-the reminder on that read.
+the reminder on that read. The one exception, outside the slot, is the body lines recording an owner
+acceptance (`skills/showrunner/reference/vet-receipt.md` § Recording an owner acceptance — the
+advisor writes it).
 
 `vet_slot.py write` refuses `slot-span-builder-text`, writing nothing, when the slot span holds
 anything besides the builder's reminder and your own earlier verdict: a builder section, prose
