@@ -462,6 +462,34 @@ def test_row8_a_failing_gh_read_in_a_tick_records_builder_note_unavailable(repo,
     assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
 
 
+def test_a_terminal_local_lanes_comment_read_gets_a_quarter_of_the_tick_not_its_whole_budget(
+        repo, monkeypatch):
+    # A slow comment read for a closed local lane must not spend the budget the PR, cloud and note reads need.
+    _local_lane(repo)
+    _scan(monkeypatch, (None, False))
+    seen = []
+
+    def read_lane_comments(repo_root, issue, basis, deadline, *args):
+        seen.append(deadline)
+        return True, []
+
+    monkeypatch.setattr(ww, "_read_lane_comments", read_lane_comments)
+    _run(repo, monotonic=lambda: 1000.0)
+    assert seen == [1000.0 + ww.RUN_READ_BUDGET_SECONDS / 4]
+
+
+def test_the_heartbeat_stamp_time_uses_the_clock_sample_its_age_was_read_at(monkeypatch):
+    # The age is measured against the read's own sample; a later sample would move an old stamp past the basis.
+    clock_reads = iter([1000.0] + [1001.0] * 10)
+    monkeypatch.setattr(ww.time, "time", lambda: next(clock_reads))
+
+    def read_heartbeat(repo_root, launch_id, env=None, now=None):
+        return {"ageSeconds": (1000.0 if now is None else now) - 900.0}
+
+    monkeypatch.setattr(ww.hb, "read_heartbeat", read_heartbeat)
+    assert ww._heartbeat_stamped_after("/unused", "local-a", {}, 900.5) is False
+
+
 # --- the order of the signals, and the lanes that are never reopened -------------------------------
 
 
