@@ -240,10 +240,11 @@ def test_both_callers_reach_the_one_rule(monkeypatch, tmp_path):
     """One function, two callers: both go through leftover_accepting.missing, and vet_slot holds no copy."""
     seen = []
     real = la.missing
-    monkeypatch.setattr(la, "missing", lambda rec, b: seen.append(b) or real(rec, b))
+    monkeypatch.setattr(la, "missing", lambda rec, b, **kw: seen.append((b, kw)) or real(rec, b, **kw))
     handback(body(ACCEPT_BOTH), [record_comment([F1, F2])])
     write(body(ACCEPT_BOTH), [RECEIPT, record_comment([F1, F2])], tmp_path)
     assert len(seen) == 2
+    assert all(kw.get("shared") is True for _b, kw in seen)
 
 
 # --- review round 1 (codex light-lane seat) fixes ---------------------------------------------------

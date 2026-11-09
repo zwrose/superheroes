@@ -32,7 +32,7 @@ The owner half is the close line, then three fixed headings in this order, then 
   any direct question the builder has for the owner. The omission floor's three rows are keyed on
   severity, not on the disposition label. Each finding the review record leaves for the owner (its
   `leftForOwner` list) gets one line here that carries its record id and its title, with
-  its consequence around them: a paraphrase that drops the id does not name it. The id is matched as a whole word, case
+  its consequence around them: a paraphrase that drops the id does not name it. Give each such finding its own top-level bullet carrying its id and title, never a sub-bullet under a lead-in bullet: a bullet and the lines nested under it are read as one acceptance, and one acceptance counts for one finding. The id is matched as a whole word, case
   aside, every kind of dash read as `-` and the punctuation around it ignored; the title is matched by its words, ignoring
   case, quotes and punctuation (`lib/leftover_accepting.py` states both). A finding a higher layer of the same stack fixes
   gets the line `<id> <title> — fixed-above #<layer PR> <commit>` instead of an acceptance, and that line is shown on the
