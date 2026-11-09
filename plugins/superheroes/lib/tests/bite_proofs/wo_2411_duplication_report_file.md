@@ -1,8 +1,8 @@
 # Bite-proof record — the duplication lens reads jscpd's report from a file (#2411)
 
-Detector file: `plugins/superheroes/lib/tests/test_guardian_lens_duplication.py` (the six new tests, 10 test nodes, each with a `# bites on:` line), unedited between each red and its green. Every neutralization is one targeted, reversible edit to one production file (`plugins/superheroes/lib/guardian_lens_duplication.py`) made through the Edit tool in a detached probe worktree (`/home/user/sh-2411-probe`, at the commit named per entry), restored by the inverse Edit; no `git checkout`, `restore`, `reset` or `stash`, and no shell edit. Command for every red and green, from the probe worktree root: `timeout 600 scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest <node ids> -q -p no:randomly --tb=line`, followed by `git status --porcelain`. Captures are the whole output, the `uv` deprecation warning included. No secret, token, private URL or PII appears in any capture, so nothing was redacted.
+Detector file: `plugins/superheroes/lib/tests/test_guardian_lens_duplication.py` (the seven new tests, 11 test nodes, each with a `# bites on:` line), unedited between each red and its green. Every neutralization is one targeted, reversible edit to one production file (`plugins/superheroes/lib/guardian_lens_duplication.py`) made through the Edit tool in a detached probe worktree (`/home/user/sh-2411-probe`, at the commit named per entry), restored by the inverse Edit; no `git checkout`, `restore`, `reset` or `stash`, and no shell edit. Command for every red and green, from the probe worktree root: `timeout 600 scripts/pinned-python -B -X pycache_prefix=<scratch> -m pytest <node ids> -q -p no:randomly --tb=line`, followed by `git status --porcelain`. Captures are the whole output, the `uv` deprecation warning included. No secret, token, private URL or PII appears in any capture, so nothing was redacted.
 
-The guarded-element set, declared before the review (this build is light-lane and orchestrator-typed, so the declaration goes on the reviewer's dispatch): G1 the file read, G2 the lens's read bound, G3 the temp-dir removal, G4 the named missing-file cause. None is grouped.
+The guarded-element set, declared before the review (this build is light-lane and orchestrator-typed, so the declaration goes on the reviewer's dispatch): G1 the file read, G2 the lens's read bound, G3 the temp-dir removal, G4 the named missing-file cause; G5, the file name's literal pin, was added after review round 1. None is grouped.
 
 ## G1. The report is read from jscpd's report file (`guardian_lens_duplication.py`, `collect`: the `if res["ok"]:` read of `REPORT_FILE_NAME` before the temp dir is removed)
 
@@ -189,6 +189,47 @@ Red on the claimed axis: the reason reads `jscpd produced no JSON report`, which
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
 .                                                                        [100%]
 1 passed in 0.39s
+exit=0
+```
+
+## G5. The report file name is jscpd's own (`guardian_lens_duplication.py`: `REPORT_FILE_NAME = "jscpd-report.json"`)
+
+Added after review round 1 (test role, Minor, verifier CONFIRMED): the fake writes through the same constant the lens reads, so only a literal pin catches a rename (CONVENTIONS §11.3, the external-contract exception).
+
+- **Axis:** the lens's report file name equals the name real jscpd writes into its `-o` dir.
+- **Detectors (expected red):** `test_report_file_name_is_jscpds_own`.
+- **Probe head:** `8938296f`.
+- **Neutralization:** `REPORT_FILE_NAME = "jscpd-report.json"` became `REPORT_FILE_NAME = "jscpd-report-x.json"`.
+
+**Raw red:**
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+F                                                                        [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert 'jscpd-report-x.json' == 'jscpd-report.json'
+      
+      - jscpd-report.json
+      + jscpd-report-x.json
+      ?             ++
+/home/user/sh-2411-probe/plugins/superheroes/lib/tests/test_guardian_lens_duplication.py:684: AssertionError: assert 'jscpd-report-x.json' == 'jscpd-report.json'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_guardian_lens_duplication.py::test_report_file_name_is_jscpds_own
+1 failed in 0.52s
+exit=1
+ M plugins/superheroes/lib/guardian_lens_duplication.py
+```
+
+Red on the claimed axis: the constant no longer names jscpd's file.
+
+**Restore:** the inverse Edit.
+
+**Raw green** (the trailing empty `git status --porcelain` is the restore receipt):
+
+```
+warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
+.                                                                        [100%]
+1 passed in 0.58s
 exit=0
 ```
 
