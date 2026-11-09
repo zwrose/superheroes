@@ -560,6 +560,10 @@ when set, otherwise `~/.claude`). Answer by message, or through the relay below.
 step the builder should use, written out in full. Never answer by reference to the note ("go ahead
 as your note proposes", "the usual"): a cloud builder cannot message back to ask what you meant, so
 an answer it cannot act on costs a second round trip and the gate below still reads it as delivered.
+When the owner's word lifts a park and the handback will rest on that acceptance, the answer never
+asks the builder to write the acceptance lines or to mark the PR ready for review: you write them and
+take the PR out of draft yourself (`skills/showrunner/reference/vet-receipt.md` § Recording an owner
+acceptance — the advisor writes it).
 
 **One-time setup.** Each Claude account the builders run on must have opened Claude Code in the
 repository root once and accepted its trust prompt. The owner does this once per account, before the

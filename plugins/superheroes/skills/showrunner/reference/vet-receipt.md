@@ -377,12 +377,12 @@ with no open finding that has a real owner consequence writes no field.
 
 When a handback rests on the owner's acceptance of something the builder could not finish (an
 uncertified review, a waived check, a park the owner lifted by their word), **you write the PR-body
-lines that record that acceptance, and you mark the PR ready.** Never order the builder to write them
-or to mark it ready: a builder's permission check judges the edit from its text alone and refuses it
+lines that record that acceptance, and you mark the PR ready for review (out of draft).** Never order
+the builder to write them or to mark it ready for review: a builder's permission check judges the edit from its text alone and refuses it
 as merging without review, so the order parks. Each line names the owner's words and links the
 record of the ruling. Any other body correction the builder owes, it posts as text on the issue, and
-you apply it word for word, changing nothing. This is the one exception to never editing the
-builder's prose outside the slot.
+you apply it word for word, changing nothing. These are builder-body edits you make outside the
+slot, alongside the others this file names.
 
 **The receipt names it.** Under one field, `**Advisor-applied body lines.**`, list each line you
 wrote with the ruling it records, and each builder correction you applied with a link to the

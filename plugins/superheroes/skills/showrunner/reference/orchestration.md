@@ -637,8 +637,8 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   send: the wave watch opens the lane's window at the newest fix order, so a builder note or handback
   posted between the send and a later `not-ready` is not surfaced.
   The builder fixes, pushes and hands back as usual. A fix order never asks the builder to record
-  an owner acceptance in the PR body or to mark the PR ready: you write those lines and the ready
-  mark yourself (`skills/showrunner/reference/vet-receipt.md` § Recording an owner acceptance — the
+  an owner acceptance in the PR body or to mark the PR ready for review: you write those lines and
+  take the PR out of draft yourself (`skills/showrunner/reference/vet-receipt.md` § Recording an owner acceptance — the
   advisor writes it). Launch a new fix
   leg (a premise with `adoptsBranch`/`adoptsHead`) only when that session is archived, gone from the
   listing (shown by a complete listing, as below), its status bucket reads failed,
