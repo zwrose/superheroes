@@ -676,6 +676,14 @@ def _large_pair_report(tmp_path, min_bytes):
     return _report([entry])
 
 
+def test_report_file_name_is_jscpds_own():
+    """jscpd's json reporter writes ``jscpd-report.json`` into its ``-o`` dir; the name is an
+    external contract, so it is pinned by its literal (CONVENTIONS §11.3), not read back
+    from the lens constant the fake also writes through."""
+    # bites on: G1 the report file name matches the one real jscpd writes
+    assert gld.REPORT_FILE_NAME == "jscpd-report.json"
+
+
 def test_report_larger_than_stdout_cap_parses_from_file(tmp_path):
     """A report past the collector's stdout cap still yields a reading: the lens reads
     jscpd's report file, never the capped stdout (the field failure was truncated-output)."""
