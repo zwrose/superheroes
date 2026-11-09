@@ -25,7 +25,18 @@ switching, never a lane already running.
 Check these in a consuming project when it adopts 0.48.1. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed.** An advisor driving a merge train reports a merge done without waiting for the base branch's post-merge run when the branch requires up-to-date pull requests (both protection reads answered, one `true`) and the merged commit's tree equals the tree CI passed on the merged PR's head; the run still runs, and a red one is still a red train. Every other case, a failed protection read and a tree mismatch included, keeps the wait. See [Merge train: no post-merge wait when the merged tree is the tree CI passed](#merge-train-no-post-merge-wait-when-the-merged-tree-is-the-tree-ci-passed).
+- **After switching.** **When a `leftover-not-accepted` refusal's missing finding is named only in an acceptance another finding already took (a sub-bullet under a lead-in bullet, say), its detail now says the two share one acceptance and asks for one top-level bullet per finding; the reason and every other detail are unchanged.** Nothing is owed. See [Leftover rule: the refusal names a shared acceptance](#leftover-rule-the-refusal-names-a-shared-acceptance).
 - **After switching.** **The leftover rule no longer counts a finding's title word that GitHub runs into the next word through inline markup: an acceptance such as `- F-1 The retry loop never backs off*f*`, which GitHub shows as `offf`, leaves F-1 missing, and `vet_slot.py handback --pr` and a READY `vet_slot.py write` refuse `leftover-not-accepted` until the acceptance is reworded.** Nothing else is owed. See [Leftover rule: a title word glued to inline markup is not that word](#leftover-rule-a-title-word-glued-to-inline-markup-is-not-that-word).
+
+### Merge train: no post-merge wait when the merged tree is the tree CI passed
+
+- `skills/showrunner/reference/merge-train.md` § A merge train's "green" gains a paragraph, "When a merge is reported done without waiting". Where the base branch requires pull requests to be up to date (one of the section's two protection reads reports `true` and neither read failed; the classic read's 404 "Branch not protected" is an answer, any other failure is not) and `git rev-parse --verify <sha>^{tree}` prints the same tree for the merged commit and for the merged PR's head whose green the merge relied on (a stack: its top layer's head), the advisor reports the merge done and goes on without waiting for the post-merge run. The run still runs; a red one is still a red train, fixed by the same recipe, and the advisor reads its result at its next pass. A merge through a merge queue keeps the wait.
+- A failed protection read, which still counts as requiring up-to-date PRs when bringing PRs current, keeps the wait here; so do no up-to-date requirement, a failing `rev-parse`, and two different trees.
+- Showrunner duty 6's sentence "A merge train's "green" includes post-merge `main` CI" names the exception in one clause and points at that section; § Merging a stack item 6 points at it too.
+
+### Leftover rule: the refusal names a shared acceptance
+
+The `leftover-not-accepted` detail from `vet_slot.py handback --pr` and a READY `vet_slot.py write` now names a missing finding whose id and title sit in an acceptance already given to another finding as sharing one acceptance with that finding and adds that each finding left for the owner gets its own top-level bullet, while a missing finding named nowhere keeps today's wording and the one-to-one rule and the item grouping are unchanged.
 
 ### Leftover rule: a title word glued to inline markup is not that word
 
@@ -33,12 +44,6 @@ Check these in a consuming project when it adopts 0.48.1. Each step names the no
 - **Why.** The title was compared by its words with every non-word character read as a space, so `off*f*` read as `off f`, and the title counted although GitHub shows `offf`.
 - **What changes.** Fewer acceptances count, never more. The rule reads the acceptance and the record title alike, so a title written with glued markup still matches a verbatim copy. A word glued only at its start (`x*The*`) is unchanged. Emphasis pairing is approximated (flanking, and a partner run on the other side), so a literal `*` or `~` that has a partner can refuse an acceptance GitHub would show with a break. Reword the acceptance: a space after the title's last word always counts. Text on a fenced line is read with no markup, as GitHub shows it; a fence opened on an item's own marker line counts as one only after `-`, `*`, `+` or `1.`, so a genuine fence after a marker such as `2.` still refuses.
 - **Replacement.** None: no command, result key or refusal reason changes.
-
-### Merge train: no post-merge wait when the merged tree is the tree CI passed
-
-- `skills/showrunner/reference/merge-train.md` § A merge train's "green" gains a paragraph, "When a merge is reported done without waiting". Where the base branch requires pull requests to be up to date (one of the section's two protection reads reports `true` and neither read failed; the classic read's 404 "Branch not protected" is an answer, any other failure is not) and `git rev-parse --verify <sha>^{tree}` prints the same tree for the merged commit and for the merged PR's head whose green the merge relied on (a stack: its top layer's head), the advisor reports the merge done and goes on without waiting for the post-merge run. The run still runs; a red one is still a red train, fixed by the same recipe, and the advisor reads its result at its next pass. A merge through a merge queue keeps the wait.
-- A failed protection read, which still counts as requiring up-to-date PRs when bringing PRs current, keeps the wait here; so do no up-to-date requirement, a failing `rev-parse`, and two different trees.
-- Showrunner duty 6's sentence "A merge train's "green" includes post-merge `main` CI" names the exception in one clause and points at that section; § Merging a stack item 6 points at it too.
 
 ## 0.48.0
 

@@ -33,7 +33,10 @@ modelled beyond V852-4): an item holding a ``<`` that can start markup anywhere,
 Two callers, no second copy of the rule: ``vet_slot.py handback --pr`` (the builder's check before the ready mark) and
 ``vet_slot.py write`` (the advisor's slot write, for a READY verdict only). ``missing`` takes the latest record exactly as
 ``review_record.py read --pr <n>`` returns it and the PR body; it returns the leftovers the section does not name, and
-raises ``Unreadable`` for a record it cannot read, which a caller reports as unreadable, never as a pass."""
+raises ``Unreadable`` for a record it cannot read, which a caller reports as unreadable, never as a pass. With
+``shared=True`` (#2401) each leftover it returns also lists, as ``sharedWith``, the leftovers holding an acceptance that
+names it, and ``describe`` then says the two share one acceptance and asks for one top-level bullet per finding; the
+rule and which leftovers are missing do not change."""
 import functools
 import os
 import re
@@ -605,19 +608,28 @@ def _assign(leftovers, items, colliding):
     return dict(sorted((i, j) for j, i in holder.items()))
 
 
-def missing(record, body):
+def missing(record, body, shared=False):
     """The leftovers ``body``'s What we're accepting does not name, as [{"id", "title"}] in record order ([] when every
     one is named, or the record leaves none). ``record`` is ``review_record.read``'s result; Unreadable when it cannot be
     read. Only text that renders counts (``_accepting_items``: read once from the blanked body, cut per item). A leftover
     whose finding carries no title is checked by its id alone. One acceptance counts for at most one leftover
     (``_assign``): a leftover with no acceptance of its own is missing, however many acceptances name it or however many
-    leftovers one acceptance names."""
+    leftovers one acceptance names. With ``shared=True`` (#2401) each gap also carries ``sharedWith``, the leftovers
+    (``{"id", "title"}``, record order) that hold an acceptance naming the gap; which leftovers are missing never changes."""
     items = _accepting_items(body)
     leftovers = _leftovers(record)
-    given = _assign(leftovers, items, _collisions(leftovers))
+    colliding = _collisions(leftovers)
+    given = _assign(leftovers, items, colliding)
     # axis: two ids of one record that share a normal form are each matched on their exact bytes, and one acceptance is
     # given to one leftover, so neither satisfies the other
-    return [{"id": ident, "title": title} for n, (ident, title) in enumerate(leftovers) if n not in given]
+    gaps = [{"id": ident, "title": title} for n, (ident, title) in enumerate(leftovers) if n not in given]
+    if shared:
+        for n, gap in zip((n for n in range(len(leftovers)) if n not in given), gaps):
+            ident, title = leftovers[n]
+            # axis: a gap is shared only when an acceptance the very same _names match holds for it is assigned to a different leftover; one named by no held acceptance has no holder and keeps today's wording
+            gap["sharedWith"] = [{"id": leftovers[h][0], "title": leftovers[h][1]} for h in sorted(given)
+                                 if h != n and _names(items[given[h]], ident, title, colliding.get(ident))]
+    return gaps
 
 
 def fixed_above(record, body):
@@ -647,8 +659,27 @@ def assigned_fixed_above(record, body):
     return claims
 
 
+def _label(entry):
+    """``id (title)``, or the bare id for an entry with no title."""
+    return "%s (%s)" % (entry["id"], entry["title"]) if entry.get("title") else entry["id"]
+
+
 def describe(gaps):
-    """The refusal detail naming each missing leftover with its title."""
-    named = ["%s (%s)" % (g["id"], g["title"]) if g["title"] else g["id"] for g in gaps]
-    return ("What we're accepting does not name these findings left for the owner, each by its record id and its title"
-            " in one line, matched as lib/leftover_accepting.py states: " + "; ".join(named))
+    """The refusal detail naming each missing leftover with its title. A gap carrying a non-empty ``sharedWith``
+    (``missing(..., shared=True)``, #2401) reads ``<gap> shares one acceptance with <holder>``, and the one-acceptance
+    sentence follows the list once; with none shared the text is exactly what it was before."""
+    named, any_shared = [], False
+    for g in gaps:
+        holders = g.get("sharedWith") or []
+        # axis: a gap named inside an acceptance another finding already took says so (and why); a gap with no holder keeps the plain wording
+        if holders:
+            any_shared = True
+            named.append("%s shares one acceptance with %s" % (_label(g), " and ".join(_label(h) for h in holders)))
+        else:
+            named.append(_label(g))
+    detail = ("What we're accepting does not name these findings left for the owner, each by its record id and its title"
+              " in one line, matched as lib/leftover_accepting.py states: " + "; ".join(named))
+    if any_shared:
+        detail += (". One acceptance counts for one finding: give each finding left for the owner its own top-level bullet"
+                   " carrying its id and its title, never a sub-bullet under a lead-in bullet.")
+    return detail
