@@ -61,6 +61,11 @@ def test_a_link_with_a_title_is_not_glued_at_the_chokepoint():
                  id="angle_destination_link_shows_offf_model_only"),
     pytest.param("- F-1 The retry loop never backs off[f](https://x.example/a_(b)): accepted.\n",
                  id="parenthesised_destination_link_shows_offf_model_only"),
+    # review round 1, v1: GFM link text nests balanced brackets, so this is one link (shown `off<a>f [g]</a>`)
+    pytest.param("- F-1 The retry loop never backs off[f [g]](https://x.example): accepted.\n",
+                 id="balanced_brackets_in_link_text_shows_offf_model_only"),
+    # review round 1, v5: CommonMark strips the padding of ` off `, so the span's shown content ends at `off` (`<code>…off</code>f`)
+    pytest.param("- F-1 ` The retry loop never backs off `f: accepted.\n", id="padded_closing_code_span_shows_offf_model_only"),
 ])
 def test_more_glued_forms_are_refused(line):
     assert gaps(RECORD, line) == ["F-1"]
@@ -82,6 +87,10 @@ def test_more_glued_forms_are_refused(line):
     pytest.param("- F-1 The retry loop never backs off`  f  `: accepted.\n", id="code_span_two_spaces_one_stripped"),
     pytest.param("- F-1 The retry loop never backs off*.*: accepted.\n", id="star_dot_star_is_literal"),
     pytest.param("- F-1 x*The* retry loop never backs off.\n", id="word_glued_at_its_start_is_unaffected"),
+    # review round 1, v2: a fenced line is shown literally, so its stars are visible punctuation after `off`
+    pytest.param("- F-1\n  ~~~\n  The retry loop never backs off*f*: accepted.\n  ~~~\n", id="stars_on_a_fenced_line_are_literal"),
+    pytest.param("- F-1\n  ~~~\n  The retry loop never backs off[f](https://x.example)\n  ~~~\n",
+                 id="link_on_a_fenced_line_is_literal"),
 ])
 def test_healthy_acceptances_keep_counting(line):
     assert gaps(RECORD, line) == []
