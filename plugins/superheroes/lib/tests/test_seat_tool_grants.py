@@ -849,6 +849,72 @@ def test_order_linter_grant_is_read_only():
         "order-linter-grant-outside-allowlist: %s" % extra)
 
 
+SEARCHER_EXACT_TOOLS = ["Glob", "Grep", "Read"]
+
+
+def test_searcher_grant_is_exactly_read_grep_glob():
+    """Axis: the repository-sweep searcher's parsed tools: grant equals Read, Grep, Glob exactly —
+    adding a tool (a write, shell, session or messaging tool) or removing one fails (#2399)."""
+    tools = _parse_tools(
+        _read_required(os.path.join(PLUGIN, "agents", "searcher.md"),
+                       "the repository-sweep searcher seat"),
+        "searcher")
+    assert sorted(tools) == SEARCHER_EXACT_TOOLS, (
+        "searcher-grant-not-exact: %s" % sorted(tools))
+
+
+def _dispatching_searchers_paragraph():
+    text = _read_required(
+        os.path.join(PLUGIN, "skills", "review-code", "reference", "auto-fix-loop.md"),
+        "auto-fix-loop.md, home of the Dispatching searchers paragraph")
+    anchor = "**Dispatching searchers.**"
+    start = text.find(anchor)
+    assert start != -1, (
+        "auto-fix-loop.md: the paragraph's opening anchor (%r) was not found" % anchor)
+    end = text.find("\n\n", start)
+    return text[start:end if end != -1 else len(text)]
+
+
+def test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose():
+    """Axis: every searcher dispatch site names the `superheroes:searcher` agent, and every
+    `general-purpose` mention is negated by its own clause: the nearest `never` before it sits in the
+    same clause (no comma, semicolon, period, em dash, `and` or `or` between) and at most four words
+    before it (#2399)."""
+    paragraph = _dispatching_searchers_paragraph()
+    assert "superheroes:searcher" in paragraph, "searcher-dispatch-agent-not-named: auto-fix-loop.md"
+
+    driver = _read_required(
+        os.path.join(PLUGIN, "skills", "review-code", "reference", "round-driver.md"),
+        "round-driver.md, home of the dispatch-sweep row")
+    rows = [line for line in driver.splitlines() if line.startswith("| `dispatch-sweep` |")]
+    assert len(rows) == 1, "searcher-dispatch-row-not-found: %d" % len(rows)
+    assert "superheroes:searcher" in rows[0], "searcher-dispatch-agent-not-named: round-driver.md"
+    assert "general-purpose" not in rows[0], "searcher-dispatch-general-purpose: round-driver.md"
+
+    agent = _read_required(os.path.join(PLUGIN, "agents", "searcher.md"),
+                           "the repository-sweep searcher seat")
+    assert "general-purpose" not in agent, "searcher-dispatch-general-purpose: searcher.md"
+
+    flat = " ".join(paragraph.split())
+    token = "`general-purpose`"
+    occurrences = [m.start() for m in re.finditer(re.escape(token), flat)]
+    assert occurrences, "searcher-dispatch-never-general-purpose-missing: auto-fix-loop.md"
+    for at in occurrences:
+        before = flat[:at]
+        nevers = list(re.finditer(r"\bnever\b", before))
+        window = flat[max(0, at - 80):at + len(token)]
+        assert nevers, (
+            "searcher-dispatch-general-purpose: auto-fix-loop.md: no `never` before %r" % window)
+        clause = before[nevers[-1].start():]
+        padded = " %s " % clause
+        assert not any(d in padded for d in (",", ";", ".", "—", " and ", " or ")), (
+            "searcher-dispatch-general-purpose: auto-fix-loop.md: the nearest `never` is not in the "
+            "same clause as %r" % window)
+        assert len(clause.split()) <= 4, (
+            "searcher-dispatch-general-purpose: auto-fix-loop.md: the nearest `never` is more than "
+            "four words before %r" % window)
+
+
 def _dispatch_mechanics_tree_inspection_bullet():
     """The dispatch-mechanics reference's tree-inspection bullet (FIX-2 item 8).
 
