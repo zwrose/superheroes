@@ -323,3 +323,47 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 .                                                                        [100%]
 1 passed, 60 deselected in 0.69s
 ```
+
+## 8. One clock sample for a heartbeat's stamp (`_heartbeat_stamped_after`)
+
+Added at review (round 1 finding "Use one clock sample when recovering the heartbeat timestamp"; the round 2
+audit showed the first version of the test passed on the original code, so the test was rewritten to sample
+the clock inside the fake reader, as `heartbeat.py` does). Run by the build session in a detached probe
+worktree at `9b32b704`, with `--tb=line`; captures trimmed to their last lines (the `UV_NATIVE_TLS` line and
+the progress dots are dropped).
+
+- **Axis:** the read and the subtraction use one clock sample, so the read's latency never moves an old stamp past the basis.
+- **Neutralization:** the helper restored to the original two-sample code: `now = time.time()` removed,
+  `hb.read_heartbeat(repo_root, lid, env=env, now=now)` became `hb.read_heartbeat(repo_root, lid, env=env)`,
+  and `now - age > basis` became `time.time() - age > basis`.
+- **Raw red** (`-k "clock_sample_its_age"`):
+
+```
+/home/user/sh-2410-probe/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:514: AssertionError: assert True is False
+FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_the_heartbeat_stamp_time_uses_the_clock_sample_its_age_was_read_at
+1 failed, 63 deselected in 5.35s
+```
+
+- **Restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing.
+- **Raw green** (selector of elements 8 and 9 together): `3 passed, 61 deselected in 0.76s`.
+
+## 9. The terminal local lanes' comment-read share (`_evaluate_tick`, `read_lane_comments`)
+
+Added at review (the seams-check finding "Reserve polling time before reading terminal local lanes" and its
+sweep hit; the round 2 audit showed a one-second arm still handed the read its whole window). Same probe
+worktree and capture rule as element 8.
+
+- **Axis:** a closed local lane's comment reads share a quarter of the tick, and a share under one request's minimum makes no request.
+- **Neutralization:** the share check (`if local_share[0] - monotonic() < _MIN_PR_POLL_SECONDS: return None, []`)
+  removed and `local_share[0]` passed as `deadline` (the whole tick deadline, the original shape).
+- **Raw red** (`-k "quarter_of_the_tick or too_short_to_share"`):
+
+```
+/home/user/sh-2410-probe/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:500: AssertionError: assert [('/tmp/pytes...4f20f0>, ...)] == []
+FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_a_terminal_local_lanes_comment_read_gets_a_quarter_of_the_tick_not_its_whole_budget
+FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_a_tick_too_short_to_share_makes_no_comment_read_and_discloses_it
+2 failed, 62 deselected in 8.14s
+```
+
+- **Restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing.
+- **Raw green:** as element 8.
