@@ -84,12 +84,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > caller's live checkout), bounds the attempt and streams liveness heartbeats to `--progress-file`,
 > and on a **terminal forfeit** (timeout OR nonzero engine exit OR `unreadable` OR **vacuous** OR
 > **`forfeit-with-engaged-artifact`** — never intermediate bootstrap noise that still yields a final
-> answer) auto-retries ONCE tight-inline with a ≥900 s ceiling before returning
+> answer) auto-retries ONCE tight-inline with a ≥900 s ceiling (twice when the retry follows a silence-watchdog cut and is cut as well; see below) before returning
 > `{"ok": false, "forfeited": true, "disclosure": …}` (or `reason: "vacuous"` when the **last**
 > attempt ended vacuous — e.g. attempt 1 timing out and attempt 2 coming back vacuous still yields
 > `vacuous`, not only a double vacuous forfeit; or `reason: "forfeit-with-engaged-artifact"` when
 > stdout was engaged but our transport could not grade it — still a forfeit, the seat does not count
-> toward the panel, and the loop's behaviour is unchanged). A codex review attempt that is not the last one is also ended early, and retried, when it has been silent for the runner's silence-watchdog threshold (390 s) with no command in flight; the last attempt keeps its full ceiling. A forfeit → the orchestrator re-runs the seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, only when that vendor takes the same delivery channel as the emitted order (never hand-compose a replacement order), recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat; for the non-panel phases the driver re-emits the order to the same selected vendor, with no switch to another vendor in this layer, and a non-panel result whose recorded vendor is not the one its order named is ignored and disclosed); with no such vendor live on that channel, the seat is recorded missing (`record-missing`) and counts as not run, and it is never re-run on the host model when the host's family is a maker and the
+> toward the panel, and the loop's behaviour is unchanged). A codex review attempt is also ended early, and retried, when it has been silent for the runner's silence-watchdog threshold (390 s) with no command in flight; the retry after such a cut is watched the same way, and if it is cut too the run makes one last attempt, which is never cut early and keeps its full ceiling. A forfeit → the orchestrator re-runs the seat on another live vendor from the seat map's `liveVendors` whose family is outside every maker family, only when that vendor takes the same delivery channel as the emitted order (never hand-compose a replacement order), recording which vendor ran it in its dispatch record (the driver does not reseat a panel seat; for the non-panel phases the driver re-emits the order to the same selected vendor, with no switch to another vendor in this layer, and a non-panel result whose recorded vendor is not the one its order named is ignored and disclosed); with no such vendor live on that channel, the seat is recorded missing (`record-missing`) and counts as not run, and it is never re-run on the host model when the host's family is a maker and the
 > orchestrator **discloses** the degraded vendor mix (the `disclosure` string); the driver also records
 > the fall-open on the receipt from the orchestrator's `ranManifest` (`round-driver.md`,
 > `dispatch-panel`).
@@ -400,7 +400,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
 > # The attempt and retry ceilings: 900 s unless the step is a dispatch-panel whose payload carries `ceilings`, which
 > # `round_phases.seat_ceiling` filled per seat. A dispatch-panel payload with no `ceilings` key at all (a pending step
-> # persisted before this change, re-emitted after an upgrade) keeps 900/900, as does every other phase.
+> # persisted by an earlier plugin version, re-emitted after an upgrade) keeps 900/900, as does every other phase.
 > SEAT_TIMEOUT=900; SEAT_RETRY_TIMEOUT=900
 > if [ "$SEAT_PHASE" = "dispatch-panel" ] && printf '%s' "$PAYLOAD" | jq -e 'has("ceilings")' >/dev/null 2>&1; then
 >   SEAT_CEILING=$(printf '%s' "$PAYLOAD" | jq -c --arg k "$SEAT_KEY" '.ceilings[$k] // empty')

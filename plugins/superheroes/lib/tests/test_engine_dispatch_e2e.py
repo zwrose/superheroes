@@ -570,6 +570,86 @@ def test_e2e_review_retry_after_silence_watchdog_runs_with_the_seat_ceiling(tmp_
     assert carrying[0]["timeout"] == expected
 
 
+def _install_attempt_scripted_codex(tmp_path, monkeypatch, per_attempt):
+    """A fake `codex` whose behaviour is chosen by the attempt suffix of its `-o` path (`-1.json`, `-2.json`, ...):
+    "sleep" stays silent for 120 s, "fail" exits 3 at once, "answer" writes a findings result."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    exe = bin_dir / "codex"
+    exe.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        "sys.stdin.read()\n"
+        "out = sys.argv[sys.argv.index('-o') + 1]\n"
+        "plan = %r\n"
+        "for n, what in plan.items():\n"
+        "    if out.endswith('-%%d.json' %% n):\n"
+        "        if what == 'sleep':\n"
+        "            time.sleep(120)\n"
+        "        if what == 'fail':\n"
+        "            sys.exit(3)\n"
+        "with open(out, 'w', encoding='utf-8') as fh:\n"
+        "    fh.write(%r)\n"
+        "sys.exit(0)\n" % (dict(per_attempt), _e2e_native_findings_result_json()),
+        encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+
+
+def test_e2e_review_second_chance_a_retry_cut_by_the_watchdog_earns_a_third_attempt(tmp_path, monkeypatch):
+    """The second chance: attempts 1 and 2 of a codex review are silent with no command in flight, so the watchdog
+    (threshold 1 s) cuts each at a heartbeat, the retry included; attempt 3 is unarmed and answers."""
+    # axis: G3 — a retry that follows a watchdog cut is itself armed, and its cut earns one last attempt
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2415_test_role_ceiling.md
+    repo = str(tmp_path / "repo")
+    _init_repo(repo)
+    run_dir = _run_dir(tmp_path, "run-review-second-chance")
+    prompt_path = _prompt(tmp_path, "Review this.\n")
+    _install_attempt_scripted_codex(tmp_path, monkeypatch, {1: "sleep", 2: "sleep", 3: "answer"})
+    monkeypatch.setattr(ED, "CODEX_SILENCE_WATCHDOG_SECONDS", 1)
+
+    started = time.monotonic()
+    res = _poll_review_terminal(repo, run_dir, prompt_path, timeout=150)
+    elapsed = time.monotonic() - started
+
+    assert res["ok"] is True
+    assert res["terminal"] is True
+    assert res["attempts"] == 3
+    assert elapsed < 110, "the watchdog did not end attempts 1 and 2 well before the fake's 120 s sleeps"
+    ended = {r["attempt"]: r for r in _journal_records(run_dir) if r.get("kind") == "attempt-ended"}
+    assert sorted(ended) == [1, 2, 3]
+    for att in (1, 2):
+        assert ended[att]["signalSource"] == "silence-watchdog"
+        assert ended[att]["timedOut"] is False
+        assert ended[att]["silenceWatchdog"]["thresholdSeconds"] == 1
+    assert "silenceWatchdog" not in ended[3]
+    assert ended[3]["exit"] == 0
+
+
+def test_e2e_review_second_chance_a_retry_that_does_not_stall_earns_no_third_attempt(tmp_path, monkeypatch):
+    """Attempt 1 is cut by the watchdog; attempt 2 exits non-zero at once (no watchdog end), so the budget stays at
+    two: the run is terminal-forfeited after attempt 2 and no attempt 3 is spawned."""
+    # axis: G3 — only a retry cut by the watchdog earns the extra attempt
+    repo = str(tmp_path / "repo")
+    _init_repo(repo)
+    run_dir = _run_dir(tmp_path, "run-review-second-chance-no-stall")
+    prompt_path = _prompt(tmp_path, "Review this.\n")
+    _install_attempt_scripted_codex(tmp_path, monkeypatch, {1: "sleep", 2: "fail", 3: "answer"})
+    monkeypatch.setattr(ED, "CODEX_SILENCE_WATCHDOG_SECONDS", 1)
+
+    res = _poll_review_terminal(repo, run_dir, prompt_path, timeout=150)
+
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+    assert res["attempts"] == 2
+    ended = {r["attempt"]: r for r in _journal_records(run_dir) if r.get("kind") == "attempt-ended"}
+    assert sorted(ended) == [1, 2]
+    assert ended[1]["signalSource"] == "silence-watchdog"
+    assert "silenceWatchdog" not in ended[2]
+    assert ended[2]["exit"] == 3
+
+
 # --- 2. Write real path terminal success --------------------------------------
 
 

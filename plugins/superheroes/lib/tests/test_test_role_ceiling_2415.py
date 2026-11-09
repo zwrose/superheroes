@@ -73,16 +73,19 @@ def test_seat_ceiling_values(seat_key, lines, expected):
 
 
 def test_the_floor_equals_the_retry_minimum():
+    # axis: the ceiling floor cannot drift below the retry minimum the dispatcher enforces
     assert RP.SEAT_CEILING_FLOOR_SECONDS == ED.RETRY_MIN_TIMEOUT == 900
 
 
 def test_an_every_other_lens_keeps_the_floor_at_any_size():
+    # axis: only the test role scales; no other lens's ceiling grows with the change's size
     for lens in RP.DIMENSIONS:
         if lens != "test-role":
             assert RP.seat_ceiling(lens, 5000) == 900
 
 
 def test_the_dispatch_review_flags_accept_a_computed_ceiling(tmp_path):
+    # axis: the dispatch-review parser takes a computed ceiling above the floor as an int for both flags
     value = RP.seat_ceiling("test-role", 301)
     (tmp_path / ".git").mkdir()  # the `--repo-root` type only checks that a `.git` entry exists; nothing is dispatched
     args = ED.build_parser().parse_args([
@@ -120,6 +123,7 @@ def test_a_sliced_plan_gives_each_seat_its_ceiling_row():
 
 
 def test_an_unsliced_small_change_keeps_the_floor():
+    # axis: a small unsliced change is not given a raised ceiling
     state, payload = _panel_payload(_new_file_diff(50))
     assert state["slicePlan"]["sliced"] is False
     row = payload["ceilings"]["test-role"]
@@ -141,6 +145,7 @@ def test_an_unsliced_change_of_about_800_lines_raises_the_test_role_ceiling():
 
 
 def test_no_slice_plan_reads_every_row_as_the_floor():
+    # axis: an absent slice plan reads every seat as unknown size, at the floor
     state = RD.new_state(dict(CFG, diff=_new_file_diff(800)))
     state.pop("slicePlan", None)
     payload = RD._advance(state, state["config"])["payload"]
@@ -154,6 +159,7 @@ def _plan_state(plan):
 
 
 def test_a_non_int_or_bool_weight_reads_as_unknown():
+    # axis: a slice weight that is not a plain int (bool, str, float, absent) is not a size
     # E1
     plan = {"sliced": True, "countable": 2000, "slices": [
         {"id": "s1", "weight": True}, {"id": "s2", "weight": "900"}, {"id": "s3", "weight": 1000},
@@ -166,6 +172,7 @@ def test_a_non_int_or_bool_weight_reads_as_unknown():
 
 
 def test_a_slice_seat_whose_id_is_not_in_the_plan_reads_as_unknown():
+    # axis: a slice seat the plan does not name reads as unknown size, while a whole-change seat reads the plan total
     # E2
     plan = {"sliced": True, "countable": 2000, "slices": [{"id": "s1", "weight": 1000}]}
     rows = RD._panel_ceilings(_plan_state(plan), ["test-role:s9", "test-role"])
@@ -175,6 +182,7 @@ def test_a_slice_seat_whose_id_is_not_in_the_plan_reads_as_unknown():
 
 
 def test_a_wave_marked_slice_row_still_gives_its_weight():
+    # axis: a wave-marked slice row is found by id and gives its weight like any other slice
     plan = {"sliced": True, "countable": 3000, "slices": [
         {"id": "s1", "weight": 1000}, {"id": "u2s1", "weight": 820, "wave": 2}]}
     rows = RD._panel_ceilings(_plan_state(plan), ["test-role:u2s1"])
@@ -186,6 +194,7 @@ def test_a_wave_marked_slice_row_still_gives_its_weight():
     {"slicePlan": {"slices": "x", "countable": "9"}}, {"slicePlan": {"slices": [None, 3, {"id": 7}], "countable": True}},
 ])
 def test_a_malformed_plan_never_raises_and_reads_as_the_floor(state):
+    # axis: a malformed slice plan fails closed to the floor and never raises
     rows = RD._panel_ceilings(state, ["test-role", "test-role:s1", "code-reviewer"])
     assert set(rows) == {"test-role", "test-role:s1", "code-reviewer"}
     for row in rows.values():
@@ -204,6 +213,7 @@ def _recipe_block():
 
 
 def test_the_recipe_passes_the_resolved_ceilings_at_both_invocations():
+    # axis: the recipe passes the resolved ceilings at both dispatch-review invocations, never a hard-coded 900
     with open(_RECIPE, encoding="utf-8") as fh:
         text = fh.read()
     assert "--timeout 900 --retry-timeout 900" not in text
@@ -234,10 +244,12 @@ def _run_ceiling(phase, payload, key="test-role:s1"):
 @pytest.mark.skipif(shutil.which("jq") is None or shutil.which("bash") is None, reason="needs bash and jq")
 class TestRecipeCeilingResolution:
     def test_a_panel_row_is_passed_through(self):
+        # axis: a panel row's integer ceilings reach the recipe's timeout variables unchanged
         done = _run_ceiling("dispatch-panel", {"ceilings": {"test-role:s1": {"lines": 820, "timeout": 1680, "retryTimeout": 1680}}})
         assert (done.returncode, done.stdout.strip()) == (0, "1680 1680")
 
     def test_e4_a_panel_with_ceilings_but_no_row_for_the_seat_fails_closed(self):
+        # axis: a panel that carries ceilings but no row for the seat stops the recipe rather than guessing a ceiling
         done = _run_ceiling("dispatch-panel", {"ceilings": {"code-reviewer": {"lines": 1, "timeout": 900, "retryTimeout": 900}}})
         assert done.returncode == 1
         assert "fail closed" in done.stderr and "test-role:s1" in done.stderr
@@ -249,15 +261,18 @@ class TestRecipeCeilingResolution:
         {"lines": 5, "timeout": 1800},
     ])
     def test_e4_a_row_without_integer_ceilings_fails_closed(self, row):
+        # axis: a row whose timeout or retryTimeout is not an integer stops the recipe
         done = _run_ceiling("dispatch-panel", {"ceilings": {"test-role:s1": row}})
         assert done.returncode == 1
         assert "fail closed" in done.stderr
 
     def test_e5_a_panel_payload_with_no_ceilings_key_keeps_the_floor(self):
+        # axis: compatibility, a panel payload persisted by an earlier plugin version (no ceilings key) keeps 900/900
         done = _run_ceiling("dispatch-panel", {"dimensions": ["test-role:s1"], "tier": "deep", "slices": []})
         assert (done.returncode, done.stdout.strip()) == (0, "900 900")
 
     def test_e6_any_other_phase_keeps_the_floor(self):
+        # axis: only a dispatch-panel step reads ceilings; every other phase keeps 900/900
         payload = {"ceilings": {"test-role:s1": {"lines": 820, "timeout": 1680, "retryTimeout": 1680}}}
         for phase in ("dispatch-audits", "dispatch-verifiers", "dispatch-synthesis", "dispatch-seams-check", ""):
             done = _run_ceiling(phase, payload)

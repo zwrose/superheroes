@@ -3781,14 +3781,51 @@ def _size_or_none(path):
         return None
 
 
-def _silence_watchdog_threshold(opened, attempt):
+def _silence_watchdog_seconds_valid(opened):
+    """True when the run's recorded watchdog threshold is a finite positive number. Never raises."""
+    try:
+        seconds = opened.get("silenceWatchdogSeconds")
+        return (isinstance(seconds, (int, float)) and not isinstance(seconds, bool)
+                and math.isfinite(seconds) and seconds > 0)
+    except Exception:
+        return False
+
+
+def _attempt_budget(opened, state):
+    """The run's attempt budget: MAX_ATTEMPTS, or MAX_ATTEMPTS + 1 for a watched retry after a cut. Never raises."""
+    # axis: only a codex review run with the watchdog on whose attempt 1 was cut by the watchdog, and whose
+    # attempt 2 is still running or was cut too, earns a third attempt. Measured: a retry after a cut sat
+    # silent to its ceiling, while a fresh attempt after a cut answered in 295 s. Only attempt 1's cut
+    # earns the extra attempt, so the budget is at most MAX_ATTEMPTS + 1.
+    try:
+        if not (isinstance(opened, dict) and opened.get("engine") == "codex"
+                and opened.get("runKind") == RUN_KIND_REVIEW
+                and _silence_watchdog_seconds_valid(opened) and isinstance(state, dict)):
+            return MAX_ATTEMPTS
+        attempts = state.get("attempts")
+        if not isinstance(attempts, dict):
+            return MAX_ATTEMPTS
+        first = attempts.get(1)
+        if not (isinstance(first, dict) and _silence_watchdog_end(first.get("ended"))):
+            return MAX_ATTEMPTS
+        second = attempts.get(2)
+        second_ended = second.get("ended") if isinstance(second, dict) else None
+        if not second_ended or _silence_watchdog_end(second_ended):
+            return MAX_ATTEMPTS + 1
+    except Exception:
+        pass
+    return MAX_ATTEMPTS
+
+
+def _silence_watchdog_threshold(opened, attempt, state=None):
     """The armed watchdog threshold in seconds, or None when it is off (#2375 I4). Never raises."""
     try:
         seconds = opened.get("silenceWatchdogSeconds")  # axis: the threshold is the one recorded at run open
-        # axis: armed only for a codex review run, never on the final attempt, with a finite positive number
+        # axis: armed only for a codex review run, on every attempt below the run's budget and never on the
+        # last (a retry after a watchdog cut is armed; state=None keeps the two-attempt budget)
         if (opened.get("engine") == "codex" and opened.get("runKind") == RUN_KIND_REVIEW
-                and attempt < MAX_ATTEMPTS and isinstance(seconds, (int, float))
-                and not isinstance(seconds, bool) and math.isfinite(seconds) and seconds > 0):
+                and attempt < _attempt_budget(opened, state)
+                and _silence_watchdog_seconds_valid(opened)):
             return seconds
     except Exception:
         pass
@@ -4114,7 +4151,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     Caller must journal engine-launching before invoking. Journals engine-started
     immediately after Popen returns, then attempt-ended on completion or spawn failure."""
     records, corrupt = _journal_read(run_dir_real)
-    opened = _journal_state(records).get("opened")
+    state = _journal_state(records)
+    opened = state.get("opened")
     # axis: G2 — no external engine Popen without dispatch_guard.validate on the journal seat.
     guard_verdict = _spawn_allowlist_verdict(opened, journal_corrupt=corrupt)
     if not guard_verdict.get("ok"):
@@ -4250,7 +4288,7 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         "drop_cause": None,
     }
     native_completion_obs = {"stamp": None, "prev_sig": None}
-    wd_threshold = _silence_watchdog_threshold(opened, attempt)
+    wd_threshold = _silence_watchdog_threshold(opened, attempt, state)
     wd_tracker = codex_silence.StreamTracker()
     wd_offset = 0
     wd_prev = (_size_or_none(stdout_path), _size_or_none(stderr_path))
@@ -4622,7 +4660,7 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     alive, who = _run_live_evidence(state)
     if alive:
         return False, "attempt-already-live:%s" % who
-    if attempt > MAX_ATTEMPTS:
+    if attempt > _attempt_budget(state.get("opened"), state):
         return False, "attempts-exhausted"
     if attempt in state.get("attempts", {}) and state["attempts"][attempt].get("childPid") is not None:
         return False, "attempt-already-started"
@@ -5937,7 +5975,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     ))
 
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
-                if latest < MAX_ATTEMPTS:
+                if latest < _attempt_budget(opened, state):
                     if run_kind == RUN_KIND_WRITE:
                         baseline = opened.get("worktreeBaseline")
                         dirt_verdict = _worktree_dirt_verdict(baseline, opened["cwd"])
@@ -5966,12 +6004,12 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
                 if run_kind == RUN_KIND_WRITE:
                     terminal = _write_terminal_forfeit(
-                        engine, MAX_ATTEMPTS, run_dir_real=run_dir_real, state=state,
+                        engine, latest, run_dir_real=run_dir_real, state=state,
                         detail=grade.get("detail"),
                     )
                 else:
                     terminal = _review_terminal_forfeit(
-                        engine, reason, MAX_ATTEMPTS,
+                        engine, reason, latest,
                         engagement=grade.get("engagement"),
                         investigated_rejected=grade.get("investigatedRejected"),
                         investigated_rejected_records=grade.get("investigatedRejectedRecords"),
