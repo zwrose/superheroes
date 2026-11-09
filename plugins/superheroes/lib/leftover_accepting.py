@@ -211,10 +211,12 @@ def _item_cut(lines, span, shown):
             # axis: a fenced line is literal text, no comment is dropped on it; an entry `<` on it makes the whole item count as nothing — see bite-proof record i2389_leftover_visible_within_line.md
             if _TAG_ENTRY.search(line, start):
                 return ""
-            # axis: a fenced run reads as literal only when the item's own text opens it (a later line that starts with the
-            # fence run, no list marker): a marker line such as `2. ~~~` may be a paragraph on GitHub, so its run keeps its markup
+            # axis: a fenced run reads as literal only when GitHub opens a fence there: the item's own line starting with the
+            # fence run, or its marker line when the marker can interrupt a paragraph (a bullet, or an ordered 1); `2. ~~~`
+            # after a paragraph is that paragraph on GitHub, so its run keeps its markup
             if k == 0 or span[k - 1][1] != "fenced":
-                trusted = k > 0 and _FENCE_OPEN.match(line[start:].lstrip()) is not None
+                marker = _ORDERED_MARKER.match(line[:start]) if k == 0 else None
+                trusted = (marker is None or int(marker.group(1)) == 1) and _FENCE_OPEN.match(line[start:].lstrip()) is not None
             parts.append((line[start:].strip(), trusted))
         else:
             kept, cut = _scan_line(line, start)
@@ -239,6 +241,7 @@ class _Item(str):
 
 _LITERAL_MARKUP = {ord(c): "." for c in "*~`[]\\"}
 _FENCE_OPEN = re.compile(r"`{3,}|~{3,}")
+_ORDERED_MARKER = re.compile(r"\s*([0-9]{1,9})[.)]")
 
 
 def _unmarked_literal(item):
@@ -325,6 +328,7 @@ def _mark_glued_ends(text):
     runs = [(m.group()[0], m.start(), m.end()) for m in re.finditer(r"\*+|~+", text)
             if not in_span(m.start()) and (m.group()[0] == "*" or len(m.group()) <= 2)]
     brackets = [m.start() for m in re.finditer(r"\[", text) if not in_span(m.start())]
+    links = {}  # opener position -> whether it opens a link, so nested literal brackets are read once each
 
     def emphasis_end(j):
         """The end of the delimiter run starting at ``j`` when it is real markup, else None."""
@@ -343,31 +347,36 @@ def _mark_glued_ends(text):
 
     def tail_end(j):
         """The end of the inline link tail ``](...)`` at ``j`` as cmark-gfm reads it, else None."""
-        end = md_hidden._destination_end(text, j + 2) if text.startswith("](", j) else 0
-        # a failed read returns len(text) and passes when the text ends in ")": harmless, each word end scans on its own and lands at the end
-        return end if end and text[end - 1] == ")" else None
+        # axis: md_hidden's reader returns the text's length when it cannot close a tail, so it reads a copy with a sentinel
+        # appended: a failed read lands past the real text, and only a tail closed inside it counts
+        end = md_hidden._destination_end(text + "\0", j + 2) if text.startswith("](", j) else 0
+        return end if 0 < end <= n and text[end - 1] == ")" else None
+
+    # One left-to-right pass pairs the brackets (escapes and code spans skipped) and records which `[` opens a link, so
+    # every character is read once however deep the nesting.
+    # axis: link text may hold balanced brackets ([f [g]](url)), so a label ends at the bracket that balances its opener
+    # axis: links never nest (GFM 6.6): a pair that holds a link (not an image) opens none, its brackets stay literal
+    stack, k = [], 0  # each open bracket as [position, whether a link sits inside it]
+    while k < n:
+        span = next((s for s in spans if s[0] == k), None)
+        if span is not None:
+            k = span[3]
+            continue
+        if text[k] == "\\":
+            k += 2
+            continue
+        if text[k] == "[":
+            stack.append([k, False])
+        elif text[k] == "]" and stack:
+            j, holds_link = stack.pop()
+            links[j] = not holds_link and tail_end(k) is not None
+            if stack:
+                stack[-1][1] = stack[-1][1] or holds_link or (links[j] and text[j - 1:j] != "!")
+        k += 1
 
     def opens_link(j):
-        """Whether the ``[`` at ``j`` opens a full link: the ``]`` that balances it (escapes and code spans skipped, as
-        GFM nests balanced brackets in link text) starts a valid tail."""
-        # axis: link text may hold balanced brackets ([f [g]](url)), so the label ends at the bracket that balances the opener
-        k, depth = j + 1, 1
-        while k < n:
-            span = next((s for s in spans if s[0] == k), None)
-            if span is not None:
-                k = span[3]
-                continue
-            if text[k] == "\\":
-                k += 2
-                continue
-            # axis: links never nest (GFM 6.6): an inner link leaves the outer brackets literal, so the outer `[` opens none
-            if text[k] == "[" and text[k - 1] != "!" and opens_link(k):
-                return False
-            depth += {"[": 1, "]": -1}.get(text[k], 0)
-            if depth == 0:
-                return tail_end(k) is not None
-            k += 1
-        return False
+        """Whether the ``[`` at ``j`` opens a full link (``links``, read once above)."""
+        return links.get(j, False)
 
     def padded(span):
         """Whether CommonMark strips one space from each end of the span's content (§6.3)."""

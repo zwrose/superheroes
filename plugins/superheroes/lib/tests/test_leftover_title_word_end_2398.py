@@ -69,6 +69,9 @@ def test_a_link_with_a_title_is_not_glued_at_the_chokepoint():
     # review round 2, v0: `2.` cannot interrupt the paragraph above it, so GitHub shows no fence and `*f*` is emphasis (`off<em>f</em>`)
     pytest.param("Accepted:\n2. ~~~\n   F-1 The retry loop never backs off*f*: accepted.\n",
                  id="list_marker_fence_that_github_reads_as_a_paragraph_model_only"),
+    # review round 3, v0: an inner link whose destination does not parse is no link, so the outer link stands (`off<a>f [g](not a url)</a>`)
+    pytest.param("- F-1 The retry loop never backs off[f [g](not a url)](https://outer.example)\n",
+                 id="invalid_inner_link_leaves_the_outer_link_standing_model_only"),
 ])
 def test_more_glued_forms_are_refused(line):
     assert gaps(RECORD, line) == ["F-1"]
@@ -97,6 +100,8 @@ def test_more_glued_forms_are_refused(line):
     # review round 2, v1/v2: links never nest, so the inner link leaves the outer brackets literal (`off[f <a>g</a>]`)
     pytest.param("- F-1 The retry loop never backs off[f [g](https://inner.example)](https://outer.example): accepted.\n",
                  id="inner_link_leaves_the_outer_brackets_literal"),
+    # review round 3, v1: a bullet can interrupt a paragraph, so a fence opened on the item's marker line is a real fence
+    pytest.param("- ~~~\n  F-1 The retry loop never backs off*f*: accepted.\n  ~~~\n", id="fence_opened_on_the_marker_line_is_literal"),
 ])
 def test_healthy_acceptances_keep_counting(line):
     assert gaps(RECORD, line) == []
@@ -134,6 +139,12 @@ def test_a_title_written_with_glued_markup_matches_its_verbatim_copy_and_not_the
 
 
 # --- 7: the marker ---------------------------------------------------------------------------------
+
+def test_nested_literal_brackets_are_read_in_linear_time():
+    # review round 3, v2: each opener is read once, so deep literal nesting neither rescans nor recurses
+    deep = "- F-1 The retry loop never backs off[f " + "[" * 3000 + "g" + "]" * 3000 + "](https://x.example): accepted.\n"
+    assert gaps(RECORD, deep) == ["F-1"]
+
 
 def test_the_marker_is_a_word_character_that_normalisation_leaves_alone():
     marker = "ꙮ"
