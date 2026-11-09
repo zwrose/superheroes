@@ -223,7 +223,7 @@ SCENARIOS = _build_scenarios()
 def _run(scenario):
     value = audits.apply_audit_results(copy.deepcopy(scenario["audited"]), copy.deepcopy(scenario["results"]),
                                        **copy.deepcopy(scenario["kwargs"]))
-    return json.loads(json.dumps(value))
+    return value
 
 
 def _golden():
@@ -271,6 +271,7 @@ def test_golden_scenario_returns_exactly_the_recorded_value(scenario):
 
 
 def test_golden_fixture_names_exactly_the_scenarios_of_this_module():
+    # axis: scenario names are unique and golden keys exactly match them, rejecting missing or extra fixture entries.
     names = [s["name"] for s in SCENARIOS]
     assert len(names) == len(set(names))
     assert sorted(_golden()) == sorted(names)
