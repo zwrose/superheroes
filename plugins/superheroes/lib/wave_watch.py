@@ -3319,17 +3319,20 @@ def _evaluate_tick(
     # One slot for the tick: whichever read resolves the repository slug first fills it, and the
     # others reuse it, a failed resolution (None) included.
     slug_cell = [_SLUG_UNRESOLVED]
-    # The terminal local lanes' comment reads share one quarter of what is left of the tick (never less than
-    # one request's minimum, never more than is left), fixed here once, so they never consume the budget the
-    # PR, cloud, note and stack reads that follow need.
-    local_now = monotonic()
-    local_remaining = max(deadline - local_now, 0)
-    local_deadline = local_now + min(local_remaining, max(local_remaining / 4, _MIN_PR_POLL_SECONDS))
+    # The terminal local lanes' comment reads share one quarter of what was left of the tick at the first
+    # such read, so they never consume the budget the PR, cloud, note and stack reads that follow need. A
+    # share smaller than one request's minimum makes no request (the read is disclosed as not made).
+    local_share = []
 
     def read_lane_comments(issue, basis):
+        if not local_share:
+            local_now = monotonic()
+            local_share.append(local_now + max(deadline - local_now, 0) / 4)
         # axis: a terminal local lane's comment read spends only its tick share, never the pollers' budget — see bite-proof record i2410_local_resume.md
+        if local_share[0] - monotonic() < _MIN_PR_POLL_SECONDS:
+            return None, []
         return _read_lane_comments(
-            repo_root, issue, basis, local_deadline, monotonic, gh_run, env, None, slug_cell,
+            repo_root, issue, basis, local_share[0], monotonic, gh_run, env, None, slug_cell,
         )
 
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(

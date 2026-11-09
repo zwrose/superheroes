@@ -20,7 +20,7 @@ import pytest
 import heartbeat as hb
 import launch_ledger as ll
 import wave_watch as ww
-from test_wave_watch_builder_note import _BATCH, _NoteGh, _arm, _raw  # noqa: F401
+from test_wave_watch_builder_note import _BATCH, _NoteGh, _arm, _cloud_lane, _raw  # noqa: F401
 from test_wave_watch_cloud import _add_local_lane, _reserved, clock, repo  # noqa: F401
 from test_wave_watch_cloud_progress import _progress  # noqa: F401
 from test_wave_watch_fix_order import _ending, _later  # noqa: F401
@@ -149,16 +149,18 @@ def test_row2_the_comment_itself_fires_no_event(repo, monkeypatch):
     assert "/issues/201/comments" in gh.note_calls()[0][-1]
 
 
-@pytest.mark.parametrize("comments", [
-    pytest.param([_later(7, issue=201, secs=-_BEFORE_BASIS)], id="note-before-the-basis"),
-    pytest.param([_later(7, "Looks good to me.", issue=201)], id="free-form-comment"),
-    pytest.param([_later(7, issue=202)], id="another-issue"),
-    pytest.param([_later(7, _ending("handback"), issue=201, secs=-_BEFORE_BASIS)], id="ending-before"),
+@pytest.mark.parametrize("make", [
+    pytest.param(lambda: [_later(7, issue=201, secs=-_BEFORE_BASIS)], id="note-before-the-basis"),
+    pytest.param(lambda: [_later(7, "Looks good to me.", issue=201)], id="free-form-comment"),
+    pytest.param(lambda: [_later(7, issue=202)], id="another-issue"),
+    pytest.param(lambda: [_later(7, _ending("handback"), issue=201, secs=-_BEFORE_BASIS)], id="ending-before"),
 ])
 def test_row2_a_comment_that_is_not_a_builder_comment_after_the_basis_does_not_reopen(
-        repo, monkeypatch, comments):
+        repo, monkeypatch, make):
     _local_lane(repo)
     _scan(monkeypatch, (None, False))
+    # Built after the lane, so a before-the-basis comment is still after the reserve whatever the delay.
+    comments = make()
     live, degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, comments)})
     assert live == {}
     assert degraded == set()
@@ -353,6 +355,9 @@ class _Ps:
     "claude --resume=%s" % _SID,
 ])
 def test_row6_a_session_flag_naming_the_session_id_matches(monkeypatch, command):
+    # The watcher's pid is pinned apart from the synthetic one, so a test worker that happens to hold
+    # the synthetic pid cannot make the match fail.
+    monkeypatch.setattr(os, "getpid", lambda: 1)
     monkeypatch.setattr(subprocess, "run", _Ps("  %d %s\n" % (_RESUMED_PID, command)))
     assert ww._resumed_session_pid(_SID) == (_RESUMED_PID, False)
 
@@ -382,8 +387,10 @@ def test_row6_the_ps_read_is_one_listing_in_the_c_locale(monkeypatch):
 
 
 def test_row6_two_matching_processes_give_the_lowest_pid_and_the_watchers_own_is_skipped(monkeypatch):
+    # The watcher's pid is pinned below every synthetic one, so the skip is what keeps it out.
+    monkeypatch.setattr(os, "getpid", lambda: 77)
     listing = "\n".join([
-        "%d claude --resume %s" % (os.getpid(), _SID),
+        "77 claude --resume %s" % _SID,
         "900 claude --resume %s" % _SID,
         "300 x -r %s" % _SID,
         "not-a-pid claude --resume %s" % _SID,
@@ -478,13 +485,30 @@ def test_a_terminal_local_lanes_comment_read_gets_a_quarter_of_the_tick_not_its_
     assert seen == [1000.0 + ww.RUN_READ_BUDGET_SECONDS / 4]
 
 
+def test_a_tick_too_short_to_share_makes_no_comment_read_and_discloses_it(repo, monkeypatch):
+    # A one-second arm: a quarter of it is less than one request's minimum, so the closed lane's read is not
+    # made at all, and the arm's whole window stays with the other reads.
+    _local_lane(repo)
+    _scan(monkeypatch, (None, False))
+    seen = []
+    monkeypatch.setattr(ww, "_read_lane_comments", lambda *args: seen.append(args) or (True, []))
+    clock = iter(range(1000, 1100))
+    result = ww.watch_arm(
+        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=_NoteGh(),
+        monotonic=lambda: float(next(clock)) / 10, sleep=lambda _d: None,
+    )
+    assert seen == []
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
+
+
 def test_the_heartbeat_stamp_time_uses_the_clock_sample_its_age_was_read_at(monkeypatch):
     # The age is measured against the read's own sample; a later sample would move an old stamp past the basis.
     clock_reads = iter([1000.0] + [1001.0] * 10)
     monkeypatch.setattr(ww.time, "time", lambda: next(clock_reads))
 
     def read_heartbeat(repo_root, launch_id, env=None, now=None):
-        return {"ageSeconds": (1000.0 if now is None else now) - 900.0}
+        # Like heartbeat.py: an age measured against `now`, or against the reader's own clock sample.
+        return {"ageSeconds": (ww.time.time() if now is None else now) - 900.0}
 
     monkeypatch.setattr(ww.hb, "read_heartbeat", read_heartbeat)
     assert ww._heartbeat_stamped_after("/unused", "local-a", {}, 900.5) is False
@@ -532,11 +556,14 @@ def test_a_lane_in_ignore_launch_is_never_reopened(repo, monkeypatch):
 
 def test_a_live_local_lane_and_a_cloud_lane_are_unchanged(repo, monkeypatch):
     _add_local_lane(repo, "local-live", 301, pid=os.getpid())
+    _cloud_lane(repo, "cloud-live", 302)
     _scan(monkeypatch, (_RESUMED_PID, False))
+    recorded_cloud_pid = ww._derive_batch_lanes(repo, _BATCH, os.environ, set(), ())[1]["cloud-live"].get("pid")
     live, _degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [])})
-    assert set(live) == {"local-live"}
-    assert "reopenedBy" not in live["local-live"]
+    assert set(live) == {"local-live", "cloud-live"}
+    assert "reopenedBy" not in live["local-live"] and "reopenedBy" not in live["cloud-live"]
     assert live["local-live"]["pid"] == os.getpid()
+    assert live["cloud-live"].get("pid") == recorded_cloud_pid
 
 
 def test_a_closed_local_lane_is_not_a_never_stamped_lane_at_the_deadline(repo, monkeypatch):
