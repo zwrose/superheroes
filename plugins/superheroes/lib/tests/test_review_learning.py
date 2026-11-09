@@ -491,7 +491,9 @@ def test_tally_finding_without_a_key_falls_back_to_its_id():
 def test_tally_no_adoption_day_is_unmeasured_with_no_counts():
     got = RL.tally(_truth_table_records(), _escapes(), None, until="2026-10-11")
     assert (got["measured"], got["reason"]) == (False, "no-adoption-day")
-    assert "review_learning.py adopt" in got["remedy"] and "--date" in got["remedy"]
+    # the remedy names every argument `adopt` requires, so the command it names can run
+    for part in ("review_learning.py adopt", "--cwd <project root>", "--date <YYYY-MM-DD>"):
+        assert part in got["remedy"], part
     assert got["seats"] == {} and got["unattributedCatches"] is None
     assert got["escapes"] == {"missed": None, "seenAndLeft": None}
     assert set(got["leftOut"].values()) == {None}

@@ -270,7 +270,7 @@ before any relaunch:
    work-in-progress commit on that build's own branch. Its message says it is an unreviewed save
    after a usage-limit stop, so the successor reads it as residue to adjudicate, not as a receipt.
 2. Push that branch, and name the commit by its sha in the recovery record.
-3. Once the push is confirmed, remove the dead worktree (`git worktree remove`, one path per call),
+3. Once the push is confirmed, remove the dead worktree (`git worktree remove`, each worktree in its own call),
    so the relaunch's sibling check and its own new worktree do not meet a stale tree. Remove only a
    worktree whose builder process is confirmed gone (§ Read liveness from the right signals).
 
