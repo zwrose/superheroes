@@ -212,11 +212,12 @@ def _item_cut(lines, span, shown):
             if _TAG_ENTRY.search(line, start):
                 return ""
             # axis: a fenced run reads as literal only when GitHub opens a fence there: the item's own line starting with the
-            # fence run, or its marker line when the marker can interrupt a paragraph (a bullet, or an ordered 1); `2. ~~~`
-            # after a paragraph is that paragraph on GitHub, so its run keeps its markup
+            # fence run, or its marker line when the marker is one GitHub reads and that can interrupt a paragraph (an ASCII
+            # bullet, or an ASCII ordered 1); any other marker (`2. ~~~` after a paragraph, a full-width `２.`) keeps its markup,
+            # over-refusing a genuine fence after an ordered marker above 1 rather than trusting a paragraph
             if k == 0 or span[k - 1][1] != "fenced":
-                marker = _ORDERED_MARKER.match(line[:start]) if k == 0 else None
-                trusted = (marker is None or int(marker.group(1)) == 1) and _FENCE_OPEN.match(line[start:].lstrip()) is not None
+                opens_here = k > 0 or _FENCE_MARKER.fullmatch(line[:start].strip()) is not None
+                trusted = opens_here and _FENCE_OPEN.match(line[start:].lstrip()) is not None
             parts.append((line[start:].strip(), trusted))
         else:
             kept, cut = _scan_line(line, start)
@@ -241,7 +242,7 @@ class _Item(str):
 
 _LITERAL_MARKUP = {ord(c): "." for c in "*~`[]\\"}
 _FENCE_OPEN = re.compile(r"`{3,}|~{3,}")
-_ORDERED_MARKER = re.compile(r"\s*([0-9]{1,9})[.)]")
+_FENCE_MARKER = re.compile(r"[-*+]|0{0,8}1[.)]")  # an item marker that can interrupt a paragraph (CommonMark 5.2), ASCII only
 
 
 def _unmarked_literal(item):

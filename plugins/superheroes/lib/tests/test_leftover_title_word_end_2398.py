@@ -72,6 +72,13 @@ def test_a_link_with_a_title_is_not_glued_at_the_chokepoint():
     # review round 3, v0: an inner link whose destination does not parse is no link, so the outer link stands (`off<a>f [g](not a url)</a>`)
     pytest.param("- F-1 The retry loop never backs off[f [g](not a url)](https://outer.example)\n",
                  id="invalid_inner_link_leaves_the_outer_link_standing_model_only"),
+    # review round 4, v0: GitHub reads no list marker in a full-width digit, so the line is a paragraph and `*f*` is emphasis
+    pytest.param("２. ~~~\n   F-1 The retry loop never backs off*f*: accepted.\n   ~~~\n",
+                 id="full_width_digit_marker_is_no_fence_model_only"),
+    # known over-refusal, pinned: after a blank line GitHub shows this as a real fence, but a marker above 1 is not trusted,
+    # because the same line after a paragraph is that paragraph (the check refuses rather than trust a paragraph)
+    pytest.param("2. ~~~\n   F-1 The retry loop never backs off*f*: accepted.\n   ~~~\n",
+                 id="known_over_refusal_fence_after_an_ordered_marker_above_one"),
 ])
 def test_more_glued_forms_are_refused(line):
     assert gaps(RECORD, line) == ["F-1"]
