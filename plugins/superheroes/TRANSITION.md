@@ -18,6 +18,16 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## Unreleased
+
+### Before you upgrade
+
+- **After switching.** **When a `leftover-not-accepted` refusal's missing finding is named only in an acceptance another finding already took (a sub-bullet under a lead-in bullet, say), its detail now says the two share one acceptance and asks for one top-level bullet per finding; the reason and every other detail are unchanged.** Nothing is owed. See [Leftover rule: the refusal names a shared acceptance](#leftover-rule-the-refusal-names-a-shared-acceptance).
+
+### Leftover rule: the refusal names a shared acceptance
+
+The `leftover-not-accepted` detail from `vet_slot.py handback --pr` and a READY `vet_slot.py write` now names a missing finding whose id and title sit in an acceptance already given to another finding as sharing one acceptance with that finding and adds that each finding left for the owner gets its own top-level bullet, while a missing finding named nowhere keeps today's wording and the one-to-one rule and the item grouping are unchanged.
+
 ## 0.48.0
 
 ### Before you upgrade
