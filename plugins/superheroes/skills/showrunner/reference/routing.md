@@ -38,12 +38,12 @@ Quiet means the full lane at any size, as bounded in `rubric/review-discipline.m
    behaves like a quiet one. Database outages reported as authentication errors are highly visible
    and still send everyone to the wrong place.
 
-**Weaker considerations** — label them weaker in the conversation:
+**Weaker considerations** — label them weaker in the recorded reasoning:
 
 - **Expected size** is an unreliable forecast. It is a reason to lean full, never a reason to feel
   safe about something small: silent defects arrive in small and mid-sized diffs.
 - **Whether it moves a line or sits inside one already drawn** sharpens the first two answers but is
-  not a signal of its own. It is hard to apply consistently, so it belongs in the conversation, not
+  not a signal of its own. It is hard to apply consistently, so it belongs in the recorded reasoning, not
   the decision.
 - **A flaky review engine** makes the light lane unreliable as the fast option. It is a reason to
   take the full lane, never a reason to cut the review. The single reviewer keeps its normal

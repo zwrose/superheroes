@@ -276,7 +276,10 @@ above).
    plain consequence at filing time.** **The premises of an order you send bind you, the
    dispatcher** — amend the order when the world moves under it. **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/routing.md` when you write a consequence line or amend a live order.**
 
-   **Call the lane when you mark the issue build-ready, with the owner present at kickoff.**
+   **Call the lane when you mark the issue build-ready, at any hour, attended or not.** The lane
+   call and the presentation call are craft calls: make both and record them for the owner's veto,
+   as the standing order says of every craft call
+   (`${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/owner-decisions.md`).
    Run the lane rule first, over the paths the issue will change; its floor binds the call
    (`rubric/review-discipline.md` § The lane floor, which runs it through `lib/lane_call.py`).
    **Default to the full lane; anything unclear resolves
@@ -284,13 +287,21 @@ above).
    **down** a lane is **never** your call — it requires the owner, per change. Disclosure alone
    never authorizes a downgrade. **Quiet means the full lane at any size** (as bounded in
    `review-discipline.md`): a failure nobody would notice soon is quiet, however small the diff.
+   **Around the lane call, the owner's word, per change, stays required for exactly three things:**
+   lowering a lane already called (a downgrade, above), every micro change (§ Micro — hard-line
+   edit), and the owner-capability preconditions cleared at dispatch, such as sign-ins (duty 9).
+   Separately, a reviewer from a maker's family runs only on the owner's word for that change
+   (`review-discipline.md`). None of these holds a lane call for the owner: without the word, the
+   change resolves upward or parks.
    **Read `${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/routing.md` when you make the lane call.**
    **Record the lane call and one line of reasoning in the issue** (in the **PR** for micro), and
    **record the show it / say it / nothing to see presentation call alongside it, with one line of
    reasoning** (duty 5).
 
-   **Check the single reviewer's availability while the owner is present** (light and micro, as
-   bounded in `review-discipline.md`). The single reviewer's review record answers to the reading rule in
+   **Check the single reviewer's availability yourself at kickoff** (light and micro, as bounded in
+   `review-discipline.md`). When no reviewer outside the makers' families is available, the change
+   resolves upward (a light call becomes full; micro resolves as § Micro — hard-line edit says),
+   never a wait for the owner. The single reviewer's review record answers to the reading rule in
    `review-discipline.md` (§ What never changes in any lane), which owns the criterion, the retry,
    and what a missing reading means. The investigation-record floor applies automatically to **every
    external review seat**, single-seat lanes included (see `review-discipline.md`).
