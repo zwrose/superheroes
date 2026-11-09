@@ -2,7 +2,8 @@
 
 New contract (post #559/#560/#561): tool invocation routes through
 ``guardian_collect.run_tool`` and the injected ``ctx["run"]`` seam. jscpd's json reporter
-is read off stdout (JSON object first, trailing summary ignored). Degradation is a
+is read from the report file it writes into the lens's temp dir (#2411; JSON object first,
+trailing summary ignored); stdout is read only when no report file exists. Degradation is a
 ``not-collected`` / ``partial`` status return — never a raised ``LensDegraded``. The
 previous digest is read as camelCase ``ctx["prevDigest"]``.
 """
@@ -40,14 +41,22 @@ class _FakeJscpd:
       file a test wrote is "tracked"; pass ``tracked=[...]`` to control the census
       explicitly (empty list ⇒ zero tracked). The ``raise_exc`` / ``returncode`` knobs are
       jscpd-only, so the jscpd-degradation scenarios still exercise jscpd itself.
-    - anything else (``jscpd``) — the crafted report / stdout / returncode / raise, exactly
-      as before, JSON object first then a trailing human summary the parser must ignore.
+    - anything else (``jscpd``) — the crafted report / stdout / returncode / raise, JSON
+      object first then a trailing human summary the parser must ignore. Like real jscpd,
+      the text is written to ``jscpd-report.json`` in the ``-o`` dir (``report_via="file"``,
+      the default); ``report_via="stdout"`` returns it on stdout and writes no file (the
+      conformance seam's shape); ``report_via="none"`` does neither. ``report_dirs``
+      records each ``-o`` dir so a test can check it was removed, and ``report_sizes``
+      each written file's size.
     """
 
     def __init__(self, report=None, *, stdout=None, returncode=0, raise_exc=None,
-                 trailer=True, tracked=None):
+                 trailer=True, tracked=None, report_via="file"):
         self.report = report
         self.stdout = stdout
+        self.report_via = report_via
+        self.report_dirs = []
+        self.report_sizes = []
         self.returncode = returncode
         self.raise_exc = raise_exc
         self.trailer = trailer
@@ -88,6 +97,11 @@ class _FakeJscpd:
                 raw = cfg.get("path")
                 if isinstance(raw, list):
                     config_paths = raw
+        out_dir = None
+        for i, arg in enumerate(argv):
+            if arg == "-o" and i + 1 < len(argv):
+                out_dir = argv[i + 1]
+                self.report_dirs.append(out_dir)
         if self.raise_exc is not None:
             raise self.raise_exc
         if self.stdout is not None:
@@ -100,7 +114,17 @@ class _FakeJscpd:
                 total["sources"] = len(config_paths) if config_paths else 1
             text = json.dumps(report)
             if self.trailer:
-                text += "\nreport saved to /dev/stdout\n"
+                text += "\nreport saved to jscpd-report.json\n"
+        if self.report_via == "file" and out_dir is not None:
+            with open(os.path.join(out_dir, gld.REPORT_FILE_NAME), "w",
+                      encoding="utf-8") as fh:
+                fh.write(text)
+            self.report_sizes.append(
+                os.path.getsize(os.path.join(out_dir, gld.REPORT_FILE_NAME)))
+            text = "JSON report saved to %s\n" % os.path.join(
+                out_dir, gld.REPORT_FILE_NAME)
+        elif self.report_via == "none":
+            text = ""
         rc = self.returncode
 
         class R:
@@ -622,20 +646,140 @@ def test_degrade_on_unparseable_stdout(tmp_path):
 
 
 def test_reporter_setup_failure_returns_not_collected_never_raises(tmp_path, monkeypatch):
-    """F: a failure in the /dev/stdout reporter setup (mkdtemp / os.symlink) must convert
-    to not-collected — collect() must NEVER raise out of the never-raises contract."""
+    """F: a failure in the reporter setup (the temp report dir) must convert to
+    not-collected — collect() must NEVER raise out of the never-raises contract."""
     _seed_tracked(tmp_path)
 
     def boom(*a, **k):
-        raise OSError("symlink not permitted")
+        raise OSError("temp dir not permitted")
 
-    monkeypatch.setattr(gld.os, "symlink", boom)
+    monkeypatch.setattr(gld.tempfile, "mkdtemp", boom)
     run = _FakeJscpd(_report([]))  # would collect cleanly if setup had succeeded
     out = _collect(gld.DuplicationLens(), tmp_path, run)  # must not raise
     status, reason = gl.classify_collect(out)
     assert status == "not-collected"
     assert out["digest"] is None
     assert "reporter setup failed" in reason
+
+
+# --- #2411: the report is read from jscpd's report file ----------------------------
+
+def _large_pair_report(tmp_path, min_bytes):
+    """A one-clone report padded past ``min_bytes`` through its ``fragment`` text (jscpd
+    copies the cloned code there, which is what grows a large tree's report)."""
+    shared = ["S_%d" % i for i in range(12)]
+    _write_pair(tmp_path, "a.md", "b.md",
+                ["A"] + shared + ["Z"], ["B"] + shared + ["Y"])
+    entry = _clone_entry("a.md", "b.md", lines=12, fmt="markdown",
+                         start_a=2, end_a=13, start_b=2, end_b=13)
+    entry["fragment"] = "x" * (min_bytes + 1)
+    return _report([entry])
+
+
+def test_report_larger_than_stdout_cap_parses_from_file(tmp_path):
+    """A report past the collector's stdout cap still yields a reading: the lens reads
+    jscpd's report file, never the capped stdout (the field failure was truncated-output)."""
+    import guardian_tools as gt
+    report = _large_pair_report(tmp_path, gt.MAX_OUTPUT_BYTES)
+    run = _FakeJscpd(report)
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    assert gl.classify_collect(out) == ("collected", None)
+    assert len(out["candidates"]) == 1
+    assert out["candidates"][0]["files"] == ["a.md", "b.md"]
+    # The same report on stdout trips the cap: the seam, like production, refuses it.
+    out_stdout = _collect(gld.DuplicationLens(), tmp_path,
+                          _FakeJscpd(report, report_via="stdout"))
+    status, reason = gl.classify_collect(out_stdout)
+    assert status == "not-collected"
+    assert "truncated-output" in reason
+
+
+def test_report_file_over_lens_bound_degrades_named(tmp_path, monkeypatch):
+    """A report file past the lens's own read bound degrades with a named cause and no
+    digest — never a zero reading that would erase the baseline."""
+    monkeypatch.setattr(gld, "MAX_REPORT_FILE_BYTES", 4096)
+    report = _large_pair_report(tmp_path, 4096)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "report-too-large" in reason
+    assert out["digest"] is None
+    assert out["candidates"] == []
+
+
+def test_report_file_at_lens_bound_still_reads(tmp_path, monkeypatch):
+    """The bound is inclusive: a report of exactly MAX_REPORT_FILE_BYTES reads, and one
+    byte less of bound degrades."""
+    report = _large_pair_report(tmp_path, 0)
+    probe = _FakeJscpd(report)
+    _collect(gld.DuplicationLens(), tmp_path, probe)
+    (size,) = probe.report_sizes
+    monkeypatch.setattr(gld, "MAX_REPORT_FILE_BYTES", size)
+    out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    assert gl.classify_collect(out) == ("collected", None)
+    assert len(out["candidates"]) == 1
+    monkeypatch.setattr(gld, "MAX_REPORT_FILE_BYTES", size - 1)
+    out_over = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
+    assert "report-too-large" in gl.classify_collect(out_over)[1]
+
+
+def test_no_report_file_and_no_stdout_json_degrades_named(tmp_path):
+    """jscpd exits 0 but writes no report file and prints no JSON → named degrade."""
+    _seed_tracked(tmp_path)
+    out = _collect(gld.DuplicationLens(), tmp_path,
+                   _FakeJscpd(_report([]), report_via="none"))
+    status, reason = gl.classify_collect(out)
+    assert status == "not-collected"
+    assert "no report file" in reason
+    assert out["digest"] is None
+
+
+def test_report_file_is_preferred_over_stdout(tmp_path):
+    """When jscpd wrote a report file, stdout is never parsed for the report."""
+    _seed_tracked(tmp_path)
+    clean = {"statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 1}},
+             "duplicates": []}
+    run = _FakeJscpd(clean)
+    real_call = run.__call__
+
+    class _StdoutDecoy:
+        calls = run.calls
+
+        def __call__(self, argv, **kwargs):
+            r = real_call(argv, **kwargs)
+            if argv and argv[0] == "jscpd":
+                r.stdout = "{not valid json at all"
+            return r
+
+    out = _collect(gld.DuplicationLens(), tmp_path, _StdoutDecoy())
+    assert gl.classify_collect(out) == ("collected", None)
+
+
+@pytest.mark.parametrize("case", [
+    "success", "tool-failed", "unparseable", "over-bound", "tool-raises"])
+def test_report_temp_dir_removed_after_run(tmp_path, monkeypatch, case):
+    """The lens's temp report dir is gone after collect(), success or failure."""
+    _seed_tracked(tmp_path)
+    clean = {"statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 1}},
+             "duplicates": []}
+    if case == "success":
+        run = _FakeJscpd(clean)
+    elif case == "tool-failed":
+        run = _FakeJscpd(clean, returncode=2)
+    elif case == "unparseable":
+        run = _FakeJscpd(stdout="{not valid json at all")
+    elif case == "over-bound":
+        monkeypatch.setattr(gld, "MAX_REPORT_FILE_BYTES", 8)
+        run = _FakeJscpd(clean)
+    else:
+        run = _FakeJscpd(clean, raise_exc=OSError("spawn failed"))
+    out = _collect(gld.DuplicationLens(), tmp_path, run)
+    assert len(run.report_dirs) == 1
+    report_dir = run.report_dirs[0]
+    assert os.path.basename(report_dir).startswith("guardian-jscpd-")
+    assert not os.path.exists(report_dir), "temp report dir left behind: %s" % report_dir
+    expected = "collected" if case == "success" else "not-collected"
+    assert gl.classify_collect(out)[0] == expected
 
 
 def test_degrade_on_report_missing_duplicates_list(tmp_path):
