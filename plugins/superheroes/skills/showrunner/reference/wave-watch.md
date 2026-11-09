@@ -464,7 +464,7 @@ posted between a send and a later `not-ready` is not surfaced.
 The window runs from the fix order to the lane's first ending (handback, stop
 or park, a superseded park not counting): endings and notes from before the fix order are not
 re-reported, the closing ending fires `lane-terminal`, and nothing about the lane surfaces after it.
-A refused or never-started lane, and a local lane, are never re-opened. A not-ready lane whose fix
+A refused or never-started lane is never re-opened, and a local lane is not re-opened by a fix order. A not-ready lane whose fix
 goes to a fresh launch instead is passed `--ignore-launch`, or its vet is recorded `ready` or
 `parked-blocker` when done, so the old lane is not watched for an ending that will never come.
 
@@ -488,6 +488,20 @@ read skipped for budget names it only when the tick made a comments request; a t
 request names no lane; `builder-note-unavailable` is recorded in every case.
 A lane passed `--ignore-launch` is not watched on this path either, with no sign in the result: drop
 the ignore before you resume a lane (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
+
+A terminal **local** lane you resumed (its outcome is recorded, and the builder is running again) is
+**watched again, exactly like a live local lane**, once any one of three things shows after its basis (the
+same basis as above, and a lane relaunched on its issue is never reopened): a live process resumed on the
+lane's recorded session id, a heartbeat stamped after the basis, or a builder comment on the lane's issue
+(a builder note, a handback, stop or park, or a progress edit to a resumed phase more than five minutes
+after the basis). A local lane with none of the three stays out of the watch and fires nothing. The pid
+recorded before the resume never fires `builder-exited`; once the watch has seen the resumed process, it
+keeps its pid for the rest of the loop, so the resumed builder's exit fires `builder-exited` (a one-shot
+`run` keeps nothing between calls). A heartbeat from before the outcome never fires `lane-terminal` or
+`lane-blocked` again; only one stamped after the basis counts. Only the lane's own issue comments are
+read, never its PR's, and a comment reopens the lane without firing anything itself; a read that failed
+records `builder-note-unavailable` and the lane stays closed that tick. A lane passed `--ignore-launch`
+is not reopened.
 
 What you do on each: on a **handback**, vet the PR. On a **stop**, repair it — an Anchor stop is duty
 3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it
