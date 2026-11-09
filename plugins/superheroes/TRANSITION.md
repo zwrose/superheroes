@@ -45,6 +45,10 @@ The `leftover-not-accepted` detail from `vet_slot.py handback --pr` and a READY 
 - **What changes.** Fewer acceptances count, never more. The rule reads the acceptance and the record title alike, so a title written with glued markup still matches a verbatim copy. A word glued only at its start (`x*The*`) is unchanged. Emphasis pairing is approximated (flanking, and a partner run on the other side), so a literal `*` or `~` that has a partner can refuse an acceptance GitHub would show with a break. Reword the acceptance: a space after the title's last word always counts. Text on a fenced line is read with no markup, as GitHub shows it; a fence opened on an item's own marker line counts as one only after `-`, `*`, `+` or `1.`, so a genuine fence after a marker such as `2.` still refuses.
 - **Replacement.** None: no command, result key or refusal reason changes.
 
+### Builders: one stop-and-delete rule
+
+- **Stop only what you started; delete only what you created (#2412).** `STOP_AND_DELETE_RULE` in `lib/command_refusals.py` is the one home of the rule: stop a process only by its PID and only when you started it, never by name or pattern, and delete only a path you created in this session or one your task names, never by a name pattern or glob over a directory you did not create. It rides every `dispatch-write` order (`WRITE_DISPATCH_PROCESS_RULE` is that constant), the native implementer preamble, `agents/implementer.md`, review-code's fix step and setup recipes, and every builder launch prompt as an eleventh standing ruling, `own-processes-and-paths`.
+
 ## 0.48.0
 
 ### Before you upgrade

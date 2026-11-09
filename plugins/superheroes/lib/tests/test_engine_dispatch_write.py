@@ -135,8 +135,10 @@ def _expected_staged_write_prompt(base, contract):
 
 
 _NO_PATTERN_KILL_RULE_LITERAL = (
-    "Never stop processes by name or pattern (`pkill`, `killall`, `kill` on a `pgrep` match); "
-    "other sessions share this machine. Stop only a PID you started yourself."
+    "Stop only a process you started yourself, and only by its PID, never by name or pattern "
+    "(`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this "
+    "machine. Delete only a path you created in this session or one your task names for deletion, "
+    "never by a name pattern or a glob over a directory you did not create."
 )
 
 

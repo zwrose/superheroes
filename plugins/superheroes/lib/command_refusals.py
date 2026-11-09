@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """The one home of the refused-command stop rule, the refusal-entry shape (#2011), the
-file-write rule (#2067, #2126), and the delete rule (#2314).
+file-write rule (#2067, #2126), the delete rule (#2314), and the stop-and-delete rule (#2412).
 
 Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT`,
-`FILE_WRITE_RULE` and `DELETE_RULE`; no order surface keeps a hand copy of any. `refusals_fault` is the one
+`FILE_WRITE_RULE`, `DELETE_RULE` and `STOP_AND_DELETE_RULE` (#2412); no order surface keeps a hand copy of any. `refusals_fault` is the one
 check of a result's `refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
 """
 
@@ -54,6 +54,13 @@ DELETE_RULE = (
     "Never put `rm`, or any other delete, inside a compound command: not after `&&`, `||` or `;`, "
     "not in a pipe, and not inside `bash -c` or a subshell. A delete is always its own plain call, "
     "one path per call."
+)
+
+STOP_AND_DELETE_RULE = (
+    "Stop only a process you started yourself, and only by its PID, never by name or pattern "
+    "(`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this "
+    "machine. Delete only a path you created in this session or one your task names for deletion, "
+    "never by a name pattern or a glob over a directory you did not create."
 )
 
 

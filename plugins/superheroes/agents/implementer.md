@@ -55,8 +55,7 @@ This dominates every rung below: a refused or denied command is never a command 
 under rung 3 or rung 4 — you stop and report.
 
 **Deletes.** The delete rule (`DELETE_RULE` in `lib/command_refusals.py`) binds every command you
-run; read it there and follow it. This file does not restate it.
-
+run; read it there and follow it. This file does not restate it. The stop-and-delete rule (`STOP_AND_DELETE_RULE`, same home) binds every process you stop and every path you delete; read it there and follow it.
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when
 another rung decides the command did not run.
