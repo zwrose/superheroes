@@ -18,6 +18,21 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
+## 0.48.1
+
+### Before you upgrade
+
+Check these in a consuming project when it adopts 0.48.1. Each step names the note it comes from.
+
+- **After switching.** **The leftover rule no longer counts a finding's title word that GitHub runs into the next word through inline markup: an acceptance such as `- F-1 The retry loop never backs off*f*`, which GitHub shows as `offf`, leaves F-1 missing, and `vet_slot.py handback --pr` and a READY `vet_slot.py write` refuse `leftover-not-accepted` until the acceptance is reworded.** Nothing else is owed. See [Leftover rule: a title word glued to inline markup is not that word](#leftover-rule-a-title-word-glued-to-inline-markup-is-not-that-word).
+
+### Leftover rule: a title word glued to inline markup is not that word
+
+- **The rule.** A title word counts only where GitHub shows a word break after it, so a word whose end runs into emphasis, strikethrough, a code span, an inline link or an HTML tag with no break (`off*f*`, ``off`f` ``, `off[f](url)`, `off<b>f</b>`, each shown `offf`) is not that word.
+- **Why.** The title was compared by its words with every non-word character read as a space, so `off*f*` read as `off f`, and the title counted although GitHub shows `offf`.
+- **What changes.** Fewer acceptances count, never more. The rule reads the acceptance and the record title alike, so a title written with glued markup still matches a verbatim copy. A word glued only at its start (`x*The*`) is unchanged. Emphasis pairing is approximated (flanking, and a partner run on the other side), so a literal `*` or `~` that has a partner can refuse an acceptance GitHub would show with a break. Reword the acceptance: a space after the title's last word always counts.
+- **Replacement.** None: no command, result key or refusal reason changes.
+
 ## 0.48.0
 
 ### Before you upgrade
