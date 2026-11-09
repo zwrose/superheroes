@@ -400,7 +400,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
 > # The attempt and retry ceilings: 900 s unless the step is a dispatch-panel whose payload carries `ceilings`, which
 > # `round_phases.seat_ceiling` filled per seat. A dispatch-panel payload with no `ceilings` key at all (a pending step
-> # persisted before this change, re-emitted after an upgrade) keeps 900/900, as does every other phase.
+> # persisted by an earlier plugin version, re-emitted after an upgrade) keeps 900/900, as does every other phase.
 > SEAT_TIMEOUT=900; SEAT_RETRY_TIMEOUT=900
 > if [ "$SEAT_PHASE" = "dispatch-panel" ] && printf '%s' "$PAYLOAD" | jq -e 'has("ceilings")' >/dev/null 2>&1; then
 >   SEAT_CEILING=$(printf '%s' "$PAYLOAD" | jq -c --arg k "$SEAT_KEY" '.ceilings[$k] // empty')
