@@ -466,12 +466,22 @@ def test_golden_render_matches_fixture(phase):
 # --- #2399: a host searcher is the read-only superheroes:searcher agent — it replies, never writes ---
 
 
+def _assert_reply_delivery_text_is_a_reply_contract(delivery):
+    """The delivery text itself, read from the production constant at call time: non-blank, names the
+    reply, and holds no affirmative write instruction (`Write no file.` passes, `Write a file.` fails)."""
+    assert delivery.strip(), "sweep-host-reply-delivery-blank"
+    assert re.search(r"\breply\b", delivery), "sweep-host-reply-delivery-no-reply"
+    assert not re.search(r"\bwrite\b(?!\s+no\b)", delivery, re.IGNORECASE), \
+        "sweep-host-reply-delivery-writes"
+
+
 def test_sweep_host_seat_order_replies_and_never_writes():
     """Axis: the host-seat sweep order carries the reply delivery and the landing path, and no write
     instruction in either the channel block or the landing block (the searcher holds no write tool)."""
     ctx = _GOLDEN_CONTEXTS[RP.P_SWEEP]()
     text, reason = RO.render_order(RP.P_SWEEP, "golden-seat", ctx)
     assert reason is None, reason
+    _assert_reply_delivery_text_is_a_reply_contract(RO._SWEEP_HOST_REPLY_DELIVERY)
     assert RO._SWEEP_HOST_REPLY_DELIVERY in text, "sweep-host-reply-delivery-missing"
     assert ctx["landing_path"] in text, "sweep-landing-path-missing"
     assert "Write **only** your payload artifact" not in text, "sweep-host-landing-write-line"

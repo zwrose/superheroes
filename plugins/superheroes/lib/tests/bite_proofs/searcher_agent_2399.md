@@ -435,3 +435,80 @@ Pass line: `1 passed in 0.18s`.
 1 passed in 0.19s
 ```
 Pass line: `1 passed in 0.19s`. At `74cb9bd6` (sentence-level check) this same test fails with `DID NOT RAISE AssertionError` (reviewer's receipt; not re-run here).
+
+## G5 — both sweep delivery guards check the reply text itself
+
+**Provenance:** claude (implementer), work order WO-5 (review finding at `test_round_orders.py:475`, confirmed by the verifier). Worktree `/home/user/wt-2399`, branch `claude/task-auijfg`, HEAD `760f666ffa06a679eda95a09055998dd1a847440`. Before this change both guards took the expected reply text from the production constant `round_orders._SWEEP_HOST_REPLY_DELIVERY`, so emptying the constant, or changing `Write no file.` to `Write a file.`, passed both. Each guard now also checks the constant itself, read at call time through a small private helper (`_assert_reply_delivery_text_is_a_reply_contract`, one copy per module): the text is non-blank after `strip()` (`sweep-host-reply-delivery-blank`), matches `\breply\b` (`sweep-host-reply-delivery-no-reply`), and does not match `\bwrite\b(?!\s+no\b)` case-insensitively (`sweep-host-reply-delivery-writes`). In the census test the helper runs only when `replies` is true, before the `writes != emits` assertion.
+
+**Guarded elements and axes (the two guards share one failure-mode class per check; the representative guard node is named for each):**
+- `test_round_orders.py::test_sweep_host_seat_order_replies_and_never_writes` and `test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]` — axis: the delivery text contains an affirmative write instruction (red 1) or does not name the reply (red 2). Both nodes are run in each red, so neither is represented by the other.
+- The blank check (`sweep-host-reply-delivery-blank`) is exercised by the reviewer's break-it test (`empty-render`, `empty-census`), not by a red of my own; a red of my own on it was not run (budget).
+
+### G5 break-it — the reviewer's test at the fixed state
+
+`plugins/superheroes/lib/tests/test_sweep_reply_contract_break_it.py` (the reviewer's file, copied with `cp`, not edited). Run alone with `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_sweep_reply_contract_break_it.py -v`:
+```
+collected 4 items
+
+plugins/superheroes/lib/tests/test_sweep_reply_contract_break_it.py::test_sweep_reply_guards_reject_invalid_delivery[empty-render] PASSED [ 25%]
+plugins/superheroes/lib/tests/test_sweep_reply_contract_break_it.py::test_sweep_reply_guards_reject_invalid_delivery[empty-census] PASSED [ 50%]
+plugins/superheroes/lib/tests/test_sweep_reply_contract_break_it.py::test_sweep_reply_guards_reject_invalid_delivery[writes-file-render] PASSED [ 75%]
+plugins/superheroes/lib/tests/test_sweep_reply_contract_break_it.py::test_sweep_reply_guards_reject_invalid_delivery[writes-file-census] PASSED [100%]
+
+============================== 4 passed in 0.44s ===============================
+```
+At `760f666f` the reviewer's receipt is `4 failed` with `DID NOT RAISE AssertionError` (not re-run here).
+
+### G5 red 1 — `Write no file.` becomes `Write a file.`
+
+**neutralization** (`round_orders.py`, inside `_SWEEP_HOST_REPLY_DELIVERY`):
+```diff
+-    "Return the payload object as your whole reply with nothing after it. Write no file. When you "
++    "Return the payload object as your whole reply with nothing after it. Write a file. When you "
+```
+Run with `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_round_orders.py::test_sweep_host_seat_order_replies_and_never_writes" "plugins/superheroes/lib/tests/test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]" -q`. **raw red** (the failure bodies elided to the decisive lines; both nodes FAILED):
+```
+FF                                                                       [100%]
+E       AssertionError: sweep-host-reply-delivery-writes
+E       assert not <re.Match object; span=(69, 74), match='Write'>
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_round_orders.py:474: AssertionError
+E       AssertionError: sweep-host-reply-delivery-writes
+E       assert not <re.Match object; span=(69, 74), match='Write'>
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_round_driver_order_channel.py:226: AssertionError
+FAILED plugins/superheroes/lib/tests/test_round_orders.py::test_sweep_host_seat_order_replies_and_never_writes
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]
+2 failed in 0.38s
+```
+**restore:** the inverse Edit (`Write a file.` back to `Write no file.`). **restore receipt:** `git diff -- plugins/superheroes/lib/round_orders.py` printed nothing, and the restored line quoted back: `    "Return the payload object as your whole reply with nothing after it. Write no file. When you "`. **raw green** (same two nodes):
+```
+..                                                                       [100%]
+2 passed in 0.38s
+```
+
+### G5 red 2 — every `reply` in the constant becomes `answer`
+
+**neutralization** (`round_orders.py`, inside `_SWEEP_HOST_REPLY_DELIVERY`, three occurrences replaced in one Edit):
+```diff
+-    "Return the payload object as your whole reply with nothing after it. Write no file. When you "
+-    "found nothing, reply with an empty `hits` list, never an empty reply."
++    "Return the payload object as your whole answer with nothing after it. Write no file. When you "
++    "found nothing, answer with an empty `hits` list, never an empty answer."
+```
+Same two-node command as red 1. **raw red** (failure bodies elided to the decisive lines; both nodes FAILED):
+```
+FF                                                                       [100%]
+E       AssertionError: sweep-host-reply-delivery-no-reply
+E       assert None
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_round_orders.py:473: AssertionError
+E       AssertionError: sweep-host-reply-delivery-no-reply
+E       assert None
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_round_driver_order_channel.py:225: AssertionError
+FAILED plugins/superheroes/lib/tests/test_round_orders.py::test_sweep_host_seat_order_replies_and_never_writes
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]
+2 failed in 0.57s
+```
+**restore:** the inverse Edit (the two lines put back to `reply`). **restore receipt:** `git diff -- plugins/superheroes/lib/round_orders.py` printed nothing, and the restored lines quoted back: `    "Return the payload object as your whole reply with nothing after it. Write no file. When you "` and `    "found nothing, reply with an empty `hits` list, never an empty reply."`. **raw green** (same two nodes):
+```
+..                                                                       [100%]
+2 passed in 0.38s
+```

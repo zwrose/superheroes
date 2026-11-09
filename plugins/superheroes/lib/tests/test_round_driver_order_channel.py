@@ -11,6 +11,7 @@ engine ones included, was told to write.
 """
 import importlib.util
 import os
+import re
 
 import pytest
 
@@ -217,6 +218,15 @@ def test_engine_channel_renders_no_write_instruction_for_every_phase(phase):
     assert LANDING not in text, phase
 
 
+def _assert_reply_delivery_text_is_a_reply_contract(delivery):
+    """The delivery text itself, read from the production constant at call time: non-blank, names the
+    reply, and holds no affirmative write instruction (`Write no file.` passes, `Write a file.` fails)."""
+    assert delivery.strip(), "sweep-host-reply-delivery-blank"
+    assert re.search(r"\breply\b", delivery), "sweep-host-reply-delivery-no-reply"
+    assert not re.search(r"\bwrite\b(?!\s+no\b)", delivery, re.IGNORECASE), \
+        "sweep-host-reply-delivery-writes"
+
+
 @pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
 def test_every_phase_renders_exactly_one_output_contract(phase):
     """Direction 2: exactly one output contract per seat kind x channel — never two, never none.
@@ -230,6 +240,8 @@ def test_every_phase_renders_exactly_one_output_contract(phase):
         text = _render_phase(phase, host_seat=host_seat)
         writes = bool(_names_a_write(text))
         replies = host_seat and phase in RO.REPLY_HOST_PHASES
+        if replies:
+            _assert_reply_delivery_text_is_a_reply_contract(RO._SWEEP_HOST_REPLY_DELIVERY)
         emits = ("runner's declared result channel" in text) or (
             replies and RO._SWEEP_HOST_REPLY_DELIVERY in text)
         assert writes != emits, (
