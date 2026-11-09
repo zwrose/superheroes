@@ -539,8 +539,10 @@ above).
    **Issuing the merge command is yours alone.** No subagent issues it. The mechanical duties
    around it (sequencing, branch-update, waiting for CI green on the recorded head, conflict
    resolution under an advisor-authored recipe, and post-merge hygiene) may be handed to a subagent
-   under the three conditions below. A merge train's "green" includes post-merge `main` CI, and
-   union fixes ride the last open PR, disclosed.
+   under the three conditions below. A merge train's "green" includes post-merge `main` CI
+   ([merge-train.md](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/merge-train.md) § A merge
+   train's "green" says when a merge is reported done without waiting for that run), and union
+   fixes ride the last open PR, disclosed.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat

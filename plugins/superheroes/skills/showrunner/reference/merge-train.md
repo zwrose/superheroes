@@ -41,6 +41,30 @@ Read the requirement before the train's first merge, for the base branch (`main`
 (classic protection; a 404 "Branch not protected" answers "none"). Either one reporting `true`
 means the branch requires it. Any other failure of either read counts as requiring it.
 
+**When a merge is reported done without waiting.** The advisor reports a merge done, and goes on
+with the train, without waiting for `main`'s post-merge run only when both of these hold:
+
+1. **The base branch requires pull requests to be up to date, and both reads answered.** One of the
+   two reads above reports `true`, and neither read failed: the classic read may answer with its 404
+   "Branch not protected", but any other 404, a 403, or any other failure of either read is a failed
+   read. A failed read still counts as requiring up-to-date PRs when you bring PRs current; here it
+   keeps the wait.
+2. **The merged commit's tree is the tree CI passed.** After `git fetch origin main`,
+   `git rev-parse --verify <merged sha>^{tree}` and `git rev-parse --verify <head sha>^{tree}` both
+   succeed and print the same tree. The head is the merged PR's head whose green the merge relied
+   on, its run selected by workflow name plus head sha ([Selecting the run to
+   watch](#selecting-the-run-to-watch)); for a stack, its top layer's head. Because the branch
+   requires up-to-date PRs, that head already held the base, so its `pull_request` run's test merge
+   built the head's own tree. Either command failing, or two different trees, keeps the wait. A
+   merge through a merge queue keeps the wait too: its run tests the queue's own commit.
+
+The post-merge run still runs, and the train is still green only when it is green: a red one is a
+red train, fixed by the recipe below, the post-merge-only red included. The advisor reads its result
+at its next pass, selected the same way, instead of blocking on it. The pre-merge green is still
+not a substitute for that run, as above and as the post-merge-only red below shows: the exception
+changes only when the merge is reported, never what makes the train green. In every other case the
+wait stays as it is.
+
 ## Union fixes ride the last *open* PR, disclosed
 
 While a lane is still open, the fix lands on **that** branch as a disclosed integration commit — never
@@ -186,7 +210,8 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    — and then this file's existing rules apply unchanged: the train is green when **`main`'s own
    post-merge run** is green on the merged head, selected by workflow name plus head sha ([A merge
    train's "green" includes post-merge `main` CI](#a-merge-trains-green-includes-post-merge-main-ci),
-   [Selecting the run to watch](#selecting-the-run-to-watch)). Reading back each landed layer's
+   [Selecting the run to watch](#selecting-the-run-to-watch); that section says when the merge is
+   reported done without waiting for that run). Reading back each landed layer's
    sub-issue and closing the feature issue follow [Each layer is a
    sub-issue](../../../rubric/native-stacks.md#each-layer-is-a-sub-issue), item 6.
 
