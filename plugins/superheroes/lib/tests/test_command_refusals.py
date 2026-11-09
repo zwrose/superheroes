@@ -165,7 +165,7 @@ def test_bite_proof_is_the_only_sanctioned_retry():
     # axis: the three conditions, in order — see bite-proof record wo1_2431_session_rule
     assert entry["conditions"] == (
         "in a throwaway copy of the tree",
-        "with the mutation reverted",
+        "with the mutation in place for the red run and reverted before the green run",
         "never committed or pushed",
     )
     # axis: the disclosure names the refusal and the re-run in the PR body and the vet receipt — see bite-proof record wo1_2431_session_rule

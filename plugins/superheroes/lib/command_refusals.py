@@ -33,7 +33,7 @@ SANCTIONED_RETRIES = (
         "who": ("the build's orchestrator", "a vet"),
         "conditions": (
             "in a throwaway copy of the tree",
-            "with the mutation reverted",
+            "with the mutation in place for the red run and reverted before the green run",
             "never committed or pushed",
         ),
         "disclosure": "the PR body (for a vet, the vet receipt) names the refusal and the re-run",
