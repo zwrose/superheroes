@@ -485,6 +485,19 @@ def test_a_terminal_local_lanes_comment_read_gets_a_quarter_of_the_tick_not_its_
     assert seen == [1000.0 + ww.RUN_READ_BUDGET_SECONDS / 4]
 
 
+def test_a_local_event_already_due_is_reported_before_any_closed_lanes_comment_read(repo, monkeypatch):
+    # A live lane's handback is due; the closed lane's comment read never runs ahead of it.
+    _local_lane(repo)
+    _add_local_lane(repo, "local-live", 301, pid=os.getpid())
+    _stamp(repo, "handback", 5, launch_id="local-live")
+    _scan(monkeypatch, (None, False))
+    seen = []
+    monkeypatch.setattr(ww, "_read_lane_comments", lambda *args: seen.append(args) or (True, []))
+    result = _run(repo)
+    assert result["event"] == ww.EVENT_LANE_TERMINAL
+    assert seen == []
+
+
 def test_a_tick_too_short_to_share_makes_no_comment_read_and_discloses_it(repo, monkeypatch):
     # A one-second arm: a quarter of it is less than one request's minimum, so the closed lane's read is not
     # made at all, and the arm's whole window stays with the other reads.

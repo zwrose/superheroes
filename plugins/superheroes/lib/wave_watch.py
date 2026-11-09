@@ -700,18 +700,27 @@ def _reopen_local_lane(repo_root, lid, info, launches, env, degraded, local_resu
             del pids[lid]
     if reopened is None and _heartbeat_stamped_after(repo_root, lid, env, basis):
         reopened = (None, "builder-heartbeat")
-    if (reopened is None and isinstance(local_resume, dict)
+    if (reopened is None and isinstance(local_resume, dict) and isinstance(local_resume.get("pending"), list)
+            and _valid_issue_number(info.get("issue"))):
+        # axis: the comment read waits until the tick knows no local event is due — see bite-proof record i2410_local_resume.md
+        local_resume["pending"].append((lid, info, basis))
+    elif (reopened is None and isinstance(local_resume, dict)
             and callable(local_resume.get("read_comments")) and _valid_issue_number(info.get("issue"))):
-        state, comments = local_resume["read_comments"](info["issue"], basis)
-        if state is not True:
-            # axis: a comment read that failed or made no request is disclosed and leaves the lane closed this tick — see bite-proof record i2410_local_resume.md
-            degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-        # axis: a builder comment after the basis on the lane's issue reopens a local lane, with no event of its own — see bite-proof record i2410_local_resume.md
-        elif _local_builder_comment(comments, lid, info, basis):
-            reopened = (None, "builder-comment")
+        _reopen_by_comment(lid, info, basis, local_resume["read_comments"], degraded, live_lanes)
     if reopened is not None:
         # axis: a started, outcome-terminal local lane whose builder is running again is watched like a live local lane, its recorded pre-resume pid replaced — see bite-proof record i2410_local_resume.md
         live_lanes[lid] = {**info, "pid": reopened[0], "reopenedAt": basis, "reopenedBy": reopened[1]}
+
+
+def _reopen_by_comment(lid, info, basis, read_comments, degraded, live_lanes):
+    """Read the lane's issue from `basis` and add it to `live_lanes` as `builder-comment` on a builder comment."""
+    state, comments = read_comments(info["issue"], basis)
+    if state is not True:
+        # axis: a comment read that failed or made no request is disclosed and leaves the lane closed this tick — see bite-proof record i2410_local_resume.md
+        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
+    # axis: a builder comment after the basis on the lane's issue reopens a local lane, with no event of its own — see bite-proof record i2410_local_resume.md
+    elif _local_builder_comment(comments, lid, info, basis):
+        live_lanes[lid] = {**info, "pid": None, "reopenedAt": basis, "reopenedBy": "builder-comment"}
 
 
 def _local_builder_comment(comments, lid, info, basis):
@@ -741,7 +750,12 @@ def _heartbeat_stamped_after(repo_root, lid, env, basis):
         age = hb.read_heartbeat(repo_root, lid, env=env, now=now).get("ageSeconds")
     except Exception:
         return False
-    return _finite_number(age) and _finite_number(basis) and now - age > basis
+    return _stamped_after(age, now, basis)
+
+
+def _stamped_after(age, now, basis):
+    """Whether a heartbeat whose age was measured at `now` was stamped after `basis`; a non-finite value is False."""
+    return _finite_number(age) and _finite_number(now) and _finite_number(basis) and now - age > basis
 
 
 _SESSION_FLAGS = ("--resume", "-r", "--session-id")
@@ -891,15 +905,19 @@ def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
         # at its path is no evidence about it.
         if _is_cloud_lane(live_lanes[lid]):
             continue
-        hb_result = hb.read_heartbeat(repo_root, lid, env=env)
+        reopened_at = live_lanes[lid].get("reopenedAt")
+        read_now = time.time()
+        if reopened_at is None:
+            hb_result = hb.read_heartbeat(repo_root, lid, env=env)
+        else:
+            hb_result = hb.read_heartbeat(repo_root, lid, env=env, now=read_now)
         hb_class = hb_result.get("class")
         hb_reason = hb_result.get("reason")
         if hb_class == HB_CLASS_UNKNOWN and hb_reason != REASON_HEARTBEAT_MISSING:
             degraded.add(DEGRADATION_HEARTBEAT_UNREADABLE)
             continue
-        # axis: a reopened local lane's heartbeat stamped at or before its basis is the old ending, never a terminal, blocked or state — see bite-proof record i2410_local_resume.md
-        if "reopenedAt" in live_lanes[lid] and not _heartbeat_stamped_after(
-                repo_root, lid, env, live_lanes[lid]["reopenedAt"]):
+        # axis: a reopened local lane's heartbeat stamped at or before its basis is the old ending, never a terminal, blocked or state; the stamp is judged from the same read as the state — see bite-proof record i2410_local_resume.md
+        if reopened_at is not None and not _stamped_after(hb_result.get("ageSeconds"), read_now, reopened_at):
             continue
         hb_state = hb_result.get("state")
         if hb_state is not None:
@@ -3323,6 +3341,8 @@ def _evaluate_tick(
     # such read, so they never consume the budget the PR, cloud, note and stack reads that follow need. A
     # share smaller than one request's minimum makes no request (the read is disclosed as not made).
     local_share = []
+    # (launch id, info, basis) of each closed local lane no cheaper signal reopened: read after the local events.
+    pending_comment_reads = []
 
     def read_lane_comments(issue, basis):
         if not local_share:
@@ -3337,7 +3357,7 @@ def _evaluate_tick(
 
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
-        local_resume={"pids": resume_state, "read_comments": read_lane_comments},
+        local_resume={"pids": resume_state, "pending": pending_comment_reads},
     )
 
     if first_tick[0] and not ledger_readable:
@@ -3379,6 +3399,10 @@ def _evaluate_tick(
         open_pr_numbers = None
         repo_slug = None
     else:
+        # A closed local lane's comment read waits until here: a local event that is already due is reported
+        # first. A lane it reopens has no pid and no heartbeat after its basis, so it adds no local event now.
+        for lid, info, basis in pending_comment_reads:
+            _reopen_by_comment(lid, info, basis, read_lane_comments, degraded, live_lanes)
         open_pr_numbers, _pr_poll_ok = _poll_open_pr_numbers(
             repo_root,
             deadline,
