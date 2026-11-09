@@ -41,6 +41,11 @@ def test_a_title_word_glued_to_markup_is_not_that_word_at_the_chokepoint(glue):
     assert la._names("F-1 The retry loop never backs off%s: accepted." % glue, "F-1", TITLE) is False
 
 
+def test_a_link_with_a_title_is_not_glued_at_the_chokepoint():
+    # chokepoint only: end to end, md_hidden reads a line holding a link title as unsure and `_cut_items` blanks the item first (upstream, outside #2398)
+    assert la._names("F-1 [The retry loop never backs off](https://x.example 'note') accepted.", "F-1", TITLE) is True
+
+
 # --- 3: more glued forms that must refuse ----------------------------------------------------------
 
 @pytest.mark.parametrize("line", [
@@ -52,6 +57,10 @@ def test_a_title_word_glued_to_markup_is_not_that_word_at_the_chokepoint(glue):
     pytest.param("- F-1 [The retry loop never backs off](https://x.example)f: accepted.\n",
                  id="closing_link_shows_offf_model_only"),
     pytest.param("- F-1 The retry loop never*backs* off: accepted.\n", id="interior_emphasis_shows_neverbacks_model_only"),
+    pytest.param("- F-1 The retry loop never backs off[f](<https://x.example>): accepted.\n",
+                 id="angle_destination_link_shows_offf_model_only"),
+    pytest.param("- F-1 The retry loop never backs off[f](https://x.example/a_(b)): accepted.\n",
+                 id="parenthesised_destination_link_shows_offf_model_only"),
 ])
 def test_more_glued_forms_are_refused(line):
     assert gaps(RECORD, line) == ["F-1"]

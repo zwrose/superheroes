@@ -249,9 +249,7 @@ def _title_key(text):
 
 
 _MARKER = "ꙮ"  # CYRILLIC LETTER MULTIOCULAR O: a word character that NFKC and case-folding leave unchanged
-_LINK_TAIL = re.compile(r'\]\([^\s()]*(?: "[^"]*")?\)')
-_LINK_FULL = re.compile(r'\[[^\[\]]*\]\([^\s()]*(?: "[^"]*")?\)')
-_HTML_TAG = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*[^<>]*>")
+_LABEL = re.compile(r"(?:\\.|[^\[\]\\])*\]", re.S)  # a link label's end: up to the first unescaped "]" with no "[" before it
 
 
 def _is_word(ch):
@@ -274,7 +272,9 @@ def _mark_glued_ends(text):
     # axis: a word end that GitHub runs into the next word through inline markup carries a marker, so it is not that word
     # disclosure: emphasis pairing is approximated by flanking and "a partner run exists", not CommonMark's delimiter algorithm; it can over-mark (over-refuse), it must not under-mark
     n = len(text)
-    spans, i = [], 0  # (open start, content start, content end, end) of each code span; an unclosed backtick run is literal
+    tags = dict(md_hidden._inline_constructs(text))  # md_hidden's own readers (also _destination_end), reused so the lib keeps one inline parser
+    # md_hidden has no code-span region reader, so the code-span scan stays on this module's _code_span_end and _TICKS
+    spans, i = [], 0 # (open start, content start, content end, end) of each code span; an unclosed backtick run is literal
     while i < n:
         if text[i] == "\\" and i + 1 < n:
             i += 2
@@ -311,6 +311,17 @@ def _mark_glued_ends(text):
             p[1] >= end and not text[p[1] - 1].isspace() for p in peers)
         return end if closes or opens else None
 
+    def tail_end(j):
+        """The end of the inline link tail ``](...)`` at ``j`` as cmark-gfm reads it, else None."""
+        end = md_hidden._destination_end(text, j + 2) if text.startswith("](", j) else 0
+        # a failed read returns len(text) and passes when the text ends in ")": harmless, each word end scans on its own and lands at the end
+        return end if end and text[end - 1] == ")" else None
+
+    def opens_link(j):
+        """Whether the ``[`` at ``j`` opens a full link: its first unescaped ``]`` (no ``[`` between) starts a valid tail."""
+        label = _LABEL.match(text, j + 1)
+        return label is not None and tail_end(label.end() - 1) is not None
+
     def starts_with_word(span):
         content = text[span[1]:span[2]].replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
         if content[:1] == " " and content[-1:] == " " and content.strip(" "):
@@ -331,15 +342,11 @@ def _mark_glued_ends(text):
             if text[j] in "*~":
                 after = emphasis_end(j)
             elif text[j] == "]":
-                tail = _LINK_TAIL.match(text, j)
-                after = tail.end() if tail is not None and any(b < j for b in brackets) else None
+                after = tail_end(j) if any(b < j for b in brackets) else None
             elif text[j] == "[":
-                after = j + 1 if _LINK_FULL.match(text, j) is not None else None
-            elif text[j] == "<":
-                tag = _HTML_TAG.match(text, j)
-                after = tag.end() if tag is not None else None
+                after = j + 1 if opens_link(j) else None
             else:
-                after = None
+                after = tags.get(j)
             if after is None:
                 break
             j, skipped = after, True
