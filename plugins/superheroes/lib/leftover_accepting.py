@@ -13,7 +13,9 @@ one to one by a maximum matching (``_assign``, deterministic: leftovers in recor
 ``fixed-above`` tried first, then the others, each in body order), and a leftover with no acceptance of its own is
 missing. The title is compared by its words, ignoring case, quotes, punctuation and Markdown underscore emphasis
 (quotes and apostrophes are dropped, so ``don't`` and ``don’t`` agree; backticks, a hyphen written as a space and
-underscores that wrap a word, as in ``_slow retry_``, are read as spaces; an underscore inside a word is kept). An
+underscores that wrap a word, as in ``_slow retry_``, are read as spaces; an underscore inside a word is kept). A title
+word counts only where GitHub shows a word break after it, so a word run into emphasis, strikethrough, a code span, a link
+or a tag (``off*f*``, shown ``offf``) is not that word; a word glued at its start is unaffected (#2398). An
 acceptance that
 carries ``fixed-above #<PR> <7-40 hex commit>`` resolves the leftovers it names as fixed by that higher layer
 (``fixed_above``); whether the named PR is a higher member of this PR's stack is the caller's check, not this module's.
@@ -35,6 +37,7 @@ raises ``Unreadable`` for a record it cannot read, which a caller reports as unr
 ``shared=True`` (#2401) each leftover it returns also lists, as ``sharedWith``, the leftovers holding an acceptance that
 names it, and ``describe`` then says the two share one acceptance and asks for one top-level bullet per finding; the
 rule and which leftovers are missing do not change."""
+import functools
 import os
 import re
 import sys
@@ -196,8 +199,9 @@ def _item_cut(lines, span, shown):
     an entry ``<`` on a ``text`` line (plain, escaped or inside a code span), an unclosed ``<!--``, or an entry ``<`` on a
     ``fenced`` line. The words before such a ``<`` may be joined by GitHub to what follows (``f-1<span>-other</span>`` shows
     ``f-1-other``; a title word cut short reads whole) (#2389 vet 856). Otherwise the result is the kept parts, stripped and
-    joined with one space, as ``pr_sheet.accepting_listed`` joins an item. It only removes text."""
-    parts = []
+    joined with one space, as ``pr_sheet.accepting_listed`` joins an item. It only removes text. The result is an ``_Item``
+    whose ``literal`` names the spans that came from fenced lines, so the title compare reads no markup there."""
+    parts, trusted = [], False
     for k, (n, kind) in enumerate(span):
         # axis: a line md_hidden does not read VISIBLE, or one the reader drops (a whole-line comment, a line inside one), stops the item — see bite-proof record i2389_leftover_visible_within_line.md
         if n >= len(lines) or n >= len(shown) or not shown[n] or kind == "dropped":
@@ -210,14 +214,48 @@ def _item_cut(lines, span, shown):
             # axis: a fenced line is literal text, no comment is dropped on it; an entry `<` on it makes the whole item count as nothing — see bite-proof record i2389_leftover_visible_within_line.md
             if _TAG_ENTRY.search(line, start):
                 return ""
-            parts.append(line[start:].strip())
+            # axis: a fenced run reads as literal only when GitHub opens a fence there: the item's own line starting with the
+            # fence run, or its marker line when the marker is one GitHub reads and that can interrupt a paragraph (an ASCII
+            # bullet, or an ASCII ordered 1); any other marker (`2. ~~~` after a paragraph, a full-width `２.`) keeps its markup,
+            # over-refusing a genuine fence after an ordered marker above 1 rather than trusting a paragraph
+            if k == 0 or span[k - 1][1] != "fenced":
+                opens_here = k > 0 or _FENCE_MARKER.fullmatch(line[:start].strip()) is not None
+                trusted = opens_here and _FENCE_OPEN.match(line[start:].lstrip()) is not None
+            parts.append((line[start:].strip(), trusted))
         else:
             kept, cut = _scan_line(line, start)
             # axis: a cut anywhere in the item (entry `<` plain, escaped or code-spanned, unclosed `<!--`) makes the whole item count as nothing, never the words before the cut (#2389 vet 856, G22) — see bite-proof record i2389_leftover_visible_within_line.md
             if cut:
                 return ""
-            parts.append(kept.strip())
-    return " ".join(part for part in parts if part)
+            parts.append((kept.strip(), False))
+    kept = [(part, fenced) for part, fenced in parts if part]
+    item, literal, at = _Item(" ".join(part for part, _fenced in kept)), [], 0
+    for part, fenced in kept:
+        if fenced:
+            literal.append((at, at + len(part)))
+        at += len(part) + 1
+    item.literal = tuple(literal)
+    return item
+
+
+class _Item(str):
+    """An item's text; ``literal`` holds the ``(start, end)`` spans of it that came from fenced lines."""
+    literal = ()
+
+
+_LITERAL_MARKUP = {ord(c): "." for c in "*~`[]\\"}
+_FENCE_OPEN = re.compile(r"`{3,}|~{3,}")
+_FENCE_MARKER = re.compile(r"[-*+]|0{0,8}1[.)]")  # an item marker that can interrupt a paragraph (CommonMark 5.2), ASCII only
+
+
+def _unmarked_literal(item):
+    """``item`` with the markup characters of its fenced spans read as plain punctuation, so ``_mark_glued_ends`` finds no
+    markup where GitHub shows the text literally; ``_title_key`` reads both as a space, so the words do not change."""
+    # axis: a fenced line's `*f*` is shown literally, so it never marks a glued word end (`off*f*` in a fence shows `off*f*`)
+    text = str(item)
+    for start, end in getattr(item, "literal", ()):
+        text = text[:start] + text[start:end].translate(_LITERAL_MARKUP) + text[end:]
+    return text
 
 
 def normalise_id(text):
@@ -246,6 +284,149 @@ def _title_key(text):
     # axis: an underscore run at a word edge is emphasis and reads as a space; one between two word characters is kept
     folded = re.sub(r"(?<!\w)_+|_+(?!\w)", " ", folded)
     return re.sub(r"[^\w]+", " ", folded).strip()
+
+
+_MARKER = "ꙮ"  # CYRILLIC LETTER MULTIOCULAR O: a word character that NFKC and case-folding leave unchanged
+
+
+def _is_word(ch):
+    return ch.isalnum() or ch == "_"
+
+
+def _is_punct(ch):
+    return unicodedata.category(ch)[0] in "PS"
+
+
+@functools.lru_cache(maxsize=512)
+def _mark_glued_ends(text):
+    """``text`` with ``_MARKER`` appended at every glued word end (#2398 V856-3). A word end is a position after a word
+    character and before a character that is not one; it is glued when GitHub shows the next word character right after
+    it, with only markup that shows nothing between (an emphasis or strikethrough delimiter run, a code span's closing
+    backticks, an inline link's ``](...)`` tail or its ``[`` opener, an HTML tag), or when a code span whose rendered
+    content starts with a word character follows at once. ``_title_key`` keeps the marker on its word (``off`` reads
+    ``offꙮ``), so a word run into markup (``off*f*``, shown ``offf``) no longer equals that word, and nothing is joined, so
+    the marker never makes a word match that did not. A word glued only at its start is not marked."""
+    # axis: a word end that GitHub runs into the next word through inline markup carries a marker, so it is not that word
+    # disclosure: emphasis pairing is approximated by flanking and "a partner run exists", not CommonMark's delimiter algorithm; it can over-mark (over-refuse), it must not under-mark
+    n = len(text)
+    tags = dict(md_hidden._inline_constructs(text))  # md_hidden's own readers (also _destination_end), reused so the lib keeps one inline parser
+    # md_hidden has no code-span region reader, so the code-span scan stays on this module's _code_span_end and _TICKS
+    spans, i = [], 0 # (open start, content start, content end, end) of each code span; an unclosed backtick run is literal
+    while i < n:
+        if text[i] == "\\" and i + 1 < n:
+            i += 2
+        elif text[i] == "`":
+            run = _TICKS.match(text, i).end() - i
+            end = _code_span_end(text, i)
+            if end is None:
+                i += run
+            else:
+                spans.append((i, i + run, end - run, end))
+                i = end
+        else:
+            i += 1
+
+    def in_span(x):
+        return any(s[0] <= x < s[3] for s in spans)
+
+    runs = [(m.group()[0], m.start(), m.end()) for m in re.finditer(r"\*+|~+", text)
+            if not in_span(m.start()) and (m.group()[0] == "*" or len(m.group()) <= 2)]
+    brackets = [m.start() for m in re.finditer(r"\[", text) if not in_span(m.start())]
+    links = {}  # opener position -> whether it opens a link, so nested literal brackets are read once each
+
+    def emphasis_end(j):
+        """The end of the delimiter run starting at ``j`` when it is real markup, else None."""
+        run = next((r for r in runs if r[1] == j), None)
+        if run is None:
+            return None
+        char, start, end = run
+        peers = [p for p in runs if p is not run and p[0] == char and (char == "*" or p[2] - p[1] == end - start)]
+        before, after = (text[start - 1] if start else ""), (text[end] if end < n else "")
+        closes = before != "" and not before.isspace() and any(
+            p[2] <= start and p[2] < n and not text[p[2]].isspace() for p in peers)
+        opens = after != "" and not after.isspace() and (
+            not _is_punct(after) or before == "" or before.isspace() or _is_punct(before)) and any(
+            p[1] >= end and not text[p[1] - 1].isspace() for p in peers)
+        return end if closes or opens else None
+
+    def tail_end(j):
+        """The end of the inline link tail ``](...)`` at ``j`` as cmark-gfm reads it, else None."""
+        # axis: md_hidden's reader returns the text's length when it cannot close a tail, so it reads a copy with a sentinel
+        # appended: a failed read lands past the real text, and only a tail closed inside it counts
+        end = md_hidden._destination_end(text + "\0", j + 2) if text.startswith("](", j) else 0
+        return end if 0 < end <= n and text[end - 1] == ")" else None
+
+    # One left-to-right pass pairs the brackets (escapes and code spans skipped) and records which `[` opens a link, so
+    # every character is read once however deep the nesting.
+    # axis: link text may hold balanced brackets ([f [g]](url)), so a label ends at the bracket that balances its opener
+    # axis: links never nest (GFM 6.6): a pair that holds a link (not an image) opens none, its brackets stay literal
+    stack, k = [], 0  # each open bracket as [position, whether a link sits inside it]
+    while k < n:
+        span = next((s for s in spans if s[0] == k), None)
+        if span is not None:
+            k = span[3]
+            continue
+        if text[k] == "\\":
+            k += 2
+            continue
+        if text[k] == "[":
+            stack.append([k, False])
+        elif text[k] == "]" and stack:
+            j, holds_link = stack.pop()
+            links[j] = not holds_link and tail_end(k) is not None
+            if stack:
+                stack[-1][1] = stack[-1][1] or holds_link or (links[j] and text[j - 1:j] != "!")
+        k += 1
+
+    def opens_link(j):
+        """Whether the ``[`` at ``j`` opens a full link (``links``, read once above)."""
+        return links.get(j, False)
+
+    def padded(span):
+        """Whether CommonMark strips one space from each end of the span's content (§6.3)."""
+        content = text[span[1]:span[2]].replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+        return content[:1] == " " and content[-1:] == " " and content.strip(" ") != ""
+
+    def starts_with_word(span):
+        content = text[span[1] + padded(span):span[2]]
+        return content[:1] != "" and _is_word(content[0])
+
+    glued = []
+    for i in range(1, n):
+        if not (_is_word(text[i - 1]) and not _is_word(text[i])):
+            continue
+        j, skipped = i, False
+        # axis: a span's rendered content ends one space early when CommonMark strips its padding (`` ` off `f ``, shown offf)
+        closing = next((s for s in spans if i == s[2] or (padded(s) and i == s[2] - 1)), None)
+        if closing is not None:
+            j, skipped = closing[3], True
+        elif any(s[1] <= i < s[2] for s in spans):
+            continue
+        while j < n and not in_span(j):
+            if text[j] in "*~":
+                after = emphasis_end(j)
+            elif text[j] == "]":
+                after = tail_end(j) if any(b < j for b in brackets) else None
+            elif text[j] == "[":
+                after = j + 1 if opens_link(j) else None
+            else:
+                after = tags.get(j)
+            if after is None:
+                break
+            j, skipped = after, True
+        opening = next((s for s in spans if s[0] == j), None)
+        if opening is not None:
+            if starts_with_word(opening):
+                glued.append(i)
+        elif skipped and j < n and _is_word(text[j]):
+            glued.append(i)
+    out, last = [], 0
+    for i in glued:
+        out.append(text[last:i])
+        out.append(_MARKER)
+        last = i
+    out.append(text[last:])
+    return "".join(out)
 
 
 def _id_named(item, ident):
@@ -281,7 +462,8 @@ def _names(item, ident, title, group=None):
     """Whether one acceptance names the id and carries the title (its words, case and punctuation aside). An id with a
     ``group`` (the ids of the record sharing its normal form, itself included) is named on its exact bytes
     (``_exact_named``); any other id as a whole token run under the normalisation (``_id_named``). A title that reduces
-    to no words is carried only byte for byte."""
+    to no words is carried only byte for byte. A title word counts only where GitHub shows a word break after it: a word
+    run into inline markup (``off*f*``, shown ``offf``) is not that word (``_mark_glued_ends``, applied to both sides)."""
     # axis: a colliding id never goes the normalised path, so one acceptance cannot name two ids of one group
     if not (_exact_named(item, ident, group) if group else _id_named(item, ident)):
         return False
@@ -291,7 +473,8 @@ def _names(item, ident, title, group=None):
     # axis: a title of punctuation only has no words to compare, so it is carried byte for byte
     if not key:
         return title in item
-    return " " + key + " " in " " + _title_key(item) + " "
+    # axis: both sides pass _mark_glued_ends, so a title word GitHub runs into the next word through markup is not that word (#2398 V856-3)
+    return " " + _title_key(_mark_glued_ends(title)) + " " in " " + _title_key(_mark_glued_ends(_unmarked_literal(item))) + " "
 
 
 def _collisions(leftovers):
