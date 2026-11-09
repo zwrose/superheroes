@@ -4,7 +4,9 @@ Part one pins `refusals_fault` and the composition of `ORDER_TEXT`. Part two is 
 the three order surfaces (write-engine prompt, native preamble, implementer agent) is rendered or
 read on its own and must carry the constant's text.
 """
+import ast
 import os
+import re
 
 import pytest
 
@@ -410,3 +412,32 @@ def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
                 offenders.append(os.path.relpath(path, _PLUGIN_ROOT))
     # axis: every carrier of the delete rule also carries or cites the stop-and-delete rule — see bite-proof record wo_2412_stop_and_delete
     assert offenders == []
+
+
+def test_no_test_module_copies_the_stop_and_delete_rule():
+    # A test reads the rule from its home (CONVENTIONS §11.3). The one-home census above skips the
+    # tests tree, so this reads every test module's string constants (adjacent literals are joined
+    # by the parser) and refuses any that holds the whole rule.
+    tests_root = os.path.dirname(os.path.abspath(__file__))
+    rule = " ".join(CR.STOP_AND_DELETE_RULE.split())
+    squashed_rule = re.sub(r"[\s\"']", "", rule)
+    copies = []
+    for root, dirs, files in os.walk(tests_root):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for name in files:
+            if not name.endswith(".py"):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8") as fh:
+                source = fh.read()
+            # Cheap screen first: with quotes and whitespace removed, a copy split over adjacent
+            # literals still reads as the rule; only such a file is parsed.
+            if squashed_rule not in re.sub(r"[\s\"']", "", source):
+                continue
+            tree = ast.parse(source, filename=path)
+            for node in ast.walk(tree):
+                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and rule in " ".join(node.value.split())):
+                    copies.append("%s:%d" % (os.path.relpath(path, tests_root), node.lineno))
+    # axis: no test module keeps its own copy of the stop-and-delete rule's text — see bite-proof record wo_2412_stop_and_delete
+    assert copies == []

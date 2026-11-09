@@ -462,3 +462,67 @@ all: the failure is loud, not a silent omission.
 .                                                                        [100%]
 1 passed in 1.31s
 ```
+
+---
+
+## (h) `test_no_test_module_copies_the_stop_and_delete_rule` (review fix, round 2)
+
+Added by the build session at review-code's `apply-fixes` step, after the fix auditor ruled the round-1 fix (the write-prompt test reading `CR.STOP_AND_DELETE_RULE` instead of a hand copy) not discharged because nothing would catch the copy coming back: the one-home census skips the tests tree.
+
+**Guarded element:** `plugins/superheroes/lib/tests/test_command_refusals.py::test_no_test_module_copies_the_stop_and_delete_rule` —
+axis: no test module keeps its own copy of the stop-and-delete rule's text (adjacent string literals joined by the parser).
+
+**Neutralization:** Edit tool, restored the removed `_NO_PATTERN_KILL_RULE_LITERAL` constant (the full rule text over four adjacent literals) above `_finish_codex_write_runner` in `plugins/superheroes/lib/tests/test_engine_dispatch_write.py`.
+
+**Raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_no_test_module_copies_the_stop_and_delete_rule ______________
+
+    def test_no_test_module_copies_the_stop_and_delete_rule():
+        # A test reads the rule from its home (CONVENTIONS §11.3). The one-home census above skips the
+        # tests tree, so this reads every test module's string constants (adjacent literals are joined
+        # by the parser) and refuses any that holds the whole rule.
+        tests_root = os.path.dirname(os.path.abspath(__file__))
+        rule = " ".join(CR.STOP_AND_DELETE_RULE.split())
+        squashed_rule = re.sub(r"[\s\"']", "", rule)
+        copies = []
+        for root, dirs, files in os.walk(tests_root):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for name in files:
+                if not name.endswith(".py"):
+                    continue
+                path = os.path.join(root, name)
+                with open(path, encoding="utf-8") as fh:
+                    source = fh.read()
+                # Cheap screen first: with quotes and whitespace removed, a copy split over adjacent
+                # literals still reads as the rule; only such a file is parsed.
+                if squashed_rule not in re.sub(r"[\s\"']", "", source):
+                    continue
+                tree = ast.parse(source, filename=path)
+                for node in ast.walk(tree):
+                    if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                            and rule in " ".join(node.value.split())):
+                        copies.append("%s:%d" % (os.path.relpath(path, tests_root), node.lineno))
+        # axis: no test module keeps its own copy of the stop-and-delete rule's text — see bite-proof record wo_2412_stop_and_delete
+>       assert copies == []
+E       AssertionError: assert ['test_engine...write.py:138'] == []
+E         
+E         Left contains one more item: 'test_engine_dispatch_write.py:138'
+E         Use -v to get more diff
+
+/home/user/wt-2412/plugins/superheroes/lib/tests/test_command_refusals.py:443: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_no_test_module_copies_the_stop_and_delete_rule
+1 failed in 26.56s
+```
+Which assertion went red: `assert copies == []`, naming `test_engine_dispatch_write.py:138`, the restored constant.
+
+**Restore:** Edit tool, the inverse edit removed the constant again; `git diff --stat` afterwards showed only `test_command_refusals.py` changed.
+
+**Raw green:**
+```
+.                                                                        [100%]
+1 passed in 1.20s
+```
