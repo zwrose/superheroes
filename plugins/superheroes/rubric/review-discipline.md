@@ -161,15 +161,15 @@ lowers a change below [the lane floor](#the-lane-floor).
 **Lanes change up on their own; moving down a lane is never the builder's or advisor's
 call — it requires the owner, per change.** Disclosure alone never authorizes a downgrade.
 
+This default does not bend. The thoughts that precede a bad light call — *it's just a
+wording fix*, *I know this area* — are exactly the ones this convention exists to
+override.
+
 **Calling a lane is the advisor's craft call**, made at any hour, attended or not, and recorded
 with its reasoning for the owner's veto; so is the presentation call. Around the lane call the
 owner's word, per change, is needed only for a downgrade, for every micro change, and for the
 owner-capability preconditions cleared at dispatch; a same-family reviewer's own owner's word
 (below) is separate. None of them holds a lane call for the owner.
-
-This default does not bend. The thoughts that precede a bad light call — *it's just a
-wording fix*, *I know this area* — are exactly the ones this convention exists to
-override.
 
 ### Provisional guidance
 

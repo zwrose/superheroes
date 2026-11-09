@@ -300,7 +300,8 @@ above).
 
    **Check the single reviewer's availability yourself at kickoff** (light and micro, as bounded in
    `review-discipline.md`). When no reviewer outside the makers' families is available, the change
-   resolves upward (a light call becomes full; micro resolves as § Micro — hard-line edit says),
+   resolves upward (a light call becomes full when an independent full panel can be composed, and
+   parks otherwise; micro resolves as § Micro — hard-line edit says),
    never a wait for the owner. The single reviewer's review record answers to the reading rule in
    `review-discipline.md` (§ What never changes in any lane), which owns the criterion, the retry,
    and what a missing reading means. The investigation-record floor applies automatically to **every
