@@ -4,7 +4,6 @@ Part one pins `refusals_fault` and the composition of `ORDER_TEXT`. Part two is 
 the three order surfaces (write-engine prompt, native preamble, implementer agent) is rendered or
 read on its own and must carry the constant's text.
 """
-import ast
 import os
 import re
 
@@ -366,10 +365,17 @@ def test_census_stop_and_delete_rule_prose_cites(relpath):
     assert " ".join(CR.STOP_AND_DELETE_RULE.split()) not in body
 
 
-def test_stop_and_delete_rule_has_one_home():
-    # A hand copy of the sentence anywhere in the shipped plugin outside its home is a second
-    # copy; prose consumers cite the home instead.
-    marker = "Delete only a path you created in this session"
+# The one-home markers are the rule's own sentences, derived from the constant and never hand-copied.
+_STOP_AND_DELETE_SENTENCES = [
+    s.strip() for s in " ".join(CR.STOP_AND_DELETE_RULE.split()).split(". ") if s.strip()
+]
+
+
+@pytest.mark.parametrize("sentence", _STOP_AND_DELETE_SENTENCES[:2], ids=["stop-sentence", "delete-sentence"])
+def test_stop_and_delete_rule_has_one_home(sentence):
+    # A copy of either sentence anywhere in the shipped plugin outside its home is a second copy;
+    # prose consumers cite the home instead. Fail closed if the rule's shape (two sentences) changes.
+    assert len(_STOP_AND_DELETE_SENTENCES) == 2
     allowed = [
         os.path.join("lib", "command_refusals.py"),
         # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is STOP_AND_DELETE_RULE itself
@@ -383,10 +389,14 @@ def test_stop_and_delete_rule_has_one_home():
                 continue
             path = os.path.join(root, name)
             with open(path, encoding="utf-8", errors="replace") as fh:
-                if marker in " ".join(fh.read().split()):
-                    copies.append(os.path.relpath(path, _PLUGIN_ROOT))
-    # axis: the stop-and-delete rule's text lives once, in its home plus the parser-verified ruling line — see bite-proof record wo_2412_stop_and_delete
-    assert sorted(copies) == allowed
+                raw = fh.read()
+            # The home stores the rule as adjacent string literals split across lines; dropping the
+            # quote-gap between them makes those read as one string.
+            body = " ".join(re.sub(r'"\s*"', "", raw).split())
+            if sentence in body:
+                copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+    # axis: each sentence of the stop-and-delete rule lives once, in its home plus the parser-verified ruling line — see bite-proof record wo_2412_stop_and_delete
+    assert sorted(copies) == allowed, "sentence %r" % sentence
 
 
 def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
@@ -412,32 +422,3 @@ def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
                 offenders.append(os.path.relpath(path, _PLUGIN_ROOT))
     # axis: every carrier of the delete rule also carries or cites the stop-and-delete rule — see bite-proof record wo_2412_stop_and_delete
     assert offenders == []
-
-
-def test_no_test_module_copies_the_stop_and_delete_rule():
-    # A test reads the rule from its home (CONVENTIONS §11.3). The one-home census above skips the
-    # tests tree, so this reads every test module's string constants (adjacent literals are joined
-    # by the parser) and refuses any that holds the whole rule.
-    tests_root = os.path.dirname(os.path.abspath(__file__))
-    rule = " ".join(CR.STOP_AND_DELETE_RULE.split())
-    squashed_rule = re.sub(r"[\s\"']", "", rule)
-    copies = []
-    for root, dirs, files in os.walk(tests_root):
-        dirs[:] = [d for d in dirs if d != "__pycache__"]
-        for name in files:
-            if not name.endswith(".py"):
-                continue
-            path = os.path.join(root, name)
-            with open(path, encoding="utf-8") as fh:
-                source = fh.read()
-            # Cheap screen first: with quotes and whitespace removed, a copy split over adjacent
-            # literals still reads as the rule; only such a file is parsed.
-            if squashed_rule not in re.sub(r"[\s\"']", "", source):
-                continue
-            tree = ast.parse(source, filename=path)
-            for node in ast.walk(tree):
-                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                        and rule in " ".join(node.value.split())):
-                    copies.append("%s:%d" % (os.path.relpath(path, tests_root), node.lineno))
-    # axis: no test module keeps its own copy of the stop-and-delete rule's text — see bite-proof record wo_2412_stop_and_delete
-    assert copies == []

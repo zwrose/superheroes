@@ -5,7 +5,7 @@ exactly once and `WRITE_DISPATCH_PROCESS_RULE` is that constant (`test_census_st
 (b) T2 — the native implementer preamble carries it exactly once, before the order
 (`test_census_stop_and_delete_rule_native_preamble`); (c) T3 — prose consumers cite it by name and never carry
 its text (`test_census_stop_and_delete_rule_prose_cites`, representative `[implementer]`); (d) T4 — the text has
-one home plus the parser-verified ruling line (`test_stop_and_delete_rule_has_one_home`, with T3 `[orders]`);
+one home plus the parser-verified ruling line, one marker per sentence of the constant (`test_stop_and_delete_rule_has_one_home`, run with T3 `[orders]`);
 (e) T5 — every carrier of the delete rule also carries or cites the stop-and-delete rule
 (`test_every_delete_rule_carrier_carries_the_stop_and_delete_rule`); (f) T7 — the `own-processes-and-paths`
 ruling keeps its "only by its PID" invariant (`test_doctrine_own_processes_and_paths_ruling_invariant_missing`);
@@ -22,9 +22,9 @@ No secrets or tokens appear in these captures; nothing is redacted. Where an ass
 itself abbreviated it with `...`; those abbreviations are pytest's, not ours.
 
 Not separately neutralized: T6 (`test_own_processes_and_paths_ruling_text_is_the_shared_rule`) and the other three
-T3 parameters (`auto-fix-loop`, `review-code-skill`; `orders` is covered in (d)). They are siblings of the proven
-detectors: T6 shares T7's parse path and `RULING_TEXT` entry, and the T3 parameters run the one function body
-proven in (c) and (d). They are listed here as not independently proven.
+T3 parameters (`auto-fix-loop`, `review-code-skill`, `orders`; a single-sentence paste into `orders` leaves T3 green, see (d)).
+They are siblings of the proven detectors: T6 shares T7's parse path and `RULING_TEXT` entry, and the T3 parameters run the
+one function body proven in (c). They are listed here as not independently proven.
 
 ---
 
@@ -190,25 +190,43 @@ Which assertion went red: `"STOP_AND_DELETE_RULE" in body` (the citation half).
 
 ## (d) T4 `test_stop_and_delete_rule_has_one_home` and T3 `[orders]`
 
-**Guarded element:** `plugins/superheroes/lib/tests/test_command_refusals.py::test_stop_and_delete_rule_has_one_home` —
-axis: the rule's text (marker "Delete only a path you created in this session") appears only in `lib/command_refusals.py`
-and `rubric/launch-doctrine.md`; and `...::test_census_stop_and_delete_rule_prose_cites[orders]` — axis: `orders.md` never
-carries the text.
+**Guarded element:** `plugins/superheroes/lib/tests/test_command_refusals.py::test_stop_and_delete_rule_has_one_home`
+(parametrized `[stop-sentence]`, `[delete-sentence]`) — axis: each sentence of `CR.STOP_AND_DELETE_RULE` (the markers are
+derived from the constant, split on `". "` after whitespace normalisation, and the test asserts there are exactly two) appears
+only in `lib/command_refusals.py` and `rubric/launch-doctrine.md`; and `...::test_census_stop_and_delete_rule_prose_cites[orders]`
+— axis: `orders.md` never carries the whole rule text. (There is no census of the tests tree: a test reads the rule from its home,
+`rubric/review-discipline.md` § "Guards do not get guards".)
 
-**Neutralization:** Edit tool, in `plugins/superheroes/skills/workhorse/reference/orders.md` (line 80) inserted the full rule
-text ("Stop only a process you started yourself, ... a directory you did not create.") immediately before
-"They carry the stop-and-delete rule too". Both nodes run in one invocation, so (d) spends two proofs in one run.
+Two elements, two neutralizations (one per sentence), each run with the T3 `[orders]` node alongside.
+
+**Baseline before any neutralization** (the one-home test and the four `test_census_stop_and_delete_rule_prose_cites` nodes):
+```
+......                                                                   [100%]
+6 passed in 10.29s
+```
+
+### (d1) the stop sentence
+
+**Neutralization:** Edit tool, appended the first sentence alone, with a final period, as a new paragraph at the end of
+`plugins/superheroes/skills/workhorse/reference/orders.md`:
+```
+Stop only a process you started yourself, and only by its PID, never by name or pattern (`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this machine.
+```
+Command: `scripts/pinned-python -B -X pycache_prefix=/tmp/claude-0/wo2412-pyc -m pytest plugins/superheroes/lib/tests/test_command_refusals.py::test_stop_and_delete_rule_has_one_home "plugins/superheroes/lib/tests/test_command_refusals.py::test_census_stop_and_delete_rule_prose_cites[orders]" -q -p no:cacheprovider`
 
 **Raw red:**
 ```
-FF                                                                       [100%]
+F..                                                                      [100%]
 =================================== FAILURES ===================================
-____________________ test_stop_and_delete_rule_has_one_home ____________________
+____________ test_stop_and_delete_rule_has_one_home[stop-sentence] _____________
 
-    def test_stop_and_delete_rule_has_one_home():
-        # A hand copy of the sentence anywhere in the shipped plugin outside its home is a second
-        # copy; prose consumers cite the home instead.
-        marker = "Delete only a path you created in this session"
+sentence = 'Stop only a process you started yourself, and only by its PID, never by name or pattern (`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this machine'
+
+    @pytest.mark.parametrize("sentence", _STOP_AND_DELETE_SENTENCES[:2], ids=["stop-sentence", "delete-sentence"])
+    def test_stop_and_delete_rule_has_one_home(sentence):
+        # A copy of either sentence anywhere in the shipped plugin outside its home is a second copy;
+        # prose consumers cite the home instead. Fail closed if the rule's shape (two sentences) changes.
+        assert len(_STOP_AND_DELETE_SENTENCES) == 2
         allowed = [
             os.path.join("lib", "command_refusals.py"),
             # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is STOP_AND_DELETE_RULE itself
@@ -222,64 +240,123 @@ ____________________ test_stop_and_delete_rule_has_one_home ____________________
                     continue
                 path = os.path.join(root, name)
                 with open(path, encoding="utf-8", errors="replace") as fh:
-                    if marker in " ".join(fh.read().split()):
-                        copies.append(os.path.relpath(path, _PLUGIN_ROOT))
-        # axis: the stop-and-delete rule's text lives once, in its home plus the parser-verified ruling line — see bite-proof record wo_2412_stop_and_delete
->       assert sorted(copies) == allowed
-E       AssertionError: assert ['lib/command...ce/orders.md'] == ['lib/command...-doctrine.md']
+                    raw = fh.read()
+                # The home stores the rule as adjacent string literals split across lines; dropping the
+                # quote-gap between them makes those read as one string.
+                body = " ".join(re.sub(r'"\s*"', "", raw).split())
+                if sentence in body:
+                    copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+        # axis: each sentence of the stop-and-delete rule lives once, in its home plus the parser-verified ruling line — see bite-proof record wo_2412_stop_and_delete
+>       assert sorted(copies) == allowed, "sentence %r" % sentence
+E       AssertionError: sentence 'Stop only a process you started yourself, and only by its PID, never by name or pattern (`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this machine'
+E       assert ['lib/command...ce/orders.md'] == ['lib/command...-doctrine.md']
 E         
 E         Left contains one more item: 'skills/workhorse/reference/orders.md'
 E         Use -v to get more diff
 
-/home/user/wt-2412/plugins/superheroes/lib/tests/test_command_refusals.py:387: AssertionError
-_____________ test_census_stop_and_delete_rule_prose_cites[orders] _____________
-
-relpath = 'skills/workhorse/reference/orders.md'
-
-    @pytest.mark.parametrize("relpath", [
-        os.path.join("agents", "implementer.md"),
-        os.path.join("skills", "review-code", "reference", "auto-fix-loop.md"),
-        os.path.join("skills", "review-code", "SKILL.md"),
-        os.path.join("skills", "workhorse", "reference", "orders.md"),
-    ], ids=["implementer", "auto-fix-loop", "review-code-skill", "orders"])
-    def test_census_stop_and_delete_rule_prose_cites(relpath):
-        with open(os.path.join(_PLUGIN_ROOT, relpath), encoding="utf-8") as fh:
-            body = " ".join(fh.read().split())
-        # axis: a prose consumer cites the stop-and-delete rule by name, never carries its text (CONVENTIONS §11.4) — see bite-proof record wo_2412_stop_and_delete
-        assert "STOP_AND_DELETE_RULE" in body
->       assert " ".join(CR.STOP_AND_DELETE_RULE.split()) not in body
-E       AssertionError: assert 'Stop only a... not create.' not in '# Contents ... accounting.'
-E         
-E         'Stop only a proces...you did not create.' is contained here:
-E           per call. Stop only a process you started yourself, and only by its PID, never by name or pattern (`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this machine. Delete only a path you created in this session or one your task names for deletion, never by a name pattern or a glob over a directory you did not create. They carry the stop-and-delete rule too (`STOP_AND_DELETE_RULE`, same home): a process is stopped only by its PID and only when the session started it, and a path ...
-E         
-E         ...Full output truncated, use '-vv' to show
-
-/home/user/wt-2412/plugins/superheroes/lib/tests/test_command_refusals.py:387: AssertionError
+/home/user/wt-2412/plugins/superheroes/lib/tests/test_command_refusals.py:399: AssertionError
 =========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_stop_and_delete_rule_has_one_home
-FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_census_stop_and_delete_rule_prose_cites[orders]
-2 failed in 0.95s
+FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_stop_and_delete_rule_has_one_home[stop-sentence]
+1 failed, 2 passed in 1.16s
 ```
-Which assertions went red: T4 `sorted(copies) == allowed` (the extra copy is named: `skills/workhorse/reference/orders.md`);
-T3[orders] `rule text not in body` (the `"STOP_AND_DELETE_RULE" in body` half passed, since the citation is still there).
-(The `:387` line number printed under the T3 traceback is pytest's own, as captured.)
+Which nodes went red: `test_stop_and_delete_rule_has_one_home[stop-sentence]`, the assertion message naming the sentence and the extra
+copy `skills/workhorse/reference/orders.md`. `[delete-sentence]` and T3 `[orders]` stayed green (T3 checks the whole rule text,
+which a single sentence is not).
 
-**Restore:** inverse Edit-tool edit, removed the pasted rule text, leaving "call. They carry the stop-and-delete rule too".
+**Restore:** inverse Edit-tool edit, removed the appended paragraph (and its blank line).
 
-**Restore receipt:** quoted back from `orders.md`:
+**Restore receipt:** `git status --porcelain plugins/superheroes/skills/workhorse/reference/orders.md` printed nothing, and the file's last
+three lines read:
 ```
-79:  same home): a delete never rides a compound command; it is its own plain call, one path per
-80:  call. They carry the stop-and-delete rule too (`STOP_AND_DELETE_RULE`, same home): a process is
-81:  stopped only by its PID and only when the session started it, and a path is deleted only when the
-82:  session created it or the order names it. When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
+the family off the registry, never off the CLI. A rung-up inside one engine's ladder can stay in the
+same family. A surface's deep and adversarial review seats exclude the maker families of the orders
+that built it. Your dispatch-provenance record is that accounting.
 ```
 
 **Raw green:**
 ```
-..                                                                       [100%]
-2 passed in 0.89s
+...                                                                      [100%]
+3 passed in 1.02s
 ```
+
+### (d2) the delete sentence
+
+**Neutralization:** Edit tool, appended the second sentence alone as a new paragraph at the end of the same file:
+```
+Delete only a path you created in this session or one your task names for deletion, never by a name pattern or a glob over a directory you did not create.
+```
+Command: the same as (d1).
+
+**Raw red:**
+```
+.F.                                                                      [100%]
+=================================== FAILURES ===================================
+___________ test_stop_and_delete_rule_has_one_home[delete-sentence] ____________
+
+sentence = 'Delete only a path you created in this session or one your task names for deletion, never by a name pattern or a glob over a directory you did not create.'
+
+    @pytest.mark.parametrize("sentence", _STOP_AND_DELETE_SENTENCES[:2], ids=["stop-sentence", "delete-sentence"])
+    def test_stop_and_delete_rule_has_one_home(sentence):
+        # A copy of either sentence anywhere in the shipped plugin outside its home is a second copy;
+        # prose consumers cite the home instead. Fail closed if the rule's shape (two sentences) changes.
+        assert len(_STOP_AND_DELETE_SENTENCES) == 2
+        allowed = [
+            os.path.join("lib", "command_refusals.py"),
+            # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is STOP_AND_DELETE_RULE itself
+            os.path.join("rubric", "launch-doctrine.md"),
+        ]
+        copies = []
+        for root, dirs, files in os.walk(_PLUGIN_ROOT):
+            dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+            for name in files:
+                if not name.endswith((".py", ".md", ".json", ".txt")):
+                    continue
+                path = os.path.join(root, name)
+                with open(path, encoding="utf-8", errors="replace") as fh:
+                    raw = fh.read()
+                # The home stores the rule as adjacent string literals split across lines; dropping the
+                # quote-gap between them makes those read as one string.
+                body = " ".join(re.sub(r'"\s*"', "", raw).split())
+                if sentence in body:
+                    copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+        # axis: each sentence of the stop-and-delete rule lives once, in its home plus the parser-verified ruling line — see bite-proof record wo_2412_stop_and_delete
+>       assert sorted(copies) == allowed, "sentence %r" % sentence
+E       AssertionError: sentence 'Delete only a path you created in this session or one your task names for deletion, never by a name pattern or a glob over a directory you did not create.'
+E       assert ['lib/command...ce/orders.md'] == ['lib/command...-doctrine.md']
+E         
+E         Left contains one more item: 'skills/workhorse/reference/orders.md'
+E         Use -v to get more diff
+
+/home/user/wt-2412/plugins/superheroes/lib/tests/test_command_refusals.py:399: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_stop_and_delete_rule_has_one_home[delete-sentence]
+1 failed, 2 passed in 0.88s
+```
+Which nodes went red: `test_stop_and_delete_rule_has_one_home[delete-sentence]`, naming the sentence and `skills/workhorse/reference/orders.md`.
+`[stop-sentence]` and T3 `[orders]` stayed green.
+
+**Restore:** inverse Edit-tool edit, removed the appended paragraph (and its blank line).
+
+**Restore receipt:** `git status --porcelain plugins/superheroes/skills/workhorse/reference/orders.md` printed nothing, and the file's last
+three lines read:
+```
+the family off the registry, never off the CLI. A rung-up inside one engine's ladder can stay in the
+same family. A surface's deep and adversarial review seats exclude the maker families of the orders
+that built it. Your dispatch-provenance record is that accounting.
+```
+
+**Raw green:**
+```
+...                                                                      [100%]
+3 passed in 1.04s
+```
+
+### T3 `[orders]` under a single-sentence paste
+
+Run once with each paste, it stayed green both times (each red run above shows `2 passed`: the one-home test's other parameter
+and `test_census_stop_and_delete_rule_prose_cites[orders]`). T3 refuses the whole rule text, so a lone sentence does not trip
+it; the one-home test is the detector for a lone-sentence copy. T3 `[orders]` is therefore not independently proven here and
+joins the other T3 parameters listed as not independently proven in the preamble above.
 
 ---
 
@@ -461,68 +538,4 @@ all: the failure is loud, not a silent omission.
 ```
 .                                                                        [100%]
 1 passed in 1.31s
-```
-
----
-
-## (h) `test_no_test_module_copies_the_stop_and_delete_rule` (review fix, round 2)
-
-Added by the build session at review-code's `apply-fixes` step, after the fix auditor ruled the round-1 fix (the write-prompt test reading `CR.STOP_AND_DELETE_RULE` instead of a hand copy) not discharged because nothing would catch the copy coming back: the one-home census skips the tests tree.
-
-**Guarded element:** `plugins/superheroes/lib/tests/test_command_refusals.py::test_no_test_module_copies_the_stop_and_delete_rule` —
-axis: no test module keeps its own copy of the stop-and-delete rule's text (adjacent string literals joined by the parser).
-
-**Neutralization:** Edit tool, restored the removed `_NO_PATTERN_KILL_RULE_LITERAL` constant (the full rule text over four adjacent literals) above `_finish_codex_write_runner` in `plugins/superheroes/lib/tests/test_engine_dispatch_write.py`.
-
-**Raw red:**
-```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_____________ test_no_test_module_copies_the_stop_and_delete_rule ______________
-
-    def test_no_test_module_copies_the_stop_and_delete_rule():
-        # A test reads the rule from its home (CONVENTIONS §11.3). The one-home census above skips the
-        # tests tree, so this reads every test module's string constants (adjacent literals are joined
-        # by the parser) and refuses any that holds the whole rule.
-        tests_root = os.path.dirname(os.path.abspath(__file__))
-        rule = " ".join(CR.STOP_AND_DELETE_RULE.split())
-        squashed_rule = re.sub(r"[\s\"']", "", rule)
-        copies = []
-        for root, dirs, files in os.walk(tests_root):
-            dirs[:] = [d for d in dirs if d != "__pycache__"]
-            for name in files:
-                if not name.endswith(".py"):
-                    continue
-                path = os.path.join(root, name)
-                with open(path, encoding="utf-8") as fh:
-                    source = fh.read()
-                # Cheap screen first: with quotes and whitespace removed, a copy split over adjacent
-                # literals still reads as the rule; only such a file is parsed.
-                if squashed_rule not in re.sub(r"[\s\"']", "", source):
-                    continue
-                tree = ast.parse(source, filename=path)
-                for node in ast.walk(tree):
-                    if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                            and rule in " ".join(node.value.split())):
-                        copies.append("%s:%d" % (os.path.relpath(path, tests_root), node.lineno))
-        # axis: no test module keeps its own copy of the stop-and-delete rule's text — see bite-proof record wo_2412_stop_and_delete
->       assert copies == []
-E       AssertionError: assert ['test_engine...write.py:138'] == []
-E         
-E         Left contains one more item: 'test_engine_dispatch_write.py:138'
-E         Use -v to get more diff
-
-/home/user/wt-2412/plugins/superheroes/lib/tests/test_command_refusals.py:443: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_no_test_module_copies_the_stop_and_delete_rule
-1 failed in 26.56s
-```
-Which assertion went red: `assert copies == []`, naming `test_engine_dispatch_write.py:138`, the restored constant.
-
-**Restore:** Edit tool, the inverse edit removed the constant again; `git diff --stat` afterwards showed only `test_command_refusals.py` changed.
-
-**Raw green:**
-```
-.                                                                        [100%]
-1 passed in 1.20s
 ```
