@@ -679,6 +679,7 @@ def _large_pair_report(tmp_path, min_bytes):
 def test_report_larger_than_stdout_cap_parses_from_file(tmp_path):
     """A report past the collector's stdout cap still yields a reading: the lens reads
     jscpd's report file, never the capped stdout (the field failure was truncated-output)."""
+    # bites on: G1 the report is read from jscpd's report file, not the capped stdout
     import guardian_tools as gt
     report = _large_pair_report(tmp_path, gt.MAX_OUTPUT_BYTES)
     run = _FakeJscpd(report)
@@ -697,6 +698,7 @@ def test_report_larger_than_stdout_cap_parses_from_file(tmp_path):
 def test_report_file_over_lens_bound_degrades_named(tmp_path, monkeypatch):
     """A report file past the lens's own read bound degrades with a named cause and no
     digest — never a zero reading that would erase the baseline."""
+    # bites on: G2 the lens's own read bound names report-too-large
     monkeypatch.setattr(gld, "MAX_REPORT_FILE_BYTES", 4096)
     report = _large_pair_report(tmp_path, 4096)
     out = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
@@ -710,6 +712,7 @@ def test_report_file_over_lens_bound_degrades_named(tmp_path, monkeypatch):
 def test_report_file_at_lens_bound_still_reads(tmp_path, monkeypatch):
     """The bound is inclusive: a report of exactly MAX_REPORT_FILE_BYTES reads, and one
     byte less of bound degrades."""
+    # bites on: G2 the lens's read bound is inclusive and names report-too-large past it
     report = _large_pair_report(tmp_path, 0)
     probe = _FakeJscpd(report)
     _collect(gld.DuplicationLens(), tmp_path, probe)
@@ -725,6 +728,7 @@ def test_report_file_at_lens_bound_still_reads(tmp_path, monkeypatch):
 
 def test_no_report_file_and_no_stdout_json_degrades_named(tmp_path):
     """jscpd exits 0 but writes no report file and prints no JSON → named degrade."""
+    # bites on: G4 a missing report file is named in the degrade reason
     _seed_tracked(tmp_path)
     out = _collect(gld.DuplicationLens(), tmp_path,
                    _FakeJscpd(_report([]), report_via="none"))
@@ -736,6 +740,7 @@ def test_no_report_file_and_no_stdout_json_degrades_named(tmp_path):
 
 def test_report_file_is_preferred_over_stdout(tmp_path):
     """When jscpd wrote a report file, stdout is never parsed for the report."""
+    # bites on: G1 the report file wins over stdout
     _seed_tracked(tmp_path)
     clean = {"statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 1}},
              "duplicates": []}
@@ -759,6 +764,7 @@ def test_report_file_is_preferred_over_stdout(tmp_path):
     "success", "tool-failed", "unparseable", "over-bound", "tool-raises"])
 def test_report_temp_dir_removed_after_run(tmp_path, monkeypatch, case):
     """The lens's temp report dir is gone after collect(), success or failure."""
+    # bites on: G3 the temp report dir is removed on every exit path
     _seed_tracked(tmp_path)
     clean = {"statistics": {"total": {"clones": 0, "duplicatedLines": 0, "sources": 1}},
              "duplicates": []}
