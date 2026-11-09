@@ -18,11 +18,20 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
-## Unreleased
+## 0.48.1
 
 ### Before you upgrade
 
+Check these in a consuming project when it adopts 0.48.1. Each step names the note it comes from.
+
+- **After switching.** **Nothing is owed.** An advisor driving a merge train reports a merge done without waiting for the base branch's post-merge run when the branch requires up-to-date pull requests (both protection reads answered, one `true`) and the merged commit's tree equals the tree CI passed on the merged PR's head; the run still runs, and a red one is still a red train. Every other case, a failed protection read and a tree mismatch included, keeps the wait. See [Merge train: no post-merge wait when the merged tree is the tree CI passed](#merge-train-no-post-merge-wait-when-the-merged-tree-is-the-tree-ci-passed).
 - **After switching.** **When a `leftover-not-accepted` refusal's missing finding is named only in an acceptance another finding already took (a sub-bullet under a lead-in bullet, say), its detail now says the two share one acceptance and asks for one top-level bullet per finding; the reason and every other detail are unchanged.** Nothing is owed. See [Leftover rule: the refusal names a shared acceptance](#leftover-rule-the-refusal-names-a-shared-acceptance).
+
+### Merge train: no post-merge wait when the merged tree is the tree CI passed
+
+- `skills/showrunner/reference/merge-train.md` § A merge train's "green" gains a paragraph, "When a merge is reported done without waiting". Where the base branch requires pull requests to be up to date (one of the section's two protection reads reports `true` and neither read failed; the classic read's 404 "Branch not protected" is an answer, any other failure is not) and `git rev-parse --verify <sha>^{tree}` prints the same tree for the merged commit and for the merged PR's head whose green the merge relied on (a stack: its top layer's head), the advisor reports the merge done and goes on without waiting for the post-merge run. The run still runs; a red one is still a red train, fixed by the same recipe, and the advisor reads its result at its next pass. A merge through a merge queue keeps the wait.
+- A failed protection read, which still counts as requiring up-to-date PRs when bringing PRs current, keeps the wait here; so do no up-to-date requirement, a failing `rev-parse`, and two different trees.
+- Showrunner duty 6's sentence "A merge train's "green" includes post-merge `main` CI" names the exception in one clause and points at that section; § Merging a stack item 6 points at it too.
 
 ### Leftover rule: the refusal names a shared acceptance
 
