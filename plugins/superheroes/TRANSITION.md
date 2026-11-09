@@ -18,11 +18,11 @@ switches: it moves to a new version only when the advisor relaunches it after ad
 before-switching step therefore binds the advisor's seat and every lane it launches after
 switching, never a lane already running.
 
-## 0.48.1
+## 0.49.0
 
 ### Before you upgrade
 
-Check these in a consuming project when it adopts 0.48.1. Each step names the note it comes from.
+Check these in a consuming project when it adopts 0.49.0. Each step names the note it comes from.
 
 - **After switching.** **Nothing is owed.** An advisor driving a merge train reports a merge done without waiting for the base branch's post-merge run when the branch requires up-to-date pull requests (both protection reads answered, one `true`) and the merged commit's tree equals the tree CI passed on the merged PR's head; the run still runs, and a red one is still a red train. Every other case, a failed protection read and a tree mismatch included, keeps the wait. See [Merge train: no post-merge wait when the merged tree is the tree CI passed](#merge-train-no-post-merge-wait-when-the-merged-tree-is-the-tree-ci-passed).
 - **After switching.** **When a `leftover-not-accepted` refusal's missing finding is named only in an acceptance another finding already took (a sub-bullet under a lead-in bullet, say), its detail now says the two share one acceptance and asks for one top-level bullet per finding; the reason and every other detail are unchanged.** Nothing is owed. See [Leftover rule: the refusal names a shared acceptance](#leftover-rule-the-refusal-names-a-shared-acceptance).
