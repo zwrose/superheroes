@@ -451,7 +451,7 @@ def test_template_body_does_not_restate_payload_contract(phase):
 # A golden whose phase's order is doctrine prose that changed is retired, never refreshed: the pin rule
 # (rubric/review-discipline.md § One home per rule, and the pin rule). Structure stays asserted on the
 # rendered order by the tests that read it.
-_RETIRED_GOLDENS = frozenset({RP.P_AUDITS})
+_RETIRED_GOLDENS = frozenset({RP.P_AUDITS, RP.P_SWEEP})
 
 
 @pytest.mark.parametrize("phase", [p for p in _GOLDEN_CONTEXTS if p not in _RETIRED_GOLDENS])
@@ -461,6 +461,39 @@ def test_golden_render_matches_fixture(phase):
     with open(golden_path, encoding="utf-8") as fh:
         expected = fh.read()
     assert _normalize_golden_machine_paths(rendered) == _normalize_golden_machine_paths(expected)
+
+
+# --- #2399: a host searcher is the read-only superheroes:searcher agent — it replies, never writes ---
+
+
+def _assert_reply_delivery_text_is_a_reply_contract(delivery):
+    """The delivery text itself, read from the production constant at call time: non-blank, names the
+    reply, and holds no affirmative write instruction (`Write no file.` passes, `Write a file.` fails)."""
+    assert delivery.strip(), "sweep-host-reply-delivery-blank"
+    assert re.search(r"\breply\b", delivery), "sweep-host-reply-delivery-no-reply"
+    assert not re.search(r"\bwrite\b(?!\s+no\b)", delivery, re.IGNORECASE), \
+        "sweep-host-reply-delivery-writes"
+
+
+def test_sweep_host_seat_order_replies_and_never_writes():
+    """Axis: the host-seat sweep order carries the reply delivery and the landing path, and no write
+    instruction in either the channel block or the landing block (the searcher holds no write tool)."""
+    ctx = _GOLDEN_CONTEXTS[RP.P_SWEEP]()
+    text, reason = RO.render_order(RP.P_SWEEP, "golden-seat", ctx)
+    assert reason is None, reason
+    _assert_reply_delivery_text_is_a_reply_contract(RO._SWEEP_HOST_REPLY_DELIVERY)
+    assert RO._SWEEP_HOST_REPLY_DELIVERY in text, "sweep-host-reply-delivery-missing"
+    assert ctx["landing_path"] in text, "sweep-landing-path-missing"
+    assert "Write **only** your payload artifact" not in text, "sweep-host-landing-write-line"
+    assert "Write your payload to" not in text, "sweep-host-channel-write-line"
+
+
+def test_panel_host_seat_order_still_writes_its_payload_artifact():
+    """The other phases are unchanged: a panel host seat is still told to write its payload artifact."""
+    ctx = _GOLDEN_CONTEXTS[RP.P_PANEL]()
+    text, reason = RO.render_order(RP.P_PANEL, "golden-seat", ctx)
+    assert reason is None, reason
+    assert "Write **only** your payload artifact" in text
 
 
 # --- FX-1: host-seat and stdout-channel golden coverage (fix 14) ----------------
