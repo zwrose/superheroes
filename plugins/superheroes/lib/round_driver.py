@@ -10588,7 +10588,7 @@ def _never_sent_outcome(state, key, entry, ledger_by_key):
         if entry.get(session_contract.MERGED_INTO_FIELD):
             return None
         # shape guard: a ledger row that carries a disposition is not an absent disposition
-        if entry.get("disposition") is not None:
+        if session_contract.disposition_value(entry) is not None:
             return None
     # E6: any ruling kind bound to the finding (its own or a merged-in member's) withholds
     rulings = _live_ruling_by_key(state)
