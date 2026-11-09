@@ -3638,6 +3638,32 @@ def _panel_slices(state, roster):
     return out
 
 
+def _panel_ceilings(state, roster):
+    """The panel payload's ceilings (#2415): each seat of ``roster`` with the countable lines it reviews and the attempt and retry
+    ceilings ``round_phases.seat_ceiling`` gives it. A slice seat's lines are its slice's ``weight``; any other seat's are the plan's
+    ``countable``; a missing plan, row or value reads as None (the floor). Pure read; never raises on a malformed plan."""
+    plan = state.get("slicePlan") if isinstance(state, dict) else None
+    plan = plan if isinstance(plan, dict) else {}
+
+    def _int_or_none(value):
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+    weights = {}
+    rows = plan.get("slices")
+    for row in rows if isinstance(rows, list) else []:
+        if isinstance(row, dict) and isinstance(row.get("id"), str):
+            weights.setdefault(row["id"], _int_or_none(row.get("weight")))
+    out = {}
+    for key in roster:
+        if round_phases.is_slice_seat(key):
+            lines = weights.get(key.partition(":")[2])
+        else:
+            lines = _int_or_none(plan.get("countable"))
+        ceiling = round_phases.seat_ceiling(key, lines)
+        out[key] = {"lines": lines, "timeout": ceiling, "retryTimeout": ceiling}
+    return out
+
+
 # The held finding's fields the second-test seat reads: the finding as staged, its first test, that
 # test's runs with their output, and the note the verifier gave for holding it.
 _SECOND_TEST_ENTRY_FIELDS = ("id", "title", "file", "line", "severity", "body", "consequence",
@@ -3664,7 +3690,8 @@ def _advance(state, config):
     if step == P_PANEL:
         roster = round_phases.panel_roster(state, config)
         # round 1 / full panels are always reviewer-deep
-        payload = {"dimensions": list(roster), "tier": DEEP, "slices": _panel_slices(state, roster)}
+        payload = {"dimensions": list(roster), "tier": DEEP, "slices": _panel_slices(state, roster),
+                   "ceilings": _panel_ceilings(state, roster)}
     elif step == P_VERIFIERS:
         staged = verification.stage_ids(state.get("_toVerify") or [])
         payload = {"clusters": verification.cluster_findings(staged)}
