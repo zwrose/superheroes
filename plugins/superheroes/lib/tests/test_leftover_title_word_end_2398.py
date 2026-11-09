@@ -66,6 +66,9 @@ def test_a_link_with_a_title_is_not_glued_at_the_chokepoint():
                  id="balanced_brackets_in_link_text_shows_offf_model_only"),
     # review round 1, v5: CommonMark strips the padding of ` off `, so the span's shown content ends at `off` (`<code>…off</code>f`)
     pytest.param("- F-1 ` The retry loop never backs off `f: accepted.\n", id="padded_closing_code_span_shows_offf_model_only"),
+    # review round 2, v0: `2.` cannot interrupt the paragraph above it, so GitHub shows no fence and `*f*` is emphasis (`off<em>f</em>`)
+    pytest.param("Accepted:\n2. ~~~\n   F-1 The retry loop never backs off*f*: accepted.\n",
+                 id="list_marker_fence_that_github_reads_as_a_paragraph_model_only"),
 ])
 def test_more_glued_forms_are_refused(line):
     assert gaps(RECORD, line) == ["F-1"]
@@ -91,6 +94,9 @@ def test_more_glued_forms_are_refused(line):
     pytest.param("- F-1\n  ~~~\n  The retry loop never backs off*f*: accepted.\n  ~~~\n", id="stars_on_a_fenced_line_are_literal"),
     pytest.param("- F-1\n  ~~~\n  The retry loop never backs off[f](https://x.example)\n  ~~~\n",
                  id="link_on_a_fenced_line_is_literal"),
+    # review round 2, v1/v2: links never nest, so the inner link leaves the outer brackets literal (`off[f <a>g</a>]`)
+    pytest.param("- F-1 The retry loop never backs off[f [g](https://inner.example)](https://outer.example): accepted.\n",
+                 id="inner_link_leaves_the_outer_brackets_literal"),
 ])
 def test_healthy_acceptances_keep_counting(line):
     assert gaps(RECORD, line) == []

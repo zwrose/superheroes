@@ -198,7 +198,7 @@ def _item_cut(lines, span, shown):
     ``f-1-other``; a title word cut short reads whole) (#2389 vet 856). Otherwise the result is the kept parts, stripped and
     joined with one space, as ``pr_sheet.accepting_listed`` joins an item. It only removes text. The result is an ``_Item``
     whose ``literal`` names the spans that came from fenced lines, so the title compare reads no markup there."""
-    parts = []
+    parts, trusted = [], False
     for k, (n, kind) in enumerate(span):
         # axis: a line md_hidden does not read VISIBLE, or one the reader drops (a whole-line comment, a line inside one), stops the item — see bite-proof record i2389_leftover_visible_within_line.md
         if n >= len(lines) or n >= len(shown) or not shown[n] or kind == "dropped":
@@ -211,7 +211,11 @@ def _item_cut(lines, span, shown):
             # axis: a fenced line is literal text, no comment is dropped on it; an entry `<` on it makes the whole item count as nothing — see bite-proof record i2389_leftover_visible_within_line.md
             if _TAG_ENTRY.search(line, start):
                 return ""
-            parts.append((line[start:].strip(), True))
+            # axis: a fenced run reads as literal only when the item's own text opens it (a later line that starts with the
+            # fence run, no list marker): a marker line such as `2. ~~~` may be a paragraph on GitHub, so its run keeps its markup
+            if k == 0 or span[k - 1][1] != "fenced":
+                trusted = k > 0 and _FENCE_OPEN.match(line[start:].lstrip()) is not None
+            parts.append((line[start:].strip(), trusted))
         else:
             kept, cut = _scan_line(line, start)
             # axis: a cut anywhere in the item (entry `<` plain, escaped or code-spanned, unclosed `<!--`) makes the whole item count as nothing, never the words before the cut (#2389 vet 856, G22) — see bite-proof record i2389_leftover_visible_within_line.md
@@ -234,6 +238,7 @@ class _Item(str):
 
 
 _LITERAL_MARKUP = {ord(c): "." for c in "*~`[]\\"}
+_FENCE_OPEN = re.compile(r"`{3,}|~{3,}")
 
 
 def _unmarked_literal(item):
@@ -355,6 +360,9 @@ def _mark_glued_ends(text):
             if text[k] == "\\":
                 k += 2
                 continue
+            # axis: links never nest (GFM 6.6): an inner link leaves the outer brackets literal, so the outer `[` opens none
+            if text[k] == "[" and text[k - 1] != "!" and opens_link(k):
+                return False
             depth += {"[": 1, "]": -1}.get(text[k], 0)
             if depth == 0:
                 return tail_end(k) is not None
