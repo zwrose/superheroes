@@ -296,18 +296,15 @@ def test_c_retried_attempt_that_answers_is_accepted(tmp_path, monkeypatch):
 
 
 def test_d_bound_still_ends_an_attempt_that_never_answers(tmp_path, monkeypatch):
-    """DoD (d) and W6: on the final attempt (attempt 3, after two watchdog-cut attempts) the watchdog is
-    never armed even when silent, so the per-attempt bound ends it. Attempts 1 and 2 are the control: the
-    same silence is ended by the watchdog on each (a retry after a cut is watched too)."""
-    run_dir, prompt, argv = _open_run(tmp_path, attempts=(1, 2, 3))
+    """DoD (d) and W6: on the final attempt (== MAX_ATTEMPTS) the watchdog is never armed even when
+    silent, so the per-attempt bound ends it. Attempt 1 is the control: the same silence is ended."""
+    run_dir, prompt, argv = _open_run(tmp_path, attempts=(1, 2))
     TD._install_fake_codex(monkeypatch, tmp_path, _SILENT)
     _Clock(monkeypatch)
     assert ED.MAX_ATTEMPTS == 2
     control = _run_attempt(run_dir, prompt, argv, 1, 60)
     assert control["signalSource"] == "silence-watchdog"
-    retry = _run_attempt(run_dir, prompt, argv, 2, 60)
-    assert retry["signalSource"] == "silence-watchdog"
-    final = _run_attempt(run_dir, prompt, argv, ED.MAX_ATTEMPTS + 1, 1.0)
+    final = _run_attempt(run_dir, prompt, argv, ED.MAX_ATTEMPTS, 1.0)
     _assert_bound_end(final)
 
 
