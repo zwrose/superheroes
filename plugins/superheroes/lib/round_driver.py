@@ -10553,11 +10553,60 @@ def _restored_run_record(state, key, run, run_round, row):
     return dict(run, sha256=_sha256(block["content"]), content=block["content"])
 
 
+def _never_sent_outcome(state, key, entry, ledger_by_key):
+    """The end-of-loop outcome (``craft`` or ``left-for-owner``) of a finding with no disposition that
+    was never fix-bound, or None (withhold). Fails closed: None when the finding's lineage root is
+    present in ``sentUnderDecision`` (E1, presence even at seq 0), the key is in the fix batch or queue
+    now (E2), its severity is blocking (E3), it was merged into another (E4), it has no content (E5),
+    a ruling binds it (E6), or its ledger row already carries a disposition or the ledger is unreadable.
+    Mirrors ``finding_outcomes.settle``: a code-quality-only consequence is craft, anything else is
+    left for the owner."""
+    if not isinstance(key, str) or not key or not isinstance(ledger_by_key, dict):
+        return None
+    sent = state.get("sentUnderDecision")
+    # E1: a finding that ever went to a fixer in a slice is fix-bound for good, even when sent under no decision (seq 0)
+    if isinstance(sent, dict) and _lineage_root(_lineage_map(state), key) in sent:
+        return None
+    # E2: a finding in the fix batch or queue now is about to be fix-bound
+    for field in ("_fixBatch", "_fixQueue", "fixBatch"):
+        rows = state.get(field)
+        for row in (rows if isinstance(rows, list) else ()):
+            if isinstance(row, dict) and key in (_finding_identity_key(row), _fix_batch_row_key(row)):
+                return None
+    live = _live_finding_by_key(state, key)
+    # E5: no ledger row and no live finding leaves no content to classify
+    if not isinstance(entry, dict) and not isinstance(live, dict):
+        return None
+    content = _newest_content(entry, live) if isinstance(entry, dict) else live
+    if not isinstance(content, dict):
+        return None
+    # E3: a finding whose severity required a fix was fix-bound, whatever else is true of it
+    if circuit_breaker.is_blocking(content.get("severity")):
+        return None
+    if isinstance(entry, dict):
+        # E4: a finding merged into another follows that one's outcome
+        if entry.get(session_contract.MERGED_INTO_FIELD):
+            return None
+        # shape guard: a ledger row that carries a disposition is not an absent disposition
+        if session_contract.disposition_value(entry) is not None:
+            return None
+    # E6: any ruling kind bound to the finding (its own or a merged-in member's) withholds
+    rulings = _live_ruling_by_key(state)
+    if _row_decision(state, rulings, ledger_by_key, key) is not None or rulings.get(key) is not None:
+        return None
+    outcomes = review_findings_schema.OUTCOMES
+    if content.get(review_findings_schema.CONSEQUENCE_KIND_KEY) == review_findings_schema.CODE_QUALITY:
+        return outcomes[2]
+    return outcomes[3]
+
+
 def _break_it_kept_step(state, config, session_dir=None):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
     parked (certification withheld). A finding ruled out of scope and cleared by the audit owes no
-    check; a finding with any other disposition besides fixed or out-of-scope owes none either."""
+    check; a finding with any other disposition besides fixed or out-of-scope owes none either; a
+    finding with no disposition that was never fix-bound and ends as craft or left for the owner owes
+    none (a `not-required` row)."""
     for rkey in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         for run in (state["rounds"][rkey].get("breakItRuns") or []):
             # axis: a per-area (or kind-less) break-it run that compile dropped and that did not pass withholds certification; an attached test's dropped run stays recorded and parks nothing, as its dropped finding would without a test; a run whose finding went to the "Outside this PR" list parks nothing either, as the list is no block on the review
@@ -10631,7 +10680,16 @@ def _break_it_kept_step(state, config, session_dir=None):
         entry = by_key.get(key)
         disposition = entry.get("disposition") if isinstance(entry, dict) else None
         if disposition is None:
-            # axis: an absent disposition is unresolved, never a waiver — retention is not checked, so certification is withheld
+            # axis: an absent disposition is unresolved, never a waiver for a fix-bound finding — only a never-fix-bound craft or left-for-owner one is not-required; retention is not checked, so certification is withheld otherwise
+            # axis: the waiver needs every leg of _never_sent_outcome (no history, not queued, non-blocking, not merged, has content, no ruling); any one failing keeps the withhold — see bite-proof record wo_a_2397_never_sent
+            # the by_key above is the fixed-rows map under a legacy ledger, so the helper reads the whole ledger
+            full_ledger, full_fault = _disposition_ledger_by_key(state)
+            never_sent = (None if full_fault is not None
+                          else _never_sent_outcome(state, key, full_ledger.get(key), full_ledger))
+            if never_sent is not None:
+                rows.append({"findingKey": key, "path": run.get("path"), "outcome": "not-required",
+                             "reason": never_sent, "neverSentForFix": True})
+                continue
             row = {"findingKey": key, "path": run.get("path"), "outcome": "unresolved",
                    "reason": "no-disposition", "run": None}
             rows.append(row)
