@@ -48,7 +48,7 @@ The `leftover-not-accepted` detail from `vet_slot.py handback --pr` and a READY 
 
 ### Refusals: a refusal binds the whole build session
 
-- `lib/command_refusals.py` gains `SANCTIONED_RETRIES`, the one list of sanctioned retry exceptions (each entry: `act`, `who`, `conditions`, `disclosure`), `session_rule()` and `SESSION_RULE` (the rule rendered from the list) and `compose_order_text()`. `ORDER_TEXT` is now `compose_order_text(SANCTIONED_RETRIES)`: the stop rule, then the session rule, then the refusal meaning and the entry shape. Every implementer order carries it, so a new entry reaches every order with no other edit.
+- `lib/command_refusals.py` gains `SANCTIONED_RETRIES`, the one list of sanctioned retry exceptions (each entry: `act`, `who`, `conditions`, `disclosure`), `SESSION_RULE` (the rule rendered from the list by its renderer) and `compose_order_text()`. `ORDER_TEXT` is now `compose_order_text(SANCTIONED_RETRIES)`: the stop rule, then the session rule, then the refusal meaning and the entry shape. Every implementer order carries it, so a new entry reaches every order with no other edit.
 - The session rule: no seat, the orchestrator and a vet included, takes a refused act in any form or hands it to another seat, unless an entry covers it; the stop rule's two exceptions stay the refusing seat's own. An uncovered refused act stays a stop, and the claim it would have proved goes back UNVERIFIED. A new entry needs the owner's word with its field sightings.
 - `refusals_fault` and the refusals entry shape are unchanged.
 

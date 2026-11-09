@@ -53,7 +53,8 @@ it. Each refusals entry carries command (the command exactly as you wrote it), r
 refusal, else null), and next (what you did next). An empty list means you met none.
 A refusal also binds the whole build session, not only you: the session rule and its list of
 sanctioned retries (`SESSION_RULE` and `SANCTIONED_RETRIES` in `lib/command_refusals.py`) ride in
-every order you receive; read them there, and take no retry the list does not give your seat.
+every order you receive; read them there. Beyond the stop rule's two exceptions above, which stay
+yours for a refusal you met, take no retry the list does not give your seat.
 This dominates every rung below: a refused or denied command is never a command you "could not run"
 under rung 3 or rung 4 — you stop and report.
 
