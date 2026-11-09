@@ -723,7 +723,9 @@ def test_report_file_at_lens_bound_still_reads(tmp_path, monkeypatch):
     assert len(out["candidates"]) == 1
     monkeypatch.setattr(gld, "MAX_REPORT_FILE_BYTES", size - 1)
     out_over = _collect(gld.DuplicationLens(), tmp_path, _FakeJscpd(report))
-    assert "report-too-large" in gl.classify_collect(out_over)[1]
+    status, reason = gl.classify_collect(out_over)
+    assert status == "not-collected"
+    assert "report-too-large" in reason
 
 
 def test_no_report_file_and_no_stdout_json_degrades_named(tmp_path):
