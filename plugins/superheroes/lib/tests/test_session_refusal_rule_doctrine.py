@@ -34,16 +34,3 @@ def test_doctrine_cites_the_session_rule(relpath):
     # axis: the no-copy guard — a cite, never a copy of the rule — see bite-proof record wo2_2431_doctrine_cites
     assert " ".join(CR.SESSION_RULE_HEAD.split()) not in body
     assert " ".join(CR.SESSION_RULE_TAIL.split()) not in body
-
-
-@pytest.mark.parametrize(
-    "relpath",
-    ["skills/workhorse/SKILL.md", "skills/showrunner/reference/vetting.md"],
-    ids=["workhorse-skill", "vetting"],
-)
-def test_workhorse_and_vet_doctrine_say_the_same(relpath):
-    body = _body(relpath)
-    # axis: same-say guard — workhorse duty 8 and the vet doctrine state the same list and entry rule
-    # — see bite-proof record wo2_2431_doctrine_cites
-    assert "SANCTIONED_RETRIES" in body
-    assert "owner's word with its field sightings" in body

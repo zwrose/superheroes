@@ -158,16 +158,22 @@ def test_bite_proof_is_the_only_sanctioned_retry():
     # axis: the one sanctioned retry today is the bite-proof run — see bite-proof record wo1_2431_session_rule
     assert len(CR.SANCTIONED_RETRIES) == 1
     entry = CR.SANCTIONED_RETRIES[0]
-    # axis: the entry names the bite-proof act — see bite-proof record wo1_2431_session_rule
-    assert "bite-proof" in entry["act"]
+    # axis: the act, exactly — see bite-proof record wo3_2431_vet883
+    assert entry["act"] == "a bite-proof red or green run"
     # axis: only the build's orchestrator and a vet may re-run it — see bite-proof record wo1_2431_session_rule
     assert entry["who"] == ("the build's orchestrator", "a vet")
-    # axis: the three conditions, in order — see bite-proof record wo1_2431_session_rule
+    # axis: the four conditions, in order, the refusal kind first — see bite-proof record wo3_2431_vet883
     assert entry["conditions"] == (
+        "after a refusal by a permission check or the auto-mode classifier (refusedBy "
+        "permission), never by a hook or the sandbox",
         "in a throwaway copy of the tree",
         "with the mutation in place for the red run and reverted before the green run",
         "never committed or pushed",
     )
+    # axis: only a permission refusal (refusedBy permission) opens it, never a hook's or the sandbox's — see bite-proof record wo3_2431_vet883
+    assert "refusedBy permission" in entry["conditions"][0]
+    assert "never by a hook or the sandbox" in entry["conditions"][0]
+    assert "permission" in CR.REFUSED_BY
     # axis: the disclosure names the refusal and the re-run in the PR body and the vet receipt — see bite-proof record wo1_2431_session_rule
     for word in ("refusal", "re-run", "PR body", "vet receipt"):
         assert word in entry["disclosure"]
@@ -194,7 +200,7 @@ def test_a_new_entry_needs_only_the_constant():
     for field in [fixture["act"]] + list(fixture["who"]) + list(fixture["conditions"]) + [fixture["disclosure"]]:
         assert field in text
     # axis: a new entry is numbered after the existing ones — see bite-proof record wo1_2431_session_rule
-    assert "(2) a fixture act:" in text
+    assert "(%d) a fixture act:" % (len(CR.SANCTIONED_RETRIES) + 1) in text
     # axis: the existing entries still render beside a new one — see bite-proof record wo1_2431_session_rule
     for entry in CR.SANCTIONED_RETRIES:
         for field in [entry["act"]] + list(entry["who"]) + list(entry["conditions"]) + [entry["disclosure"]]:

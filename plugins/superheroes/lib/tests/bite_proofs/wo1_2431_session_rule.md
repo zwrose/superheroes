@@ -12,7 +12,7 @@ Guarded-element set (declared by the order, exactly six):
 All runs: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <node> -q`,
 from the worktree root, one exact test node each. Every neutralization was a single targeted Edit and
 every restore the exact inverse Edit; no `git checkout`, `git restore`, `git reset` or `git stash`.
-No receipt below holds a secret, token, or private URL; nothing was redacted. Where a red shows a
+No receipt below holds a secret, token, or private URL; the home-folder part of every absolute path was redacted to `/path/to/home/`; nothing else was redacted. Where a red shows a
 truncated `assert` line (`...`), pytest itself cut it; nothing was edited out by hand.
 
 ---
@@ -45,7 +45,7 @@ ____________________ test_session_rule_renders_every_entry _____________________
 E               assert 'with the mutation reverted' in "A refusal binds the whole build session, not only the seat that met it. No seat, the orchestrator and a vet included,...aim it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field sightings behind it."
 E                +  where "A refusal binds the whole build session, not only the seat that met it. No seat, the orchestrator and a vet included,...aim it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field sightings behind it." = CR.SESSION_RULE
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:181: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:181: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_session_rule_renders_every_entry
 1 failed in 0.46s
@@ -102,7 +102,7 @@ E         - m. A refusal binds the whole build session, not only the seat that m
 E         
 E         ...Full output truncated, use '-vv' to show
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:132: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:132: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_order_text_composition
 1 failed in 0.50s
@@ -153,7 +153,7 @@ entries = ({'act': 'a bite-proof red or green run', 'who': ("the build's orchest
 E       assert "A refused act that no entry covers stays a stop for the whole session: record it, and a claim it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field sightings behind it." in 'A refusal binds the whole build session, not only the seat that met it. No seat, the orchestrator and a vet included,...tation reverted, never committed or pushed; the PR body (for a vet, the vet receipt) names the refusal and the re-run.'
 E        +  where "A refused act that no entry covers stays a stop for the whole session: record it, and a claim it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field sightings behind it." = CR.SESSION_RULE_TAIL
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:212: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:212: AssertionError
 _______________ test_an_uncovered_refusal_stays_a_stop[entries1] _______________
 
 entries = ()
@@ -167,7 +167,7 @@ entries = ()
 E       assert "A refused act that no entry covers stays a stop for the whole session: record it, and a claim it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field sightings behind it." in 'A refusal binds the whole build session, not only the seat that met it. No seat, the orchestrator and a vet included,...ommand_refusals.py, each taken only by the seats it names, only on its conditions, and only with its disclosure: none.'
 E        +  where "A refused act that no entry covers stays a stop for the whole session: record it, and a claim it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field sightings behind it." = CR.SESSION_RULE_TAIL
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:212: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:212: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_an_uncovered_refusal_stays_a_stop[entries0]
 FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_an_uncovered_refusal_stays_a_stop[entries1]
@@ -226,7 +226,7 @@ _____________________ test_sanctioned_retries_entry_shape ______________________
 E               AssertionError: assert (False)
 E                +  where False = isinstance('in a throwaway copy of the tree', tuple)
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:152: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:152: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_sanctioned_retries_entry_shape
 1 failed in 0.44s
@@ -284,7 +284,7 @@ __________________________ test_census_implementer_md __________________________
 >       assert cite in flat
 E       assert '`SESSION_RULE` and `SANCTIONED_RETRIES` in `lib/command_refusals.py`' in '--- name: implementer description: Internal build subagent — implements one scoped work order dispatched by the Workh...d out of scope. - Return per the **Short structured return** rule above. Nothing beyond that — no verdict, no "ready."'
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:306: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:306: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_census_implementer_md
 1 failed in 0.45s
@@ -356,7 +356,7 @@ E
 E         Left contains one more item: 'agents/implementer.md'
 E         Use -v to get more diff
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:456: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_command_refusals.py:456: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_command_refusals.py::test_sanctioned_retries_have_one_home
 1 failed in 0.51s

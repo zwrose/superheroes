@@ -1,10 +1,11 @@
 # WO-2 (#2431) bite-proofs — the doctrine cites the session-wide refusal rule
 
 Guarded-element set: the order declared exactly three elements (a, b, c), one neutralization and one
-red each. The order declared no wider set.
+red each. The order declared no wider set. Element (c) was dropped in the vet 883 fix leg (see its
+section below); (a) and (b) stand.
 
 All runs: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest <node> -q`, from
-the worktree root. No receipt below holds a secret, token, or private URL; nothing was redacted. The
+the worktree root. No receipt below holds a secret, token, or private URL; the home-folder part of every absolute path was redacted to `/path/to/home/`; nothing else was redacted. The
 red `body = ...` reprs are cut by pytest itself; nothing was edited out by hand.
 
 ---
@@ -41,7 +42,7 @@ relpath = 'skills/showrunner/reference/vetting.md'
 >       assert "lib/command_refusals.py" in body
 E       AssertionError: assert 'lib/command_refusals.py' in '# Contents - [Vetting — the mechanism behind duty 4](#vetting--the-mechanism-behind-duty-4) - [Order-quality accounti...Instructions nobody executed are reconstruction with extra steps. - **attended** and **none** remain the honest floor.'
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py:32: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py:32: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py::test_doctrine_cites_the_session_rule[vetting]
 1 failed in 0.16s
@@ -99,7 +100,7 @@ E
 E         'A refused act that...ightings behind it.' is contained here:
 E           o "ready". A refused act that no entry covers stays a stop for the whole session: record it, and a claim it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field sightings behind it.
 
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py:36: AssertionError
+/path/to/home/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py:36: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py::test_doctrine_cites_the_session_rule[check-runner]
 1 failed in 0.16s
@@ -118,54 +119,9 @@ the results mean, no "ready".`; the appended sentence is gone.
 
 ---
 
-## (c) the same-say guard — `test_workhorse_and_vet_doctrine_say_the_same`
+## (c) the same-say guard — `test_workhorse_and_vet_doctrine_say_the_same` (dropped)
 
-**Guarded element:** the `owner's word with its field sightings` assert of
-`test_workhorse_and_vet_doctrine_say_the_same`, on the vetting.md paragraph. Axis: workhorse duty 8
-and the vet doctrine both state the entry rule beside `SANCTIONED_RETRIES`.
-
-**Neutralization:** with the Edit tool, deleted `A new entry needs the owner's word with its field
-sightings.` (with its leading space) from the `A vet re-runs no refused act.` paragraph.
-
-**Command:**
-```
-scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py::test_workhorse_and_vet_doctrine_say_the_same -q
-```
-
-**Raw red:**
-```
-.F                                                                       [100%]
-=================================== FAILURES ===================================
-____________ test_workhorse_and_vet_doctrine_say_the_same[vetting] _____________
-
-relpath = 'skills/showrunner/reference/vetting.md'
-
-    @pytest.mark.parametrize(
-        "relpath",
-        ["skills/workhorse/SKILL.md", "skills/showrunner/reference/vetting.md"],
-        ids=["workhorse-skill", "vetting"],
-    )
-    def test_workhorse_and_vet_doctrine_say_the_same(relpath):
-        body = _body(relpath)
-        # axis: same-say guard — workhorse duty 8 and the vet doctrine state the same list and entry rule
-        # — see bite-proof record wo2_2431_doctrine_cites
-        assert "SANCTIONED_RETRIES" in body
->       assert "owner's word with its field sightings" in body
-E       assert "owner's word with its field sightings" in '# Contents - [Vetting — the mechanism behind duty 4](#vetting--the-mechanism-behind-duty-4) - [Order-quality accounti...Instructions nobody executed are reconstruction with extra steps. - **attended** and **none** remain the honest floor.'
-
-/Users/zwrose/.superheroes-worktrees/superheroes/issue-2431-f8f492f5d738c44a/plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py:49: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_session_refusal_rule_doctrine.py::test_workhorse_and_vet_doctrine_say_the_same[vetting]
-1 failed, 1 passed in 0.10s
-```
-
-**Restore:** by the inverse Edit, reinserted the sentence after `under its degradations.`
-
-**Restore receipt:** the restored text, quoted back: `...recorded in the receipt as unverified, under
-its degradations. A new entry needs the owner's word with its field sightings.`
-
-**Raw green:**
-```
-..                                                                       [100%]
-2 passed in 0.10s
-```
+The test was deleted in the vet 883 fix leg because it pinned a doctrine sentence fragment, against
+the pin rule in `rubric/review-discipline.md`: a paraphrase with the same meaning turned it red, and
+a rule rewritten to mean the opposite kept it green. WO-2 (c) is dropped and no test replaces it; the
+doctrine's agreement is checked at review and vet by reading.

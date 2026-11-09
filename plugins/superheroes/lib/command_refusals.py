@@ -4,8 +4,10 @@ file-write rule (#2067, #2126), the delete rule (#2314), and the session-wide re
 sanctioned retry exceptions (#2431).
 
 Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT`,
-`FILE_WRITE_RULE` and `DELETE_RULE`; no order surface keeps a hand copy of any. `refusals_fault` is the one
-check of a result's `refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
+`FILE_WRITE_RULE` and `DELETE_RULE`; no order surface keeps a hand copy of any, except that
+`agents/implementer.md` keeps a census-tested copy of the stop rule (`STOP_RULE`, `REFUSAL_MEANING`,
+`ENTRY_SHAPE`). `refusals_fault` is the one check of a result's `refusals` list. Leaf module: stdlib
+only, imports nothing from `lib/`.
 """
 
 STOP_RULE = (
@@ -32,6 +34,8 @@ SANCTIONED_RETRIES = (
         "act": "a bite-proof red or green run",
         "who": ("the build's orchestrator", "a vet"),
         "conditions": (
+            "after a refusal by a permission check or the auto-mode classifier (refusedBy "
+            "permission), never by a hook or the sandbox",
             "in a throwaway copy of the tree",
             "with the mutation in place for the red run and reverted before the green run",
             "never committed or pushed",
