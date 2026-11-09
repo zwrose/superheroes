@@ -161,7 +161,8 @@ above).
    against the filed body **before filing**, whether or not the body contains a quoted block; for a
    stack layer, use the register-check [stack layer
    inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs).
-   A body with zero quoted blocks is exactly the case the check is there to fail. Fix the body
+   A body with zero quoted blocks is exactly the case the check is there to fail, unless the child
+   is declared on the register's `*No-entry children:*` line (an undeclared child still blocks). Fix the body
    rather than filing a drifted or incomplete quote. On `pass`, record the check's own output in the
    filing note —
    the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a claim that it ran.

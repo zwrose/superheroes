@@ -37,6 +37,7 @@ UNDECIDED_REGISTER_EMPTY = "register-empty"
 UNDECIDED_REGISTER_MALFORMED = "register-malformed"
 UNDECIDED_BODY_MALFORMED = "body-malformed"
 UNDECIDED_CHILD_UNRECOGNIZED = "child-unrecognized"
+UNDECIDED_CHILD_CONTRADICTED = "child-contradicted"
 UNDECIDED_USAGE = "usage"
 UNDECIDED_INTERNAL_ERROR = "internal-error"
 UNDECIDED_REASONS = frozenset({
@@ -46,6 +47,7 @@ UNDECIDED_REASONS = frozenset({
     UNDECIDED_REGISTER_MALFORMED,
     UNDECIDED_BODY_MALFORMED,
     UNDECIDED_CHILD_UNRECOGNIZED,
+    UNDECIDED_CHILD_CONTRADICTED,
     UNDECIDED_USAGE,
     UNDECIDED_INTERNAL_ERROR,
 })
@@ -72,13 +74,17 @@ _MAIN_BRANCH_FQ_REFS = {
 RESULT_FIELDS = (
     "schema", "result", "ok", "reason", "detail", "child", "register",
     "registerCopy", "registerRef", "body", "registerEntries", "requiredEntries",
-    "quotedEntries", "duplicateQuoteIds", "entriesWithoutConsumers", "findings",
-    "firstDifference",
+    "quotedEntries", "duplicateQuoteIds", "entriesWithoutConsumers",
+    "noEntryDeclaration", "findings", "firstDifference",
 )
 FINDING_FIELDS = ("kind", "entry", "line", "column", "expected", "actual", "detail")
 
 ENTRY_HEADER_RE = re.compile(r"^\*\*(R\d+)\s+—\s")
 CONSUMERS_LINE_RE = re.compile(r"^\*Consumers:\*\s*(.*)")
+NO_ENTRY_LABEL = "*No-entry children:*"
+# A candidate is any line that looks like the declaration, however damaged its label is.
+NO_ENTRY_CANDIDATE_RE = re.compile(r"^[*_ ]*no[- ]entry children", re.IGNORECASE)
+NO_ENTRY_FORBIDDEN_CHARS = "();*`"
 
 
 def _lines_from_text(text):
@@ -283,6 +289,7 @@ def _make_result(
     quoted_entries,
     duplicate_quote_ids,
     entries_without_consumers,
+    no_entry_declaration,
     findings,
     first_difference,
 ):
@@ -302,6 +309,7 @@ def _make_result(
         quoted_entries,
         duplicate_quote_ids,
         entries_without_consumers,
+        no_entry_declaration,
         findings,
         first_difference,
     )
@@ -322,14 +330,84 @@ def _quotable_has_substance(quotable):
     return len(quotable) > 1
 
 
+def _parse_no_entry_list(line):
+    """Return the declared tokens of a `*No-entry children:*` line, or an error detail."""
+    if not line.startswith(NO_ENTRY_LABEL):
+        return None, (
+            f"line looks like a no-entry declaration but is not in the exact form "
+            f"{NO_ENTRY_LABEL} <list>"
+        )
+    rest = line[len(NO_ENTRY_LABEL):].strip()
+    if rest.endswith("."):
+        rest = rest[:-1]
+    if not rest.strip():
+        return None, f"{NO_ENTRY_LABEL} list is empty"
+    tokens = [token.strip() for token in rest.split(",")]
+    for token in tokens:
+        if not token:
+            return None, f"{NO_ENTRY_LABEL} list has an empty token"
+        for ch in NO_ENTRY_FORBIDDEN_CHARS:
+            if ch in token:
+                return None, (
+                    f"{NO_ENTRY_LABEL} token {token!r} contains forbidden character {ch!r}"
+                )
+    return tokens, None
+
+
+def _scan_no_entry_declaration(lines, inert):
+    """Find the register's one no-entry declaration.
+
+    Returns (declaration, error_line, error_detail). `declaration` is None when the
+    register carries none; an error means the register is malformed.
+    """
+    first_header_idx = None
+    for idx, line in enumerate(lines):
+        if not inert[idx] and ENTRY_HEADER_RE.match(line):
+            first_header_idx = idx
+            break
+
+    declaration = None
+    for idx, line in enumerate(lines):
+        if inert[idx]:
+            continue
+        # axis: a damaged label is still a candidate — it must block, not pass silently.
+        if NO_ENTRY_CANDIDATE_RE.match(line) is None:
+            continue
+        line_no = idx + 1
+        # axis: placement above the first entry header keeps it out of every entry's text.
+        if first_header_idx is not None and idx > first_header_idx:
+            return None, line_no, (
+                f"{NO_ENTRY_LABEL} line appears below the first entry header"
+            )
+        # axis: one declaration per register — a second one blocks the whole register.
+        if declaration is not None:
+            return None, line_no, (
+                f"second no-entry declaration (first is on line {declaration['line']})"
+            )
+        tokens, error = _parse_no_entry_list(line)
+        if tokens is None:
+            return None, line_no, error
+        declaration = {"line": line_no, "children": tokens}
+    return declaration, None, None
+
+
 def parse_register_lines(lines):
-    """Parse register lines into ordered entries or a malformed/empty error."""
+    """Parse register lines into ordered entries or a malformed/empty error.
+
+    Returns (entries, reason, line, detail, declaration). `declaration` is
+    {"line", "children"} when the register carries a valid `*No-entry children:*`
+    line, else None.
+    """
     fence_scan = md_fence.scan(lines)
     inert = fence_scan.inert
     if fence_scan.unterminated_opener_line is not None:
         return None, UNDECIDED_REGISTER_MALFORMED, fence_scan.unterminated_opener_line, (
             "unterminated code fence — entries after this line were not parsed"
-        )
+        ), None
+
+    declaration, decl_line, decl_detail = _scan_no_entry_declaration(lines, inert)
+    if decl_detail is not None:
+        return None, UNDECIDED_REGISTER_MALFORMED, decl_line, decl_detail, None
 
     entries = []
     seen_ids = set()
@@ -349,7 +427,7 @@ def parse_register_lines(lines):
             # axis: register shape is fail-closed — malformed lines block the run.
             return None, UNDECIDED_REGISTER_MALFORMED, line_no, (
                 "*Consumers:* line appears before any entry header"
-            )
+            ), None
 
         header_match = ENTRY_HEADER_RE.match(line)
         if header_match:
@@ -357,7 +435,7 @@ def parse_register_lines(lines):
             if entry_id in seen_ids:
                 return None, UNDECIDED_REGISTER_MALFORMED, line_no, (
                     f"entry id {entry_id} opens twice"
-                )
+                ), None
             seen_ids.add(entry_id)
             quotable = [line]
             i += 1
@@ -373,7 +451,7 @@ def parse_register_lines(lines):
             if not _quotable_has_substance(quotable):
                 return None, UNDECIDED_REGISTER_MALFORMED, line_no, (
                     f"entry {entry_id} has empty quotable text"
-                )
+                ), None
             consumers_lines = []
             while i < n:
                 if inert[i]:
@@ -390,7 +468,7 @@ def parse_register_lines(lines):
                 bad_line = consumers_lines[1][0]
                 return None, UNDECIDED_REGISTER_MALFORMED, bad_line, (
                     f"entry {entry_id} trailer has multiple *Consumers:* lines"
-                )
+                ), None
             consumers_text = consumers_lines[0][1] if consumers_lines else None
             entries.append({
                 "id": entry_id,
@@ -402,8 +480,8 @@ def parse_register_lines(lines):
         i += 1
 
     if not entries:
-        return None, UNDECIDED_REGISTER_EMPTY, None, "register contains no entries"
-    return entries, None, None, None
+        return None, UNDECIDED_REGISTER_EMPTY, None, "register contains no entries", None
+    return entries, None, None, None, declaration
 
 
 def load_register(register_path, register_copy=REGISTER_COPY_AUTO):
@@ -418,9 +496,10 @@ def load_register(register_path, register_copy=REGISTER_COPY_AUTO):
                 "register file is missing or not valid UTF-8",
                 REGISTER_COPY_WORKTREE,
                 None,
+                None,
             )
-        entries, reason, line, detail = parse_register_lines(lines)
-        return entries, reason, line, detail, REGISTER_COPY_WORKTREE, None
+        entries, reason, line, detail, declaration = parse_register_lines(lines)
+        return entries, reason, line, detail, REGISTER_COPY_WORKTREE, None, declaration
 
     lines, main_ref, unreadable_detail = _read_register_lines_from_main(register_path)
     if lines is None:
@@ -432,9 +511,10 @@ def load_register(register_path, register_copy=REGISTER_COPY_AUTO):
             unreadable_detail,
             REGISTER_COPY_MAIN,
             main_ref,
+            None,
         )
-    entries, reason, line, detail = parse_register_lines(lines)
-    return entries, reason, line, detail, REGISTER_COPY_MAIN, main_ref
+    entries, reason, line, detail, declaration = parse_register_lines(lines)
+    return entries, reason, line, detail, REGISTER_COPY_MAIN, main_ref, declaration
 
 
 def _unprefix_blockquote(line):
@@ -566,6 +646,7 @@ def _base_result(
     duplicate_quote_ids,
     entries_without_consumers,
     findings,
+    no_entry_declaration=None,
 ):
     first_difference = None
     for finding in findings:
@@ -588,6 +669,7 @@ def _base_result(
         quoted_entries,
         duplicate_quote_ids,
         entries_without_consumers,
+        no_entry_declaration,
         findings,
         first_difference,
     )
@@ -601,6 +683,7 @@ def _undecided(
     register_copy=None,
     register_ref=None,
     body_path=None,
+    no_entry_declaration=None,
 ):
     return _base_result(
         RESULT_UNDECIDED,
@@ -617,6 +700,7 @@ def _undecided(
         [],
         [],
         [],
+        no_entry_declaration=no_entry_declaration,
     )
 
 
@@ -642,7 +726,9 @@ def check_body(
             body_path=body_path,
         )
 
-    entries, reg_reason, reg_line, reg_detail, loaded_copy, loaded_ref = load_register(
+    (
+        entries, reg_reason, reg_line, reg_detail, loaded_copy, loaded_ref, declaration,
+    ) = load_register(
         register_path,
         register_copy,
     )
@@ -720,8 +806,34 @@ def check_body(
         for entry in entries
         if _child_matches_consumers(entry["consumers_text"], child)
     ]
+    no_entry_declaration = None
+    child_declared = False
+    if declaration is not None:
+        # axis: a child is declared only by an exact token match — never a substring.
+        child_declared = child in declaration["children"]
+        no_entry_declaration = {
+            "line": declaration["line"],
+            "children": list(declaration["children"]),
+            "childDeclared": child_declared,
+        }
+    if child_declared and required_entries:
+        # axis: declared-and-consumed is refused, not passed — the register contradicts itself.
+        return _undecided(
+            UNDECIDED_CHILD_CONTRADICTED,
+            (
+                f"child {child!r} is listed on the {NO_ENTRY_LABEL} line "
+                f"(register line {declaration['line']}) but entries "
+                f"{', '.join(required_entries)} name it on their Consumers lines"
+            ),
+            child=child,
+            register_path=register_path,
+            register_copy=selected_copy,
+            register_ref=register_ref,
+            body_path=body_path,
+            no_entry_declaration=no_entry_declaration,
+        )
     # axis: every Consumers match for the child token must appear quoted — completeness.
-    if not required_entries and not allow_no_required_entries:
+    if not required_entries and not allow_no_required_entries and not child_declared:
         # axis: an unmatched child token must not silently pass — child fail-closed.
         return _undecided(
             UNDECIDED_CHILD_UNRECOGNIZED,
@@ -731,6 +843,7 @@ def check_body(
             register_copy=selected_copy,
             register_ref=register_ref,
             body_path=body_path,
+            no_entry_declaration=no_entry_declaration,
         )
 
     quoted_blocks = parse_quoted_blocks(body_lines)
@@ -824,6 +937,7 @@ def check_body(
             duplicate_quote_ids,
             entries_without_consumers,
             findings,
+            no_entry_declaration=no_entry_declaration,
         )
     return _base_result(
         RESULT_PASS,
@@ -840,6 +954,7 @@ def check_body(
         duplicate_quote_ids,
         entries_without_consumers,
         findings,
+        no_entry_declaration=no_entry_declaration,
     )
 
 
