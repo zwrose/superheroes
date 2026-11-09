@@ -361,6 +361,7 @@ def _result_channel_neutral_delivery(stdout_example=None):
 
 # A host searcher is the read-only `superheroes:searcher` agent: it holds no write tool, so it replies
 # and the orchestrator writes the reply to the landing path (#2399).
+REPLY_HOST_PHASES = frozenset({round_phases.P_SWEEP})  # host seat is a read-only agent: it replies, never writes a landing file
 _SWEEP_HOST_REPLY_DELIVERY = (
     "Return the payload object as your whole reply with nothing after it. Write no file. When you "
     "found nothing, reply with an empty `hits` list, never an empty reply."
@@ -428,7 +429,7 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
         return None, "context-missing:envelope_stub_path"
     host_seat = context.get("host_seat") is True
     lines = ["## Return your result", ""]
-    if host_seat and phase == round_phases.P_SWEEP:
+    if host_seat and phase in REPLY_HOST_PHASES:
         lines.extend([
             _SWEEP_HOST_LANDING_NOTE,
             "",

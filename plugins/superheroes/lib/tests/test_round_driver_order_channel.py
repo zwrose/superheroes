@@ -223,16 +223,19 @@ def test_every_phase_renders_exactly_one_output_contract(phase):
 
     Bite axis: MUTUAL EXCLUSIVITY of the two concrete contracts. Counting the `## Return your
     result` heading would not do this — `render_order` appends that heading unconditionally, so an
-    order carrying BOTH a stdout instruction and a landing-file write would still count 1.
+    order carrying BOTH a stdout instruction and a landing-file write would still count 1. A phase in
+    `REPLY_HOST_PHASES` states the reply contract on its host seat instead of the write.
     """
     for host_seat in (True, False):
         text = _render_phase(phase, host_seat=host_seat)
         writes = bool(_names_a_write(text))
-        emits = "runner's declared result channel" in text
+        replies = host_seat and phase in RO.REPLY_HOST_PHASES
+        emits = ("runner's declared result channel" in text) or (
+            replies and RO._SWEEP_HOST_REPLY_DELIVERY in text)
         assert writes != emits, (
             "phase=%s host_seat=%s must state exactly one contract (writes=%s emits_stdout=%s)"
             % (phase, host_seat, writes, emits))
-        assert writes is host_seat, (phase, host_seat, writes)
+        assert writes is (host_seat and not replies), (phase, host_seat, writes)
 
 
 # =================================================================================================

@@ -11,9 +11,10 @@ Captures are far under the 32 KiB / 128 KiB ceilings. Nothing was redacted (no c
 |---|---|---|---|
 | G1 | the searcher's parsed `tools:` grant equals Read, Grep, Glob exactly (an added tool fails; a removed tool fails) | `plugins/superheroes/agents/searcher.md:4` | `test_seat_tool_grants.py::test_searcher_grant_is_exactly_read_grep_glob` |
 | G2 | the searcher dispatch paragraph names the `superheroes:searcher` plugin agent (and `general-purpose` appears only in a `never` sentence) | `plugins/superheroes/skills/review-code/reference/auto-fix-loop.md:742` | `test_seat_tool_grants.py::test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose` |
-| G3 | the host-seat sweep order replies and carries no write line | `plugins/superheroes/lib/round_orders.py:431` (`_format_landing_block`) | `test_round_orders.py::test_sweep_host_seat_order_replies_and_never_writes` |
+| G3 | the host-seat sweep order replies and carries no write line | `plugins/superheroes/lib/round_orders.py:432` (`_format_landing_block`) | `test_round_orders.py::test_sweep_host_seat_order_replies_and_never_writes` |
+| G4 | every phase renders exactly one output contract; a phase in `REPLY_HOST_PHASES` states the reply contract on its host seat instead of the write (mutual exclusivity of the two contracts) | `plugins/superheroes/lib/round_orders.py:432` (`_format_landing_block`) and `:594` (`_channel_derived_placeholders`) | `test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]` |
 
-G1 is proven on two distinct failure modes (a tool added, a tool removed), each its own red. No element is left unproven.
+G1 is proven on two distinct failure modes (a tool added, a tool removed), each its own red. G4 is proven on two distinct failure modes (both contracts stated, no contract stated), each its own red. No element is left unproven.
 
 ## G1 — the searcher grant is exactly Read, Grep, Glob
 
@@ -138,7 +139,7 @@ Pass line: `1 passed in 0.16s`.
 
 ## G3 — the host-seat sweep order replies and never writes
 
-**neutralization** (`plugins/superheroes/lib/round_orders.py:431`, `_format_landing_block`):
+**neutralization** (`plugins/superheroes/lib/round_orders.py`, `_format_landing_block`; the line was 431 when this was run and is 432 after WO-3 added `REPLY_HOST_PHASES`, whose condition now reads `host_seat and phase in REPLY_HOST_PHASES`):
 ```diff
 -    if host_seat and phase == round_phases.P_SWEEP:
 +    if False:
@@ -181,6 +182,108 @@ Failing assertion line: `AssertionError: sweep-host-landing-write-line` (the hos
 1 passed in 0.19s
 ```
 Pass line: `1 passed in 0.19s`.
+
+## G4 — the census states exactly one output contract per phase (reply-host phases reply)
+
+**Provenance:** claude (implementer), work order WO-3. The census was updated to read `round_orders.REPLY_HOST_PHASES` (CI run 42543907271 failed the old census on `dispatch-sweep` host seat). Every run is the single node `plugins/superheroes/lib/tests/test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]` (the id pytest printed), detector unedited. Nothing redacted; the `UV_NATIVE_TLS` warning line is omitted.
+
+### G4 red 1 — the sweep host seat writes again (both contracts stated)
+
+**neutralization** (`round_orders.py:432`, `_format_landing_block`):
+```diff
+-    if host_seat and phase in REPLY_HOST_PHASES:
++    if False:
+```
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_every_phase_renders_exactly_one_output_contract[dispatch-sweep] _____
+
+phase = 'dispatch-sweep'
+
+    @pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
+    def test_every_phase_renders_exactly_one_output_contract(phase):
+        """Direction 2: exactly one output contract per seat kind x channel — never two, never none.
+    
+        Bite axis: MUTUAL EXCLUSIVITY of the two concrete contracts. Counting the `## Return your
+        result` heading would not do this — `render_order` appends that heading unconditionally, so an
+        order carrying BOTH a stdout instruction and a landing-file write would still count 1. A phase in
+        `REPLY_HOST_PHASES` states the reply contract on its host seat instead of the write.
+        """
+        for host_seat in (True, False):
+            text = _render_phase(phase, host_seat=host_seat)
+            writes = bool(_names_a_write(text))
+            replies = host_seat and phase in RO.REPLY_HOST_PHASES
+            emits = ("runner's declared result channel" in text) or (
+                replies and RO._SWEEP_HOST_REPLY_DELIVERY in text)
+>           assert writes != emits, (
+                "phase=%s host_seat=%s must state exactly one contract (writes=%s emits_stdout=%s)"
+                % (phase, host_seat, writes, emits))
+E           AssertionError: phase=dispatch-sweep host_seat=True must state exactly one contract (writes=True emits_stdout=True)
+E           assert True != True
+
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_round_driver_order_channel.py:235: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]
+1 failed in 0.31s
+```
+Failing assertion line: `AssertionError: phase=dispatch-sweep host_seat=True must state exactly one contract (writes=True emits_stdout=True)`.
+**restore:** the inverse Edit (`    if False:` back to `    if host_seat and phase in REPLY_HOST_PHASES:`). **restore receipt:** the restored line quoted back, `    if host_seat and phase in REPLY_HOST_PHASES:`, and `git diff -- plugins/superheroes/lib/round_orders.py` after the revert showed only the `REPLY_HOST_PHASES` constant and that condition change. **raw green** (same node):
+```
+.                                                                        [100%]
+1 passed in 0.39s
+```
+Pass line: `1 passed in 0.39s`.
+
+### G4 red 2 — the reply contract is missing (no contract stated)
+
+**neutralization** (`round_orders.py:594`, `_channel_derived_placeholders`, the `elif phase == round_phases.P_SWEEP:` branch):
+```diff
+-        ph["OUTPUT_CHANNEL_BLOCK"] = _SWEEP_HOST_REPLY_DELIVERY
++        ph["OUTPUT_CHANNEL_BLOCK"] = ""
+```
+**raw red** (same node):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_every_phase_renders_exactly_one_output_contract[dispatch-sweep] _____
+
+phase = 'dispatch-sweep'
+
+    @pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
+    def test_every_phase_renders_exactly_one_output_contract(phase):
+        """Direction 2: exactly one output contract per seat kind x channel — never two, never none.
+    
+        Bite axis: MUTUAL EXCLUSIVITY of the two concrete contracts. Counting the `## Return your
+        result` heading would not do this — `render_order` appends that heading unconditionally, so an
+        order carrying BOTH a stdout instruction and a landing-file write would still count 1. A phase in
+        `REPLY_HOST_PHASES` states the reply contract on its host seat instead of the write.
+        """
+        for host_seat in (True, False):
+            text = _render_phase(phase, host_seat=host_seat)
+            writes = bool(_names_a_write(text))
+            replies = host_seat and phase in RO.REPLY_HOST_PHASES
+            emits = ("runner's declared result channel" in text) or (
+                replies and RO._SWEEP_HOST_REPLY_DELIVERY in text)
+>           assert writes != emits, (
+                "phase=%s host_seat=%s must state exactly one contract (writes=%s emits_stdout=%s)"
+                % (phase, host_seat, writes, emits))
+E           AssertionError: phase=dispatch-sweep host_seat=True must state exactly one contract (writes=False emits_stdout=False)
+E           assert False != False
+
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_round_driver_order_channel.py:235: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_round_driver_order_channel.py::test_every_phase_renders_exactly_one_output_contract[dispatch-sweep]
+1 failed in 0.31s
+```
+Failing assertion line: `AssertionError: phase=dispatch-sweep host_seat=True must state exactly one contract (writes=False emits_stdout=False)`.
+**restore:** the inverse Edit (`        ph["OUTPUT_CHANNEL_BLOCK"] = ""` back to `        ph["OUTPUT_CHANNEL_BLOCK"] = _SWEEP_HOST_REPLY_DELIVERY`, anchored on the `elif phase == round_phases.P_SWEEP:` line because the bare string occurs three times; the first attempt without the anchor was refused by the Edit tool as non-unique and changed nothing). **restore receipt:** the restored line quoted back, `        ph["OUTPUT_CHANNEL_BLOCK"] = _SWEEP_HOST_REPLY_DELIVERY`, and `git diff -- plugins/superheroes/lib/round_orders.py` after the revert showed only the `REPLY_HOST_PHASES` constant and condition change. **raw green** (same node):
+```
+.                                                                        [100%]
+1 passed in 0.27s
+```
+Pass line: `1 passed in 0.27s`.
 
 ## Final tree after every restore
 
