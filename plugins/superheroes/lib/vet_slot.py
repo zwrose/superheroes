@@ -806,7 +806,7 @@ def check_leftovers(pr, repo, body, comments, run=None, membership_reader=None):
     stack, or when the stack cannot be read (#2332); with no such acceptance the stack is never read."""
     record = _latest_record(pr, repo, comments)
     try:
-        gaps = leftover_accepting.missing(record, body)
+        gaps = leftover_accepting.missing(record, body, shared=True)
     except leftover_accepting.Unreadable as exc:
         # axis: a review record that is missing or cannot be read refuses review-record-unreadable, never passes
         raise _Refusal("review-record-unreadable", "the latest review record on PR %d: %s" % (pr, exc))
