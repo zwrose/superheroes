@@ -739,7 +739,7 @@ computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats carries 
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.
 
 **Dispatching searchers.** The `dispatch-sweep` phase's seats (`searcher:<sweepId>:<part>`) are each dispatched
-as the read-only plugin agent `superheroes:searcher` (`plugins/superheroes/agents/searcher.md`), by
+as the read-only plugin agent `superheroes:searcher` (`agents/searcher.md`), by
 name, at the mechanical cell the payload's `searcher` names — never as a `general-purpose` subagent and never on
 any other agent, because the session's own grant would reach session, messaging, write and shell tools. They are
 outside the review independence rule because they search a list of files for one described mistake and do not
