@@ -294,3 +294,144 @@ Both detector files together, every element restored (`scripts/pinned-python -B 
 110 passed in 1.56s
 ```
 `git status --porcelain -- plugins` at that point lists only `auto-fix-loop.md` and `round-driver.md` (the two citation fixes) beside this new record; `agents/searcher.md` and `round_orders.py` do not differ from the committed tree.
+
+## G2b — every `general-purpose` mention is negated by its own clause (strengthened G2 node)
+
+**Provenance:** claude (implementer), work order WO-4 (review finding at `test_seat_tool_grants.py:900`, confirmed by the verifier). Worktree `/home/user/wt-2399`, branch `claude/task-auijfg`, HEAD `74cb9bd6e3283a4354e4edfc3614385fee98be3b`. The G2 node's sentence-level `"never" in sentence` check was replaced by a per-occurrence check: for each `` `general-purpose` `` in the whitespace-normalized `**Dispatching searchers.**` paragraph, the nearest preceding `never` must exist, must have none of `,` `;` `.` `—` ` and ` ` or ` between it and the token, and the clause from that `never` through the token must be at most four words (the `never` counts as a word: `never as a` is 3, `never re-dispatched as` is 3). Failure messages start `searcher-dispatch-general-purpose:` and quote the offending window.
+**Guarded element and axis:** the two `` `general-purpose` `` mentions in `auto-fix-loop.md` (line 743 and line 752); each mention is negated by a `never` in its own clause, not by a `never` elsewhere in its sentence. Two elements, two reds, no grouping, none unproven.
+Every run is `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest "plugins/superheroes/lib/tests/test_seat_tool_grants.py::test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose" -q`, the detector unedited. Nothing redacted; the `UV_NATIVE_TLS` warning line is omitted from the captures below.
+
+### G2b red 1 — line 743, the `never` removed from the first mention
+
+**neutralization** (`auto-fix-loop.md`, line 743):
+```diff
+-name, at the mechanical cell the payload's `searcher` names — never as a `general-purpose` subagent and never on
++name, at the mechanical cell the payload's `searcher` names — as a `general-purpose` subagent and never on
+```
+(The sentence still contains the second `never`, which is what the old sentence-level check accepted.)
+**raw red:**
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose ____
+
+    def test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose():
+        """Axis: every searcher dispatch site names the `superheroes:searcher` agent, and every
+        `general-purpose` mention is negated by its own clause: the nearest `never` before it sits in the
+        same clause (no comma, semicolon, period, em dash, `and` or `or` between) and at most four words
+        before it (#2399)."""
+        paragraph = _dispatching_searchers_paragraph()
+        assert "superheroes:searcher" in paragraph, "searcher-dispatch-agent-not-named: auto-fix-loop.md"
+    
+        driver = _read_required(
+            os.path.join(PLUGIN, "skills", "review-code", "reference", "round-driver.md"),
+            "round-driver.md, home of the dispatch-sweep row")
+        rows = [line for line in driver.splitlines() if line.startswith("| `dispatch-sweep` |")]
+        assert len(rows) == 1, "searcher-dispatch-row-not-found: %d" % len(rows)
+        assert "superheroes:searcher" in rows[0], "searcher-dispatch-agent-not-named: round-driver.md"
+        assert "general-purpose" not in rows[0], "searcher-dispatch-general-purpose: round-driver.md"
+    
+        agent = _read_required(os.path.join(PLUGIN, "agents", "searcher.md"),
+                               "the repository-sweep searcher seat")
+        assert "general-purpose" not in agent, "searcher-dispatch-general-purpose: searcher.md"
+    
+        flat = " ".join(paragraph.split())
+        token = "`general-purpose`"
+        occurrences = [m.start() for m in re.finditer(re.escape(token), flat)]
+        assert occurrences, "searcher-dispatch-never-general-purpose-missing: auto-fix-loop.md"
+        for at in occurrences:
+            before = flat[:at]
+            nevers = list(re.finditer(r"\bnever\b", before))
+            window = flat[max(0, at - 80):at + len(token)]
+>           assert nevers, (
+                "searcher-dispatch-general-purpose: auto-fix-loop.md: no `never` before %r" % window)
+E           AssertionError: searcher-dispatch-general-purpose: auto-fix-loop.md: no `never` before "her.md`), by name, at the mechanical cell the payload's `searcher` names — as a `general-purpose`"
+E           assert []
+
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_seat_tool_grants.py:906: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_tool_grants.py::test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose
+1 failed in 0.18s
+```
+Failing assertion line: `AssertionError: searcher-dispatch-general-purpose: auto-fix-loop.md: no `never` before "...— as a `general-purpose`"`.
+**restore:** the inverse Edit (`— as a `general-purpose` subagent and never on` back to `— never as a `general-purpose` subagent and never on`). **restore receipt:** `git diff --stat -- plugins/superheroes/skills` printed nothing (empty) before red 2 began, and the restored line quoted back is `name, at the mechanical cell the payload's `searcher` names — never as a `general-purpose` subagent and never on`. **raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.30s
+```
+Pass line: `1 passed in 0.30s`.
+
+### G2b red 2 — line 752, the `never` removed from the second mention
+
+**neutralization** (`auto-fix-loop.md`, line 752):
+```diff
+-into the phase artifact (hand path). A searcher that derails is never re-dispatched as `general-purpose` (it is
++into the phase artifact (hand path). A searcher that derails is re-dispatched as `general-purpose` (it is
+```
+(The nearest preceding `never` is then the one on line 743, across a `.`/`,` boundary, so the same-clause rule is what fails.)
+**raw red** (the unfiltered re-run; the first red-2 run was piped through `tail -n 12`, which is a filtered capture and is not used as the receipt, though it showed the same assertion):
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose ____
+
+    def test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose():
+        """Axis: every searcher dispatch site names the `superheroes:searcher` agent, and every
+        `general-purpose` mention is negated by its own clause: the nearest `never` before it sits in the
+        same clause (no comma, semicolon, period, em dash, `and` or `or` between) and at most four words
+        before it (#2399)."""
+        paragraph = _dispatching_searchers_paragraph()
+        assert "superheroes:searcher" in paragraph, "searcher-dispatch-agent-not-named: auto-fix-loop.md"
+    
+        driver = _read_required(
+            os.path.join(PLUGIN, "skills", "review-code", "reference", "round-driver.md"),
+            "round-driver.md, home of the dispatch-sweep row")
+        rows = [line for line in driver.splitlines() if line.startswith("| `dispatch-sweep` |")]
+        assert len(rows) == 1, "searcher-dispatch-row-not-found: %d" % len(rows)
+        assert "superheroes:searcher" in rows[0], "searcher-dispatch-agent-not-named: round-driver.md"
+        assert "general-purpose" not in rows[0], "searcher-dispatch-general-purpose: round-driver.md"
+    
+        agent = _read_required(os.path.join(PLUGIN, "agents", "searcher.md"),
+                               "the repository-sweep searcher seat")
+        assert "general-purpose" not in agent, "searcher-dispatch-general-purpose: searcher.md"
+    
+        flat = " ".join(paragraph.split())
+        token = "`general-purpose`"
+        occurrences = [m.start() for m in re.finditer(re.escape(token), flat)]
+        assert occurrences, "searcher-dispatch-never-general-purpose-missing: auto-fix-loop.md"
+        for at in occurrences:
+            before = flat[:at]
+            nevers = list(re.finditer(r"\bnever\b", before))
+            window = flat[max(0, at - 80):at + len(token)]
+            assert nevers, (
+                "searcher-dispatch-general-purpose: auto-fix-loop.md: no `never` before %r" % window)
+            clause = before[nevers[-1].start():]
+            padded = " %s " % clause
+>           assert not any(d in padded for d in (",", ";", ".", "—", " and ", " or ")), (
+                "searcher-dispatch-general-purpose: auto-fix-loop.md: the nearest `never` is not in the "
+                "same clause as %r" % window)
+E           AssertionError: searcher-dispatch-general-purpose: auto-fix-loop.md: the nearest `never` is not in the same clause as 'nto the phase artifact (hand path). A searcher that derails is re-dispatched as `general-purpose`'
+E           assert not True
+E            +  where True = any(<generator object test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose.<locals>.<genexpr> at 0x7efd6706f9f0>)
+
+/home/user/wt-2399/plugins/superheroes/lib/tests/test_seat_tool_grants.py:910: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_seat_tool_grants.py::test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose
+1 failed in 0.21s
+```
+Failing assertion line: `AssertionError: searcher-dispatch-general-purpose: auto-fix-loop.md: the nearest `never` is not in the same clause as '...A searcher that derails is re-dispatched as `general-purpose`'`.
+**restore:** the inverse Edit (`is re-dispatched as `general-purpose`` back to `is never re-dispatched as `general-purpose``). **restore receipt:** `git diff --stat -- plugins/superheroes/skills` printed nothing (empty), and a grep of the file after the revert shows line 743 `... names — never as a `general-purpose` subagent and never on` and line 752 `... A searcher that derails is never re-dispatched as `general-purpose` (it is`. **raw green:**
+```
+.                                                                        [100%]
+1 passed in 0.18s
+```
+Pass line: `1 passed in 0.18s`.
+
+### G2b — the reviewer's break-it test at the fixed state
+
+`plugins/superheroes/lib/tests/test_searcher_dispatch_negation_break_it.py` (the reviewer's file, copied with `cp`). Run alone with `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_searcher_dispatch_negation_break_it.py -q`; it removes only the first `never` from line 743 in memory and expects the guard to raise `searcher-dispatch`:
+```
+.                                                                        [100%]
+1 passed in 0.19s
+```
+Pass line: `1 passed in 0.19s`. At `74cb9bd6` (sentence-level check) this same test fails with `DID NOT RAISE AssertionError` (reviewer's receipt; not re-run here).

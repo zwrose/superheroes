@@ -876,8 +876,10 @@ def _dispatching_searchers_paragraph():
 
 
 def test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose():
-    """Axis: every searcher dispatch site names the `superheroes:searcher` agent, and the only
-    `general-purpose` mentions sit in a sentence that says `never` (#2399)."""
+    """Axis: every searcher dispatch site names the `superheroes:searcher` agent, and every
+    `general-purpose` mention is negated by its own clause: the nearest `never` before it sits in the
+    same clause (no comma, semicolon, period, em dash, `and` or `or` between) and at most four words
+    before it (#2399)."""
     paragraph = _dispatching_searchers_paragraph()
     assert "superheroes:searcher" in paragraph, "searcher-dispatch-agent-not-named: auto-fix-loop.md"
 
@@ -893,12 +895,24 @@ def test_searcher_dispatch_names_the_plugin_agent_and_never_general_purpose():
                            "the repository-sweep searcher seat")
     assert "general-purpose" not in agent, "searcher-dispatch-general-purpose: searcher.md"
 
-    mentions = [s for s in re.split(r"(?<=[.;])\s+", " ".join(paragraph.split()))
-                if "general-purpose" in s]
-    assert mentions, "searcher-dispatch-never-general-purpose-missing: auto-fix-loop.md"
-    for sentence in mentions:
-        assert "never" in sentence, (
-            "searcher-dispatch-general-purpose: auto-fix-loop.md: %r" % sentence)
+    flat = " ".join(paragraph.split())
+    token = "`general-purpose`"
+    occurrences = [m.start() for m in re.finditer(re.escape(token), flat)]
+    assert occurrences, "searcher-dispatch-never-general-purpose-missing: auto-fix-loop.md"
+    for at in occurrences:
+        before = flat[:at]
+        nevers = list(re.finditer(r"\bnever\b", before))
+        window = flat[max(0, at - 80):at + len(token)]
+        assert nevers, (
+            "searcher-dispatch-general-purpose: auto-fix-loop.md: no `never` before %r" % window)
+        clause = before[nevers[-1].start():]
+        padded = " %s " % clause
+        assert not any(d in padded for d in (",", ";", ".", "—", " and ", " or ")), (
+            "searcher-dispatch-general-purpose: auto-fix-loop.md: the nearest `never` is not in the "
+            "same clause as %r" % window)
+        assert len(clause.split()) <= 4, (
+            "searcher-dispatch-general-purpose: auto-fix-loop.md: the nearest `never` is more than "
+            "four words before %r" % window)
 
 
 def _dispatch_mechanics_tree_inspection_bullet():
