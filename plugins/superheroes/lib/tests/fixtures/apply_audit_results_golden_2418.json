@@ -1,0 +1,1743 @@
+{
+ "M1_unsorted_targets_results_in_another_order_mixed_outcomes": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t5",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged-but-new-issue",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t2",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t9",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "still broken",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t7",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "unrecognized ruling 'maybe' — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t3",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "audit refused: `checks` is missing, not an object with `right`, `brokeNothing` and `testWouldFail`",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t5",
+   "t2"
+  ],
+  "echoMismatch": [],
+  "malformed": [
+   "t7",
+   "t3"
+  ],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t5",
+    "severity": "Minor",
+    "title": "from t5"
+   }
+  ],
+  "notDischarged": [
+   "t9",
+   "t1",
+   "t7",
+   "t3"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [
+   "t1"
+  ],
+  "unauthenticated": [],
+  "unmatched": [
+   "z2",
+   "z1"
+  ],
+  "unnamedChange": []
+ },
+ "M2_review_guarded_then_plain_then_plain_then_guarded": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "g1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reviewGuarded": {
+     "answer": "review-guarded",
+     "why": "checked: testWouldFail"
+    },
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "p1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "p2",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "g2",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reviewGuarded": {
+     "answer": "review-guarded",
+     "why": "checked: testWouldFail"
+    },
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "g1",
+   "p1",
+   "p2",
+   "g2"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [
+   "g1",
+   "g2"
+  ],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "M3_kept_then_dropped_then_dropped_then_kept_new_issues": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "auditor": "codex",
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "k1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "k2",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "k3",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "auditor": "codex",
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "k4",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "k1",
+    "severity": "Minor",
+    "title": "kept 1"
+   },
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "k4",
+    "severity": "Minor",
+    "title": "kept 4"
+   }
+  ],
+  "notDischarged": [
+   "k1",
+   "k2",
+   "k3",
+   "k4"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "M4_new_issue_and_blocking_test_targets_order_new_issues": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "b1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged-but-new-issue",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "b2",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "break-it test missing: the committed test at tests/test_a.py is not the test role's version (or the build session's explained change of it)",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "testMatch": {
+     "answer": null,
+     "blocking": true,
+     "match": "missing"
+    },
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "b3",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "break-it test changed-unexplained: the committed test at tests/test_a.py is not the test role's version (or the build session's explained change of it)",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "testMatch": {
+     "answer": null,
+     "blocking": true,
+     "match": "changed-unexplained"
+    },
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "b4",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged-but-new-issue",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "b1",
+   "b4"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "b1",
+    "severity": "Minor",
+    "title": "from b1"
+   },
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "b2",
+    "severity": "Minor",
+    "title": "from b2"
+   },
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "b3",
+    "severity": "Minor",
+    "title": "from b3"
+   },
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "b4",
+    "severity": "Minor",
+    "title": "from b4"
+   }
+  ],
+  "notDischarged": [
+   "b2",
+   "b3"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [
+   "b2",
+   "b3"
+  ],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S01_silence_idless_target": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "a.py",
+    "id": null,
+    "identity": "a.py::no id",
+    "line": 1,
+    "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "no id"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": null,
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S02_silence_unaudited": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [
+   "t1"
+  ],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S03_silence_ambiguous_result_id": {
+  "ambiguous": [
+   "t1"
+  ],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "more than one audit result claimed this finding — honoring none",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S04_duplicate_target_with_a_result": {
+  "ambiguous": [
+   "t1"
+  ],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "duplicate audit target id — honoring none",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 9,
+    "reason": "duplicate audit target id — honoring none",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1",
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S05_unmatched_result": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [
+   "zzz"
+  ],
+  "unnamedChange": []
+ },
+ "S06_provenance_no_auditor_recorded": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no independent auditor was recorded for this target — cannot prove the audit came from an independent auditor; treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap",
+    "unauthenticatedCause": "no-auditor-recorded"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [
+   "t1"
+  ],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S07_provenance_manifest_entry_missing": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no dispatch-manifest entry for this target — the orchestrator did not record which engine executed the audit; cannot authenticate; treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap",
+    "unauthenticatedCause": "manifest-entry-missing"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [
+   "t1"
+  ],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S08_provenance_manifest_vendor_mismatch": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the dispatch manifest names 'claude' but the selected independent auditor is 'codex' — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap",
+    "unauthenticatedCause": "manifest-vendor-mismatch"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [
+   "t1"
+  ],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S09_provenance_authenticated_echo_mismatch": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "auditor": "codex",
+    "classKey": null,
+    "dimension": null,
+    "echoMismatch": {
+     "echo": "gemini",
+     "manifest": "codex"
+    },
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [
+   "t1"
+  ],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S10_blocking_break_it_match_keeps_new_issues": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "break-it test missing: the committed test at tests/test_a.py is not the test role's version (or the build session's explained change of it)",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "testMatch": {
+     "answer": "matches",
+     "blocking": true,
+     "match": "missing"
+    },
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t1",
+    "severity": "Minor",
+    "title": "kept one"
+   }
+  ],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [
+   "t1"
+  ],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S11_three_checks_fault": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "audit refused: `checks` is missing, not an object with `right`, `brokeNothing` and `testWouldFail`",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [
+   "t1"
+  ],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S12_places_collected_a_place_ignored": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "places": [
+     {
+      "file": "src/a.py",
+      "fixed": true,
+      "line": 3
+     },
+     {
+      "file": "src/a.py",
+      "fixed": true,
+      "line": 19
+     }
+    ],
+    "placesIgnored": [
+     {
+      "file": "src/other.py",
+      "line": 5
+     }
+    ],
+    "reason": "the fix resolves it",
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [
+   "t1"
+  ],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S13_weakened_explained_test_precedes_places": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "places": [
+     {
+      "file": "src/a.py",
+      "fixed": false,
+      "line": 3
+     },
+     {
+      "file": "src/a.py",
+      "fixed": false,
+      "line": 19
+     }
+    ],
+    "reason": "break-it test weakened: dropped an assertion",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "testMatch": {
+     "answer": "weakened",
+     "blocking": true,
+     "match": "changed-explained"
+    },
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [
+   "t1"
+  ],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S14_incomplete_places_with_unnamed_change": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "places": [
+     {
+      "file": "src/a.py",
+      "fixed": true,
+      "line": 3
+     },
+     {
+      "file": "src/a.py",
+      "fixed": false,
+      "line": 19
+     }
+    ],
+    "reason": "the fix leaves a place of the same kind of mistake open (left unfixed: src/a.py:19). Unnamed change: also drops the log line",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [
+   "t1"
+  ],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S15_failed_check": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "audit check failed: right: checked: right",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t1",
+    "severity": "Minor",
+    "title": "fresh"
+   }
+  ],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S16_review_guarded_refused": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "audit check failed: testWouldFail: review-guarded clears only a fix whose whole delta is prose; this fix's delta touches src/a.py",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [
+   "t1"
+  ],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S17_review_guarded_cleared": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reviewGuarded": {
+     "answer": "review-guarded",
+     "why": "checked: testWouldFail"
+    },
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [
+   "t1"
+  ],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S18_unnamed_change_not_a_string": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "`unnamedChange` is not a string — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [
+   "t1"
+  ],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S19_unnamed_change_seq_not_an_int": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "`unnamedChangeAllowedBySeq` is not an integer — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [
+   "t1"
+  ],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S20_claim_fault": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "`unnamedChangeFixes` is not a list of non-blank strings — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [
+   "t1"
+  ],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S21_discharged_unnamed_change_refused": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix changes behaviour its finding does not name: also drops the log line",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": [
+   "t1"
+  ]
+ },
+ "S22_discharged_attributed": {
+  "ambiguous": [],
+  "attributedChange": [
+   "t1"
+  ],
+  "audits": [
+   {
+    "attributedChange": "also drops the log line",
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reportedUnnamedChange": "also drops the log line",
+    "revertedChanges": [
+     "r2:a"
+    ],
+    "ruling": "discharged",
+    "sameRoundFixes": [
+     "m"
+    ],
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S23_discharged_allowed_change_with_evidence_and_carry_fields": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "allowedChange": "also drops the log line",
+    "classKey": null,
+    "dimension": null,
+    "evidence": "ran the suite",
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "marker": "carry-me",
+    "reason": "the fix resolves it",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S24_discharged_with_no_reason": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "`discharged` with no reason — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [
+   "t1"
+  ],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S25_new_issue_unnamed_change_refused": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix changes behaviour its finding does not name: also drops the log line",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t1",
+    "severity": "Minor",
+    "title": "fresh"
+   }
+  ],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": [
+   "t1"
+  ]
+ },
+ "S26_new_issue_attributed": {
+  "ambiguous": [],
+  "attributedChange": [
+   "t1"
+  ],
+  "audits": [
+   {
+    "attributedChange": "also drops the log line",
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "discharged-but-new-issue",
+    "sameRoundFixes": [
+     "m"
+    ],
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t1",
+    "severity": "Minor",
+    "title": "fresh"
+   }
+  ],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S27_new_issue_no_usable_candidates": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "`discharged-but-new-issue` with no usable newIssues — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [
+   "t1"
+  ],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S28_not_discharged_by_selected_auditor": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "auditor": "codex",
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "still broken Unnamed change: also drops the log line",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t1",
+    "severity": "Minor",
+    "title": "kept"
+   }
+  ],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S29_unknown_ruling": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "unrecognized ruling 'maybe' — treated as not-discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [
+   "t1"
+  ],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S30_results_not_a_list": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "no audit result for this finding — cannot certify the fix discharged",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "t1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [
+   "t1"
+  ],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "S31_audited_not_a_list": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [
+   "t1"
+  ],
+  "unnamedChange": []
+ },
+ "T1_duplicate_target_without_a_result": {
+  "ambiguous": [
+   "d1"
+  ],
+  "attributedChange": [],
+  "audits": [
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "d1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "duplicate audit target id — honoring none",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   },
+   {
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "d1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 9,
+    "reason": "duplicate audit target id — honoring none",
+    "ruling": "not-discharged",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [],
+  "notDischarged": [
+   "d1",
+   "d1"
+  ],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ },
+ "T2_allowed_change_on_a_new_issue_result": {
+  "ambiguous": [],
+  "attributedChange": [],
+  "audits": [
+   {
+    "allowedChange": "also drops the log line",
+    "classKey": null,
+    "dimension": null,
+    "file": "src/a.py",
+    "id": "t1",
+    "identity": "src/a.py::retry without a cap",
+    "line": 2,
+    "reason": "the fix resolves it",
+    "reportedUnnamedChange": "also drops the log line",
+    "ruling": "discharged-but-new-issue",
+    "taxonomy": null,
+    "title": "Retry without a cap"
+   }
+  ],
+  "discharged": [
+   "t1"
+  ],
+  "echoMismatch": [],
+  "malformed": [],
+  "newIssues": [
+   {
+    "file": "g.py",
+    "line": 3,
+    "originAuditId": "t1",
+    "severity": "Minor",
+    "title": "fresh"
+   }
+  ],
+  "notDischarged": [],
+  "placesIgnored": [],
+  "placesUnfixed": [],
+  "reviewGuardRefused": [],
+  "reviewGuarded": [],
+  "testMismatch": [],
+  "unaudited": [],
+  "unauthenticated": [],
+  "unmatched": [],
+  "unnamedChange": []
+ }
+}

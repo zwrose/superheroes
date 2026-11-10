@@ -201,3 +201,5 @@ session on a superheroes-calibrated project (both storage modes, zero repo trace
 
 `main` requires a PR with passing CI. The repo owner may bypass when needed —
 prefer PRs anyway.
+
+Any runner that starts a nested test run gives it a base temp folder outside every repository; `plugins/superheroes/lib/tests/conftest.py` `_tmp_base_outside_any_repository` refuses anything else, so a temp folder under a git directory fails at setup.
