@@ -6988,13 +6988,16 @@ _REMOVAL_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 def _fixer_removal(config, base, head):
     """The removal record of a fix: ``{"base", "head", "files": [{"path", "removed": [[start, end], ...],
-    "added": bool, "testOpenings": [line, ...] or None}]}`` read from a plain zero-context diff of ``base`` to the
+    "added": bool, "testOpenings": [line, ...] or None, "testSpans": [[start, opening, end], ...] or None,
+    "blankLines": [line, ...]}]}`` read from a plain zero-context diff of ``base`` to the
     explicit commit ``head`` (never the live checkout HEAD) at ``config["repoRoot"]``. ``removed`` lists the
     base-side line ranges (the reviewed head's line numbers) each hunk deleted, one range per hunk even when
     ``diff.interHunkContext`` is set; ``added`` is True when any hunk adds a line. ``testOpenings`` is
     ``audits.test_openings`` of the base blob of a file that has a removed range (None when its language has no
-    reader), and ``[]`` for a file with none. A file the fix only added to still appears (``removed: []``,
-    ``added: True``). The record is ``{"unreadable": <why>, "base", "head"}`` — never an exception — when a
+    reader), and ``[]`` for a file with none; ``testSpans`` is ``audits.test_spans`` of the same blob (None or ``[]``
+    under the same conditions), and ``blankLines`` the sorted base-blob lines inside the removed ranges that are
+    blank (computed for a language with no reader too; ``[]`` for a file with no removed range). A file the fix
+    only added to still appears (``removed: []``, ``added: True``). The record is ``{"unreadable": <why>, "base", "head"}`` — never an exception — when a
     commit is missing or does not resolve, git fails, the output is not UTF-8, the diff holds a header that is
     not one path twice, a binary file, or a binary patch, or a base blob cannot be read or is not UTF-8 (so the
     fold clears nothing on it). Git's own settings (textconv, external diff, color, renames) never shape it."""
@@ -7049,7 +7052,7 @@ def _fixer_removal(config, base, head):
                 current["added"] = True
     for entry in files:
         if not entry["removed"]:
-            entry["testOpenings"] = []
+            entry["testOpenings"], entry["testSpans"], entry["blankLines"] = [], [], []
             continue
         blob = _git_bytes(repo_root, "cat-file", "blob", "%s:%s" % (shas[0], entry["path"]))
         try:
@@ -7060,6 +7063,10 @@ def _fixer_removal(config, base, head):
         if base_text is None:
             return unreadable("the base file %s cannot be read as UTF-8 text" % entry["path"])
         entry["testOpenings"] = audits.test_openings(entry["path"], base_text)
+        entry["testSpans"] = audits.test_spans(entry["path"], base_text)
+        lines = base_text.split("\n")
+        entry["blankLines"] = sorted({n for lo, hi in entry["removed"] for n in range(lo, min(hi, len(lines)) + 1)
+                                      if lines[n - 1].strip() == ""})
     return {"base": shas[0], "head": shas[1], "files": files}
 
 

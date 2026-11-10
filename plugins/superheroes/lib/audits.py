@@ -169,9 +169,10 @@ _ABSENT = object()
 PYTHON_TEST_EXTENSIONS = frozenset({".py"})
 JS_TEST_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
 PYTHON_TEST_OPENING = re.compile(r"^\s*(async\s+)?def\s+test\w*\s*\(|^\s*class\s+Test\w*\b")
-# The test functions of the common runners, their skipped (`x`) and focused (`f`) forms included, called directly
-# or through a tagged template (`test.each` followed by a backtick table).
-JS_TEST_OPENING = re.compile(r"^\s*(x|f)?(it|test|describe)(\.\w+)*\s*[(`]")
+# The test functions of the common runners (`it`, `test`, `describe` and their aliases `specify`, `context`,
+# `suite`), their skipped (`x`) and focused (`f`) forms included, called directly or through a tagged template
+# (`test.each` followed by a backtick table).
+JS_TEST_OPENING = re.compile(r"^\s*(x|f)?(it|test|describe|specify|context|suite)(\.\w+)*\s*[(`]")
 
 
 def test_openings(path, text):
@@ -190,13 +191,50 @@ def test_openings(path, text):
     return [number for number, line in enumerate(text.split("\n"), 1) if pattern.match(line)]
 
 
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def test_spans(path, text):
+    """None exactly when `test_openings(path, text)` is None; otherwise, in opening order, one `[start, opening,
+    end]` (1-based, `start <= opening <= end`) per opening `test_openings` returns, lines cut at `\\n`. The
+    end: scan the lines after the opening, skipping blank lines; the first non-blank line whose indent is `<=`
+    the opening's ends the span, unless its text starts with `}`, `)` or `]` and its indent equals the opening's
+    (it is then the last line of the span, and the scan goes on); a closer at a shallower indent belongs to the
+    enclosing span. The span's end is the last non-blank line included (the opening itself when none is). The
+    start: the topmost line of the run of non-blank `@` lines at the opening's indent directly above it, else the
+    opening. The reader reads indentation only: code whose indentation does not follow its nesting is read by
+    its indentation. It fails closed either way: a line read into an uncited span refuses (C9), and a line read
+    outside every span falls to C7's rule."""
+    openings = test_openings(path, text)
+    if openings is None:
+        return None
+    lines, spans = text.split("\n"), []
+    for opening in openings:
+        indent, end, start = _indent(lines[opening - 1]), opening, opening
+        for number in range(opening + 1, len(lines) + 1):
+            line = lines[number - 1]
+            if not line.strip():
+                continue
+            if _indent(line) > indent or (_indent(line) == indent and line.lstrip()[0] in "})]"):
+                end = number
+            else:
+                break
+        while start > 1 and lines[start - 2].lstrip().startswith("@") and _indent(lines[start - 2]) == indent:
+            start -= 1
+        spans.append([start, opening, end])
+    return spans
+
+
 def _removal_files(target):
-    """The files of the target's driver-built `fixerRemoval` as `[(path, ranges, added, openings)]`, or None when
-    the record is absent, `unreadable`, or not exactly `{"files": [{"path": <non-empty str>, "removed": [[start,
-    end], ...], "added": <bool>, "testOpenings": <None or [<int >= 1>, ...]>}, ...]}` with at least one file, one
+    """The files of the target's driver-built `fixerRemoval` as `[(path, ranges, added, openings, spans, blank)]`,
+    or None when the record is absent, `unreadable`, or not exactly `{"files": [{"path": <non-empty str>,
+    "removed": [[start, end], ...], "added": <bool>, "testOpenings": <None or [<int >= 1>, ...]>, "testSpans":
+    <None or [[start, opening, end], ...]>, "blankLines": [<int >= 1>, ...]}, ...]}` with at least one file, one
     record per path, and every range two plain integers with `1 <= start <= end` (fail closed: an unreadable
-    record clears nothing). `testOpenings` is the base file's test-opening lines (`test_openings`); None means
-    its language has no reader."""
+    record clears nothing). `testOpenings` is the base file's test-opening lines (`test_openings`) and
+    `testSpans` its test spans (`test_spans`); None means its language has no reader, and the two are None
+    together, their openings the same. `blankLines` lists the blank lines inside the removed ranges."""
     record = target.get("fixerRemoval") if isinstance(target, dict) else None
     # axis: an absent, unreadable or malformed removal record is never readable — see bite-proof record audit_test_removal_2434
     if not isinstance(record, dict) or "unreadable" in record:
@@ -218,6 +256,16 @@ def _removal_files(target):
         if openings is _ABSENT or not (openings is None or (
                 isinstance(openings, list) and all(_plain_int(n) and n >= 1 for n in openings))):
             return None
+        spans, blank = entry.get("testSpans", _ABSENT), entry.get("blankLines", _ABSENT)
+        # axis: a row whose `testSpans` or `blankLines` is absent or malformed, or whose spans do not match its `testOpenings`, makes the record unreadable — see bite-proof record audit_test_removal_2434
+        if spans is _ABSENT or blank is _ABSENT or (spans is None) != (openings is None):
+            return None
+        if spans is not None and not (isinstance(spans, list) and all(
+                isinstance(s, list) and len(s) == 3 and all(_plain_int(n) for n in s) and 1 <= s[0] <= s[1] <= s[2]
+                for s in spans) and [s[1] for s in spans] == openings):
+            return None
+        if not (isinstance(blank, list) and all(_plain_int(n) and n >= 1 for n in blank)):
+            return None
         ranges = []
         for pair in removed:
             if not (isinstance(pair, list) and len(pair) == 2 and all(_plain_int(n) for n in pair)):
@@ -226,7 +274,8 @@ def _removal_files(target):
                 return None
             ranges.append((pair[0], pair[1]))
         seen.add(path)
-        out.append((path, ranges, added, None if openings is None else list(openings)))
+        out.append((path, ranges, added, None if openings is None else list(openings),
+                    None if spans is None else [list(s) for s in spans], list(blank)))
     return out
 
 
@@ -272,18 +321,21 @@ def test_removal_clearance(target):
     C4  every file of the record added nothing and removed at least one range;
     C5  the target is a Test finding labelled with a worthless-test smell, with a usable body;
     C6  one of the target's own cited lines (its `file:line` or a kind-of-mistake place) lies in a removed range;
-    C7  every removed range holds a line cited by the target or by a fresh qualifying sibling (a batch sibling
-        that itself passes C5 and whose driver-built `citationFresh` is True);
+    C7  every removed line that lies in no test span (`testSpans`; all lines, for a file with none) and is
+        neither cited nor blank (`blankLines`) has a cited line in its removed range; a cited line is the
+        target's or a fresh qualifying sibling's (a batch sibling that itself passes C5 and whose driver-built
+        `citationFresh` is True);
     C8  every changed file is in a language the test-opening reader supports (`testOpenings` is not None);
-    C9  every test the base file opens inside a removed range opens on a cited line (the target's, or a
-        fresh qualifying sibling's), so the fix cannot also delete an unflagged test beside the flagged one;
+    C9  every removed line that is neither cited nor blank, and lies in a test span, has an innermost span (the
+        containing span with the greatest start) that opens on a cited line, so the fix cannot also delete an
+        unflagged test, or the rest of one, or the fixture around a flagged one;
     C10 the target's `citationFresh` is True: the files its cited lines sit in did not change between the head
         the finding was raised on and the fix's start head, so a cited line still points at what it cited.
 
     On success `(evidence, None, None)` with `evidence` the dict the audit entry records
     (`{"source": "finding", "finding", "taxonomy", "reason", "removed", "cited", "openings"}`; `cited` lists the
     target's cited lines, then each fresh qualifying sibling's; `openings` lists, per file, the base file's test openings
-    inside its removed ranges); otherwise `(None, <first failing condition>, <short detail>)`."""
+    inside its removed ranges, as a record of what the fix deleted; C9 judges lines, not openings); otherwise `(None, <first failing condition>, <short detail>)`."""
     from size_count import is_test_path as _is_test_path  # noqa: E402 — lazy: the closure of this module stays unchanged
     files = _delta_files(target)
     # axis: an absent, unreadable or empty delta clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
@@ -298,9 +350,9 @@ def test_removal_clearance(target):
     if rows is None:
         return None, "C2", "no readable removal record"
     # axis: the removal record and the delta must name the same files — see bite-proof record audit_test_removal_2434
-    if {path for path, _r, _a, _o in rows} != set(files):
+    if {row[0] for row in rows} != set(files):
         return None, "C3", "the removal record and the delta name different files"
-    for path, ranges, added, _o in rows:
+    for path, ranges, added, _o, _s, _b in rows:
         # axis: a fix that adds a line to a file clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
         if added is not False:
             return None, "C4", "%s has added lines" % path
@@ -322,31 +374,42 @@ def test_removal_clearance(target):
         return any(file == path and rng[0] <= line <= rng[1] for file, line in places)
 
     # axis: one of the target's own cited lines must lie in a removed range — see bite-proof record audit_test_removal_2434
-    if not any(_inside(own, path, rng) for path, ranges, _a, _o in rows for rng in ranges):
+    if not any(_inside(own, path, rng) for path, ranges, _a, _o, _s, _b in rows for rng in ranges):
         return None, "C6", "no removed range holds a line the finding cites"
-    for path, ranges, _a, _o in rows:
+    cited_set = set(cited)
+
+    def _tied(path, line, blank):
+        return (path, line) in cited_set or line in blank
+
+    for path, ranges, _a, _o, spans, blank in rows:
         for rng in ranges:
-            # axis: every removed range must hold a cited line, so the fix cannot also delete an uncited test — see bite-proof record audit_test_removal_2434
-            if not _inside(cited, path, rng):
+            # axis: a removed line outside every test span, neither cited nor blank, needs a cited line in its removed range, so the fix cannot also delete an uncited helper or fixture — see bite-proof record audit_test_removal_2434
+            if not _inside(cited, path, rng) and any(
+                    line not in blank and not any(s[0] <= line <= s[2] for s in spans or ())
+                    for line in range(rng[0], rng[1] + 1)):
                 return None, "C7", "%s lines %d-%d hold no cited line" % (path, rng[0], rng[1])
-    for path, _r, _a, openings in rows:
+    for path, _r, _a, openings, _s, _b in rows:
         # axis: a file in a language the test-opening reader does not support clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
         if openings is None:
             return None, "C8", "%s is in a language whose tests cannot be read" % path
+    for path, ranges, _a, _o, spans, blank in rows:
+        for rng in ranges:
+            for line in range(rng[0], rng[1] + 1):
+                inner = max((s for s in spans if s[0] <= line <= s[2]), key=lambda s: s[0], default=None)
+                # axis: a removed line, neither cited nor blank, whose innermost test span opens on an uncited line refuses, so the fix cannot also delete the rest of an unflagged test or the fixture around a flagged one — see bite-proof record audit_test_removal_2434
+                if inner is not None and not _tied(path, line, blank) and (path, inner[1]) not in cited_set:
+                    return None, "C9", "%s line %d is in the test that opens at line %d, which no finding cites" % (
+                        path, line, inner[1])
     inside_openings = []
-    for path, ranges, _a, openings in rows:
+    for path, ranges, _a, openings, _s, _b in rows:
         within = sorted({n for n in openings if any(rng[0] <= n <= rng[1] for rng in ranges)})
-        for line in within:
-            # axis: every test the base file opens inside a removed range must open on a cited line, so the fix cannot also delete an unflagged test beside the flagged one — see bite-proof record audit_test_removal_2434
-            if (path, line) not in cited:
-                return None, "C9", "%s opens a test at line %d that no finding cites" % (path, line)
         inside_openings.append({"file": path, "lines": within})
     # axis: a cited line that may have moved since the finding was raised ties nothing — see bite-proof record audit_test_removal_2434
     if target.get("citationFresh") is not True:
         return None, "C10", "the cited lines may have moved since the finding was raised"
     reason = target["body"].strip()[:500]
     return {"source": "finding", "finding": target.get("id"), "taxonomy": smell, "reason": reason,
-            "removed": [{"file": path, "ranges": [list(r) for r in ranges]} for path, ranges, _a, _o in rows],
+            "removed": [{"file": row[0], "ranges": [list(r) for r in row[1]]} for row in rows],
             "cited": [{"file": file, "line": line} for file, line in cited],
             "openings": inside_openings}, None, None
 

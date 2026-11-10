@@ -11,18 +11,21 @@ C3  a removal record and a delta that name different files refuse;
 C4  a file that added a line, or removed none, refuses;
 C5  a target that is not a Test finding with a worthless smell and a usable body refuses;
 C6  a removal that holds none of the target's own cited lines refuses;
-C7  a removed range that holds no cited line refuses, unless a worthless-smell sibling whose `citationFresh` is
-    exactly True cites it (a stale, absent, string or int `citationFresh` lends nothing);
+C7  a removed line outside every test span that is neither cited nor blank refuses when its removed range holds
+    no cited line, unless a worthless-smell sibling whose `citationFresh` is exactly True cites the range (a
+    stale, absent, string or int `citationFresh` lends nothing); a range wholly inside a cited test's span clears;
 C8  a changed file in a language the test-opening reader does not support refuses;
-C9  a test the base file opens inside a removed range on a line no finding cites refuses (the adjacent unflagged
-    test, a whole file with one test cited, a boundary line, an opening only a stale sibling cites); every deleted
-    test cited clears;
+C9  a removed line, neither cited nor blank, whose innermost test span opens on a line no finding cites refuses
+    (the adjacent unflagged test, the tail of the test above a cited one, the other lines of a test one line of
+    which is cited, a fixture line of an uncited `describe` or class around a cited test, a whole file with one
+    test cited, a boundary line, an opening only a stale sibling cites); every deleted test cited clears;
 C10 a target whose `citationFresh` is not exactly True refuses;
 O   `audits.test_openings` reads Python and JavaScript/TypeScript test openings, and nothing else;
+SP  `audits.test_spans` reads the span of each opening by indentation (end, decorator start, closers, end of file);
 G   `review-guarded` is judged exactly as before; the new answer is a fault on `right` and `brokeNothing`;
 S   the strict-mode schema lists the answer for `testWouldFail` only;
 R   `_fixer_removal` reads a real `git diff`: removed ranges (one per hunk whatever `diff.interHunkContext` says),
-    additions, test openings of the base blob, binary files, an unreadable base blob, a missing commit, a configured
+    additions, test openings, test spans and blank lines of the base blob, binary files, an unreadable base blob, a missing commit, a configured
     textconv, and an explicit head older than the checkout;
 D   the review record names the evidence; `_audit_targets` puts the record and the citation freshness on every
     target, and the citation freshness (alone) on every sibling of its `batchFindings`.
@@ -68,14 +71,23 @@ def _delta(*files):
     return out
 
 
-def _row(path=TEST_FILE, removed=((10, 14),), added=False, openings=(12,)):
-    """A removal row; `openings` is the base file's test openings (a tuple becomes the list the driver builds)."""
+DEFAULT = object()  # a row field left to its default
+
+
+def _row(path=TEST_FILE, removed=((10, 14),), added=False, openings=(12,), spans=DEFAULT, blank=()):
+    """A removal row; `openings` is the base file's test openings (a tuple becomes the list the driver builds),
+    `spans` its test spans (by default each opening `o` gets the span `[o, o, o]`, or None when `openings` is not
+    a list) and `blank` the blank lines inside the removed ranges."""
     if isinstance(removed, (tuple, list)):
         removed = [list(r) if isinstance(r, tuple) else r for r in removed]
+    if spans is DEFAULT:
+        spans = [[o, o, o] for o in openings] if isinstance(openings, (tuple, list)) else None
     row = {"path": path, "removed": removed, "added": added,
-           "testOpenings": list(openings) if isinstance(openings, tuple) else openings}
-    if openings is NO_KEY:
-        del row["testOpenings"]
+           "testOpenings": list(openings) if isinstance(openings, tuple) else openings,
+           "testSpans": spans, "blankLines": list(blank) if isinstance(blank, tuple) else blank}
+    for key, value in (("testOpenings", openings), ("testSpans", spans), ("blankLines", blank)):
+        if value is NO_KEY:
+            del row[key]
     return row
 
 
@@ -247,6 +259,23 @@ def _with(record):
     pytest.param(_record(_row(openings=["12"])), id="openings-holds-a-string"),
     pytest.param(_record(_row(openings=[12.0])), id="openings-holds-a-float"),
     pytest.param(_record(_row(openings=[[12]])), id="openings-holds-a-list"),
+    pytest.param(_record(_row(spans=NO_KEY)), id="spans-absent"),
+    pytest.param(_record(_row(blank=NO_KEY)), id="blank-absent"),
+    pytest.param(_record(_row(spans=[[12, 12]])), id="span-of-length-2"),
+    pytest.param(_record(_row(spans=[[13, 12, 14]])), id="span-start-after-opening"),
+    pytest.param(_record(_row(spans=[[12, 12, 11]])), id="span-opening-after-end"),
+    pytest.param(_record(_row(spans=[[0, 12, 12]])), id="span-start-zero"),
+    pytest.param(_record(_row(spans=[[12, 12, True]])), id="span-holds-a-bool"),
+    pytest.param(_record(_row(spans=[[12, 12.0, 12]])), id="span-holds-a-float"),
+    pytest.param(_record(_row(spans="12")), id="spans-a-string"),
+    pytest.param(_record(_row(spans=[[1, 11, 12]])), id="span-openings-differ-from-openings"),
+    pytest.param(_record(_row(spans=[[12, 12, 12], [20, 20, 20]])), id="span-openings-longer-than-openings"),
+    pytest.param(_record(_row(spans=None)), id="spans-none-with-openings-a-list"),
+    pytest.param(_record(_row(openings=None, spans=[[12, 12, 12]])), id="spans-a-list-with-openings-none"),
+    pytest.param(_record(_row(blank=[0])), id="blank-holds-zero"),
+    pytest.param(_record(_row(blank=["12"])), id="blank-holds-a-string"),
+    pytest.param(_record(_row(blank=[True])), id="blank-holds-a-bool"),
+    pytest.param(_record(_row(blank="12")), id="blank-a-string"),
 ])
 def test_c2_an_absent_unreadable_or_malformed_removal_record_refuses(record):
     # axis: G3 — C2, the removal record must be readable and well formed
@@ -308,9 +337,10 @@ def test_c6_a_removal_holding_none_of_the_targets_lines_refuses():
     _refused(_fold([_removed()], _target(file=OTHER_TEST_FILE, line=12)), "C6")
 
 
-@pytest.mark.parametrize("line", [None, True, "12", 12.0])
+@pytest.mark.parametrize("line", [None, True, "2", 2.0])
 def test_c6_a_line_that_is_not_a_plain_integer_cites_nothing(line):
-    # a bool is an int to Python: `True` must not tie line 1
+    # the invalid value reads as a line inside the removed range 1-3 (`True` as line 1, `"2"` and `2.0` as line 2),
+    # so the refusal is the plain-integer check's, not an accident of the line lying outside the range
     record = _record(_row(removed=((1, 3),)))
     _refused(_fold([_removed()], _target(record=record, line=line)), "C6")
 
@@ -338,7 +368,7 @@ def _sibling(line=31, **over):
 
 
 def test_c7_a_removed_range_holding_no_cited_line_refuses():
-    # axis: G8 — C7, every removed range holds a cited line
+    # axis: G8 — C7, a removed line outside every test span, neither cited nor blank, needs a cited line in its range
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
     reason = _refused(_fold([_removed()], _target(record=_two_ranges())), "C7")
     assert "30-34" in reason and "10-14" not in reason
@@ -358,12 +388,6 @@ def test_c7_a_sibling_place_of_its_kind_of_mistake_ties_a_range_too():
     sibling = _sibling(line=1, kindOfMistake={"kind": "k", "places": [{"file": TEST_FILE, "line": 33}]})
     outcome = _fold([_removed()], _target(record=_two_ranges((12, 33)), batchFindings=[sibling]))
     assert outcome["testRemovalCleared"] == ["t0"]
-
-
-def test_c7_an_uncited_stretch_with_no_test_opening_still_refuses():
-    # an uncited helper or fixture opens no test, so C9 has nothing to say about it: C7 is what refuses it
-    reason = _refused(_fold([_removed()], _target(record=_two_ranges((12,)))), "C7")
-    assert "30-34" in reason
 
 
 @pytest.mark.parametrize("change", [
@@ -437,7 +461,7 @@ def test_c8_a_changed_file_in_an_unsupported_language_refuses_naming_it():
 # --- C9 -----------------------------------------------------------------------------------------------------------
 
 def test_c9_a_stretch_that_removes_a_cited_test_and_the_uncited_test_after_it_refuses():
-    # axis: G14 — C9, every test the base file opens inside a removed stretch opens on a cited line
+    # axis: G14 — C9, a removed line in the span of a test that opens on an uncited line refuses (an adjacent uncited test)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
     record = _record(_row(removed=((10, 20),), openings=(10, 15)))
     reason = _refused(_fold([_removed()], _target(line=10, record=record)), "C9")
@@ -516,6 +540,146 @@ def test_c9_names_the_file_of_the_uncited_opening():
     assert OTHER_TEST_FILE in reason and "line 11 " in reason
 
 
+# --- C7 and C9 per removed line -----------------------------------------------------------------------------------
+
+JS_FILE = "plugins/superheroes/lib/tests/widget_2434.test.js"
+
+
+def _read_row(path, text, removed):
+    """A row built from the readers' own output on real file text, as the driver builds it."""
+    lines = text.split("\n")
+    blank = sorted({n for lo, hi in removed for n in range(lo, hi + 1) if lines[n - 1].strip() == ""})
+    return _row(path, removed=removed, openings=tuple(audits.test_openings(path, text)),
+                spans=audits.test_spans(path, text), blank=tuple(blank))
+
+
+def _cites(line, path=TEST_FILE, **extra):
+    return _target(files=(path,), file=path, line=line, **extra)
+
+
+def _detail(reason, line, opening, path=TEST_FILE):
+    assert path in reason and "line %d is in the test that opens at line %d, which no finding cites" % (
+        line, opening) in reason, reason
+
+
+def test_c9_a_stretch_that_takes_the_tail_of_the_uncited_test_above_a_cited_one_refuses():
+    # axis: G14 — C9, a removed line in the span of an uncited test refuses: the tail (line 3) of the test above
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    record = _record(_row(removed=[[3, 8]], openings=(1, 6), spans=[[1, 1, 4], [6, 6, 8]]))
+    _detail(_refused(_fold([_removed()], _target(line=6, record=record)), "C9"), 3, 1)
+
+
+def test_c9_the_tail_of_an_uncited_python_test_read_from_real_text_refuses():
+    # axis: G24 — the span end rule, through the reader: the tail (line 3) of the uncited test above is in its span
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    text = "def test_a():\n    x = 1\n    y = 2\n\ndef test_b():\n    assert 1\n"
+    record = _record(_read_row(TEST_FILE, text, [[3, 6]]))
+    _detail(_refused(_fold([_removed()], _target(line=5, record=record)), "C9"), 3, 1)
+
+
+def test_c9_a_finding_citing_one_line_of_a_test_does_not_tie_the_rest_of_that_test():
+    record = _record(_row(removed=[[3, 5]], openings=(1,), spans=[[1, 1, 5]]))
+    _detail(_refused(_fold([_removed()], _target(line=3, record=record)), "C9"), 4, 1)
+
+
+def test_c9_a_fixture_line_of_an_uncited_describe_around_a_cited_inner_it_refuses():
+    record = _record(_row(JS_FILE, removed=[[2, 6]], openings=(1, 4), spans=[[1, 1, 9], [4, 4, 6]]))
+    _detail(_refused(_fold([_removed()], _cites(4, JS_FILE, fixerRemoval=record)), "C9"), 2, 1, JS_FILE)
+
+
+def test_c9_a_class_level_fixture_line_of_an_uncited_test_class_around_a_cited_method_refuses():
+    record = _record(_row(removed=[[11, 20]], openings=(10, 14), spans=[[10, 10, 30], [14, 14, 20]]))
+    _detail(_refused(_fold([_removed()], _target(line=14, record=record)), "C9"), 11, 10)
+
+
+def test_c9_an_uncited_specify_beside_a_cited_it_refuses():
+    text = "it('a', () => {\n  expect(1).toBe(1);\n});\nspecify('b', () => {\n  expect(2).toBe(2);\n});\n"
+    assert audits.test_openings(JS_FILE, text) == [1, 4]
+    assert audits.test_spans(JS_FILE, text) == [[1, 1, 3], [4, 4, 6]]
+    record = _record(_read_row(JS_FILE, text, [[1, 6]]))
+    _detail(_refused(_fold([_removed()], _cites(1, JS_FILE, fixerRemoval=record)), "C9"), 4, 4, JS_FILE)
+
+
+def test_c9_an_inner_uncited_test_inside_a_cited_describe_refuses_its_lines():
+    # axis: G25 — the innermost span decides: line 4 is in the cited describe (start 1) and the uncited it (start 4)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    record = _record(_row(removed=[[1, 9]], openings=(1, 4), spans=[[1, 1, 9], [4, 4, 6]]))
+    _detail(_refused(_fold([_removed()], _target(line=1, record=record)), "C9"), 4, 4)
+
+
+def test_c9_a_cited_test_deleted_with_its_decorator_directly_after_an_uncited_test_clears():
+    text = "def test_keep():\n    assert 1\n\n@pytest.mark.slow\ndef test_cited():\n    assert 2\n\ndef test_next():\n    assert 3\n"
+    record = _record(_read_row(TEST_FILE, text, [[3, 6]]))
+    outcome = _fold([_removed()], _target(line=5, record=record))
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c9_only_the_cited_line_deleted_from_inside_a_test_clears():
+    record = _record(_row(removed=[[3, 3]], openings=(1,), spans=[[1, 1, 5]]))
+    outcome = _fold([_removed()], _target(line=3, record=record))
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c9_a_whole_file_with_every_test_cited_clears():
+    text = "def test_a():\n    assert 1\n\n\ndef test_b():\n    assert 2\n"
+    record = _record(_read_row(TEST_FILE, text, [[1, 6]]))
+    kind = {"kind": "pins prose", "places": [{"file": TEST_FILE, "line": 5}]}
+    places = [{"file": TEST_FILE, "line": 5, "fixed": True}]
+    outcome = _fold([_removed(places=places)], _target(line=1, record=record, kindOfMistake=kind))
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c9_a_cited_inner_it_deleted_from_inside_an_uncited_describe_clears():
+    # axis: G25 — the innermost span decides: line 5 is in the uncited describe (start 1) and the cited it (start 5)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    text = "describe('s', () => {\n  it('a', () => {\n    x();\n  });\n  it('b', () => {\n    y();\n  });\n});\n"
+    record = _record(_read_row(JS_FILE, text, [[5, 7]]))
+    assert audits.test_spans(JS_FILE, text) == [[1, 1, 8], [2, 2, 4], [5, 5, 7]]
+    outcome = _fold([_removed()], _cites(5, JS_FILE, fixerRemoval=record))
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c9_a_decorated_cited_method_deleted_from_inside_an_uncited_test_class_clears():
+    # axis: G26 — the decorator start rule: line 5 (the decorator) is in the cited method's span, not only the class's
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    text = ("class TestSuite:\n    def test_other(self):\n        assert 1\n\n    @pytest.mark.slow\n"
+            "    def test_cited(self):\n        assert 2\n")
+    record = _record(_read_row(TEST_FILE, text, [[5, 7]]))
+    outcome = _fold([_removed()], _target(line=6, record=record))
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c9_a_blank_line_inside_an_uncited_span_removed_with_a_cited_test_clears():
+    text = "class TestSuite:\n    def test_other(self):\n        assert 1\n\n    def test_cited(self):\n        assert 2\n"
+    record = _record(_read_row(TEST_FILE, text, [[4, 6]]))
+    assert record["files"][0]["blankLines"] == [4]
+    outcome = _fold([_removed()], _target(line=5, record=record))
+    assert outcome["testRemovalCleared"] == ["t0"]
+    # the same removal without the blank line recorded refuses on it: it lies in the uncited class
+    bare = _record(dict(record["files"][0], blankLines=[]))
+    _detail(_refused(_fold([_removed()], _target(line=5, record=bare)), "C9"), 4, 1)
+
+
+def test_c7_a_range_wholly_inside_a_cited_tests_span_clears_without_a_cited_line_of_its_own():
+    # two hunks of one cited test with an unchanged line between them: the second holds no cited line
+    record = _record(_row(removed=[[10, 11], [15, 16]], openings=(10,), spans=[[10, 10, 20]]))
+    outcome = _fold([_removed()], _target(line=10, record=record))
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c7_a_range_of_blank_lines_outside_every_span_clears_and_one_blank_line_does_not_tie_its_neighbours():
+    blank_only = _record(_row(removed=[[10, 14], [20, 21]], blank=(20, 21)))
+    assert _fold([_removed()], _target(record=blank_only))["testRemovalCleared"] == ["t0"]
+    mixed = _record(_row(removed=[[10, 14], [30, 34]], blank=(30, 31)))
+    assert "30-34" in _refused(_fold([_removed()], _target(record=mixed)), "C7")
+
+
+def test_c7_a_file_with_no_reader_refuses_its_uncited_lines_as_c7_before_c8():
+    only = _record(_row(), _row(RB_TEST_FILE, openings=None))
+    target = _target(files=(TEST_FILE, RB_TEST_FILE), record=only)
+    assert RB_TEST_FILE in _refused(_fold([_removed()], target), "C7")
+
+
 # --- C10 ----------------------------------------------------------------------------------------------------------
 
 @pytest.mark.parametrize("fresh", [
@@ -578,11 +742,52 @@ def test_o_the_python_reader_reads_def_test_and_class_test_lines(text, expected)
     pytest.param("  await it('x');\n", [], id="not-at-the-start-of-the-line"),
     pytest.param("test.each`table`('x', () => {});\n", [1], id="a-template-call-on-one-line"),
     pytest.param("it.each`\n  a | b\n`('row', () => {});\n", [1], id="a-tagged-template-table"),
+    pytest.param("specify('x', () => {});\n", [1], id="specify"),
+    pytest.param("context('x', () => {});\n", [1], id="context"),
+    pytest.param("suite('x', () => {});\n", [1], id="suite"),
+    pytest.param("xspecify('x', () => {});\n", [1], id="skipped-specify"),
+    pytest.param("fcontext('x', () => {});\n", [1], id="focused-context"),
+    pytest.param("suite.only('x', () => {});\n", [1], id="suite-only"),
+    pytest.param("contextual('x');\n", [], id="a-longer-name-than-context-is-no-opening"),
 ])
 def test_o_the_js_reader_reads_it_test_and_describe_calls(text, expected):
     # axis: G18 — the JavaScript and TypeScript reader names the lines that open a test
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
     assert audits.test_openings("tests/a.test.js", text) == expected
+
+
+@pytest.mark.parametrize("path,text,expected", [
+    pytest.param("t.py", "def test_a():\n    x = 1\n\n    y = 2\n\n\ndef test_b():\n    pass\n", [[1, 1, 4], [7, 7, 8]],
+                 id="python-span-ends-at-the-next-def-at-its-indent"),
+    pytest.param("t.py", "def test_sig(\n    a,\n    b,\n):\n    assert a\n\n\ndef helper():\n    pass\n", [[1, 1, 5]],
+                 id="python-multi-line-signature-closer-at-the-opening-indent-and-the-body-after-it"),
+    pytest.param("t.js", "it('a', () => {\n  x();\n});\nfoo();\n", [[1, 1, 3]], id="js-it-includes-its-closer"),
+    pytest.param("t.js", "describe('s', () => {\n  it('a', () => {\n    x();\n  });\n});\n", [[1, 1, 5], [2, 2, 4]],
+                 id="js-it-in-a-describe-the-outer-closer-is-not-the-its"),
+    pytest.param("t.py", "import pytest\n\n@pytest.mark.a\n@pytest.mark.b(1)\ndef test_a():\n    pass\n", [[3, 5, 6]],
+                 id="decorator-run-above-a-python-test-starts-at-the-first"),
+    pytest.param("t.py", "@pytest.mark.a\n\ndef test_a():\n    pass\n", [[3, 3, 4]],
+                 id="a-blank-line-between-decorator-and-opening-ends-the-run"),
+    pytest.param("t.py", "@deco\n    def test_m(self):\n        pass\n", [[2, 2, 3]],
+                 id="a-decorator-at-another-indent-is-not-the-run"),
+    pytest.param("t.py", "def test_a():\n    pass", [[1, 1, 2]], id="span-to-end-of-file-without-a-newline"),
+    pytest.param("t.py", "def test_a():\n    pass\n\n\n", [[1, 1, 2]], id="trailing-blank-lines-are-not-in-the-span"),
+    pytest.param("t.py", "\tdef test_t(self):\n\t\tpass\n", [[1, 1, 2]], id="a-tab-counts-as-one-indent-character"),
+    pytest.param("t.py", "def test_a():\n    pass\n    )\n", [[1, 1, 3]], id="a-deeper-closer-is-inside"),
+    pytest.param("t.py", "x = 1\n", [], id="no-opening-no-span"),
+])
+def test_sp_the_span_reader_reads_indentation(path, text, expected):
+    # axis: G24 — the span end rule (a closer at the opening's indent is in the span; the next line at that indent is not)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    spans = audits.test_spans(path, text)
+    assert spans == expected
+    assert [s[1] for s in spans] == audits.test_openings(path, text)
+
+
+@pytest.mark.parametrize("path", ["a.rb", "a.go", "Makefile", ""])
+def test_sp_an_unsupported_extension_has_no_spans(path):
+    assert audits.test_spans(path, "def test_a():\n    pass\n") is None
+    assert audits.test_openings(path, "def test_a():\n    pass\n") is None
 
 
 @pytest.mark.parametrize("path", ["a.py", "a.PY", "dir/b.test.js", "a.jsx", "a.mjs", "a.cjs", "a.ts", "a.tsx",
@@ -867,7 +1072,8 @@ def test_r_a_clean_fake_diff_reads_and_an_empty_diff_names_no_file(monkeypatch):
     monkeypatch.setattr(RD, "_git_bytes", _fake_git(clean))
     assert RD._fixer_removal({"repoRoot": "/r"}, "a" * 40, "b" * 40) == {
         "base": "c" * 40, "head": "c" * 40,
-        "files": [{"path": "t.py", "removed": [[4, 5]], "added": False, "testOpenings": []}]}
+        "files": [{"path": "t.py", "removed": [[4, 5]], "added": False, "testOpenings": [], "testSpans": [],
+                   "blankLines": []}]}
     monkeypatch.setattr(RD, "_git_bytes", _fake_git(b""))
     assert RD._fixer_removal({"repoRoot": "/r"}, "a" * 40, "b" * 40)["files"] == []
 
@@ -953,8 +1159,29 @@ def test_r_the_test_openings_come_from_the_base_blob_of_each_file_with_a_removed
     assert rows[TFILE]["testOpenings"] == [3, 6, 9, 10]  # the base file's lines, test_a included
     assert rows["tests/a.test.js"]["testOpenings"] == [1]
     assert rows["tests/test_spec.rb"]["testOpenings"] is None  # no reader for the language
-    assert rows["tests/test_new.py"] == {"path": "tests/test_new.py", "removed": [], "added": True, "testOpenings": []}
+    assert rows["tests/test_new.py"] == {"path": "tests/test_new.py", "removed": [], "added": True, "testOpenings": [],
+                                         "testSpans": [], "blankLines": []}
     assert "tests/test_keep.py" not in rows
+
+
+def test_r_the_spans_and_blank_lines_come_from_the_base_blob_of_each_file_with_a_removed_range(tmp_path):
+    # axis: G28 — `_fixer_removal` records `testSpans` and the blank `blankLines` of the base blob, from a real git diff
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    py_base = "import x\ndef test_a():\n    pass\n\n    more()\ndef test_b():\n    pass\n"
+    repo, base = _repo(tmp_path, {TFILE: py_base, "tests/test_spec.rb": "x\n\ny\n"})
+    _write(repo, TFILE, "import x\ndef test_b():\n    pass\n")  # lines 2-5 of the base removed: test_a, a blank inside it
+    _write(repo, "tests/test_spec.rb", "x\n")  # lines 2-3 removed, line 2 blank, a language with no reader
+    _write(repo, "tests/test_new.py", "def test_new():\n    pass\n")  # added to only: no removed range
+    head = _commit(repo, "remove")
+    rows = {f["path"]: f for f in _removal(repo, base, head)["files"]}
+    assert rows[TFILE] == {"path": TFILE, "removed": [[2, 5]], "added": False, "testOpenings": [2, 6],
+                           "testSpans": [[2, 2, 5], [6, 6, 7]], "blankLines": [4]}
+    assert rows["tests/test_spec.rb"] == {"path": "tests/test_spec.rb", "removed": [[2, 3]], "added": False,
+                                          "testOpenings": None, "testSpans": None, "blankLines": [2]}
+    assert rows["tests/test_new.py"]["testSpans"] == [] and rows["tests/test_new.py"]["blankLines"] == []
+    # the row the driver builds clears through the fold: test_a (cited at its opening) goes with the blank line inside it
+    target = _target(files=(TFILE,), record={"base": base, "head": head, "files": [rows[TFILE]]}, file=TFILE, line=2)
+    assert _fold([_removed()], target)["testRemovalCleared"] == ["t0"]
 
 
 def test_r_a_base_blob_that_is_not_utf8_makes_the_whole_record_unreadable(tmp_path):
@@ -1062,7 +1289,8 @@ def test_w_the_record_is_built_from_the_given_base_and_head(tmp_path):
     assert len(rows) == 2
     for row in rows:
         assert row["fixerRemoval"] == {"base": base, "head": head, "files": [
-            {"path": TFILE, "removed": [[3, 4]], "added": False, "testOpenings": []}]}
+            {"path": TFILE, "removed": [[3, 4]], "added": False, "testOpenings": [], "testSpans": [],
+             "blankLines": []}]}
     assert rows[0]["fixerRemoval"] is not rows[1]["fixerRemoval"]
 
 
@@ -1156,9 +1384,10 @@ def test_f_unequal_heads_are_compared_over_the_cited_files_only(tmp_path, monkey
     original = RD._git_bytes
     monkeypatch.setattr(RD, "_git_bytes", lambda root, *args: asked.append(args) or original(root, *args))
     _targets(repo, raised, base, head, [_raised(1)])
-    # one identical call per finding per role: the target row, and the sibling entry the same finding also is
-    assert [a for a in asked if a[:4] == ("diff", "--no-ext-diff", "--no-textconv", "--quiet")] == [
-        ("diff", "--no-ext-diff", "--no-textconv", "--quiet", raised, base, "--", TFILE)] * 2
+    quiet = [a for a in asked if a[:4] == ("diff", "--no-ext-diff", "--no-textconv", "--quiet")]
+    assert quiet  # the comparison was made
+    for call in quiet:
+        assert call[call.index("--") + 1:] == (TFILE,)  # only the cited file is compared, never OTHER
 
 
 def test_f_equal_heads_with_no_cited_file_are_not_fresh(tmp_path):
