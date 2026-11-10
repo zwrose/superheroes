@@ -9272,8 +9272,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
             "evidence": f.get("evidence"),
         }
         # The auditor compares the fix with what the finding names: its body, suggestion and
-        # consequence ride every target, beside the hunks of the fix over the finding's line.
-        for carried in ("body", "suggestion", review_findings_schema.CONSEQUENCE_KEY):
+        # consequence ride every target, beside the hunks of the fix over the finding's line. The round it was raised
+        # in rides too, so a target re-queued into the next fix batch still has its citation judged fresh (C10).
+        for carried in ("body", "suggestion", review_findings_schema.CONSEQUENCE_KEY, session_contract.RAISED_ROUND_FIELD):
             if f.get(carried) is not None:
                 row[carried] = f[carried]
         # The kind of mistake rides every target with the other places it names (no earlier audit's `fixed` result):
