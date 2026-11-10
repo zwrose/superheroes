@@ -111,6 +111,16 @@ as well as the verdict. Re-read the slot immediately before you submit a rewrite
 confirm it still carries the advisor's actual text, not merely that something is there. If the
 advisor wrote or extended the slot while you were editing, the newer advisor text wins.
 
+**An owner acceptance is the advisor's to record.** When your handback rests on an acceptance the
+owner has already given by a ruling, of something you could not finish (an uncertified review, a
+waived check, a park lifted by the owner's word), the advisor writes the body lines that record it
+and marks the PR ready for review (out of draft). An order asking you to write them or mark it ready
+for review gets that answer on the issue, not the edit. In that case, post any other body correction
+you owe as text on the issue; the advisor applies it word for word. This does not change §11: you
+still name each finding the review left for the owner under `## What we're accepting`, and you mark
+your own PR ready when the handback check passes
+(`skills/showrunner/reference/vet-receipt.md` § Recording an owner acceptance — the advisor writes it).
+
 ## The build record
 
 Place `<!-- superheroes:build-record -->` immediately above the build record, then wrap the record in
@@ -183,7 +193,10 @@ record, each under the next unused FU number (in the marker too), with its origi
 
 ## The size tripwire row
 
-§4's size step fills this row. After a mid-build merge of the base branch, `N` counts from the merge
+§4's size step fills this row. Its count `N` is the size result's `tripwireCount`, the count
+`crossed` is read against (the folded `sizeTripwire`, `dispatch-mechanics.md` § Size tripwire at
+fold, or your own `lib/size_count.py count` run), and never its `barCount`, the count the two
+absolute bars read (`rubric/review-discipline.md` § Size). After a mid-build merge of the base branch, `N` counts from the merge
 base of the head and that branch (`git merge-base HEAD <base branch>`) only when the fold's
 `sizeTripwire` reads `status: "ok"` with `countedFrom`, so the base branch's own lines are not the
 build's. When it reads `indeterminate` with `size-base-ref-contains-head`, or the merge base holds
