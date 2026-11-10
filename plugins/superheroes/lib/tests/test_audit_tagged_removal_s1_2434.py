@@ -36,6 +36,7 @@ def test_uncited_tagged_each_test_blocks_removal_clearance():
         "fixerRemoval": {"files": [{
             "path": path, "removed": [[1, len(lines)]], "added": False,
             "testOpenings": audits.test_openings(path, source),
+            "testSpans": audits.test_spans(path, source), "blankLines": [],
         }]},
         # Freshness is fixed here to isolate recognition of uncited test openings.
         "citationFresh": True,
@@ -55,3 +56,4 @@ def test_uncited_tagged_each_test_blocks_removal_clearance():
     assert outcome["discharged"] == []
     assert outcome["notDischarged"] == ["t0"]
     assert outcome["testRemovalRefused"] == ["t0"]
+    assert "; C9: " in outcome["audits"][0]["reason"]
