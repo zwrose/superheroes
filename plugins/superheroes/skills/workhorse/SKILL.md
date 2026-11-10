@@ -511,6 +511,17 @@ tests pass, types are clean, or the build is green is an input, never a substitu
 calibrated verify command does not cover, and that no qualifying receipt grounds, goes into the
 handback as **UNVERIFIED**.
 
+**A refusal binds the whole build, you included.** When a seat in this build, or you, met a
+refusal, you never take the refused act in any form and never hand it to another seat, unless a
+sanctioned retry covers it; the stop rule's two exceptions (a route the refusal names, a plain-form
+re-issue after a form-only refusal) stay with the seat that met the refusal, once, and no other seat
+inherits them. The session rule and its list (`SESSION_RULE` and `SANCTIONED_RETRIES` in
+`lib/command_refusals.py`) name each retry's seats, conditions and disclosure. A verify or bite-proof
+run that a refusal stopped and no entry covers goes into the handback as **UNVERIFIED**. Record
+every refusal you meet yourself, the review fix step included, beside your seats' refusals in the
+build record's dispatch provenance. A new entry needs the owner's word with its field sightings; a
+builder never adds one.
+
 **A handback claims a live process only with evidence of which physics applies.** Harness-tracked
 background work dies at turn end. A shell-detached child with durable on-disk output survives and is
 recoverable. Without that evidence, state the wait as owed to the reader.
