@@ -120,6 +120,9 @@ decision in a **contract register** stored beside the spec in the work-item fold
 
 - **Numbered entries**, each a **plain binding sentence**, with its **consuming children named** on a
   `*Consumers:*` line, owner rulings embedded, amendments dated.
+- A child that consumes **no** entry is listed on one `*No-entry children:*` line **above the first
+  entry**, and is named on no `*Consumers:*` line. The
+  [register check](register-check.md#a-child-that-consumes-no-entry) passes it with zero quotes.
 - An **embedded ruling is a dated copy pointing at where the ruling was made** — the register
   **quotes** rulings, it never becomes their ledger.
 - **The advisor owns register edits; a builder never amends the register it is graded against.**

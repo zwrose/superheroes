@@ -130,7 +130,8 @@ spend: before the workspace, the brief, and every dispatch.
 **Run the register-check at intake for a register-consuming child**, before the brief. A
 register-consuming child is an epic child of a package that has a register, or a single-issue child
 standing in for one. Run the check whether or not the body quotes a block: a body with zero quoted
-blocks is the case the check exists to fail. For a stack layer, use the [stack layer
+blocks is the case the check exists to fail, unless the child is declared on the register's
+`*No-entry children:*` line (an undeclared, unconsumed child still blocks). For a stack layer, use the [stack layer
 inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs).
 When the route names the register and child token, or they are derivable, run the check. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
