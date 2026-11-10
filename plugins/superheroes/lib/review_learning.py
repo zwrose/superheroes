@@ -40,6 +40,9 @@ import session_contract  # noqa: E402
 import store_core  # noqa: E402
 
 SINCE_KEY = "reviewLearningSince"
+# the fix a `no-adoption-day` tally names: the day is recorded once (owner-decisions § The two revisit checks at the pass)
+NO_ADOPTION_DAY_REMEDY = ("record the adoption day once: python3 -B <plugin root>/lib/review_learning.py adopt "
+                          "--cwd <project root> --date <YYYY-MM-DD>")
 PROPOSAL_SCHEMA = "calibration-proposal/1"
 COMMIT_MESSAGE = "docs: record an approved calibration change in Canon"
 GIT_TIMEOUT_SECONDS = 60  # a stalled signer or commit hook must not hang apply after Canon is appended
@@ -492,7 +495,8 @@ def tally(records, escapes, since, *, until=None, window_days=None):
     `raiserRunNotShown` are None wherever `unattributedCatches` is None. A PR supplied more than once reads `incomplete-evidence`.
     An escape item marked `"marker": "false-pr-claim"` is counted in `falsePrClaims`, never in `escapes`; `falsePrClaims` is None wherever `escapes` reads None.
     An escape's optional `kind` (one of ESCAPE_KINDS, what would have caught it) is counted in `escapesByKind`; an escape with no
-    kind counts there as `unmeasured`, never as `nothing-reachable`, and a kind outside the list reads malformed."""
+    kind counts there as `unmeasured`, never as `nothing-reachable`, and a kind outside the list reads malformed.
+    With no adoption day the tally is unmeasured, `reason` `no-adoption-day`, and `remedy` names the `adopt` command that records it."""
     end = _day(until) if until is not None else datetime.datetime.now(datetime.timezone.utc).date()
     left = {"beforeWindow": 0, "afterWindow": 0, "undated": 0, "malformed": 0}
     out = {"since": since, "window": {"from": None, "until": end.isoformat() if end else until},
@@ -500,7 +504,7 @@ def tally(records, escapes, since, *, until=None, window_days=None):
            "raiserRunNotShown": None, "escapes": {"missed": None, "seenAndLeft": None}, "escapesByKind": None, "falsePrClaims": None,
            "leftOut": dict.fromkeys(left)}
     if since is None:
-        return dict(out, reason="no-adoption-day")
+        return dict(out, reason="no-adoption-day", remedy=NO_ADOPTION_DAY_REMEDY)
     start = _day(since)
     bad_window = window_days is not None and not (isinstance(window_days, int) and window_days > 0)
     if start is None or end is None or bad_window or end < start:  # an `until` before the adoption day measures nothing

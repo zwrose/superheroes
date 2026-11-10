@@ -314,13 +314,20 @@ def _poll_write_terminal(wt, run_dir, prompt_path, *, order_id="e2e-order", time
     )
 
 
-def _poll_review_terminal(repo_root, run_dir, prompt_path, *, timeout=120):
+def _poll_review_terminal(repo_root, run_dir, prompt_path, *, timeout=120, timeout_s=None, retry_timeout=None):
     deadline = time.monotonic() + timeout
     last = None
+    # unset (None) keeps today's call: the dispatch's own defaults decide the attempt and retry bounds
+    bounds = {}
+    if timeout_s is not None:
+        bounds["timeout"] = timeout_s
+    if retry_timeout is not None:
+        bounds["retry_timeout"] = retry_timeout
     while time.monotonic() < deadline:
         last = ED.dispatch_review(
             seat=_codex_seat(),
             prompt_path=prompt_path, repo_root=repo_root, run_dir=run_dir,
+            **bounds,
         )
         if last.get("terminal"):
             return last
@@ -514,6 +521,53 @@ def test_e2e_review_silence_watchdog_ends_silent_attempt_and_retry_answers(tmp_p
     assert ended[1]["silenceWatchdog"]["silentSeconds"] >= 1
     assert "silenceWatchdog" not in ended[2]
     assert ended[2]["exit"] == 0
+
+
+@pytest.mark.parametrize("lines,expected", [(1000, 1800), (100, 900)])
+def test_e2e_review_retry_after_silence_watchdog_runs_with_the_seat_ceiling(tmp_path, monkeypatch, lines, expected):
+    """#2415: a test-role seat's ceiling (`round_phases.seat_ceiling`) is passed as both `timeout` and `retry_timeout`; the
+    attempt after the silence-watchdog cut runs with that ceiling, read off its journaled `engine-launching` record."""
+    # axis: G2 — the retry attempt's journaled bound is the seat's ceiling
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/i2415_test_role_ceiling.md
+    import round_phases as RP
+
+    ceiling = RP.seat_ceiling("test-role:s1", lines)
+    assert ceiling == expected
+    repo = str(tmp_path / "repo")
+    _init_repo(repo)
+    run_dir = _run_dir(tmp_path, "run-review-silence-ceiling")
+    prompt_path = _prompt(tmp_path, "Review this.\n")
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    exe = bin_dir / "codex"
+    exe.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys, time\n"
+        "sys.stdin.read()\n"
+        "out = sys.argv[sys.argv.index('-o') + 1]\n"
+        "if out.endswith('-1.json'):\n"
+        "    time.sleep(120)\n"
+        "with open(out, 'w', encoding='utf-8') as fh:\n"
+        "    fh.write(%r)\n"
+        "sys.exit(0)\n" % _e2e_native_findings_result_json(),
+        encoding="utf-8")
+    exe.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir) + os.pathsep + "/usr/bin" + os.pathsep + "/bin")
+    monkeypatch.setattr(ED, "CODEX_SILENCE_WATCHDOG_SECONDS", 1)
+
+    res = _poll_review_terminal(repo, run_dir, prompt_path, timeout=90, timeout_s=ceiling, retry_timeout=ceiling)
+
+    assert res["ok"] is True
+    assert res["terminal"] is True
+    assert res["attempts"] == 2
+    records = _journal_records(run_dir)
+    ended = {r["attempt"]: r for r in records if r.get("kind") == "attempt-ended"}
+    assert ended[1]["signalSource"] == "silence-watchdog"
+    carrying = [r for r in records
+                if r.get("kind") == "engine-launching" and r.get("attempt") == 2 and "timeout" in r]
+    assert len(carrying) == 1
+    assert carrying[0]["timeout"] == expected
 
 
 # --- 2. Write real path terminal success --------------------------------------

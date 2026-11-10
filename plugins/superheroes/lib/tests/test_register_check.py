@@ -827,6 +827,7 @@ def test_internal_error(monkeypatch, tmp_path, capsys):
     payload = json.loads(out.strip())
     assert payload["reason"] == rc.UNDECIDED_INTERNAL_ERROR
     _assert_result_field_keys(payload)
+    assert payload["noEntryDeclaration"] is None
 
 
 def test_emitted_objects_use_authoritative_field_sets(tmp_path):
@@ -860,6 +861,12 @@ def test_emitted_objects_use_authoritative_field_sets(tmp_path):
     undecided_body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
     undecided_result = _check(register, undecided_body, "C09")
     _assert_result_field_keys(undecided_result)
+
+    # a register without a declaration carries the field as null on every path
+    for emitted in (
+        pass_result, drift_result, missing_result, unknown_result, undecided_result,
+    ):
+        assert emitted["noEntryDeclaration"] is None
 
 
 # --- determinism ------------------------------------------------------------
@@ -1292,9 +1299,353 @@ def test_vocabulary_constants():
         rc.UNDECIDED_REGISTER_MALFORMED,
         rc.UNDECIDED_BODY_MALFORMED,
         rc.UNDECIDED_CHILD_UNRECOGNIZED,
+        rc.UNDECIDED_CHILD_CONTRADICTED,
         rc.UNDECIDED_USAGE,
         rc.UNDECIDED_INTERNAL_ERROR,
     })
+    assert rc.UNDECIDED_CHILD_CONTRADICTED == "child-contradicted"
+    assert rc.RESULT_FIELDS.index("noEntryDeclaration") == (
+        rc.RESULT_FIELDS.index("entriesWithoutConsumers") + 1
+    )
+    assert rc.RESULT_FIELDS[rc.RESULT_FIELDS.index("noEntryDeclaration") + 1] == "findings"
     assert rc.EXIT_PASS == 0
     assert rc.EXIT_FAIL == 1
     assert rc.EXIT_UNDECIDED == 2
+
+
+# --- no-entry children declaration (#2430) ----------------------------------
+
+_NE_DECL_LINE = 3  # the declaration sits on line 3 of every `_ne_register` file
+
+
+def _ne_register(tmp_path, decl, entries=None, name="register.md"):
+    """Register with a title, the declaration line (if any) on line 3, then entries."""
+    if entries is None:
+        entries = "**R1 — Consumed entry.**\n*Consumers:* C1\n"
+    head = "# Register\n\n"
+    if decl is not None:
+        head += decl + "\n\n"
+    return _minimal_register(tmp_path, head + entries, name)
+
+
+def _ne_body(tmp_path, text, name="body.md"):
+    path = tmp_path / name
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+def _ne_check(register, body, child):
+    return _check(
+        register, body, child, register_copy=rc.REGISTER_COPY_WORKTREE,
+    )
+
+
+_NE_R1_QUOTE = "> **R1 — Consumed entry.**\n"
+
+
+def _assert_consuming_child_malformed(tmp_path, register_text_entries, decl, expect_in_detail):
+    register = _ne_register(tmp_path, decl, entries=register_text_entries)
+    body = _ne_body(tmp_path, _NE_R1_QUOTE)
+    result = _ne_check(register, body, "C1")
+    assert result["result"] == rc.RESULT_UNDECIDED, decl
+    assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED, decl
+    assert "register line " in result["detail"], decl
+    assert expect_in_detail in result["detail"], (decl, result["detail"])
+    assert result["noEntryDeclaration"] is None
+    _assert_result_field_keys(result)
+
+
+def test_no_entry_declared_child_passes_without_quotes(tmp_path):
+    register = _ne_register(
+        tmp_path, "*No-entry children:* the background child, C7.",
+    )
+    body = _ne_body(tmp_path, "No quotes here.\n")
+    for child in ("C7", "the background child"):
+        result = _ne_check(register, body, child)
+        assert result["result"] == rc.RESULT_PASS, result
+        assert result["requiredEntries"] == []
+        assert result["noEntryDeclaration"] == {
+            "line": _NE_DECL_LINE,
+            "children": ["the background child", "C7"],
+            "childDeclared": True,
+        }
+        _assert_result_field_keys(result)
+    code, out, _err = _run_cli(
+        "--register", str(register),
+        "--body-file", str(body),
+        "--child", "C7",
+        "--register-copy", "worktree",
+    )
+    assert code == rc.EXIT_PASS
+    payload = json.loads(out.strip())
+    assert payload["requiredEntries"] == []
+    assert payload["noEntryDeclaration"]["childDeclared"] is True
+
+
+def test_no_entry_undeclared_child_still_unrecognized(tmp_path):
+    register = _ne_register(tmp_path, "*No-entry children:* C7")
+    body = _ne_body(tmp_path, "No quotes here.\n")
+    result = _ne_check(register, body, "C8")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
+    assert result["noEntryDeclaration"] == {
+        "line": _NE_DECL_LINE,
+        "children": ["C7"],
+        "childDeclared": False,
+    }
+    code, _out, _err = _run_cli(
+        "--register", str(register),
+        "--body-file", str(body),
+        "--child", "C8",
+        "--register-copy", "worktree",
+    )
+    assert code == rc.EXIT_UNDECIDED
+
+
+def test_no_entry_contradiction_refused(tmp_path):
+    register = _ne_register(
+        tmp_path,
+        "*No-entry children:* C2",
+        entries=(
+            "**R1 — Consumed entry.**\n*Consumers:* C2\n\n"
+            "**R2 — Other entry.**\n*Consumers:* C3\n"
+        ),
+    )
+    body = _ne_body(tmp_path, "No quotes here.\n")
+    result = _ne_check(register, body, "C2")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_CHILD_CONTRADICTED
+    assert "C2" in result["detail"]
+    assert f"line {_NE_DECL_LINE}" in result["detail"]
+    assert "R1" in result["detail"]
+    assert "R2" not in result["detail"]
+    assert result["noEntryDeclaration"] == {
+        "line": _NE_DECL_LINE, "children": ["C2"], "childDeclared": True,
+    }
+    code, out, _err = _run_cli(
+        "--register", str(register),
+        "--body-file", str(body),
+        "--child", "C2",
+        "--register-copy", "worktree",
+    )
+    assert code == rc.EXIT_UNDECIDED
+    assert json.loads(out.strip())["reason"] == rc.UNDECIDED_CHILD_CONTRADICTED
+
+    # even with the consumed entry correctly quoted the contradiction is refused, not passed
+    quoted = _ne_body(tmp_path, "> **R1 — Consumed entry.**\n", name="quoted.md")
+    refused = _ne_check(register, quoted, "C2")
+    assert refused["result"] == rc.RESULT_UNDECIDED
+    assert refused["reason"] == rc.UNDECIDED_CHILD_CONTRADICTED
+
+    other_body = _ne_body(tmp_path, "> **R2 — Other entry.**\n", name="other.md")
+    other = _ne_check(register, other_body, "C3")
+    assert other["result"] == rc.RESULT_PASS
+    assert other["requiredEntries"] == ["R2"]
+    assert other["noEntryDeclaration"]["childDeclared"] is False
+
+
+def test_no_entry_malformed_broken_label(tmp_path):
+    for decl in (
+        "*No-entry children: C2",
+        "**No-entry children:** C2",
+        "*no-entry children:* C2",
+        "_No-entry children:_ C2",
+        "*No entry children:* C2",
+        " *No-entry children:* C2",
+    ):
+        _assert_consuming_child_malformed(tmp_path, None, decl, f"register line {_NE_DECL_LINE}")
+
+
+def test_no_entry_malformed_below_first_entry(tmp_path):
+    for tail in (
+        "*Consumers:* C1\n*No-entry children:* C2\n",
+        "*Consumers:* C1\n\n*No-entry children:* C2\n",
+        "_No-entry children:_ C2\n*Consumers:* C1\n",
+        "*Consumers:* C1\n\n**R2 — Later entry.**\n*Consumers:* C3\n*No-entry children:* C2\n",
+    ):
+        entries = "**R1 — Consumed entry.**\n" + tail
+        _assert_consuming_child_malformed(
+            tmp_path, entries, None, "below the first entry header",
+        )
+
+
+def test_no_entry_malformed_two_declarations(tmp_path):
+    _assert_consuming_child_malformed(
+        tmp_path,
+        None,
+        "*No-entry children:* C2\n\n*No-entry children:* C3",
+        "second no-entry declaration",
+    )
+
+
+def test_no_entry_malformed_empty_token(tmp_path):
+    for decl in (
+        "*No-entry children:*",
+        "*No-entry children:*   ",
+        "*No-entry children:* .",
+        "*No-entry children:* C7,,C8",
+        "*No-entry children:* C7,",
+        "*No-entry children:* ,C7",
+    ):
+        _assert_consuming_child_malformed(tmp_path, None, decl, "empty")
+
+
+def test_no_entry_malformed_forbidden_char(tmp_path):
+    for decl in (
+        "*No-entry children:* C7 (background)",
+        "*No-entry children:* C7)",
+        "*No-entry children:* C7; C8",
+        "*No-entry children:* C7*",
+        "*No-entry children:* `C7`",
+    ):
+        _assert_consuming_child_malformed(tmp_path, None, decl, "forbidden character")
+
+
+def test_no_entry_exact_match_c1_not_c10(tmp_path):
+    body = _ne_body(tmp_path, "No quotes here.\n")
+    for declared, other in (("C1", "C10"), ("C10", "C1")):
+        sub = tmp_path / declared
+        sub.mkdir()
+        register = _ne_register(
+            sub,
+            f"*No-entry children:* {declared}",
+            entries="**R1 — Consumed entry.**\n*Consumers:* C99\n",
+        )
+        ok = _ne_check(register, body, declared)
+        assert ok["result"] == rc.RESULT_PASS
+        result = _ne_check(register, body, other)
+        assert result["result"] == rc.RESULT_UNDECIDED, (declared, other)
+        assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED, (declared, other)
+        assert result["noEntryDeclaration"]["childDeclared"] is False
+
+
+def test_no_entry_field_case_two_declared_children(tmp_path):
+    register = _ne_register(
+        tmp_path,
+        "*No-entry children:* C7, C8.",
+        entries=(
+            "**R1 — First entry.**\n*Consumers:* C1, C2\n\n"
+            "**R2 — Second entry.**\n*Consumers:* C2\n"
+        ),
+    )
+    plain = _ne_body(tmp_path, "No quotes here.\n", name="plain.md")
+    for child in ("C7", "C8"):
+        result = _ne_check(register, plain, child)
+        assert result["result"] == rc.RESULT_PASS, result
+        assert result["requiredEntries"] == []
+        assert result["noEntryDeclaration"]["children"] == ["C7", "C8"]
+        assert result["noEntryDeclaration"]["childDeclared"] is True
+    c1_body = _ne_body(tmp_path, "> **R1 — First entry.**\n", name="c1.md")
+    c1 = _ne_check(register, c1_body, "C1")
+    assert c1["result"] == rc.RESULT_PASS
+    assert c1["requiredEntries"] == ["R1"]
+    assert c1["noEntryDeclaration"]["childDeclared"] is False
+    c2_body = _ne_body(
+        tmp_path,
+        "> **R1 — First entry.**\n\n> **R2 — Second entry.**\n",
+        name="c2.md",
+    )
+    c2 = _ne_check(register, c2_body, "C2")
+    assert c2["result"] == rc.RESULT_PASS
+    assert c2["requiredEntries"] == ["R1", "R2"]
+    # a missing quote for a consuming child still fails
+    c2_missing = _ne_check(register, c1_body, "C2")
+    assert c2_missing["result"] == rc.RESULT_FAIL
+    assert [f["kind"] for f in c2_missing["findings"]] == [rc.KIND_MISSING_QUOTE]
+    assert c2_missing["findings"][0]["entry"] == "R2"
+
+
+def test_no_entry_declared_child_body_still_compared(tmp_path):
+    register = _ne_register(tmp_path, "*No-entry children:* C7")
+    drift = _ne_body(tmp_path, "> **R1 — Consumed entry.X**\n", name="drift.md")
+    result = _ne_check(register, drift, "C7")
+    assert result["result"] == rc.RESULT_FAIL
+    assert [f["kind"] for f in result["findings"]] == [rc.KIND_TEXT_DRIFT]
+    assert result["requiredEntries"] == []
+    assert result["noEntryDeclaration"]["childDeclared"] is True
+    unknown = _ne_body(tmp_path, "> **R99 — Unknown.**\n", name="unknown.md")
+    result = _ne_check(register, unknown, "C7")
+    assert result["result"] == rc.RESULT_FAIL
+    assert [f["kind"] for f in result["findings"]] == [rc.KIND_UNKNOWN_ENTRY]
+    exact = _ne_body(tmp_path, _NE_R1_QUOTE, name="exact.md")
+    assert _ne_check(register, exact, "C7")["result"] == rc.RESULT_PASS
+
+
+def test_no_entry_declaration_in_fence_is_ignored(tmp_path):
+    register = _ne_register(
+        tmp_path,
+        "```\n*No-entry children:* C7\n```",
+    )
+    body = _ne_body(tmp_path, "No quotes here.\n")
+    result = _ne_check(register, body, "C7")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
+    assert result["noEntryDeclaration"] is None
+    # a broken-label line inside a fence does not block the register either
+    fenced_broken = _ne_register(
+        tmp_path, "```\n**No-entry children:** C7\n```", name="fenced_broken.md",
+    )
+    assert _ne_check(fenced_broken, _ne_body(tmp_path, _NE_R1_QUOTE), "C1")["result"] == (
+        rc.RESULT_PASS
+    )
+
+
+def test_no_entry_declaration_field_on_every_result_path(tmp_path):
+    plain = _tiny_register(tmp_path)
+    good = _ne_body(tmp_path, "> **R1 — One line entry.**\n", name="good.md")
+    bad = _ne_body(tmp_path, "> **R1 — One line entry.X**\n", name="bad.md")
+    # no declaration: null on every path
+    results = [
+        _check(plain, good, "C1"),
+        _check(plain, bad, "C1"),
+        _check(plain, good, "C09"),
+        _check(plain, tmp_path / "missing.md", "C1"),
+        _check(tmp_path / "missing-register.md", good, "C1"),
+        _check(plain, good, ""),
+    ]
+    for result in results:
+        _assert_result_field_keys(result)
+        assert result["noEntryDeclaration"] is None, result["reason"]
+
+    # declaration present: carried on pass, fail, child-unrecognized, child-contradicted
+    decl = _ne_register(
+        tmp_path,
+        "*No-entry children:* C7, C2",
+        entries="**R1 — One line entry.**\n*Consumers:* C1, C2\n",
+        name="decl.md",
+    )
+    expected_children = ["C7", "C2"]
+    carried = [
+        (_ne_check(decl, good, "C1"), rc.RESULT_PASS, False),
+        (_ne_check(decl, bad, "C1"), rc.RESULT_FAIL, False),
+        (_ne_check(decl, good, "C9"), rc.RESULT_UNDECIDED, False),
+        (_ne_check(decl, good, "C2"), rc.RESULT_UNDECIDED, True),
+        (_ne_check(decl, good, "C7"), rc.RESULT_PASS, True),
+    ]
+    for result, outcome, declared in carried:
+        _assert_result_field_keys(result)
+        assert result["result"] == outcome
+        assert result["noEntryDeclaration"] == {
+            "line": _NE_DECL_LINE,
+            "children": expected_children,
+            "childDeclared": declared,
+        }
+    # undecided paths other than the two above carry null even when the register declares
+    nulls = [
+        _ne_check(decl, tmp_path / "missing.md", "C7"),
+        _ne_check(decl, _ne_body(tmp_path, "```\nopen\n", name="open.md"), "C7"),
+        _ne_check(decl, good, "  "),
+        _ne_check(tmp_path / "nope.md", good, "C7"),
+    ]
+    for result in nulls:
+        _assert_result_field_keys(result)
+        assert result["result"] == rc.RESULT_UNDECIDED
+        assert result["noEntryDeclaration"] is None, result["reason"]
+    empty = _minimal_register(tmp_path, "*No-entry children:* C7\n", "empty.md")
+    empty_result = _ne_check(empty, good, "C7")
+    assert empty_result["reason"] == rc.UNDECIDED_REGISTER_EMPTY
+    assert empty_result["noEntryDeclaration"] is None
+    malformed = _ne_register(tmp_path, "*No-entry children:*", name="malformed.md")
+    malformed_result = _ne_check(malformed, good, "C7")
+    assert malformed_result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
+    assert malformed_result["noEntryDeclaration"] is None

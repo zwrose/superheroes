@@ -4,6 +4,8 @@ layers (#723).
 
 Single home for the `P_*` action strings so `round_driver`, `round_adapters`, and
 `round_records` agree without import cycles. Stdlib-only."""
+import math
+
 import round_panel_contract
 
 # Phases (the `action` a `next` emits; each is fulfilled by exactly one orchestrator dispatch).
@@ -93,6 +95,28 @@ def panel_roster(state, config):
         if "security-reviewer" in dims and sl.get("security") is True:
             roster.append("security-reviewer:" + sl["id"])
     return roster
+
+
+# The attempt and retry ceilings of an external review seat (#2415). Evidence: PR #2403 review session 1's test-role retry
+# stayed engaged and hit the 900 s ceiling on a ~820-line unsliced change; a consuming project's ~1,400-line change needed
+# 1,800 s. The floor equals `engine_dispatch.RETRY_MIN_TIMEOUT` (not imported here: that module sits above this one).
+SEAT_CEILING_FLOOR_SECONDS = 900
+TEST_ROLE_CEILING_FREE_LINES = 300
+TEST_ROLE_CEILING_SECONDS_PER_LINE = 1.5
+TEST_ROLE_CEILING_MAX_SECONDS = 1800
+
+
+def seat_ceiling(seat_key, lines):
+    """Seconds an external review seat's attempt (and its retry) may run: the floor, except that the test role's ceiling
+    grows with the countable ``lines`` of the slice it reviews, past the free lines, up to the maximum. Always an int."""
+    # axis: only the test role scales; every other lens keeps the floor
+    if seat_lens(seat_key) != "test-role":
+        return SEAT_CEILING_FLOOR_SECONDS
+    # axis: an unknown size (not an int, a bool, or a negative count) and a small one keep the floor
+    if isinstance(lines, bool) or not isinstance(lines, int) or lines <= TEST_ROLE_CEILING_FREE_LINES:
+        return SEAT_CEILING_FLOOR_SECONDS
+    extra = math.ceil(TEST_ROLE_CEILING_SECONDS_PER_LINE * (lines - TEST_ROLE_CEILING_FREE_LINES))
+    return int(min(TEST_ROLE_CEILING_MAX_SECONDS, SEAT_CEILING_FLOOR_SECONDS + extra))
 
 
 # The lens whose later-wave seat reads the whole change rather than a slice.

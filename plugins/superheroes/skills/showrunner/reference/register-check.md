@@ -5,6 +5,7 @@
 - [The invocation](#the-invocation)
 - [The result contract](#the-result-contract)
 - [What counts as a quoted register block](#what-counts-as-a-quoted-register-block)
+- [A child that consumes no entry](#a-child-that-consumes-no-entry)
 - [Vocabulary](#vocabulary)
 - [The three invocation points](#the-three-invocation-points)
 - [What this check does not do](#what-this-check-does-not-do)
@@ -58,9 +59,12 @@ check **never** falls back to the worktree file unless the caller passes
 passed by the caller. The store is a git work tree with no `origin/main` and no `main`, so `auto`
 selects `main` and answers `undecided` / `register-unreadable`; the file on disk is the only copy.
 
-`--allow-no-required-entries` exists for the single legitimate case of a child that consumes
-**no** register entry — it makes the required set legitimately empty. **None of the three
-invocation points ever passes this flag.** At those points an unmatched `--child` is a
+A child that consumes **no** register entry is declared on the register's `*No-entry children:*`
+line — see [A child that consumes no entry](#a-child-that-consumes-no-entry). **That declaration
+is the path for such a child.** `--allow-no-required-entries` is not that path: it only makes
+the required set empty for a caller that asks for it, and **none of the three invocation points
+ever passes it** — nothing there needs it, because the declaration covers the case. At those
+points a `--child` that is neither named on a `*Consumers:*` line nor declared is a
 `child-unrecognized` `undecided`, which blocks per the gate below.
 
 **Epic child** — a register-consuming epic child; pass the epic register path and the child
@@ -105,6 +109,8 @@ except on `undecided`. `registerCopy` is `"main"` or `"worktree"` — the copy t
 `registerRef` is the ref actually read (`"origin/main"` or `"main"`), or `null` for the worktree
 copy. Both appear on every result, including every `undecided` path, so a caller never has to
 infer which copy a refusal is about. `firstDifference` is the first `text-drift` finding, else null.
+`noEntryDeclaration` is described under
+[A child that consumes no entry](#a-child-that-consumes-no-entry).
 
 **Results:**
 
@@ -177,6 +183,47 @@ A register entry's **quotable text is a single paragraph** — the entry header 
 immediately following it, up to the first blank line, italic metadata line, `---`, or heading.
 Text after a blank line is trailer, not quotable.
 
+## A child that consumes no entry
+
+A register declares the children that consume no entry on **one** line:
+
+```text
+*No-entry children:* C7, the background child.
+```
+
+- **Form** — exactly `*No-entry children:* <list>`, outside any code fence. The list is
+  comma-separated; each token is trimmed of spaces and may contain spaces. One trailing `.` at the
+  end of the whole list is allowed.
+- **Placement** — above the first entry header (`**R<n> — `), so it is never part of an entry's
+  quotable text or trailer.
+- **Matching is exact** — a child is declared when `--child` equals a token exactly. `C1` declared
+  does not declare `C10`, and `C10` declared does not declare `C1`.
+- **What a declared child gets** — a `pass` with `requiredEntries: []` and no quotes required.
+  Any quoted block in its body is still compared exactly: drift is `text-drift`, an id the
+  register does not define is `unknown-entry`.
+- **A forgotten line still blocks** — a child that is neither declared nor named on any
+  `*Consumers:*` line stays `undecided` / `child-unrecognized`.
+- **Contradiction** — a child that is declared **and** named on an entry's `*Consumers:*` line is
+  `undecided` / `child-contradicted` (exit 2). The detail names the child, the declaration line,
+  and the entry ids. Other children of the register are unaffected.
+- **Malformed fails closed** — any line that looks like the declaration (it begins, ignoring
+  leading `*`, `_` and spaces and ignoring case, with `no-entry children` or `no entry children`)
+  must be a valid declaration, or the whole register is `undecided` / `register-malformed` for
+  **every** child, consuming children included. Malformed means: a damaged label (for example
+  `*No-entry children: C2`, `**No-entry children:** C2`, `*no-entry children:* C2`,
+  `_No-entry children:_ C2`); a candidate below the first entry header, including inside an
+  entry's trailer; a second candidate; an empty list or an empty token (`C7,,C8`, `C7,`); a
+  token containing `(`, `)`, `;`, `*` or a backtick. A declaration inside a code fence is ignored.
+
+**`noEntryDeclaration`** is on every result. It is `{"line": <1-based line of the declaration>,
+"children": [<tokens in order>], "childDeclared": <bool>}` whenever the register parsed and carries
+a declaration — on `pass`, `fail`, `child-unrecognized` and `child-contradicted` alike. It is
+`null` when the register has no declaration, and `null` on every other `undecided` result
+(`usage`, `register-unreadable`, `register-empty`, `register-malformed`, `body-unreadable`,
+`body-malformed`, `internal-error`), even if the register carries a declaration. The pass that
+rests on the declaration is the one with `requiredEntries: []` and
+`noEntryDeclaration.childDeclared: true`. The schema stays `register-check/1`.
+
 ## Vocabulary
 
 The schema token, result tokens, finding kinds, undecided reasons, exit codes (`EXIT_PASS`,
@@ -189,7 +236,10 @@ The schema token, result tokens, finding kinds, undecided reasons, exit codes (`
 **Child filing (showrunner duty 2).** When the advisor files a **register-consuming child** — an
 epic child of a package that has a register, or a single-issue child standing in for one under
 FR-36 — run the check against the body **before filing**, whether or not the body contains a
-quoted block; a body with zero quoted blocks is exactly the case the check is there to fail. For a
+quoted block; a body with zero quoted blocks is exactly the case the check is there to fail for a
+child that consumes an entry. A child declared on the register's `*No-entry children:*` line
+passes with zero quotes; an undeclared child that no `*Consumers:*` line names still blocks as
+`child-unrecognized`. For a
 stack layer, use the [stack layer inputs](#stack-layer-inputs). Where applicability cannot be
 derived from the issue alone, the route names the register and child token at routing for the
 builder to pass. On `fail`, fix the body — do not file a drifted
@@ -205,7 +255,10 @@ the child token is recognized, exactly like `fail`. See the showrunner charter's
 for the filing obligation.
 
 **Child build intake (workhorse §1).** When the routed issue is a **register-consuming child**,
-run the check at intake before the brief, whether or not the body contains a quoted block. For a
+run the check at intake before the brief, whether or not the body contains a quoted block. A body
+with zero quotes fails for a child that consumes an entry; a child declared on the register's
+`*No-entry children:*` line passes with zero quotes, and an undeclared child that no
+`*Consumers:*` line names still blocks as `child-unrecognized`. For a
 stack layer, use the [stack layer inputs](#stack-layer-inputs). On
 `fail`, **park** — the quoted text is the contract the build is graded on, so a drifted quote is
 not a buildable surface. On `pass`, record the check's own output in the intake note — the
@@ -221,8 +274,10 @@ park obligation.
 
 **Package-read verification pass (showrunner duty 3).** At an epic package read's verification
 pass, re-run the check per **register-consuming child** across **both** directions, whether or
-not each body contains a quoted block. For a stack layer, use the [stack layer
-inputs](#stack-layer-inputs). On `fail`, record a blocking package-read finding and do
+not each body contains a quoted block. A body with zero quotes fails for a child that consumes an
+entry; a child declared on the register's `*No-entry children:*` line passes with zero quotes, and
+an undeclared child that no `*Consumers:*` line names still blocks as `child-unrecognized`. For a
+stack layer, use the [stack layer inputs](#stack-layer-inputs). On `fail`, record a blocking package-read finding and do
 not treat the package as verified. On `pass`, record the check's own output in the package-read
 verification record — the `result` line, or `pass` together with `requiredEntries` and `registerCopy`/`registerRef` — not merely a
 claim that it ran. When the register path and child token are known — the route names them or they
