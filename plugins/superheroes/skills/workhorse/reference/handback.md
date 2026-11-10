@@ -111,6 +111,16 @@ as well as the verdict. Re-read the slot immediately before you submit a rewrite
 confirm it still carries the advisor's actual text, not merely that something is there. If the
 advisor wrote or extended the slot while you were editing, the newer advisor text wins.
 
+**An owner acceptance is the advisor's to record.** When your handback rests on an acceptance the
+owner has already given by a ruling, of something you could not finish (an uncertified review, a
+waived check, a park lifted by the owner's word), the advisor writes the body lines that record it
+and marks the PR ready for review (out of draft). An order asking you to write them or mark it ready
+for review gets that answer on the issue, not the edit. In that case, post any other body correction
+you owe as text on the issue; the advisor applies it word for word. This does not change §11: you
+still name each finding the review left for the owner under `## What we're accepting`, and you mark
+your own PR ready when the handback check passes
+(`skills/showrunner/reference/vet-receipt.md` § Recording an owner acceptance — the advisor writes it).
+
 ## The build record
 
 Place `<!-- superheroes:build-record -->` immediately above the build record, then wrap the record in
