@@ -1,25 +1,34 @@
 # Bite-proof record — a fix that only removes worthless test lines clears its audit on a `worthless-test-removed` answer (#2434)
 
-Detector file: `plugins/superheroes/lib/tests/test_audit_test_removal_2434.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py` for G1-G8, `plugins/superheroes/lib/round_driver.py` for G9-G12), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest '<exact node id>' -q -n 0 --tb=short`, one test node each, output captured whole, followed by the `exit=` line the command printed. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture. One redaction: the absolute path of the build worktree, which prefixes the file paths in the tracebacks, is written `<worktree>`; nothing else was redacted.
+Detector file: `plugins/superheroes/lib/tests/test_audit_test_removal_2434.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py` for G1-G8, G13-G15, G17 and G18, `plugins/superheroes/lib/round_driver.py` for G9-G12, G16 and G19), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest '<exact node id>' -q -n 0 --tb=short`, one test node each, output captured whole, followed by the `exit=` line the command printed. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture. One redaction: the absolute path of the build worktree, which prefixes the file paths in the tracebacks, is written `<worktree>`; nothing else was redacted.
 
-The twelve guarded elements are the ones the order declared: G1 the clear arm, G2-G8 the refusals C1-C7, G9 the `added` detection, G10 the unreadable detection, G11 `--no-textconv`, G12 the explicit endpoint. The new answer on `right` or `brokeNothing` (a shape fault) and on a `not-discharged` ruling (no clearing, no listing) are plain tests, not guarded elements.
+The nineteen guarded elements: G1 the clear arm, G2-G8 the refusals C1-C7, G9 the `added` detection, G10 the unreadable detection, G11 `--no-textconv`, G12 the explicit endpoint, G13 the refusal C8 (an unsupported language), G14 the refusal C9 (a test the base file opens in a removed stretch on an uncited line), G15 the refusal C10 (a citation that is not exactly fresh), G16 `--inter-hunk-context=0`, G17 the Python test-opening reader, G18 the JavaScript/TypeScript test-opening reader, G19 the unreadable-base-blob form. The new answer on `right` or `brokeNothing` (a shape fault) and on a `not-discharged` ruling (no clearing, no listing) are plain tests, not guarded elements.
+
+G1-G12 were captured again in the fix leg of vet 886: the fixtures gained `testOpenings` and `citationFresh`, which moved the detectors' line numbers and the production files' line numbers, so every earlier red and green was re-run and replaced. The restore receipts of G1-G12 were read back by one Grep after the last of them was restored (every restored line appears in it); those of G13-G19 were read back right after each restore.
 
 **Grouping** (the grouping rule of `rubric/bite-proof.md`: a class is a distinct failure mode, named by its representative, and every grouped input keeps its own test case). Each condition element proves one representative input; the inputs it groups run in the same test function or parametrization and are not neutralized one by one:
 
-- G3 (C2, the removal record is readable and well formed): representative a range with `start > end` (`[start-after-end]`); it groups an absent record, `None`, an `unreadable` record, an empty or non-list `files`, a range with start `0`, a bool, a string or a float, a range of the wrong length or not a list, a blank or non-string path, an `added` that is not a bool, a row that is not a dict, and a path named twice.
+- G3 (C2, the removal record is readable and well formed): representative a range with `start > end` (`[start-after-end]`); it groups an absent record, `None`, an `unreadable` record, an empty or non-list `files`, a range with start `0`, a bool, a string or a float, a range of the wrong length or not a list, a blank or non-string path, an `added` that is not a bool, a row that is not a dict, a path named twice, and a `testOpenings` that is absent, not a list, or holds a bool, `0`, a negative, a string, a float or a list (the ten `openings-*` cases; the `_removal_files` branch that rejects them has its own `# axis:` line and is not neutralized one by one).
 - G5 (C4, the fix added nothing): representative `added: True`; it groups a file with no removed range (`test_c4_a_file_with_no_removed_range_refuses`).
 - G6 (C5, the target is a worthless-test finding): representative a wrong dimension (`[wrong-dimension]`); it groups no or differently cased dimension, an unknown or near-miss taxonomy, a `None` or non-string taxonomy, and a blank, missing or non-string body.
 - G7 (C6, one of the target's own cited lines lies in a removed range): representative a `line` outside every removed range; it groups a `line` that is `None`, a bool, a string or a float (`test_c6_a_line_that_is_not_a_plain_integer_cites_nothing`) and a sibling's line that does not supply the target's own tie (`test_c6_a_siblings_line_does_not_tie_a_removal_the_target_does_not_cite`). With C6 neutralized the first case falls through to C7 and still reds the detector, as the capture shows; the sibling case is the one whose result C6 alone decides.
-- G8 (C7, every removed range holds a cited line): representative an extra range tied to nothing; it groups a sibling that fails C5 (`test_c7_a_sibling_that_is_not_a_worthless_test_finding_ties_nothing`, five cases) and a sibling that is not a dict.
+- G8 (C7, every removed range holds a cited line): representative an extra range tied to nothing; it groups a sibling that fails C5 (`test_c7_a_sibling_that_is_not_a_worthless_test_finding_ties_nothing`, five cases), a sibling that is not a dict, and an uncited stretch that opens no test (`test_c7_an_uncited_stretch_with_no_test_opening_still_refuses`).
 - G10 (the unreadable forms of `_fixer_removal`): representative a real binary file; it groups a two-path header, a git-quoted header, a `Binary files` line, a `GIT binary patch`, a diff that is not UTF-8, an unreadable hunk header, a hunk before any header, a path named twice, a failed `git diff` (`test_r_every_unreadable_form_makes_the_whole_record_unreadable`) and a missing or unresolvable base or head (`test_r_a_missing_base_or_head_is_unreadable_and_never_raises`).
+- G14 (C9, every test the base file opens inside a removed stretch opens on a cited line): representative the flagged test removed together with the unflagged test after it in one stretch; it groups a whole file removed with one of its four tests cited (`test_c9_a_whole_file_removal_with_one_cited_test_of_four_refuses`), an uncited opening on a range's first or last line (`test_c9_an_uncited_opening_on_a_range_boundary_refuses`), an opening a sibling that is not a worthless-test finding "cites", and the file named in the detail.
+- G15 (C10, `citationFresh` is exactly True): representative the string `"yes"` (`[a-string]`), the weakest input that separates "exactly True" from "truthy"; it groups `False`, an absent key, `None` and a truthy int. The neutralization is the truthiness test, so the detector reds exactly when the guard stops requiring `True`; any weaker guard (including no guard) reds the same node.
+- G17 (the Python reader): representative a plain `def test_a():` line (`[def-test]`); it groups `async def test_`, `class TestX`, a tab-indented method, a spaced name, CRLF, and every non-match and over-match case of the same parametrization. The neutralization makes the pattern match nothing, the fail-open direction (a missed opening lets an unflagged test be deleted).
+- G18 (the JavaScript/TypeScript reader): representative an `it(` line (`[it]`); it groups `describe`, `test`, `test.only`, `test.skip.each`, `describe.each(...)(`, a space before the parenthesis, and every non-match case of the same parametrization (`const t = test`, `item(`, `await it(`, a template call). The neutralization is the same match-nothing pattern.
+- G19 (the unreadable base blob): representative a base file that is not UTF-8 text (read from a real git repository); it groups a base blob git cannot read at all (`test_r_a_base_blob_that_cannot_be_read_makes_the_whole_record_unreadable`), since both reach the one `base_text is None` branch.
 
-G1, G2, G4, G9, G11 and G12 are single inputs, not grouped.
+G1, G2, G4, G9, G11, G12 and G16 are single inputs, not grouped.
+
+**Listed unproven (named, with detectors, not neutralized in this record).** Three branches of the driver's citation freshness, `round_driver._citation_freshness`, each carry an `# axis:` line and a detector but were not given a neutralization in this leg, because the order declared G13-G19 and its budget covers those seven: a target with no removal head or repository is never fresh (`test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh`, `test_f_no_repository_is_not_fresh`); a target with no cited file or a head that does not resolve is never fresh (`test_f_equal_heads_with_no_cited_file_are_not_fresh`, `test_f_a_finding_with_no_usable_raised_head_is_not_fresh`, `test_f_a_removal_base_that_does_not_resolve_is_not_fresh`); a cited file that changed between the raised head and the base makes the citation stale (`test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale`). Their protection is covered by tests that pass on the current code and were not shown to fail on a weakened one. The owner of the outstanding receipt is the next fix leg or the reviewer who asks for it.
 
 The detectors are the tests that carry a `# bite-proof:` line.
 
 ## G1. The clear arm for a test-removing `worthless-test-removed` result (`audits._AuditFold._test_removal_guard`)
 
-- **Axis:** a clearing ruling whose `testWouldFail` answers `worthless-test-removed` stands when `test_removal_clearance` finds C1-C7 true.
+- **Axis:** a clearing ruling whose `testWouldFail` answers `worthless-test-removed` stands when `test_removal_clearance` finds C1-C10 true.
 - **Detector:** `test_audit_test_removal_2434.py::test_t1_a_whole_function_removal_tied_to_the_targets_line_clears`.
 - **Neutralization:** `evidence, failing, detail = test_removal_clearance(f)` became `evidence, failing, detail = None, "C1", "no recorded delta"`, so the arm refuses unconditionally.
 
@@ -29,7 +38,7 @@ The detectors are the tests that carry a `# bite-proof:` line.
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _______ test_t1_a_whole_function_removal_tied_to_the_targets_line_clears _______
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:122: in test_t1_a_whole_function_removal_tied_to_the_targets_line_clears
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:139: in test_t1_a_whole_function_removal_tied_to_the_targets_line_clears
     assert outcome["discharged"] == ["t0"] and outcome["notDischarged"] == []
 E   AssertionError: assert ([] == ['t0']
 E     
@@ -37,22 +46,22 @@ E     Right contains one more item: 't0'
 E     Use -v to get more diff)
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_t1_a_whole_function_removal_tied_to_the_targets_line_clears
-1 failed in 0.57s
+1 failed in 1.45s
 exit=1
 ```
 
 - **Restore:** inverse edit (the original call put back).
-- **Restore receipt** (read back by the Grep tool, `evidence, failing, detail = `):
+- **Restore receipt** (read back by the Grep tool, `evidence, failing, detail = test_removal_clearance`):
 
 ```
-926:            evidence, failing, detail = test_removal_clearance(f)
+984:            evidence, failing, detail = test_removal_clearance(f)
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.70s
+1 passed in 1.18s
 exit=0
 ```
 
@@ -68,18 +77,18 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________ test_c1_a_non_test_file_in_the_delta_refuses_naming_it ____________
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:180: in test_c1_a_non_test_file_in_the_delta_refuses_naming_it
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:198: in test_c1_a_non_test_file_in_the_delta_refuses_naming_it
     reason = _refused(_fold([_removed()], _target(files=(TEST_FILE, LIB_PY), record=record)), "C1")
-             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:104: in _refused
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:121: in _refused
     assert entry["reason"].startswith(prefix), entry["reason"]
 E   AssertionError: audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C7: plugins/superheroes/lib/widget_2434.py lines 10-14 hold no cited line
 E   assert False
-E    +  where False = <built-in method startswith of str object at 0x1088bd330>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C1: ')
-E    +    where <built-in method startswith of str object at 0x1088bd330> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C7: plugins/superheroes/lib/widget_2434.py lines 10-14 hold no cited line'.startswith
+E    +  where False = <built-in method startswith of str object at 0x108787230>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C1: ')
+E    +    where <built-in method startswith of str object at 0x108787230> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C7: plugins/superheroes/lib/widget_2434.py lines 10-14 hold no cited line'.startswith
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c1_a_non_test_file_in_the_delta_refuses_naming_it
-1 failed in 0.59s
+1 failed in 1.38s
 exit=1
 ```
 
@@ -87,14 +96,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `    if other:`):
 
 ```
-249:    if other:
+291:    if other:
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.52s
+1 passed in 1.16s
 exit=0
 ```
 
@@ -110,17 +119,17 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_c2_an_absent_unreadable_or_malformed_removal_record_refuses[start-after-end] _
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:225: in test_c2_an_absent_unreadable_or_malformed_removal_record_refuses
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:253: in test_c2_an_absent_unreadable_or_malformed_removal_record_refuses
     _refused(_fold([_removed()], target), "C2")
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:104: in _refused
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:121: in _refused
     assert entry["reason"].startswith(prefix), entry["reason"]
 E   AssertionError: audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: no removed range holds a line the finding cites
 E   assert False
-E    +  where False = <built-in method startswith of str object at 0x10a0e8650>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C2: ')
-E    +    where <built-in method startswith of str object at 0x10a0e8650> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: no removed range holds a line the finding cites'.startswith
+E    +  where False = <built-in method startswith of str object at 0x106f22250>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C2: ')
+E    +    where <built-in method startswith of str object at 0x106f22250> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: no removed range holds a line the finding cites'.startswith
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c2_an_absent_unreadable_or_malformed_removal_record_refuses[start-after-end]
-1 failed in 0.53s
+1 failed in 1.58s
 exit=1
 ```
 
@@ -128,14 +137,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `if not 1 <= pair`):
 
 ```
-188:            if not 1 <= pair[0] <= pair[1]:
+223:            if not 1 <= pair[0] <= pair[1]:
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.53s
+1 passed in 1.17s
 exit=0
 ```
 
@@ -143,7 +152,7 @@ exit=0
 
 - **Axis:** a removal record whose file set differs from the delta's clears nothing.
 - **Detector:** `test_audit_test_removal_2434.py::test_c3_a_removal_record_and_a_delta_that_name_different_files_refuse`.
-- **Neutralization:** `if {path for path, _r, _a in rows} != set(files):` became `if False:`.
+- **Neutralization:** `if {path for path, _r, _a, _o in rows} != set(files):` became `if False:`.
 
 **Raw red** (exit 1):
 
@@ -151,17 +160,17 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____ test_c3_a_removal_record_and_a_delta_that_name_different_files_refuse _____
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:233: in test_c3_a_removal_record_and_a_delta_that_name_different_files_refuse
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:261: in test_c3_a_removal_record_and_a_delta_that_name_different_files_refuse
     _refused(_fold([_removed()], _target(record=_record(_row(OTHER_TEST_FILE)))), "C3")
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:104: in _refused
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:121: in _refused
     assert entry["reason"].startswith(prefix), entry["reason"]
 E   AssertionError: audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: no removed range holds a line the finding cites
 E   assert False
-E    +  where False = <built-in method startswith of str object at 0x104df1b50>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C3: ')
-E    +    where <built-in method startswith of str object at 0x104df1b50> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: no removed range holds a line the finding cites'.startswith
+E    +  where False = <built-in method startswith of str object at 0x106aaa170>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C3: ')
+E    +    where <built-in method startswith of str object at 0x106aaa170> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: no removed range holds a line the finding cites'.startswith
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c3_a_removal_record_and_a_delta_that_name_different_files_refuse
-1 failed in 0.54s
+1 failed in 1.17s
 exit=1
 ```
 
@@ -169,14 +178,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `!= set\(files\)`):
 
 ```
-256:    if {path for path, _r, _a in rows} != set(files):
+298:    if {path for path, _r, _a, _o in rows} != set(files):
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.52s
+1 passed in 1.39s
 exit=0
 ```
 
@@ -192,10 +201,10 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ___________________ test_c4_a_file_that_added_a_line_refuses ___________________
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:243: in test_c4_a_file_that_added_a_line_refuses
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:271: in test_c4_a_file_that_added_a_line_refuses
     reason = _refused(_fold([_removed()], _target(record=_record(_row(added=True)))), "C4")
              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:99: in _refused
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:116: in _refused
     assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
 E   AssertionError: assert (['t0'] == []
 E     
@@ -203,7 +212,7 @@ E     Left contains one more item: 't0'
 E     Use -v to get more diff)
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c4_a_file_that_added_a_line_refuses
-1 failed in 0.55s
+1 failed in 1.36s
 exit=1
 ```
 
@@ -211,14 +220,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `if added is not False`):
 
 ```
-260:        if added is not False:
+302:        if added is not False:
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.56s
+1 passed in 1.31s
 exit=0
 ```
 
@@ -234,9 +243,9 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _ test_c5_a_target_that_is_not_a_worthless_test_finding_refuses[wrong-dimension] _
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:269: in test_c5_a_target_that_is_not_a_worthless_test_finding_refuses
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:297: in test_c5_a_target_that_is_not_a_worthless_test_finding_refuses
     _refused(_fold([_removed()], _target(**change)), "C5")
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:99: in _refused
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:116: in _refused
     assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
 E   AssertionError: assert (['t0'] == []
 E     
@@ -244,7 +253,7 @@ E     Left contains one more item: 't0'
 E     Use -v to get more diff)
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c5_a_target_that_is_not_a_worthless_test_finding_refuses[wrong-dimension]
-1 failed in 0.51s
+1 failed in 1.22s
 exit=1
 ```
 
@@ -252,14 +261,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `dimension"\) != "Test"`):
 
 ```
-202:    if finding.get("dimension") != "Test":
+237:    if finding.get("dimension") != "Test":
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.54s
+1 passed in 1.58s
 exit=0
 ```
 
@@ -267,7 +276,7 @@ exit=0
 
 - **Axis:** a removal holding none of the target's own cited lines clears nothing; this entry proves the line-outside-every-range input (grouping above).
 - **Detector:** `test_audit_test_removal_2434.py::test_c6_a_removal_holding_none_of_the_targets_lines_refuses`.
-- **Neutralization:** `if not any(_inside(own, path, rng) for path, ranges, _a in rows for rng in ranges):` became `if False:`.
+- **Neutralization:** `if not any(_inside(own, path, rng) for path, ranges, _a, _o in rows for rng in ranges):` became `if False:`.
 
 **Raw red** (exit 1):
 
@@ -275,17 +284,17 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _________ test_c6_a_removal_holding_none_of_the_targets_lines_refuses __________
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:277: in test_c6_a_removal_holding_none_of_the_targets_lines_refuses
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:305: in test_c6_a_removal_holding_none_of_the_targets_lines_refuses
     _refused(_fold([_removed()], _target(line=30)), "C6")
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:104: in _refused
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:121: in _refused
     assert entry["reason"].startswith(prefix), entry["reason"]
 E   AssertionError: audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C7: plugins/superheroes/lib/tests/test_widget_2434.py lines 10-14 hold no cited line
 E   assert False
-E    +  where False = <built-in method startswith of str object at 0x103cd5240>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: ')
-E    +    where <built-in method startswith of str object at 0x103cd5240> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C7: plugins/superheroes/lib/tests/test_widget_2434.py lines 10-14 hold no cited line'.startswith
+E    +  where False = <built-in method startswith of str object at 0x1085b98a0>('audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C6: ')
+E    +    where <built-in method startswith of str object at 0x1085b98a0> = 'audit check failed: testWouldFail: worthless-test-removed clears only a fix that removes test lines a worthless-test finding cites; C7: plugins/superheroes/lib/tests/test_widget_2434.py lines 10-14 hold no cited line'.startswith
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c6_a_removal_holding_none_of_the_targets_lines_refuses
-1 failed in 0.50s
+1 failed in 2.38s
 exit=1
 ```
 
@@ -293,14 +302,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `if not any\(_inside\(own`):
 
 ```
-280:    if not any(_inside(own, path, rng) for path, ranges, _a in rows for rng in ranges):
+322:    if not any(_inside(own, path, rng) for path, ranges, _a, _o in rows for rng in ranges):
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.57s
+1 passed in 1.19s
 exit=0
 ```
 
@@ -316,10 +325,10 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________ test_c7_a_removed_range_holding_no_cited_line_refuses _____________
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:309: in test_c7_a_removed_range_holding_no_cited_line_refuses
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:337: in test_c7_a_removed_range_holding_no_cited_line_refuses
     reason = _refused(_fold([_removed()], _target(record=_two_ranges())), "C7")
              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:99: in _refused
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:116: in _refused
     assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
 E   AssertionError: assert (['t0'] == []
 E     
@@ -327,7 +336,7 @@ E     Left contains one more item: 't0'
 E     Use -v to get more diff)
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c7_a_removed_range_holding_no_cited_line_refuses
-1 failed in 0.53s
+1 failed in 1.64s
 exit=1
 ```
 
@@ -335,14 +344,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `if not _inside\(cited`):
 
 ```
-285:            if not _inside(cited, path, rng):
+327:            if not _inside(cited, path, rng):
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 0.50s
+1 passed in 3.60s
 exit=0
 ```
 
@@ -358,7 +367,7 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 _______ test_r_a_replacement_and_a_new_file_mark_their_files_as_added_to _______
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:530: in test_r_a_replacement_and_a_new_file_mark_their_files_as_added_to
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:731: in test_r_a_replacement_and_a_new_file_mark_their_files_as_added_to
     assert _files(_removal(repo, base, head)) == {TFILE: ([[2, 2]], True), "tests/test_new.py": ([], True)}
 E   AssertionError: assert {'tests/test_...: ([], False)} == {'tests/test_...': ([], True)}
 E     
@@ -368,7 +377,7 @@ E     {'tests/test_new.py': ([], False)} != {'tests/test_new.py': ([], True)}
 E     Use -v to get more diff
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_r_a_replacement_and_a_new_file_mark_their_files_as_added_to
-1 failed in 1.27s
+1 failed in 6.15s
 exit=1
 ```
 
@@ -376,14 +385,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `if new_count > 0`):
 
 ```
-7017:            if new_count > 0:
+7021:            if new_count > 0:
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 1.17s
+1 passed in 4.58s
 exit=0
 ```
 
@@ -393,18 +402,18 @@ exit=0
 - **Detector:** `test_audit_test_removal_2434.py::test_r_a_binary_file_makes_the_whole_record_unreadable`.
 - **Neutralization:** `elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):` became `elif False:`.
 
-**Raw red** (exit 1):
+**Raw red** (exit 1; the `...` inside the assertion line is pytest's own truncation of a long repr, not an edit):
 
 ```
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________ test_r_a_binary_file_makes_the_whole_record_unreadable ____________
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:541: in test_r_a_binary_file_makes_the_whole_record_unreadable
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:742: in test_r_a_binary_file_makes_the_whole_record_unreadable
     assert "unreadable" in record and "files" not in record
-E   AssertionError: assert ('unreadable' in {'base': 'e530c083f63f6ba02d411d22a9d1faecf6ee11dd', 'head': 'bd6a5b18b0e81861d633472813bb59b51b1682bf', 'files': [{'path': 'tests/blob.bin', 'removed': [], 'added': False}, {'path': 'tests/test_a.py', 'removed': [[2, 8]], 'added': False}]})
+E   AssertionError: assert ('unreadable' in {'base': 'a9431fbc0d5049a143d94c613d3ab804c6483e1c', 'head': '6cd153cc8eda587884619b6785851fc7f4bbf737', 'files': [{'p...ed': False, 'testOpenings': []}, {'path': 'tests/test_a.py', 'removed': [[2, 8]], 'added': False, 'testOpenings': []}]})
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_r_a_binary_file_makes_the_whole_record_unreadable
-1 failed in 1.17s
+1 failed in 5.28s
 exit=1
 ```
 
@@ -412,14 +421,14 @@ exit=1
 - **Restore receipt** (read back by the Grep tool, `elif line.startswith\("Binary files `):
 
 ```
-7004:        elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+7008:        elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 1.19s
+1 passed in 2.77s
 exit=0
 ```
 
@@ -435,7 +444,7 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ____________ test_r_a_configured_textconv_never_hides_an_added_line ____________
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:627: in test_r_a_configured_textconv_never_hides_an_added_line
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:831: in test_r_a_configured_textconv_never_hides_an_added_line
     assert _files(_removal(repo, base, head)) == {"tests/test_a.txt": ([], True)}
 E   AssertionError: assert {} == {'tests/test_...': ([], True)}
 E     
@@ -444,22 +453,22 @@ E     {'tests/test_a.txt': ([], True)}
 E     Use -v to get more diff
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_r_a_configured_textconv_never_hides_an_added_line
-1 failed in 1.44s
+1 failed in 2.84s
 exit=1
 ```
 
 - **Restore:** inverse edit (the argument put back).
-- **Restore receipt** (read back by the Grep tool, `"--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",`):
+- **Restore receipt** (read back by the Grep tool, `"--no-ext-diff", "--no-textconv", "--no-color"`):
 
 ```
-6985:    raw = _git_bytes(repo_root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
+6989:    raw = _git_bytes(repo_root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 1.43s
+1 passed in 3.11s
 exit=0
 ```
 
@@ -475,7 +484,7 @@ exit=0
 F                                                                        [100%]
 =================================== FAILURES ===================================
 ________ test_r_the_record_describes_the_explicit_head_not_the_checkout ________
-<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:641: in test_r_the_record_describes_the_explicit_head_not_the_checkout
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:845: in test_r_the_record_describes_the_explicit_head_not_the_checkout
     assert _files(record) == {TFILE: ([], True)}
 E   AssertionError: assert {'tests/test_..., 1]], False)} == {'tests/test_...': ([], True)}
 E     
@@ -484,22 +493,320 @@ E     {'tests/test_a.py': ([[1, 1]], False)} != {'tests/test_a.py': ([], True)}
 E     Use -v to get more diff
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_r_the_record_describes_the_explicit_head_not_the_checkout
-1 failed in 1.51s
+1 failed in 3.34s
 exit=1
 ```
 
 - **Restore:** inverse edit (`"HEAD")` back to `shas[1])`).
-- **Restore receipt** (read back by the Grep tool, `"--unified=0", shas\[0\]`):
+- **Restore receipt** (read back by the Grep tool, `"--inter-hunk-context=0", shas\[0\], shas\[1\]\)`):
 
 ```
-6986:                     "--dst-prefix=b/", "--no-renames", "--unified=0", shas[0], shas[1])
+6990:                     "--dst-prefix=b/", "--no-renames", "--unified=0", "--inter-hunk-context=0", shas[0], shas[1])
 ```
 
 **Raw green** (exit 0):
 
 ```
 .                                                                        [100%]
-1 passed in 1.97s
+1 passed in 3.30s
 exit=0
 ```
-</content>
+
+## G13. C8, every changed file is in a language the test-opening reader supports (`audits.test_removal_clearance`)
+
+- **Axis:** a changed file whose language has no test-opening reader (`testOpenings` is `None`) clears nothing on the removal answer, so the fix cannot delete tests the driver cannot count.
+- **Detector:** `test_audit_test_removal_2434.py::test_c8_a_changed_file_in_an_unsupported_language_refuses_naming_it`.
+- **Neutralization:** `if openings is None:` (in the C8 loop) became `if False:`. With C8 gone the `.rb` file's `None` reaches the C9 loop, which raises; the red below is that crash, so the detector reds whether the weakened code crashes or clears.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____ test_c8_a_changed_file_in_an_unsupported_language_refuses_naming_it ______
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:384: in test_c8_a_changed_file_in_an_unsupported_language_refuses_naming_it
+    assert RB_TEST_FILE in _refused(_fold([_removed()], only), "C8")
+                                    ^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:106: in _fold
+    return audits.apply_audit_results([target], results, collection_manifest={"t0": "codex"})
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/audits.py:1228: in apply_audit_results
+    fold.fold_target(f)
+<worktree>/plugins/superheroes/lib/audits.py:735: in fold_target
+    finished, removal = self._test_removal_guard(base, fid, f, r, ruling)
+                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/audits.py:984: in _test_removal_guard
+    evidence, failing, detail = test_removal_clearance(f)
+                                ^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/audits.py:335: in test_removal_clearance
+    within = sorted({n for n in openings if any(rng[0] <= n <= rng[1] for rng in ranges)})
+                                ^^^^^^^^
+E   TypeError: 'NoneType' object is not iterable
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c8_a_changed_file_in_an_unsupported_language_refuses_naming_it
+1 failed in 1.14s
+exit=1
+```
+
+- **Restore:** inverse edit (`if False:` back to `if openings is None:`).
+- **Restore receipt** (read back by the Grep tool, `if openings is None:`):
+
+```
+331:        if openings is None:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 2.19s
+exit=0
+```
+
+## G14. C9, every test the base file opens inside a removed stretch opens on a cited line (`audits.test_removal_clearance`)
+
+- **Axis:** a removed stretch that takes a flagged test together with an unflagged one (an opening on a line no finding cites) clears nothing; this entry proves the adjacent-test input (grouping above).
+- **Detector:** `test_audit_test_removal_2434.py::test_c9_a_stretch_that_removes_a_cited_test_and_the_uncited_test_after_it_refuses`.
+- **Neutralization:** `if (path, line) not in cited:` became `if False:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_c9_a_stretch_that_removes_a_cited_test_and_the_uncited_test_after_it_refuses _
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:397: in test_c9_a_stretch_that_removes_a_cited_test_and_the_uncited_test_after_it_refuses
+    reason = _refused(_fold([_removed()], _target(line=10, record=record)), "C9")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:116: in _refused
+    assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
+E   AssertionError: assert (['t0'] == []
+E     
+E     Left contains one more item: 't0'
+E     Use -v to get more diff)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c9_a_stretch_that_removes_a_cited_test_and_the_uncited_test_after_it_refuses
+1 failed in 2.50s
+exit=1
+```
+
+- **Restore:** inverse edit (`if False:` back to `if (path, line) not in cited:`).
+- **Restore receipt** (read back by the Grep tool, `if \(path, line\) not in cited:`):
+
+```
+338:            if (path, line) not in cited:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.88s
+exit=0
+```
+
+## G15. C10, `citationFresh` is exactly True (`audits.test_removal_clearance`)
+
+- **Axis:** a target whose `citationFresh` is not exactly `True` (false, absent, a string, `None`, a truthy int) clears nothing, so a cited line that may have moved ties nothing; this entry proves the string input, the one that separates "exactly True" from "truthy" (grouping above).
+- **Detector:** `test_audit_test_removal_2434.py::test_c10_a_target_whose_citation_is_not_exactly_fresh_refuses[a-string]`.
+- **Neutralization:** `if target.get("citationFresh") is not True:` became `if not target.get("citationFresh"):`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+___ test_c10_a_target_whose_citation_is_not_exactly_fresh_refuses[a-string] ____
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:466: in test_c10_a_target_whose_citation_is_not_exactly_fresh_refuses
+    reason = _refused(_fold([_removed()], _target(citationFresh=fresh)), "C10")
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:116: in _refused
+    assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
+E   AssertionError: assert (['t0'] == []
+E     
+E     Left contains one more item: 't0'
+E     Use -v to get more diff)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c10_a_target_whose_citation_is_not_exactly_fresh_refuses[a-string]
+1 failed in 1.07s
+exit=1
+```
+
+- **Restore:** inverse edit (`if not target.get("citationFresh"):` back to `if target.get("citationFresh") is not True:`).
+- **Restore receipt** (read back by the Grep tool, `citationFresh"\) is not True`):
+
+```
+342:    if target.get("citationFresh") is not True:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.89s
+exit=0
+```
+
+## G16. `--inter-hunk-context=0` (`round_driver._fixer_removal`)
+
+- **Axis:** a configured `diff.interHunkContext` never merges two deleted stretches with an unchanged line between them into one range (which one cited line could then tie): the diff is asked for with `--inter-hunk-context=0`.
+- **Detector:** `test_audit_test_removal_2434.py::test_r_two_deletions_with_a_kept_line_between_them_stay_two_ranges_whatever_git_is_configured_to`.
+- **Neutralization:** the `"--inter-hunk-context=0", ` argument was removed from the `git diff` call.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_r_two_deletions_with_a_kept_line_between_them_stay_two_ranges_whatever_git_is_configured_to _
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:869: in test_r_two_deletions_with_a_kept_line_between_them_stay_two_ranges_whatever_git_is_configured_to
+    assert _files(_removal(repo, base, head)) == {TFILE: ([[2, 2], [4, 4]], False)}
+E   AssertionError: assert {'tests/test_...2, 4]], True)} == {'tests/test_..., 4]], False)}
+E     
+E     Differing items:
+E     {'tests/test_a.py': ([[2, 4]], True)} != {'tests/test_a.py': ([[2, 2], [4, 4]], False)}
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_r_two_deletions_with_a_kept_line_between_them_stay_two_ranges_whatever_git_is_configured_to
+1 failed in 2.80s
+exit=1
+```
+
+- **Restore:** inverse edit (the argument put back after `"--unified=0", `).
+- **Restore receipt** (read back by the Grep tool, `"--unified=0", "--inter-hunk-context=0"`):
+
+```
+6990:                     "--dst-prefix=b/", "--no-renames", "--unified=0", "--inter-hunk-context=0", shas[0], shas[1])
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 3.00s
+exit=0
+```
+
+## G17. The Python test-opening reader (`audits.PYTHON_TEST_OPENING`, read by `audits.test_openings`)
+
+- **Axis:** a `.py` file's test openings are the lines that start a `def test...`, `async def test...` or `class Test...`; a reader that finds none lets a flagged test be deleted together with unflagged ones unseen.
+- **Detector:** `test_audit_test_removal_2434.py::test_o_the_python_reader_reads_def_test_and_class_test_lines[def-test]`.
+- **Neutralization:** `PYTHON_TEST_OPENING = re.compile(r"^\s*(async\s+)?def\s+test\w*\s*\(|^\s*class\s+Test\w*\b")` became `PYTHON_TEST_OPENING = re.compile(r"(?!)")`, a pattern that matches nothing.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_o_the_python_reader_reads_def_test_and_class_test_lines[def-test] ____
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:498: in test_o_the_python_reader_reads_def_test_and_class_test_lines
+    assert audits.test_openings("tests/test_a.py", text) == expected
+E   assert [] == [1]
+E     
+E     Right contains one more item: 1
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_o_the_python_reader_reads_def_test_and_class_test_lines[def-test]
+1 failed in 1.43s
+exit=1
+```
+
+- **Restore:** inverse edit (the original pattern put back).
+- **Restore receipt** (read back by the Grep tool, `^PYTHON_TEST_OPENING`):
+
+```
+171:PYTHON_TEST_OPENING = re.compile(r"^\s*(async\s+)?def\s+test\w*\s*\(|^\s*class\s+Test\w*\b")
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 0.99s
+exit=0
+```
+
+## G18. The JavaScript/TypeScript test-opening reader (`audits.JS_TEST_OPENING`, read by `audits.test_openings`)
+
+- **Axis:** a `.js`, `.jsx`, `.mjs`, `.cjs`, `.ts`, `.tsx`, `.mts` or `.cts` file's test openings are the lines that start an `it(`, `test(` or `describe(` call (with any `.modifier`); a reader that finds none lets a flagged test be deleted together with unflagged ones unseen.
+- **Detector:** `test_audit_test_removal_2434.py::test_o_the_js_reader_reads_it_test_and_describe_calls[it]`.
+- **Neutralization:** `JS_TEST_OPENING = re.compile(r"^\s*(it|test|describe)(\.\w+)*\s*\(")` became `JS_TEST_OPENING = re.compile(r"(?!)")`, a pattern that matches nothing.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__________ test_o_the_js_reader_reads_it_test_and_describe_calls[it] ___________
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:517: in test_o_the_js_reader_reads_it_test_and_describe_calls
+    assert audits.test_openings("tests/a.test.js", text) == expected
+E   assert [] == [1]
+E     
+E     Right contains one more item: 1
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_o_the_js_reader_reads_it_test_and_describe_calls[it]
+1 failed in 0.96s
+exit=1
+```
+
+- **Restore:** inverse edit (the original pattern put back).
+- **Restore receipt** (read back by the Grep tool, `^JS_TEST_OPENING`):
+
+```
+172:JS_TEST_OPENING = re.compile(r"^\s*(it|test|describe)(\.\w+)*\s*\(")
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 1.09s
+exit=0
+```
+
+## G19. The unreadable base blob (`round_driver._fixer_removal`)
+
+- **Axis:** a base file with a removed range that cannot be read, or is not UTF-8 text, makes the whole record unreadable, so its test openings are never guessed; this entry proves the not-UTF-8 input (grouping above).
+- **Detector:** `test_audit_test_removal_2434.py::test_r_a_base_blob_that_is_not_utf8_makes_the_whole_record_unreadable`.
+- **Neutralization:** `if base_text is None:` became `if False:`. With the branch gone the unreadable text reaches `audits.test_openings`, which raises; the red below is that crash, so the detector reds whether the weakened code crashes or records a guess.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_r_a_base_blob_that_is_not_utf8_makes_the_whole_record_unreadable _____
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:898: in test_r_a_base_blob_that_is_not_utf8_makes_the_whole_record_unreadable
+    record = _removal(repo, base, head)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:707: in _removal
+    return RD._fixer_removal({"repoRoot": str(repo)}, base, head)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/round_driver.py:7035: in _fixer_removal
+    entry["testOpenings"] = audits.test_openings(entry["path"], base_text)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/audits.py:188: in test_openings
+    return [number for number, line in enumerate(text.split("\n"), 1) if pattern.match(line)]
+                                                 ^^^^^^^^^^
+E   AttributeError: 'NoneType' object has no attribute 'split'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_r_a_base_blob_that_is_not_utf8_makes_the_whole_record_unreadable
+1 failed in 2.22s
+exit=1
+```
+
+- **Restore:** inverse edit (`if False:` back to `if base_text is None:`).
+- **Restore receipt** (read back by the Grep tool, `if base_text is None:`):
+
+```
+7033:        if base_text is None:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 1.95s
+exit=0
+```

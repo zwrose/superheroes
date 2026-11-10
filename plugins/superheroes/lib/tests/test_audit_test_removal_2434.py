@@ -12,11 +12,18 @@ C4  a file that added a line, or removed none, refuses;
 C5  a target that is not a Test finding with a worthless smell and a usable body refuses;
 C6  a removal that holds none of the target's own cited lines refuses;
 C7  a removed range that holds no cited line refuses, unless a worthless-smell sibling cites it;
+C8  a changed file in a language the test-opening reader does not support refuses;
+C9  a test the base file opens inside a removed range on a line no finding cites refuses (the adjacent unflagged
+    test, a whole file with one test cited, a boundary line); every deleted test cited clears;
+C10 a target whose `citationFresh` is not exactly True refuses;
+O   `audits.test_openings` reads Python and JavaScript/TypeScript test openings, and nothing else;
 G   `review-guarded` is judged exactly as before; the new answer is a fault on `right` and `brokeNothing`;
 S   the strict-mode schema lists the answer for `testWouldFail` only;
-R   `_fixer_removal` reads a real `git diff`: removed ranges, additions, binary files, a missing commit, a configured
+R   `_fixer_removal` reads a real `git diff`: removed ranges (one per hunk whatever `diff.interHunkContext` says),
+    additions, test openings of the base blob, binary files, an unreadable base blob, a missing commit, a configured
     textconv, and an explicit head older than the checkout;
-D   the review record names the evidence; `_audit_targets` puts the record on every target.
+D   the review record names the evidence; `_audit_targets` puts the record and the citation freshness on every
+    target.
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
 """
@@ -42,10 +49,12 @@ RD = TRD.RD
 
 TEST_FILE = "plugins/superheroes/lib/tests/test_widget_2434.py"
 OTHER_TEST_FILE = "plugins/superheroes/lib/tests/test_gadget_2434.py"
+RB_TEST_FILE = "plugins/superheroes/lib/tests/test_widget_2434.rb"
 LIB_PY = "plugins/superheroes/lib/widget_2434.py"
 RUBRIC_MD = "plugins/superheroes/rubric/some-doctrine-2434.md"
 BODY = "The test asserts the exact prose of an error message, which is not a contract."
 BAD_BASE = "0" * 40
+NO_KEY = object()  # a row field left out altogether
 
 
 def _delta(*files):
@@ -57,10 +66,15 @@ def _delta(*files):
     return out
 
 
-def _row(path=TEST_FILE, removed=((10, 14),), added=False):
+def _row(path=TEST_FILE, removed=((10, 14),), added=False, openings=(12,)):
+    """A removal row; `openings` is the base file's test openings (a tuple becomes the list the driver builds)."""
     if isinstance(removed, (tuple, list)):
         removed = [list(r) if isinstance(r, tuple) else r for r in removed]
-    return {"path": path, "removed": removed, "added": added}
+    row = {"path": path, "removed": removed, "added": added,
+           "testOpenings": list(openings) if isinstance(openings, tuple) else openings}
+    if openings is NO_KEY:
+        del row["testOpenings"]
+    return row
 
 
 def _record(*rows):
@@ -80,8 +94,11 @@ def _removed(**extra):
 def _target(files=(TEST_FILE,), record=None, **extra):
     target = {"id": "t0", "title": "T", "file": TEST_FILE, "line": 12, "auditorVendor": "codex",
               "dimension": "Test", "taxonomy": "wording pin", "body": BODY,
-              "fixerDelta": _delta(*files), "fixerRemoval": record if record is not None else _record()}
+              "fixerDelta": _delta(*files), "fixerRemoval": record if record is not None else _record(),
+              "citationFresh": True}
     target.update(extra)
+    for key in [k for k, v in target.items() if v is NO_KEY]:
+        del target[key]
     return target
 
 
@@ -126,7 +143,8 @@ def test_t1_a_whole_function_removal_tied_to_the_targets_line_clears():
         "answer": audits.WORTHLESS_TEST_REMOVED, "why": "the test only pinned wording",
         "evidence": {"source": "finding", "finding": "t0", "taxonomy": "wording-pin", "reason": BODY,
                      "removed": [{"file": TEST_FILE, "ranges": [[10, 14]]}],
-                     "cited": [{"file": TEST_FILE, "line": 12}]}}
+                     "cited": [{"file": TEST_FILE, "line": 12}],
+                     "openings": [{"file": TEST_FILE, "lines": [12]}]}}
 
 
 def test_t1_the_reason_is_the_stripped_body_cut_to_500_characters():
@@ -135,7 +153,7 @@ def test_t1_the_reason_is_the_stripped_body_cut_to_500_characters():
 
 
 def test_t1_a_place_of_the_kind_of_mistake_inside_a_removed_range_ties_the_removal():
-    target = _target(line=3, kindOfMistake={"kind": "pins prose", "places": [
+    target = _target(line=3, record=_record(_row(openings=(11,))), kindOfMistake={"kind": "pins prose", "places": [
         {"file": TEST_FILE, "line": 11}, {"file": TEST_FILE, "line": None}]})
     # a target that names places owes an answer for each of them (`fixed`), whatever the removal answer
     places = [{"file": TEST_FILE, "line": 11, "fixed": True}, {"file": TEST_FILE, "line": None, "fixed": True}]
@@ -217,6 +235,16 @@ def _with(record):
     pytest.param(_record(_row(added=None)), id="added-not-a-bool"),
     pytest.param(_record(_row(), "not a row"), id="row-not-a-dict"),
     pytest.param(_record(_row(), _row()), id="path-twice"),
+    pytest.param(_record(_row(openings=NO_KEY)), id="openings-absent"),
+    pytest.param(_record(_row(openings="12")), id="openings-a-string"),
+    pytest.param(_record(_row(openings=12)), id="openings-an-int"),
+    pytest.param(_record(_row(openings={"12": True})), id="openings-a-dict"),
+    pytest.param(_record(_row(openings=[12, True])), id="openings-holds-a-bool"),
+    pytest.param(_record(_row(openings=[0])), id="openings-holds-zero"),
+    pytest.param(_record(_row(openings=[-3])), id="openings-holds-a-negative"),
+    pytest.param(_record(_row(openings=["12"])), id="openings-holds-a-string"),
+    pytest.param(_record(_row(openings=[12.0])), id="openings-holds-a-float"),
+    pytest.param(_record(_row(openings=[[12]])), id="openings-holds-a-list"),
 ])
 def test_c2_an_absent_unreadable_or_malformed_removal_record_refuses(record):
     # axis: G3 — C2, the removal record must be readable and well formed
@@ -292,8 +320,8 @@ def test_c6_a_siblings_line_does_not_tie_a_removal_the_target_does_not_cite():
 
 # --- C7 -----------------------------------------------------------------------------------------------------------
 
-def _two_ranges():
-    return _record(_row(removed=((10, 14), (30, 34))))
+def _two_ranges(openings=(12,)):
+    return _record(_row(removed=((10, 14), (30, 34)), openings=openings))
 
 
 def _sibling(line=31, **over):
@@ -311,18 +339,25 @@ def test_c7_a_removed_range_holding_no_cited_line_refuses():
 
 
 def test_c7_the_same_range_passes_when_a_worthless_smell_sibling_cites_it():
-    outcome = _fold([_removed()], _target(record=_two_ranges(), batchFindings=[_sibling()]))
+    outcome = _fold([_removed()], _target(record=_two_ranges((12, 31)), batchFindings=[_sibling()]))
     assert outcome["testRemovalCleared"] == ["t0"]
     assert _only(outcome)["testRemoval"]["evidence"] == {
         "source": "finding", "finding": "t0", "taxonomy": "wording-pin", "reason": BODY,
         "removed": [{"file": TEST_FILE, "ranges": [[10, 14], [30, 34]]}],
-        "cited": [{"file": TEST_FILE, "line": 12}, {"file": TEST_FILE, "line": 31}]}
+        "cited": [{"file": TEST_FILE, "line": 12}, {"file": TEST_FILE, "line": 31}],
+        "openings": [{"file": TEST_FILE, "lines": [12, 31]}]}
 
 
 def test_c7_a_sibling_place_of_its_kind_of_mistake_ties_a_range_too():
     sibling = _sibling(line=1, kindOfMistake={"kind": "k", "places": [{"file": TEST_FILE, "line": 33}]})
-    outcome = _fold([_removed()], _target(record=_two_ranges(), batchFindings=[sibling]))
+    outcome = _fold([_removed()], _target(record=_two_ranges((12, 33)), batchFindings=[sibling]))
     assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c7_an_uncited_stretch_with_no_test_opening_still_refuses():
+    # an uncited helper or fixture opens no test, so C9 has nothing to say about it: C7 is what refuses it
+    reason = _refused(_fold([_removed()], _target(record=_two_ranges((12,)))), "C7")
+    assert "30-34" in reason
 
 
 @pytest.mark.parametrize("change", [
@@ -338,6 +373,172 @@ def test_c7_a_sibling_that_is_not_a_worthless_test_finding_ties_nothing(change):
 
 def test_c7_a_sibling_that_is_not_a_dict_ties_nothing():
     _refused(_fold([_removed()], _target(record=_two_ranges(), batchFindings=["s1", None])), "C7")
+
+
+# --- C8 -----------------------------------------------------------------------------------------------------------
+
+def test_c8_a_changed_file_in_an_unsupported_language_refuses_naming_it():
+    # axis: G13 — C8, every changed file is in a language the test-opening reader supports
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    only = _target(files=(RB_TEST_FILE,), file=RB_TEST_FILE, record=_record(_row(RB_TEST_FILE, openings=None)))
+    assert RB_TEST_FILE in _refused(_fold([_removed()], only), "C8")
+    # one supported file beside it does not rescue the unsupported one, even when a sibling cites its stretch
+    both = _target(files=(TEST_FILE, RB_TEST_FILE), batchFindings=[_sibling(file=RB_TEST_FILE, line=12)],
+                   record=_record(_row(), _row(RB_TEST_FILE, openings=None)))
+    assert RB_TEST_FILE in _refused(_fold([_removed()], both), "C8")
+
+
+# --- C9 -----------------------------------------------------------------------------------------------------------
+
+def test_c9_a_stretch_that_removes_a_cited_test_and_the_uncited_test_after_it_refuses():
+    # axis: G14 — C9, every test the base file opens inside a removed stretch opens on a cited line
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    record = _record(_row(removed=((10, 20),), openings=(10, 15)))
+    reason = _refused(_fold([_removed()], _target(line=10, record=record)), "C9")
+    assert TEST_FILE in reason and "line 15 " in reason
+
+
+def test_c9_a_whole_file_removal_with_one_cited_test_of_four_refuses():
+    record = _record(_row(removed=((1, 20),), openings=(1, 6, 11, 16)))
+    reason = _refused(_fold([_removed()], _target(line=6, record=record)), "C9")
+    assert TEST_FILE in reason and "line 1 " in reason  # the first uncited opening, in file order
+
+
+def test_c9_a_sibling_that_is_not_a_worthless_test_finding_cites_no_opening():
+    record = _record(_row(removed=((10, 20),), openings=(10, 15)))
+    sibling = _sibling(line=15, taxonomy="brittle test")
+    assert "line 15 " in _refused(_fold([_removed()], _target(line=10, record=record, batchFindings=[sibling])), "C9")
+
+
+def test_c9_every_deleted_test_cited_by_the_target_and_a_qualifying_sibling_clears():
+    record = _record(_row(removed=((10, 20),), openings=(10, 15)))
+    outcome = _fold([_removed()], _target(line=10, record=record, batchFindings=[_sibling(line=15)]))
+    assert outcome["testRemovalCleared"] == ["t0"] and outcome["testRemovalRefused"] == []
+    evidence = _only(outcome)["testRemoval"]["evidence"]
+    assert evidence["cited"] == [{"file": TEST_FILE, "line": 10}, {"file": TEST_FILE, "line": 15}]
+    assert evidence["openings"] == [{"file": TEST_FILE, "lines": [10, 15]}]
+
+
+@pytest.mark.parametrize("removed,openings,line", [
+    pytest.param(((10, 14),), (10,), 10, id="first-line"),
+    pytest.param(((10, 14),), (14,), 14, id="last-line"),
+    pytest.param(((12, 12),), (12,), 12, id="single-line-range"),
+    pytest.param(((10, 14),), (9, 12, 15), 12, id="openings-just-outside-the-range-are-not-inside-it"),
+])
+def test_c9_a_cited_opening_on_a_range_boundary_clears(removed, openings, line):
+    outcome = _fold([_removed()], _target(line=line, record=_record(_row(removed=removed, openings=openings))))
+    assert outcome["testRemovalCleared"] == ["t0"]
+    (rng,) = removed
+    inside = [n for n in openings if rng[0] <= n <= rng[1]]
+    assert _only(outcome)["testRemoval"]["evidence"]["openings"] == [{"file": TEST_FILE, "lines": inside}]
+
+
+@pytest.mark.parametrize("openings,uncited", [
+    pytest.param((10, 12), 10, id="first-line"),
+    pytest.param((12, 14), 14, id="last-line"),
+])
+def test_c9_an_uncited_opening_on_a_range_boundary_refuses(openings, uncited):
+    record = _record(_row(removed=((10, 14),), openings=openings))
+    reason = _refused(_fold([_removed()], _target(line=12, record=record)), "C9")
+    assert "line %d " % uncited in reason
+
+
+def test_c9_names_the_file_of_the_uncited_opening():
+    record = _record(_row(), _row(OTHER_TEST_FILE, openings=(11, 12)))
+    target = _target(files=(TEST_FILE, OTHER_TEST_FILE), record=record,
+                     batchFindings=[_sibling(file=OTHER_TEST_FILE, line=12)])
+    reason = _refused(_fold([_removed()], target), "C9")
+    assert OTHER_TEST_FILE in reason and "line 11 " in reason
+
+
+# --- C10 ----------------------------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("fresh", [
+    pytest.param(False, id="false"),
+    pytest.param(NO_KEY, id="absent"),
+    pytest.param("yes", id="a-string"),
+    pytest.param(None, id="none"),
+    pytest.param(1, id="a-truthy-int"),
+])
+def test_c10_a_target_whose_citation_is_not_exactly_fresh_refuses(fresh):
+    # axis: G15 — C10, `citationFresh` is exactly True
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    reason = _refused(_fold([_removed()], _target(citationFresh=fresh)), "C10")
+    assert reason.endswith("C10: the cited lines may have moved since the finding was raised")
+
+
+def test_c10_is_judged_after_the_conditions_before_it():
+    record = _record(_row(removed=((10, 20),), openings=(10, 15)))
+    _refused(_fold([_removed()], _target(line=10, record=record, citationFresh=False)), "C9")
+
+
+# --- the test-opening reader --------------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("text,expected", [
+    pytest.param("def test_a():\n    pass\n", [1], id="def-test"),
+    pytest.param("import x\n\nasync def test_b(client):\n    pass\n", [3], id="async-def-test"),
+    pytest.param("class TestX:\n    def test_m(self):\n        pass\n", [1, 2], id="class-and-method"),
+    pytest.param("class Test:\n    pass\n", [1], id="class-test-alone"),
+    pytest.param("\tdef test_tab(self):\n", [1], id="tab-indented"),
+    pytest.param("def  test_spaced (x):\n", [1], id="spaces-around-the-name"),
+    pytest.param("def test_a():\r\n    pass\r\n", [1], id="crlf"),
+    pytest.param("def helper():\n    pass\n", [], id="def-helper-is-no-opening"),
+    pytest.param("class Helper:\n    pass\n", [], id="class-helper-is-no-opening"),
+    pytest.param("x = 'def test_x():'\n", [], id="a-def-inside-a-string-at-column-above-zero"),
+    pytest.param("def test_x\n", [], id="no-opening-parenthesis"),
+    pytest.param("def Test_x():\n", [], id="the-case-matters"),
+    pytest.param("@pytest.mark.parametrize('a', [1])\ndef helper_test(a):\n", [], id="decorator-and-a-helper-named-test-last"),
+    # the reader matches a line, not a parse: these look like openings and count as openings (the safe direction)
+    pytest.param("def testify(x):\n", [1], id="a-name-that-begins-with-test-counts"),
+    pytest.param('"""\n    def test_in_a_docstring(self):\n"""\n', [2], id="an-indented-def-inside-a-docstring-counts"),
+])
+def test_o_the_python_reader_reads_def_test_and_class_test_lines(text, expected):
+    # axis: G17 — the Python reader names the lines that open a test
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    assert audits.test_openings("tests/test_a.py", text) == expected
+
+
+@pytest.mark.parametrize("text,expected", [
+    pytest.param("it('adds', () => {\n});\n", [1], id="it"),
+    pytest.param("describe('suite', () => {\n  test('a', () => {});\n  it.each([1])('b', () => {});\n});\n",
+                 [1, 2, 3], id="describe-test-it-each"),
+    pytest.param("  test.only('x', () => {});\n", [1], id="test-only"),
+    pytest.param("test.skip.each([1])('x', () => {});\n", [1], id="test-skip-each"),
+    pytest.param("describe.each([[1, 2]])('adds %i', (a) => {});\n", [1], id="describe-each-call"),
+    pytest.param("test ('spaced', () => {});\n", [1], id="space-before-the-parenthesis"),
+    pytest.param("const t = test\n", [], id="a-test-alias-is-no-opening"),
+    pytest.param("item('x');\ntesting('y');\nxit('z');\nexpect(a).toBe(1);\n", [], id="longer-names-are-no-opening"),
+    pytest.param("  await it('x');\n", [], id="not-at-the-start-of-the-line"),
+    pytest.param("test.each`table`('x', () => {});\n", [], id="a-template-call-is-not-read"),
+])
+def test_o_the_js_reader_reads_it_test_and_describe_calls(text, expected):
+    # axis: G18 — the JavaScript and TypeScript reader names the lines that open a test
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    assert audits.test_openings("tests/a.test.js", text) == expected
+
+
+@pytest.mark.parametrize("path", ["a.py", "a.PY", "dir/b.test.js", "a.jsx", "a.mjs", "a.cjs", "a.ts", "a.tsx",
+                                  "a.mts", "a.cts", "A.TS"])
+def test_o_every_supported_extension_has_a_reader(path):
+    extensions = audits.PYTHON_TEST_EXTENSIONS | audits.JS_TEST_EXTENSIONS
+    assert path[path.rindex("."):].lower() in extensions
+    assert audits.test_openings(path, "x\n") == []
+
+
+@pytest.mark.parametrize("path", ["a.rb", "a.go", "a.java", "a.rs", "a.pyc", "a.json", "a", "Makefile", "", "dir.py/x"])
+def test_o_any_other_extension_has_no_reader(path):
+    assert audits.test_openings(path, "def test_a():\nit('x', () => {})\n") is None
+
+
+def test_o_the_extension_sets_are_the_ones_the_reader_documents():
+    assert audits.PYTHON_TEST_EXTENSIONS == {".py"}
+    assert audits.JS_TEST_EXTENSIONS == {".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+
+
+def test_o_lines_are_cut_at_newlines_only_as_git_counts_them():
+    # a form feed or a line separator does not start a new line for git, so it must not for the reader either
+    text = "a = '\x0c\x0b\x1c\x85" + chr(0x2028) + "'\ndef test_a():\n    pass\n"
+    assert audits.test_openings("t.py", text) == [2]
 
 
 # --- the neighbouring answers and rulings ---------------------------------------------------------------------------
@@ -564,8 +765,10 @@ def test_r_no_repository_is_unreadable_and_never_raises():
         assert "unreadable" in RD._fixer_removal(config, "a" * 40, "b" * 40)
 
 
-def _fake_git(diff_bytes, resolved=b"c" * 40 + b"\n"):
+def _fake_git(diff_bytes, resolved=b"c" * 40 + b"\n", blob=b""):
     def fake(repo_root, *args):
+        if args[0] == "cat-file":
+            return blob
         return resolved if args[0] == "rev-parse" else diff_bytes
     return fake
 
@@ -595,7 +798,8 @@ def test_r_a_clean_fake_diff_reads_and_an_empty_diff_names_no_file(monkeypatch):
     clean = b"diff --git a/t.py b/t.py\nindex 1..2 100644\n--- a/t.py\n+++ b/t.py\n@@ -4,2 +3,0 @@\n-a\n-b\n"
     monkeypatch.setattr(RD, "_git_bytes", _fake_git(clean))
     assert RD._fixer_removal({"repoRoot": "/r"}, "a" * 40, "b" * 40) == {
-        "base": "c" * 40, "head": "c" * 40, "files": [{"path": "t.py", "removed": [[4, 5]], "added": False}]}
+        "base": "c" * 40, "head": "c" * 40,
+        "files": [{"path": "t.py", "removed": [[4, 5]], "added": False, "testOpenings": []}]}
     monkeypatch.setattr(RD, "_git_bytes", _fake_git(b""))
     assert RD._fixer_removal({"repoRoot": "/r"}, "a" * 40, "b" * 40)["files"] == []
 
@@ -611,7 +815,7 @@ def test_r_the_diff_is_asked_for_in_the_raw_pinned_form(monkeypatch):
     RD._fixer_removal({"repoRoot": "/r"}, "base", "head")
     (diff,) = [c for c in calls if c[0] == "diff"]
     assert diff == ("diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/", "--dst-prefix=b/",
-                    "--no-renames", "--unified=0", "c" * 40, "c" * 40)
+                    "--no-renames", "--unified=0", "--inter-hunk-context=0", "c" * 40, "c" * 40)
     assert [c[3] for c in calls if c[0] == "rev-parse"] == ["base^{commit}", "head^{commit}"]
 
 
@@ -650,6 +854,76 @@ def test_r_a_real_record_clears_through_the_fold(tmp_path):
     assert _files(record) == {TFILE: ([[3, 5]], False)}
     outcome = _fold([_removed()], _target(files=(TFILE,), record=record, file=TFILE, line=4))
     assert outcome["testRemovalCleared"] == ["t0"]
+    assert _only(outcome)["testRemoval"]["evidence"]["openings"] == [{"file": TFILE, "lines": []}]
+
+
+def test_r_two_deletions_with_a_kept_line_between_them_stay_two_ranges_whatever_git_is_configured_to(tmp_path):
+    # axis: G16 — `--inter-hunk-context=0`: a configured `diff.interHunkContext` never merges two ranges into one
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    repo, base = _repo(tmp_path)
+    _git(repo, "config", "diff.interHunkContext", "1")
+    _write(repo, TFILE, "l1\nl3\nl5\nl6\nl7\nl8\n")  # old lines 2 and 4 deleted, old line 3 kept
+    head = _commit(repo, "delete lines 2 and 4")
+    plain = _git(repo, "diff", "--no-ext-diff", "--unified=0", base, head)
+    assert len([ln for ln in plain.splitlines() if ln.startswith("@@ ")]) == 1  # the setting does merge a plain diff
+    assert _files(_removal(repo, base, head)) == {TFILE: ([[2, 2], [4, 4]], False)}
+
+
+def test_r_the_test_openings_come_from_the_base_blob_of_each_file_with_a_removed_range(tmp_path):
+    # `testOpenings` is the base file's openings, not the head file's
+    py_base = ("import x\n\ndef test_a():\n    pass\n\nasync def test_b():\n    pass\n\nclass TestC:\n"
+               "    def test_m(self):\n        pass\n")
+    repo, base = _repo(tmp_path, {TFILE: py_base, "tests/a.test.js": "it('a', () => {\n});\n",
+                                  "tests/test_spec.rb": "x\ny\n", "tests/test_keep.py": "def test_keep():\n    pass\n"})
+    _write(repo, TFILE, "import x\n\nasync def test_b():\n    pass\n\nclass TestC:\n    def test_m(self):\n        pass\n")
+    (repo / "tests" / "a.test.js").unlink()
+    _write(repo, "tests/test_spec.rb", "x\n")
+    _write(repo, "tests/test_new.py", "def test_new():\n    pass\n")  # added to only: no removed range
+    head = _commit(repo, "remove")
+    record = _removal(repo, base, head)
+    rows = {f["path"]: f for f in record["files"]}
+    assert rows[TFILE]["testOpenings"] == [3, 6, 9, 10]  # the base file's lines, test_a included
+    assert rows["tests/a.test.js"]["testOpenings"] == [1]
+    assert rows["tests/test_spec.rb"]["testOpenings"] is None  # no reader for the language
+    assert rows["tests/test_new.py"] == {"path": "tests/test_new.py", "removed": [], "added": True, "testOpenings": []}
+    assert "tests/test_keep.py" not in rows
+
+
+def test_r_a_base_blob_that_is_not_utf8_makes_the_whole_record_unreadable(tmp_path):
+    # axis: G19 — a base file that cannot be read as UTF-8 text makes the whole record unreadable
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    repo, base = _repo(tmp_path, {TFILE: b"\xff\nl2\nl3\n"})
+    _write(repo, TFILE, b"\xff\nl2\n")  # the removed line is text: the diff itself reads, the base blob does not
+    head = _commit(repo, "remove")
+    record = _removal(repo, base, head)
+    assert "unreadable" in record and "files" not in record
+    assert record["base"] == base and record["head"] == head
+
+
+def test_r_a_base_blob_that_cannot_be_read_makes_the_whole_record_unreadable(monkeypatch):
+    diff = b"diff --git a/t.py b/t.py\n--- a/t.py\n+++ b/t.py\n@@ -4,2 +3,0 @@\n-a\n-b\n"
+    monkeypatch.setattr(RD, "_git_bytes", _fake_git(diff, blob=b"def test_a():\n"))
+    assert "unreadable" not in RD._fixer_removal({"repoRoot": "/r"}, "a" * 40, "b" * 40)
+    monkeypatch.setattr(RD, "_git_bytes", _fake_git(diff, blob=None))
+    record = RD._fixer_removal({"repoRoot": "/r"}, "a" * 40, "b" * 40)
+    assert "unreadable" in record and "files" not in record
+    assert record["base"] == "a" * 40 and record["head"] == "b" * 40
+
+
+def test_r_the_base_blob_is_read_at_the_resolved_base_commit_and_path(monkeypatch):
+    calls = []
+
+    def fake(repo_root, *args):
+        calls.append(args)
+        if args[0] == "cat-file":
+            return b"def test_a():\n"
+        return b"c" * 40 + b"\n" if args[0] == "rev-parse" else (
+            b"diff --git a/t.py b/t.py\n@@ -1 +0,0 @@\n-x\ndiff --git a/n.py b/n.py\n@@ -0,0 +1 @@\n+y\n")
+
+    monkeypatch.setattr(RD, "_git_bytes", fake)
+    record = RD._fixer_removal({"repoRoot": "/r"}, "base", "head")
+    assert [c for c in calls if c[0] == "cat-file"] == [("cat-file", "blob", "c" * 40 + ":t.py")]  # not for n.py
+    assert [f["testOpenings"] for f in record["files"]] == [[1], []]
 
 
 # --- the review record and the audit targets ----------------------------------------------------------------------
@@ -699,6 +973,8 @@ def test_w_every_audit_target_carries_the_removal_record_and_siblings_their_smel
     assert len(rows) == 3
     for row in rows:
         assert "unreadable" in row["fixerRemoval"]  # no base or head given: the fold fails closed
+        assert row["citationFresh"] is False  # and no head to compare the cited lines at
+        assert row["citationCheck"] == {"raisedHead": None, "base": None, "files": [TEST_FILE]}
     first = rows[0]
     siblings = {s["id"]: s for s in first["batchFindings"]}
     assert [s["title"] for s in first["batchFindings"]] == ["B", "C"]
@@ -717,8 +993,8 @@ def test_w_the_record_is_built_from_the_given_base_and_head(tmp_path):
     rows = RD._audit_targets(state, state["config"], {}, removal_base=base, removal_head=head)
     assert len(rows) == 2
     for row in rows:
-        assert row["fixerRemoval"] == {"base": base, "head": head,
-                                       "files": [{"path": TFILE, "removed": [[3, 4]], "added": False}]}
+        assert row["fixerRemoval"] == {"base": base, "head": head, "files": [
+            {"path": TFILE, "removed": [[3, 4]], "added": False, "testOpenings": []}]}
     assert rows[0]["fixerRemoval"] is not rows[1]["fixerRemoval"]
 
 
@@ -734,3 +1010,189 @@ def test_w_the_attempt_start_head_is_recorded_by_the_first_slice_only(tmp_path):
     assert RD._queue_fix_batch(state, state["config"], [_finding("B", 4, severity="Blocker")],
                                reset_accumulator=False, batch_index=1) == "queued"
     assert state["_fixStepHead"] == second and state["_fixAttemptStartHead"] == first
+
+
+# --- citation freshness -------------------------------------------------------------------------------------------
+
+OTHER = "tests/other.py"
+
+
+def _stage(tmp_path, between=None, remove=None):
+    """A throwaway repo with the raised head, then (when `between` writes files) a fix start head after it, then
+    the fix's removal head (`remove` writes files, else it empties `tests/other.py`). Returns `(repo, raised,
+    base, head)`; with nothing between, base IS the raised head."""
+    tmp_path.mkdir(exist_ok=True)
+    repo, raised = _repo(tmp_path, {TFILE: LINES, OTHER: "x\n"})
+    base = raised
+    if between:
+        for name, body in between.items():
+            _write(repo, name, body)
+        base = _commit(repo, "between the raised head and the fix start")
+    for name, body in (remove or {OTHER: ""}).items():
+        _write(repo, name, body)
+    return repo, raised, base, _commit(repo, "the fix")
+
+
+def _targets(repo, raised, base, head, findings, rounds=None, **config):
+    state = RD.new_state(TRD._cfg(fixerVendor="claude", repoRoot=str(repo), **config))
+    state["config"]["headSha"] = raised
+    state["rounds"].update(rounds or {})
+    state["fixBatch"] = findings
+    return RD._audit_targets(state, state["config"], {}, removal_base=base, removal_head=head)
+
+
+def _raised(round_no, line=3, **extra):
+    return _finding("A", line, file=TFILE, **{SC.RAISED_ROUND_FIELD: round_no}, **extra)
+
+
+def test_f_a_cited_file_unchanged_between_the_raised_head_and_the_base_is_fresh(tmp_path):
+    # a cited file that did not change between the raised head and the base keeps its citation fresh
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
+    assert raised != base
+    (row,) = _targets(repo, raised, base, head, [_raised(1)])
+    assert row["citationFresh"] is True
+    assert row["citationCheck"] == {"raisedHead": raised, "base": base, "files": [TFILE]}
+
+
+def test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale(tmp_path):
+    # axis: R4 — a cited file that changed between the raised head and the base makes the citation stale
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md (listed unproven there)
+    repo, raised, base, head = _stage(tmp_path, {TFILE: "new first line\n" + LINES})
+    (row,) = _targets(repo, raised, base, head, [_raised(1)])
+    assert row["citationFresh"] is False
+    assert row["citationCheck"] == {"raisedHead": raised, "base": base, "files": [TFILE]}
+
+
+def test_f_a_place_of_the_kind_of_mistake_in_a_changed_file_makes_the_citation_stale(tmp_path):
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
+    kind = {"kind": "k", "places": [{"file": OTHER, "line": 1}, {"file": TFILE, "line": 5}]}
+    (row,) = _targets(repo, raised, base, head, [_raised(1, kindOfMistake=kind)])
+    assert row["citationFresh"] is False
+    assert row["citationCheck"]["files"] == [TFILE, OTHER]
+
+
+def test_f_equal_heads_are_fresh_without_asking_git_for_a_diff(tmp_path, monkeypatch):
+    repo, raised, base, head = _stage(tmp_path)
+    assert raised == base
+    asked = []
+    original = RD._git_bytes
+    monkeypatch.setattr(RD, "_git_bytes", lambda root, *args: asked.append(args) or original(root, *args))
+    (row,) = _targets(repo, raised, base, head, [_raised(1)])
+    assert row["citationFresh"] is True
+    assert not [a for a in asked if a[:4] == ("diff", "--no-ext-diff", "--no-textconv", "--quiet")]
+
+
+def test_f_unequal_heads_are_compared_over_the_cited_files_only(tmp_path, monkeypatch):
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
+    asked = []
+    original = RD._git_bytes
+    monkeypatch.setattr(RD, "_git_bytes", lambda root, *args: asked.append(args) or original(root, *args))
+    _targets(repo, raised, base, head, [_raised(1)])
+    assert [a for a in asked if a[:4] == ("diff", "--no-ext-diff", "--no-textconv", "--quiet")] == [
+        ("diff", "--no-ext-diff", "--no-textconv", "--quiet", raised, base, "--", TFILE)]
+
+
+def test_f_equal_heads_with_no_cited_file_are_not_fresh(tmp_path):
+    # axis: R4 — a target that cites no file is never fresh, even when the heads are equal
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md (listed unproven there)
+    repo, raised, base, head = _stage(tmp_path)
+    assert raised == base
+    (row,) = _targets(repo, raised, base, head, [_finding("A", None, file=None, **{SC.RAISED_ROUND_FIELD: 1})])
+    assert row["citationFresh"] is False
+    assert row["citationCheck"] == {"raisedHead": raised, "base": base, "files": []}
+
+
+def test_f_a_later_rounds_finding_is_judged_from_the_previous_rounds_fix_fold_head(tmp_path):
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
+    # round 2: the session-setup head is deliberately unresolvable, so reading it would give False
+    (row,) = _targets(repo, "f" * 40, base, head, [_raised(2)], rounds={"1": {"fixFoldHead": raised}})
+    assert row["citationFresh"] is True and row["citationCheck"]["raisedHead"] == raised
+    # round 1: the round-1 fold head is deliberately unresolvable, so reading it would give False
+    (row,) = _targets(repo, raised, base, head, [_raised(1)], rounds={"1": {"fixFoldHead": "f" * 40}})
+    assert row["citationFresh"] is True and row["citationCheck"]["raisedHead"] == raised
+
+
+@pytest.mark.parametrize("round_no,rounds,setup", [
+    pytest.param(NO_KEY, {}, True, id="no-raised-round"),
+    pytest.param(0, {}, True, id="round-zero"),
+    pytest.param(True, {}, True, id="round-is-a-bool"),
+    pytest.param("1", {}, True, id="round-is-a-string"),
+    pytest.param(None, {}, True, id="round-is-none"),
+    pytest.param(1, {}, False, id="round-1-with-no-setup-head"),
+    pytest.param(2, {}, True, id="round-2-with-no-recorded-head"),
+    pytest.param(2, {"1": {}}, True, id="round-2-with-a-blank-record"),
+    pytest.param(2, {"1": {"fixFoldHead": ""}}, True, id="round-2-with-an-empty-head"),
+    pytest.param(2, {"1": {"fixFoldHead": "0" * 40}}, True, id="round-2-with-an-unresolvable-head"),
+    pytest.param(1, {}, "0" * 40, id="round-1-with-an-unresolvable-setup-head"),
+])
+def test_f_a_finding_with_no_usable_raised_head_is_not_fresh(tmp_path, round_no, rounds, setup):
+    repo, raised, base, head = _stage(tmp_path)
+    finding = _raised(1)
+    if round_no is NO_KEY:
+        del finding[SC.RAISED_ROUND_FIELD]
+    else:
+        finding[SC.RAISED_ROUND_FIELD] = round_no
+    state = RD.new_state(TRD._cfg(fixerVendor="claude", repoRoot=str(repo)))
+    if setup is True:
+        state["config"]["headSha"] = raised
+    elif setup:
+        state["config"]["headSha"] = setup
+    state["rounds"].update(rounds)
+    state["fixBatch"] = [finding]
+    (row,) = RD._audit_targets(state, state["config"], {}, removal_base=base, removal_head=head)
+    assert row["citationFresh"] is False and row["citationCheck"]["files"] == [TFILE]
+
+
+def test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh(tmp_path):
+    repo, raised, base, _head = _stage(tmp_path)
+    (row,) = _targets(repo, raised, base, None, [_raised(1)])
+    assert row["citationFresh"] is False and "unreadable" in row["fixerRemoval"]
+
+
+@pytest.mark.parametrize("base", [None, "", "-p", "0" * 40])
+def test_f_a_removal_base_that_does_not_resolve_is_not_fresh(tmp_path, base):
+    repo, raised, _base, head = _stage(tmp_path)
+    (row,) = _targets(repo, raised, base, head, [_raised(1)])
+    assert row["citationFresh"] is False and row["citationCheck"]["base"] is None
+
+
+def test_f_no_repository_is_not_fresh(tmp_path):
+    repo, raised, base, head = _stage(tmp_path)
+    state = RD.new_state(TRD._cfg(fixerVendor="claude"))
+    state["config"]["headSha"] = raised
+    state["fixBatch"] = [_raised(1)]
+    (row,) = RD._audit_targets(state, state["config"], {}, removal_base=base, removal_head=head)
+    assert row["citationFresh"] is False
+
+
+def test_f_a_git_failure_is_not_fresh(tmp_path, monkeypatch):
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
+    original = RD._git_bytes
+    monkeypatch.setattr(RD, "_git_bytes",
+                        lambda root, *args: None if args[:1] == ("diff",) and "--quiet" in args else original(root, *args))
+    (row,) = _targets(repo, raised, base, head, [_raised(1)])
+    assert row["citationFresh"] is False
+
+
+def test_f_every_target_of_the_batch_carries_its_own_freshness(tmp_path):
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
+    rows = _targets(repo, raised, base, head, [_raised(1), dict(_raised(1, line=9), title="B")])
+    assert [r["citationFresh"] for r in rows] == [True, True]
+
+
+def test_f_the_drivers_freshness_and_record_reach_the_fold(tmp_path):
+    cut = "l1\nl2\nl5\nl6\nl7\nl8\n"
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"}, remove={TFILE: cut})
+    (row,) = _targets(repo, raised, base, head, [_raised(1)])
+    target = _target(files=(TFILE,), record=row["fixerRemoval"], file=TFILE, line=3,
+                     citationFresh=row["citationFresh"])
+    assert row["citationFresh"] is True and row["fixerRemoval"]["files"][0]["testOpenings"] == []
+    assert _fold([_removed()], target)["testRemovalCleared"] == ["t0"]
+    # the cited file changed after the finding was raised: the same removal refuses
+    repo, raised, base, head = _stage(tmp_path / "stale", {TFILE: "new first line\n" + LINES},
+                                      remove={TFILE: "new first line\n" + cut})
+    (row,) = _targets(repo, raised, base, head, [_raised(1, line=4)])
+    target = _target(files=(TFILE,), record=row["fixerRemoval"], file=TFILE, line=4,
+                     citationFresh=row["citationFresh"])
+    assert row["citationFresh"] is False
+    _refused(_fold([_removed()], target), "C10")

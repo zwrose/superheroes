@@ -11,6 +11,7 @@ unaudited fix (the expensive failure direction: a real defect ships believed fix
 uncertain / malformed / missing ruling collapses to `not-discharged` and is disclosed.
 """
 
+import os
 import re
 
 from finding_identity import finding_identity, place_pair as _place_key
@@ -160,11 +161,40 @@ def _plain_int(value):
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+_ABSENT = object()
+
+
+# The languages whose test files the removal clearance can read (#2434): the extensions of each and the line
+# pattern that opens a test in it. A file in any other language has no reader, so it clears nothing.
+PYTHON_TEST_EXTENSIONS = frozenset({".py"})
+JS_TEST_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
+PYTHON_TEST_OPENING = re.compile(r"^\s*(async\s+)?def\s+test\w*\s*\(|^\s*class\s+Test\w*\b")
+JS_TEST_OPENING = re.compile(r"^\s*(it|test|describe)(\.\w+)*\s*\(")
+
+
+def test_openings(path, text):
+    """The sorted 1-based line numbers at which the file `path` with content `text` opens a test, or None
+    when the language of `path` has no reader (an extension outside `PYTHON_TEST_EXTENSIONS` and
+    `JS_TEST_EXTENSIONS`). A reader matches a line, not a parse: a line inside a string or comment that looks like
+    an opening counts as one, which only makes the clearance refuse more. Lines are cut at `\\n`, as git counts
+    them."""
+    extension = os.path.splitext(path)[1].lower() if isinstance(path, str) else ""
+    if extension in PYTHON_TEST_EXTENSIONS:
+        pattern = PYTHON_TEST_OPENING
+    elif extension in JS_TEST_EXTENSIONS:
+        pattern = JS_TEST_OPENING
+    else:
+        return None
+    return [number for number, line in enumerate(text.split("\n"), 1) if pattern.match(line)]
+
+
 def _removal_files(target):
-    """The files of the target's driver-built `fixerRemoval` as `[(path, ranges, added)]`, or None when the
-    record is absent, `unreadable`, or not exactly `{"files": [{"path": <non-empty str>, "removed": [[start,
-    end], ...], "added": <bool>}, ...]}` with at least one file, one record per path, and every range two plain
-    integers with `1 <= start <= end` (fail closed: an unreadable record clears nothing)."""
+    """The files of the target's driver-built `fixerRemoval` as `[(path, ranges, added, openings)]`, or None when
+    the record is absent, `unreadable`, or not exactly `{"files": [{"path": <non-empty str>, "removed": [[start,
+    end], ...], "added": <bool>, "testOpenings": <None or [<int >= 1>, ...]>}, ...]}` with at least one file, one
+    record per path, and every range two plain integers with `1 <= start <= end` (fail closed: an unreadable
+    record clears nothing). `testOpenings` is the base file's test-opening lines (`test_openings`); None means
+    its language has no reader."""
     record = target.get("fixerRemoval") if isinstance(target, dict) else None
     # axis: an absent, unreadable or malformed removal record is never readable — see bite-proof record audit_test_removal_2434
     if not isinstance(record, dict) or "unreadable" in record:
@@ -181,6 +211,11 @@ def _removal_files(target):
             return None
         if not isinstance(added, bool) or not isinstance(removed, list):
             return None
+        openings = entry.get("testOpenings", _ABSENT)
+        # axis: a row whose `testOpenings` is absent or not None-or-a-list-of-lines-from-1 makes the record unreadable — see bite-proof record audit_test_removal_2434
+        if openings is _ABSENT or not (openings is None or (
+                isinstance(openings, list) and all(_plain_int(n) and n >= 1 for n in openings))):
+            return None
         ranges = []
         for pair in removed:
             if not (isinstance(pair, list) and len(pair) == 2 and all(_plain_int(n) for n in pair)):
@@ -189,7 +224,7 @@ def _removal_files(target):
                 return None
             ranges.append((pair[0], pair[1]))
         seen.add(path)
-        out.append((path, ranges, added))
+        out.append((path, ranges, added, None if openings is None else list(openings)))
     return out
 
 
@@ -211,9 +246,10 @@ def _worthless_test_smell(finding):
     return smell, None
 
 
-def _cited_lines(finding):
+def cited_lines(finding):
     """The `(file, line)` places a finding cites at a plain integer line, in order, none twice: its own
-    `file`/`line` and the places of its kind of mistake."""
+    `file`/`line` and the places of its kind of mistake. The one reading of what a finding cites: the clearance
+    conditions and the driver's citation-freshness check both use it."""
     out = []
     if isinstance(finding, dict) and isinstance(finding.get("file"), str) and _plain_int(finding.get("line")):
         out.append((finding["file"], finding["line"]))
@@ -226,7 +262,7 @@ def _cited_lines(finding):
 def test_removal_clearance(target):
     """`(evidence, failing, detail)`: whether the target's fix is the removal of test lines a worthless-test
     finding cites, judged only from driver-built data (the target's `fixerDelta`, `fixerRemoval`, its own
-    finding fields and its `batchFindings`), never from anything the auditor wrote. All of C1-C7 must hold:
+    finding fields and its `batchFindings`), never from anything the auditor wrote. All of C1-C10 must hold:
 
     C1  `fixerDelta` is readable, names at least one file, and every file is a test path;
     C2  `fixerRemoval` is readable and well formed (see `_removal_files`);
@@ -234,11 +270,17 @@ def test_removal_clearance(target):
     C4  every file of the record added nothing and removed at least one range;
     C5  the target is a Test finding labelled with a worthless-test smell, with a usable body;
     C6  one of the target's own cited lines (its `file:line` or a kind-of-mistake place) lies in a removed range;
-    C7  every removed range holds a line cited by the target or by a batch sibling that itself passes C5.
+    C7  every removed range holds a line cited by the target or by a batch sibling that itself passes C5;
+    C8  every changed file is in a language the test-opening reader supports (`testOpenings` is not None);
+    C9  every test the base file opens inside a removed range opens on a cited line (the target's, or a
+        qualifying sibling's), so the fix cannot also delete an unflagged test beside the flagged one;
+    C10 the target's `citationFresh` is True: the files its cited lines sit in did not change between the head
+        the finding was raised on and the fix's start head, so a cited line still points at what it cited.
 
     On success `(evidence, None, None)` with `evidence` the dict the audit entry records
-    (`{"source": "finding", "finding", "taxonomy", "reason", "removed", "cited"}`; `cited` lists the target's
-    cited lines, then each qualifying sibling's); otherwise `(None, <first failing condition>, <short detail>)`."""
+    (`{"source": "finding", "finding", "taxonomy", "reason", "removed", "cited", "openings"}`; `cited` lists the
+    target's cited lines, then each qualifying sibling's; `openings` lists, per file, the base file's test openings
+    inside its removed ranges); otherwise `(None, <first failing condition>, <short detail>)`."""
     from size_count import is_test_path as _is_test_path  # noqa: E402 — lazy: the closure of this module stays unchanged
     files = _delta_files(target)
     # axis: an absent, unreadable or empty delta clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
@@ -253,9 +295,9 @@ def test_removal_clearance(target):
     if rows is None:
         return None, "C2", "no readable removal record"
     # axis: the removal record and the delta must name the same files — see bite-proof record audit_test_removal_2434
-    if {path for path, _r, _a in rows} != set(files):
+    if {path for path, _r, _a, _o in rows} != set(files):
         return None, "C3", "the removal record and the delta name different files"
-    for path, ranges, added in rows:
+    for path, ranges, added, _o in rows:
         # axis: a fix that adds a line to a file clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
         if added is not False:
             return None, "C4", "%s has added lines" % path
@@ -265,29 +307,45 @@ def test_removal_clearance(target):
     smell, detail = _worthless_test_smell(target)
     if smell is None:
         return None, "C5", detail
-    own = _cited_lines(target)
+    own = cited_lines(target)
     cited = list(own)
     batch = target.get("batchFindings")
     for sibling in batch if isinstance(batch, list) else ():
         # axis: only a sibling that is itself a worthless-test finding lends its cited lines — see bite-proof record audit_test_removal_2434
         if _worthless_test_smell(sibling)[0] is not None:
-            cited.extend(c for c in _cited_lines(sibling) if c not in cited)
+            cited.extend(c for c in cited_lines(sibling) if c not in cited)
 
     def _inside(places, path, rng):
         return any(file == path and rng[0] <= line <= rng[1] for file, line in places)
 
     # axis: one of the target's own cited lines must lie in a removed range — see bite-proof record audit_test_removal_2434
-    if not any(_inside(own, path, rng) for path, ranges, _a in rows for rng in ranges):
+    if not any(_inside(own, path, rng) for path, ranges, _a, _o in rows for rng in ranges):
         return None, "C6", "no removed range holds a line the finding cites"
-    for path, ranges, _a in rows:
+    for path, ranges, _a, _o in rows:
         for rng in ranges:
             # axis: every removed range must hold a cited line, so the fix cannot also delete an uncited test — see bite-proof record audit_test_removal_2434
             if not _inside(cited, path, rng):
                 return None, "C7", "%s lines %d-%d hold no cited line" % (path, rng[0], rng[1])
+    for path, _r, _a, openings in rows:
+        # axis: a file in a language the test-opening reader does not support clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+        if openings is None:
+            return None, "C8", "%s is in a language whose tests cannot be read" % path
+    inside_openings = []
+    for path, ranges, _a, openings in rows:
+        within = sorted({n for n in openings if any(rng[0] <= n <= rng[1] for rng in ranges)})
+        for line in within:
+            # axis: every test the base file opens inside a removed range must open on a cited line, so the fix cannot also delete an unflagged test beside the flagged one — see bite-proof record audit_test_removal_2434
+            if (path, line) not in cited:
+                return None, "C9", "%s opens a test at line %d that no finding cites" % (path, line)
+        inside_openings.append({"file": path, "lines": within})
+    # axis: a cited line that may have moved since the finding was raised ties nothing — see bite-proof record audit_test_removal_2434
+    if target.get("citationFresh") is not True:
+        return None, "C10", "the cited lines may have moved since the finding was raised"
     reason = target["body"].strip()[:500]
     return {"source": "finding", "finding": target.get("id"), "taxonomy": smell, "reason": reason,
-            "removed": [{"file": path, "ranges": [list(r) for r in ranges]} for path, ranges, _a in rows],
-            "cited": [{"file": file, "line": line} for file, line in cited]}, None, None
+            "removed": [{"file": path, "ranges": [list(r) for r in ranges]} for path, ranges, _a, _o in rows],
+            "cited": [{"file": file, "line": line} for file, line in cited],
+            "openings": inside_openings}, None, None
 
 
 MATCH_SAME = "same"
@@ -918,13 +976,13 @@ class _AuditFold:
 
     def _test_removal_guard(self, base, fid, f, r, ruling):
         # A clearing ruling whose `testWouldFail` answers `worthless-test-removed` stands only when the fix
-        # attempt only removed test lines a worthless-test finding cites (`test_removal_clearance`, C1-C7),
+        # attempt only removed test lines a worthless-test finding cites (`test_removal_clearance`, C1-C10),
         # judged from the driver-built `fixerDelta`, `fixerRemoval` and the target's own finding fields — never
         # from anything the auditor wrote. The answer is recorded only once the entry ends cleared.
         removal = None
         if ruling in _CLEARS and r["checks"]["testWouldFail"]["answer"] == WORTHLESS_TEST_REMOVED:
             evidence, failing, detail = test_removal_clearance(f)
-            # axis: worthless-test-removed clears only when every condition C1-C7 holds; any other fix folds not-discharged — see bite-proof record audit_test_removal_2434
+            # axis: worthless-test-removed clears only when every condition C1-C10 holds; any other fix folds not-discharged — see bite-proof record audit_test_removal_2434
             if evidence is None:
                 self.not_discharged.append(fid)
                 self.test_removal_refused.append(fid)
@@ -990,7 +1048,6 @@ class _AuditFold:
             # axis: a review-guarded id is listed only once its entry ends cleared — see bite-proof record audit_review_guarded_2341
             if guarded is not None:
                 self.review_guarded.append(fid)
-            if guarded is not None:
                 base["reviewGuarded"] = guarded
             # a worthless-test-removed id is listed only once its entry ends cleared, as a review-guarded one is
             if removal is not None:
@@ -1026,7 +1083,6 @@ class _AuditFold:
             self.discharged.append(fid)
             if guarded is not None:
                 self.review_guarded.append(fid)
-            if guarded is not None:
                 base["reviewGuarded"] = guarded
             if removal is not None:
                 self.test_removal_cleared.append(fid)
@@ -1136,7 +1192,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     not-discharged and listed in `reviewGuardRefused`, and a cleared one is listed in `reviewGuarded`
     and its entry records `reviewGuarded: {answer, why}`. A clearing ruling may instead answer `worthless-test-removed`
     for `testWouldFail` (`right` and `brokeNothing` still `yes`); it stands only when `test_removal_clearance`
-    finds every condition C1-C7 true of the target's driver-built `fixerDelta`, `fixerRemoval`, own finding
+    finds every condition C1-C10 true of the target's driver-built `fixerDelta`, `fixerRemoval`, own finding
     fields and `batchFindings` (the fix only removes test lines a worthless-test finding cites); otherwise it is
     not-discharged and listed in `testRemovalRefused`, its reason naming the first failing condition, and a
     cleared one is listed in `testRemovalCleared` and its entry records `testRemoval: {answer, why, evidence}`.

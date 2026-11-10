@@ -117,6 +117,7 @@ Collect findings under these named smells; **every finding cites its smell by na
 - A test that asserts exact prose whose wording is not a contract.
 - **brittle test:** an assertion that a module-private cache, registry, or counter equals an exact value. A harmless refactor of the cache turns it red.
 - **wording pin:** a test that builds a value from a string and asserts the same string back, or asserts an error message's exact prose when the message is not a contract.
+- **Name every test the finding flags.** A `wording-pin`, `duplicate-test` or `cannot-fail` finding names every test it flags: its first test as the finding's `file:line`, the line of that test's opening (the `def test_...` line, or the `it(`, `test(` or `describe(` line), and every other flagged test as a `kindOfMistake` place. The fix audit clears the removal of a test only when every test opening inside the removed lines is a line some finding cites, so a test you flag but do not name is not cleared with the others.
 
 **Unproven checks.**
 

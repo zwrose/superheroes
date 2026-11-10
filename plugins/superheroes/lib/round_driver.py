@@ -6961,13 +6961,16 @@ _REMOVAL_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
 
 def _fixer_removal(config, base, head):
     """The removal record of a fix: ``{"base", "head", "files": [{"path", "removed": [[start, end], ...],
-    "added": bool}]}`` read from a plain zero-context diff of ``base`` to the explicit commit ``head`` (never the
-    live checkout HEAD) at ``config["repoRoot"]``. ``removed`` lists the base-side line ranges (the reviewed head's
-    line numbers) each hunk deleted; ``added`` is True when any hunk adds a line. A file the fix only added to
-    still appears (``removed: []``, ``added: True``). The record is ``{"unreadable": <why>, "base", "head"}``
-    — never an exception — when a commit is missing or does not resolve, git fails, the output is not UTF-8,
-    or the diff holds a header that is not one path twice, a binary file, or a binary patch (so the fold
-    clears nothing on it). Git's own settings (textconv, external diff, color, renames) never shape it."""
+    "added": bool, "testOpenings": [line, ...] or None}]}`` read from a plain zero-context diff of ``base`` to the
+    explicit commit ``head`` (never the live checkout HEAD) at ``config["repoRoot"]``. ``removed`` lists the
+    base-side line ranges (the reviewed head's line numbers) each hunk deleted, one range per hunk even when
+    ``diff.interHunkContext`` is set; ``added`` is True when any hunk adds a line. ``testOpenings`` is
+    ``audits.test_openings`` of the base blob of a file that has a removed range (None when its language has no
+    reader), and ``[]`` for a file with none. A file the fix only added to still appears (``removed: []``,
+    ``added: True``). The record is ``{"unreadable": <why>, "base", "head"}`` — never an exception — when a
+    commit is missing or does not resolve, git fails, the output is not UTF-8, the diff holds a header that is
+    not one path twice, a binary file, or a binary patch, or a base blob cannot be read or is not UTF-8 (so the
+    fold clears nothing on it). Git's own settings (textconv, external diff, color, renames) never shape it."""
     def unreadable(why):
         return {"unreadable": why, "base": base, "head": head}
 
@@ -6982,8 +6985,9 @@ def _fixer_removal(config, base, head):
         if not sha:
             return unreadable("the %s commit %s does not resolve" % (label, commit))
         shas.append(sha)
+    # axis: `--inter-hunk-context=0` keeps two deletions with an unchanged line between them two ranges, whatever `diff.interHunkContext` is configured — see bite-proof record audit_test_removal_2434
     raw = _git_bytes(repo_root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
-                     "--dst-prefix=b/", "--no-renames", "--unified=0", shas[0], shas[1])
+                     "--dst-prefix=b/", "--no-renames", "--unified=0", "--inter-hunk-context=0", shas[0], shas[1])
     if raw is None:
         return unreadable("git could not diff the base commit to the head commit")
     try:
@@ -7016,6 +7020,19 @@ def _fixer_removal(config, base, head):
             # axis: any hunk that adds a line marks its file as added to — see bite-proof record audit_test_removal_2434
             if new_count > 0:
                 current["added"] = True
+    for entry in files:
+        if not entry["removed"]:
+            entry["testOpenings"] = []
+            continue
+        blob = _git_bytes(repo_root, "cat-file", "blob", "%s:%s" % (shas[0], entry["path"]))
+        try:
+            base_text = blob.decode("utf-8") if blob is not None else None
+        except UnicodeDecodeError:
+            base_text = None
+        # axis: a base file that cannot be read, or is not UTF-8, makes the whole record unreadable — see bite-proof record audit_test_removal_2434
+        if base_text is None:
+            return unreadable("the base file %s cannot be read as UTF-8 text" % entry["path"])
+        entry["testOpenings"] = audits.test_openings(entry["path"], base_text)
     return {"base": shas[0], "head": shas[1], "files": files}
 
 
@@ -9056,6 +9073,63 @@ def _audit_fix_group(finding, key):
     return {"id": group["id"], "members": [m for m in group["members"] if m != key]}
 
 
+def _resolve_commit_sha(repo_root, commit, cache):
+    """The full sha ``commit`` names in ``repo_root`` (``cache`` holds the answers of one pass), or None when it
+    is blank, an option, or does not resolve to a commit."""
+    if not (_nonempty_str(repo_root) and _nonempty_str(commit)) or commit.startswith("-"):
+        return None
+    if commit not in cache:
+        resolved = _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % commit)
+        cache[commit] = (resolved.decode("utf-8", errors="replace").strip() or None) if resolved is not None else None
+    return cache[commit]
+
+
+def _raised_head(state, raised_round):
+    """The head a finding raised in round ``raised_round`` was raised on: round 1's is the session-setup head
+    (``config["headSha"]``, the head the round-1 orders are anchored on: a round-1 panel runs before any fix);
+    a later round's is the head the previous round's fix folded to (``rounds[<r-1>]["fixFoldHead"]``). None when
+    the round is no plain integer from 1 or no head is recorded for it."""
+    if not isinstance(raised_round, int) or isinstance(raised_round, bool) or raised_round < 1:
+        return None
+    if raised_round == 1:
+        config = state.get("config")
+        head = config.get("headSha") if isinstance(config, dict) else None
+    else:
+        rounds = state.get("rounds")
+        record = rounds.get(str(raised_round - 1)) if isinstance(rounds, dict) else None
+        head = record.get("fixFoldHead") if isinstance(record, dict) else None
+    return head if _nonempty_str(head) else None
+
+
+def _citation_freshness(state, config, finding, row, removal_base, removal_head, cache):
+    """``(fresh, check)``: whether the lines the target row cites still point at what they cited when the
+    finding was raised, and the facts that decided it (``{"raisedHead", "base", "files"}``, the heads as resolved
+    shas or None). Fresh only when the row cites at least one file, the head the finding was raised on
+    (``_raised_head``) and the removal base both resolve to commits, and those heads are equal or none of the
+    cited files differs between them. Every other case is False: no raised round or head, no repository or
+    removal head (a finding carried over from an earlier session), a git failure, or no cited file."""
+    repo_root = config.get("repoRoot") if isinstance(config, dict) else None
+    files = []
+    for file, _line in audits.cited_lines(row):
+        if file not in files:
+            files.append(file)
+    check = {"raisedHead": None, "base": None, "files": files}
+    # axis: a finding with no removal head (carried over from an earlier session) or no repository is never fresh — see bite-proof record audit_test_removal_2434
+    if not (_nonempty_str(repo_root) and _nonempty_str(removal_head)):
+        return False, check
+    raised = _resolve_commit_sha(repo_root, _raised_head(state, finding.get(session_contract.RAISED_ROUND_FIELD)), cache)
+    base = _resolve_commit_sha(repo_root, removal_base, cache)
+    check["raisedHead"], check["base"] = raised, base
+    # axis: a finding with no cited file, or a head that does not resolve, is never fresh — see bite-proof record audit_test_removal_2434
+    if not files or raised is None or base is None:
+        return False, check
+    if raised == base:
+        return True, check
+    # axis: a cited file that changed between the raised head and the removal base makes the citation stale — see bite-proof record audit_test_removal_2434
+    unchanged = _git_bytes(repo_root, "diff", "--no-ext-diff", "--no-textconv", "--quiet", raised, base, "--", *files)
+    return unchanged is not None, check
+
+
 def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal_base=None, removal_head=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
@@ -9063,7 +9137,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
     occurrence wins. A re-queued target keys by its findingKey marker, never by id.
 
     Every target also carries ``fixerRemoval``, the removal record of the fix (``removal_base`` to
-    ``removal_head``, see ``_fixer_removal``); with no usable base or head it says it is unreadable."""
+    ``removal_head``, see ``_fixer_removal``); with no usable base or head it says it is unreadable. Every target
+    also carries ``citationFresh`` and ``citationCheck`` (see ``_citation_freshness``)."""
     fixer_vendor = config.get("fixerVendor")
     runner_only = bool(state.get("_advanceUsed"))
     maker_families, pinned_vendors = receipt_disclosures.auditor_constraints(state)
@@ -9136,6 +9211,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
                 child, content, _carried_owner_ruling(_row_decision(state, effective, ledger_by_key, child))))
     reported_changes = _reported_unnamed_changes(state)
     audited_head = {}
+    resolved_commits = {}
 
     def target_row(f, tid):
         """One audit target row — a batch finding's and a rider's alike, so the two never drift."""
@@ -9204,6 +9280,10 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
             if "head" not in audited_head:
                 audited_head["head"] = _audit_head(state, config)
             row["breakIt"] = _break_it_target_facts(state, config, f, audited_head["head"])
+        # whether the lines this row cites still point at what they cited when the finding was raised: the fold's
+        # C10 reads `citationFresh`, and `citationCheck` shows the facts behind it
+        row["citationFresh"], row["citationCheck"] = _citation_freshness(
+            state, config, f, row, removal_base, removal_head, resolved_commits)
         if auditor_vendor is not None:
             row["auditorVendor"] = auditor_vendor
         return row
