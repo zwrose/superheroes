@@ -24,6 +24,7 @@ switching, never a lane already running.
 
 Check these in a consuming project when it adopts 0.48.1. Each step names the note it comes from.
 
+- **After switching.** **Nothing is owed.** The wave watch now watches a recorded-terminal local lane again when its builder is running again (a live process resumed on its session id, or a heartbeat stamped after its outcome), where it used to drop the lane for good. See [Wave watch: a resumed local lane is watched again](#wave-watch-a-resumed-local-lane-is-watched-again).
 - **After switching.** **Nothing is owed.** An advisor driving a merge train reports a merge done without waiting for the base branch's post-merge run when the branch requires up-to-date pull requests (both protection reads answered, one `true`) and the merged commit's tree equals the tree CI passed on the merged PR's head; the run still runs, and a red one is still a red train. Every other case, a failed protection read and a tree mismatch included, keeps the wait. See [Merge train: no post-merge wait when the merged tree is the tree CI passed](#merge-train-no-post-merge-wait-when-the-merged-tree-is-the-tree-ci-passed).
 - **After switching.** **When a `leftover-not-accepted` refusal's missing finding is named only in an acceptance another finding already took (a sub-bullet under a lead-in bullet, say), its detail now says the two share one acceptance and asks for one top-level bullet per finding; the reason and every other detail are unchanged.** Nothing is owed. See [Leftover rule: the refusal names a shared acceptance](#leftover-rule-the-refusal-names-a-shared-acceptance).
 - **After switching.** **The leftover rule no longer counts a finding's title word that GitHub runs into the next word through inline markup: an acceptance such as `- F-1 The retry loop never backs off*f*`, which GitHub shows as `offf`, leaves F-1 missing, and `vet_slot.py handback --pr` and a READY `vet_slot.py write` refuse `leftover-not-accepted` until the acceptance is reworded.** Nothing else is owed. See [Leftover rule: a title word glued to inline markup is not that word](#leftover-rule-a-title-word-glued-to-inline-markup-is-not-that-word).
@@ -60,6 +61,13 @@ The `leftover-not-accepted` detail from `vet_slot.py handback --pr` and a READY 
 - **Why.** The title was compared by its words with every non-word character read as a space, so `off*f*` read as `off f`, and the title counted although GitHub shows `offf`.
 - **What changes.** Fewer acceptances count, never more. The rule reads the acceptance and the record title alike, so a title written with glued markup still matches a verbatim copy. A word glued only at its start (`x*The*`) is unchanged. Emphasis pairing is approximated (flanking, and a partner run on the other side), so a literal `*` or `~` that has a partner can refuse an acceptance GitHub would show with a break. Reword the acceptance: a space after the title's last word always counts. Text on a fenced line is read with no markup, as GitHub shows it; a fence opened on an item's own marker line counts as one only after `-`, `*`, `+` or `1.`, so a genuine fence after a marker such as `2.` still refuses.
 - **Replacement.** None: no command, result key or refusal reason changes.
+
+### Wave watch: a resumed local lane is watched again
+
+- **The rule.** A started, outcome-terminal local lane that was not relaunched is watched like a live local lane once, after its basis (its outcome or newest amendment), a live process runs on its recorded session id or a heartbeat is stamped. The pid recorded before the resume never fires `builder-exited`, and a heartbeat from before the outcome never fires `lane-terminal` or `lane-blocked` again.
+- **What it reads.** One `ps` listing per lane per tick for the process signal (a failed listing records `pid-probe-uncertain`). The watch makes no comment read for a finished local lane.
+- **Within one loop.** A resumed process the loop has seen is remembered for the rest of the loop, so its exit fires `builder-exited`; a one-shot `run` remembers nothing between calls.
+- **Replacement.** None: no command, result key or reason is added or removed, and a local lane has no `cloudLanes` entry.
 
 ### Builders: one stop-and-delete rule
 
