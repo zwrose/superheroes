@@ -803,6 +803,31 @@ def test_doctrine_no_compound_delete_ruling_invariant_missing():
     assert result["detectiveCloudLine"] is None
 
 
+def test_own_processes_and_paths_ruling_text_is_the_shared_rule():
+    # axis: the own-processes-and-paths ruling's text is STOP_AND_DELETE_RULE itself, parsed and in RULING_TEXT — see bite-proof record wo_2412_stop_and_delete
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "own-processes-and-paths")
+    assert text == command_refusals.STOP_AND_DELETE_RULE
+    assert LD.RULING_TEXT["own-processes-and-paths"] is command_refusals.STOP_AND_DELETE_RULE
+
+
+def test_doctrine_own_processes_and_paths_ruling_invariant_missing():
+    # axis: the own-processes-and-paths ruling must keep its "only by its PID" phrase; the parse refuses and clears every payload field — see bite-proof record wo_2412_stop_and_delete
+    text = _mutate_once(_read_doctrine(), "only by its PID", "by its name")
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == (
+        "doctrine-ruling-invariant-missing:own-processes-and-paths:only by its PID"
+    )
+    assert result["rulings"] == []
+    assert result["checks"] == []
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+    assert result["cloudLaunchLine"] is None
+    assert result["detectiveCloudLine"] is None
+
+
 def test_turn_end_ruling_is_cited_not_copied_in_dispatch_mechanics():
     # axis: the dispatch-mechanics reference's "The turn's final act" section cites the turn-end
     # ruling's home (CONVENTIONS §11.4) and does not carry a second copy of its text

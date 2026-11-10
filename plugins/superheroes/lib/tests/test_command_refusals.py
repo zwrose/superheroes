@@ -5,6 +5,7 @@ the three order surfaces (write-engine prompt, native preamble, implementer agen
 read on its own and must carry the constant's text.
 """
 import os
+import re
 
 import pytest
 
@@ -320,3 +321,104 @@ def test_delete_rule_has_one_home():
                 if marker in " ".join(fh.read().split()):
                     copies.append(os.path.relpath(path, _PLUGIN_ROOT))
     assert sorted(copies) == allowed
+
+
+# --- the stop-and-delete rule (#2412): one home, every carrier of the delete rule ---
+
+
+def test_census_stop_and_delete_rule_write_prompt(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    prompt_path = _prompt(tmp_path, "Implement exactly the assigned work order.\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
+    assert res["ok"] is True
+    with open(os.path.join(str(tmp_path / "run"), ED.PROMPT_NAME), encoding="utf-8") as fh:
+        staged = fh.read()
+    # axis: the stop-and-delete rule reaches every dispatch-write order exactly once, and the process-rule name is that constant — see bite-proof record wo_2412_stop_and_delete
+    assert staged.count(CR.STOP_AND_DELETE_RULE) == 1
+    assert ED.WRITE_DISPATCH_PROCESS_RULE is CR.STOP_AND_DELETE_RULE
+
+
+def test_census_stop_and_delete_rule_native_preamble(tmp_path, monkeypatch, capsys):
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _out = _open(capsys, r, deadline=600, items=["src/new.txt"])
+    assert code == 0
+    with open(os.path.join(os.path.realpath(r.run), "agent-prompt.md"), encoding="utf-8") as fh:
+        prompt = fh.read()
+    # axis: the stop-and-delete rule reaches the native implementer preamble exactly once — see bite-proof record wo_2412_stop_and_delete
+    assert prompt.count(CR.STOP_AND_DELETE_RULE) == 1
+    assert prompt.index(CR.STOP_AND_DELETE_RULE) < prompt.index("The order follows, verbatim.")
+
+
+@pytest.mark.parametrize("relpath", [
+    os.path.join("agents", "implementer.md"),
+    os.path.join("skills", "review-code", "reference", "auto-fix-loop.md"),
+    os.path.join("skills", "review-code", "SKILL.md"),
+    os.path.join("skills", "workhorse", "reference", "orders.md"),
+], ids=["implementer", "auto-fix-loop", "review-code-skill", "orders"])
+def test_census_stop_and_delete_rule_prose_cites(relpath):
+    with open(os.path.join(_PLUGIN_ROOT, relpath), encoding="utf-8") as fh:
+        body = " ".join(fh.read().split())
+    # axis: a prose consumer cites the stop-and-delete rule by name, never carries its text (CONVENTIONS §11.4) — see bite-proof record wo_2412_stop_and_delete
+    assert "STOP_AND_DELETE_RULE" in body
+    assert " ".join(CR.STOP_AND_DELETE_RULE.split()) not in body
+
+
+# The one-home markers are the rule's own sentences, derived from the constant and never hand-copied.
+_STOP_AND_DELETE_SENTENCES = [
+    s.strip() for s in " ".join(CR.STOP_AND_DELETE_RULE.split()).split(". ") if s.strip()
+]
+
+
+@pytest.mark.parametrize("sentence", _STOP_AND_DELETE_SENTENCES[:2], ids=["stop-sentence", "delete-sentence"])
+def test_stop_and_delete_rule_has_one_home(sentence):
+    # A copy of either sentence anywhere in the shipped plugin outside its home is a second copy;
+    # prose consumers cite the home instead. Fail closed if the rule's shape (two sentences) changes.
+    assert len(_STOP_AND_DELETE_SENTENCES) == 2
+    allowed = [
+        os.path.join("lib", "command_refusals.py"),
+        # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is STOP_AND_DELETE_RULE itself
+        os.path.join("rubric", "launch-doctrine.md"),
+    ]
+    copies = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+            # The home stores the rule as adjacent string literals split across lines; dropping the
+            # quote-gap between them makes those read as one string.
+            body = " ".join(re.sub(r'"\s*"', "", raw).split())
+            if sentence in body:
+                copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+    # axis: each sentence of the stop-and-delete rule lives once, in its home plus the parser-verified ruling line — see bite-proof record wo_2412_stop_and_delete
+    assert sorted(copies) == allowed, "sentence %r" % sentence
+
+
+def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
+    # The invariant census: whatever carries or cites the delete rule also carries or cites the
+    # stop-and-delete rule. TRANSITION.md and CHANGELOG.md are history and are skipped.
+    delete_text = " ".join(CR.DELETE_RULE.split())
+    stop_text = " ".join(CR.STOP_AND_DELETE_RULE.split())
+    offenders = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            if name in ("TRANSITION.md", "CHANGELOG.md"):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+            body = " ".join(raw.split())
+            carries_delete = "DELETE_RULE" in raw or delete_text in body
+            carries_stop = "STOP_AND_DELETE_RULE" in raw or stop_text in body
+            if carries_delete and not carries_stop:
+                offenders.append(os.path.relpath(path, _PLUGIN_ROOT))
+    # axis: every carrier of the delete rule also carries or cites the stop-and-delete rule — see bite-proof record wo_2412_stop_and_delete
+    assert offenders == []

@@ -415,6 +415,24 @@ def test_every_launch_path_carries_the_no_compound_delete_ruling(tmp_path):
         assert result["prompt"].count(line) == 1, path
 
 
+def test_every_launch_path_carries_the_own_processes_and_paths_ruling(tmp_path):
+    # axis: the own-processes-and-paths ruling (STOP_AND_DELETE_RULE) reaches every composed builder prompt, local and cloud, fresh and adopt — see bite-proof record wo_2412_stop_and_delete
+    repo = _init_repo(tmp_path / "repo")
+    adopting = dict(_stamped(repo), adoptsBranch="feature/adopted", adoptsHead=_head_sha(repo))
+    composed = {
+        "local fresh": L.compose_launch(repo, 656, _stamped(repo)),
+        "local adopt": L.compose_launch(repo, 656, adopting, place="local"),
+        "cloud fresh": _compose_cloud(repo),
+        "cloud adopt": L.compose_launch(repo, 656, adopting, place="cloud", cloud_environment=ENV_ID,
+                                        session_name="issue-656-preview"),
+    }
+    line = launch_doctrine.ruling_line(launch_doctrine.load(), "own-processes-and-paths")
+    assert line
+    for path, result in composed.items():
+        assert result["ok"] is True, (path, result.get("reason"))
+        assert result["prompt"].count(line) == 1, path
+
+
 def test_compose_cloud_refuses_a_doctrine_with_no_cloud_launch_line(tmp_path):
     repo = _init_repo(tmp_path / "repo")
 
