@@ -530,6 +530,10 @@ def _slot_envelope(session_dir, key, attempt):
     # axis: a landing that is present but cannot be read as a result is listed landing-unreadable, never taken for a result or for nothing — see bite-proof record i2436_abandoned_missing
     if refusal is not None:
         return None, refusal.get("reason") != "landing-missing"
+    # axis: a landing that is neither a seat-missing record nor a known seat-result envelope with a payload object is unreadable, never a result — see bite-proof record i2436_abandoned_missing
+    if not (isinstance(env, dict) and (env.get("schema") == sc.SEAT_MISSING_SCHEMA or (
+            env.get("schema") in round_records.SEAT_RESULT_SCHEMAS and isinstance(env.get("payload"), dict)))):
+        return None, True
     return env, False
 
 

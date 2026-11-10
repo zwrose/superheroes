@@ -379,3 +379,21 @@ def test_a_recorded_miss_re_dispatched_by_the_pending_step_reads_its_newer_attem
         _land(session, TEST, raw="{not json", attempt=1)
     _, rec = _record(tmp_path, session)
     assert _missing(rec) == expected
+
+
+@pytest.mark.parametrize("body", [{"schema": "unknown"}, {"schema": round_records.SEAT_RESULT_SCHEMA},
+                                  {"schema": round_records.SEAT_RESULT_SCHEMA, "payload": "x"}],
+                         ids=["unknown-schema", "no-payload", "payload-not-an-object"])
+@pytest.mark.parametrize("journaled", [True, False], ids=["re-dispatched-miss", "pending-seat"])
+def test_a_landing_that_is_no_known_result_envelope_is_unreadable_never_a_result(tmp_path, body, journaled):
+    """axis: a landed object with an unknown schema, or a seat-result envelope with no payload object, is listed
+    landing-unreadable, both for a re-dispatched recorded miss and for a pending seat with no journal row."""
+    s = _session(tmp_path, pending=_pending(attempt=1 if journaled else 0), seats=(CODE,))
+    if journaled:
+        s.seat(TEST, cmd="record-missing")
+    session = s.save()
+    if journaled:
+        put_envelope(session, TEST, {"schema": sc.SEAT_MISSING_SCHEMA, "reason": "timeout"})
+    _land(session, TEST, body, attempt=1 if journaled else 0)
+    _, rec = _record(tmp_path, session)
+    assert _missing(rec) == [(TEST_ROW, rr.LANDING_UNREADABLE)]
