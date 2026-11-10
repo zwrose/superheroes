@@ -116,7 +116,7 @@ Contract:
 - Fix orders: a terminal, started cloud lane is watched again, exactly like a live cloud lane, from
   the moment it is sent a fix order until its next ending. Openers: a `vet not-ready` amendment, or a
   fix-order relay record (cloud_relay.fix_orders, composed with --fix-order) whose check read delivered
-  or may-hold-text, for the lane's session, opening at the message's compose time (`sentAfter`), never
+  or uncertain, for the lane's session, opening at the message's compose time (`sentAfter`), never
   at the check. Closers: a `reoutcome` amendment, or a vet `ready` or
   `parked-blocker`; the newest opener must be later than the newest closer. The window is
   [reopenedAt, close): the close is the first handback, stop or park created at or after reopenedAt that
@@ -157,17 +157,14 @@ Contract:
   a match on an engine's name; the lowest such pid; one `ps` read per lane, and a read that failed records
   pid-probe-uncertain and counts for nothing), `builder-process` again (the pid of such a process an
   earlier tick of the same loop saw at the same basis, so its exit fires builder-exited; a one-shot `run`
-  keeps none, and a retained pid whose basis changed is dropped), `builder-heartbeat` (a heartbeat stamped
-  after the basis) and `builder-comment` (a builder note, or an ending, created at or after the basis, or the
-  lane's progress comment updated more than PARK_SUPERSESSION_GRACE_SECONDS after it whose phase reads
-  resumed, on the lane's own issue; the lane's issue is read from the basis, once per lane per tick,
-  never its PR's; a read that failed or made no request records builder-note-unavailable and the lane stays
-  closed that tick; the comment itself fires no event). The reopened lane's recorded pid is replaced by the
+  keeps none, and a retained pid whose basis changed is dropped) and `builder-heartbeat` (a heartbeat
+  stamped after the basis). The reopened lane's recorded pid is replaced by the
   resumed process's (or None), so the pid recorded before the resume never fires builder-exited, and its
   heartbeat counts only when stamped after the basis, so the stamp of the outcome never fires
-  lane-terminal or lane-blocked again. A local lane with none of the signals is not watched and fires
-  nothing. A refused or never-started lane, one whose terminal is not an outcome, and one in
-  ignore-launch are never reopened. The deadline timer reads no comments and keeps no pid.
+  lane-terminal or lane-blocked again. A local lane with neither signal is not watched and fires
+  nothing. The watch makes no comment read for a finished local lane, so one never records
+  builder-note-unavailable. A refused or never-started lane, one whose terminal is not an outcome, and one in
+  ignore-launch are never reopened. The deadline timer keeps no pid.
 - Cloud endings: the same comments read surfaces, per live started cloud lane, the newest
   comment opening with a `cloud_builder.TERMINAL_HEADERS` header (handback, stop, park),
   created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
@@ -670,10 +667,10 @@ def _reopen_local_lane(repo_root, lid, info, launches, env, degraded, local_resu
 
     A lane that was not relaunched is reopened after its basis by the first of: a live process resumed on
     the lane's recorded session id (`builder-process`), the loop's retained pid of such a process (also
-    `builder-process`), a heartbeat stamped after the basis (`builder-heartbeat`), or a builder comment on
-    the lane's issue after the basis (`builder-comment`). The recorded pid is always replaced by the resumed
-    one (or None): the pid recorded before the resume never fires builder-exited. A lane none of them reopens
-    stays out of the live set and fires nothing.
+    `builder-process`), or a heartbeat stamped after the basis (`builder-heartbeat`). The recorded pid is
+    always replaced by the resumed one (or None): the pid recorded before the resume never fires
+    builder-exited. A lane neither reopens stays out of the live set and fires nothing. The watch makes no
+    comment read for a finished local lane.
     """
     pids = local_resume.get("pids") if isinstance(local_resume, dict) else None
     pids = pids if isinstance(pids, dict) else None
@@ -700,45 +697,9 @@ def _reopen_local_lane(repo_root, lid, info, launches, env, degraded, local_resu
             del pids[lid]
     if reopened is None and _heartbeat_stamped_after(repo_root, lid, env, basis):
         reopened = (None, "builder-heartbeat")
-    if (reopened is None and isinstance(local_resume, dict) and isinstance(local_resume.get("pending"), list)
-            and _valid_issue_number(info.get("issue"))):
-        # axis: the comment read waits until the tick knows no local event is due — see bite-proof record i2410_local_resume.md
-        local_resume["pending"].append((lid, info, basis))
-    elif (reopened is None and isinstance(local_resume, dict)
-            and callable(local_resume.get("read_comments")) and _valid_issue_number(info.get("issue"))):
-        _reopen_by_comment(lid, info, basis, local_resume["read_comments"], degraded, live_lanes)
     if reopened is not None:
         # axis: a started, outcome-terminal local lane whose builder is running again is watched like a live local lane, its recorded pre-resume pid replaced — see bite-proof record i2410_local_resume.md
         live_lanes[lid] = {**info, "pid": reopened[0], "reopenedAt": basis, "reopenedBy": reopened[1]}
-
-
-def _reopen_by_comment(lid, info, basis, read_comments, degraded, live_lanes):
-    """Read the lane's issue from `basis` and add it to `live_lanes` as `builder-comment` on a builder comment."""
-    state, comments = read_comments(info["issue"], basis)
-    if state is not True:
-        # axis: a comment read that failed or made no request is disclosed and leaves the lane closed this tick — see bite-proof record i2410_local_resume.md
-        degraded.add(DEGRADATION_BUILDER_NOTE_UNAVAILABLE)
-    # axis: a builder comment after the basis on the lane's issue reopens a local lane, with no event of its own — see bite-proof record i2410_local_resume.md
-    elif _local_builder_comment(comments, lid, info, basis):
-        live_lanes[lid] = {**info, "pid": None, "reopenedAt": basis, "reopenedBy": "builder-comment"}
-
-
-def _local_builder_comment(comments, lid, info, basis):
-    """Whether the lane's issue shows a builder comment after `basis`: a builder note or an ending created
-    at or after it, or the lane's progress comment updated more than PARK_SUPERSESSION_GRACE_SECONDS after it
-    whose phase reads resumed. The comments are assigned to the lane by `_comment_lane`."""
-    watched = {lid: info}
-    # axis: the comment signal reads the three builder comment kinds — a note, an ending, a resumed progress edit — each at its own cutoff — see bite-proof record i2410_local_resume.md
-    if any(created >= basis for created in _cloud_note_times(comments, watched).values()):
-        return True
-    if any(created >= basis for _lid, _number, created, _comment, _kind in _cloud_endings(comments, watched)):
-        return True
-    progress = _cloud_progress(comments, watched).get(lid)
-    return (
-        isinstance(progress, dict)
-        and progress["updatedEpoch"] - basis > PARK_SUPERSESSION_GRACE_SECONDS
-        and _phase_reads_resumed(progress.get("phase"))
-    )
 
 
 def _heartbeat_stamped_after(repo_root, lid, env, basis):
@@ -2389,8 +2350,10 @@ def _evaluate_cloud_comments(
     shows none, so the slot is left as the caller set it. `known_closes` is the closes an earlier complete
     read showed for the lanes' current reopening ({launch id: (close epoch, ending kind)}): a partial read
     filters notes and endings by them, after dropping from it (in place) each park close the observed
-    comments show superseded. `unread_out` is a dict that gains {launch id: issue} for each watched
-    lane when a request was made and came back partial: any watched issue may hold a comment on an unread page.
+    comments show superseded. `unread_out` is a dict that gains {launch id: issue} for a lane whose own
+    per-lane read failed or was skipped for budget after the tick made a request; for each shared lane when
+    the shared read came back partial; and for every watched lane when the shared read's `since` could not
+    be formed (no read follows it).
     """
     watched = {
         lid: info for lid, info in live_lanes.items()
@@ -3337,27 +3300,9 @@ def _evaluate_tick(
     # One slot for the tick: whichever read resolves the repository slug first fills it, and the
     # others reuse it, a failed resolution (None) included.
     slug_cell = [_SLUG_UNRESOLVED]
-    # The terminal local lanes' comment reads share one quarter of what was left of the tick at the first
-    # such read, so they never consume the budget the PR, cloud, note and stack reads that follow need. A
-    # share smaller than one request's minimum makes no request (the read is disclosed as not made).
-    local_share = []
-    # (launch id, info, basis) of each closed local lane no cheaper signal reopened: read after the local events.
-    pending_comment_reads = []
-
-    def read_lane_comments(issue, basis):
-        if not local_share:
-            local_now = monotonic()
-            local_share.append(local_now + max(deadline - local_now, 0) / 4)
-        # axis: a terminal local lane's comment read spends only its tick share, never the pollers' budget — see bite-proof record i2410_local_resume.md
-        if local_share[0] - monotonic() < _MIN_PR_POLL_SECONDS:
-            return None, []
-        return _read_lane_comments(
-            repo_root, issue, basis, local_share[0], monotonic, gh_run, env, None, slug_cell,
-        )
-
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
-        local_resume={"pids": resume_state, "pending": pending_comment_reads},
+        local_resume={"pids": resume_state},
     )
 
     if first_tick[0] and not ledger_readable:
@@ -3399,10 +3344,6 @@ def _evaluate_tick(
         open_pr_numbers = None
         repo_slug = None
     else:
-        # A closed local lane's comment read waits until here: a local event that is already due is reported
-        # first. A lane it reopens has no pid and no heartbeat after its basis, so it adds no local event now.
-        for lid, info, basis in pending_comment_reads:
-            _reopen_by_comment(lid, info, basis, read_lane_comments, degraded, live_lanes)
         open_pr_numbers, _pr_poll_ok = _poll_open_pr_numbers(
             repo_root,
             deadline,

@@ -2,14 +2,15 @@
 
 A started, outcome-terminal local lane that was not relaunched is watched like a live local lane when,
 after its basis (its recorded outcome, or its newest amendment), its builder is running again: a live
-process resumed on the lane's recorded session id, a heartbeat stamped after the basis, or a builder
-comment on its issue. The pid recorded before the resume never fires builder-exited, and a heartbeat
-from before the outcome never fires lane-terminal or lane-blocked again.
+process resumed on the lane's recorded session id, or a heartbeat stamped after the basis. A builder
+comment is no signal, and the watch makes no comment read for a finished local lane. The pid recorded
+before the resume never fires builder-exited, and a heartbeat from before the outcome never fires
+lane-terminal or lane-blocked again.
 
 Ledger outcome timestamps are wall-clock `time.time()`. The lane below was reserved 300 seconds ago,
 started 290 seconds ago and had its outcome recorded 200 seconds ago, so its basis is `now - 200`: a
-comment or heartbeat "after the basis" is stamped later than that, and one "before" it earlier (but after
-the reserve, which is when a comment becomes the lane's).
+heartbeat "after the basis" is stamped later than that, and one "before" it earlier (but after the
+reserve).
 """
 import os
 import subprocess
@@ -20,10 +21,9 @@ import pytest
 import heartbeat as hb
 import launch_ledger as ll
 import wave_watch as ww
-from test_wave_watch_builder_note import _BATCH, _NoteGh, _arm, _cloud_lane, _raw  # noqa: F401
+from test_wave_watch_builder_note import _BATCH, _NoteGh, _arm, _cloud_lane  # noqa: F401
 from test_wave_watch_cloud import _add_local_lane, _reserved, clock, repo  # noqa: F401
-from test_wave_watch_cloud_progress import _progress  # noqa: F401
-from test_wave_watch_fix_order import _ending, _later  # noqa: F401
+from test_wave_watch_fix_order import _later  # noqa: F401
 
 _SID = "5f0e8c1a-2b3d-4e6f-8a9b-0c1d2e3f4a5b"
 _RECORDED_PID = 999999999
@@ -76,17 +76,6 @@ def _derive(repo_root, local_resume=None, ignore=()):
     return live, degraded
 
 
-def _reader(state, comments=()):
-    calls = []
-
-    def read(issue, basis):
-        calls.append((issue, basis))
-        return state, list(comments)
-
-    read.calls = calls
-    return read
-
-
 def _run(repo_root, gh=None, **kwargs):
     return ww.run(repo_root, _BATCH, gh_run=gh or _NoteGh(), **kwargs)
 
@@ -116,95 +105,6 @@ def test_row1_the_process_signal_reopens_by_builder_process_and_replaces_the_rec
     assert pids == {"local-a": (lane["reopenedAt"], _RESUMED_PID)}
 
 
-# --- row 2: a builder comment after the basis reopens the lane, and fires nothing -------------------
-
-
-@pytest.mark.parametrize("body", [
-    pytest.param(None, id="note"),
-    pytest.param("handback", id="handback"),
-    pytest.param("stop", id="stop"),
-    pytest.param("park", id="park"),
-])
-def test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment(
-        repo, monkeypatch, body):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    comment = _later(7, issue=201) if body is None else _later(7, _ending(body), issue=201)
-    read = _reader(True, [comment])
-    live, degraded = _derive(repo, {"pids": {}, "read_comments": read})
-    lane = live["local-a"]
-    assert (lane["reopenedBy"], lane["pid"]) == ("builder-comment", None)
-    assert read.calls == [(201, lane["reopenedAt"])]
-    assert degraded == set()
-
-
-def test_row2_the_comment_itself_fires_no_event(repo, monkeypatch):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    gh = _NoteGh([_later(7, issue=201)])
-    result = _run(repo, gh)
-    assert result["event"] == ww.EVENT_TIMER
-    assert result["degraded"] == []
-    assert len(gh.note_calls()) == 1
-    assert "/issues/201/comments" in gh.note_calls()[0][-1]
-
-
-@pytest.mark.parametrize("make", [
-    pytest.param(lambda: [_later(7, issue=201, secs=-_BEFORE_BASIS)], id="note-before-the-basis"),
-    pytest.param(lambda: [_later(7, "Looks good to me.", issue=201)], id="free-form-comment"),
-    pytest.param(lambda: [_later(7, issue=202)], id="another-issue"),
-    pytest.param(lambda: [_later(7, _ending("handback"), issue=201, secs=-_BEFORE_BASIS)], id="ending-before"),
-])
-def test_row2_a_comment_that_is_not_a_builder_comment_after_the_basis_does_not_reopen(
-        repo, monkeypatch, make):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    # Built after the lane, so a before-the-basis comment is still after the reserve whatever the delay.
-    comments = make()
-    live, degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, comments)})
-    assert live == {}
-    assert degraded == set()
-
-
-# --- row 2b: a progress edit to a resumed phase, more than the grace after the basis -----------------
-
-
-def test_row2b_a_progress_comment_updated_after_the_grace_with_a_resumed_phase_reopens(
-        repo, monkeypatch):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    # Created before the basis, updated 400 seconds after it (the grace is 300).
-    comment = _progress(
-        9, 201, updated_age=-(400 - _OUTCOME_AGE), created_age=_BEFORE_BASIS,
-        phase="resumed: fixing the gate",
-    )
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [comment])})
-    assert live["local-a"]["reopenedBy"] == "builder-comment"
-
-
-def test_row2b_the_same_progress_comment_updated_inside_the_grace_does_not_reopen(
-        repo, monkeypatch):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    # Updated 100 seconds after the basis, inside the 300-second grace.
-    comment = _progress(
-        9, 201, updated_age=_OUTCOME_AGE - 100, created_age=_BEFORE_BASIS,
-        phase="resumed: fixing the gate",
-    )
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [comment])})
-    assert live == {}
-
-
-def test_row2b_a_progress_comment_whose_phase_reads_parked_does_not_reopen(repo, monkeypatch):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    comment = _progress(
-        9, 201, updated_age=-(400 - _OUTCOME_AGE), created_age=_BEFORE_BASIS, phase="parked",
-    )
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [comment])})
-    assert live == {}
-
-
 # --- row 3: no signal, no watch ------------------------------------------------------------------
 
 
@@ -213,7 +113,7 @@ def test_row3_a_local_lane_with_no_signal_stays_out_of_the_live_set_and_fires_no
     _local_lane(repo)
     _scan(monkeypatch, (None, False))
     _stamp(repo, "handback", _BEFORE_BASIS)  # stamped before the outcome: no signal
-    live, degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [])})
+    live, degraded = _derive(repo, {"pids": {}})
     assert live == {}
     assert degraded == set()
     result = _run(repo)
@@ -291,7 +191,7 @@ def test_row4_a_retained_pid_of_another_basis_is_deleted_not_used(repo, monkeypa
     _local_lane(repo)
     _scan(monkeypatch, (None, False))
     pids = {"local-a": (12345.0, _RESUMED_PID)}  # a different basis
-    live, _degraded = _derive(repo, {"pids": pids, "read_comments": _reader(True, [])})
+    live, _degraded = _derive(repo, {"pids": pids})
     assert live == {}
     assert pids == {}
 
@@ -443,75 +343,37 @@ def test_row7_a_local_lane_relaunched_on_its_issue_is_not_reopened(repo, monkeyp
     _local_lane(repo)
     _add_local_lane(repo, "local-b", 201, pid=_RECORDED_PID)  # the relaunch, reserved later
     _scan(monkeypatch, (_RESUMED_PID, False))
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [_later(7, issue=201)])})
+    live, _degraded = _derive(repo, {"pids": {}})
     assert set(live) == {"local-b"}
 
 
-# --- row 8: a comment read that fails ----------------------------------------------------------
+# --- R2-new: a builder comment is no signal for a finished local lane, and no comment is read -----
 
 
-@pytest.mark.parametrize("state", [False, None])
-def test_row8_a_comment_read_that_failed_or_made_no_request_is_disclosed_and_the_lane_stays_closed(
-        repo, monkeypatch, state):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    live, degraded = _derive(repo, {"pids": {}, "read_comments": _reader(state, [_later(7, issue=201)])})
-    assert live == {}
-    assert degraded == {ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE}
-
-
-def test_row8_a_failing_gh_read_in_a_tick_records_builder_note_unavailable(repo, monkeypatch):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    gh = _NoteGh(script=[_raw(["gh"], "", 1)])
-    result = _run(repo, gh)
-    assert result["event"] == ww.EVENT_TIMER
-    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
-
-
-def test_a_terminal_local_lanes_comment_read_gets_a_quarter_of_the_tick_not_its_whole_budget(
+def test_a_builder_comment_after_the_basis_does_not_reopen_a_finished_local_lane_and_no_comment_is_read(
         repo, monkeypatch):
-    # A slow comment read for a closed local lane must not spend the budget the PR, cloud and note reads need.
     _local_lane(repo)
     _scan(monkeypatch, (None, False))
-    seen = []
-
-    def read_lane_comments(repo_root, issue, basis, deadline, *args):
-        seen.append(deadline)
-        return True, []
-
-    monkeypatch.setattr(ww, "_read_lane_comments", read_lane_comments)
-    _run(repo, monotonic=lambda: 1000.0)
-    assert seen == [1000.0 + ww.RUN_READ_BUDGET_SECONDS / 4]
+    gh = _NoteGh([_later(7, issue=201)])  # a builder note created after the basis, on the lane's issue
+    result = _run(repo, gh)
+    assert result["event"] == ww.EVENT_TIMER, result
+    live, _degraded = _derive(repo, {"pids": {}})
+    assert "local-a" not in live
+    assert gh.note_calls() == []
 
 
-def test_a_local_event_already_due_is_reported_before_any_closed_lanes_comment_read(repo, monkeypatch):
-    # A live lane's handback is due; the closed lane's comment read never runs ahead of it.
-    _local_lane(repo)
-    _add_local_lane(repo, "local-live", 301, pid=os.getpid())
-    _stamp(repo, "handback", 5, launch_id="local-live")
-    _scan(monkeypatch, (None, False))
-    seen = []
-    monkeypatch.setattr(ww, "_read_lane_comments", lambda *args: seen.append(args) or (True, []))
-    result = _run(repo)
-    assert result["event"] == ww.EVENT_LANE_TERMINAL
-    assert seen == []
-
-
-def test_a_tick_too_short_to_share_makes_no_comment_read_and_discloses_it(repo, monkeypatch):
-    # A one-second arm: a quarter of it is less than one request's minimum, so the closed lane's read is not
-    # made at all, and the arm's whole window stays with the other reads.
+def test_a_batch_of_only_local_lanes_ending_on_its_timer_records_no_builder_note_unavailable(
+        repo, monkeypatch):
+    # A finished local lane with no signal (a live local lane cannot be made quiet without a transcript: it
+    # reads lane-stale): the arm ends on its timer and records no builder-note-unavailable on its account.
     _local_lane(repo)
     _scan(monkeypatch, (None, False))
-    seen = []
-    monkeypatch.setattr(ww, "_read_lane_comments", lambda *args: seen.append(args) or (True, []))
-    clock = iter(range(1000, 1100))
-    result = ww.watch_arm(
-        repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=_NoteGh(),
-        monotonic=lambda: float(next(clock)) / 10, sleep=lambda _d: None,
-    )
-    assert seen == []
-    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE in result["degraded"]
+    gh = _NoteGh([_later(7, issue=201)])
+    # No `sleep` argument: the autouse virtual clock advances only through the default sleep it patches.
+    result = ww.watch_arm(repo, _BATCH, max_seconds=1, interval_seconds=1, gh_run=gh)
+    assert result["event"] == ww.EVENT_TIMER, result
+    assert ww.DEGRADATION_BUILDER_NOTE_UNAVAILABLE not in result["degraded"], result["degraded"]
+    assert gh.note_calls() == []
 
 
 def test_the_heartbeat_stamp_time_uses_the_clock_sample_its_age_was_read_at(monkeypatch):
@@ -530,40 +392,19 @@ def test_the_heartbeat_stamp_time_uses_the_clock_sample_its_age_was_read_at(monk
 # --- the order of the signals, and the lanes that are never reopened -------------------------------
 
 
-def test_the_process_signal_wins_over_the_heartbeat_and_the_comment(repo, monkeypatch):
+def test_the_process_signal_wins_over_the_heartbeat(repo, monkeypatch):
     _local_lane(repo)
     _scan(monkeypatch, (_RESUMED_PID, False))
     _stamp(repo, "working", _AFTER_BASIS)
-    read = _reader(True, [_later(7, issue=201)])
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": read})
+    live, _degraded = _derive(repo, {"pids": {}})
     assert live["local-a"]["reopenedBy"] == "builder-process"
-    assert read.calls == []
-
-
-def test_the_heartbeat_signal_wins_over_the_comment(repo, monkeypatch):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    _stamp(repo, "working", _AFTER_BASIS)
-    read = _reader(True, [_later(7, issue=201)])
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": read})
-    assert live["local-a"]["reopenedBy"] == "builder-heartbeat"
-    assert read.calls == []
-
-
-def test_without_a_comment_reader_no_comment_is_read_and_the_lane_stays_closed(repo, monkeypatch):
-    _local_lane(repo)
-    _scan(monkeypatch, (None, False))
-    live, degraded = _derive(repo, {"pids": {}})
-    assert live == {}
-    assert degraded == set()
 
 
 def test_a_lane_in_ignore_launch_is_never_reopened(repo, monkeypatch):
     _local_lane(repo)
     _scan(monkeypatch, (_RESUMED_PID, False))
     _stamp(repo, "working", _AFTER_BASIS)
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [_later(7, issue=201)])},
-                              ignore=("local-a",))
+    live, _degraded = _derive(repo, {"pids": {}}, ignore=("local-a",))
     assert live == {}
 
 
@@ -572,7 +413,7 @@ def test_a_live_local_lane_and_a_cloud_lane_are_unchanged(repo, monkeypatch):
     _cloud_lane(repo, "cloud-live", 302)
     _scan(monkeypatch, (_RESUMED_PID, False))
     recorded_cloud_pid = ww._derive_batch_lanes(repo, _BATCH, os.environ, set(), ())[1]["cloud-live"].get("pid")
-    live, _degraded = _derive(repo, {"pids": {}, "read_comments": _reader(True, [])})
+    live, _degraded = _derive(repo, {"pids": {}})
     assert set(live) == {"local-live", "cloud-live"}
     assert "reopenedBy" not in live["local-live"] and "reopenedBy" not in live["cloud-live"]
     assert live["local-live"]["pid"] == os.getpid()

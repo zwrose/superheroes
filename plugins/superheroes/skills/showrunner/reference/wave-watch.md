@@ -490,18 +490,15 @@ A lane passed `--ignore-launch` is not watched on this path either, with no sign
 the ignore before you resume a lane (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
 
 A terminal **local** lane you resumed (its outcome is recorded, and the builder is running again) is
-**watched again, exactly like a live local lane**, once any one of three things shows after its basis (the
+**watched again, exactly like a live local lane**, once either of two things shows after its basis (the
 same basis as above, and a lane relaunched on its issue is never reopened): a live process resumed on the
-lane's recorded session id, a heartbeat stamped after the basis, or a builder comment on the lane's issue
-(a builder note, a handback, stop or park, or a progress edit to a resumed phase more than five minutes
-after the basis). A local lane with none of the three stays out of the watch and fires nothing. The pid
+lane's recorded session id (kept for the rest of the loop once seen), or a heartbeat stamped after the
+basis. A local lane with neither stays out of the watch and fires nothing. The pid
 recorded before the resume never fires `builder-exited`; once the watch has seen the resumed process, it
 keeps its pid for the rest of the loop, so the resumed builder's exit fires `builder-exited` (a one-shot
 `run` keeps nothing between calls). A heartbeat from before the outcome never fires `lane-terminal` or
-`lane-blocked` again; only one stamped after the basis counts. Only the lane's own issue comments are
-read, never its PR's, and a comment reopens the lane without firing anything itself; a read that failed
-records `builder-note-unavailable` and the lane stays closed that tick. A lane passed `--ignore-launch`
-is not reopened.
+`lane-blocked` again; only one stamped after the basis counts. The watch makes no comment read for a
+finished local lane. A lane passed `--ignore-launch` is not reopened.
 
 What you do on each: on a **handback**, vet the PR. On a **stop**, repair it — an Anchor stop is duty
 3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it
@@ -552,7 +549,7 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
-- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing; when the read was partial, the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only then) names the issues it left unread, and across an arm or a loop a lane named once stays named
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing; the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only when non-empty) names a lane whose own per-lane read failed or was skipped after the tick made a request, each shared lane when the shared read came back partial, and every watched lane when the shared read could not be made at all, and across an arm or a loop a lane named once stays named
 - `fix-order-unavailable` — the relay's state file could not be read, so a fix order relayed to a terminal cloud lane may go unseen; only `vet not-ready` amendments re-open lanes meanwhile
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane

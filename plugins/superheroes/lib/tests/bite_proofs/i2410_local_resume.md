@@ -21,8 +21,15 @@ Disclosures:
   the red and green below are from that second pass.
 - Element 2's selector `row6_a_session_id_anywhere` selects 6 tests; 5 are red under the neutralization and 1
   (`claude --resume other-session-id-0000`, a different id) passes, since a substring match does not match it.
-- Element 6's selector `row2` selects 12 tests (the row 2, 2b and no-reopen cases); 5 are red and 7 pass, since
-  the cases that must not reopen pass when nothing reopens.
+- Elements 6 and 9 were removed by the owner's 2026-11-10 fix order (the comment signal and its comment-read
+  share no longer exist), with their tests and selector notes. Element 1 was re-run on a selector over
+  surviving tests; its raw red and green below are the new captures. Element 8's trailing green line is the
+  historic one, taken with element 9. Elements 2 to 5 and 7 keep their earlier captures, whose line numbers
+  and `degraded` lists predate the removal; their neutralizations and selectors were not re-run.
+- The tests added by the fix order (`test_a_builder_comment_after_the_basis_does_not_reopen_a_finished_local_lane_and_no_comment_is_read`
+  and `test_a_batch_of_only_local_lanes_ending_on_its_timer_records_no_builder_note_unavailable`) guard the
+  absence of removed code, so there is no element in the tree to neutralize: no bite-proof element is added
+  for them.
 - A scratch copy of element 1's red output was first written with `tee` (a rule breach, reported to the
   orchestrator); the output quoted below is the run's own stdout.
 
@@ -32,29 +39,20 @@ Disclosures:
   it is watched like a live local lane.
 - **Neutralization:** `live_lanes[lid] = {**info, "pid": reopened[0], "reopenedAt": basis, "reopenedBy": reopened[1]}`
   became `pass`.
-- **Raw red** (`-k "row1_the_process_signal or row2_a_builder_comment_after"`):
+- **Raw red** (re-run after the comment signal was removed, `-k "row1_the_process_signal or row4_a_lane_reopened_by_a_heartbeat"`):
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-FFFFF                                                                    [100%]
+FF                                                                       [100%]
 =================================== FAILURES ===================================
 E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:113: KeyError: 'local-a'
+/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:102: KeyError: 'local-a'
 E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
+/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:136: KeyError: 'local-a'
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row1_the_process_signal_reopens_by_builder_process_and_replaces_the_recorded_pid
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[note]
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[handback]
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[stop]
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[park]
-5 failed, 56 deselected in 1.19s
+FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row4_a_lane_reopened_by_a_heartbeat_does_not_fire_builder_exited_for_the_recorded_pid
+2 failed, 45 deselected in 0.56s
 ```
 
 - **Restore:** the inverse Edit put the assignment back.
@@ -64,8 +62,8 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_
 
 ```
 warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-.....                                                                    [100%]
-5 passed, 56 deselected in 1.35s
+..                                                                       [100%]
+2 passed, 45 deselected in 0.75s
 ```
 
 ## 2. The session-flag identity rule (`_resumed_session_pid`, `_names_session`)
@@ -251,46 +249,7 @@ warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be remo
 2 passed, 59 deselected in 0.83s
 ```
 
-## 6. The comment signal (`_reopen_local_lane` -> `_local_builder_comment`)
-
-- **Axis:** a builder note, an ending, or a resumed progress edit on the lane's issue after the basis reopens
-  the lane as `builder-comment`.
-- **Neutralization:** `elif _local_builder_comment(comments, lid, info, basis):` became
-  `elif False and _local_builder_comment(comments, lid, info, basis):`.
-- **Raw red** (`-k "row2"`):
-
-```
-warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-FFFF.....F..                                                             [100%]
-=================================== FAILURES ===================================
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:135: KeyError: 'local-a'
-E   KeyError: 'local-a'
-/home/user/sh-2410/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:180: KeyError: 'local-a'
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[note]
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[handback]
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[stop]
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2_a_builder_comment_after_the_basis_reopens_the_lane_as_builder_comment[park]
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_row2b_a_progress_comment_updated_after_the_grace_with_a_resumed_phase_reopens
-5 failed, 7 passed, 49 deselected in 1.52s
-```
-
-- **Restore:** the inverse Edit removed `False and`.
-- **Restore receipt** (restored line quoted): `elif _local_builder_comment(comments, lid, info, basis):`
-- **Raw green** (same selector):
-
-```
-warning: The `UV_NATIVE_TLS` environment variable is deprecated and will be removed in a future release. Use `UV_SYSTEM_CERTS` instead.
-............                                                             [100%]
-12 passed, 49 deselected in 1.65s
-```
+## 6. (removed by the owner's 2026-11-10 fix order)
 
 ## 7. The relaunch exclusion for a local lane (`_dormant_basis`, called with `place=local`)
 
@@ -347,23 +306,4 @@ FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_
 - **Restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing.
 - **Raw green** (selector of elements 8 and 9 together): `3 passed, 61 deselected in 0.76s`.
 
-## 9. The terminal local lanes' comment-read share (`_evaluate_tick`, `read_lane_comments`)
-
-Added at review (the seams-check finding "Reserve polling time before reading terminal local lanes" and its
-sweep hit; the round 2 audit showed a one-second arm still handed the read its whole window). Same probe
-worktree and capture rule as element 8.
-
-- **Axis:** a closed local lane's comment reads share a quarter of the tick, and a share under one request's minimum makes no request.
-- **Neutralization:** the share check (`if local_share[0] - monotonic() < _MIN_PR_POLL_SECONDS: return None, []`)
-  removed and `local_share[0]` passed as `deadline` (the whole tick deadline, the original shape).
-- **Raw red** (`-k "quarter_of_the_tick or too_short_to_share"`):
-
-```
-/home/user/sh-2410-probe/plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py:500: AssertionError: assert [('/tmp/pytes...4f20f0>, ...)] == []
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_a_terminal_local_lanes_comment_read_gets_a_quarter_of_the_tick_not_its_whole_budget
-FAILED plugins/superheroes/lib/tests/test_wave_watch_local_resume_2410.py::test_a_tick_too_short_to_share_makes_no_comment_read_and_discloses_it
-2 failed, 62 deselected in 8.14s
-```
-
-- **Restore:** the inverse Edit; `git status --short` in the probe worktree printed nothing.
-- **Raw green:** as element 8.
+## 9. (removed by the owner's 2026-11-10 fix order)
