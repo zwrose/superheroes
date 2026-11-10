@@ -229,6 +229,22 @@ def test_mark_delivered_then_superseded_round_trips(tmp_path):
     assert text.endswith(_doc().split("---\n", 2)[2])   # the body is untouched
 
 
+def test_mark_superseded_on_an_undelivered_spec_points_to_the_amendment_path(tmp_path):
+    p = tmp_path / "spec.md"
+    p.write_text(_doc(), encoding="utf-8")
+    before = p.read_bytes()
+    r = DD.add_superseded(str(p), "2026-03-01", ["FR-6"], "r")
+    assert r["ok"] is False and r["reason"] == "not-delivered"
+    assert "amended in place" in r["detail"] and "skills/showrunner/reference/amendments.md" in r["detail"]
+    out = _cli("mark-superseded", "--path", str(p), "--date", "2026-03-01",
+               "--section", "FR-6", "--ruling", "r", "--root", _REPO_ROOT)
+    got = json.loads(out.stdout)
+    assert out.returncode == 1 and got["reason"] == "not-delivered" and got["detail"] == r["detail"]
+    assert p.read_bytes() == before
+    # the path the detail names resolves from the plugin root
+    assert os.path.isfile(os.path.join(_REPO_ROOT, "plugins/superheroes/skills/showrunner/reference/amendments.md"))
+
+
 @pytest.mark.parametrize("doc,args", [
     (_doc(approved=False), ("2026-02-01", RECEIPT, ["lib/x.py"])),
     (_doc(), ("2026-02-01", "not a link", ["x"])),

@@ -263,6 +263,19 @@ to push and hand over, and the successor starts from what was pushed. Work in a 
 never pushed cannot be preserved and is redone, and a cloud lane that never pushed starts again from
 its base.
 
+**When a usage limit kills local builders,** the sweep preserves each dead build in three steps,
+before any relaunch:
+
+1. Save the dead worktree's uncommitted files, edits and the untracked files the build made, as a
+   work-in-progress commit on that build's own branch. Its message says it is an unreviewed save
+   after a usage-limit stop, so the successor reads it as residue to adjudicate, not as a receipt.
+2. Push that branch, and name the commit by its sha in the recovery record.
+3. Once the push is confirmed, remove the dead worktree (`git worktree remove`, each worktree in its own call),
+   so the relaunch's sibling check and its own new worktree do not meet a stale tree. Remove only a
+   worktree whose builder process is confirmed gone (§ Read liveness from the right signals).
+
+The relaunch then adopts from the pushed branch. A cloud lane keeps the exception above.
+
 ### Check for a sibling build at a clean-base intake
 
 A builder launched on a clean base, with no branch handed over, checks at intake for another build

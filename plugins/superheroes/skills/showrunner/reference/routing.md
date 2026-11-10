@@ -105,5 +105,13 @@ premise did the right thing. Three amendments have a fixed home:
 - A fold into a live lane lands in **both** the issue body and an order amendment, so neither the
   builder's intake nor its live order is left stale.
 
+**Never write a wait-for-a-later-message step into a headless builder's order or its amendment.**
+"Hold until I relay", "wait for my go" and every step like them ask the builder to hear a message
+sent after launch, and a running headless session cannot: it waits for nothing, or ends its turn and
+stops. Write the condition into the issue body instead, as something the builder can read for
+itself, and have the builder park durably when the condition does not hold. The builder side is
+workhorse's park rule (a headless builder parks when an in-turn wait cannot fit). A cloud builder's
+own builder note, a question it asks with a bounded reply window, is not such a step.
+
 A mis-routed "ready" issue that turns out unclear is caught by the builder's stop-and-report
 safeguard, which the workhorse charter defines. You own the route; the builder owns that safeguard.
