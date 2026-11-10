@@ -37,6 +37,9 @@ its verdict actually turns on, it runs itself.
   names no ceiling for a command whose output you cannot bound, stop and report before running it.
   Honour any **order-wide** ceiling across the whole command set the same way: if the running total
   would overrun it, **stop and report the overrun** rather than silently truncating a later capture.
+- **A refused or denied command is a stop.** Record the refusal in that command's capture and in
+  your report, and run nothing in its place: a refusal binds the whole build session (`SESSION_RULE`
+  in `lib/command_refusals.py`), and what follows is the orchestrator's call.
 - **Never delete or filter a capture yourself.** The captures are working artifacts the orchestrator
   reads, quotes (redacted), and removes when verification closes — that cleanup is the
   orchestrator's, not yours; you write what your order names and leave it in place.

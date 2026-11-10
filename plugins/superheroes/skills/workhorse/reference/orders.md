@@ -80,7 +80,10 @@ These obligations attach to the order on your side, when you write it.
   call. They carry the stop-and-delete rule too (`STOP_AND_DELETE_RULE`, same home): a process is
   stopped only by its PID and only when the session started it, and a path is deleted only when the
   session created it or the order names it. When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
-  so as its own instruction and names the refusal it answers. The refusals each dispatch reports go
+  so as its own instruction and names the refusal it answers; that route must not be the refused act
+  in another form, because a refusal binds the whole build session: beyond the refusing seat's own
+  two exceptions above, only a sanctioned retry lets a seat re-take a refused act (`SESSION_RULE` and
+  `SANCTIONED_RETRIES`, same home). The refusals each dispatch reports go
   into the build record's dispatch provenance (`handback.md` § The build record).
 - **An order to an external engine carries a no-install, no-network block and a provenance-accuracy
   block.** Every order to codex or cursor says: install nothing (no npm, pip, brew or npx, global or
