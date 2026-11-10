@@ -374,15 +374,19 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 > # Per external seat — the orchestrator sets these before this recipe runs:
-> #   $SEAT_KEY       roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats
+> #   $SEAT_KEY       roster seat key (e.g. code-reviewer, or test-role:s1 for a slice seat)
+> #   $SEAT_PHASE     the step's action (e.g. dispatch-panel)
+> #   $PAYLOAD        the step's payload JSON
 > #   $SEAT_PROMPT    emitted order path for this seat
 > #   $RUN_DIR        fresh run directory (created by first dispatch-review)
 > #   $SEAT_PROGRESS  progress file outside $RUN_DIR
 > case "$SEAT_KEY" in ""|null)
 >   echo "dispatch-review: SEAT_KEY unset — cannot resolve seat map entry (fail closed)." >&2; exit 1;; esac
-> SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_KEY\"] // empty")
+> # The seat map is keyed by lens; a slice seat key `<lens>:<slice id>` resolves to its lens (as the driver's `seat_lens` does).
+> SEAT_LENS="${SEAT_KEY%%:*}"
+> SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_LENS\"] // empty")
 > case "$SEAT_CELL" in ""|null)
->   echo "dispatch-review: seat map has no entry for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1;; esac
+>   echo "dispatch-review: seat map has no entry for SEAT_LENS=$SEAT_LENS (SEAT_KEY=$SEAT_KEY) (fail closed)." >&2; exit 1;; esac
 > SEAT_VENDOR=$(printf '%s' "$SEAT_CELL" | jq -r '.vendor // empty')
 > SEAT_ENGINE_MODEL=$(printf '%s' "$SEAT_CELL" | jq -r '.model // empty')
 > SEAT_TIER=$(printf '%s' "$SEAT_CELL" | jq -r '.tier // empty')
@@ -394,6 +398,18 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > fi
 > if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
+> # The attempt and retry ceilings: 900 s unless the step is a dispatch-panel whose payload carries `ceilings`, which
+> # `round_phases.seat_ceiling` filled per seat. A dispatch-panel payload with no `ceilings` key at all (a pending step
+> # persisted by an earlier plugin version, re-emitted after an upgrade) keeps 900/900, as does every other phase.
+> SEAT_TIMEOUT=900; SEAT_RETRY_TIMEOUT=900
+> if [ "$SEAT_PHASE" = "dispatch-panel" ] && printf '%s' "$PAYLOAD" | jq -e 'has("ceilings")' >/dev/null 2>&1; then
+>   SEAT_CEILING=$(printf '%s' "$PAYLOAD" | jq -c --arg k "$SEAT_KEY" '.ceilings[$k] // empty')
+>   SEAT_TIMEOUT=$(printf '%s' "$SEAT_CEILING" | jq -r 'if (.timeout | type) == "number" and (.timeout | floor) == .timeout then .timeout else empty end' 2>/dev/null)
+>   SEAT_RETRY_TIMEOUT=$(printf '%s' "$SEAT_CEILING" | jq -r 'if (.retryTimeout | type) == "number" and (.retryTimeout | floor) == .retryTimeout then .retryTimeout else empty end' 2>/dev/null)
+>   if [ -z "$SEAT_TIMEOUT" ] || [ -z "$SEAT_RETRY_TIMEOUT" ]; then
+>     echo "dispatch-review: payload.ceilings has no integer timeout/retryTimeout row for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1
+>   fi
+> fi
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 > # A session begun before the leave-out sidecar existed (a pending panel resumed after an upgrade) has no
 > # reviewer-leave-out.json; pass the flag only when the file is there, since a missing file refuses the launch.
@@ -410,7 +426,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   ${LEAVE_OUT_ARGS[@]+"${LEAVE_OUT_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
->   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+>   --progress-file "$SEAT_PROGRESS" --timeout "$SEAT_TIMEOUT" --retry-timeout "$SEAT_RETRY_TIMEOUT"
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
@@ -418,8 +434,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   ${DIFF_BASE_ARGS[@]+"${DIFF_BASE_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
->   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+>   --progress-file "$SEAT_PROGRESS" --timeout "$SEAT_TIMEOUT" --retry-timeout "$SEAT_RETRY_TIMEOUT"
 > ```
+>
+> **Attempt and retry ceilings.** The test role's ceilings scale with the countable lines of the slice it reviews: 900 s up
+> to 300 lines, then 1.5 s for each line past 300, at most 1,800 s. `round_phases.seat_ceiling` sets them and a
+> `dispatch-panel` step carries them in `payload.ceilings`, one `{lines, timeout, retryTimeout}` row per seat; the recipe passes
+> a seat's row as its `--timeout` and `--retry-timeout`, so the retry after a silence-watchdog cut runs with the same ceiling.
+> Every other seat, a test role whose size is unknown or small, and every phase other than `dispatch-panel` keep 900 s.
 >
 > For the full `dispatch-review` argument surface, read
 > `skills/workhorse/reference/dispatch-entry.md`.
@@ -593,7 +615,7 @@ When `next` returns `apply-fixes`, the build session fixes the batch itself, in 
 5. A finding about the PR body is fixed by editing the staged PR body at `prBodyPath`; that file is never committed. With no `prBodyPath`, list such a finding `unfixed`.
 6. Never push, merge or write to GitHub.
 7. When a run needs a throwaway test file, choose a path inside the working tree named with the prefix `autofix-probe-`, check on the filesystem (not with git) that the path does not exist, and delete only that file before you commit. If you cannot show the path is new, do not write there; report it instead. A probe file must never land in a fix commit.
-8. Never put a delete inside a compound command: the delete rule (`DELETE_RULE` in `lib/command_refusals.py`) binds this step as it binds every implementer order.
+8. Never put a delete inside a compound command: the delete rule (`DELETE_RULE` in `lib/command_refusals.py`) binds this step as it binds every implementer order. So does the stop-and-delete rule (`STOP_AND_DELETE_RULE`, same home).
 9. A refusal binds this step as it binds the whole build session: beyond the stop rule's two exceptions for a refusal you met here yourself (a route the refusal names, a plain-form re-issue after a form-only refusal, once each), never take a refused act in another form unless a sanctioned retry covers it (`SESSION_RULE` and `SANCTIONED_RETRIES` in `lib/command_refusals.py`); record each refusal you meet here in the build record, and list as `unfixed`, with the refusal as `why`, a finding whose fix needs a refused act.
 
 **A restore-only step.** When the payload carries `restoreOnly: true`, the fix auditor found a break-it test missing, changed without a reason or weakened, and the step puts the test role's version back. It carries `restores` and no batch. Write each `restores` entry's `content` at its `path`, byte for byte, and commit; a commit that carries only those files is right here. Make no other change, fix nothing, edit nothing to make a test pass, and run no formatter or autofix over the files. Submit `{"fixes": []}`; the report takes no `unfixed` entry and no `{finding, commit}` binding, and the driver reads the commit from git. A second restore-only step may follow when the test role corrects its test: it is the same step, with the corrected `content`.

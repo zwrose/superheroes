@@ -464,7 +464,7 @@ posted between a send and a later `not-ready` is not surfaced.
 The window runs from the fix order to the lane's first ending (handback, stop
 or park, a superseded park not counting): endings and notes from before the fix order are not
 re-reported, the closing ending fires `lane-terminal`, and nothing about the lane surfaces after it.
-A refused or never-started lane, and a local lane, are never re-opened. A not-ready lane whose fix
+A refused or never-started lane is never re-opened, and a local lane is not re-opened by a fix order. A not-ready lane whose fix
 goes to a fresh launch instead is passed `--ignore-launch`, or its vet is recorded `ready` or
 `parked-blocker` when done, so the old lane is not watched for an ending that will never come.
 
@@ -488,6 +488,17 @@ read skipped for budget names it only when the tick made a comments request; a t
 request names no lane; `builder-note-unavailable` is recorded in every case.
 A lane passed `--ignore-launch` is not watched on this path either, with no sign in the result: drop
 the ignore before you resume a lane (see [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)).
+
+A terminal **local** lane you resumed (its outcome is recorded, and the builder is running again) is
+**watched again, exactly like a live local lane**, once either of two things shows after its basis (the
+same basis as above, and a lane relaunched on its issue is never reopened): a live process resumed on the
+lane's recorded session id (kept for the rest of the loop once seen), or a heartbeat stamped after the
+basis. A local lane with neither stays out of the watch and fires nothing. The pid
+recorded before the resume never fires `builder-exited`; once the watch has seen the resumed process, it
+keeps its pid for the rest of the loop, so the resumed builder's exit fires `builder-exited` (a one-shot
+`run` keeps nothing between calls). A heartbeat from before the outcome never fires `lane-terminal` or
+`lane-blocked` again; only one stamped after the basis counts. The watch makes no comment read for a
+finished local lane. A lane passed `--ignore-launch` is not reopened.
 
 What you do on each: on a **handback**, vet the PR. On a **stop**, repair it — an Anchor stop is duty
 3's anchor-stop repair, a route-back is a re-route; record the lane's outcome and never relaunch it
@@ -538,7 +549,7 @@ Notes beyond the token name:
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is ambiguous and the lane alerts rather than being suppressed
 - `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so the lane alerts without the watcher being able to tell a cold transcript from an unread one
 - `cloud-activity-unavailable` — the activity read for a cloud lane could not be made, so the lane is neither stale nor clean and the reading is partial
-- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing; when the read was partial, the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only then) names the issues it left unread, and across an arm or a loop a lane named once stays named
+- `builder-note-unavailable` — the comments read could not be made or understood, so a note or a cloud lane's terminal comment may be waiting unseen; an unreadable answered record is not this token, it leaves notes surfacing; the result's `unreadIssues` (`[{"launchId", "issue"}]`, present only when non-empty) names a lane whose own per-lane read failed or was skipped after the tick made a request, each shared lane when the shared read came back partial, and every watched lane when the shared read could not be made at all, and across an arm or a loop a lane named once stays named
 - `fix-order-unavailable` — the relay's state file could not be read, so a fix order relayed to a terminal cloud lane may go unseen; only `vet not-ready` amendments re-open lanes meanwhile
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
@@ -560,6 +571,10 @@ when set, otherwise `~/.claude`). Answer by message, or through the relay below.
 step the builder should use, written out in full. Never answer by reference to the note ("go ahead
 as your note proposes", "the usual"): a cloud builder cannot message back to ask what you meant, so
 an answer it cannot act on costs a second round trip and the gate below still reads it as delivered.
+When the owner's word lifts a park and the handback will rest on that acceptance, the answer never
+asks the builder to write the acceptance lines or to mark the PR ready for review: you write them and
+take the PR out of draft yourself (`skills/showrunner/reference/vet-receipt.md` § Recording an owner
+acceptance — the advisor writes it).
 
 **One-time setup.** Each Claude account the builders run on must have opened Claude Code in the
 repository root once and accepted its trust prompt. The owner does this once per account, before the
@@ -615,7 +630,14 @@ with `--fix-order`, and it re-opens the watch only once `check` reads delivered 
    refuses it. A message composed before this release reads `legacy-unverified` and never reads
    delivered. `check` sees only the relay's send compared with the pointer, so a mismatch does not
    say which step changed it: your own send can reach the relay already changed. Re-running `check`
-   later re-reads the relay's record.
+   later re-reads the relay's record. `check` also reads delivered when the relay's own record shows
+   no send but the comment matches and the target lane was active on its issue after the comment: a
+   builder note, or its progress comment edited with a phase that does not read parked, stopped or
+   handed back. That result carries `basis: "comment-and-activity"` and the `activity` it found; the
+   usual basis is `"relay-report"`. A `relay-silent` result names the legs it did not establish in
+   `missingLegs` and says in `activityLeg` what the activity read found. The activity is tied to the
+   message's own lane through the launch ledger, so a successor lane's comments never count, and the
+   builder's PR comments are not read.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
 owner the `say` sentence, or the refusal and its `detail`. Settle every relayed send by one rule, here

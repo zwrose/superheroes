@@ -8,10 +8,12 @@ detector only and prices / thresholds off difflib.SequenceMatcher(autojunk=False
 
 Tool invocation routes through ``guardian_collect.run_tool`` (never subprocess directly):
 in production it goes through ``guardian_tools.invoke``'s hardening; in tests / conformance
-it goes through the injected ``ctx["run"]`` seam. jscpd's json reporter writes a FILE, but
-``run_tool`` captures stdout — so the reporter is aimed at a ``/dev/stdout`` symlink inside a
-throwaway temp dir and the JSON object is parsed off stdout (a trailing "report saved"
-summary line is ignored).
+it goes through the injected ``ctx["run"]`` seam. jscpd's json reporter writes a FILE into
+a throwaway temp dir the lens creates, and the lens reads that file (bounded by
+``MAX_REPORT_FILE_BYTES``), so a large tree's report is not cut off by the collector's
+stdout cap (``guardian_tools.MAX_OUTPUT_BYTES``). Only when no report file exists does the
+lens read a JSON object off stdout: the injected seam's conformance payloads arrive there
+(lens-contract.md); a real jscpd prints none, so a missing file degrades.
 """
 import difflib
 import json
@@ -41,6 +43,11 @@ MEASURE_TIME_BUDGET_SECONDS = 20
 # budget (a red line must not be hidden by the time cap) — but the must-measure set is
 # BOUNDED so it cannot itself defeat the declared time bound.
 MAX_MUST_MEASURE = 50
+
+# jscpd's json reporter writes this file into the ``-o`` dir. The lens reads it with its
+# own bound (read at call time): a report past it degrades as ``report-too-large``.
+REPORT_FILE_NAME = "jscpd-report.json"
+MAX_REPORT_FILE_BYTES = 256 * 1024 * 1024
 
 # The one duplication red-line kind, sourced from the authoritative tuple (I3) — not a
 # bare literal. Fails closed at import if guardian_lens drops the kind.
@@ -142,16 +149,44 @@ def _file_size_bytes(path):
         return None
 
 
-def _decode_report(stdout):
-    """Read the jscpd JSON object off captured stdout.
+def _read_report_file(path):
+    """Read jscpd's report file, bounded by ``MAX_REPORT_FILE_BYTES``.
 
-    jscpd's json reporter is aimed at /dev/stdout, so the JSON object appears first; a
-    trailing human summary ("report saved to …") is ignored via raw_decode. Returns
+    Returns (text, None) on success, (None, None) when jscpd wrote no file, or
+    (None, reason) so collect() can degrade with a named cause. Reads at most one byte
+    past the bound, so a report that grows past it never loads whole. Never raises.
+    """
+    limit = MAX_REPORT_FILE_BYTES
+    try:
+        with open(path, "rb") as fh:
+            data = fh.read(limit + 1)
+    except FileNotFoundError:
+        return None, None
+    except OSError as exc:
+        return None, "jscpd report file unreadable: %s" % exc
+    if len(data) > limit:
+        return None, (
+            "jscpd report file is larger than the lens's %d-byte read bound "
+            "(report-too-large)" % limit)
+    try:
+        return data.decode("utf-8"), None
+    except UnicodeDecodeError:
+        return None, "unparseable jscpd report (not UTF-8)"
+
+
+def _decode_report(text, no_file=False):
+    """Read the jscpd JSON object off the report text.
+
+    The JSON object is read from the first ``{``; anything after it (a human summary such
+    as "report saved to …") is ignored via raw_decode. ``no_file`` marks text read off
+    stdout because jscpd wrote no report file, so the no-JSON reason names both. Returns
     (report, None) on success or (None, reason) so collect() can degrade honestly.
     """
-    so = stdout or ""
+    so = text or ""
     i = so.find("{")
     if i < 0:
+        if no_file:
+            return None, "jscpd wrote no report file and printed no JSON report"
         return None, "jscpd produced no JSON report"
     try:
         obj, _end = json.JSONDecoder().raw_decode(so[i:])
@@ -679,7 +714,8 @@ class DuplicationLens:
           either map the harness falls back to the jscpd JSON payload for git, which parses
           to no tracked file → zero tracked → the not-collected short-circuit fires and the
           honesty-gate assertion fails confusingly.
-        - ``jscpd`` → the jscpd json reports this lens parses (JSON object first).
+        - ``jscpd`` → the jscpd json reports this lens parses (JSON object first). The
+          seam writes no report file, so the lens reads these off stdout.
           ``stdout`` reports clones in its summary but carries an EMPTY ``duplicates``
           array — the honesty gate degrades it. ``clean_stdout`` reports zero clones — a
           genuine quiet collection.
@@ -753,14 +789,16 @@ class DuplicationLens:
 
         operands = sorted(tracked)
 
-        # jscpd's json reporter writes a FILE, but run_tool captures stdout — aim the
-        # reporter at /dev/stdout (via a symlink in a throwaway temp dir OUTSIDE the
-        # repo) and read the JSON object off stdout. The tracked-file census is written
-        # to a config file (not argv) so large repos are not capped by ARG_MAX. The
-        # mkdtemp + symlink + config write lives INSIDE the try so any failure there (F)
-        # converts to not-collected — collect() must never RAISE; the finally still cleans
-        # up whatever tmp dir was created.
+        # jscpd's json reporter writes a FILE into a throwaway temp dir OUTSIDE the repo,
+        # and the lens reads that file before the dir is removed, so the report's size is
+        # bounded by MAX_REPORT_FILE_BYTES, not the collector's stdout cap (#2411). The
+        # tracked-file census is written to a config file (not argv) so large repos are
+        # not capped by ARG_MAX (#640). The mkdtemp + config write + run + report read
+        # live INSIDE the try so any failure there (F) converts to not-collected —
+        # collect() must never RAISE; the finally removes whatever tmp dir was created,
+        # success or failure.
         tmp = None
+        report_text, report_file_reason = None, None
         try:
             tmp = tempfile.mkdtemp(prefix="guardian-jscpd-")
             tmp_real = os.path.realpath(tmp)
@@ -782,7 +820,6 @@ class DuplicationLens:
                     **gc.not_collected(
                         "tracked-file operand escapes repo: %s" % exc),
                 }
-            os.symlink("/dev/stdout", os.path.join(tmp, "jscpd-report.json"))
             config_path = os.path.join(tmp, "jscpd-input.json")
             with open(config_path, "w", encoding="utf-8") as cfg_fh:
                 json.dump({"path": abs_paths}, cfg_fh)
@@ -800,6 +837,9 @@ class DuplicationLens:
                 "--min-tokens", "50",
             ]
             res = gc.run_tool(argv, ctx=ctx, cwd=cwd, ok_exits=(0,))
+            if res["ok"]:
+                report_text, report_file_reason = _read_report_file(
+                    os.path.join(tmp, REPORT_FILE_NAME))
         except OSError as exc:
             return {
                 "candidates": [],
@@ -813,7 +853,14 @@ class DuplicationLens:
         if not res["ok"]:
             return {"candidates": [], "digest": None, **gc.not_collected(res["reason"])}
 
-        report, decode_reason = _decode_report(res.get("stdout") or "")
+        if report_file_reason is not None:
+            return {"candidates": [], "digest": None,
+                    **gc.not_collected(report_file_reason)}
+        if report_text is not None:
+            report, decode_reason = _decode_report(report_text)
+        else:
+            # No report file: only the injected seam carries the report on stdout.
+            report, decode_reason = _decode_report(res.get("stdout") or "", no_file=True)
         if report is None:
             return {"candidates": [], "digest": None, **gc.not_collected(decode_reason)}
 

@@ -1,6 +1,6 @@
 # Launch doctrine
 
-This document is the standing doctrine for headless builder launches and recovery: the ten rulings
+This document is the standing doctrine for headless builder launches and recovery: the eleven rulings
 a dispatch must carry verbatim, the seven-check dispatch preflight every launch records before it
 goes autonomous, and the recovery doctrine for taking over a build that stopped. Advisors read it
 for intent; `lib/launch_doctrine.py` parses the three marked blocks below fail-closed — not the
@@ -23,6 +23,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `await-dispatches` — Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message. Until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — on `dispatch-review` a zero slice opens the run and returns now without starting an attempt; on `dispatch-write` a zero or too-short slice can return terminal `git-preflight-timeout` with nothing opened, so size the launch slice to the repository's git-preflight cost; progress comes from a re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; independent dispatches go out CONCURRENTLY — give each member its own `--run-dir`, launch each one with a short positive slice, then re-invoke the originating verb on every non-terminal run in rotation until each returns terminal, so a batch costs its slowest member and not their sum; the concurrency comes from the engines working while you poll the others, never from issuing the calls together in one message — measured on one host: run-action calls serialize, and a launch call blocks for its whole slice, so keep the launch slice short; a native-subagent batch is the other channel and does go out as parallel dispatches in one message, harness-managed; independent means no result dependency, no shared writable worktree, and no shared output path — dependent orders and dispatches sharing a writable worktree stay sequenced; the concurrency changes a batch's shape, never its invariant: in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR. The same rule covers anything long-running you start locally — a full-suite run, a build, a long script — not only engine dispatches: await it in-turn, or park; never end a turn to wait.
 - `turn-end` — A headless lane never ends a turn with a background task or subagent still running: harness-tracked background work and a running subagent die when the turn ends, and `Monitor`, harness background-run completion and wakeup scheduling cannot wake a headless session, so none of them is a turn's exit plan; until the handback or park comment is posted, end every turn with a tool call, and await every outcome in-turn or park durably first.
 - `no-compound-delete` — Never put `rm`, or any other delete, inside a compound command: not after `&&`, `||` or `;`, not in a pipe, and not inside `bash -c` or a subshell. A delete is always its own plain call, one path per call.
+- `own-processes-and-paths` — Stop only a process you started yourself, and only by its PID, never by name or pattern (`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this machine. Delete only a path you created in this session or one your task names for deletion, never by a name pattern or a glob over a directory you did not create.
 - `remote-head` — verify the REMOTE head against your receipts before declaring the PR ready.
 - `git-identity` — commits inherit the git identity the worktree resolves through git's normal cascade — the `GIT_AUTHOR_*`/`GIT_COMMITTER_*` environment variables when set, otherwise repo-local `.git/config`, otherwise this environment's global config; never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or wrong identity — `git -c user.useConfigOnly=true var GIT_AUTHOR_IDENT` or `GIT_COMMITTER_IDENT` failing, never an empty `git config` answer alone — is a park-and-report, not an improvisation.
 - `gated-strings` — gated command strings reach disk only through file-write tools: a permission-gated literal that is being written or matched as data — a probe's test string, a memory or ledger append, any carrier that is not the command you intend to run — is never embedded inline in Bash text; a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or ledger append carrying a gated literal is written with a file-write tool, never echoed through a shell. A command the session genuinely intends to execute — including the preflight `gh` write — is issued as itself in Bash so the permission classifier sees it; staging a gated command in a file and executing the file to dodge the gate is forbidden.
@@ -167,7 +168,7 @@ This section is the doctrine artifact's home for those rules. A builder session 
 from workhorse charter §7 (`skills/workhorse/SKILL.md`); the full mechanism, the detached-shape
 contract, and the field evidence are in `skills/workhorse/reference/dispatch-mechanics.md` §
 Awaiting a dispatch — the in-turn contract — do not consolidate the mechanism back into the
-machine-parsed blocks above. The `turn-end` ruling in the machine-parsed block above carries the turn-end rule. The `no-compound-delete` ruling carries `DELETE_RULE` from `lib/command_refusals.py`, so the builder session's own commands keep a delete out of a compound command, as every order it dispatches does. The
+machine-parsed blocks above. The `turn-end` ruling in the machine-parsed block above carries the turn-end rule. The `no-compound-delete` ruling carries `DELETE_RULE` from `lib/command_refusals.py`, so the builder session's own commands keep a delete out of a compound command, as every order it dispatches does. The `own-processes-and-paths` ruling carries `STOP_AND_DELETE_RULE` from the same home, so the builder session stops only processes it started, by PID, and deletes only paths it created or its task names, as every order it dispatches does. The
 `await-dispatches` ruling carries the poll contract for external engine dispatches the builder
 invokes directly (skill-owned seats and native subagents keep their own lifecycle), the park
 escape, the concurrent-batch shape, and the invariant it preserves, so a launched builder
@@ -262,6 +263,19 @@ lane the ask to push replaces the sweep: the advisor asks a stalled builder that
 to push and hand over, and the successor starts from what was pushed. Work in a cloud lane that was
 never pushed cannot be preserved and is redone, and a cloud lane that never pushed starts again from
 its base.
+
+**When a usage limit kills local builders,** the sweep preserves each dead build in three steps,
+before any relaunch:
+
+1. Save the dead worktree's uncommitted files, edits and the untracked files the build made, as a
+   work-in-progress commit on that build's own branch. Its message says it is an unreviewed save
+   after a usage-limit stop, so the successor reads it as residue to adjudicate, not as a receipt.
+2. Push that branch, and name the commit by its sha in the recovery record.
+3. Once the push is confirmed, remove the dead worktree (`git worktree remove`, each worktree in its own call),
+   so the relaunch's sibling check and its own new worktree do not meet a stale tree. Remove only a
+   worktree whose builder process is confirmed gone (§ Read liveness from the right signals).
+
+The relaunch then adopts from the pushed branch. A cloud lane keeps the exception above.
 
 ### Check for a sibling build at a clean-base intake
 

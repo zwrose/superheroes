@@ -854,6 +854,12 @@ def mark_delivered(path, date, receipt, lives_in, root=None):
         root=root)
 
 
+# the path a not-yet-delivered spec takes instead of a superseded-in-part line
+NOT_DELIVERED_DETAIL = ("this spec is not delivered, so nothing in it can be superseded: an approved spec that is not "
+                        "yet delivered is amended in place (skills/showrunner/reference/amendments.md), "
+                        "and superseded-in-part lines go only on a delivered spec")
+
+
 def add_superseded(path, date, sections, ruling, root=None):
     """Append one superseded-in-part entry to a delivered spec."""
     read = _read_lifecycle(path)
@@ -861,7 +867,7 @@ def add_superseded(path, date, sections, ruling, root=None):
         return read
     text, found = read
     if "delivered" not in found:
-        return {"ok": False, "reason": "not-delivered"}
+        return {"ok": False, "reason": "not-delivered", "detail": NOT_DELIVERED_DETAIL}
     try:
         entries = json.loads(found["supersededInPart"][1]) if "supersededInPart" in found else []
     except ValueError:
