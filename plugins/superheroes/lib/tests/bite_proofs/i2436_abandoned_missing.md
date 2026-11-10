@@ -29,6 +29,9 @@ and r.get("planned") is True and r.get("ran") is False`; `1673` `said = ABANDONE
 reason=m["reason"]) if isinstance(m.get("reason"), str) \`; `1926` `missing.append({"name": v["name"], "goAhead": good,
 **({"reason": src["noResult"]} if "noResult" in src else {})})`.
 
+Two of those quoted lines, `547` (`row["noResult"] = UNFILLED`) and `636` (the `**({"noResult": UNFILLED} if abandoned else {})` term),
+were removed afterwards with the G11 and G12 stamps (see G11, G12 and G13); the line numbers after 547 have shifted by one and after 636 by one more.
+
 Green runs: `26 passed in 0.86s` (after batch A's restore) and `26 passed in 1.00s` (after the last restore, batch D).
 Batches B, C and D were each restored in the step that set up the next, so their green is that final run (stated per element).
 
@@ -147,38 +150,38 @@ quoted per element below, and the scratch file is a working artifact, not the re
 - Restore: the two-line expression restored. Receipt: as above, and line 1673 quoted.
 - Green: no isolated run; G10 was restored in the same step that neutralized G1, so the final all-restored run is the green: `26 passed in 1.00s`.
 
-## G11 (added by the implementer; not in the order's set). `_reviewers` stamps `unfilled` on an unfilled seat's row
+## G11 (retired). `_reviewers` stamped `unfilled` on an unfilled seat's row
 
-- Axis: an abandoned journaled session's seat the map left unfilled carries `noResult: unfilled`, and the pending phase adds no second row for it.
-- Neutralization: `**({"noResult": UNFILLED} if abandoned else {})` became `**{}`.
-- Red (batch A): `test_a_seat_the_map_left_unfilled_is_listed_once_with_the_unfilled_reason`:
-  `E       AssertionError: assert [] == [('test-role ..., 'unfilled')]` / `Right contains one more item: ('test-role (round 1)', False, 'unfilled')`.
-- Restore: edited back. Receipt: as above, line 636 quoted.
-- Green: `26 passed in 0.86s`.
+- Retired: the stamp was removed because the fallback pass (G13) sets the same value, and the orchestrator's joint neutralization
+  of both stamps (G11 and G12 together) read `28 passed` on the file alone, so neither bit any more.
 
-## G12 (added by the implementer; not in the order's set). the pending function's unfilled row
+## G12 (retired). the pending function's unfilled row
 
-- Axis: a hand-submit session's pending panel seat whose lens the governing map leaves unfilled reads `unfilled`, not `no-result`.
-- Neutralization: the line `row["noResult"] = UNFILLED` in `unfilled_row` was deleted.
-- Red (batch A): `test_a_pending_panel_round_with_an_unfilled_seat_lists_it_unfilled_in_a_hand_submit_session`:
-  `E         {'test-role (round 2)': None} != {'test-role (round 2)': 'unfilled'}`.
-- Restore: the line put back. Receipt: as above, line 547 quoted.
-- Green: `26 passed in 0.86s`.
+- Retired: the stamp was removed because the fallback pass (G13) sets the same value, and the orchestrator's joint neutralization
+  of both stamps (G11 and G12 together) read `28 passed` on the file alone, so neither bit any more.
 
 ## G13. the fallback pass in `account_from_session` stamps a reason on every planned not-run row
 
 - Axis: every planned not-run row of an abandoned account carries a no-result reason, the hand-submit rows included
-  (`_status_reviewers` builds rows with none; this pass is the single chokepoint that closes the gap). Two tests were
-  added for it (28 tests in the file now; the 26 above are the earlier count): `test_a_hand_submit_seat_the_status_calls_missing_carries_recorded_missing`
-  and `test_every_planned_not_run_row_of_an_abandoned_account_carries_a_vocabulary_reason`.
-- Neutralization (`review_record_session.py`, line 1449, one targeted `Edit`): `if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:`
+  (`_status_reviewers` builds rows with none; this pass is the single chokepoint that closes the gap), and an unfilled
+  row (vendor `unfilled`) takes its `unfilled` reason here and nowhere else (the explicit stamps in `unfilled_row` and
+  `_reviewers` were removed; G11 and G12 are retired). Two tests guard the hand-submit part (28 tests in the file now; the 26
+  above are the earlier count): `test_a_hand_submit_seat_the_status_calls_missing_carries_recorded_missing`
+  and `test_every_planned_not_run_row_of_an_abandoned_account_carries_a_vocabulary_reason`; two more guard the unfilled part:
+  `test_a_seat_the_map_left_unfilled_is_listed_once_with_the_unfilled_reason` and
+  `test_a_pending_panel_round_with_an_unfilled_seat_lists_it_unfilled_in_a_hand_submit_session`.
+- Neutralization (`review_record_session.py`, the loop's `if` line, one targeted `Edit`): `if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:`
   became `if False and v.get("planned") is True and v.get("ran") is False and "noResult" not in v:` (the loop never stamps).
-- Red (command: the two-file command, `--tb=short`; `2 failed, 62 passed in 1.34s`; the second file is `test_review_record_abandoned_2137.py`):
-  `test_a_hand_submit_seat_the_status_calls_missing_carries_recorded_missing`:
-  `assert rows[TEST_ROW]["noResult"] == rr.RECORDED_MISSING` / `E   KeyError: 'noResult'`;
+- Precondition, run before the neutralization with both unfilled stamps already removed and the loop intact: the two-file command read `64 passed in 1.43s`.
+- Red (command: the two-file command, `--tb=line`; `4 failed, 60 passed in 1.35s`; the second file is `test_review_record_abandoned_2137.py`);
+  the failing node names, read off the short test summary:
+  `test_a_seat_the_map_left_unfilled_is_listed_once_with_the_unfilled_reason`:
+  `E   AssertionError: assert [] == [('test-role ..., 'unfilled')]` / `Right contains one more item: ('test-role (round 1)', False, 'unfilled')`;
+  `test_a_pending_panel_round_with_an_unfilled_seat_lists_it_unfilled_in_a_hand_submit_session`:
+  `Differing items: {'test-role (round 2)': None} != {'test-role (round 2)': 'unfilled'}`;
+  `test_a_hand_submit_seat_the_status_calls_missing_carries_recorded_missing`: `E   KeyError: 'noResult'`;
   `test_every_planned_not_run_row_of_an_abandoned_account_carries_a_vocabulary_reason`:
-  `E   AssertionError: ('hand-submit-missing', 'test-role (round 1)', None)` / `assert None in frozenset({'forfeit', ... 'malformed-output', ...})`.
-- Restore: the inverse `Edit` removed `False and `. Restore receipt, the restored lines quoted from the file:
-  `1447` the axis comment, `1448` `for v in reviewers:`, `1449` `if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:`,
-  `1450` `v["noResult"] = UNFILLED if v.get("vendor") == UNFILLED else review_record.RECORDED_MISSING`.
-- Green: `64 passed in 2.54s` (both files). Nothing redacted: the captures hold no secret, token or private URL.
+  `E   AssertionError: ('journaled-unfilled', 'test-role (round 1)', None)` / `assert None in frozenset({'forfeit', ... 'malformed-output', ...})`- Restore: the inverse `Edit` removed `False and `. Restore receipt, the restored line quoted from the file:
+  `if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:` followed by
+  `v["noResult"] = UNFILLED if v.get("vendor") == UNFILLED else review_record.RECORDED_MISSING`.
+- Green: `64 passed in 1.80s` (both files). Nothing redacted: the captures hold no secret, token or private URL.

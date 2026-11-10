@@ -544,7 +544,6 @@ def _pending_without_result(state, session_dir, rows, reviewers):
 
     def unfilled_row(seat):
         row = _unfilled_reviewer(rnd, seat)
-        row["noResult"] = UNFILLED
         if row["name"] not in names:
             names.add(row["name"])
             out.append(row)
@@ -633,7 +632,7 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None, aba
             reported = body.get("readParts") if isinstance(body, dict) else None
             row["readParts"] = reported if review_record._items_fault(reported, review_record._part_fault) is None else []
         out.append(row)
-    out += [dict(_unfilled_reviewer(rnd, seat), **({"noResult": UNFILLED} if abandoned else {}))
+    out += [_unfilled_reviewer(rnd, seat)
             for rnd, names in unfilled.items() for seat in names
             if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it
     return out, raw
@@ -1444,7 +1443,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                                     review_record._readers(readers)["engine_run"], raw_dir, abandoned=abandoned is not None)
     if abandoned is not None:  # the pending phase's planned seats that produced no result are reviewers that did not run
         reviewers += _pending_without_result(state, session_dir, rows, reviewers)
-        # axis: every planned not-run row of an abandoned account carries a no-result reason, the hand-submit rows included — see bite-proof record i2436_abandoned_missing
+        # axis: every planned not-run row of an abandoned account carries a no-result reason, the hand-submit rows included, and an unfilled row takes its `unfilled` reason here and nowhere else — see bite-proof record i2436_abandoned_missing
         for v in reviewers:
             if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:
                 v["noResult"] = UNFILLED if v.get("vendor") == UNFILLED else review_record.RECORDED_MISSING
