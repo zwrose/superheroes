@@ -52,8 +52,8 @@ and review. The review and the advisor's vet sit downstream of you.
 ## Build lanes
 
 A build runs in one of three lanes: **full**, **light**, or **micro**. The advisor calls full or
-light when it marks the issue build-ready, with the owner present, and records the call in the
-issue. Micro is the showrunner's lane, recorded in the PR, and the showrunner charter carries its
+light when it marks the issue build-ready, at any hour, and records the call in the issue for the
+owner's veto. Micro is the showrunner's lane, recorded in the PR, and the showrunner charter carries its
 shape. The lane table and the cross-lane invariants live in
 `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`.
 
@@ -81,8 +81,8 @@ Everything below that names the light lane is an exception. Otherwise the build 
   blocked permission would surface after the work is done.
 
 **The kickoff stands in for the brief.** The brief is where "does this need something irreversible
-or expensive?" gets asked. In the light lane the owner-present kickoff, the recorded lane call, and
-the escalation triggers below do that job together. Keep the kickoff conversation.
+or expensive?" gets asked. In the light lane the advisor's recorded lane call, with its one line of
+reasoning, and the escalation triggers below do that job together.
 
 **Escalate to the full lane when any of these holds.** Escalation runs up only.
 
@@ -130,7 +130,8 @@ spend: before the workspace, the brief, and every dispatch.
 **Run the register-check at intake for a register-consuming child**, before the brief. A
 register-consuming child is an epic child of a package that has a register, or a single-issue child
 standing in for one. Run the check whether or not the body quotes a block: a body with zero quoted
-blocks is the case the check exists to fail. For a stack layer, use the [stack layer
+blocks is the case the check exists to fail, unless the child is declared on the register's
+`*No-entry children:*` line (an undeclared, unconsumed child still blocks). For a stack layer, use the [stack layer
 inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs).
 When the route names the register and child token, or they are derivable, run the check. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together

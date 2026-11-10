@@ -131,7 +131,7 @@ Only the owner's word, for that one change, lets a reviewer from a maker's famil
 
 **Two reviewer-loss events end in the same place.**
 
-1. **No reviewer outside the makers' families at kickoff.** The owner's word comes first: when given, it admits the same-family reviewer for that change instead. Without it, that review did not happen.
+1. **No reviewer outside the makers' families at kickoff.** The advisor checks availability itself at kickoff, at any hour, and never holds the change waiting for the owner. The owner's word comes first: when given, it admits the same-family reviewer for that change instead. Without it, that review did not happen.
 2. **The reviewer forfeits mid-run** (the dispatch returns a **terminal forfeit**: its structural timeout firing, a nonzero exit, unreadable or unparseable output, or a vacuous forfeit; *silence is not forfeit; a terminal forfeit result is*). The owner's word comes first here too. Without it, that review did not happen. The light lane allows no host-model stand-in after a forfeit.
 
 When that review did not happen, the change resolves upward to the full lane if an independent full panel can be composed, meaning every panel seat is filled from outside the makers' families. Otherwise the change parks.
@@ -164,6 +164,12 @@ call — it requires the owner, per change.** Disclosure alone never authorizes 
 This default does not bend. The thoughts that precede a bad light call — *it's just a
 wording fix*, *I know this area* — are exactly the ones this convention exists to
 override.
+
+**Calling a lane is the advisor's craft call**, made at any hour, attended or not, and recorded
+with its reasoning for the owner's veto; so is the presentation call. Around the lane call the
+owner's word, per change, is needed only for a downgrade, for every micro change, and for the
+owner-capability preconditions cleared at dispatch; a same-family reviewer's own owner's word
+(below) is separate. None of them holds a lane call for the owner.
 
 ### Provisional guidance
 

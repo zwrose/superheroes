@@ -192,7 +192,7 @@ def test_a_three_thousand_line_diff_has_no_shards_in_the_panel_payload():
     state["reviewedDiff"] = big
     payload = RD._advance(state, state["config"])["payload"]
     assert "shards" not in payload
-    assert set(payload) == {"dimensions", "tier", "slices"}
+    assert set(payload) == {"dimensions", "tier", "slices", "ceilings"}
     assert payload["dimensions"] == RP.panel_roster(state, state["config"])
     assert isinstance(payload["slices"], list) and payload["slices"]
     assert [s["id"] for s in payload["slices"]] == [s["id"] for s in state["slicePlan"]["slices"]]

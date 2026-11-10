@@ -374,15 +374,19 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT}"
 > # Per external seat — the orchestrator sets these before this recipe runs:
-> #   $SEAT_KEY       roster seat key (e.g. code-reviewer) — indexes $SEAT_MAP.seats
+> #   $SEAT_KEY       roster seat key (e.g. code-reviewer, or test-role:s1 for a slice seat)
+> #   $SEAT_PHASE     the step's action (e.g. dispatch-panel)
+> #   $PAYLOAD        the step's payload JSON
 > #   $SEAT_PROMPT    emitted order path for this seat
 > #   $RUN_DIR        fresh run directory (created by first dispatch-review)
 > #   $SEAT_PROGRESS  progress file outside $RUN_DIR
 > case "$SEAT_KEY" in ""|null)
 >   echo "dispatch-review: SEAT_KEY unset — cannot resolve seat map entry (fail closed)." >&2; exit 1;; esac
-> SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_KEY\"] // empty")
+> # The seat map is keyed by lens; a slice seat key `<lens>:<slice id>` resolves to its lens (as the driver's `seat_lens` does).
+> SEAT_LENS="${SEAT_KEY%%:*}"
+> SEAT_CELL=$(printf '%s' "$SEAT_MAP" | jq -c ".seats[\"$SEAT_LENS\"] // empty")
 > case "$SEAT_CELL" in ""|null)
->   echo "dispatch-review: seat map has no entry for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1;; esac
+>   echo "dispatch-review: seat map has no entry for SEAT_LENS=$SEAT_LENS (SEAT_KEY=$SEAT_KEY) (fail closed)." >&2; exit 1;; esac
 > SEAT_VENDOR=$(printf '%s' "$SEAT_CELL" | jq -r '.vendor // empty')
 > SEAT_ENGINE_MODEL=$(printf '%s' "$SEAT_CELL" | jq -r '.model // empty')
 > SEAT_TIER=$(printf '%s' "$SEAT_CELL" | jq -r '.tier // empty')
@@ -394,6 +398,18 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > fi
 > if [ "$SEAT_EFFORT" = "null" ]; then SEAT_EFFORT_JSON=null; else SEAT_EFFORT_JSON="\"$SEAT_EFFORT\""; fi
 > SEAT_JSON='{"vendor":"'"$SEAT_VENDOR"'","model":"'"$SEAT_ENGINE_MODEL"'","effort":'"$SEAT_EFFORT_JSON"',"role":"'"$SEAT_TIER"'"}'
+> # The attempt and retry ceilings: 900 s unless the step is a dispatch-panel whose payload carries `ceilings`, which
+> # `round_phases.seat_ceiling` filled per seat. A dispatch-panel payload with no `ceilings` key at all (a pending step
+> # persisted by an earlier plugin version, re-emitted after an upgrade) keeps 900/900, as does every other phase.
+> SEAT_TIMEOUT=900; SEAT_RETRY_TIMEOUT=900
+> if [ "$SEAT_PHASE" = "dispatch-panel" ] && printf '%s' "$PAYLOAD" | jq -e 'has("ceilings")' >/dev/null 2>&1; then
+>   SEAT_CEILING=$(printf '%s' "$PAYLOAD" | jq -c --arg k "$SEAT_KEY" '.ceilings[$k] // empty')
+>   SEAT_TIMEOUT=$(printf '%s' "$SEAT_CEILING" | jq -r 'if (.timeout | type) == "number" and (.timeout | floor) == .timeout then .timeout else empty end' 2>/dev/null)
+>   SEAT_RETRY_TIMEOUT=$(printf '%s' "$SEAT_CEILING" | jq -r 'if (.retryTimeout | type) == "number" and (.retryTimeout | floor) == .retryTimeout then .retryTimeout else empty end' 2>/dev/null)
+>   if [ -z "$SEAT_TIMEOUT" ] || [ -z "$SEAT_RETRY_TIMEOUT" ]; then
+>     echo "dispatch-review: payload.ceilings has no integer timeout/retryTimeout row for SEAT_KEY=$SEAT_KEY (fail closed)." >&2; exit 1
+>   fi
+> fi
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 > # A session begun before the leave-out sidecar existed (a pending panel resumed after an upgrade) has no
 > # reviewer-leave-out.json; pass the flag only when the file is there, since a missing file refuses the launch.
@@ -410,7 +426,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   ${LEAVE_OUT_ARGS[@]+"${LEAVE_OUT_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
->   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+>   --progress-file "$SEAT_PROGRESS" --timeout "$SEAT_TIMEOUT" --retry-timeout "$SEAT_RETRY_TIMEOUT"
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --seat "$SEAT_JSON" \
@@ -418,8 +434,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   ${DIFF_BASE_ARGS[@]+"${DIFF_BASE_ARGS[@]}"} \
 >   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
->   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+>   --progress-file "$SEAT_PROGRESS" --timeout "$SEAT_TIMEOUT" --retry-timeout "$SEAT_RETRY_TIMEOUT"
 > ```
+>
+> **Attempt and retry ceilings.** The test role's ceilings scale with the countable lines of the slice it reviews: 900 s up
+> to 300 lines, then 1.5 s for each line past 300, at most 1,800 s. `round_phases.seat_ceiling` sets them and a
+> `dispatch-panel` step carries them in `payload.ceilings`, one `{lines, timeout, retryTimeout}` row per seat; the recipe passes
+> a seat's row as its `--timeout` and `--retry-timeout`, so the retry after a silence-watchdog cut runs with the same ceiling.
+> Every other seat, a test role whose size is unknown or small, and every phase other than `dispatch-panel` keep 900 s.
 >
 > For the full `dispatch-review` argument surface, read
 > `skills/workhorse/reference/dispatch-entry.md`.
@@ -738,12 +760,19 @@ computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats carries 
   violation for any seat that does name a maker family. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.
 
-**Dispatching searchers.** The `dispatch-sweep` phase's seats (`searcher:<sweepId>:<part>`) are native host
-subagents, each seated at the registry's mechanical cell, which the payload's `searcher` names. They are
+**Dispatching searchers.** The `dispatch-sweep` phase's seats (`searcher:<sweepId>:<part>`) are each dispatched
+as the read-only plugin agent `superheroes:searcher` (`agents/searcher.md`), by
+name, at the mechanical cell the payload's `searcher` names — never as a `general-purpose` subagent and never on
+any other agent, because the session's own grant would reach session, messaging, write and shell tools. They are
 outside the review independence rule because they search a list of files for one described mistake and do not
 judge: a searcher is never a reviewer, never appears in the record's reviewers, and needs no seat-map entry.
 The orchestrator passes each searcher the order and its part's input as given and never edits the search
 description. A searcher's result goes back per seat, `{hits: [{file, line, what}]}`, each seat in the one
 artifact of the phase; a seat that returns nothing usable is left out of the artifact, so the fold records it
-missing, and is never submitted as an empty list. See [the `dispatch-sweep` row](round-driver.md#actions-and-payloads)
+missing, and is never submitted as an empty list. The searcher returns its `{hits: [...]}` in its reply and
+writes no file; the orchestrator writes each reply to that seat's landing path (durable-record path) or puts it
+into the phase artifact (hand path). A searcher that derails is never re-dispatched as `general-purpose` (it is
+a capability-constrained seat, `hosts/claude-tools.md` § Dispatch Reliability); it is left out of the artifact
+and recorded missing, as above. On a host where the registry has no mechanical cell for the host's own vendor
+(Codex today), no searcher runs: the sweep is recorded `no-searcher-cell`. See [the `dispatch-sweep` row](round-driver.md#actions-and-payloads)
 for the payload and how the hits are routed.

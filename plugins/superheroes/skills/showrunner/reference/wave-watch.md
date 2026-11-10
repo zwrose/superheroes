@@ -560,6 +560,10 @@ when set, otherwise `~/.claude`). Answer by message, or through the relay below.
 step the builder should use, written out in full. Never answer by reference to the note ("go ahead
 as your note proposes", "the usual"): a cloud builder cannot message back to ask what you meant, so
 an answer it cannot act on costs a second round trip and the gate below still reads it as delivered.
+When the owner's word lifts a park and the handback will rest on that acceptance, the answer never
+asks the builder to write the acceptance lines or to mark the PR ready for review: you write them and
+take the PR out of draft yourself (`skills/showrunner/reference/vet-receipt.md` § Recording an owner
+acceptance — the advisor writes it).
 
 **One-time setup.** Each Claude account the builders run on must have opened Claude Code in the
 repository root once and accepted its trust prompt. The owner does this once per account, before the
@@ -615,7 +619,14 @@ with `--fix-order`, and it re-opens the watch only once `check` reads delivered 
    refuses it. A message composed before this release reads `legacy-unverified` and never reads
    delivered. `check` sees only the relay's send compared with the pointer, so a mismatch does not
    say which step changed it: your own send can reach the relay already changed. Re-running `check`
-   later re-reads the relay's record.
+   later re-reads the relay's record. `check` also reads delivered when the relay's own record shows
+   no send but the comment matches and the target lane was active on its issue after the comment: a
+   builder note, or its progress comment edited with a phase that does not read parked, stopped or
+   handed back. That result carries `basis: "comment-and-activity"` and the `activity` it found; the
+   usual basis is `"relay-report"`. A `relay-silent` result names the legs it did not establish in
+   `missingLegs` and says in `activityLeg` what the activity read found. The activity is tied to the
+   message's own lane through the launch ledger, so a successor lane's comments never count, and the
+   builder's PR comments are not read.
 
 **Not delivered, or `ensure` refused.** Do not run `note-answered`; the note keeps surfacing. Tell the
 owner the `say` sentence, or the refusal and its `detail`. Settle every relayed send by one rule, here

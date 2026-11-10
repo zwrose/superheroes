@@ -6043,7 +6043,7 @@ def _run_child_main(run_dir_real):
 
     _journal_append(run_dir_real, {
         "kind": "engine-launching", "attempt": pending_att,
-        "childPid": os.getpid(), "argv": list(argv), "at": time.time(),
+        "childPid": os.getpid(), "argv": list(argv), "timeout": timeout, "at": time.time(),
     })
 
     _run_engine_files(

@@ -359,6 +359,19 @@ def _result_channel_neutral_delivery(stdout_example=None):
     )
 
 
+# A host searcher is the read-only `superheroes:searcher` agent: it holds no write tool, so it replies
+# and the orchestrator writes the reply to the landing path (#2399).
+REPLY_HOST_PHASES = frozenset({round_phases.P_SWEEP})  # host seat is a read-only agent: it replies, never writes a landing file
+_SWEEP_HOST_REPLY_DELIVERY = (
+    "Return the payload object as your whole reply with nothing after it. Write no file. When you "
+    "found nothing, reply with an empty `hits` list, never an empty reply."
+)
+
+_SWEEP_HOST_LANDING_NOTE = (
+    "The orchestrator writes your reply to the payload landing path below. You write no file."
+)
+
+
 _READ_PARTS_REMINDER = (
     "Return `readParts` — one entry per file you actually read, with the line ranges of it you "
     "read (the file's lines at the reviewed head), as the base rubric defines it; `[]` when you "
@@ -416,7 +429,13 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
         return None, "context-missing:envelope_stub_path"
     host_seat = context.get("host_seat") is True
     lines = ["## Return your result", ""]
-    if host_seat:
+    if host_seat and phase in REPLY_HOST_PHASES:
+        lines.extend([
+            _SWEEP_HOST_LANDING_NOTE,
+            "",
+            "- Payload landing path: %s" % landing,
+        ])
+    elif host_seat:
         lines.extend([
             "Write **only** your payload artifact to the landing path below — no envelope header, "
             "no stub copy.",
@@ -572,10 +591,7 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             "you have nothing to flag." % landing
         )
     elif phase == round_phases.P_SWEEP:
-        ph["OUTPUT_CHANNEL_BLOCK"] = (
-            "Write your payload to %s — an empty `hits` list, never a skipped file, when you "
-            "found nothing." % landing
-        )
+        ph["OUTPUT_CHANNEL_BLOCK"] = _SWEEP_HOST_REPLY_DELIVERY
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = ""
     return ph
