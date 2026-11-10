@@ -11,6 +11,8 @@ unaudited fix (the expensive failure direction: a real defect ships believed fix
 uncertain / malformed / missing ruling collapses to `not-discharged` and is disclosed.
 """
 
+import re
+
 from finding_identity import finding_identity, place_pair as _place_key
 
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
@@ -67,14 +69,29 @@ TEST_MATCH_ANSWERS = ("matches", "weakened")
 # the pin rule (rubric/review-discipline.md) forbids pinning with a test, so no test can be asked for.
 REVIEW_GUARDED = "review-guarded"
 
+# The fourth answer `testWouldFail` may take (#2434): the fix only removes test lines that a worthless-test
+# finding cites, so no test can be asked for. The fold clears it only through `test_removal_clearance`.
+WORTHLESS_TEST_REMOVED = "worthless-test-removed"
+
+# The test smells (as `normalize_smell` reads a finding's `taxonomy`) whose finding asks for a test to be removed.
+WORTHLESS_TEST_SMELLS = frozenset({"wording-pin", "duplicate-test", "mock-echo", "cannot-fail"})
+
 
 def check_answers(name):
     """The answers check `name` accepts. The one home of the per-check answer set: the shape judge
     (`audit_checks_fault`) and the strict-mode schema (`engine_result_channel`) both read it. Only
-    `testWouldFail` may answer `review-guarded`."""
+    `testWouldFail` may answer `review-guarded` or `worthless-test-removed`."""
     if name == "testWouldFail":
-        return CHECK_ANSWERS + (REVIEW_GUARDED,)
+        return CHECK_ANSWERS + (REVIEW_GUARDED, WORTHLESS_TEST_REMOVED)
     return CHECK_ANSWERS
+
+
+def normalize_smell(text):
+    """A taxonomy label read as a test-smell name: lower-cased, every run of non-alphanumeric characters one
+    `-`, leading and trailing `-` stripped (`"Wording pin"` reads `wording-pin`). None when `text` is no string."""
+    if not isinstance(text, str):
+        return None
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
 # Path components that are never doctrine prose, even for a Markdown file: eval graders are scored
@@ -138,6 +155,141 @@ def prose_only_delta(target):
     other = [f for f in files if not _is_prose_path(f)]
     return not other, other
 
+
+def _plain_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _removal_files(target):
+    """The files of the target's driver-built `fixerRemoval` as `[(path, ranges, added)]`, or None when the
+    record is absent, `unreadable`, or not exactly `{"files": [{"path": <non-empty str>, "removed": [[start,
+    end], ...], "added": <bool>}, ...]}` with at least one file, one record per path, and every range two plain
+    integers with `1 <= start <= end` (fail closed: an unreadable record clears nothing)."""
+    record = target.get("fixerRemoval") if isinstance(target, dict) else None
+    # axis: an absent, unreadable or malformed removal record is never readable — see bite-proof record audit_test_removal_2434
+    if not isinstance(record, dict) or "unreadable" in record:
+        return None
+    files = record.get("files")
+    if not isinstance(files, list) or not files:
+        return None
+    out, seen = [], set()
+    for entry in files:
+        if not isinstance(entry, dict):
+            return None
+        path, removed, added = entry.get("path"), entry.get("removed"), entry.get("added")
+        if not isinstance(path, str) or not path or path in seen:
+            return None
+        if not isinstance(added, bool) or not isinstance(removed, list):
+            return None
+        ranges = []
+        for pair in removed:
+            if not (isinstance(pair, list) and len(pair) == 2 and all(_plain_int(n) for n in pair)):
+                return None
+            if not 1 <= pair[0] <= pair[1]:
+                return None
+            ranges.append((pair[0], pair[1]))
+        seen.add(path)
+        out.append((path, ranges, added))
+    return out
+
+
+def _worthless_test_smell(finding):
+    """`(smell, detail)`: the normalized `taxonomy` of a finding that is a Test finding labelled with one of the
+    `WORTHLESS_TEST_SMELLS` and carries a usable body, else `(None, <what is missing>)`."""
+    if not isinstance(finding, dict):
+        return None, "is not a finding"
+    # axis: only a Test finding is a worthless-test finding — see bite-proof record audit_test_removal_2434
+    if finding.get("dimension") != "Test":
+        return None, "dimension is %r, not 'Test'" % (finding.get("dimension"),)
+    smell = normalize_smell(finding.get("taxonomy"))
+    # axis: only a finding labelled with one of the worthless-test smells is one — see bite-proof record audit_test_removal_2434
+    if smell not in WORTHLESS_TEST_SMELLS:
+        return None, "taxonomy %r is not one of: %s" % (finding.get("taxonomy"), ", ".join(sorted(WORTHLESS_TEST_SMELLS)))
+    # axis: a worthless-test finding must give its reason in a body — see bite-proof record audit_test_removal_2434
+    if not has_usable_reason(finding.get("body")):
+        return None, "has no usable body giving its reason"
+    return smell, None
+
+
+def _cited_lines(finding):
+    """The `(file, line)` places a finding cites at a plain integer line, in order, none twice: its own
+    `file`/`line` and the places of its kind of mistake."""
+    out = []
+    if isinstance(finding, dict) and isinstance(finding.get("file"), str) and _plain_int(finding.get("line")):
+        out.append((finding["file"], finding["line"]))
+    for file, line in target_places(finding):
+        if isinstance(file, str) and _plain_int(line) and (file, line) not in out:
+            out.append((file, line))
+    return out
+
+
+def test_removal_clearance(target):
+    """`(evidence, failing, detail)`: whether the target's fix is the removal of test lines a worthless-test
+    finding cites, judged only from driver-built data (the target's `fixerDelta`, `fixerRemoval`, its own
+    finding fields and its `batchFindings`), never from anything the auditor wrote. All of C1-C7 must hold:
+
+    C1  `fixerDelta` is readable, names at least one file, and every file is a test path;
+    C2  `fixerRemoval` is readable and well formed (see `_removal_files`);
+    C3  the removal record names exactly the delta's files;
+    C4  every file of the record added nothing and removed at least one range;
+    C5  the target is a Test finding labelled with a worthless-test smell, with a usable body;
+    C6  one of the target's own cited lines (its `file:line` or a kind-of-mistake place) lies in a removed range;
+    C7  every removed range holds a line cited by the target or by a batch sibling that itself passes C5.
+
+    On success `(evidence, None, None)` with `evidence` the dict the audit entry records
+    (`{"source": "finding", "finding", "taxonomy", "reason", "removed", "cited"}`; `cited` lists the target's
+    cited lines, then each qualifying sibling's); otherwise `(None, <first failing condition>, <short detail>)`."""
+    from size_count import is_test_path as _is_test_path  # noqa: E402 — lazy: the closure of this module stays unchanged
+    files = _delta_files(target)
+    # axis: an absent, unreadable or empty delta clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+    if not files:
+        return None, "C1", "no recorded delta"
+    # axis: a non-test file in the delta clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+    other = [f for f in files if not _is_test_path(f)]
+    if other:
+        return None, "C1", "the delta touches non-test %s" % ", ".join(other)
+    rows = _removal_files(target)
+    # axis: a removal record that is absent, unreadable or malformed clears nothing — see bite-proof record audit_test_removal_2434
+    if rows is None:
+        return None, "C2", "no readable removal record"
+    # axis: the removal record and the delta must name the same files — see bite-proof record audit_test_removal_2434
+    if {path for path, _r, _a in rows} != set(files):
+        return None, "C3", "the removal record and the delta name different files"
+    for path, ranges, added in rows:
+        # axis: a fix that adds a line to a file clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+        if added is not False:
+            return None, "C4", "%s has added lines" % path
+        # axis: a file with no removed range clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+        if not ranges:
+            return None, "C4", "%s has no removed lines" % path
+    smell, detail = _worthless_test_smell(target)
+    if smell is None:
+        return None, "C5", detail
+    own = _cited_lines(target)
+    cited = list(own)
+    batch = target.get("batchFindings")
+    for sibling in batch if isinstance(batch, list) else ():
+        # axis: only a sibling that is itself a worthless-test finding lends its cited lines — see bite-proof record audit_test_removal_2434
+        if _worthless_test_smell(sibling)[0] is not None:
+            cited.extend(c for c in _cited_lines(sibling) if c not in cited)
+
+    def _inside(places, path, rng):
+        return any(file == path and rng[0] <= line <= rng[1] for file, line in places)
+
+    # axis: one of the target's own cited lines must lie in a removed range — see bite-proof record audit_test_removal_2434
+    if not any(_inside(own, path, rng) for path, ranges, _a in rows for rng in ranges):
+        return None, "C6", "no removed range holds a line the finding cites"
+    for path, ranges, _a in rows:
+        for rng in ranges:
+            # axis: every removed range must hold a cited line, so the fix cannot also delete an uncited test — see bite-proof record audit_test_removal_2434
+            if not _inside(cited, path, rng):
+                return None, "C7", "%s lines %d-%d hold no cited line" % (path, rng[0], rng[1])
+    reason = target["body"].strip()[:500]
+    return {"source": "finding", "finding": target.get("id"), "taxonomy": smell, "reason": reason,
+            "removed": [{"file": path, "ranges": [list(r) for r in ranges]} for path, ranges, _a in rows],
+            "cited": [{"file": file, "line": line} for file, line in cited]}, None, None
+
+
 MATCH_SAME = "same"
 MATCH_CHANGED_EXPLAINED = "changed-explained"
 MATCH_CHANGED_UNEXPLAINED = "changed-unexplained"
@@ -172,7 +324,7 @@ def _answered(entry, allowed):
 def audit_checks_fault(result, target=None):
     """None when an audit result answers the fix auditor's three checks (`checks.right`,
     `checks.brokeNothing`, `checks.testWouldFail`, each `{"answer": "yes"|"no", "why": <reason>}`; only
-    `testWouldFail` may also answer `review-guarded`, per `check_answers`) and,
+    `testWouldFail` may also answer `review-guarded` or `worthless-test-removed`, per `check_answers`) and,
     where `target` carries a `breakIt` whose match is `changed-explained`, the test comparison
     (`testMatch`: `{"answer": "matches"|"weakened", "why": <reason>}`); otherwise a short reason. With
     no target in hand only the `checks` shape is judged. The ONE judge of this shape: the payload
@@ -420,6 +572,8 @@ class _AuditFold:
         self.places_ignored = []
         self.review_guarded = []
         self.review_guard_refused = []
+        self.test_removal_cleared = []
+        self.test_removal_refused = []
         self.allowed_ids = set(i for i in (change_allowed_ids or ()) if isinstance(i, str))
         self.matched_ids = set()
 
@@ -520,6 +674,9 @@ class _AuditFold:
         finished, guarded = self._review_guard(base, fid, f, r, ruling)
         if finished:
             return
+        finished, removal = self._test_removal_guard(base, fid, f, r, ruling)
+        if finished:
+            return
 
         # A clearing result that names behaviour its finding does not name is accepted only when the
         # finding's ruling allows the change. Provenance (above) keeps its precedence.
@@ -538,10 +695,10 @@ class _AuditFold:
 
         if ruling == "discharged":
             self._fold_discharged(base, fid, reason, has_reason, evidence, unnamed_text, attributed,
-                                  fixes, reverts, guarded)
+                                  fixes, reverts, guarded, removal)
         elif ruling == "discharged-but-new-issue":
             self._fold_discharged_new_issue(base, fid, r, reason, has_reason, evidence, unnamed_text,
-                                            attributed, fixes, reverts, guarded)
+                                            attributed, fixes, reverts, guarded, removal)
         elif ruling == "not-discharged":
             self._fold_not_discharged(base, fid, r, reason, has_reason, unnamed_text, expected_auditor,
                                       keeps_new_issues)
@@ -759,6 +916,32 @@ class _AuditFold:
             guarded = {"answer": REVIEW_GUARDED, "why": r["checks"]["testWouldFail"]["why"].strip()}
         return False, guarded
 
+    def _test_removal_guard(self, base, fid, f, r, ruling):
+        # A clearing ruling whose `testWouldFail` answers `worthless-test-removed` stands only when the fix
+        # attempt only removed test lines a worthless-test finding cites (`test_removal_clearance`, C1-C7),
+        # judged from the driver-built `fixerDelta`, `fixerRemoval` and the target's own finding fields — never
+        # from anything the auditor wrote. The answer is recorded only once the entry ends cleared.
+        removal = None
+        if ruling in _CLEARS and r["checks"]["testWouldFail"]["answer"] == WORTHLESS_TEST_REMOVED:
+            evidence, failing, detail = test_removal_clearance(f)
+            # axis: worthless-test-removed clears only when every condition C1-C7 holds; any other fix folds not-discharged — see bite-proof record audit_test_removal_2434
+            if evidence is None:
+                self.not_discharged.append(fid)
+                self.test_removal_refused.append(fid)
+                candidates = (_valid_new_issues(r.get("newIssues"), fid)
+                              if ruling == "discharged-but-new-issue" else [])
+                self.new_issues.extend(candidates)
+                base.update(ruling="not-discharged",
+                            reason=("audit check failed: testWouldFail: worthless-test-removed clears only a "
+                                    "fix that removes test lines a worthless-test finding cites; %s: %s"
+                                    % (failing, detail)))
+                self.audits.append(base)
+                return True, removal
+            evidence["finding"] = fid
+            removal = {"answer": WORTHLESS_TEST_REMOVED, "why": r["checks"]["testWouldFail"]["why"].strip(),
+                       "evidence": evidence}
+        return False, removal
+
     def _fold_malformed_unnamed(self, base, fid, r, ruling, unnamed):
         if ruling in _CLEARS and unnamed is not None and not isinstance(unnamed, str):
             self.malformed.append(fid)
@@ -790,7 +973,7 @@ class _AuditFold:
         return False
 
     def _fold_discharged(self, base, fid, reason, has_reason, evidence, unnamed_text, attributed,
-                         fixes, reverts, guarded):
+                         fixes, reverts, guarded, removal=None):
         if has_reason and unnamed_text and fid not in self.allowed_ids and not attributed:
             self.refuse_unnamed_change(base, fid, unnamed_text, [])
             return
@@ -809,6 +992,10 @@ class _AuditFold:
                 self.review_guarded.append(fid)
             if guarded is not None:
                 base["reviewGuarded"] = guarded
+            # a worthless-test-removed id is listed only once its entry ends cleared, as a review-guarded one is
+            if removal is not None:
+                self.test_removal_cleared.append(fid)
+                base["testRemoval"] = removal
             return
         # reasonless `discharged` is unusable — a bare "fixed" is exactly the unproven claim
         # this fold exists to reject.
@@ -820,7 +1007,7 @@ class _AuditFold:
         return
 
     def _fold_discharged_new_issue(self, base, fid, r, reason, has_reason, evidence, unnamed_text,
-                                   attributed, fixes, reverts, guarded):
+                                   attributed, fixes, reverts, guarded, removal=None):
         candidates = _valid_new_issues(r.get("newIssues"), fid)
         if candidates and unnamed_text and fid not in self.allowed_ids and not attributed:
             self.refuse_unnamed_change(base, fid, unnamed_text, candidates)
@@ -841,6 +1028,9 @@ class _AuditFold:
                 self.review_guarded.append(fid)
             if guarded is not None:
                 base["reviewGuarded"] = guarded
+            if removal is not None:
+                self.test_removal_cleared.append(fid)
+                base["testRemoval"] = removal
             return
         # a discharged-but-new-issue with no usable candidate is an unusable claim.
         self.malformed.append(fid)
@@ -896,6 +1086,8 @@ class _AuditFold:
             "placesIgnored": self.places_ignored,
             "reviewGuarded": self.review_guarded,
             "reviewGuardRefused": self.review_guard_refused,
+            "testRemovalCleared": self.test_removal_cleared,
+            "testRemovalRefused": self.test_removal_refused,
         }
 
 
@@ -942,7 +1134,13 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     `brokeNothing` with `review-guarded` for `testWouldFail` when the target's driver-built `fixerDelta`
     shows the fix attempt's whole delta is prose (`prose_only_delta`); with any other delta it is
     not-discharged and listed in `reviewGuardRefused`, and a cleared one is listed in `reviewGuarded`
-    and its entry records `reviewGuarded: {answer, why}`. A target carrying `breakIt`
+    and its entry records `reviewGuarded: {answer, why}`. A clearing ruling may instead answer `worthless-test-removed`
+    for `testWouldFail` (`right` and `brokeNothing` still `yes`); it stands only when `test_removal_clearance`
+    finds every condition C1-C7 true of the target's driver-built `fixerDelta`, `fixerRemoval`, own finding
+    fields and `batchFindings` (the fix only removes test lines a worthless-test finding cites); otherwise it is
+    not-discharged and listed in `testRemovalRefused`, its reason naming the first failing condition, and a
+    cleared one is listed in `testRemovalCleared` and its entry records `testRemoval: {answer, why, evidence}`.
+    A target carrying `breakIt`
     is blocked (not-discharged, listed in `testMismatch`) when its `match` is `missing` or
     `changed-unexplained`, or is `changed-explained` and the result's `testMatch` says `weakened`; each
     of its `audits` entries records `testMatch: {match, answer, blocking}`. Only a target that has a
@@ -950,7 +1148,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
     unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange, testMismatch,
-    placesUnfixed, placesIgnored, reviewGuarded, reviewGuardRefused}. Each `audits` entry
+    placesUnfixed, placesIgnored, reviewGuarded, reviewGuardRefused, testRemovalCleared, testRemovalRefused}. Each `audits` entry
     carries the EFFECTIVE (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
     are subsets of notDischarged that name WHY the finding could not be certified discharged;
     `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the

@@ -1998,7 +1998,12 @@ def _seed_carried(state, cfg, returning):
     state["headDiff"] = state.get("reviewedDiff")
     state["fixBatch"] = list(audited.values())
     # axis: the audit's fixer delta diffs the unfiltered baseline against the head, so a file unchanged between the two never shows as an addition — see bite-proof record c1_followups_2288
-    state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
+    # `_returning_diffs` reads two diff texts (the earlier session's baseline and the round-1 diff), not a pinned head
+    # commit, so there is no exact head to diff the removal record against: `removal_head` stays None and the record
+    # reads unreadable, which fails the removal clearance closed for a carried finding.
+    state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline,
+                                            removal_base=cfg.get("returningAuditBase") or returning.get("lastReviewed"),
+                                            removal_head=None)
     state["fixBatch"] = []
     return True
 
@@ -6670,6 +6675,10 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     state["_fixBatchIndex"] = batch_index
     if not keep_step_start:
         state["_fixStepHead"] = _fix_step_head(config)
+        if batch_index == 0:
+            # the fix attempt's start head: the first slice's, never overwritten by a later slice, and kept past the
+            # step (unlike `_fixStepHead`) so the audit can diff the whole attempt — see `_fixer_removal`
+            state["_fixAttemptStartHead"] = state["_fixStepHead"]
         state.pop("_prBodyAtStep", None)
     state["step"] = P_APPLY_FIXES
     return "queued"
@@ -6945,6 +6954,69 @@ def _git_bytes(repo_root, *args):
     except (OSError, subprocess.SubprocessError):
         return None
     return proc.stdout if proc.returncode == 0 else None
+
+
+_REMOVAL_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+def _fixer_removal(config, base, head):
+    """The removal record of a fix: ``{"base", "head", "files": [{"path", "removed": [[start, end], ...],
+    "added": bool}]}`` read from a plain zero-context diff of ``base`` to the explicit commit ``head`` (never the
+    live checkout HEAD) at ``config["repoRoot"]``. ``removed`` lists the base-side line ranges (the reviewed head's
+    line numbers) each hunk deleted; ``added`` is True when any hunk adds a line. A file the fix only added to
+    still appears (``removed: []``, ``added: True``). The record is ``{"unreadable": <why>, "base", "head"}``
+    — never an exception — when a commit is missing or does not resolve, git fails, the output is not UTF-8,
+    or the diff holds a header that is not one path twice, a binary file, or a binary patch (so the fold
+    clears nothing on it). Git's own settings (textconv, external diff, color, renames) never shape it."""
+    def unreadable(why):
+        return {"unreadable": why, "base": base, "head": head}
+
+    repo_root = config.get("repoRoot") if isinstance(config, dict) else None
+    if not (_nonempty_str(repo_root) and _nonempty_str(base) and _nonempty_str(head)):
+        return unreadable("no repository, base commit or head commit to diff")
+    shas = []
+    for label, commit in (("base", base), ("head", head)):
+        resolved = (None if commit.startswith("-") else
+                    _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % commit))
+        sha = resolved.decode("utf-8", errors="replace").strip() if resolved is not None else ""
+        if not sha:
+            return unreadable("the %s commit %s does not resolve" % (label, commit))
+        shas.append(sha)
+    raw = _git_bytes(repo_root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
+                     "--dst-prefix=b/", "--no-renames", "--unified=0", shas[0], shas[1])
+    if raw is None:
+        return unreadable("git could not diff the base commit to the head commit")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return unreadable("the diff is not UTF-8 text")
+    files, current = [], None
+    for line in text.split("\n"):
+        if line.startswith("diff --git "):
+            rest = line[len("diff --git "):]
+            span = len(rest) - 5
+            path = rest[2:2 + span // 2] if span > 0 and span % 2 == 0 else ""
+            # axis: a header that is not one path twice (a rename, a git-quoted name) makes the whole record unreadable — see bite-proof record audit_test_removal_2434
+            if not path or rest != "a/" + path + " b/" + path or any(f["path"] == path for f in files):
+                return unreadable("a diff header does not name one path twice: %s" % line)
+            current = {"path": path, "removed": [], "added": False}
+            files.append(current)
+        elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+            # axis: a binary file or patch makes the whole record unreadable — see bite-proof record audit_test_removal_2434
+            return unreadable("the diff holds a binary file")
+        elif line.startswith("@@ "):
+            hunk = _REMOVAL_HUNK.match(line)
+            if hunk is None or current is None:
+                return unreadable("a hunk header cannot be read: %s" % line)
+            start = int(hunk.group(1))
+            old_count = 1 if hunk.group(2) is None else int(hunk.group(2))
+            new_count = 1 if hunk.group(3) is None else int(hunk.group(3))
+            if old_count > 0:
+                current["removed"].append([start, start + old_count - 1])
+            # axis: any hunk that adds a line marks its file as added to — see bite-proof record audit_test_removal_2434
+            if new_count > 0:
+                current["added"] = True
+    return {"base": shas[0], "head": shas[1], "files": files}
 
 
 def _git_fix_commit_facts(config, step_head, commits, test_paths):
@@ -7724,7 +7796,8 @@ def _audit_result_entry_fault(entry, index, target_ids, targets_by_id=None):
     checks_fault = audits.audit_checks_fault(entry, (targets_by_id or {}).get(rid))
     if checks_fault is not None:
         return ("%s is refused: %s; expected `checks` with `right`, `brokeNothing` and `testWouldFail`, "
-                "each {\"answer\": \"yes\" or \"no\" (`testWouldFail` may also be \"review-guarded\"), "
+                "each {\"answer\": \"yes\" or \"no\" (`testWouldFail` may also be \"review-guarded\" or "
+                "\"worthless-test-removed\"), "
                 "\"why\": <reason>}" % (where, checks_fault))
     # axis: the optional `places` answer is a list of {file, line, fixed} rows — `audits.place_answers_fault`, the fold's own judge
     places_fault = audits.place_answers_fault(entry)
@@ -8333,7 +8406,8 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     state["fullPanelRan"] = False
     state["_auditTargets"] = _audit_targets(
         state, config, split.get("auditTargets") or {},
-        reviewed_diff=reviewed)
+        reviewed_diff=reviewed,
+        removal_base=state.get("_fixAttemptStartHead"), removal_head=_audit_head(state, config))
     state["_newSurface"], state["_fixDeltaDiff"] = fix_delta
     _record_round(state, "roundKind", "delta")
     _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
@@ -8982,11 +9056,14 @@ def _audit_fix_group(finding, key):
     return {"id": group["id"], "members": [m for m in group["members"] if m != key]}
 
 
-def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
+def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal_base=None, removal_head=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
-    occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
+    occurrence wins. A re-queued target keys by its findingKey marker, never by id.
+
+    Every target also carries ``fixerRemoval``, the removal record of the fix (``removal_base`` to
+    ``removal_head``, see ``_fixer_removal``); with no usable base or head it says it is unreadable."""
     fixer_vendor = config.get("fixerVendor")
     runner_only = bool(state.get("_advanceUsed"))
     maker_families, pinned_vendors = receipt_disclosures.auditor_constraints(state)
@@ -9008,6 +9085,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                          if file not in left_out}
     attempt_delta = (_attempt_fixer_delta(reviewed_diff, state.get("headDiff"), left_out)
                      if reviewed_diff is not None else None)
+    fixer_removal = _fixer_removal(config, removal_base, removal_head)
     batch_findings = []
     for bf in state.get("fixBatch") or []:
         if isinstance(bf, dict) and _finding_key_of(bf) not in [b["id"] for b in batch_findings]:
@@ -9015,7 +9093,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                        "line": bf.get("line"), "title": bf.get("title")}
             # A sibling carries its scope: body, suggestion and its effective owner ruling, so the
             # auditor attributes a change to the finding whose scope names it.
-            for carried in ("body", "suggestion"):
+            # The dimension and taxonomy ride too: the removal judge (audits.test_removal_clearance) counts a
+            # sibling's cited lines only when that sibling is itself a worthless-test finding.
+            for carried in ("body", "suggestion", "dimension", "taxonomy"):
                 if bf.get(carried) is not None:
                     sibling[carried] = bf[carried]
             sibling_kind = _kind_of_mistake_projection(bf)
@@ -9091,6 +9171,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         # changed; `batchFindings` are the attempt's other findings (id, file, line, title).
         if attempt_delta is not None:
             row["fixerDelta"] = list(attempt_delta)
+        row["fixerRemoval"] = copy.deepcopy(fixer_removal)
         row["batchFindings"] = [b for b in batch_findings if b["id"] != tid]
         if _audit_fix_group(f, tid) is not None:
             row[verification.FIX_GROUP_FIELD] = _audit_fix_group(f, tid)
@@ -9477,8 +9558,13 @@ def _fold_audits(state, config, artifact, session_dir=None):
                                for p in a["places"] if isinstance(p, dict) and isinstance(p.get("fixed"), bool)]
                      for a in outcome["audits"]
                      if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("places"), list)}
+    removal_by_id = {a["id"]: a["testRemoval"] for a in outcome["audits"]
+                     if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("testRemoval"), dict)}
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
+        if tid in removal_by_id:
+            # a fix cleared as the removal of a worthless test carries the evidence it cleared on, so the review record can name it
+            receipt = dict(receipt, testRemoval=copy.deepcopy(removal_by_id[tid]))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt,
                             placeResults=place_answers.get(tid) or None)
         # The discharge supersedes the closure's earlier dispositions the ruling had reopened.
