@@ -738,12 +738,19 @@ computed once in the SKILL as `$SEAT_MAP`). Each of the five lens seats carries 
   violation for any seat that does name a maker family. Every degradation / unhonorable-pin fallback is recorded in the
   seat-map receipt, so a downgraded composition is visible at vet time, never silent.
 
-**Dispatching searchers.** The `dispatch-sweep` phase's seats (`searcher:<sweepId>:<part>`) are native host
-subagents, each seated at the registry's mechanical cell, which the payload's `searcher` names. They are
+**Dispatching searchers.** The `dispatch-sweep` phase's seats (`searcher:<sweepId>:<part>`) are each dispatched
+as the read-only plugin agent `superheroes:searcher` (`agents/searcher.md`), by
+name, at the mechanical cell the payload's `searcher` names — never as a `general-purpose` subagent and never on
+any other agent, because the session's own grant would reach session, messaging, write and shell tools. They are
 outside the review independence rule because they search a list of files for one described mistake and do not
 judge: a searcher is never a reviewer, never appears in the record's reviewers, and needs no seat-map entry.
 The orchestrator passes each searcher the order and its part's input as given and never edits the search
 description. A searcher's result goes back per seat, `{hits: [{file, line, what}]}`, each seat in the one
 artifact of the phase; a seat that returns nothing usable is left out of the artifact, so the fold records it
-missing, and is never submitted as an empty list. See [the `dispatch-sweep` row](round-driver.md#actions-and-payloads)
+missing, and is never submitted as an empty list. The searcher returns its `{hits: [...]}` in its reply and
+writes no file; the orchestrator writes each reply to that seat's landing path (durable-record path) or puts it
+into the phase artifact (hand path). A searcher that derails is never re-dispatched as `general-purpose` (it is
+a capability-constrained seat, `hosts/claude-tools.md` § Dispatch Reliability); it is left out of the artifact
+and recorded missing, as above. On a host where the registry has no mechanical cell for the host's own vendor
+(Codex today), no searcher runs: the sweep is recorded `no-searcher-cell`. See [the `dispatch-sweep` row](round-driver.md#actions-and-payloads)
 for the payload and how the hits are routed.
