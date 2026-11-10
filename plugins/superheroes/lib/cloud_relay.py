@@ -17,7 +17,9 @@ names, read back through `gh api`, has the body `compose` recorded.
                         read the posted comment back, check it against the composed body, and record
                         the pointer (and the message to send to the relay)
   cloud_relay.py check --repo-root R --msg-id X [--wait S] [--interval I]
-                        whether message X was delivered, waiting up to S seconds
+                        whether message X was delivered, waiting up to S seconds; delivered on the relay's own
+                        report of the exact send, or (relay silent) on a matching comment plus the target
+                        lane's later builder activity on its issue
   cloud_relay.py limit --repo-root R --config-dir D
                         whether account D is at its usage limit, read from the relay's session record
 
@@ -183,9 +185,10 @@ def comment_text(body, msg_id):
     return body[len(prefix):]
 
 
-def read_comment(repo, comment_id, *, env=None, run=None):
-    """(status, body) of one issue comment read through `gh api`: `ok` with the API's `body` string, `missing`
-    when gh failed and its output names HTTP 404, `unreadable` for any other failure."""
+def _fetch_comment(repo, comment_id, *, env=None, run=None):
+    """(status, parsed comment dict) of the one `gh api repos/<r>/issues/comments/<id>` call: `ok` with the API's
+    object, `missing` when gh failed and its output names HTTP 404, `unreadable` for any other failure or an
+    answer that is not a JSON object. The dict is None unless the status is `ok`."""
     if not (isinstance(repo, str) and _REPO_NAME_RE.match(repo)
             and isinstance(comment_id, int) and not isinstance(comment_id, bool) and comment_id > 0):
         return "unreadable", None
@@ -199,8 +202,27 @@ def read_comment(repo, comment_id, *, env=None, run=None):
         parsed = json.loads(out)
     except ValueError:
         return "unreadable", None
-    body = parsed.get("body") if isinstance(parsed, dict) else None
-    return ("ok", body) if isinstance(body, str) else ("unreadable", None)
+    return ("ok", parsed) if isinstance(parsed, dict) else ("unreadable", None)
+
+
+class _ReadBody(str):
+    """A comment body that remembers the whole comment it was read from, so `check` gets the body and the comment's
+    creation time from the one read `read_comment` makes. It equals, hashes and slices as the plain string."""
+    comment = None
+
+
+def read_comment(repo, comment_id, *, env=None, run=None):
+    """(status, body) of one issue comment read through `gh api`: `ok` with the API's `body` string, `missing`
+    when gh failed and its output names HTTP 404, `unreadable` for any other failure."""
+    status, parsed = _fetch_comment(repo, comment_id, env=env, run=run)
+    if status != "ok":
+        return status, None
+    body = parsed.get("body")
+    if not isinstance(body, str):
+        return "unreadable", None
+    carried = _ReadBody(body)
+    carried.comment = parsed
+    return "ok", carried
 
 
 def lane_repo(repo_root, *, env=None, run=None):
@@ -805,8 +827,26 @@ _COMMENT_ALSO = {
 }
 
 
+_LEG_WORDS = {
+    "relay-report": "the relay's own report of the send",
+    "comment-match": "a pointer comment that matches the composed text",
+    "later-activity": "builder activity on the lane's issue after the comment",
+}
+_ACTIVITY_WORDS = {"note": "it posted a builder note", "progress": "its progress comment was edited"}
+
+
+def _missing_sentence(legs):
+    """One sentence naming the legs a silent relay's result did not establish, in plain words."""
+    words = [_LEG_WORDS[leg] for leg in legs]
+    return "Not established: " + (", ".join(words[:-1]) + " and " + words[-1] if len(words) > 1 else words[0]) + "."
+
+
 def _say(verdict, msg_id, wait, detail):
     if verdict == "delivered":
+        if (detail or {}).get("activity"):
+            return ("Message %s was delivered to the cloud session: the relay's own report of the send is missing, "
+                    "but the pointer comment matches and the builder was active on the issue after it (%s)."
+                    % (msg_id, _ACTIVITY_WORDS[detail["activity"]["kind"]]))
         return "Message %s was delivered to the cloud session." % msg_id
     if verdict == "account-limited":
         return ("The relay's account is at its usage limit (%s) until %s, so message %s was not sent; "
@@ -868,13 +908,98 @@ def _nothing_reached(reason):
 
 
 def _comment_leg(msg, env, run):
-    """"matches", "missing", "altered" or "unreadable": the comment the pointer names, read back once."""
+    """(leg, created epoch): the leg is "matches", "missing", "altered" or "unreadable" for the comment the pointer
+    names, read back once; the epoch is when that same read says the comment was created (None when it carries no
+    readable `created_at`, or the read did not return the comment)."""
     status, body = read_comment(msg.get("commentRepo"), msg.get("commentId"), env=env, run=run)
     if status == "missing":
-        return "missing"
+        return "missing", None
     if status != "ok":
-        return "unreadable"
-    return "matches" if comment_sha256(body) == msg.get("commentSha256") else "altered"
+        return "unreadable", None
+    comment = getattr(body, "comment", None)
+    created = _sibling("cloud_recover")._epoch(comment.get("created_at")) if isinstance(comment, dict) else None
+    return ("matches" if comment_sha256(body) == msg.get("commentSha256") else "altered"), created
+
+
+def _target_lane(repo_root, msg, env):
+    """(issue, lower, upper) of the message's own lane window, or None when the lane cannot be told. The lane is the
+    one cloud launch whose `cloudSessionName` is the message's session; its window opens at its note cutoff and
+    closes at the smallest later cutoff of another launch on the same issue (upper None: unbounded). It is the wave
+    watch's one lane-assignment rule (`wave_watch._comment_lane`)."""
+    ledger, watch = _sibling("launch_ledger"), _sibling("wave_watch")
+    session = msg.get("session")
+    got = ledger.read(repo_root, env=_env(env), create=False)
+    # axis: an unreadable ledger or a fold that is not ok attributes no lane, so no activity is ever read for it — see bite-proof record wo_2409_relay_activity.md
+    if got.get("state") not in ("ok", "tornTail"):
+        return None
+    folded = ledger.fold(got.get("records") or [])
+    if folded.get("ok") is not True or not isinstance(folded.get("launches"), dict):
+        return None
+    launches = folded["launches"]
+    named = [info for info in launches.values() if isinstance(info, dict) and info.get("place") == ledger.PLACE_CLOUD
+             and isinstance(session, str) and session and info.get("cloudSessionName") == session]
+    # axis: exactly one cloud launch carries the message's session name — none or two cannot be told apart, so neither is attributed — see bite-proof record wo_2409_relay_activity.md
+    if len(named) != 1:
+        return None
+    target = named[0]
+    lower, issue = watch._note_cutoff(target), target.get("issue")
+    # axis: the pointer comment must sit on the lane's own issue — see bite-proof record wo_2409_relay_activity.md
+    if lower is None or isinstance(issue, bool) or msg.get("commentIssue") != issue:
+        return None
+    later = [cutoff for info in launches.values()
+             if isinstance(info, dict) and info is not target and info.get("issue") == issue
+             and (cutoff := watch._note_cutoff(info)) is not None and cutoff > lower]
+    return issue, lower, (min(later) if later else None)
+
+
+def _later_activity(repo_root, msg, created, env, run):
+    """("found"|"none"|"unreadable"|"unattributable", activity or None): whether the message's own lane was active on
+    its issue after the pointer comment (created at epoch `created`). Activity is a builder note created strictly
+    after the comment, or the lane's progress comment (created at or before the comment) edited after it with a phase
+    that reads working, both created inside the lane's window. Nothing else counts. The activity is
+    `{"kind": "note"|"progress", "commentId", "at"}`."""
+    # axis: a comment whose creation time is missing or unreadable, or a lane that cannot be attributed, leaves the activity unjudged and the leg unattributable, never found — see bite-proof record wo_2409_relay_activity.md
+    lane = _target_lane(repo_root, msg, env) if created is not None else None
+    if lane is None:
+        return "unattributable", None
+    issue, lower, upper = lane
+    recover, builder, watch = _sibling("cloud_recover"), _sibling("cloud_builder"), _sibling("wave_watch")
+    comments = recover._issue_comments(msg.get("commentRepo"), issue, created, _env(env), run)
+    # axis: comments that cannot be read whole leave the activity unreadable, never none and never found — see bite-proof record wo_2409_relay_activity.md
+    if comments is None:
+        return "unreadable", None
+    for comment in comments:
+        made = recover._epoch(comment.get("created_at"))
+        comment_id = comment.get("id")
+        if made is None or type(comment_id) is not int or comment_id <= 0:
+            continue
+        # axis: the lane's window opens at its own note cutoff — a comment created before it (an earlier lane's) is not this lane's — see bite-proof record wo_2409_relay_activity.md
+        if made < lower:
+            continue
+        # axis: the lane's window closes at the next launch's cutoff on the same issue — a successor lane's comment is not this lane's — see bite-proof record wo_2409_relay_activity.md
+        if upper is not None and made >= upper:
+            continue
+        text = builder.strip_cloud_footer(comment.get("body"))
+        if text is None:
+            continue
+        if text.lstrip().startswith(builder.NOTE_HEADER):
+            # axis: a builder note is activity only when created strictly after the pointer comment, so one before it or in its second is not — see bite-proof record wo_2409_relay_activity.md
+            if made > created:
+                return "found", {"kind": "note", "commentId": comment_id, "at": comment.get("created_at")}
+            continue
+        progress = builder.parse_progress(text)
+        if progress is None:
+            continue
+        # axis: a progress comment is the lane's edit only when it was created at or before the pointer comment — one created after it is a new comment, not an edit — see bite-proof record wo_2409_relay_activity.md
+        if made > created:
+            continue
+        edited = recover._epoch(comment.get("updated_at"))
+        if edited is None or edited <= created:
+            continue
+        # axis: a progress edit is activity only when its phase reads working — a parked, stopped or handed-back phase is the lane ending, not working — see bite-proof record wo_2409_relay_activity.md
+        if watch._phase_reads_resumed(progress["phase"]) and not watch._phase_reads_handed_back(progress["phase"]):
+            return "found", {"kind": "progress", "commentId": comment_id, "at": comment.get("updated_at")}
+    return "none", None
 
 
 def _number(value, low_open):
@@ -889,7 +1014,10 @@ def _number(value, low_open):
 def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep=None, wall=None, run=None):
     """Whether message `msg_id` was delivered. Two legs, both needed: the text the relay actually sent, read
     from its own session record, equals the pointer exactly and the send succeeded; and the comment the pointer
-    names, read back through `gh api`, has the body `compose` recorded. A message composed but never pointed
+    names, read back through `gh api`, has the body `compose` recorded (`basis: "relay-report"`). A second basis
+    (`basis: "comment-and-activity"`) reads delivered when the relay's leg reads `relay-silent` but the comment
+    matches byte for byte and the message's own lane shows builder activity on its issue after the comment; a
+    silent result names the legs it did not establish (`missingLegs`, `activityLeg`). A message composed but never pointed
     reads `pointer-not-composed` with no wait; one composed before comment hashes were recorded never reads
     delivered (`legacy-unverified`). A relay that sent nothing while its account is at its usage limit reads
     `account-limited`, not `relay-silent`; `wall` is the epoch-seconds clock that reading is made against
@@ -905,9 +1033,11 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
         return _check_refusal(msg_id, _refuse("message-unknown"))
     is_pointer = "commentSha256" in msg
     relay, detail, comment_leg = None, None, None
+    activity_leg, activity, basis = None, None, None
     # axis: a message composed with a comment hash but never pointed reads pointer-not-composed at once, with no wait and no relay read, and nothing reached the builder — see bite-proof record wo_2368_relay_pointer.md
     if is_pointer and not isinstance(msg.get("forward"), str):
         verdict, parts = "pointer-not-composed", ["pointer"]
+        pointer_leg = verdict
     else:
         relay = state["relays"].get(msg.get("relay"))
         relay_id = relay.get("sessionId") if isinstance(relay, dict) else None
@@ -927,11 +1057,22 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
                 verdict = "account-limited"
                 detail = {"limitType": limit["limitType"], "resetsAt": limit["resetsAt"],
                           "resetsAtIso": reset_iso(limit["resetsAt"])}
+        created = None
         if is_pointer:
-            comment_leg = _comment_leg(msg, env, run)
+            comment_leg, created = _comment_leg(msg, env, run)
+        pointer_leg = verdict
+        if is_pointer and verdict == "relay-silent":
+            # axis: the second basis reads the lane's activity only for a silent relay leg whose comment matches byte for byte — an altered, missing or unreadable comment reads no activity and is never delivered — see bite-proof record wo_2409_relay_activity.md
+            if comment_leg == "matches":
+                activity_leg, activity = _later_activity(repo_root, msg, created, env, run)
+                # axis: a silent relay leg reads delivered on the second basis only when the lane's later activity was found — none, unreadable and unattributable stay relay-silent — see bite-proof record wo_2409_relay_activity.md
+                if activity_leg == "found":
+                    verdict, basis = "delivered", "comment-and-activity"
+                    detail = {"activity": activity}
+            else:
+                activity_leg = "not-read"
         parts = ([] if verdict == "delivered" else ["pointer"]) + (
             ["comment"] if is_pointer and comment_leg != "matches" else [])
-    pointer_leg = verdict
     if not is_pointer and verdict == "delivered":
         # axis: an entry composed before comment hashes were recorded can be sent exactly and still never reads delivered, since no comment can be checked — see bite-proof record wo_2368_relay_pointer.md
         verdict = "legacy-unverified"
@@ -939,15 +1080,25 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
     delivered = verdict == "delivered" and comment_leg == "matches"
     # the relay leg's verdict when it is not delivered, else the comment leg's (only a pointer entry gets here with a comment problem)
     reason = verdict if verdict != "delivered" or delivered else "comment-" + comment_leg
+    basis = (basis or "relay-report") if delivered else None
+    # the legs a silent pointer entry did not establish, in order; None for every other result
+    missing = (["relay-report"] + (["comment-match"] if comment_leg != "matches" else [])
+               + (["later-activity"] if activity_leg != "found" else [])) if is_pointer and reason == "relay-silent" else None
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return _check_refusal(msg_id, refusal)
     saved = True
     if isinstance(state["pending"].get(msg_id), dict):
-        state["pending"][msg_id]["decision"] = {"delivered": delivered, "reason": reason, "at": _now_iso()}
+        decision = {"delivered": delivered, "reason": reason, "at": _now_iso()}
+        if basis:
+            decision["basis"] = basis
+        state["pending"][msg_id]["decision"] = decision
         saved = _save(path, state)
     wait_text = "%g" % wait_s
     say = _say(reason, msg_id, wait_text, detail)
+    # a lane that could not be attributed keeps today's sentence: the keys carry the legs, and no sentence is added where nothing was judged
+    if missing and activity_leg != "unattributable":
+        say += " " + _missing_sentence(missing)
     if pointer_leg != "delivered" and comment_leg not in (None, "matches"):
         say += " " + _COMMENT_ALSO["comment-" + comment_leg] % msg_id
     out = {"ok": delivered, "delivered": delivered, "reason": None if delivered else reason,
@@ -955,6 +1106,10 @@ def check(repo_root, msg_id, *, wait=60, interval=2, env=None, clock=None, sleep
     if is_pointer:
         out["commentLeg"] = comment_leg
         out["failedParts"] = parts
+        if delivered:
+            out["basis"] = basis
+        elif missing is not None:
+            out.update(activityLeg=activity_leg, missingLegs=missing)
     out.update(detail or {})
     # axis: a silent relay whose liveness ensure could not tell says so, after the usual sentence and before the unwritable-state suffix — see bite-proof record wo_2294_dead_relay.md
     if verdict == "relay-silent" and relay.get("liveness") == "undetermined":
