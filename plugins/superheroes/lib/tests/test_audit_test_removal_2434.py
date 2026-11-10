@@ -572,9 +572,12 @@ def test_o_the_python_reader_reads_def_test_and_class_test_lines(text, expected)
     pytest.param("describe.each([[1, 2]])('adds %i', (a) => {});\n", [1], id="describe-each-call"),
     pytest.param("test ('spaced', () => {});\n", [1], id="space-before-the-parenthesis"),
     pytest.param("const t = test\n", [], id="a-test-alias-is-no-opening"),
-    pytest.param("item('x');\ntesting('y');\nxit('z');\nexpect(a).toBe(1);\n", [], id="longer-names-are-no-opening"),
+    pytest.param("item('x');\ntesting('y');\nexpect(a).toBe(1);\n", [], id="longer-names-are-no-opening"),
+    pytest.param("xit('z');\nxtest('y');\nxdescribe('s', () => {});\nfit('f');\nfdescribe('g', () => {});\n",
+                 [1, 2, 3, 4, 5], id="skipped-and-focused-forms"),
     pytest.param("  await it('x');\n", [], id="not-at-the-start-of-the-line"),
-    pytest.param("test.each`table`('x', () => {});\n", [], id="a-template-call-is-not-read"),
+    pytest.param("test.each`table`('x', () => {});\n", [1], id="a-template-call-on-one-line"),
+    pytest.param("it.each`\n  a | b\n`('row', () => {});\n", [1], id="a-tagged-template-table"),
 ])
 def test_o_the_js_reader_reads_it_test_and_describe_calls(text, expected):
     # axis: G18 — the JavaScript and TypeScript reader names the lines that open a test

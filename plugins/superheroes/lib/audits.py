@@ -169,7 +169,9 @@ _ABSENT = object()
 PYTHON_TEST_EXTENSIONS = frozenset({".py"})
 JS_TEST_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
 PYTHON_TEST_OPENING = re.compile(r"^\s*(async\s+)?def\s+test\w*\s*\(|^\s*class\s+Test\w*\b")
-JS_TEST_OPENING = re.compile(r"^\s*(it|test|describe)(\.\w+)*\s*\(")
+# The test functions of the common runners, their skipped (`x`) and focused (`f`) forms included, called directly
+# or through a tagged template (`test.each` followed by a backtick table).
+JS_TEST_OPENING = re.compile(r"^\s*(x|f)?(it|test|describe)(\.\w+)*\s*[(`]")
 
 
 def test_openings(path, text):
