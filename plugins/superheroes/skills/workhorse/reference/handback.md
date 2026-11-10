@@ -193,7 +193,10 @@ record, each under the next unused FU number (in the marker too), with its origi
 
 ## The size tripwire row
 
-§4's size step fills this row. After a mid-build merge of the base branch, `N` counts from the merge
+§4's size step fills this row. Its count `N` is the size result's `tripwireCount`, the count
+`crossed` is read against (the folded `sizeTripwire`, `dispatch-mechanics.md` § Size tripwire at
+fold, or your own `lib/size_count.py count` run), and never its `barCount`, the count the two
+absolute bars read (`rubric/review-discipline.md` § Size). After a mid-build merge of the base branch, `N` counts from the merge
 base of the head and that branch (`git merge-base HEAD <base branch>`) only when the fold's
 `sizeTripwire` reads `status: "ok"` with `countedFrom`, so the base branch's own lines are not the
 build's. When it reads `indeterminate` with `size-base-ref-contains-head`, or the merge base holds

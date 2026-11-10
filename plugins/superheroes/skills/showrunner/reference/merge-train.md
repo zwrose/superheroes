@@ -310,6 +310,10 @@ on the owner's machine. This section is the one home of how they are cleaned up.
    builder note describes) and record `delivered` when it reads `delivered: true`, `failed` when it reads `nothingReached: true` (nothing reached the
    builder, so a later run of this procedure may send again), otherwise `uncertain`. A
    same-account id has no check, so record `uncertain`. Then go on. A `pending` or `uncertain` request is never sent a second time.
+   A `check` that reads `delivered: true` on either basis (`relay-report` or `comment-and-activity`) settles the
+   request `delivered`, a request recorded `uncertain` earlier and re-checked included: the `uncertain` receipt is
+   replaced, and the plan then carries no archive text. A builder that archives itself without posting anything
+   shows no activity, so its request stays `uncertain`.
 3. **Tell the owner.** On `delivered`, tell the owner the `ownerMessage` as it is. On any other
    outcome, tell the owner that the archive request to that build's session could not be confirmed
    and that its session stays listed. Ask nothing more of the owner than the `ownerMessage` asks.
