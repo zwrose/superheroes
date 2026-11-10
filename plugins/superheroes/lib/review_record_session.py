@@ -1444,6 +1444,10 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
                                     review_record._readers(readers)["engine_run"], raw_dir, abandoned=abandoned is not None)
     if abandoned is not None:  # the pending phase's planned seats that produced no result are reviewers that did not run
         reviewers += _pending_without_result(state, session_dir, rows, reviewers)
+        # axis: every planned not-run row of an abandoned account carries a no-result reason, the hand-submit rows included — see bite-proof record i2436_abandoned_missing
+        for v in reviewers:
+            if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:
+                v["noResult"] = UNFILLED if v.get("vendor") == UNFILLED else review_record.RECORDED_MISSING
     # a hand submit journals no seat: each seat its rounds say ran (credited or not, as `_status_reviewers` lists it) is a run with no figure
     # axis: a hand-submitted audit is one run per non-silent audit target, never one per auditor vendor — see bite-proof record i2307_session_cost
     hand = [REVIEWER_ROUND_SUFFIX.sub("", v["name"]) for v in reviewers if v.get("ran") and not v["name"].startswith("audits auditor")] + [

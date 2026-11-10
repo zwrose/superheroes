@@ -306,6 +306,49 @@ def test_a_returning_session_with_no_recorded_seat_lists_its_pending_scoped_find
     assert [m["reason"] for m in rec["missingReviews"]] == [rr.NO_RESULT]
 
 
+def _hand_session_without_pending(tmp_path, **state):
+    """An abandoned hand-submit session with no pending step: round 1's seat status says code ran and test-role is missing."""
+    state.setdefault("config", {"maxRounds": 7, "dimensions": DIMS})
+    state.setdefault("rounds", {"1": {"seatStatus": {CODE: "run", TEST: "missing"}}})
+    return Session(tmp_path, terminal=None, _submitUsed=True, **state).save()
+
+
+def test_a_hand_submit_seat_the_status_calls_missing_carries_recorded_missing(tmp_path):
+    """axis: G13 — a hand-submit session's seat status `missing` row is planned and not run, so it carries recorded-missing
+    and its missingReviews entry carries the same reason."""
+    session = _hand_session_without_pending(tmp_path)
+    account = _account(session)
+    rows = {v["name"]: v for v in account["reviewers"]}
+    assert rows[CODE_ROW]["ran"] is True and "noResult" not in rows[CODE_ROW]
+    assert rows[TEST_ROW]["planned"] is True and rows[TEST_ROW]["ran"] is False
+    assert rows[TEST_ROW]["noResult"] == rr.RECORDED_MISSING
+    assert all("noResult" in v for v in account["reviewers"] if v["planned"] is True and v["ran"] is False)
+    _, rec = _record(tmp_path, session)
+    assert _missing(rec) == [(TEST_ROW, rr.RECORDED_MISSING)]
+    assert rec["missingReviews"][0]["reason"] == rr.RECORDED_MISSING
+
+
+def test_every_planned_not_run_row_of_an_abandoned_account_carries_a_vocabulary_reason(tmp_path):
+    """axis: G13 — the invariant over several abandoned shapes: journaled with nothing landed, journaled with an unfilled
+    seat, a hand-submit session with a missing seat, and a hand-submit session with an unfilled pending panel seat."""
+    builders = {
+        "journaled-nothing-landed": lambda p: _session(p).save(),
+        "journaled-unfilled": lambda p: _session(p, seatMapReceipts=UNFILLED_MAP).save(),
+        "hand-submit-missing": lambda p: _hand_session_without_pending(p),
+        "hand-submit-pending-unfilled": lambda p: _session(
+            p, pending=_pending(rnd=2), seats=(), _submitUsed=True, round=2, seatMapReceipts=UNFILLED_MAP,
+            rounds={"1": {"seatStatus": {CODE: "run"}}, "2": {}}).save(),
+    }
+    for label, build in builders.items():
+        sub = tmp_path / label
+        sub.mkdir()
+        not_run = [v for v in _account(build(sub))["reviewers"] if v["planned"] is True and v["ran"] is False]
+        assert not_run, label
+        for v in not_run:
+            assert v.get("noResult") in rr.NO_RESULT_REASONS, (label, v["name"], v.get("noResult"))
+            assert (v["noResult"] == rs.UNFILLED) == (v["vendor"] == rs.UNFILLED), (label, v["name"])
+
+
 def test_a_pending_roster_that_cannot_be_derived_refuses_and_posts_nothing(tmp_path):
     """axis: fail closed — an underivable roster is a refusal, never an empty one."""
     session = _session(tmp_path, pending=_pending(AUDITS), _auditTargets="not-a-list").save()
