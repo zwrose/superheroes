@@ -51,11 +51,17 @@ it. Each refusals entry carries command (the command exactly as you wrote it), r
 (permission, hook or sandbox), hook (the hook's name when the refusal gave one, else null), route
 (the route a refusal message named and you took, or the plain form you re-issued after a form-only
 refusal, else null), and next (what you did next). An empty list means you met none.
+A refusal also binds the whole build session, not only you: the session rule and its list of
+sanctioned retries (`SESSION_RULE` and `SANCTIONED_RETRIES` in `lib/command_refusals.py`) ride in
+every order you receive; read them there. Beyond the stop rule's two exceptions above, which stay
+yours for a refusal you met, take no retry the list does not give your seat.
 This dominates every rung below: a refused or denied command is never a command you "could not run"
 under rung 3 or rung 4 — you stop and report.
 
 **Deletes.** The delete rule (`DELETE_RULE` in `lib/command_refusals.py`) binds every command you
-run; read it there and follow it. This file does not restate it.
+run; read it there and follow it. This file does not restate it. The stop-and-delete rule
+(`STOP_AND_DELETE_RULE`, same home) binds every process you stop and every path you delete; read
+it there and follow it.
 
 **Unscopable wide-gate order defect.** When your order names a full-suite or project-wide gate that
 cannot be scoped to your order's surface, report widening as **order defect** — always, even when
@@ -177,7 +183,9 @@ overrunning or silently truncating.
   failed.** Never infer, estimate, or describe what a run "would have" shown. **Untested work, clearly labelled
   untested, is a usable result** the orchestrator can verify. **The orchestrator's own re-run of the
   calibrated verify command, with CI's suite run on the pushed head, is what closes the loop** — your missing receipt does not make the work accepted-as-green;
-  it moves verification to the orchestrator, where authority sits. Two builds in one wave had every implementer shell call rejected; the orchestrator's own
+  it moves verification to the orchestrator, where authority sits. A command a refusal stopped is
+  the exception: the session rule binds the orchestrator too, so it re-runs that command only when
+  a sanctioned retry covers it, and otherwise the claim goes back UNVERIFIED. Two builds in one wave had every implementer shell call rejected; the orchestrator's own
   re-run was then the only verification that existed.
 - **Never mark your own work done.** You do not decide the work is done, correct, or ready — you
   leave your work in the worktree, return your receipts, and the orchestrator reads the diff off disk

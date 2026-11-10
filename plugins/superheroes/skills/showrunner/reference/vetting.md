@@ -99,6 +99,8 @@ Spend vet time on the adversarial probes the suite does not contain: does the gu
 
 A review seat's claim about what the code does when it runs is a hand trace until it is executed: a lead, not a receipt. The vet treats it as proven only when a run shows it: the builder's re-run, the vet's own probe, or a break-it test the test role wrote and the orchestrator ran.
 
+**A vet re-runs no refused act.** A refusal met anywhere in the build, by a seat, the orchestrator or the vet itself (its drafters included), binds the vet as it binds the build. A refusal the vet met itself keeps the stop rule's two exceptions for the vet alone (a route the refusal names, a plain-form re-issue after a form-only refusal), once each; beyond those, the vet re-runs a refused act only when a sanctioned retry names a vet (`SANCTIONED_RETRIES` in `lib/command_refusals.py`), only on that entry's conditions, and names the refusal and the re-run in the vet receipt. Any other refused act stays unprobed, and the claim it would have tested is recorded in the receipt as unverified, under its degradations. A new entry needs the owner's word with its field sightings.
+
 ## Grading the third-rework tripwire
 
 This is the vet-time grading of the third-rework tripwire; the ruling is [review-discipline.md § The third-rework tripwire](../../../rubric/review-discipline.md#the-third-rework-tripwire).
@@ -193,7 +195,9 @@ verdict names the findings the review left for the owner.
 
 **The reminder is the one builder text you remove.** It is not an exception to "never the
 builder's prose". If you find your verdict and the reminder both present, the verdict wins: delete
-the reminder on that read.
+the reminder on that read. Outside the slot, you also write the body lines recording an owner
+acceptance (`skills/showrunner/reference/vet-receipt.md` § Recording an owner acceptance — the
+advisor writes it).
 
 `vet_slot.py write` refuses `slot-span-builder-text`, writing nothing, when the slot span holds
 anything besides the builder's reminder and your own earlier verdict: a builder section, prose

@@ -52,8 +52,8 @@ and review. The review and the advisor's vet sit downstream of you.
 ## Build lanes
 
 A build runs in one of three lanes: **full**, **light**, or **micro**. The advisor calls full or
-light when it marks the issue build-ready, with the owner present, and records the call in the
-issue. Micro is the showrunner's lane, recorded in the PR, and the showrunner charter carries its
+light when it marks the issue build-ready, at any hour, and records the call in the issue for the
+owner's veto. Micro is the showrunner's lane, recorded in the PR, and the showrunner charter carries its
 shape. The lane table and the cross-lane invariants live in
 `${CLAUDE_PLUGIN_ROOT}/rubric/review-discipline.md`.
 
@@ -81,8 +81,8 @@ Everything below that names the light lane is an exception. Otherwise the build 
   blocked permission would surface after the work is done.
 
 **The kickoff stands in for the brief.** The brief is where "does this need something irreversible
-or expensive?" gets asked. In the light lane the owner-present kickoff, the recorded lane call, and
-the escalation triggers below do that job together. Keep the kickoff conversation.
+or expensive?" gets asked. In the light lane the advisor's recorded lane call, with its one line of
+reasoning, and the escalation triggers below do that job together.
 
 **Escalate to the full lane when any of these holds.** Escalation runs up only.
 
@@ -130,7 +130,8 @@ spend: before the workspace, the brief, and every dispatch.
 **Run the register-check at intake for a register-consuming child**, before the brief. A
 register-consuming child is an epic child of a package that has a register, or a single-issue child
 standing in for one. Run the check whether or not the body quotes a block: a body with zero quoted
-blocks is the case the check exists to fail. For a stack layer, use the [stack layer
+blocks is the case the check exists to fail, unless the child is declared on the register's
+`*No-entry children:*` line (an undeclared, unconsumed child still blocks). For a stack layer, use the [stack layer
 inputs](${CLAUDE_PLUGIN_ROOT}/skills/showrunner/reference/register-check.md#stack-layer-inputs).
 When the route names the register and child token, or they are derivable, run the check. On
 `pass`, record the check's own output in the intake note — the `result` line, or `pass` together
@@ -509,6 +510,17 @@ and every dispatch returned a terminal result in-turn or sits behind a durable p
 tests pass, types are clean, or the build is green is an input, never a substitute. A claim the
 calibrated verify command does not cover, and that no qualifying receipt grounds, goes into the
 handback as **UNVERIFIED**.
+
+**A refusal binds the whole build, you included.** When a seat in this build, or you, met a
+refusal, you never take the refused act in any form and never hand it to another seat, unless a
+sanctioned retry covers it; the stop rule's two exceptions (a route the refusal names, a plain-form
+re-issue after a form-only refusal) stay with the seat that met the refusal, once, and no other seat
+inherits them. The session rule and its list (`SESSION_RULE` and `SANCTIONED_RETRIES` in
+`lib/command_refusals.py`) name each retry's seats, conditions and disclosure. A verify or bite-proof
+run that a refusal stopped and no entry covers goes into the handback as **UNVERIFIED**. Record
+every refusal you meet yourself, the review fix step included, beside your seats' refusals in the
+build record's dispatch provenance. A new entry needs the owner's word with its field sightings; a
+builder never adds one.
 
 **A handback claims a live process only with evidence of which physics applies.** Harness-tracked
 background work dies at turn end. A shell-detached child with durable on-disk output survives and is

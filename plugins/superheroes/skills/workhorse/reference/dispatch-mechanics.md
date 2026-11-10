@@ -214,7 +214,7 @@ Tearing down what you started is where a wave kills its own siblings. **The kill
 recorded when you started the process** — read back out of the dispatch's run dir, the launch record,
 or the note you wrote at spawn time — and never a match on the process's command text. Record the PID
 at spawn precisely so this is available later; a teardown that has to go looking has already lost the
-argument.
+argument. Every seat receives the same rule as `STOP_AND_DELETE_RULE` in `lib/command_refusals.py`; this section is how a builder meets it when a PID went unrecorded.
 
 **A command-text match is a cross-session kill, not a cleanup.** Sibling sessions in the same wave run
 *identical* commands — the same dev server, the same test invocation, the same engine CLI — so
@@ -1069,8 +1069,9 @@ implementer can run anything**; the engine CLI consults its own permission surfa
 normally available on the sanctioned write path (so a blocked shell is not the expected state). But
 a whole build can have **every** implementer shell call rejected, for a cause not yet known, so
 availability cannot be inferred from a previous build. Write every external order to be correct when the
-implementer can run nothing; the orchestrator's own re-run is the verification either way, and a
-corrective round is worth budgeting.
+implementer can run nothing; the orchestrator's own re-run is the verification either way, except
+for a command a refusal stopped, which it re-runs only when a sanctioned retry covers it
+(`SANCTIONED_RETRIES` in `lib/command_refusals.py`), and a corrective round is worth budgeting.
 
 ## Check-runner — a plain shell task
 

@@ -96,11 +96,9 @@ ANTIHIJACK_PREAMBLE = (
 
 # Dispatched write engines never receive the orchestrator's kill-by-PID standing rule in the order
 # body; without an explicit process rule, a field engine used name-pattern kills and took down
-# sibling sessions' processes on a shared machine.
-WRITE_DISPATCH_PROCESS_RULE = (
-    "Never stop processes by name or pattern (`pkill`, `killall`, `kill` on a `pgrep` match); "
-    "other sessions share this machine. Stop only a PID you started yourself."
-)
+# sibling sessions' processes on a shared machine. The text's home is
+# `command_refusals.STOP_AND_DELETE_RULE` (#2412); this name is that constant, never a copy.
+WRITE_DISPATCH_PROCESS_RULE = command_refusals.STOP_AND_DELETE_RULE
 
 DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundary (2.1.219)
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
@@ -6045,7 +6043,7 @@ def _run_child_main(run_dir_real):
 
     _journal_append(run_dir_real, {
         "kind": "engine-launching", "attempt": pending_att,
-        "childPid": os.getpid(), "argv": list(argv), "at": time.time(),
+        "childPid": os.getpid(), "argv": list(argv), "timeout": timeout, "at": time.time(),
     })
 
     _run_engine_files(

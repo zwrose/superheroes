@@ -5,6 +5,7 @@ the three order surfaces (write-engine prompt, native preamble, implementer agen
 read on its own and must carry the constant's text.
 """
 import os
+import re
 
 import pytest
 
@@ -128,6 +129,108 @@ def test_order_text_composition():
     assert CR.ENTRY_SHAPE in CR.ORDER_TEXT
     for member in CR.REFUSED_BY + CR.ENTRY_REQUIRED + CR.ENTRY_OPTIONAL:
         assert member in CR.ENTRY_SHAPE
+    # axis: ORDER_TEXT is composed from the session rule, in order — see bite-proof record wo1_2431_session_rule
+    assert CR.ORDER_TEXT == " ".join([CR.STOP_RULE, CR.SESSION_RULE, CR.REFUSAL_MEANING, CR.ENTRY_SHAPE])
+    # axis: the session rule sits between the stop rule and the refusal meaning — see bite-proof record wo1_2431_session_rule
+    assert (CR.ORDER_TEXT.index(CR.STOP_RULE) < CR.ORDER_TEXT.index(CR.SESSION_RULE)
+            < CR.ORDER_TEXT.index(CR.REFUSAL_MEANING))
+
+
+# --- the session-wide refusal rule and its sanctioned retries (#2431) -----------------------
+
+
+def test_sanctioned_retries_entry_shape():
+    # axis: every sanctioned-retry entry has the four-field shape the renderer reads — see bite-proof record wo1_2431_session_rule
+    assert isinstance(CR.SANCTIONED_RETRIES, tuple) and CR.SANCTIONED_RETRIES
+    for entry in CR.SANCTIONED_RETRIES:
+        # axis: no missing or extra key in an entry — see bite-proof record wo1_2431_session_rule
+        assert set(entry) == {"act", "who", "conditions", "disclosure"}
+        # axis: act and disclosure are non-blank strings — see bite-proof record wo1_2431_session_rule
+        for key in ("act", "disclosure"):
+            assert isinstance(entry[key], str) and entry[key].strip()
+        # axis: who and conditions are non-empty tuples of non-blank strings — see bite-proof record wo1_2431_session_rule
+        for key in ("who", "conditions"):
+            assert isinstance(entry[key], tuple) and entry[key]
+            for member in entry[key]:
+                assert isinstance(member, str) and member.strip()
+
+
+def test_bite_proof_is_the_only_sanctioned_retry():
+    # axis: the one sanctioned retry today is the bite-proof run — see bite-proof record wo1_2431_session_rule
+    assert len(CR.SANCTIONED_RETRIES) == 1
+    entry = CR.SANCTIONED_RETRIES[0]
+    # axis: the act, exactly — see bite-proof record wo3_2431_vet883
+    assert entry["act"] == "a bite-proof red or green run"
+    # axis: only the build's orchestrator and a vet may re-run it — see bite-proof record wo1_2431_session_rule
+    assert entry["who"] == ("the build's orchestrator", "a vet")
+    # axis: the four conditions, in order, the refusal kind first — see bite-proof record wo3_2431_vet883
+    assert entry["conditions"] == (
+        "after a refusal by a permission check or the auto-mode classifier (refusedBy "
+        "permission), never by a hook or the sandbox",
+        "in a throwaway copy of the tree",
+        "with the mutation in place for the red run and reverted before the green run",
+        "never committed or pushed",
+    )
+    # axis: only a permission refusal (refusedBy permission) opens it, never a hook's or the sandbox's — see bite-proof record wo3_2431_vet883
+    assert "refusedBy permission" in entry["conditions"][0]
+    assert "never by a hook or the sandbox" in entry["conditions"][0]
+    assert "permission" in CR.REFUSED_BY
+    # axis: the disclosure names the refusal and the re-run in the PR body and the vet receipt — see bite-proof record wo1_2431_session_rule
+    for word in ("refusal", "re-run", "PR body", "vet receipt"):
+        assert word in entry["disclosure"]
+
+
+def test_session_rule_renders_every_entry():
+    for entry in CR.SANCTIONED_RETRIES:
+        fields = [entry["act"]] + list(entry["who"]) + list(entry["conditions"]) + [entry["disclosure"]]
+        for field in fields:
+            # axis: every field of every entry is rendered into the session rule and the order text — see bite-proof record wo1_2431_session_rule
+            assert field in CR.SESSION_RULE
+            assert field in CR.ORDER_TEXT
+
+
+def test_a_new_entry_needs_only_the_constant():
+    fixture = {
+        "act": "a fixture act",
+        "who": ("a fixture seat",),
+        "conditions": ("on fixture condition one", "on fixture condition two"),
+        "disclosure": "the fixture disclosure is named",
+    }
+    text = CR.compose_order_text(CR.SANCTIONED_RETRIES + (fixture,))
+    # axis: a new entry's every field reaches the composed order text — see bite-proof record wo1_2431_session_rule
+    for field in [fixture["act"]] + list(fixture["who"]) + list(fixture["conditions"]) + [fixture["disclosure"]]:
+        assert field in text
+    # axis: a new entry is numbered after the existing ones — see bite-proof record wo1_2431_session_rule
+    assert "(%d) a fixture act:" % (len(CR.SANCTIONED_RETRIES) + 1) in text
+    # axis: the existing entries still render beside a new one — see bite-proof record wo1_2431_session_rule
+    for entry in CR.SANCTIONED_RETRIES:
+        for field in [entry["act"]] + list(entry["who"]) + list(entry["conditions"]) + [entry["disclosure"]]:
+            assert field in text
+    # axis: the shipped constants are the rendering of the constant, nothing hand-kept — see bite-proof record wo1_2431_session_rule
+    assert CR.ORDER_TEXT == CR.compose_order_text(CR.SANCTIONED_RETRIES)
+    assert CR.SESSION_RULE == CR.session_rule(CR.SANCTIONED_RETRIES)
+
+
+@pytest.mark.parametrize("entries", [CR.SANCTIONED_RETRIES, ()])
+def test_an_uncovered_refusal_stays_a_stop(entries):
+    rule = CR.session_rule(entries)
+    # axis: the rule keeps its binding head and its uncovered-act stop tail, for any list — see bite-proof record wo1_2431_session_rule
+    assert CR.SESSION_RULE_HEAD in rule
+    assert CR.SESSION_RULE_TAIL in rule
+    for phrase in (
+        "A refusal binds the whole build session",
+        "handing a refused act to another seat",
+        "no other seat inherits them",
+        "stays a stop for the whole session",
+        "UNVERIFIED",
+        "the owner's word, with the field sightings",
+    ):
+        # axis: the binding, the hand-off ban, the no-inheritance and the uncovered-act stop are all said — see bite-proof record wo1_2431_session_rule
+        assert phrase in rule
+    if not entries:
+        # axis: an empty list fails closed: it renders "none." and no numbered entry — see bite-proof record wo1_2431_session_rule
+        assert "none." in rule
+        assert "(1)" not in rule
 
 
 @pytest.mark.parametrize("phrase", [
@@ -169,6 +272,8 @@ def test_census_write_prompt(tmp_path):
     # axis: the stop rule reaches every plugin-written write order — see bite-proof record wo1_2011_stop_rule
     assert CR.ORDER_TEXT in staged
     assert staged.index(ED.WRITE_DISPATCH_PROCESS_RULE) < staged.index(CR.ORDER_TEXT)
+    # axis: the session rule reaches the staged write prompt exactly once — see bite-proof record wo1_2431_session_rule
+    assert staged.count(CR.SESSION_RULE) == 1
 
 
 def test_census_native_preamble(tmp_path, monkeypatch, capsys):
@@ -180,6 +285,8 @@ def test_census_native_preamble(tmp_path, monkeypatch, capsys):
         prompt = fh.read()
     # axis: the stop rule reaches every plugin-written write order — see bite-proof record wo1_2011_stop_rule
     assert CR.ORDER_TEXT in prompt
+    # axis: the session rule reaches the native preamble exactly once — see bite-proof record wo1_2431_session_rule
+    assert prompt.count(CR.SESSION_RULE) == 1
     assert "{ENROLL_COMMAND}" not in prompt
     assert "{RESULT_PATH}" not in prompt
     assert os.path.join(os.path.realpath(r.run), "result.json") in prompt
@@ -198,11 +305,20 @@ def test_native_preamble_constant_keeps_both_placeholders():
 def test_census_implementer_md():
     with open(_IMPLEMENTER_MD, encoding="utf-8") as fh:
         body = fh.read()
-    # axis: the stop rule reaches every plugin-written write order — see bite-proof record wo1_2011_stop_rule
-    assert " ".join(CR.ORDER_TEXT.split()) in " ".join(body.split())
+    flat = " ".join(body.split())
+    # axis: the stop rule reaches the implementer template — see bite-proof record wo1_2011_stop_rule
+    assert " ".join((CR.STOP_RULE + " " + CR.REFUSAL_MEANING + " " + CR.ENTRY_SHAPE).split()) in flat
+    # axis: the template cites the session rule and its list by name and home — see bite-proof record wo1_2431_session_rule
+    cite = "`SESSION_RULE` and `SANCTIONED_RETRIES` in `lib/command_refusals.py`"
+    assert cite in flat
+    # axis: the template cites the session rule, never copies it (CONVENTIONS §11.4) — see bite-proof record wo1_2431_session_rule
+    assert " ".join(CR.SESSION_RULE.split()) not in flat
     ladder = body.index("Highest precedence first:")
     rung_one = body.index("1. **Never claim a run you did not make.**")
     assert ladder < body.index("**Refused or denied commands.**") < rung_one
+    # axis: the citation sits inside the refused-commands block — see bite-proof record wo1_2431_session_rule
+    assert flat.index("**Refused or denied commands.**") < flat.index(cite) < flat.index(
+        "1. **Never claim a run you did not make.**")
 
 
 # --- the file-write rule (#2126): one home, every implementer order -------------------------
@@ -320,3 +436,129 @@ def test_delete_rule_has_one_home():
                 if marker in " ".join(fh.read().split()):
                     copies.append(os.path.relpath(path, _PLUGIN_ROOT))
     assert sorted(copies) == allowed
+
+
+# --- the sanctioned retries (#2431): one home ------------------------------------------------
+
+
+def test_sanctioned_retries_have_one_home():
+    # A hand copy of an entry's rendered item or disclosure anywhere in the shipped plugin outside
+    # its home is a second copy; prose consumers cite the home instead.
+    markers = []
+    for entry in CR.SANCTIONED_RETRIES:
+        markers.append("%s may re-run it, only %s" % (" or ".join(entry["who"]), ", ".join(entry["conditions"])))
+        markers.append(entry["disclosure"])
+    copies = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                flat = " ".join(fh.read().split())
+            if any(" ".join(marker.split()) in flat for marker in markers):
+                copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+    # axis: no entry's rendered text or disclosure is hand-copied outside lib/command_refusals.py — see bite-proof record wo1_2431_session_rule
+    assert [c for c in copies if c != os.path.join("lib", "command_refusals.py")] == []
+
+
+# --- the stop-and-delete rule (#2412): one home, every carrier of the delete rule ---
+
+
+def test_census_stop_and_delete_rule_write_prompt(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    prompt_path = _prompt(tmp_path, "Implement exactly the assigned work order.\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
+    assert res["ok"] is True
+    with open(os.path.join(str(tmp_path / "run"), ED.PROMPT_NAME), encoding="utf-8") as fh:
+        staged = fh.read()
+    # axis: the stop-and-delete rule reaches every dispatch-write order exactly once, and the process-rule name is that constant — see bite-proof record wo_2412_stop_and_delete
+    assert staged.count(CR.STOP_AND_DELETE_RULE) == 1
+    assert ED.WRITE_DISPATCH_PROCESS_RULE is CR.STOP_AND_DELETE_RULE
+
+
+def test_census_stop_and_delete_rule_native_preamble(tmp_path, monkeypatch, capsys):
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _out = _open(capsys, r, deadline=600, items=["src/new.txt"])
+    assert code == 0
+    with open(os.path.join(os.path.realpath(r.run), "agent-prompt.md"), encoding="utf-8") as fh:
+        prompt = fh.read()
+    # axis: the stop-and-delete rule reaches the native implementer preamble exactly once — see bite-proof record wo_2412_stop_and_delete
+    assert prompt.count(CR.STOP_AND_DELETE_RULE) == 1
+    assert prompt.index(CR.STOP_AND_DELETE_RULE) < prompt.index("The order follows, verbatim.")
+
+
+@pytest.mark.parametrize("relpath", [
+    os.path.join("agents", "implementer.md"),
+    os.path.join("skills", "review-code", "reference", "auto-fix-loop.md"),
+    os.path.join("skills", "review-code", "SKILL.md"),
+    os.path.join("skills", "workhorse", "reference", "orders.md"),
+], ids=["implementer", "auto-fix-loop", "review-code-skill", "orders"])
+def test_census_stop_and_delete_rule_prose_cites(relpath):
+    with open(os.path.join(_PLUGIN_ROOT, relpath), encoding="utf-8") as fh:
+        body = " ".join(fh.read().split())
+    # axis: a prose consumer cites the stop-and-delete rule by name, never carries its text (CONVENTIONS §11.4) — see bite-proof record wo_2412_stop_and_delete
+    assert "STOP_AND_DELETE_RULE" in body
+    assert " ".join(CR.STOP_AND_DELETE_RULE.split()) not in body
+
+
+# The one-home markers are the rule's own sentences, derived from the constant and never hand-copied.
+_STOP_AND_DELETE_SENTENCES = [
+    s.strip() for s in " ".join(CR.STOP_AND_DELETE_RULE.split()).split(". ") if s.strip()
+]
+
+
+@pytest.mark.parametrize("sentence", _STOP_AND_DELETE_SENTENCES[:2], ids=["stop-sentence", "delete-sentence"])
+def test_stop_and_delete_rule_has_one_home(sentence):
+    # A copy of either sentence anywhere in the shipped plugin outside its home is a second copy;
+    # prose consumers cite the home instead. Fail closed if the rule's shape (two sentences) changes.
+    assert len(_STOP_AND_DELETE_SENTENCES) == 2
+    allowed = [
+        os.path.join("lib", "command_refusals.py"),
+        # parser-verified copy: launch_doctrine.parse refuses any ruling whose text differs from RULING_TEXT, which is STOP_AND_DELETE_RULE itself
+        os.path.join("rubric", "launch-doctrine.md"),
+    ]
+    copies = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+            # The home stores the rule as adjacent string literals split across lines; dropping the
+            # quote-gap between them makes those read as one string.
+            body = " ".join(re.sub(r'"\s*"', "", raw).split())
+            if sentence in body:
+                copies.append(os.path.relpath(path, _PLUGIN_ROOT))
+    # axis: each sentence of the stop-and-delete rule lives once, in its home plus the parser-verified ruling line — see bite-proof record wo_2412_stop_and_delete
+    assert sorted(copies) == allowed, "sentence %r" % sentence
+
+
+def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
+    # The invariant census: whatever carries or cites the delete rule also carries or cites the
+    # stop-and-delete rule. TRANSITION.md and CHANGELOG.md are history and are skipped.
+    delete_text = " ".join(CR.DELETE_RULE.split())
+    stop_text = " ".join(CR.STOP_AND_DELETE_RULE.split())
+    offenders = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            if name in ("TRANSITION.md", "CHANGELOG.md"):
+                continue
+            path = os.path.join(root, name)
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+            body = " ".join(raw.split())
+            carries_delete = "DELETE_RULE" in raw or delete_text in body
+            carries_stop = "STOP_AND_DELETE_RULE" in raw or stop_text in body
+            if carries_delete and not carries_stop:
+                offenders.append(os.path.relpath(path, _PLUGIN_ROOT))
+    # axis: every carrier of the delete rule also carries or cites the stop-and-delete rule — see bite-proof record wo_2412_stop_and_delete
+    assert offenders == []

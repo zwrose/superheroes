@@ -116,7 +116,7 @@ Contract:
 - Fix orders: a terminal, started cloud lane is watched again, exactly like a live cloud lane, from
   the moment it is sent a fix order until its next ending. Openers: a `vet not-ready` amendment, or a
   fix-order relay record (cloud_relay.fix_orders, composed with --fix-order) whose check read delivered
-  or may-hold-text, for the lane's session, opening at the message's compose time (`sentAfter`), never
+  or uncertain, for the lane's session, opening at the message's compose time (`sentAfter`), never
   at the check. Closers: a `reoutcome` amendment, or a vet `ready` or
   `parked-blocker`; the newest opener must be later than the newest closer. The window is
   [reopenedAt, close): the close is the first handback, stop or park created at or after reopenedAt that
@@ -149,6 +149,22 @@ Contract:
   `reopenedAt`, the basis, and `reopenedBy: "builder-activity"`); no dormant lane is in the activity
   read. A tick that made no comments request, and the deadline timer, decide active from the stored
   progress snapshot alone, so a lane active only through a note reads inactive there.
+- Resumed local lanes: a started, outcome-terminal local lane that was not relaunched (the same basis and
+  relaunch rule as above) is watched again, exactly like a live local lane, when after its basis its
+  builder is running again. The signals, in order, the first that holds deciding `reopenedBy`:
+  `builder-process` (a live process whose command line carries the lane's recorded session id as the value
+  of --resume, -r or --session-id, or their `=` forms: an identity match on the recorded session value, never
+  a match on an engine's name; the lowest such pid; one `ps` read per lane, and a read that failed records
+  pid-probe-uncertain and counts for nothing), `builder-process` again (the pid of such a process an
+  earlier tick of the same loop saw at the same basis, so its exit fires builder-exited; a one-shot `run`
+  keeps none, and a retained pid whose basis changed is dropped) and `builder-heartbeat` (a heartbeat
+  stamped after the basis). The reopened lane's recorded pid is replaced by the
+  resumed process's (or None), so the pid recorded before the resume never fires builder-exited, and its
+  heartbeat counts only when stamped after the basis, so the stamp of the outcome never fires
+  lane-terminal or lane-blocked again. A local lane with neither signal is not watched and fires
+  nothing. The watch makes no comment read for a finished local lane, so one never records
+  builder-note-unavailable. A refused or never-started lane, one whose terminal is not an outcome, and one in
+  ignore-launch are never reopened. The deadline timer keeps no pid.
 - Cloud endings: the same comments read surfaces, per live started cloud lane, the newest
   comment opening with a `cloud_builder.TERMINAL_HEADERS` header (handback, stop, park),
   created at or after the lane's start and not recorded by `note-answered`, as lane-terminal
@@ -586,7 +602,7 @@ def _build_also_observed(
 
 
 def _derive_batch_lanes(
-    repo_root, batch_id, env, degraded, ignore_launch_ids,
+    repo_root, batch_id, env, degraded, ignore_launch_ids, local_resume=None,
 ):
     read_result = ll.read(repo_root, env=env, create=False)
     state = read_result["state"]
@@ -634,6 +650,11 @@ def _derive_batch_lanes(
         if reopened is not None:
             live_lanes[lid] = {**info, "reopenedAt": reopened[0], "reopenedBy": reopened[1]}
             continue
+        if not _is_cloud_lane(info):
+            _reopen_local_lane(
+                repo_root, lid, info, folded["launches"], env, degraded, local_resume, live_lanes,
+            )
+            continue
         basis = _dormant_basis(lid, info, folded["launches"])
         if basis is not None:
             # axis: a started, outcome-terminal cloud lane that was not relaunched stays in the watch set as a dormant lane — see bite-proof record i2323_resumed_lane.md
@@ -641,21 +662,129 @@ def _derive_batch_lanes(
     return all_lanes, live_lanes, True
 
 
-def _dormant_basis(lid, info, launches):
-    """The `dormantSince` epoch of a started, outcome-terminal cloud lane the watch keeps after its outcome, else None.
+def _reopen_local_lane(repo_root, lid, info, launches, env, degraded, local_resume, live_lanes):
+    """Add a started, outcome-terminal local lane to `live_lanes` when its builder is running again.
+
+    A lane that was not relaunched is reopened after its basis by the first of: a live process resumed on
+    the lane's recorded session id (`builder-process`), the loop's retained pid of such a process (also
+    `builder-process`), or a heartbeat stamped after the basis (`builder-heartbeat`). The recorded pid is
+    always replaced by the resumed one (or None): the pid recorded before the resume never fires
+    builder-exited. A lane neither reopens stays out of the live set and fires nothing. The watch makes no
+    comment read for a finished local lane.
+    """
+    pids = local_resume.get("pids") if isinstance(local_resume, dict) else None
+    pids = pids if isinstance(pids, dict) else None
+    basis = _dormant_basis(lid, info, launches, place=ll.PLACE_LOCAL)
+    if basis is None:
+        if pids is not None:
+            pids.pop(lid, None)
+        return
+    reopened = None
+    # Doctrine: an identity match on the recorded session value, never a match on an engine's name.
+    pid, uncertain = _resumed_session_pid(info.get("sessionId"))
+    if pid is not None:
+        reopened = (pid, "builder-process")
+        if pids is not None:
+            pids[lid] = (basis, pid)
+    elif uncertain:
+        degraded.add(DEGRADATION_PID_PROBE_UNCERTAIN)
+    if reopened is None and pids is not None and lid in pids:
+        retained = pids[lid]
+        # axis: a retained resumed pid is used only for the basis it was seen at, so its exit fires builder-exited and a stale one never does — see bite-proof record i2410_local_resume.md
+        if isinstance(retained, tuple) and len(retained) == 2 and retained[0] == basis:
+            reopened = (retained[1], "builder-process")
+        else:
+            del pids[lid]
+    if reopened is None and _heartbeat_stamped_after(repo_root, lid, env, basis):
+        reopened = (None, "builder-heartbeat")
+    if reopened is not None:
+        # axis: a started, outcome-terminal local lane whose builder is running again is watched like a live local lane, its recorded pre-resume pid replaced — see bite-proof record i2410_local_resume.md
+        live_lanes[lid] = {**info, "pid": reopened[0], "reopenedAt": basis, "reopenedBy": reopened[1]}
+
+
+def _heartbeat_stamped_after(repo_root, lid, env, basis):
+    """Whether the lane's heartbeat was stamped after `basis`: a readable heartbeat with a finite age whose
+    stamp time (now less that age) is later than `basis`. Unreadable, missing or non-finite is False.
+    One clock sample serves the read and the subtraction, so the read's own latency never moves the stamp."""
+    now = time.time()
+    try:
+        age = hb.read_heartbeat(repo_root, lid, env=env, now=now).get("ageSeconds")
+    except Exception:
+        return False
+    return _stamped_after(age, now, basis)
+
+
+def _stamped_after(age, now, basis):
+    """Whether a heartbeat whose age was measured at `now` was stamped after `basis`; a non-finite value is False."""
+    return _finite_number(age) and _finite_number(now) and _finite_number(basis) and now - age > basis
+
+
+_SESSION_FLAGS = ("--resume", "-r", "--session-id")
+_SESSION_FLAGS_EQUALS = ("--resume=", "--session-id=")
+_SESSION_ID_MIN_LENGTH = 8
+
+
+def _names_session(tokens, session_id):
+    """Whether argv `tokens` carry `session_id` as the value of a session flag."""
+    for index, token in enumerate(tokens):
+        if token in _SESSION_FLAGS and index + 1 < len(tokens) and tokens[index + 1] == session_id:
+            return True
+        if token in tuple(flag + session_id for flag in _SESSION_FLAGS_EQUALS):
+            return True
+    return False
+
+
+def _resumed_session_pid(session_id):
+    """(pid, uncertain): the lowest live pid whose command line carries `session_id` as a session flag's value.
+
+    An identity match on the recorded session value, never a match on an engine's name: only the value of
+    --resume, -r or --session-id (or their `=` forms) counts, so a bare id elsewhere (`rg <id> dir`) is no
+    match. A session id that is not a string of at least 8 characters with no whitespace reads nothing. One
+    `ps` read; non-zero exit, timeout or any exception is `(None, True)`. The watcher's own pid is skipped.
+    """
+    if (not isinstance(session_id, str) or len(session_id) < _SESSION_ID_MIN_LENGTH
+            or any(char.isspace() for char in session_id)):
+        return None, False
+    try:
+        proc = subprocess.run(
+            ["ps", "-A", "-ww", "-o", "pid=", "-o", "command="],
+            capture_output=True, text=True, timeout=ll._PS_READ_TIMEOUT_SECONDS,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        if proc.returncode != 0:
+            return None, True
+        found = []
+        for line in proc.stdout.splitlines():
+            parts = line.strip().split(None, 1)
+            if len(parts) != 2 or not parts[0].isdigit():
+                continue
+            pid = int(parts[0])
+            if pid <= 0 or pid == os.getpid():
+                continue
+            # axis: the session id must be a session flag's value in the command line — a bare id elsewhere is no resumed builder — see bite-proof record i2410_local_resume.md
+            if _names_session(parts[1].split(), session_id):
+                found.append(pid)
+    except Exception:
+        return None, True
+    return (min(found), False) if found else (None, False)
+
+
+def _dormant_basis(lid, info, launches, place=ll.PLACE_CLOUD):
+    """The `dormantSince` epoch of a started, outcome-terminal lane of `place` (cloud by default) the watch keeps after its outcome, else None.
 
     The basis is the later of the lane's recorded outcome time and the time of each of its amendments
     (any kind) that is a finite number. A lane is not dormant when its outcome time or its own reserve
     time is not a finite number, or when any launch in the ledger, in any batch, was reserved later on
     the same issue (a relaunch is a new lane). The caller has already ruled out a fix-order reopening.
     """
-    if not (info.get("place") == ll.PLACE_CLOUD and info.get("started") and info.get("terminal")
+    if not (info.get("place") == place and info.get("started") and info.get("terminal")
             and info.get("terminalKind") == "outcome"):
         return None
     basis, reserved = info.get("terminalTs"), info.get("reservedTs")
     if not (_finite_number(basis) and _finite_number(reserved)):
         return None
     # axis: a lane relaunched on its issue, in any batch, is never resumed — the newer launch is the one watched — see bite-proof record i2323_resumed_lane.md
+    # axis: a local lane relaunched on its issue, in any batch, is never reopened — the newer launch is the one watched — see bite-proof record i2410_local_resume.md
     for other_id, other in launches.items():
         if (other_id != lid and other.get("issue") == info.get("issue")
                 and _finite_number(other.get("reservedTs")) and other["reservedTs"] > reserved):
@@ -737,11 +866,19 @@ def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
         # at its path is no evidence about it.
         if _is_cloud_lane(live_lanes[lid]):
             continue
-        hb_result = hb.read_heartbeat(repo_root, lid, env=env)
+        reopened_at = live_lanes[lid].get("reopenedAt")
+        read_now = time.time()
+        if reopened_at is None:
+            hb_result = hb.read_heartbeat(repo_root, lid, env=env)
+        else:
+            hb_result = hb.read_heartbeat(repo_root, lid, env=env, now=read_now)
         hb_class = hb_result.get("class")
         hb_reason = hb_result.get("reason")
         if hb_class == HB_CLASS_UNKNOWN and hb_reason != REASON_HEARTBEAT_MISSING:
             degraded.add(DEGRADATION_HEARTBEAT_UNREADABLE)
+            continue
+        # axis: a reopened local lane's heartbeat stamped at or before its basis is the old ending, never a terminal, blocked or state; the stamp is judged from the same read as the state — see bite-proof record i2410_local_resume.md
+        if reopened_at is not None and not _stamped_after(hb_result.get("ageSeconds"), read_now, reopened_at):
             continue
         hb_state = hb_result.get("state")
         if hb_state is not None:
@@ -2213,8 +2350,10 @@ def _evaluate_cloud_comments(
     shows none, so the slot is left as the caller set it. `known_closes` is the closes an earlier complete
     read showed for the lanes' current reopening ({launch id: (close epoch, ending kind)}): a partial read
     filters notes and endings by them, after dropping from it (in place) each park close the observed
-    comments show superseded. `unread_out` is a dict that gains {launch id: issue} for each watched
-    lane when a request was made and came back partial: any watched issue may hold a comment on an unread page.
+    comments show superseded. `unread_out` is a dict that gains {launch id: issue} for a lane whose own
+    per-lane read failed or was skipped for budget after the tick made a request; for each shared lane when
+    the shared read came back partial; and for every watched lane when the shared read's `since` could not
+    be formed (no read follows it).
     """
     watched = {
         lid: info for lid, info in live_lanes.items()
@@ -3154,9 +3293,16 @@ def _evaluate_tick(
     closed_state=None,
     ignore_notes=frozenset(),
     unread_out=None,
+    resume_state=None,
 ):
+    if resume_state is None:
+        resume_state = {}
+    # One slot for the tick: whichever read resolves the repository slug first fills it, and the
+    # others reuse it, a failed resolution (None) included.
+    slug_cell = [_SLUG_UNRESOLVED]
     batch_lanes, live_lanes, ledger_readable = _derive_batch_lanes(
         repo_root, batch_id, env, degraded, ignore_launch_ids,
+        local_resume={"pids": resume_state},
     )
 
     if first_tick[0] and not ledger_readable:
@@ -3194,9 +3340,6 @@ def _evaluate_tick(
     )
     stale_cloud_launches = []
     builder_notes = []
-    # One slot for the tick: whichever read resolves the repository slug first fills it, and the
-    # others reuse it, a failed resolution (None) included.
-    slug_cell = [_SLUG_UNRESOLVED]
     if lane_event_due:
         open_pr_numbers = None
         repo_slug = None
@@ -3515,6 +3658,7 @@ def watch_arm(
     note_state=None,
     progress_state=None,
     closed_state=None,
+    resume_state=None,
 ):
     """Windowed watch — one arm until the first event or arm deadline."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -3565,6 +3709,8 @@ def watch_arm(
             progress_state = [None]
         if closed_state is None:
             closed_state = [None]
+        if resume_state is None:
+            resume_state = {}
 
         start = monotonic()
         deadline = start + max_seconds
@@ -3597,6 +3743,7 @@ def watch_arm(
                 closed_state=closed_state,
                 ignore_notes=ignore_notes,
                 unread_out=unread,
+                resume_state=resume_state,
             )
             if tick_result is not None:
                 return _with_ignored_notes(
@@ -3709,6 +3856,7 @@ def run(
             closed_state=closed_state,
             ignore_notes=ignore_notes,
             unread_out=unread,
+            resume_state={},
         )
         if tick_result is not None:
             return _with_ignored_notes(
@@ -3815,6 +3963,7 @@ def loop(
         note_state = [None]
         progress_state = [None]
         closed_state = [None]
+        resume_state = {}
         last_cloud_lanes = [None]
         loop_unread = {}
         total_start = monotonic()
@@ -3878,6 +4027,7 @@ def loop(
                 note_state=note_state,
                 progress_state=progress_state,
                 closed_state=closed_state,
+                resume_state=resume_state,
             )
 
             result_degraded = set(result.get("degraded", []))

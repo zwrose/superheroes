@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """The one home of the refused-command stop rule, the refusal-entry shape (#2011), the
-file-write rule (#2067, #2126), and the delete rule (#2314).
+file-write rule (#2067, #2126), the delete rule (#2314), the stop-and-delete rule (#2412), and the
+session-wide refusal rule and its sanctioned retry exceptions (#2431).
 
 Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT`,
-`FILE_WRITE_RULE` and `DELETE_RULE`; no order surface keeps a hand copy of any. `refusals_fault` is the one
-check of a result's `refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
+`FILE_WRITE_RULE`, `DELETE_RULE` and `STOP_AND_DELETE_RULE` (#2412); no order surface keeps a hand
+copy of any, except that `agents/implementer.md` keeps a census-tested copy of the stop rule
+(`STOP_RULE`, `REFUSAL_MEANING`, `ENTRY_SHAPE`). `refusals_fault` is the one check of a result's
+`refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
 """
 
 STOP_RULE = (
@@ -21,6 +24,54 @@ STOP_RULE = (
     "push, a network call, a permission), stays a stop; so does every other form. A refused "
     "command that carries a delete is never only about its form."
 )
+
+# The sanctioned retry exceptions: the only acts a seat may take after another seat's refusal, or
+# re-take after its own. Each entry names the act class, the seats that may re-run it, the
+# conditions it runs under, and the disclosure it owes. A new entry needs the owner's word with the
+# field sightings behind it; adding one is this entry plus its test, and every order picks it up.
+SANCTIONED_RETRIES = (
+    {
+        "act": "a bite-proof red or green run",
+        "who": ("the build's orchestrator", "a vet"),
+        "conditions": (
+            "after a refusal by a permission check or the auto-mode classifier (refusedBy "
+            "permission), never by a hook or the sandbox",
+            "in a throwaway copy of the tree",
+            "with the mutation in place for the red run and reverted before the green run",
+            "never committed or pushed",
+        ),
+        "disclosure": "the PR body (for a vet, the vet receipt) names the refusal and the re-run",
+    },
+)
+
+SESSION_RULE_HEAD = (
+    "A refusal binds the whole build session, not only the seat that met it. No seat, the "
+    "orchestrator and a vet included, takes a refused act in any form, and handing a refused act "
+    "to another seat (an implementer, a check-runner, a pilot) is taking it in another form. The "
+    "stop rule's two exceptions belong to the seat that met the refusal, taken once by that seat; "
+    "no other seat inherits them. The only other exceptions are the sanctioned retries listed in "
+    "SANCTIONED_RETRIES in lib/command_refusals.py, each taken only by the seats it names, only on "
+    "its conditions, and only with its disclosure:"
+)
+
+SESSION_RULE_TAIL = (
+    "A refused act that no entry covers stays a stop for the whole session: record it, and a claim "
+    "it would have proved goes back UNVERIFIED. A new entry needs the owner's word, with the field "
+    "sightings behind it."
+)
+
+
+def session_rule(entries):
+    """The session-wide refusal rule, rendered from ``entries`` (the shape of ``SANCTIONED_RETRIES``)."""
+    items = [
+        "(%d) %s: %s may re-run it, only %s; %s." % (
+            n, e["act"], " or ".join(e["who"]), ", ".join(e["conditions"]), e["disclosure"])
+        for n, e in enumerate(entries, 1)
+    ]
+    return " ".join([SESSION_RULE_HEAD] + (items or ["none."]) + [SESSION_RULE_TAIL])
+
+
+SESSION_RULE = session_rule(SANCTIONED_RETRIES)
 
 REFUSAL_MEANING = (
     "A refused or denied command is one that a permission denial, a hook refusal, a sandbox refusal, "
@@ -42,7 +93,12 @@ ENTRY_SHAPE = (
     "(what you did next). An empty list means you met none."
 )
 
-ORDER_TEXT = STOP_RULE + " " + REFUSAL_MEANING + " " + ENTRY_SHAPE
+def compose_order_text(entries):
+    """The whole refused-command order text, with the session rule rendered from ``entries``."""
+    return " ".join([STOP_RULE, session_rule(entries), REFUSAL_MEANING, ENTRY_SHAPE])
+
+
+ORDER_TEXT = compose_order_text(SANCTIONED_RETRIES)
 
 FILE_WRITE_RULE = (
     "Create and edit files only with the host's file-write and file-edit tools (Write and Edit on "
@@ -54,6 +110,13 @@ DELETE_RULE = (
     "Never put `rm`, or any other delete, inside a compound command: not after `&&`, `||` or `;`, "
     "not in a pipe, and not inside `bash -c` or a subshell. A delete is always its own plain call, "
     "one path per call."
+)
+
+STOP_AND_DELETE_RULE = (
+    "Stop only a process you started yourself, and only by its PID, never by name or pattern "
+    "(`pkill`, `killall`, or `kill` over a `pgrep` or `ps` match): other sessions share this "
+    "machine. Delete only a path you created in this session or one your task names for deletion, "
+    "never by a name pattern or a glob over a directory you did not create."
 )
 
 

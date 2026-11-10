@@ -38,12 +38,12 @@ Quiet means the full lane at any size, as bounded in `rubric/review-discipline.m
    behaves like a quiet one. Database outages reported as authentication errors are highly visible
    and still send everyone to the wrong place.
 
-**Weaker considerations** — label them weaker in the conversation:
+**Weaker considerations** — label them weaker in the recorded reasoning:
 
 - **Expected size** is an unreliable forecast. It is a reason to lean full, never a reason to feel
   safe about something small: silent defects arrive in small and mid-sized diffs.
 - **Whether it moves a line or sits inside one already drawn** sharpens the first two answers but is
-  not a signal of its own. It is hard to apply consistently, so it belongs in the conversation, not
+  not a signal of its own. It is hard to apply consistently, so it belongs in the recorded reasoning, not
   the decision.
 - **A flaky review engine** makes the light lane unreliable as the fast option. It is a reason to
   take the full lane, never a reason to cut the review. The single reviewer keeps its normal
@@ -104,6 +104,14 @@ premise did the right thing. Three amendments have a fixed home:
   `rubric/launch-doctrine.md` § Recovery, "An adoption of a stack layer keeps the stack fields".
 - A fold into a live lane lands in **both** the issue body and an order amendment, so neither the
   builder's intake nor its live order is left stale.
+
+**Never write a wait-for-a-later-message step into a headless builder's order or its amendment.**
+"Hold until I relay", "wait for my go" and every step like them ask the builder to hear a message
+sent after launch, and a running headless session cannot: it waits for nothing, or ends its turn and
+stops. Write the condition into the issue body instead, as something the builder can read for
+itself, and have the builder park durably when the condition does not hold. The builder side is
+workhorse's park rule (a headless builder parks when an in-turn wait cannot fit). A cloud builder's
+own builder note, a question it asks with a bounded reply window, is not such a step.
 
 A mis-routed "ready" issue that turns out unclear is caught by the builder's stop-and-report
 safeguard, which the workhorse charter defines. You own the route; the builder owns that safeguard.
