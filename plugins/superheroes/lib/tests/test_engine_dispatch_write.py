@@ -134,12 +134,6 @@ def _expected_staged_write_prompt(base, contract):
             + CR.FILE_WRITE_RULE + "\n\n" + CR.DELETE_RULE + "\n\n" + contract)
 
 
-_NO_PATTERN_KILL_RULE_LITERAL = (
-    "Never stop processes by name or pattern (`pkill`, `killall`, `kill` on a `pgrep` match); "
-    "other sessions share this machine. Stop only a PID you started yourself."
-)
-
-
 def _finish_codex_write_runner(argv, stdout, prompt_bytes=None, timed_out=False, rc=0, stderr=""):
     _write_native_write_result(argv, stdout, prompt_bytes)
     return stdout, timed_out, rc, stderr
@@ -2318,7 +2312,7 @@ def test_write_prompt_carries_no_pattern_kill_rule(tmp_path, monkeypatch, vendor
     engine_prompt = fake.calls[0]["prompt_bytes"].decode("utf-8")
     for blob in (staged, opened["fedPrompt"], engine_prompt):
         assert blob.count(ED.WRITE_DISPATCH_PROCESS_RULE) == 1
-        assert _NO_PATTERN_KILL_RULE_LITERAL in blob
+        assert CR.STOP_AND_DELETE_RULE in blob
         assert blob.startswith(base)
         rule_at = blob.index(ED.WRITE_DISPATCH_PROCESS_RULE)
         assert rule_at > len(base.rstrip("\n"))
