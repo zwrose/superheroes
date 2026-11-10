@@ -732,6 +732,11 @@ standing rule of the pass, not a ninth duty.
 reviewer seats' evidence, and the record states each one. They are a standing rule of the pass, not a
 ninth duty.
 
+- **With no adoption day recorded, both checks read unmeasured on every pass.** The tally answers
+  `reason: "no-adoption-day"` with a `remedy` line naming the fix: record the day once with
+  `python3 -B <plugin root>/lib/review_learning.py adopt --cwd <project root> --date <YYYY-MM-DD>`.
+  The day is set once and never moves; record it at this pass, as
+  [The adoption day](#calibration-changes-and-time-complaints) says, and say so in the pass's record.
 - **The count comes from the tally.** The tally's escape input carries each logged
   [false PR claim](../../../rubric/glossary.md#false-pr-claim) too, as its review date, its call, and
   `"marker": "false-pr-claim"`. The tally returns that count as `falsePrClaims`, apart from the escape

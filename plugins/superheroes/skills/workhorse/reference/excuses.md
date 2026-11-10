@@ -5,7 +5,7 @@ an excuse with the rule that answers it and the charter section that states the 
 
 | Excuse | Reality |
 |---|---|
-| "This fix is tiny, I'll just type it." | In the full lane all implementation is delegated. The only typing exceptions are the light and micro lanes, never a size judgment. Dispatch a work order, or route to the light lane at kickoff with the owner present (§7). |
+| "This fix is tiny, I'll just type it." | In the full lane all implementation is delegated. The only typing exceptions are the light and micro lanes, never a size judgment. Dispatch a work order. The light lane is the advisor's call at kickoff; moving a called lane down is a downgrade, the owner's per change (§7). |
 | "The implementer says tests pass." | Re-run the calibrated verify and the bite-proof runs yourself and read the raw output. With no qualifying receipt per `rubric/test-receipt-evidence.md`, claim no test pass (§8). |
 | "The pilot found a bug, I'll fix it inline." | The pilot observes only. In the light lane, escalate first. In the full lane, dispatch an implementer work order (§9). |
 | "This bug's cause is the interesting part. I'll write up the diagnosis properly." | You debug to get the fix built. A diagnosis receipt is the detective's deliverable, reached through the advisor. Hand the cause up as a follow-up. |
