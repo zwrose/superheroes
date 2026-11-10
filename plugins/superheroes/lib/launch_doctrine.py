@@ -18,7 +18,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-import command_refusals  # noqa: E402  DELETE_RULE — the one home of the compound-delete rule
+import command_refusals  # noqa: E402  DELETE_RULE, STOP_AND_DELETE_RULE — the one home of the delete and stop-and-delete rules
 
 RULING_IDS = (
     "own-worktree",
@@ -28,6 +28,7 @@ RULING_IDS = (
     "await-dispatches",
     "turn-end",
     "no-compound-delete",
+    "own-processes-and-paths",
     "remote-head",
     "git-identity",
     "gated-strings",
@@ -83,6 +84,7 @@ RULING_TEXT = {
         "posted, end every turn with a tool call, and await every outcome in-turn or park durably first."
     ),
     "no-compound-delete": command_refusals.DELETE_RULE,
+    "own-processes-and-paths": command_refusals.STOP_AND_DELETE_RULE,
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
     "git-identity": (
         "commits inherit the git identity the worktree resolves through git's normal cascade "
@@ -125,6 +127,11 @@ RULING_INVARIANTS = {
     "no-compound-delete": (
         "inside a compound command",
         "one path per call",
+    ),
+    "own-processes-and-paths": (
+        "only by its PID",
+        "one your task names for deletion",
+        "a glob over a directory you did not create",
     ),
     "gated-strings": (
         "never embedded inline in Bash text",

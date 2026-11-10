@@ -77,7 +77,9 @@ These obligations attach to the order on your side, when you write it.
   re-issue in plain form after a refusal only about the command's form; each is taken once and
   recorded as the entry's `route`. Those same orders also carry the delete rule (`DELETE_RULE`,
   same home): a delete never rides a compound command; it is its own plain call, one path per
-  call. When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
+  call. They carry the stop-and-delete rule too (`STOP_AND_DELETE_RULE`, same home): a process is
+  stopped only by its PID and only when the session started it, and a path is deleted only when the
+  session created it or the order names it. When the dispatcher itself decides a different route is legitimate, the re-dispatched order says
   so as its own instruction and names the refusal it answers. The refusals each dispatch reports go
   into the build record's dispatch provenance (`handback.md` § The build record).
 - **An order to an external engine carries a no-install, no-network block and a provenance-accuracy
