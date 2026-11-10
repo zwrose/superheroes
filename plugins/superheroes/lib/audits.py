@@ -270,16 +270,17 @@ def test_removal_clearance(target):
     C4  every file of the record added nothing and removed at least one range;
     C5  the target is a Test finding labelled with a worthless-test smell, with a usable body;
     C6  one of the target's own cited lines (its `file:line` or a kind-of-mistake place) lies in a removed range;
-    C7  every removed range holds a line cited by the target or by a batch sibling that itself passes C5;
+    C7  every removed range holds a line cited by the target or by a fresh qualifying sibling (a batch sibling
+        that itself passes C5 and whose driver-built `citationFresh` is True);
     C8  every changed file is in a language the test-opening reader supports (`testOpenings` is not None);
     C9  every test the base file opens inside a removed range opens on a cited line (the target's, or a
-        qualifying sibling's), so the fix cannot also delete an unflagged test beside the flagged one;
+        fresh qualifying sibling's), so the fix cannot also delete an unflagged test beside the flagged one;
     C10 the target's `citationFresh` is True: the files its cited lines sit in did not change between the head
         the finding was raised on and the fix's start head, so a cited line still points at what it cited.
 
     On success `(evidence, None, None)` with `evidence` the dict the audit entry records
     (`{"source": "finding", "finding", "taxonomy", "reason", "removed", "cited", "openings"}`; `cited` lists the
-    target's cited lines, then each qualifying sibling's; `openings` lists, per file, the base file's test openings
+    target's cited lines, then each fresh qualifying sibling's; `openings` lists, per file, the base file's test openings
     inside its removed ranges); otherwise `(None, <first failing condition>, <short detail>)`."""
     from size_count import is_test_path as _is_test_path  # noqa: E402 — lazy: the closure of this module stays unchanged
     files = _delta_files(target)
@@ -311,8 +312,8 @@ def test_removal_clearance(target):
     cited = list(own)
     batch = target.get("batchFindings")
     for sibling in batch if isinstance(batch, list) else ():
-        # axis: only a sibling that is itself a worthless-test finding lends its cited lines — see bite-proof record audit_test_removal_2434
-        if _worthless_test_smell(sibling)[0] is not None:
+        # axis: only a sibling that is itself a worthless-test finding, with a citation the driver found fresh, lends its cited lines — see bite-proof record audit_test_removal_2434
+        if _worthless_test_smell(sibling)[0] is not None and sibling.get("citationFresh") is True:
             cited.extend(c for c in cited_lines(sibling) if c not in cited)
 
     def _inside(places, path, rng):

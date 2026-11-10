@@ -9138,7 +9138,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
 
     Every target also carries ``fixerRemoval``, the removal record of the fix (``removal_base`` to
     ``removal_head``, see ``_fixer_removal``); with no usable base or head it says it is unreadable. Every target
-    also carries ``citationFresh`` and ``citationCheck`` (see ``_citation_freshness``)."""
+    also carries ``citationFresh`` and ``citationCheck`` (see ``_citation_freshness``); each ``batchFindings``
+    sibling carries ``citationFresh`` alone, judged the same way."""
     fixer_vendor = config.get("fixerVendor")
     runner_only = bool(state.get("_advanceUsed"))
     maker_families, pinned_vendors = receipt_disclosures.auditor_constraints(state)
@@ -9161,6 +9162,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
     attempt_delta = (_attempt_fixer_delta(reviewed_diff, state.get("headDiff"), left_out)
                      if reviewed_diff is not None else None)
     fixer_removal = _fixer_removal(config, removal_base, removal_head)
+    resolved_commits = {}
     batch_findings = []
     for bf in state.get("fixBatch") or []:
         if isinstance(bf, dict) and _finding_key_of(bf) not in [b["id"] for b in batch_findings]:
@@ -9176,6 +9178,10 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
             sibling_kind = _kind_of_mistake_projection(bf)
             if sibling_kind is not None:
                 sibling[KIND_OF_MISTAKE_FIELD] = sibling_kind
+            # A sibling lends its cited lines to the removal judge only when its own citation is fresh, judged as
+            # a target's is; the check's facts stay off the sibling.
+            sibling["citationFresh"] = _citation_freshness(
+                state, config, bf, sibling, removal_base, removal_head, resolved_commits)[0]
             sib_ruling, sib_seq = _carried_owner_ruling(
                 _row_decision(state, effective, ledger_by_key, sibling["id"]))
             if sib_ruling is not None:
@@ -9211,7 +9217,6 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal
                 child, content, _carried_owner_ruling(_row_decision(state, effective, ledger_by_key, child))))
     reported_changes = _reported_unnamed_changes(state)
     audited_head = {}
-    resolved_commits = {}
 
     def target_row(f, tid):
         """One audit target row — a batch finding's and a rider's alike, so the two never drift."""

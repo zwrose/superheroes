@@ -11,10 +11,12 @@ C3  a removal record and a delta that name different files refuse;
 C4  a file that added a line, or removed none, refuses;
 C5  a target that is not a Test finding with a worthless smell and a usable body refuses;
 C6  a removal that holds none of the target's own cited lines refuses;
-C7  a removed range that holds no cited line refuses, unless a worthless-smell sibling cites it;
+C7  a removed range that holds no cited line refuses, unless a worthless-smell sibling whose `citationFresh` is
+    exactly True cites it (a stale, absent, string or int `citationFresh` lends nothing);
 C8  a changed file in a language the test-opening reader does not support refuses;
 C9  a test the base file opens inside a removed range on a line no finding cites refuses (the adjacent unflagged
-    test, a whole file with one test cited, a boundary line); every deleted test cited clears;
+    test, a whole file with one test cited, a boundary line, an opening only a stale sibling cites); every deleted
+    test cited clears;
 C10 a target whose `citationFresh` is not exactly True refuses;
 O   `audits.test_openings` reads Python and JavaScript/TypeScript test openings, and nothing else;
 G   `review-guarded` is judged exactly as before; the new answer is a fault on `right` and `brokeNothing`;
@@ -23,7 +25,7 @@ R   `_fixer_removal` reads a real `git diff`: removed ranges (one per hunk whate
     additions, test openings of the base blob, binary files, an unreadable base blob, a missing commit, a configured
     textconv, and an explicit head older than the checkout;
 D   the review record names the evidence; `_audit_targets` puts the record and the citation freshness on every
-    target.
+    target, and the citation freshness (alone) on every sibling of its `batchFindings`.
 
 Bite-proof record: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
 """
@@ -314,7 +316,8 @@ def test_c6_a_line_that_is_not_a_plain_integer_cites_nothing(line):
 
 
 def test_c6_a_siblings_line_does_not_tie_a_removal_the_target_does_not_cite():
-    sibling = {"id": "s1", "file": TEST_FILE, "line": 12, "dimension": "Test", "taxonomy": "mock-echo", "body": BODY}
+    sibling = {"id": "s1", "file": TEST_FILE, "line": 12, "dimension": "Test", "taxonomy": "mock-echo", "body": BODY,
+               "citationFresh": True}
     _refused(_fold([_removed()], _target(line=30, batchFindings=[sibling])), "C6")
 
 
@@ -325,9 +328,12 @@ def _two_ranges(openings=(12,)):
 
 
 def _sibling(line=31, **over):
+    """A qualifying batch sibling: a worthless-test finding whose driver-built `citationFresh` is True."""
     out = {"id": "s1", "file": TEST_FILE, "line": line, "title": "S", "dimension": "Test",
-           "taxonomy": "duplicate test", "body": BODY}
+           "taxonomy": "duplicate test", "body": BODY, "citationFresh": True}
     out.update(over)
+    for key in [k for k, v in out.items() if v is NO_KEY]:
+        del out[key]
     return out
 
 
@@ -375,6 +381,46 @@ def test_c7_a_sibling_that_is_not_a_dict_ties_nothing():
     _refused(_fold([_removed()], _target(record=_two_ranges(), batchFindings=["s1", None])), "C7")
 
 
+# a sibling's citation counts only when the driver found it fresh too: `citationFresh` exactly True
+STALE_SIBLING = [
+    pytest.param(False, id="false"),
+    pytest.param(NO_KEY, id="absent"),
+    pytest.param("yes", id="a-string"),
+    pytest.param(1, id="a-truthy-int"),
+]
+
+
+def test_c7_a_fresh_sibling_alone_ties_a_stretch_that_opens_no_test():
+    # the healthy twin of the refusals below: the stretch 30-34 opens no test and only the sibling's line 31 ties it
+    target = _target(record=_two_ranges((12,)), batchFindings=[_sibling(line=31, citationFresh=True)])
+    outcome = _fold([_removed()], target)
+    assert outcome["testRemovalCleared"] == ["t0"]
+    assert _only(outcome)["testRemoval"]["evidence"]["cited"] == [
+        {"file": TEST_FILE, "line": 12}, {"file": TEST_FILE, "line": 31}]
+
+
+@pytest.mark.parametrize("fresh", STALE_SIBLING)
+def test_c7_a_sibling_whose_citation_is_not_exactly_fresh_ties_no_stretch(fresh):
+    # axis: G20 — a stale sibling as the only tie of a stretch lends nothing to C7 (the stretch opens no test)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    target = _target(record=_two_ranges((12,)), batchFindings=[_sibling(line=31, citationFresh=fresh)])
+    assert target["citationFresh"] is True  # the target's own citation is fresh; only the sibling's line is needed
+    reason = _refused(_fold([_removed()], target), "C7")
+    assert "30-34" in reason and "10-14" not in reason
+
+
+def test_c7_a_stale_sibling_does_not_cancel_a_fresh_one_and_lends_nothing_to_the_evidence():
+    stale = _sibling(line=12, citationFresh=False, id="s2")  # redundant: the target already cites line 12
+    fresh = _sibling(line=31, id="s3")
+    outcome = _fold([_removed()], _target(record=_two_ranges((12,)), batchFindings=[stale, fresh]))
+    assert outcome["testRemovalCleared"] == ["t0"]
+    assert _only(outcome)["testRemoval"]["evidence"]["cited"] == [
+        {"file": TEST_FILE, "line": 12}, {"file": TEST_FILE, "line": 31}]
+    only_stale = _sibling(line=40, citationFresh=False, id="s4")
+    outcome = _fold([_removed()], _target(batchFindings=[only_stale]))
+    assert _only(outcome)["testRemoval"]["evidence"]["cited"] == [{"file": TEST_FILE, "line": 12}]
+
+
 # --- C8 -----------------------------------------------------------------------------------------------------------
 
 def test_c8_a_changed_file_in_an_unsupported_language_refuses_naming_it():
@@ -417,6 +463,25 @@ def test_c9_every_deleted_test_cited_by_the_target_and_a_qualifying_sibling_clea
     evidence = _only(outcome)["testRemoval"]["evidence"]
     assert evidence["cited"] == [{"file": TEST_FILE, "line": 10}, {"file": TEST_FILE, "line": 15}]
     assert evidence["openings"] == [{"file": TEST_FILE, "lines": [10, 15]}]
+
+
+@pytest.mark.parametrize("fresh", STALE_SIBLING)
+def test_c9_a_sibling_whose_citation_is_not_exactly_fresh_cites_no_opening(fresh):
+    # axis: G20 — a sibling whose driver-built `citationFresh` is not exactly True lends its cited line to nothing
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    record = _record(_row(removed=((10, 20),), openings=(10, 15)))
+    target = _target(line=10, record=record, batchFindings=[_sibling(line=15, citationFresh=fresh)])
+    assert target["citationFresh"] is True  # the target's own citation is fresh; only the sibling's line is needed
+    assert "line 15 " in _refused(_fold([_removed()], target), "C9")
+
+
+def test_c9_a_fresh_sibling_counts_beside_a_stale_one_that_cites_another_opening():
+    record = _record(_row(removed=((10, 20),), openings=(10, 15, 18)))
+    fresh, stale = _sibling(line=15, id="s2"), _sibling(line=18, id="s3", citationFresh=False)
+    reason = _refused(_fold([_removed()], _target(line=10, record=record, batchFindings=[fresh, stale])), "C9")
+    assert "line 18 " in reason  # the fresh sibling's line 15 is tied; only the stale sibling's line 18 is not
+    healed = _fold([_removed()], _target(line=10, record=record, batchFindings=[fresh, dict(stale, citationFresh=True)]))
+    assert healed["testRemovalCleared"] == ["t0"]
 
 
 @pytest.mark.parametrize("removed,openings,line", [
@@ -1055,8 +1120,8 @@ def test_f_a_cited_file_unchanged_between_the_raised_head_and_the_base_is_fresh(
 
 
 def test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale(tmp_path):
-    # axis: R4 — a cited file that changed between the raised head and the base makes the citation stale
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md (listed unproven there)
+    # axis: G23 — a cited file that changed between the raised head and the base makes the citation stale
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
     repo, raised, base, head = _stage(tmp_path, {TFILE: "new first line\n" + LINES})
     (row,) = _targets(repo, raised, base, head, [_raised(1)])
     assert row["citationFresh"] is False
@@ -1093,8 +1158,8 @@ def test_f_unequal_heads_are_compared_over_the_cited_files_only(tmp_path, monkey
 
 
 def test_f_equal_heads_with_no_cited_file_are_not_fresh(tmp_path):
-    # axis: R4 — a target that cites no file is never fresh, even when the heads are equal
-    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md (listed unproven there)
+    # axis: G22 — a target that cites no file is never fresh, even when the heads are equal
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
     repo, raised, base, head = _stage(tmp_path)
     assert raised == base
     (row,) = _targets(repo, raised, base, head, [_finding("A", None, file=None, **{SC.RAISED_ROUND_FIELD: 1})])
@@ -1144,6 +1209,8 @@ def test_f_a_finding_with_no_usable_raised_head_is_not_fresh(tmp_path, round_no,
 
 
 def test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh(tmp_path):
+    # axis: G21 — a target with no removal head is never fresh, even when the heads are equal and resolve
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
     repo, raised, base, _head = _stage(tmp_path)
     (row,) = _targets(repo, raised, base, None, [_raised(1)])
     assert row["citationFresh"] is False and "unreadable" in row["fixerRemoval"]
@@ -1178,6 +1245,55 @@ def test_f_every_target_of_the_batch_carries_its_own_freshness(tmp_path):
     repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
     rows = _targets(repo, raised, base, head, [_raised(1), dict(_raised(1, line=9), title="B")])
     assert [r["citationFresh"] for r in rows] == [True, True]
+
+
+def _sibling_of(row, title):
+    (sibling,) = [s for s in row["batchFindings"] if s["title"] == title]
+    return sibling
+
+
+def test_f_every_sibling_of_the_batch_carries_the_freshness_the_driver_judged_it_by(tmp_path):
+    # the stage changes TFILE between the raised head and the base: a finding citing TFILE is stale, one citing OTHER fresh
+    repo, raised, base, head = _stage(tmp_path, {TFILE: "new first line\n" + LINES})
+    findings = [dict(_raised(1), title="A", file=OTHER, line=1),
+                dict(_raised(1), title="B", file=OTHER, line=1),
+                dict(_raised(1), title="C"),  # cites TFILE, which changed: stale
+                dict(_raised(1), title="D", file=OTHER, line=1, **{SC.RAISED_ROUND_FIELD: 0}),  # no usable raised head
+                dict(_finding("E", None, file=None), **{SC.RAISED_ROUND_FIELD: 1})]  # cites no file
+    rows = _targets(repo, raised, base, head, findings)
+    assert [r["citationFresh"] for r in rows] == [True, True, False, False, False]
+    for row in rows:
+        siblings = {s["title"]: s for s in row["batchFindings"]}
+        assert set(siblings) == {"A", "B", "C", "D", "E"} - {row["title"]}
+        for title, sibling in siblings.items():
+            assert sibling["citationFresh"] is {"A": True, "B": True, "C": False, "D": False, "E": False}[title]
+            assert "citationCheck" not in sibling  # the check's facts stay on the target rows
+
+
+def test_f_a_siblings_freshness_is_what_citation_freshness_returns_for_its_own_row_and_finding(tmp_path, monkeypatch):
+    repo, raised, base, head = _stage(tmp_path, {OTHER: "x\ny\n"})
+    calls = []
+
+    def spy(state, config, finding, row, removal_base, removal_head, cache):
+        calls.append((finding, dict(row), removal_base, removal_head, cache, "batchFindings" in row))
+        return finding["title"] == "B", {"raisedHead": None, "base": None, "files": []}
+
+    monkeypatch.setattr(RD, "_citation_freshness", spy)
+    findings = [_raised(1, line=3), dict(_raised(1, line=9, kindOfMistake={"kind": "k", "places": [
+        {"file": OTHER, "line": 2}]}), title="B")]
+    rows = _targets(repo, raised, base, head, findings)
+    assert [_sibling_of(r, t)["citationFresh"] for r, t in ((rows[0], "B"), (rows[1], "A"))] == [True, False]
+    sibling_calls = [c for c in calls if not c[5]]
+    target_calls = [c for c in calls if c[5]]
+    assert [c[0]["title"] for c in sibling_calls] == ["A", "B"] and [c[0]["title"] for c in target_calls] == ["A", "B"]
+    for finding, row, call_base, call_head, _cache, _is_target in calls:
+        assert (call_base, call_head) == (base, head)
+    # the sibling row handed over is the sibling entry itself: it carries the cited file, line and kind of mistake
+    (b_row,) = [c[1] for c in sibling_calls if c[0]["title"] == "B"]
+    assert (b_row["file"], b_row["line"], b_row["kindOfMistake"]["places"]) == (TFILE, 9, [{"file": OTHER, "line": 2}])
+    assert "citationCheck" not in b_row
+    # one cache object serves the siblings and the targets alike
+    assert len({id(c[4]) for c in calls}) == 1
 
 
 def test_f_the_drivers_freshness_and_record_reach_the_fold(tmp_path):
