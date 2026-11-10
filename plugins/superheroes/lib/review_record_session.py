@@ -515,6 +515,41 @@ def _no_result_reason(cmd, env):
     return review_record.RECORDED_MISSING  # a record-missing slot, or a receipt that is missing or stale
 
 
+def _slot_envelope(session_dir, key, attempt):
+    """(envelope, unreadable) for one slot at one attempt: the stored envelope, else the one still in the landing folder.
+    A landing that is present but cannot be read gives (None, True); nothing stored or landed gives (None, False)."""
+    phase, rnd, seat, occ = key
+    env = _envelope(_path(session_dir, key, attempt))
+    if env is not None:
+        return env, False
+    try:
+        env, refusal = round_records.read_landing_envelope(
+            session_dir, rnd, phase, record_paths.storage_key(seat, occ), attempt, occ)
+    except ValueError:
+        env, refusal = None, {"reason": "bad-argument"}
+    # axis: a landing that is present but cannot be read as a result is listed landing-unreadable, never taken for a result or for nothing — see bite-proof record i2436_abandoned_missing
+    if refusal is not None:
+        return None, refusal.get("reason") != "landing-missing"
+    return env, False
+
+
+def _is_result(env):
+    """True when the envelope is a real seat result: neither a seat-missing record nor a did-not-run payload."""
+    return isinstance(env, dict) and env.get("schema") != sc.SEAT_MISSING_SCHEMA \
+        and not dispatch_outcome.payload_did_not_run(env.get("payload"))
+
+
+def _newer_pending_attempt(state, session_dir, key, recorded_attempt):
+    """(envelope, unreadable) of the pending step's own attempt of this slot when that attempt is newer than the one the
+    journal recorded, else None: the slot was re-dispatched and the newer attempt is what the session last asked for."""
+    pending = state.get("pending")
+    attempt = pending.get("attempt") if isinstance(pending, dict) else None
+    if not (_int(attempt) and pending.get("phase") == key[0] and pending.get("round") == key[1]
+            and _int(recorded_attempt) and attempt > recorded_attempt):
+        return None
+    return _slot_envelope(session_dir, key, attempt)
+
+
 def _unfilled_pending(state, rnd, seat):
     """Whether the round's governing seat map leaves the panel seat's lens unfilled."""
     return round_phases.seat_lens(seat) in (
@@ -567,20 +602,9 @@ def _pending_without_result(state, session_dir, rows, reviewers):
     for seat, occ in round_records.roster_slots(roster):
         if (phase, rnd, seat, occ) in slots:
             continue
-        env, unreadable = _envelope(_path(session_dir, (phase, rnd, seat, occ), attempt)), False
-        if env is None:
-            try:
-                env, refusal = round_records.read_landing_envelope(
-                    session_dir, rnd, phase, record_paths.storage_key(seat, occ), attempt, occ)
-            except ValueError:
-                env, refusal = None, {"reason": "bad-argument"}
-            # axis: a landing that is present but cannot be read as a result is listed landing-unreadable, never taken for a result or for nothing — see bite-proof record i2436_abandoned_missing
-            if refusal is not None:
-                env = None
-                unreadable = refusal.get("reason") != "landing-missing"
+        env, unreadable = _slot_envelope(session_dir, (phase, rnd, seat, occ), attempt)
         # axis: a seat whose stored or landed envelope is a real result produced one and is never listed — see bite-proof record i2436_abandoned_missing
-        if isinstance(env, dict) and env.get("schema") != sc.SEAT_MISSING_SCHEMA \
-                and not dispatch_outcome.payload_did_not_run(env.get("payload")):
+        if _is_result(env):
             continue
         if phase == sc.PANEL_PHASE and _unfilled_pending(state, rnd, seat):
             unfilled_row(seat)
@@ -620,13 +644,23 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None, aba
         # axis: a seat a later unread-part wave re-read is not listed as a review that did not run — see bite-proof record i2334_slice_recovery
         if phase == sc.PANEL_PHASE and key not in ran and seat in _recovered_seats(state, rnd):
             continue
+        newer = _newer_pending_attempt(state, session_dir, key, att) if abandoned and key not in ran else None
+        # axis: an abandoned session's recorded miss whose re-dispatched pending attempt produced a result is not listed — see bite-proof record i2436_abandoned_missing
+        if newer is not None and _is_result(newer[0]):
+            continue
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
         row = _reviewer(state, rnd, seat, stem, key in ran, env,
                         r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                         _text(r.get("citedHead")), bound.get(key), phase)
         # axis: an abandoned session's recorded seat that did not run carries the reason its stored envelope gives — see bite-proof record i2436_abandoned_missing
         if abandoned and key not in ran:
-            row["noResult"] = _no_result_reason(r.get("cmd"), env)
+            # axis: a re-dispatched pending attempt that landed a did-not-run result or an unreadable landing gives the reason; nothing landed keeps the recorded one — see bite-proof record i2436_abandoned_missing
+            if newer is not None and newer[1]:
+                row["noResult"] = review_record.LANDING_UNREADABLE
+            elif newer is not None and newer[0] is not None:
+                row["noResult"] = _no_result_reason(None, newer[0])
+            else:
+                row["noResult"] = _no_result_reason(r.get("cmd"), env)
         if phase == sc.PANEL_PHASE and key in ran:
             # axis: a panel reviewer that ran and reported no well-formed read list counts as having read nothing, never as unreported — see bite-proof record c1l5_wo_b_read_parts
             reported = body.get("readParts") if isinstance(body, dict) else None

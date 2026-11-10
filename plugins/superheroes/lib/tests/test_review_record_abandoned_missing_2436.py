@@ -355,3 +355,27 @@ def test_a_pending_roster_that_cannot_be_derived_refuses_and_posts_nothing(tmp_p
     out, fake = _write(tmp_path, session)
     assert out["ok"] is False and out["reason"] == rs.UNREADABLE, out
     assert fake.comments == [] and fake.writes == []
+
+
+@pytest.mark.parametrize("landed, expected", [
+    ("result", []),
+    ("forfeit", [(TEST_ROW, dispatch_outcome.REASON_FORFEITED)]),
+    ("torn", [(TEST_ROW, rr.LANDING_UNREADABLE)]),
+    ("nothing", [(TEST_ROW, "timeout")]),
+], ids=["result", "forfeit", "torn", "nothing"])
+def test_a_recorded_miss_re_dispatched_by_the_pending_step_reads_its_newer_attempt(tmp_path, landed, expected):
+    """axis: a seat recorded missing at attempt 0 and re-dispatched by the pending step at attempt 1 is read by that newer
+    attempt: a landed result means it produced one and is not listed; a landed forfeit or an unreadable landing gives
+    the reason; nothing landed keeps the recorded reason."""
+    s = _session(tmp_path, pending=_pending(attempt=1), seats=(CODE,))
+    s.seat(TEST, cmd="record-missing")
+    session = s.save()
+    put_envelope(session, TEST, {"schema": sc.SEAT_MISSING_SCHEMA, "reason": "timeout"})
+    if landed == "result":
+        _land(session, TEST, dict(RESULT, schema=round_records.SEAT_RESULT_SCHEMA), attempt=1)
+    elif landed == "forfeit":
+        _land(session, TEST, dict(FORFEIT, schema=round_records.SEAT_RESULT_SCHEMA), attempt=1)
+    elif landed == "torn":
+        _land(session, TEST, raw="{not json", attempt=1)
+    _, rec = _record(tmp_path, session)
+    assert _missing(rec) == expected
