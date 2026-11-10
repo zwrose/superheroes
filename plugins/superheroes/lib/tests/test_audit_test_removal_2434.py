@@ -1153,8 +1153,9 @@ def test_f_unequal_heads_are_compared_over_the_cited_files_only(tmp_path, monkey
     original = RD._git_bytes
     monkeypatch.setattr(RD, "_git_bytes", lambda root, *args: asked.append(args) or original(root, *args))
     _targets(repo, raised, base, head, [_raised(1)])
+    # one identical call per finding per role: the target row, and the sibling entry the same finding also is
     assert [a for a in asked if a[:4] == ("diff", "--no-ext-diff", "--no-textconv", "--quiet")] == [
-        ("diff", "--no-ext-diff", "--no-textconv", "--quiet", raised, base, "--", TFILE)]
+        ("diff", "--no-ext-diff", "--no-textconv", "--quiet", raised, base, "--", TFILE)] * 2
 
 
 def test_f_equal_heads_with_no_cited_file_are_not_fresh(tmp_path):

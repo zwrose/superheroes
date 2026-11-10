@@ -1,10 +1,10 @@
 # Bite-proof record — a fix that only removes worthless test lines clears its audit on a `worthless-test-removed` answer (#2434)
 
-Detector file: `plugins/superheroes/lib/tests/test_audit_test_removal_2434.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py` for G1-G8, G13-G15, G17 and G18, `plugins/superheroes/lib/round_driver.py` for G9-G12, G16 and G19), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest '<exact node id>' -q -n 0 --tb=short`, one test node each, output captured whole, followed by the `exit=` line the command printed. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture. One redaction: the absolute path of the build worktree, which prefixes the file paths in the tracebacks, is written `<worktree>`; nothing else was redacted.
+Detector file: `plugins/superheroes/lib/tests/test_audit_test_removal_2434.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py` for G1-G8, G13-G15, G17, G18 and G20, `plugins/superheroes/lib/round_driver.py` for G9-G12, G16, G19 and G21-G23), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest '<exact node id>' -q -n 0 --tb=short`, one test node each, output captured whole, followed by the `exit=` line the command printed. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture. One redaction: the absolute path of the build worktree, which prefixes the file paths in the tracebacks, is written `<worktree>`; nothing else was redacted.
 
-The nineteen guarded elements: G1 the clear arm, G2-G8 the refusals C1-C7, G9 the `added` detection, G10 the unreadable detection, G11 `--no-textconv`, G12 the explicit endpoint, G13 the refusal C8 (an unsupported language), G14 the refusal C9 (a test the base file opens in a removed stretch on an uncited line), G15 the refusal C10 (a citation that is not exactly fresh), G16 `--inter-hunk-context=0`, G17 the Python test-opening reader, G18 the JavaScript/TypeScript test-opening reader, G19 the unreadable-base-blob form. The new answer on `right` or `brokeNothing` (a shape fault) and on a `not-discharged` ruling (no clearing, no listing) are plain tests, not guarded elements.
+The twenty-three guarded elements: G1 the clear arm, G2-G8 the refusals C1-C7, G9 the `added` detection, G10 the unreadable detection, G11 `--no-textconv`, G12 the explicit endpoint, G13 the refusal C8 (an unsupported language), G14 the refusal C9 (a test the base file opens in a removed stretch on an uncited line), G15 the refusal C10 (a citation that is not exactly fresh), G16 `--inter-hunk-context=0`, G17 the Python test-opening reader, G18 the JavaScript/TypeScript test-opening reader, G19 the unreadable-base-blob form, G20 the sibling freshness gate (a sibling lends its cited lines only when its driver-built `citationFresh` is exactly True), G21 the no-repository / no-removal-head branch of `_citation_freshness`, G22 its no-cited-file / unresolved-head branch, G23 its changed-file branch. The new answer on `right` or `brokeNothing` (a shape fault) and on a `not-discharged` ruling (no clearing, no listing) are plain tests, not guarded elements.
 
-G1-G12 were captured again in the fix leg of vet 886: the fixtures gained `testOpenings` and `citationFresh`, which moved the detectors' line numbers and the production files' line numbers, so every earlier red and green was re-run and replaced. The restore receipts of G1-G12 were read back by one Grep after the last of them was restored (every restored line appears in it); those of G13-G19 were read back right after each restore.
+G1-G12 were captured again in the fix leg of vet 886: the fixtures gained `testOpenings` and `citationFresh`, which moved the detectors' line numbers and the production files' line numbers, so every earlier red and green was re-run and replaced. The restore receipts of G1-G12 were read back by one Grep after the last of them was restored (every restored line appears in it); those of G13-G23 were read back right after each restore. G20-G23 were captured in WO-D of #2434: the fixtures' siblings gained `citationFresh`, and the freshness branches of `_citation_freshness` got their neutralizations; G1-G19 were not captured again in that leg. One slip in G21's restore: the first inverse edit dropped the space after `raised =` (`raised =_resolve_commit_sha(`, still valid Python and the same behaviour); a `git diff` after G23 showed it and a further inverse edit put the space back, so the G21 green, the G22 red and green and the G23 red and green all ran with that one-space difference in the tree, and the final scoped run runs on the fully restored file.
 
 **Grouping** (the grouping rule of `rubric/bite-proof.md`: a class is a distinct failure mode, named by its representative, and every grouped input keeps its own test case). Each condition element proves one representative input; the inputs it groups run in the same test function or parametrization and are not neutralized one by one:
 
@@ -20,9 +20,13 @@ G1-G12 were captured again in the fix leg of vet 886: the fixtures gained `testO
 - G18 (the JavaScript/TypeScript reader): representative an `it(` line (`[it]`); it groups `describe`, `test`, `test.only`, `test.skip.each`, `describe.each(...)(`, a space before the parenthesis, and every non-match case of the same parametrization (`const t = test`, `item(`, `await it(`, a template call). The neutralization is the same match-nothing pattern.
 - G19 (the unreadable base blob): representative a base file that is not UTF-8 text (read from a real git repository); it groups a base blob git cannot read at all (`test_r_a_base_blob_that_cannot_be_read_makes_the_whole_record_unreadable`), since both reach the one `base_text is None` branch.
 
-G1, G2, G4, G9, G11, G12 and G16 are single inputs, not grouped.
+- G20 (the sibling freshness gate): representative `citationFresh: False` on the C9 parametrization (`[false]`); it groups an absent key, the string `"yes"` and the truthy int `1` (the other three cases of that parametrization), and the C7 twin (`test_c7_a_sibling_whose_citation_is_not_exactly_fresh_ties_no_stretch`, same four cases). The neutralization deletes the whole clause, so any weaker gate reds the same node only for the inputs it lets through; the three other cases are not neutralized one by one.
+- G21 (no repository or no removal head): representative a target with a resolvable repository and equal heads but no removal head (`test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh`); it groups a missing or blank repository root (`test_f_no_repository_is_not_fresh`).
+- G22 (no cited file, or a head that does not resolve): representative a target citing no file with equal heads (`test_f_equal_heads_with_no_cited_file_are_not_fresh`); it groups the unusable raised heads of `test_f_a_finding_with_no_usable_raised_head_is_not_fresh` and the unresolvable removal bases of `test_f_a_removal_base_that_does_not_resolve_is_not_fresh`, which share the one `if not files or raised is None or base is None:` branch.
 
-**Listed unproven (named, with detectors, not neutralized in this record).** Three branches of the driver's citation freshness, `round_driver._citation_freshness`, each carry an `# axis:` line and a detector but were not given a neutralization in this leg, because the order declared G13-G19 and its budget covers those seven: a target with no removal head or repository is never fresh (`test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh`, `test_f_no_repository_is_not_fresh`); a target with no cited file or a head that does not resolve is never fresh (`test_f_equal_heads_with_no_cited_file_are_not_fresh`, `test_f_a_finding_with_no_usable_raised_head_is_not_fresh`, `test_f_a_removal_base_that_does_not_resolve_is_not_fresh`); a cited file that changed between the raised head and the base makes the citation stale (`test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale`). Their protection is covered by tests that pass on the current code and were not shown to fail on a weakened one. The owner of the outstanding receipt is the next fix leg or the reviewer who asks for it.
+G1, G2, G4, G9, G11, G12, G16 and G23 are single inputs, not grouped.
+
+**Listed unproven.** None of the elements declared above is listed unproven: the three branches of `round_driver._citation_freshness` that an earlier leg listed here (no removal head or repository, no cited file or unresolved head, a changed cited file) are G21, G22 and G23 below. The grouped inputs named above run in their own test cases and were not neutralized one by one, as the grouping rule allows.
 
 The detectors are the tests that carry a `# bite-proof:` line.
 
@@ -315,7 +319,7 @@ exit=0
 
 ## G8. C7, every removed range holds a cited line (`audits.test_removal_clearance`)
 
-- **Axis:** a removed range that holds no line cited by the target or a worthless-smell sibling clears nothing, so the fix cannot also delete an uncited test; this entry proves the extra-range input (grouping above).
+- **Axis:** a removed range that holds no line cited by the target or a fresh worthless-smell sibling clears nothing, so the fix cannot also delete an uncited test; this entry proves the extra-range input (grouping above).
 - **Detector:** `test_audit_test_removal_2434.py::test_c7_a_removed_range_holding_no_cited_line_refuses`.
 - **Neutralization:** `if not _inside(cited, path, rng):` became `if False:`.
 
@@ -808,5 +812,158 @@ exit=1
 ```
 .                                                                        [100%]
 1 passed in 1.95s
+exit=0
+```
+
+## G20. The sibling freshness gate (`audits.test_removal_clearance`, the sibling loop)
+
+- **Axis:** a batch sibling lends its cited lines to C7 and C9 only when it passes C5 AND its driver-built `citationFresh` is exactly `True`; a stale, absent, string or int `citationFresh` lends nothing, so a line that may have moved ties no removed stretch and opens no test. This entry proves the `False` input (grouping above).
+- **Detector:** `test_audit_test_removal_2434.py::test_c9_a_sibling_whose_citation_is_not_exactly_fresh_cites_no_opening[false]`.
+- **Neutralization:** `if _worthless_test_smell(sibling)[0] is not None and sibling.get("citationFresh") is True:` became `if _worthless_test_smell(sibling)[0] is not None:` (the clause `and sibling.get("citationFresh") is True` deleted).
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_c9_a_sibling_whose_citation_is_not_exactly_fresh_cites_no_opening[false] _
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:475: in test_c9_a_sibling_whose_citation_is_not_exactly_fresh_cites_no_opening
+    assert "line 15 " in _refused(_fold([_removed()], target), "C9")
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:118: in _refused
+    assert outcome["discharged"] == [] and outcome["notDischarged"] == ["t0"]
+E   AssertionError: assert (['t0'] == []
+E     
+E     Left contains one more item: 't0'
+E     Use -v to get more diff)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c9_a_sibling_whose_citation_is_not_exactly_fresh_cites_no_opening[false]
+1 failed in 0.91s
+exit=1
+```
+
+- **Restore:** inverse edit (`and sibling.get("citationFresh") is True` put back).
+- **Restore receipt** (read back by the Grep tool, `sibling.get\("citationFresh"\) is True`):
+
+```
+316:        if _worthless_test_smell(sibling)[0] is not None and sibling.get("citationFresh") is True:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 1.05s
+exit=0
+```
+
+## G21. `_citation_freshness`, no repository or no removal head (`round_driver._citation_freshness`)
+
+- **Axis:** a target with no repository root or no removal head (a finding carried over from an earlier session) is never fresh, even when the raised head and the removal base are equal and resolve.
+- **Detector:** `test_audit_test_removal_2434.py::test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh`.
+- **Neutralization:** `if not (_nonempty_str(repo_root) and _nonempty_str(removal_head)):` became `if False:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh _
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:1217: in test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh
+    assert row["citationFresh"] is False and "unreadable" in row["fixerRemoval"]
+E   assert (True is False)
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh
+1 failed in 2.24s
+exit=1
+```
+
+- **Restore:** inverse edit (`if False:` back to the `_nonempty_str` test).
+- **Restore receipt** (read back by the Grep tool, `if not \(_nonempty_str\(repo_root\)`; the other three lines are other functions' guards):
+
+```
+6978:    if not (_nonempty_str(repo_root) and _nonempty_str(base) and _nonempty_str(head)):
+8967:    if not (_nonempty_str(repo_root) and _nonempty_str(base) and _nonempty_str(head) and _nonempty_str(path)
+9079:    if not (_nonempty_str(repo_root) and _nonempty_str(commit)) or commit.startswith("-"):
+9118:    if not (_nonempty_str(repo_root) and _nonempty_str(removal_head)):
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 1.81s
+exit=0
+```
+
+## G22. `_citation_freshness`, no cited file or a head that does not resolve (`round_driver._citation_freshness`)
+
+- **Axis:** a target that cites no file, or whose raised head or removal base does not resolve to a commit, is never fresh, even when the heads are equal; this entry proves the no-cited-file input (grouping above).
+- **Detector:** `test_audit_test_removal_2434.py::test_f_equal_heads_with_no_cited_file_are_not_fresh`.
+- **Neutralization:** `if not files or raised is None or base is None:` became `if False:`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_____________ test_f_equal_heads_with_no_cited_file_are_not_fresh ______________
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:1167: in test_f_equal_heads_with_no_cited_file_are_not_fresh
+    assert row["citationFresh"] is False
+E   assert True is False
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_f_equal_heads_with_no_cited_file_are_not_fresh
+1 failed in 2.38s
+exit=1
+```
+
+- **Restore:** inverse edit (`if False:` back to `if not files or raised is None or base is None:`).
+- **Restore receipt** (read back by the Grep tool, `if not files or raised is None or base is None:`):
+
+```
+9124:    if not files or raised is None or base is None:
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 2.34s
+exit=0
+```
+
+## G23. `_citation_freshness`, a cited file that changed (`round_driver._citation_freshness`)
+
+- **Axis:** a cited file that differs between the head the finding was raised on and the removal base makes the citation stale (the `git diff --quiet` answer decides), so a cited line that may have moved is not trusted.
+- **Detector:** `test_audit_test_removal_2434.py::test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale`.
+- **Neutralization:** `return unchanged is not None, check` became `return True, check`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+__ test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale ___
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:1127: in test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale
+    assert row["citationFresh"] is False
+E   assert True is False
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_f_a_cited_file_changed_between_the_raised_head_and_the_base_is_stale
+1 failed in 3.05s
+exit=1
+```
+
+- **Restore:** inverse edit (`return True, check` back to `return unchanged is not None, check`).
+- **Restore receipt** (read back by the Grep tool, `return unchanged is not None, check`):
+
+```
+9130:    return unchanged is not None, check
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 2.81s
 exit=0
 ```
