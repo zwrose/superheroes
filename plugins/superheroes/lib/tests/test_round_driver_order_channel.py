@@ -11,6 +11,7 @@ engine ones included, was told to write.
 """
 import importlib.util
 import os
+import re
 
 import pytest
 
@@ -217,22 +218,36 @@ def test_engine_channel_renders_no_write_instruction_for_every_phase(phase):
     assert LANDING not in text, phase
 
 
+def _assert_reply_delivery_text_is_a_reply_contract(delivery):
+    """The delivery text itself, read from the production constant at call time: non-blank, names the
+    reply, and holds no affirmative write instruction (`Write no file.` passes, `Write a file.` fails)."""
+    assert delivery.strip(), "sweep-host-reply-delivery-blank"
+    assert re.search(r"\breply\b", delivery), "sweep-host-reply-delivery-no-reply"
+    assert not re.search(r"\bwrite\b(?!\s+no\b)", delivery, re.IGNORECASE), \
+        "sweep-host-reply-delivery-writes"
+
+
 @pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
 def test_every_phase_renders_exactly_one_output_contract(phase):
     """Direction 2: exactly one output contract per seat kind x channel — never two, never none.
 
     Bite axis: MUTUAL EXCLUSIVITY of the two concrete contracts. Counting the `## Return your
     result` heading would not do this — `render_order` appends that heading unconditionally, so an
-    order carrying BOTH a stdout instruction and a landing-file write would still count 1.
+    order carrying BOTH a stdout instruction and a landing-file write would still count 1. A phase in
+    `REPLY_HOST_PHASES` states the reply contract on its host seat instead of the write.
     """
     for host_seat in (True, False):
         text = _render_phase(phase, host_seat=host_seat)
         writes = bool(_names_a_write(text))
-        emits = "runner's declared result channel" in text
+        replies = host_seat and phase in RO.REPLY_HOST_PHASES
+        if replies:
+            _assert_reply_delivery_text_is_a_reply_contract(RO._SWEEP_HOST_REPLY_DELIVERY)
+        emits = ("runner's declared result channel" in text) or (
+            replies and RO._SWEEP_HOST_REPLY_DELIVERY in text)
         assert writes != emits, (
             "phase=%s host_seat=%s must state exactly one contract (writes=%s emits_stdout=%s)"
             % (phase, host_seat, writes, emits))
-        assert writes is host_seat, (phase, host_seat, writes)
+        assert writes is (host_seat and not replies), (phase, host_seat, writes)
 
 
 # =================================================================================================
