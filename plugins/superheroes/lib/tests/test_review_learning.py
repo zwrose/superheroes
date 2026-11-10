@@ -491,6 +491,9 @@ def test_tally_finding_without_a_key_falls_back_to_its_id():
 def test_tally_no_adoption_day_is_unmeasured_with_no_counts():
     got = RL.tally(_truth_table_records(), _escapes(), None, until="2026-10-11")
     assert (got["measured"], got["reason"]) == (False, "no-adoption-day")
+    # the remedy names every argument `adopt` requires, so the command it names can run
+    for part in ("review_learning.py adopt", "--cwd <project root>", "--date <YYYY-MM-DD>"):
+        assert part in got["remedy"], part
     assert got["seats"] == {} and got["unattributedCatches"] is None
     assert got["escapes"] == {"missed": None, "seenAndLeft": None}
     assert set(got["leftOut"].values()) == {None}
@@ -680,10 +683,12 @@ def test_cli_tally(proj, tmp_path, capsys):
     assert code == 0 and out["measured"] is True and out["seats"]["code-reviewer"]["reviews"] == 2
     code, out = _cli(capsys, "tally", "--records", recs, "--escapes", escs, "--cwd", repo, "--root", store, "--until", "2026-10-11")
     assert (code, out["measured"], out["reason"]) == (0, False, "no-adoption-day")
+    assert out["remedy"] == RL.NO_ADOPTION_DAY_REMEDY  # the CLI carries the one-line remedy
     RL.record_adoption_day(repo, D, store)
     code, out = _cli(capsys, "tally", "--records", recs, "--escapes", escs, "--cwd", repo, "--root", store,
                      "--until", "2026-10-11", "--window-days", "5")
     assert (code, out["reason"], out["since"]) == (0, "short-of-window", D)
+    assert "remedy" not in out  # only the no-adoption-day answer names the remedy
     code, out = _cli(capsys, "tally", "--records", str(tmp_path / "missing"), "--escapes", escs, "--since", D)
     assert (code, out["reason"]) == (1, "bad-input")
 
