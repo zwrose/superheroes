@@ -5285,6 +5285,24 @@ def _record_repeat(state, key, repeat_of, repeat_kept):
             row["repeatKept"] = copy.deepcopy(repeat_kept)
 
 
+def _keep_reopened_consequence(state, key, entry):
+    """An exact repeat of an earlier record's finding left open at its loop's end reopens that finding as this one:
+    merge the earlier consequence into the row (ledger and live), so a later code-quality report never turns a real
+    consequence into craft. The in-session counterpart is `_seed_ledger_entry`'s preservation of a marked row."""
+    ledger = _ensure_disposition_ledger_for_write(state)
+    seen = _ledger_index_by_key(ledger)
+    rows = [ledger[seen[key]]] if key in seen else []
+    live = _live_finding_by_key(state, key)
+    rows += [live] if live is not None and live not in rows else []
+    for row in rows:
+        # axis: a reopened record finding keeps its real consequence across sessions, so a code-quality repeat never settles it as craft — see bite-proof record wo1_open_at_end_2445
+        text, kind = finding_outcomes.merged_consequence([entry, row])
+        if text is not None:
+            row["consequence"] = text
+        if kind is not None:
+            row["consequenceKind"] = kind
+
+
 def _record_kept_disposition(state, key, entry, reason, grade_verdict, restore):
     """Give a kept repeat's row the disposition its earlier outcome stands for. A same-key repeat is the earlier
     finding itself (``restore``): its snapshotted decision family comes back, and a ``shown-wrong`` row this
@@ -5329,6 +5347,9 @@ def _apply_repeat_marks(state, plan):
             _record_kept_disposition(state, key, entry, reason, _grade_verdict(finding),
                                      mark["source"] == "exact" and entry["source"] == "session")
         _record_repeat(state, key, repeat_of, repeat_kept)
+        if not mark["kept"] and mark["source"] == "exact" and entry["source"] == "record" \
+                and session_contract.open_at_loop_end(entry):
+            _keep_reopened_consequence(state, key, entry)
         rows.append({"id": sid, "findingKey": key, "source": mark["source"], "kept": mark["kept"],
                      "repeatOf": repeat_of, GRADE_FIELD: finding.get(GRADE_FIELD)})
     if plan["pool"]:

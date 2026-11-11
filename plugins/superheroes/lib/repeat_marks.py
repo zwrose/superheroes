@@ -170,6 +170,10 @@ def record_entry(finding):
         key = opaque_key(finding)
     # axis: the pool entry carries the record finding's marker, so a repeat of a finding left open at its loop's end reads open — see bite-proof record wo1_open_at_end_2445
     marked = {session_contract.OPEN_AT_LOOP_END_FIELD: True} if _open_at_end(finding, outcome) else {}
+    if marked:
+        # an open earlier finding's consequence rides with it, so a same-identity repeat that reopens it keeps that consequence
+        marked.update({k: finding[k] for k in (review_findings_schema.CONSEQUENCE_KEY,
+                                               review_findings_schema.CONSEQUENCE_KIND_KEY) if k in finding})
     # axis: a record finding's judged head is unknown, so a repeat of one closed as wrong reads as changed code — see bite-proof record c1l8_wo_a_repeat_marks
     return _entry("record", key, finding, outcome, head=None, **marked) if _text(key) else None
 

@@ -303,3 +303,55 @@ def test_h_two_repeats_of_a_marked_left_for_owner_original_hold_one_owner_card()
     record = [lfo("e", "e-key", **{MARK: True}), lfo("r1", "r1-key", repeatOf=mark("e-key")),
               lfo("r2", "r2-key", repeatOf=mark("e-key"))]
     assert [rr.repeat_held_elsewhere(f, record) for f in record] == [False, True, True]
+
+
+# ---- i: the driver's own repeat path (`_fold_synthesis` -> `_repeat_plan` -> `decision_outcome`) ----------
+
+import test_repeat_marks_c1l8 as C8  # noqa: E402
+
+
+def _driver_state(*record_findings):
+    entries, why = RM.read_earlier_findings(C8._record_payload(list(record_findings)))
+    assert why is None
+    return C8._state(earlierFindings=entries)
+
+
+@pytest.mark.parametrize("route", ROUTES)
+@pytest.mark.parametrize("marked", [True, False], ids=["marked", "unmarked"])
+def test_i_the_driver_routes_a_repeat_of_a_marked_record_finding_as_new_and_keeps_an_unmarked_one(marked, route):
+    raw = C8._raw("record bug", line=4)
+    stored = _record_finding(raw, **({MARK: True} if marked else {}))
+    state = _driver_state(stored)
+    new = raw if route == "exact" else C8._raw("record bug, reworded", line=4)
+    C8._verify(state, [new], {new["title"]: "CONFIRMED"})
+    C8._synth(state, [C8._group(C8._ids(state)[new["title"]], ref="e1")] if route == "judge" else None)
+    row = C8._row(state, new)
+    assert row["repeatOf"]["findingKey"] == stored["findingKey"]
+    if marked:  # rule 4: a new finding, still linked to the original, going to the fix
+        assert "repeatKept" not in row and C8._titles(state) == [new["title"]] and C8._batch(state) == [new["title"]]
+    else:  # rule 3: kept with the earlier outcome, no fix
+        assert row["repeatKept"]["outcome"] == "left-for-owner" and C8._titles(state) == [] and C8._batch(state) == []
+
+
+def test_i_an_exact_code_quality_repeat_of_a_marked_record_finding_keeps_its_real_consequence_to_the_settle():
+    raw = C8._raw("record bug", line=4, consequence="lost work", consequenceKind="real")
+    state = _driver_state(_record_finding(raw, **{MARK: True}))
+    tidy = dict(raw, severity="Minor", consequence="harder to read", consequenceKind="code-quality")
+    C8._verify(state, [tidy], {tidy["title"]: "CONFIRMED"})
+    C8._synth(state, None)
+    row = C8._row(state, tidy)
+    assert "repeatKept" not in row and row["consequenceKind"] == "real" and "lost work" in row["consequence"]
+    RD._set_terminal(state, "halted")
+    settled = C8._row(state, tidy)
+    assert settled["disposition"] == "left-for-owner" and settled[MARK] is True  # never craft
+
+
+def test_i_a_judge_named_code_quality_repeat_keeps_its_own_consequence():
+    # the judge route leaves the original as its own record finding (it is carried), so nothing is merged
+    raw = C8._raw("record bug", line=4, consequence="lost work", consequenceKind="real")
+    state = _driver_state(_record_finding(raw, **{MARK: True}))
+    tidy = C8._raw("record bug, reworded", line=4, severity="Minor", consequence="harder to read",
+                   consequenceKind="code-quality")
+    C8._verify(state, [tidy], {tidy["title"]: "CONFIRMED"})
+    C8._synth(state, [C8._group(C8._ids(state)[tidy["title"]], ref="e1")])
+    assert C8._row(state, tidy)["consequenceKind"] == "code-quality"
