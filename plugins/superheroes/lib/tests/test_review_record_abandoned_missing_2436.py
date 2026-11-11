@@ -397,3 +397,64 @@ def test_a_landing_that_is_no_known_result_envelope_is_unreadable_never_a_result
     _land(session, TEST, body, attempt=1 if journaled else 0)
     _, rec = _record(tmp_path, session)
     assert _missing(rec) == [(TEST_ROW, rr.LANDING_UNREADABLE)]
+
+
+SLICED = {"sliced": True, "slices": [{"id": "S1"}, {"id": "S2"}]}
+CODE_S1, CODE_S2, TEST_S1, TEST_S2 = CODE + ":S1", CODE + ":S2", TEST + ":S1", TEST + ":S2"
+
+
+def _sliced_session(tmp_path, seats, **state):
+    """An abandoned session pending a sliced round-1 panel, the listed seats recorded with a result."""
+    return _session(tmp_path, seats=seats, slicePlan=SLICED, round=1, **state)
+
+
+def test_the_sliced_panel_roster_keys_are_the_slice_seat_keys():
+    """axis: the seat keys the sliced tests name are the keys the roster seats."""
+    roster, why = round_adapters.roster_for(PANEL, {"round": 1, "slicePlan": SLICED}, {"maxRounds": 7, "dimensions": DIMS})
+    assert why is None and roster == [CODE_S1, TEST_S1, CODE_S2, TEST_S2]
+
+
+@pytest.mark.parametrize("recorded", [(CODE_S1,), ()], ids=["one-slice-seat-recorded", "no-panel-seat-recorded"])
+def test_an_unfilled_lens_of_a_sliced_round_is_listed_once_by_its_lens(tmp_path, recorded):
+    """axis: G17 — an unfilled lens is one row per round named by its lens, so the slices of a sliced round never list it
+    again; a filled lens's slice seat that produced no result keeps its own slice-named row."""
+    session = _sliced_session(tmp_path, recorded, seatMapReceipts=UNFILLED_MAP).save()
+    _, rec = _record(tmp_path, session)
+    owed = [(s + ROUND, rr.NO_RESULT) for s in (CODE_S1, CODE_S2) if s not in recorded]
+    assert sorted(_missing(rec)) == sorted(owed + [(TEST_ROW, "unfilled")])
+    assert not any(n.startswith(TEST + ":") for n, _ in _missing(rec))
+
+
+def test_one_go_ahead_for_an_unfilled_lens_covers_every_slice_and_the_slice_seat_keeps_its_own_entry(tmp_path):
+    """axis: G17 — the go-ahead for the lens name covers the lens; the filled lens's slice seat needs its own."""
+    session = _sliced_session(tmp_path, (CODE_S1,), seatMapReceipts=UNFILLED_MAP).save()
+    out, rec = _record(tmp_path, session, goAheads=[dict(GO_AHEAD, reviewer=TEST_ROW)])
+    entries = {m["name"]: m for m in rec["missingReviews"]}
+    assert set(entries) == {TEST_ROW, CODE_S2 + ROUND}
+    assert entries[TEST_ROW]["goAhead"]["kind"] == "owner-words"
+    assert entries[CODE_S2 + ROUND]["goAhead"] is None
+    assert out["parked"] is True
+    both = tmp_path / "both"
+    both.mkdir()
+    session = _sliced_session(both, (CODE_S1,), seatMapReceipts=UNFILLED_MAP).save()
+    out, rec = _record(both, session, goAheads=[dict(GO_AHEAD, reviewer=TEST_ROW), dict(GO_AHEAD, reviewer=CODE_S2 + ROUND)])
+    assert out["parked"] is False
+    assert all(m["goAhead"]["kind"] == "owner-words" for m in rec["missingReviews"]) and len(rec["missingReviews"]) == 2
+
+
+def test_a_filled_lens_slice_seat_with_no_result_is_listed_once_by_its_slice_name(tmp_path):
+    """axis: no planned seat that produced no result is hidden — with no lens unfilled, the slice seat is its own row."""
+    session = _sliced_session(tmp_path, (CODE_S1, TEST_S1, CODE_S2)).save()
+    _, rec = _record(tmp_path, session)
+    assert _missing(rec) == [(TEST_S2 + ROUND, rr.NO_RESULT)]
+
+
+def test_a_hand_submit_sliced_round_lists_an_unfilled_lens_once(tmp_path):
+    """axis: G17 — a hand-submit session's pending sliced panel lists the unfilled lens once by its lens name."""
+    session = _sliced_session(tmp_path, (), _submitUsed=True, seatMapReceipts=UNFILLED_MAP,
+                              rounds={"1": {"seatStatus": {CODE_S1: "run"}}}).save()
+    names = [v["name"] for v in _account(session)["reviewers"]]
+    rows = [v for v in _account(session)["reviewers"] if v["name"] == TEST_ROW]
+    assert len(rows) == 1 and rows[0]["noResult"] == "unfilled"
+    assert TEST_S1 + ROUND not in names and TEST_S2 + ROUND not in names
+    assert names.count(TEST_ROW) == 1

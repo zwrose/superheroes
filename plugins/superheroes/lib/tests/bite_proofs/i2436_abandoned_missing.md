@@ -185,3 +185,27 @@ quoted per element below, and the scratch file is a working artifact, not the re
   `if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:` followed by
   `v["noResult"] = UNFILLED if v.get("vendor") == UNFILLED else review_record.RECORDED_MISSING`.
 - Green: `64 passed in 1.80s` (both files). Nothing redacted: the captures hold no secret, token or private URL.
+
+## G17. `unfilled_row` names an unfilled lens by its lens, not by the roster's slice key
+
+- Axis: an unfilled lens is one row per round named by its lens, so the slices of a sliced round never list it again;
+  a filled lens's slice seat that produced no result keeps its own slice-named row (the file is 44 tests now). Guards:
+  `test_an_unfilled_lens_of_a_sliced_round_is_listed_once_by_its_lens[one-slice-seat-recorded]` and
+  `[no-panel-seat-recorded]`, `test_one_go_ahead_for_an_unfilled_lens_covers_every_slice_and_the_slice_seat_keeps_its_own_entry`,
+  `test_a_hand_submit_sliced_round_lists_an_unfilled_lens_once`; the sibling
+  `test_a_filled_lens_slice_seat_with_no_result_is_listed_once_by_its_slice_name` must stay green.
+- Neutralization (`review_record_session.py`, `_pending_without_result`, inner `unfilled_row`, one targeted `Edit`):
+  `row = _unfilled_reviewer(rnd, round_phases.seat_lens(seat))` became `row = _unfilled_reviewer(rnd, seat)`.
+- Precondition, run on the untouched code before the fix (tests only): `4 failed, 40 passed`, the same four nodes.
+- Red (the file, `--tb=line`; `4 failed, 40 passed in 1.64s`); the failing node names off the short test summary:
+  `test_an_unfilled_lens_of_a_sliced_round_is_listed_once_by_its_lens[one-slice-seat-recorded]`:
+  `Left contains 2 more items, first extra item: ('test-role:S1 (round 1)', 'unfilled')`;
+  `[no-panel-seat-recorded]`: `Left contains one more item: ('test-role:S2 (round 1)', 'unfilled')`;
+  `test_one_go_ahead_for_an_unfilled_lens_covers_every_slice_and_the_slice_seat_keeps_its_own_entry`:
+  `Extra items in the left set: 'test-role:S1 (round 1)' 'test-role:S2 (round 1)'`;
+  `test_a_hand_submit_sliced_round_lists_an_unfilled_lens_once`: `assert (('test-role:S1' + ' (round 1)') not in ['code-reviewer:S1 (round 1)', 'test-role (round 1)', 'test-role:S1 (round 1)', ...])`.
+  `test_a_filled_lens_slice_seat_with_no_result_is_listed_once_by_its_slice_name` stayed green (40 passed).
+- Restore: the inverse `Edit` put `round_phases.seat_lens(seat)` back. Restore receipt, the restored line quoted from
+  `git diff -U0` after the restore: `+        row = _unfilled_reviewer(rnd, round_phases.seat_lens(seat))`, with the source diff holding only that line, its axis comment and the
+  docstring sentence (`git diff --stat`: `review_record_session.py | 6 ++-`, before TRANSITION and this record were edited).
+- Green: `44 passed in 1.38s`. Nothing redacted: the captures hold no secret, token or private URL.

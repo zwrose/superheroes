@@ -565,7 +565,8 @@ def _pending_without_result(state, session_dir, rows, reviewers):
 
     A seat whose orders went out but which never had a result recorded has no journal row, so no reviewer row; an
     abandoned session lists it as a reviewer that did not run, by slot (a repeated roster key is its own slot).
-    A seat whose result is stored or still in the landing folder produced a result and is never listed."""
+    A seat whose result is stored or still in the landing folder produced a result and is never listed.
+    An unfilled lens is listed once per round, by its lens, whatever the slicing."""
     # axis: an abandoned session lists every planned seat of its pending review phase that produced no result, by slot identity — see bite-proof record i2436_abandoned_missing
     pending = state.get("pending")
     if not isinstance(pending, dict):
@@ -582,7 +583,8 @@ def _pending_without_result(state, session_dir, rows, reviewers):
     out = []
 
     def unfilled_row(seat):
-        row = _unfilled_reviewer(rnd, seat)
+        # axis: an unfilled lens is one row per round named by its lens, so the slices of a sliced round never list it again — see bite-proof record i2436_abandoned_missing
+        row = _unfilled_reviewer(rnd, round_phases.seat_lens(seat))
         if row["name"] not in names:
             names.add(row["name"])
             out.append(row)

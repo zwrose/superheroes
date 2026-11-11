@@ -119,6 +119,7 @@ The `leftover-not-accepted` detail from `vet_slot.py handback --pr` and a READY 
 
 - An abandoned session's account (`review_record_session.py write --abandoned`) now lists every planned seat that produced no result as a reviewer that did not run, carrying the new account key `noResult` (a reason from `review_record.NO_RESULT_REASONS`); the account refuses `noResult` on any account that is not abandoned and on any row that is not a planned, not-run one.
 - The record lists each such seat under `missingReviews` with a `reason` (an entry of a record that was not abandoned is still `{"name", "goAhead"}`), and its `whatIsMissing` line reads `<name> did not run (<reason>; the review session was abandoned before this seat produced a result)`. A seat whose result landed is not listed, and a pending roster that cannot be derived refuses `review-session-unreadable`.
+- A panel lens the seat map left unfilled is listed once, by its lens name, whether or not the round was sliced, so one go-ahead for that name covers it; a filled lens's slice seat that produced no result is still listed by its own slice name.
 - A session that ended writes the account and record it wrote before.
 
 ## 0.48.0
