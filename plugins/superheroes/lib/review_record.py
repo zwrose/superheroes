@@ -1753,7 +1753,7 @@ def _drop_stale_open_marker(findings):
     for f in findings:
         # axis: a finding that is no longer a bare left-for-owner one is written without the marker — see bite-proof record wo1_open_at_end_2445
         stale = (session_contract.OPEN_AT_LOOP_END_FIELD in f
-                 and (f.get("outcome") != _LEFT_FOR_OWNER or f.get("decidedBy") is not None))
+                 and (f.get("outcome") != _LEFT_FOR_OWNER or session_contract.decided_by_of(f) is not None))
         out.append({k: v for k, v in f.items() if k != session_contract.OPEN_AT_LOOP_END_FIELD} if stale else f)
     return out
 

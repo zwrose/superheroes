@@ -355,3 +355,19 @@ def test_i_a_judge_named_code_quality_repeat_keeps_its_own_consequence():
     C8._verify(state, [tidy], {tidy["title"]: "CONFIRMED"})
     C8._synth(state, [C8._group(C8._ids(state)[tidy["title"]], ref="e1")])
     assert C8._row(state, tidy)["consequenceKind"] == "code-quality"
+
+
+def test_i_a_reopened_consequence_survives_a_synthesis_merge_into_another_code_quality_finding():
+    raw = C8._raw("record bug", line=4, consequence="lost work", consequenceKind="real")
+    state = _driver_state(_record_finding(raw, **{MARK: True}))
+    tidy = dict(raw, severity="Minor", consequence="harder to read", consequenceKind="code-quality")
+    other = C8._raw("tidy neighbour", line=9, severity="Minor", consequence="harder to read",
+                    consequenceKind="code-quality")
+    C8._verify(state, [tidy, other], {tidy["title"]: "CONFIRMED", other["title"]: "CONFIRMED"})
+    ids = C8._ids(state)
+    C8._synth(state, [C8._group(ids[tidy["title"]], ids[other["title"]])])
+    reps = [r for r in state[SC.DISPOSITION_LEDGER_KEY] if not r.get(SC.MERGED_INTO_FIELD)]
+    assert len(reps) == 1 and reps[0]["consequenceKind"] == "real", reps
+    RD._set_terminal(state, "halted")
+    rep = next(r for r in state[SC.DISPOSITION_LEDGER_KEY] if not r.get(SC.MERGED_INTO_FIELD))
+    assert rep["disposition"] == "left-for-owner", rep  # the merged representative is never settled as craft

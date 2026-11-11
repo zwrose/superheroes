@@ -5260,6 +5260,8 @@ def _repeat_plan(state, grouping, session_dir, exact_only=None):
             repeat_marks.decision_outcome(entry), _grade_verdict(finding),
             lambda e=entry: _repeat_changed(state, session_dir, e))
         marks[sid] = {"finding": finding, "entry": entry, "source": source, "kept": kept, "fixHolds": fix_holds}
+        if not kept and source == "exact" and entry["source"] == "record" and session_contract.open_at_loop_end(entry):
+            _carry_reopened_consequence(finding, entry)
     kept_ids = {sid for sid, m in marks.items() if m["kept"]}
     # axis: a kept repeat is out of the survivors and every group before the merge, so it never merges into a fresh finding — see bite-proof record c1l8_wo_a_repeat_marks
     removed = kept_ids | {f.get("id") for f in refuted if isinstance(f, dict)}
@@ -5285,22 +5287,18 @@ def _record_repeat(state, key, repeat_of, repeat_kept):
             row["repeatKept"] = copy.deepcopy(repeat_kept)
 
 
-def _keep_reopened_consequence(state, key, entry):
+def _carry_reopened_consequence(finding, entry):
     """An exact repeat of an earlier record's finding left open at its loop's end reopens that finding as this one:
-    merge the earlier consequence into the row (ledger and live), so a later code-quality report never turns a real
-    consequence into craft. The in-session counterpart is `_seed_ledger_entry`'s preservation of a marked row."""
-    ledger = _ensure_disposition_ledger_for_write(state)
-    seen = _ledger_index_by_key(ledger)
-    rows = [ledger[seen[key]]] if key in seen else []
-    live = _live_finding_by_key(state, key)
-    rows += [live] if live is not None and live not in rows else []
-    for row in rows:
-        # axis: a reopened record finding keeps its real consequence across sessions, so a code-quality repeat never settles it as craft — see bite-proof record wo1_open_at_end_2445
-        text, kind = finding_outcomes.merged_consequence([entry, row])
-        if text is not None:
-            row["consequence"] = text
-        if kind is not None:
-            row["consequenceKind"] = kind
+    merge the earlier consequence into the staged finding before the synthesis merge, so the merge and
+    `_sync_merged_consequences` carry it onto whichever row represents it and a later code-quality report never
+    turns a real consequence into craft. The in-session counterpart is `_seed_ledger_entry`'s preservation of a
+    marked row. Touches only the staged finding, never the ledger."""
+    # axis: a reopened record finding keeps its real consequence across sessions, also when synthesis merges it into another finding — see bite-proof record wo1_open_at_end_2445
+    text, kind = finding_outcomes.merged_consequence([entry, finding])
+    if text is not None:
+        finding["consequence"] = text
+    if kind is not None:
+        finding["consequenceKind"] = kind
 
 
 def _record_kept_disposition(state, key, entry, reason, grade_verdict, restore):
@@ -5347,9 +5345,6 @@ def _apply_repeat_marks(state, plan):
             _record_kept_disposition(state, key, entry, reason, _grade_verdict(finding),
                                      mark["source"] == "exact" and entry["source"] == "session")
         _record_repeat(state, key, repeat_of, repeat_kept)
-        if not mark["kept"] and mark["source"] == "exact" and entry["source"] == "record" \
-                and session_contract.open_at_loop_end(entry):
-            _keep_reopened_consequence(state, key, entry)
         rows.append({"id": sid, "findingKey": key, "source": mark["source"], "kept": mark["kept"],
                      "repeatOf": repeat_of, GRADE_FIELD: finding.get(GRADE_FIELD)})
     if plan["pool"]:
