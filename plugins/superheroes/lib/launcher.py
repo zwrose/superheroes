@@ -3780,6 +3780,9 @@ def _open_pulls(repo_root, owner, repo, env, deadline=None):
                 if not isinstance(full_name, str) or full_name.lower() != want:
                     return [], "row-shape"
             rows.append({"number": number, "branch": ref, "head": sha})
+        # axis: a read whose decoding ran past the launch deadline fails as deadline, never as a complete list — see bite-proof record i2446_continues_pr
+        if deadline is not None and time.monotonic() >= deadline:
+            return [], "deadline"
         if len(data) < _OPEN_PULLS_PAGE_SIZE:
             return rows, None
     # axis: ten full pages may hide more, so the list is unread — see bite-proof record i2446_continues_pr

@@ -861,3 +861,20 @@ def test_the_launch_deadline_reaches_the_open_pull_read(tmp_path, monkeypatch):
     )
     assert result["reason"] == UNREAD
     assert len(seen) == 1 and isinstance(seen[0], float) and seen[0] > L.time.monotonic()
+
+
+def test_a_read_whose_decoding_crosses_the_deadline_fails_as_deadline(tmp_path, monkeypatch):
+    # axis: the deadline is read again after a page's rows are decoded, so a complete-looking list that finished past it refuses as deadline
+    clock = [1000.0]
+    monkeypatch.setattr(L.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(L, "_gh_open_pulls_page", lambda *a, **k: _answer([_pull(3, BRANCH)]))
+    real_loads = L.json.loads
+
+    def slow_loads(text, *a, **k):
+        clock[0] += 10
+        return real_loads(text, *a, **k)
+
+    monkeypatch.setattr(L.json, "loads", slow_loads)
+    assert L._open_pulls(str(tmp_path), "o", "r", _env(), deadline=1005.0) == ([], "deadline")
+    clock[0] = 1000.0
+    assert L._open_pulls(str(tmp_path), "o", "r", _env(), deadline=1050.0)[1] is None
