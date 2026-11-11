@@ -389,3 +389,22 @@ FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_a_
 ```
 
 **Raw green:** the same file with the two census tests, `62 passed in 9.78s`, on commit `055d59a4`.
+
+### B11, B12 — the reopen carry keeps an unknown kind unknown, and keeps the owed places
+
+**Guarded elements:** `round_driver.py` `_carry_reopened_consequence`: B11 the unconditional
+`finding["consequenceKind"] = kind`; B12 the `verification.apply_kind_members(finding, [entry, finding], ...)` call.
+Two distinct failure modes, neutralized in one edit, each red naming its own test. **Neutralization:** B11 became
+`if kind is not None: finding["consequenceKind"] = kind`; B12's call became `pass`. Detached worktree of `ed573547`
+(pycache prefix `/tmp/superheroes-pyc-probe4`); restore receipt: empty `git status --porcelain` before removal.
+
+**Raw red** (2 failed, 52 passed):
+
+```
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_a_reopened_finding_whose_earlier_kind_is_unknown_never_settles_as_craft
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_a_reopened_finding_keeps_the_places_its_earlier_record_still_owes
+2 failed, 52 passed in 32.12s
+```
+
+**Raw green:** the scoped run on `ed573547`, `717 passed in 36.92s` (this file, the two census tests and the
+neighbouring repeat, settle and driver suites).
