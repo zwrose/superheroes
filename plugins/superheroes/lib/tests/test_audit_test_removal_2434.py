@@ -600,6 +600,30 @@ def test_c9_an_uncited_specify_beside_a_cited_it_refuses():
     _detail(_refused(_fold([_removed()], _cites(1, JS_FILE, fixerRemoval=record)), "C9"), 4, 4, JS_FILE)
 
 
+LOOK_ALIKE_JS = ("it('saves', () => {\n  const x = 1;\n  context.save(() => {\n    expect(x).toBe(1);\n"
+                 "    expect(x).toBe(1);\n  });\n});\n")
+
+
+def test_c9_a_cited_member_call_on_an_opening_name_is_a_span_opening_and_ties_the_lines_under_it():
+    # Pins the look-alike behaviour TRANSITION.md states ("Supported languages"), so the text and the behaviour stay
+    # tied: the reader matches lines, so `context.save(() => {` counts as an opening; cited, it ties every line
+    # indented under it, which clears on the auditor's answers alone.
+    # axis: G29 — the JS reader's modifier match (`(\.\w+)*`) reads `context.save(` as an opening
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md
+    record = _record(_read_row(JS_FILE, LOOK_ALIKE_JS, [[3, 6]]))
+    outcome = _fold([_removed()], _cites(3, JS_FILE, taxonomy="cannot-fail", fixerRemoval=record))
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c9_the_same_deletion_with_a_name_that_is_not_an_opening_refuses():
+    # The other half of the pin above: `helper.save(` is no opening, so lines 4 and 5 stay in the uncited `it`.
+    text = LOOK_ALIKE_JS.replace("context.save", "helper.save")
+    assert audits.test_openings(JS_FILE, text) == [1]
+    record = _record(_read_row(JS_FILE, text, [[3, 6]]))
+    reason = _refused(_fold([_removed()], _cites(3, JS_FILE, taxonomy="cannot-fail", fixerRemoval=record)), "C9")
+    _detail(reason, 4, 1, JS_FILE)
+
+
 def test_c9_an_inner_uncited_test_inside_a_cited_describe_refuses_its_lines():
     # axis: G25 — the innermost span decides: line 4 is in the cited describe (start 1) and the uncited it (start 4)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md

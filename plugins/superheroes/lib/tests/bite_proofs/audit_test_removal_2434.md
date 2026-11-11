@@ -1,8 +1,8 @@
 # Bite-proof record — a fix that only removes worthless test lines clears its audit on a `worthless-test-removed` answer (#2434)
 
-Detector file: `plugins/superheroes/lib/tests/test_audit_test_removal_2434.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py` for G1-G8, G13-G15, G17, G18, G20 and G24-G27, `plugins/superheroes/lib/round_driver.py` for G9-G12, G16, G19, G21-G23 and G28), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest '<exact node id>' -q -n 0 --tb=short`, one test node each, output captured whole, followed by the `exit=` line the command printed. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture. One redaction: the absolute path of the build worktree, which prefixes the file paths in the tracebacks, is written `<worktree>`; nothing else was redacted.
+Detector file: `plugins/superheroes/lib/tests/test_audit_test_removal_2434.py`, unedited between each red and its green. Every entry is a targeted, reversible Edit-tool edit to one production file (`plugins/superheroes/lib/audits.py` for G1-G8, G13-G15, G17, G18, G20, G24-G27 and G29, `plugins/superheroes/lib/round_driver.py` for G9-G12, G16, G19, G21-G23 and G28), restored by the inverse edit (no `git checkout`, `restore`, `reset` or `stash`). Runs: `scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest '<exact node id>' -q -n 0 --tb=short`, one test node each, output captured whole, followed by the `exit=` line the command printed. Each `old_string` occurred exactly once (the Edit tool refuses a non-unique match). No secrets, tokens, private URLs or PII appear in any capture. One redaction: the absolute path of the build worktree, which prefixes the file paths in the tracebacks, is written `<worktree>`; nothing else was redacted.
 
-The twenty-eight guarded elements (declared by the order of WO-F, #2434: G8, G14 and G18 re-captured or extended, G24-G28 new): G1 the clear arm, G2-G8 the refusals C1-C7 (G8 now the per-line C7), G9 the `added` detection, G10 the unreadable detection, G11 `--no-textconv`, G12 the explicit endpoint, G13 the refusal C8 (an unsupported language), G14 the refusal C9 (now per line: a removed line whose innermost test span opens on an uncited line), G15 the refusal C10 (a citation that is not exactly fresh), G16 `--inter-hunk-context=0`, G17 the Python test-opening reader, G18 the JavaScript/TypeScript test-opening reader, G19 the unreadable-base-blob form, G20 the sibling freshness gate (a sibling lends its cited lines only when its driver-built `citationFresh` is exactly True), G21 the no-repository / no-removal-head branch of `_citation_freshness`, G22 its no-cited-file / unresolved-head branch, G23 its changed-file branch, G24 the span end rule of `audits.test_spans`, G25 the innermost-span choice in C9, G26 the decorator start rule of `audits.test_spans`, G27 the `_removal_files` validation of `testSpans` and `blankLines`, G28 `_fixer_removal`'s `testSpans` and `blankLines`. The new answer on `right` or `brokeNothing` (a shape fault) and on a `not-discharged` ruling (no clearing, no listing) are plain tests, not guarded elements.
+The twenty-nine guarded elements (declared by the order of WO-F, #2434: G8, G14 and G18 re-captured or extended, G24-G28 new; G29 added by WO-H, after vet 889): G1 the clear arm, G2-G8 the refusals C1-C7 (G8 now the per-line C7), G9 the `added` detection, G10 the unreadable detection, G11 `--no-textconv`, G12 the explicit endpoint, G13 the refusal C8 (an unsupported language), G14 the refusal C9 (now per line: a removed line whose innermost test span opens on an uncited line), G15 the refusal C10 (a citation that is not exactly fresh), G16 `--inter-hunk-context=0`, G17 the Python test-opening reader, G18 the JavaScript/TypeScript test-opening reader, G19 the unreadable-base-blob form, G20 the sibling freshness gate (a sibling lends its cited lines only when its driver-built `citationFresh` is exactly True), G21 the no-repository / no-removal-head branch of `_citation_freshness`, G22 its no-cited-file / unresolved-head branch, G23 its changed-file branch, G24 the span end rule of `audits.test_spans`, G25 the innermost-span choice in C9, G26 the decorator start rule of `audits.test_spans`, G27 the `_removal_files` validation of `testSpans` and `blankLines`, G28 `_fixer_removal`'s `testSpans` and `blankLines`, G29 the modifier match of `audits.JS_TEST_OPENING` (a member call on an opening name is an opening). The new answer on `right` or `brokeNothing` (a shape fault) and on a `not-discharged` ruling (no clearing, no listing) are plain tests, not guarded elements.
 
 **WO-F of #2434 (the span tie, after vet 888).** C7 and C9 became per removed line, tied to the test spans the driver reads (`testSpans`, `blankLines`), so G8 and G14 were captured again on the new branches (their earlier entries are replaced) and G24-G28 were added. Every red and green of G8, G14 and G24-G28 below was run on the tree of this leg, on one test node each, the detector unedited between its red and its green except where an entry says otherwise (G24's real-text node and G26's node each lost one precondition assertion on the span the reader returns before their red was captured, so the red lands on the clearance and not on a precondition). The restore receipts of those entries were read back by the Grep or Read tool right after each restore. The other entries (G1-G7, G9-G13, G15-G23) were not captured again in this leg; their detectors are unchanged except that `_row` now carries `testSpans` and `blankLines` and the C2 parametrization has more cases, and the final scoped run is green on them.
 
@@ -28,7 +28,7 @@ G1-G12 were captured again in the fix leg of vet 886: the fixtures gained `testO
 - G21 (no repository or no removal head): representative a target with a resolvable repository and equal heads but no removal head (`test_f_a_finding_carried_from_an_earlier_session_has_no_removal_head_and_is_not_fresh`); it groups a missing or blank repository root (`test_f_no_repository_is_not_fresh`).
 - G22 (no cited file, or a head that does not resolve): representative a target citing no file with equal heads (`test_f_equal_heads_with_no_cited_file_are_not_fresh`); it groups the unusable raised heads of `test_f_a_finding_with_no_usable_raised_head_is_not_fresh` and the unresolvable removal bases of `test_f_a_removal_base_that_does_not_resolve_is_not_fresh`, which share the one `if not files or raised is None or base is None:` branch.
 
-G1, G2, G4, G9, G11, G12, G16, G23, G25, G26 and G28 are single inputs, not grouped (G25 has two detectors, each red on its own; G26 has one).
+G1, G2, G4, G9, G11, G12, G16, G23, G25, G26, G28 and G29 are single inputs, not grouped (G25 has two detectors, each red on its own; G26 has one).
 
 **Listed unproven (WO-F).** None of G24-G28 is listed unproven. Two disclosures: the order's detector for G24 in its refusal form (refusal (a)) and for G25 (refusal (c1)) do not discriminate their neutralizations (hand-written spans; first refused line outside the inner span), and the detectors named in each entry are the ones that bite; the new JS names (`specify`, `context`, `suite`) are covered by G18's group without a fresh capture.
 
@@ -1253,5 +1253,47 @@ exit=1
 ```
 .                                                                        [100%]
 1 passed in 1.38s
+exit=0
+```
+
+## G29. The JavaScript reader's modifier match (`audits.JS_TEST_OPENING`, the `(\.\w+)*` group)
+
+Added in WO-H of #2434 (after vet 889). The path prefix of the build worktree in the traceback is written `<worktree>`; nothing else was redacted.
+
+- **Axis:** a JS/TS line that is a member call on one of the six opening names (`context.save(() => {`, `suite.add(`, `test.foo(`) is read as a test opening, so a finding that cites it ties every line indented under it (`test_spans`); with the modifier match gone the same cited look-alike is not an opening, the lines under it fall into the uncited `it` around it, and the removal refuses (C9). TRANSITION.md ("Supported languages") and the `audits.test_openings` docstring state this behaviour; the detector ties the text to the code.
+- **Detector:** `test_audit_test_removal_2434.py::test_c9_a_cited_member_call_on_an_opening_name_is_a_span_opening_and_ties_the_lines_under_it` (the file `it('saves', ...)` with `context.save(() => {` on line 3, cited, `[[3, 6]]` removed, built from `audits.test_openings` and `audits.test_spans` through `_read_row`; expected: it clears). Its pair `test_c9_the_same_deletion_with_a_name_that_is_not_an_opening_refuses` (`helper.save`, refuses C9 at line 4, opening 1) passes with and without the neutralization and is not a detector of this element.
+- **Neutralization:** `(\.\w+)*` became `()` in `JS_TEST_OPENING` (no modifiers read; `it.only(` and `test.each(` would stop matching too).
+- **Disclosure:** the detector first carried two precondition asserts (`test_openings == [1, 3]`, `test_spans == [[1, 1, 7], [3, 3, 6]]`); under the neutralization the first red landed on `assert [1] == [1, 3]` and not on the clearance. Both asserts were removed from the node and the red re-run, so the red below is on the clearance itself. The detector is unedited between the red and the green below.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_c9_a_cited_member_call_on_an_opening_name_is_a_span_opening_and_ties_the_lines_under_it _
+<worktree>/plugins/superheroes/lib/tests/test_audit_test_removal_2434.py:615: in test_c9_a_cited_member_call_on_an_opening_name_is_a_span_opening_and_ties_the_lines_under_it
+    assert outcome["testRemovalCleared"] == ["t0"]
+E   AssertionError: assert [] == ['t0']
+E     
+E     Right contains one more item: 't0'
+E     Use -v to get more diff
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_audit_test_removal_2434.py::test_c9_a_cited_member_call_on_an_opening_name_is_a_span_opening_and_ties_the_lines_under_it
+1 failed in 1.43s
+exit=1
+```
+
+- **Restore:** inverse edit (`()` back to `(\.\w+)*`).
+- **Restore receipt** (read back by the Grep tool, `^JS_TEST_OPENING`):
+
+```
+175:JS_TEST_OPENING = re.compile(r"^\s*(x|f)?(it|test|describe|specify|context|suite)(\.\w+)*\s*[(`]")
+```
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed in 1.62s
 exit=0
 ```

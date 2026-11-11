@@ -179,7 +179,8 @@ def test_openings(path, text):
     """The sorted 1-based line numbers at which the file `path` with content `text` opens a test, or None
     when the language of `path` has no reader (an extension outside `PYTHON_TEST_EXTENSIONS` and
     `JS_TEST_EXTENSIONS`). A reader matches a line, not a parse: a line inside a string or comment that looks like
-    an opening counts as one, which only makes the clearance refuse more. Lines are cut at `\\n`, as git counts
+    an opening counts as one: an uncited look-alike makes the clearance refuse more, and a cited one ties the
+    lines indented under it (`test_spans`), which then clear. Lines are cut at `\\n`, as git counts
     them."""
     extension = os.path.splitext(path)[1].lower() if isinstance(path, str) else ""
     if extension in PYTHON_TEST_EXTENSIONS:
