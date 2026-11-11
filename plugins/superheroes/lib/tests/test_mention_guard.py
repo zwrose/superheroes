@@ -60,6 +60,8 @@ HEALTHY = [
     TICK * 2 + "a " + TICK + " @octo" + TICK * 2,
     FENCE + "python\n@pytest.fixture\ndef f(): pass\n" + FENCE + "\n",
     "~~~\n@pytest.fixture\n~~~\n",
+    FENCE + "\n@octo\n" + FENCE + "\n",
+    "~~~\n@octo\n~~~\n",
     "a.b@example.com",
     "ops+@example.com",
     "<ops+@example.com>",
@@ -106,9 +108,9 @@ def test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes():
     # axis: G2 — lines md_fence marks inert are not scanned
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_2453_mention_guard.md
     for fence in (FENCE, "~~~"):
-        text = "before\n" + fence + "\n@pytest.fixture\n" + fence + "\nafter @octo\n"
-        assert mg.bare_mentions(text) == [{"line": 5, "token": "@octo"}]
-        assert mg.check("x\n" + fence + "\n@pytest.fixture\n" + fence + "\n") == {"ok": True}
+        text = "before\n" + fence + "\n@pytest.fixture\n@octo\n" + fence + "\nafter @octo\n"
+        assert mg.bare_mentions(text) == [{"line": 6, "token": "@octo"}]
+        assert mg.check("x\n" + fence + "\n@pytest.fixture\n@octo\n" + fence + "\n") == {"ok": True}
 
 
 def test_g3_an_inline_code_span_masks_its_mention_and_only_its_own():

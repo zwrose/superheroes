@@ -11,7 +11,7 @@ Restore receipts: for a file the work order left untouched against head `85d7dfe
 | Element | Red detector | Red on the declared axis |
 |---|---|---|
 | G1 | `test_g1_a_bare_mention_is_reported` | yes, 13 of 13 rows |
-| G2 | `test_healthy_rows_pass_untouched` (fenced-decorator row) | **no: stayed green (vacuous, see G2)**; red only on three other tests |
+| G2 | `test_healthy_rows_pass_untouched` (fenced login rows) and `test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes` | yes, after the fixture fix (see G2, Re-proof); the first run on the decorator-only fixture stayed green (vacuous, kept as history) |
 | G3 | `test_healthy_rows_pass_untouched` | yes, 2 rows |
 | G4 | `test_healthy_rows_pass_untouched` | yes, 2 rows (`a.b@example.com` stayed green) |
 | G5 | `test_g5_wrap_never_pairs_with_an_existing_backtick` | yes |
@@ -106,6 +106,46 @@ E       At index 0 diff: {'line': 3, 'token': '@octo'} != {'line': 5, 'token': '
 ```
 ..................                                                       [100%]
 18 passed, 54 deselected in 1.94s
+```
+
+**Re-proof after the fixture fix.** The two new `HEALTHY` rows (`` ```\n@octo\n``` `` and `~~~\n@octo\n~~~`) and an `@octo` line inside the fence of both texts in `test_g2_…` now create the condition the assertion discriminates on (`@octo` matches `MENTION_RE`, `@pytest.fixture` does not). The test file was not edited between the red and the green below.
+
+- **Guarded element and axis:** fence masking in `_found` (`mention_guard.py:89`); lines `md_fence` marks inert are not scanned. Detectors: `test_healthy_rows_pass_untouched` (the two new fenced-`@octo` rows) and `test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes`.
+- **Neutralization:** `if inert[idx]:` became `if False:` (targeted Edit, one occurrence).
+
+**Raw red** (exit 1; command `timeout 120 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2453 -m pytest plugins/superheroes/lib/tests/test_mention_guard.py -q -p no:cacheprovider -k "g2 or healthy"`; the `UV_NATIVE_TLS` warning line, the second `HEALTHY` failure's `E` detail lines beyond the first two, the `Use -v to get more diff` lines and the g2 source-line echo are elided; the three failing nodes are all shown):
+
+```
+....FF..........F....                                                    [100%]
+_____________ test_healthy_rows_pass_untouched[```\n@octo\n```\n] ______________
+>       assert mg.bare_mentions(text) == []
+E       AssertionError: assert [{'line': 2, ...en': '@octo'}] == []
+E         Left contains one more item: {'line': 2, 'token': '@octo'}
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:102: AssertionError
+_____________ test_healthy_rows_pass_untouched[~~~\n@octo\n~~~\n] ______________
+>       assert mg.bare_mentions(text) == []
+E       AssertionError: assert [{'line': 2, ...en': '@octo'}] == []
+E         Left contains one more item: {'line': 2, 'token': '@octo'}
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:102: AssertionError
+_________ test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes __________
+>           assert mg.bare_mentions(text) == [{"line": 6, "token": "@octo"}]
+E           AssertionError: assert [{'line': 4, ...en': '@octo'}] == [{'line': 6, ...en': '@octo'}]
+E             At index 0 diff: {'line': 4, 'token': '@octo'} != {'line': 6, 'token': '@octo'}
+E             Left contains one more item: {'line': 6, 'token': '@octo'}
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:112: AssertionError
+3 failed, 18 passed, 53 deselected in 2.37s
+```
+
+The reds are on the expected assertions: `bare_mentions(text) == []` for the two new rows, and `bare_mentions(...) == [...]` for `test_g2_…`. The two decorator rows stayed green, as before.
+
+- **Restore:** inverse Edit (`if False:` back to `if inert[idx]:`).
+- **Restore receipt:** the restored line as it reads after the restore: `89:        if inert[idx]:`. `git status --porcelain plugins/superheroes/lib/mention_guard.py` and `git diff --stat plugins/superheroes/lib/mention_guard.py`, each its own call, both printed nothing.
+
+**Raw green** (exit 0; same command; `UV_NATIVE_TLS` warning line elided):
+
+```
+.....................                                                    [100%]
+21 passed, 53 deselected in 3.79s
 ```
 
 ## G3. Inline code-span masking in `_found` (`mention_guard.py:93`)
