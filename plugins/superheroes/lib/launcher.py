@@ -3631,6 +3631,9 @@ _SURFACE_BRANCH_OF_PR = re.compile(r"(?i)\bbranch\s+of\s+(?:PR\s*)?#(\d+)")
 def _remote_host_and_path(url):
     """The ``(host, path)`` of a git remote URL, or None for a form that is no host (a local path,
     ``file://``). ``path`` is everything after the host, ``""`` when the host has none."""
+    # axis: a file:// URL is a local transport whatever its authority names (file://github.com/o/r is a path, not GitHub) — see bite-proof record i2446_continues_pr
+    if url[:7].lower() == "file://":
+        return None
     matched = _CONTINUES_PR_URL_RE.match(url)
     if matched is not None:
         rest = matched.group("rest")
@@ -3713,16 +3716,24 @@ def _gh_open_pulls_page(owner, repo, page, env, timeout):
         return None
 
 
-def _open_pulls(repo_root, owner, repo, env):
+def _open_pulls(repo_root, owner, repo, env, deadline=None):
     """``(rows, failed)``: every open pull request of ``owner/repo`` headed in that repository, as
     ``{"number", "branch", "head"}``, or ``([], <step>)`` when the list could not be read whole
-    (``gh-unrunnable``, ``gh-failed``, ``json``, ``row-shape``, ``page-cap``). A row whose head
-    repository is not this one (a fork, or a deleted fork) is skipped: its branch is not this
-    repository's to push."""
+    (``gh-unrunnable``, ``gh-failed``, ``json``, ``row-shape``, ``page-cap``, ``deadline``). A row
+    whose head repository is not this one (a fork, or a deleted fork) is skipped: its branch is not
+    this repository's to push. ``deadline`` is the launch's monotonic deadline: each page's timeout
+    is clipped to what is left of it, and a read that reaches it fails as ``deadline``."""
     want = ("%s/%s" % (owner, repo)).lower()
     rows = []
     for page in range(1, _OPEN_PULLS_MAX_PAGES + 1):
-        done = _gh_open_pulls_page(owner, repo, page, env, _WORKTREE_GIT_TIMEOUT)
+        timeout = _WORKTREE_GIT_TIMEOUT
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            # axis: a read that reaches the launch deadline stops and refuses unread, before any worktree or reservation — see bite-proof record i2446_continues_pr
+            if remaining <= 0:
+                return [], "deadline"
+            timeout = min(timeout, remaining)
+        done = _gh_open_pulls_page(owner, repo, page, env, timeout)
         # axis: a gh that could not run leaves the open pull requests unread — see bite-proof record i2446_continues_pr
         if done is None:
             return [], "gh-unrunnable"
@@ -3744,7 +3755,7 @@ def _open_pulls(repo_root, owner, repo, env):
             # axis: a row that is not a pull request with a number, branch and head sha leaves the list unread — see bite-proof record i2446_continues_pr
             if (
                 not isinstance(number, int) or isinstance(number, bool) or number < 1
-                or not isinstance(ref, str)
+                or not isinstance(ref, str) or not ref.strip()
                 or not isinstance(sha, str) or not _LOWER_HEX40.fullmatch(sha)
             ):
                 return [], "row-shape"
@@ -3818,7 +3829,7 @@ def _named_open_pulls(surfaces, pulls):
     return named
 
 
-def _continues_pr_refusal(repo_root, stamped, env):
+def _continues_pr_refusal(repo_root, stamped, env, deadline=None):
     """None when the launch does not continue an existing pull request's branch, or carries the
     adoption pair; else ``(reason, detail)``. A workhorse premise continues one when it carries
     ``adopts`` or a ``surfaces`` entry names an open pull request's head branch (see
@@ -3851,7 +3862,10 @@ def _continues_pr_refusal(repo_root, stamped, env):
             "failedRead": "origin", "remedy": _CONTINUES_PR_REMEDY_UNREAD,
         }
     owner, repo = found
-    pulls, failed = _open_pulls_fn(repo_root, owner, repo, env)
+    # The launch deadline is passed only when the launch has one, so a reader that takes none still serves.
+    pulls, failed = _open_pulls_fn(
+        repo_root, owner, repo, env, **({"deadline": deadline} if deadline is not None else {})
+    )
     # axis: open pull requests that could not be read refuse unread — see bite-proof record i2446_continues_pr
     if failed:
         return _CONTINUES_PR_UNREAD, {
@@ -4520,7 +4534,7 @@ def _check_premises(
         )}
 
     # A leg that continues an existing pull request's branch carries the adoption pair, before anything is spent.
-    refusal = _continues_pr_refusal(repo_root, stamped_premise, env)
+    refusal = _continues_pr_refusal(repo_root, stamped_premise, env, deadline=deadline)
     if refusal is not None:
         reason, detail = refusal
         return {"refusal": _refuse_unreserved(

@@ -68,7 +68,7 @@ def _replace_read(monkeypatch, rows=None, failed=None):
     """Replace the whole read of the open pull requests with a recorder; the list of its calls."""
     calls = []
 
-    def read(repo_root, owner, repo, env):
+    def read(repo_root, owner, repo, env, deadline=None):
         calls.append((owner, repo))
         return (list(rows or []), failed)
 
@@ -788,3 +788,44 @@ def test_the_unadoptable_branch_remedies_never_ask_to_move_a_pull_requests_head(
     assert "in place of" in text and "cannot be changed" in text
     assert "point the pull request" not in text and "retarget" not in text
     assert L._ADOPTABLE_BRANCH_RULE in text
+
+
+def test_a_read_past_the_launch_deadline_refuses_unread_before_any_page(tmp_path, monkeypatch):
+    # axis: the open-pull read honours the launch deadline: a spent deadline asks no page and refuses unread with failedRead deadline
+    repo = _github_repo(tmp_path)
+    asked = []
+    _replace_pages(monkeypatch, lambda page: asked.append(page) or _answer([]))
+    assert L._open_pulls(repo, "o", "r", _env(), deadline=L.time.monotonic() - 1) == ([], "deadline")
+    assert asked == []
+    stamped = {"surfaces": ["origin/" + BRANCH], "baseCommit": "a" * 40}
+    reason, detail = L._continues_pr_refusal(repo, stamped, _env(), deadline=L.time.monotonic() - 1)
+    assert reason == UNREAD and detail["failedRead"] == "deadline"
+
+
+def test_each_page_timeout_is_clipped_to_the_launch_deadline(tmp_path, monkeypatch):
+    # axis: a page asked near the deadline gets only the time that is left, never the full per-call timeout
+    timeouts = []
+
+    def page(owner, repo, number, env, timeout):
+        timeouts.append(timeout)
+        return _answer([])
+
+    monkeypatch.setattr(L, "_gh_open_pulls_page", page)
+    assert L._open_pulls(str(tmp_path), "o", "r", _env(), deadline=L.time.monotonic() + 5) == ([], None)
+    assert len(timeouts) == 1 and 0 < timeouts[0] <= 5
+    assert L._open_pulls(str(tmp_path), "o", "r", _env()) == ([], None)
+    assert timeouts[1] == L._WORKTREE_GIT_TIMEOUT
+
+
+@pytest.mark.parametrize("url", ["file://github.com/o/r.git", "FILE://github.com/o/r.git", "file:///srv/github.com/o/r.git"])
+def test_a_file_url_naming_github_is_a_local_origin(url):
+    # axis: a file:// transport is local whatever host its authority names, so it is skipped, never read as GitHub
+    assert L._remote_host_and_path(url) is None
+
+
+def test_an_empty_branch_on_a_row_leaves_the_list_unread(tmp_path, monkeypatch):
+    # axis: a row whose head.ref is empty or blank cannot be matched, so the read fails closed as row-shape
+    repo = _github_repo(tmp_path)
+    for ref in ("", "   "):
+        _replace_pages(monkeypatch, lambda page, ref=ref: _answer([_pull(3, ref)]))
+        assert L._open_pulls(repo, "o", "r", _env()) == ([], "row-shape")
