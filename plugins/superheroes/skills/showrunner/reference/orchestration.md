@@ -690,7 +690,10 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   The launcher refuses, before spend, a workhorse premise that carries `adopts` without the pair or
   whose `surfaces` name an open pull request's head branch without it
   (`premise-continues-pr-without-adoption`), and fails closed when the open pull requests of the
-  github.com origin cannot be read (`premise-continues-pr-unread`). Each `remedy` names the fix.
+  github.com origin cannot be read (`premise-continues-pr-unread`). Each `remedy` names the fix. A
+  branch whose name `adoptsBranch` cannot carry is continued through a replacement pull request:
+  push its head under an adoptable name, open a pull request from that branch in place of the old
+  one (at the same stack position, adopted by its new number), and launch with the pair naming it.
 - **Adopt a layer that is behind its base.** Bring the adopted branch current with its base
   first: merge the base in and push, so the premise keeps its base (the usual route, standing
   craft). If that is not possible for an unstacked or bottom-layer adoption, set the premise's

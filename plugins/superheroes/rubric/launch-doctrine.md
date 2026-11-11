@@ -126,7 +126,10 @@ launcher refuses, before spend, a workhorse premise that carries `adopts` withou
 `surfaces` name an open pull request's branch (`origin/<branch>`, `branch:<branch>`, the word `branch`
 beside the name, `#N's branch`, `branch of PR #N`) without it
 (`premise-continues-pr-without-adoption`), and fails closed when the open pull requests cannot be read
-(`premise-continues-pr-unread`), each with a `remedy`.
+(`premise-continues-pr-unread`), each with a `remedy`. A branch whose name `adoptsBranch` cannot
+carry (`valid_adopts_branch` refuses it) cannot be adopted, and a pull request's head branch cannot
+be changed: push its head under an adoptable name, open a pull request from that branch in place of
+the old one, and launch with the pair naming the new branch.
 An optional `dependency` names an open pull request whose READY vet the launch must be based on
 (`premise-dependency-invalid`, `dependency-closed-unmerged`, `dependency-open-ready-pr`,
 `dependency-read-unavailable`). **`launch` also refuses a

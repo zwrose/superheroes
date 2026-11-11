@@ -686,3 +686,35 @@ def test_the_rename_remedy_recovers_the_launch(tmp_path, monkeypatch):
     }
     assert L.adopts_premise_reason(stamped) is None
     assert L._continues_pr_refusal(repo, stamped, _env()) is None
+
+
+def test_a_stack_adoption_recovers_only_through_a_replacement_pull_request(tmp_path, monkeypatch):
+    # axis: the remedies' route works end to end through the stack gate — the old unadoptable name cannot be carried in the pair, while a replacement pull request on an adoptable branch at the same position launches
+    from test_launcher import _adoption_members, _launch_adoption
+
+    def members(name, number):
+        def build(head):
+            rows = _adoption_members(head, occupant_number=number, occupant_head=head)
+            rows[1]["headRefName"] = name
+            return rows
+        return build
+
+    _repo, old = _launch_adoption(
+        tmp_path / "old", monkeypatch, members("feature/fix+followup", 4242),
+        adopts_the_base_head=True, adopts=4242, adoptsBranch="feature/fix+followup",
+    )
+    assert old["ok"] is False and old["reason"] == "premise-adopts-branch-invalid"
+    _repo, new = _launch_adoption(
+        tmp_path / "new", monkeypatch, members("feature/fix-followup", 4243),
+        adopts_the_base_head=True, adopts=4243, adoptsBranch="feature/fix-followup",
+    )
+    assert new["ok"] is True, new.get("reason")
+
+
+@pytest.mark.parametrize("remedy", ["_CONTINUES_PR_REMEDY_ADOPTS", "_CONTINUES_PR_REMEDY_RENAME"])
+def test_the_unadoptable_branch_remedies_never_ask_to_move_a_pull_requests_head(remedy):
+    # axis: GitHub cannot change a pull request's head branch, so the remedy routes through a replacement pull request and states the validator's rule
+    text = getattr(L, remedy)
+    assert "in place of" in text and "cannot be changed" in text
+    assert "point the pull request" not in text and "retarget" not in text
+    assert L._ADOPTABLE_BRANCH_RULE in text
