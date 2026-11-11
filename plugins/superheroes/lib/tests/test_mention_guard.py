@@ -8,6 +8,7 @@ no bare mention), and that a healthy sibling body goes through unchanged.
 
 Bite-proof record: wo_2453_mention_guard
 """
+import inspect
 import json
 import os
 import subprocess
@@ -397,15 +398,22 @@ def _write(slot_text):
 
 
 def test_g13_vet_slot_check_slot_text_refuses_a_bare_mention():
-    # axis: G13 — slot text carrying a bare mention refuses bare-mention, naming the tokens and the remedy
+    # axis: G13 — slot text carrying a bare mention refuses write-failed, the detail opening bare-mention: and naming the tokens and the remedy
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_2453_mention_guard.md
     result = _write(TVS.SLOT + "ping @zwrose\n")
-    assert result["ok"] is False and result["reason"] == "bare-mention"
+    assert result["ok"] is False and result["reason"] == "write-failed"
+    assert result["detail"].startswith("bare-mention:")
     assert "@zwrose" in result["detail"] and "code span" in result["detail"]
     assert "newBody" not in result
     with pytest.raises(vs._Refusal) as raised:
         vs.check_slot_text("ping @zwrose")
-    assert raised.value.reason == "bare-mention"
+    assert raised.value.reason == "write-failed"
+    assert raised.value.detail.startswith("bare-mention:")
+
+
+def test_vet_slot_emits_no_bare_mention_token_of_its_own():
+    # the vet_slot refusal census stays at its existing set: the guard's refusal rides write-failed
+    assert "_Refusal(\"bare-mention\"" not in inspect.getsource(vs)
 
 
 def test_g13_a_healthy_slot_text_is_written():

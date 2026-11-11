@@ -25,8 +25,8 @@ inside the slot span, which the write would delete),
 and the advisor's own earlier verdict - a builder section, prose above the verdict line, or any other HTML
 comment - which the write would delete), ``receipt-missing``, ``followup-undispositioned``,
 ``disposition-unknown``, ``none-over-list``, ``write-failed`` (also: the marker or the slot's first line would render
-hidden, or ``md_hidden`` cannot be sure it renders), ``bare-mention`` (``write`` only: the slot text carries an
-at-sign GitHub reads as a login, outside a fence or code span; the detail names each token and the remedy),
+hidden, or ``md_hidden`` cannot be sure it renders, or the slot text carries an at-sign GitHub reads as a login,
+outside a fence or code span, the detail opening "bare-mention:" and naming each token and the remedy),
 ``write-unconfirmed``, ``owner-command-in-body`` (``handback`` only: a fenced shell block that
 names a database tool or a Keychain read), ``leftover-not-accepted`` and ``review-record-unreadable`` (``handback``
 over an open PR, and ``write`` of a READY verdict: a finding the latest review record leaves for the owner is not
@@ -845,11 +845,11 @@ def check_slot_text(slot_text):
     # axis: slot text carrying an HTML comment opener or closer anywhere refuses write-failed
     if "<!--" in slot_text or "-->" in slot_text:
         raise _Refusal("write-failed", "slot text carries an HTML comment opener or closer")
-    # axis: slot text carrying a bare at-sign mention refuses bare-mention before any edit — see bite-proof record wo_2453_mention_guard
+    # axis: slot text carrying a bare at-sign mention refuses write-failed with a bare-mention: detail before any edit — see bite-proof record wo_2453_mention_guard
     guard = mention_guard.check(slot_text)
     if not guard["ok"]:
         tokens = ", ".join(sorted({m["token"] for m in guard["mentions"]}))
-        raise _Refusal("bare-mention", "slot text carries at-sign mentions GitHub reads as logins (%s); %s"
+        raise _Refusal("write-failed", "bare-mention: slot text carries at-sign mentions GitHub reads as logins (%s); %s"
                        % (tokens, guard["remedy"]))
 
 
