@@ -829,3 +829,35 @@ def test_an_empty_branch_on_a_row_leaves_the_list_unread(tmp_path, monkeypatch):
     for ref in ("", "   "):
         _replace_pages(monkeypatch, lambda page, ref=ref: _answer([_pull(3, ref)]))
         assert L._open_pulls(repo, "o", "r", _env()) == ([], "row-shape")
+
+
+@pytest.mark.parametrize("answer", ["empty-last-page", "timed-out"])
+def test_a_page_that_ends_past_the_deadline_fails_the_read_as_deadline(tmp_path, monkeypatch, answer):
+    # axis: the deadline is read again after each page, so a last page that completes, or a call that times out, past it refuses as deadline, never as a clean read or gh-unrunnable
+    clock = [1000.0]
+    monkeypatch.setattr(L.time, "monotonic", lambda: clock[0])
+
+    def page(owner, repo, number, env, timeout):
+        clock[0] += timeout + 1
+        return None if answer == "timed-out" else _answer([])
+
+    monkeypatch.setattr(L, "_gh_open_pulls_page", page)
+    assert L._open_pulls(str(tmp_path), "o", "r", _env(), deadline=1005.0) == ([], "deadline")
+
+
+def test_the_launch_deadline_reaches_the_open_pull_read(tmp_path, monkeypatch):
+    # axis: launch_build hands its own deadline to the continued-PR check, so the read is bounded by the launch budget
+    seen = []
+
+    def spy(repo_root, stamped, env, deadline=None):
+        seen.append(deadline)
+        return UNREAD, {"failedRead": "spy", "remedy": "stop here"}
+
+    monkeypatch.setattr(L, "_continues_pr_refusal", spy)
+    repo = _init_repo(tmp_path / "repo")
+    result = L.launch_build(
+        repo, 656, _valid_premise(repo), _all_checks(), str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"), settle_seconds=0.1,
+    )
+    assert result["reason"] == UNREAD
+    assert len(seen) == 1 and isinstance(seen[0], float) and seen[0] > L.time.monotonic()

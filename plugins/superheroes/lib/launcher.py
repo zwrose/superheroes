@@ -3734,6 +3734,9 @@ def _open_pulls(repo_root, owner, repo, env, deadline=None):
                 return [], "deadline"
             timeout = min(timeout, remaining)
         done = _gh_open_pulls_page(owner, repo, page, env, timeout)
+        # axis: a page that returns, or times out, at or past the launch deadline fails the read as deadline, the last page included — see bite-proof record i2446_continues_pr
+        if deadline is not None and time.monotonic() >= deadline:
+            return [], "deadline"
         # axis: a gh that could not run leaves the open pull requests unread — see bite-proof record i2446_continues_pr
         if done is None:
             return [], "gh-unrunnable"
