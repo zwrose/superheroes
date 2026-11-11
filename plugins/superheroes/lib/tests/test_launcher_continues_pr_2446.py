@@ -347,6 +347,43 @@ def test_a_git_that_cannot_run_leaves_the_origin_unread(tmp_path, monkeypatch):
     assert calls == []
 
 
+def _stub_origin_read(monkeypatch, returncode):
+    """Make `git remote get-url origin` answer `returncode` with no output; every other git call is real."""
+    real = L._git_scrubbed
+
+    def stub(repo_root, *args, **kwargs):
+        if args[:3] == ("remote", "get-url", "origin"):
+            return types.SimpleNamespace(returncode=returncode, stdout="", stderr="")
+        return real(repo_root, *args, **kwargs)
+
+    monkeypatch.setattr(L, "_git_scrubbed", stub)
+
+
+def test_an_origin_read_that_fails_other_than_no_such_remote_refuses_unread(tmp_path, monkeypatch):
+    # axis: a git remote get-url origin that exits other than 2 (a missing directory exits 128) refuses unread with failedRead origin (V894-3)
+    repo = _github_repo(tmp_path)
+    calls = _replace_read(monkeypatch, [])
+    _stub_origin_read(monkeypatch, 128)
+    assert L._origin_github_repo(repo, _env()) == ("unread", None)
+    reason, detail = _unread(repo)
+    assert reason == UNREAD
+    assert detail["failedRead"] == "origin"
+    assert detail == {"failedRead": "origin", "remedy": L._CONTINUES_PR_REMEDY_UNREAD}
+    assert calls == []
+
+
+def test_a_no_such_remote_exit_skips_with_no_read(tmp_path, monkeypatch):
+    # axis: git's exit 2 (No such remote 'origin') alone is a skip, so a repository with no origin is not refused (V894-3)
+    repo = _github_repo(tmp_path)
+    calls = _replace_read(monkeypatch, [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}])
+    _stub_origin_read(monkeypatch, 2)
+    assert L._origin_github_repo(repo, _env()) == ("skip", None)
+    assert L._continues_pr_refusal(
+        repo, {"surfaces": ["origin/" + BRANCH], "baseCommit": "a" * 40}, _env(),
+    ) is None
+    assert calls == []
+
+
 @pytest.mark.parametrize("url", [
     "https://github.com/o", "https://github.com/", "https://github.com", "https://github.com/o/r/x",
     "git@github.com:o", "git@github.com:o/r/x", "https://github.com/o/r r", "https://github.com/o/..",
@@ -514,6 +551,39 @@ def test_a_github_origin_parses_to_its_owner_and_repo(tmp_path, url):
     repo = _init_repo(tmp_path / "repo")
     _set_origin(repo, url)
     assert L._origin_github_repo(repo, _env()) == ("github", ("o", "r"))
+
+
+@pytest.mark.parametrize("url", [
+    "https://www.github.com/o/r.git", "git@ssh.github.com:o/r.git",
+    "ssh://git@ssh.github.com:443/o/r.git",
+])
+def test_a_www_or_ssh_github_origin_is_read_like_github_com(tmp_path, url):
+    # axis: an origin on www.github.com or ssh.github.com is a GitHub origin and parses to its owner and repo (V894-2)
+    repo = _init_repo(tmp_path / "repo")
+    _set_origin(repo, url)
+    assert L._origin_github_repo(repo, _env()) == ("github", ("o", "r"))
+
+
+def test_an_ssh_host_alias_origin_stays_a_skip(tmp_path):
+    # axis: an SSH host alias (git@github-work:o/r.git) cannot be decided without ssh config and stays a skip (V894-2)
+    repo = _init_repo(tmp_path / "repo")
+    _set_origin(repo, "git@github-work:o/r.git")
+    assert L._origin_github_repo(repo, _env()) == ("skip", None)
+
+
+@pytest.mark.parametrize("marker", ["remotes/origin/", "refs/remotes/origin/", "refs/heads/"])
+def test_a_git_ref_spelling_of_the_branch_names_the_pull_request(marker):
+    # axis: remotes/origin/<branch>, refs/remotes/origin/<branch> and refs/heads/<branch> name the pull request like origin/<branch> (V894-1)
+    pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
+    surface = marker + BRANCH
+    assert L._named_open_pulls([surface], pulls) == [{**pulls[0], "matchedIn": surface}]
+
+
+@pytest.mark.parametrize("surface", ["refs/heads/other/branch-x", "remotes/origin/" + BRANCH + "-two"])
+def test_a_git_ref_spelling_of_another_branch_names_nothing(surface):
+    # axis: a ref spelling of a different or longer branch name names no open pull request (V894-1)
+    pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
+    assert L._named_open_pulls([surface], pulls) == []
 
 
 def test_the_layer_below_of_a_stack_layer_is_not_a_continued_branch(tmp_path, monkeypatch):

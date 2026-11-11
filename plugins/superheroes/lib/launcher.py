@@ -3602,18 +3602,26 @@ _CONTINUES_PR_REMEDY_UNREAD = (
     "URL, then launch again; or add the adoption pair (adoptsBranch and adoptsHead) when the "
     "launch does continue a pull request's branch."
 )
+# `git remote get-url origin` exits 2 for "No such remote 'origin'" (a missing directory exits 128).
+_GIT_NO_SUCH_REMOTE = 2
+# The hosts whose origins are read like github.com.
+_GITHUB_HOSTS = frozenset({"github.com", "www.github.com", "ssh.github.com"})
 _CONTINUES_PR_REPO_PART = re.compile(r"[A-Za-z0-9_.-]+")
 _CONTINUES_PR_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?P<rest>.*)$", re.DOTALL)
 _LOWER_HEX40 = re.compile(r"[0-9a-f]{40}")
 _OPEN_PULLS_PAGE_SIZE = 100
 _OPEN_PULLS_MAX_PAGES = 10
-# A branch name is found whole in a surface (with an optional origin/ or branch: marker before it).
+# A branch name is found whole in a surface (with an optional marker before it: origin/, branch:, or
+# a git ref spelling, refs/heads/, remotes/origin/ or refs/remotes/origin/; the longest marker wins).
 # Only a delimiter bounds it: the start or end of the text, a character git never allows in a branch
 # name (whitespace, ~ ^ : ? * [ \), or a prose mark (` ' " , ; ! ( ) ] < >). Any other neighbour,
 # non-ASCII letters, # and % included, continues a longer name, which is another branch. A period
 # after it bounds it only when a delimiter or the end follows (feature/x.bak is another name).
 _SURFACE_DELIMS = r"\s~^:?*\[\\`'\",;!()\]<>"
-_SURFACE_NAME_BEFORE = r"(?:^|(?<=[%s]))(?P<marker>origin/|branch:)?" % _SURFACE_DELIMS
+_SURFACE_NAME_BEFORE = (
+    r"(?:^|(?<=[%s]))(?P<marker>refs/remotes/origin/|remotes/origin/|refs/heads/|origin/|branch:)?"
+    % _SURFACE_DELIMS
+)
 _SURFACE_NAME_AFTER = r"(?=$|[%s]|\.(?:$|[%s]))" % (_SURFACE_DELIMS, _SURFACE_DELIMS)
 _SURFACE_BRANCH_WORD = re.compile(r"(?i)\bbranch\b")
 _SURFACE_PR_BRANCH = re.compile(r"(?i)#(\d+)(?:['’]s)?\s+branch\b")
@@ -3645,25 +3653,30 @@ def _remote_host_and_path(url):
 
 def _origin_github_repo(repo_root, env):
     """Where this checkout's pull requests live: ``("skip", None)`` when there is nothing to ask
-    (no origin, a host other than github.com, a local path or ``file://`` URL),
-    ``("github", (owner, repo))`` for a github.com origin, ``("unread", None)`` when git could not
-    run or a github.com origin does not name exactly ``owner/repo``."""
+    (no origin, a host other than github.com, www.github.com or ssh.github.com, a local path or
+    ``file://`` URL),
+    ``("github", (owner, repo))`` for an origin on one of those three hosts, ``("unread", None)``
+    when git could not run, ``git remote get-url origin`` failed for any reason other than "no such
+    remote", or a GitHub origin does not name exactly ``owner/repo``."""
     got = _git_scrubbed(
         repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
     )
     # axis: a git that could not run leaves the origin unread — see bite-proof record i2446_continues_pr
     if got is None:
         return ("unread", None)
-    # axis: no origin is no remote and so no pull requests to continue — see bite-proof record i2446_continues_pr
-    if got.returncode != 0:
+    # axis: git's "No such remote 'origin'" (exit 2) is no remote and so no pull requests to continue — see bite-proof record i2446_continues_pr
+    if got.returncode == _GIT_NO_SUCH_REMOTE:
         return ("skip", None)
+    # axis: an origin read that fails for any other reason (a missing directory exits 128) leaves the origin unread — see bite-proof record i2446_continues_pr
+    if got.returncode != 0:
+        return ("unread", None)
     split = _remote_host_and_path((got.stdout or "").strip())
     # axis: a local path or file URL has no host and no pull requests — see bite-proof record i2446_continues_pr
     if split is None:
         return ("skip", None)
     host, path = split
-    # axis: an origin on a host other than github.com is skipped, not read — see bite-proof record i2446_continues_pr
-    if host.lower() != "github.com":
+    # axis: an origin on a host other than github.com, www.github.com or ssh.github.com (an SSH host alias included) is skipped, not read — see bite-proof record i2446_continues_pr
+    if host.lower() not in _GITHUB_HOSTS:
         return ("skip", None)
     if path.startswith("/"):
         path = path[1:]
@@ -3767,8 +3780,8 @@ def _named_open_pulls(surfaces, pulls):
     """The open pull requests a surface names by explicit wording, in ``pulls`` order, each once:
     ``{"number", "branch", "head", "matchedIn"}`` with ``matchedIn`` the first surface that named it.
 
-    A surface names a pull request (branch B, number N) when it holds B whole written ``origin/B``
-    or ``branch:B``; or it holds the word ``branch`` and B whole; or it reads ``#N's branch`` or
+    A surface names a pull request (branch B, number N) when it holds B whole written ``origin/B``,
+    ``branch:B``, ``remotes/origin/B``, ``refs/remotes/origin/B`` or ``refs/heads/B``; or it holds the word ``branch`` and B whole; or it reads ``#N's branch`` or
     ``branch of [PR] #N``. B is matched as the complete name GitHub returned, whatever characters
     git allowed in it, and prose punctuation after it (a colon, a comma, a closing period) does not
     hide it. A bare path never names one, even when a branch is spelled the same."""
@@ -3788,7 +3801,7 @@ def _named_open_pulls(surfaces, pulls):
                     _SURFACE_PR_BRANCH.findall(surface) + _SURFACE_BRANCH_OF_PR.findall(surface)
                 )
             }
-            # axis: an origin/<branch> or branch:<branch> token names the pull request — see bite-proof record i2446_continues_pr
+            # axis: an origin/<branch>, branch:<branch> or git ref spelling (remotes/origin/, refs/remotes/origin/, refs/heads/) token names the pull request — see bite-proof record i2446_continues_pr
             hit = any(m.group("marker") is not None for m in matches)
             # axis: the word branch beside the branch's name names the pull request, read outside the name's own span so a name holding the word (docs/branch) does not name itself — see bite-proof record i2446_continues_pr
             hit = hit or any(

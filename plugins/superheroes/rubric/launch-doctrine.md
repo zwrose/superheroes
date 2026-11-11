@@ -123,7 +123,8 @@ refuses before spend (`premise-adopts-head-not-on-base`).
 Any leg that continues an existing pull request's branch, whether that pull request was built locally
 or in the cloud, carries `adoptsBranch`/`adoptsHead` naming that branch and its pushed head; the
 launcher refuses, before spend, a workhorse premise that carries `adopts` without the pair or whose
-`surfaces` name an open pull request's branch (`origin/<branch>`, `branch:<branch>`, the word `branch`
+`surfaces` name an open pull request's branch (`origin/<branch>`, `branch:<branch>`, `refs/heads/<branch>`,
+`remotes/origin/<branch>`, the word `branch`
 beside the name, `#N's branch`, `branch of PR #N`) without it
 (`premise-continues-pr-without-adoption`), and fails closed when the open pull requests cannot be read
 (`premise-continues-pr-unread`), each with a `remedy`. A branch whose name `adoptsBranch` cannot
