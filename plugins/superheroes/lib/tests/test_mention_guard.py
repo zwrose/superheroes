@@ -189,12 +189,48 @@ def test_e2_empty_text_is_clean():
     assert mg.bare_mentions("") == [] and mg.check("") == {"ok": True} and mg.wrap("") == ""
 
 
-def test_e3_an_unterminated_fence_makes_the_lines_after_it_inert():
-    # E3: md_fence reports the opener unterminated and treats every later line as fence content
+def test_e3_an_unterminated_fence_masks_nothing():
+    # E3: an unterminated fence masks no line, so a list-contained fence whose indented closer md_fence reads
+    # as a new opener cannot hide the prose after it
     text = "top\n" + FENCE + "\n@octo\nmore @octo\n"
-    assert mg.bare_mentions(text) == []
-    assert mg.wrap(text) == text
-    assert _tokens("@before\n" + text) == ["@before"]
+    assert _tokens(text) == ["@octo", "@octo"]
+    assert _tokens("@before\n" + text) == ["@before", "@octo", "@octo"]
+
+
+def test_a_fence_inside_a_list_cannot_mask_the_prose_after_it():
+    # axis: the list-contained fence of the review's finding; the mention after it is reported and refused
+    text = "- " + FENCE + "\n  example\n  " + FENCE + "\n\nping @octo\n"
+    assert [m["line"] for m in mg.bare_mentions(text)] == [5]
+    assert mg.check(text)["reason"] == "bare-mention"
+
+
+def test_a_code_span_crossing_a_line_break_pairs_across_it():
+    # axis: GFM pairs a code span across a paragraph's lines, so the closer on line two leaves the mention outside
+    text = "begin " + TICK + "code\nend" + TICK + " then @octo " + TICK + "literal\n"
+    assert [m["line"] for m in mg.bare_mentions(text)] == [2]
+    multi = TICK + "first\nsecond" + TICK + " @octo " + TICK + "tail" + TICK + "\n"
+    assert _tokens(multi) == ["@octo"]
+    # a span that really holds the at-sign across a line break still masks it
+    assert mg.bare_mentions(TICK + "a\n@octo b" + TICK + "\n") == []
+
+
+def test_table_cells_pair_code_spans_on_their_own():
+    # axis: a backtick in one cell cannot pair with one in another cell
+    table = "| a | b | c |\n| --- | --- | --- |\n| " + TICK + "x | @octo | y" + TICK + " |\n"
+    assert [m["line"] for m in mg.bare_mentions(table)] == [3]
+    assert mg.wrap(table) == table.replace("@octo", TICK * 2 + "@octo" + TICK * 2)
+    inside = "| a | b |\n| --- | --- |\n| x | " + TICK + "@octo" + TICK + " |\n"
+    assert mg.bare_mentions(inside) == []
+
+
+def test_a_raw_html_block_is_scanned_and_wrapped_in_a_code_element():
+    # axis: a backtick inside a raw HTML block is literal, so it masks nothing and wrap uses a code element
+    text = "<div>\n" + TICK + "@octo" + TICK + " and @hubot\n</div>\n\nafter " + TICK + "@kept" + TICK + "\n"
+    assert _tokens(text) == ["@octo", "@hubot"]
+    wrapped = mg.wrap(text)
+    assert "<code>@hubot</code>" in wrapped and "<code>@octo</code>" in wrapped
+    assert wrapped.endswith("after " + TICK + "@kept" + TICK + "\n")
+    assert mg.bare_mentions(wrapped) == [] and mg.wrap(wrapped) == wrapped
 
 
 def test_e4_a_mention_on_the_same_line_as_a_closed_span_but_outside_it_is_reported():

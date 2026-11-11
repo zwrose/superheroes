@@ -40,6 +40,10 @@ MENTION_RE = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 _BACKTICK_RUN_RE = re.compile(r"`+")
+# A line that opens a raw HTML block (GFM block kinds 6 and 7, approximated: a tag at the line's start).
+_HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
+_TABLE_ROW_RE = re.compile(r"^ {0,3}\|")
+_CODE_ELEMENT_RE = re.compile(r"<code>.*?</code>", re.IGNORECASE)
 
 
 def _bare_line(whole):
@@ -52,9 +56,10 @@ def _bare_line(whole):
 
 
 def _code_spans(line):
-    """The `(start, end)` extents of the inline code spans of one line, delimiters included. A backtick run of
-    length n opens a span that closes at the next run of exactly length n on the line; with no such run the
-    backticks are literal. A backslash before a backtick escapes it. A span across lines is out of scope."""
+    """The `(start, end)` extents of the inline code spans of one text block, delimiters included. A backtick
+    run of length n opens a span that closes at the next run of exactly length n in the block (line breaks
+    included, as GFM pairs them across lines); with no such run the backticks are literal. A backslash before a
+    backtick escapes it."""
     runs = [(m.start(), m.end()) for m in _BACKTICK_RUN_RE.finditer(line)]
     spans = []
     i = 0
@@ -79,30 +84,84 @@ def _code_spans(line):
     return spans
 
 
+def _cell_spans(line):
+    """The code-span extents of one table row: GFM parses each cell on its own, so a span never crosses an
+    unescaped pipe."""
+    spans = []
+    start = 0
+    for i, ch in enumerate(line + "|"):
+        if ch == "|" and (i == 0 or line[i - 1] != "\\"):
+            spans.extend((start + a, start + b) for a, b in _code_spans(line[start:i]))
+            start = i + 1
+    return spans
+
+
+def _inert_lines(bare):
+    """Which lines sit inside a fenced block. An unterminated fence masks nothing: `md_fence` reads a fence inside
+    a list or blockquote as top-level text, so its indented closer would otherwise open a fence that masks every
+    line after it."""
+    scan = md_fence.scan(bare)
+    inert = list(scan.inert)
+    if scan.unterminated_opener_line is not None:
+        for i in range(scan.unterminated_opener_line - 1, len(inert)):
+            inert[i] = False
+    return inert
+
+
 def _found(text):
-    """Every bare mention of `text` as `(line index, start, end, token)` in text order; `start` is the at-sign."""
-    lines = md_fence.split_lines(text)
-    bare = [_bare_line(whole) for whole in lines]
-    inert = md_fence.scan(bare).inert
+    """Every bare mention of `text` as `(line index, start, end, token, html)` in text order; `start` is the
+    at-sign and `html` says the line sits in a raw HTML block, where a code span is not code."""
+    bare = [_bare_line(whole) for whole in md_fence.split_lines(text)]
+    inert = _inert_lines(bare)
     out = []
-    for idx, line in enumerate(bare):
-        if inert[idx]:
+    in_html = False
+    idx = 0
+    while idx < len(bare):
+        line = bare[idx]
+        if inert[idx] or not line.strip():
+            in_html = False if not line.strip() else in_html
+            idx += 1
             continue
-        spans = _code_spans(line)
-        for m in MENTION_RE.finditer(line):
-            if any(start <= m.start() < end for start, end in spans):
-                continue
-            out.append((idx, m.start(), m.end(), "@" + m.group(1)))
+        if in_html or _HTML_BLOCK_RE.match(line):
+            # axis: a raw HTML block renders no code span, so its backticks mask nothing
+            in_html = True
+            elements = [(m.start(), m.end()) for m in _CODE_ELEMENT_RE.finditer(line)]
+            out.extend((idx, m.start(), m.end(), "@" + m.group(1), True) for m in MENTION_RE.finditer(line)
+                       if not any(start <= m.start() < stop for start, stop in elements))
+            idx += 1
+            continue
+        if _TABLE_ROW_RE.match(line):
+            # axis: a table row's code spans are paired cell by cell
+            blocks, spans = [(idx, 0)], _cell_spans(line)
+            end = idx + 1
+        else:
+            # axis: a paragraph's code spans are paired across its lines
+            end = idx
+            while (end < len(bare) and not inert[end] and bare[end].strip()
+                   and not _HTML_BLOCK_RE.match(bare[end]) and not _TABLE_ROW_RE.match(bare[end])):
+                end += 1
+            blocks, offset = [], 0
+            for k in range(idx, end):
+                blocks.append((k, offset))
+                offset += len(bare[k]) + 1
+            spans = _code_spans("\n".join(bare[idx:end]))
+        for k, offset in blocks:
+            for m in MENTION_RE.finditer(bare[k]):
+                if any(start <= offset + m.start() < stop for start, stop in spans):
+                    continue
+                out.append((k, m.start(), m.end(), "@" + m.group(1), False))
+        idx = end
     return out
 
 
 def bare_mentions(text):
     """`[{"line": <1-based int>, "token": "@login"}, ...]` for every bare mention in `text`, in text order;
-    `[]` for non-string text. Fenced lines (as `md_fence` marks them, an unterminated fence included: the lines
-    after it are inert) and inline code spans are masked."""
+    `[]` for non-string text. Lines inside a closed fenced block and inline code spans (paired across a
+    paragraph's lines, and cell by cell on a table row) are masked; an unterminated fence and a raw HTML block
+    mask nothing."""
     if not isinstance(text, str):
         return []
-    return [{"line": idx + 1, "token": token} for idx, _start, _end, token in _found(text)]
+    return [{"line": idx + 1, "token": token} for idx, _start, _end, token, _html in _found(text)]
 
 
 def check(text):
@@ -126,11 +185,15 @@ def wrap(text):
     ticks = "`" * (max((len(m) for m in _BACKTICK_RUN_RE.findall(text)), default=0) + 1)
     lines = md_fence.split_lines(text)
     by_line = {}
-    for idx, start, end, _token in found:
-        by_line.setdefault(idx, []).append((start, end))
+    for idx, start, end, _token, html in found:
+        by_line.setdefault(idx, []).append((start, end, html))
     for idx, extents in by_line.items():
         line = lines[idx]
-        for start, end in reversed(extents):
+        for start, end, html in reversed(extents):
+            if html:
+                # axis: in a raw HTML block a backtick is literal, so the token goes in a code element
+                line = line[:start] + "<code>" + line[start:end] + "</code>" + line[end:]
+                continue
             opener = ticks if start == 0 or line[start - 1] not in "`\\" else " " + ticks
             closer = ticks if end >= len(line) or line[end] != "`" else ticks + " "
             line = line[:start] + opener + line[start:end] + closer + line[end:]
