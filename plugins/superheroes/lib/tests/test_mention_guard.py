@@ -223,6 +223,19 @@ def test_table_cells_pair_code_spans_on_their_own():
     assert mg.bare_mentions(inside) == []
 
 
+def test_an_at_sign_inside_a_link_or_url_is_left_alone():
+    # axis: GitHub renders a link destination, an autolink and a bare URL as an anchor, which it never mentions in
+    for text in ("[package](https://www.npmjs.com/package/@playwright/test)\n",
+                 "see <https://www.npmjs.com/package/@playwright/test> now\n",
+                 "see https://www.npmjs.com/package/@playwright/test now\n",
+                 "<div><a href=\"https://www.npmjs.com/package/@playwright/test\">pkg</a></div>\n"):
+        assert mg.bare_mentions(text) == []
+        assert mg.wrap(text) == text
+    # the link text is still prose, and a mention beside a URL is still reported
+    assert _tokens("[ask @octo](https://example.com/x) and https://example.com/@ok then @hubot\n") == [
+        "@octo", "@hubot"]
+
+
 def test_a_raw_html_block_is_scanned_and_wrapped_in_a_code_element():
     # axis: a backtick inside a raw HTML block is literal, so it masks nothing and wrap uses a code element
     text = "<div>\n" + TICK + "@octo" + TICK + " and @hubot\n</div>\n\nafter " + TICK + "@kept" + TICK + "\n"

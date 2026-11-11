@@ -44,6 +44,14 @@ _BACKTICK_RUN_RE = re.compile(r"`+")
 _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
 _TABLE_ROW_RE = re.compile(r"^ {0,3}\|")
 _CODE_ELEMENT_RE = re.compile(r"<code>.*?</code>", re.IGNORECASE)
+# A link destination, an angle autolink or a bare URL: GitHub renders each as an anchor (or an attribute), and its
+# mention filter skips anchors, so an at-sign inside one is part of the address, never a mention.
+_URL_RE = re.compile(r"\]\([^)\s]*|<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)
+
+
+def _urls(line):
+    """The extents of the link destinations and URLs on one line."""
+    return [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
 
 
 def _bare_line(whole):
@@ -125,7 +133,7 @@ def _found(text):
         if in_html or _HTML_BLOCK_RE.match(line):
             # axis: a raw HTML block renders no code span, so its backticks mask nothing
             in_html = True
-            elements = [(m.start(), m.end()) for m in _CODE_ELEMENT_RE.finditer(line)]
+            elements = [(m.start(), m.end()) for m in _CODE_ELEMENT_RE.finditer(line)] + _urls(line)
             out.extend((idx, m.start(), m.end(), "@" + m.group(1), True) for m in MENTION_RE.finditer(line)
                        if not any(start <= m.start() < stop for start, stop in elements))
             idx += 1
@@ -146,8 +154,12 @@ def _found(text):
                 offset += len(bare[k]) + 1
             spans = _code_spans("\n".join(bare[idx:end]))
         for k, offset in blocks:
+            # axis: an at-sign inside a link destination or a URL is part of the address, so it is never reported
+            urls = _urls(bare[k])
             for m in MENTION_RE.finditer(bare[k]):
                 if any(start <= offset + m.start() < stop for start, stop in spans):
+                    continue
+                if any(start <= m.start() < stop for start, stop in urls):
                     continue
                 out.append((k, m.start(), m.end(), "@" + m.group(1), False))
         idx = end
