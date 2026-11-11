@@ -624,6 +624,34 @@ def test_c9_the_same_deletion_with_a_name_that_is_not_an_opening_refuses():
     _detail(reason, 4, 1, JS_FILE)
 
 
+UNRECOGNISED_CLASS = ("import unittest\n\n\n%s:\n    def setUp(self):\n        self.cart = []\n\n"
+                      "    def test_wording(self):\n        self.assertEqual(str(1), '1')\n")
+
+
+def _wording_pin_over_set_up_and_test(class_line):
+    text = UNRECOGNISED_CLASS % class_line
+    record = _record(_read_row(TEST_FILE, text, [[5, 9]]))
+    return audits.test_spans(TEST_FILE, text), _fold(
+        [_removed()], _cites(8, taxonomy="wording-pin", fixerRemoval=record))
+
+
+def test_c9_a_unittest_class_not_named_test_is_read_out_of_every_test_and_its_set_up_clears():
+    # Pins the out-of-every-test direction TRANSITION.md states ("Supported languages"): a test the reader does not
+    # recognise is read as lines outside every test, so its `setUp` clears by C7's stretch rule beside the cited
+    # test (the stretch holds cited line 8). The pair differs only in the class name: `TestCart` is an opening, so
+    # `setUp` is read into an uncited span and refuses.
+    spans, outcome = _wording_pin_over_set_up_and_test("class CartTests(unittest.TestCase)")
+    assert spans == [[8, 8, 9]]
+    assert outcome["testRemovalCleared"] == ["t0"]
+
+
+def test_c9_the_same_deletion_with_a_class_named_test_refuses_its_set_up():
+    # The other half of the pair above.
+    spans, outcome = _wording_pin_over_set_up_and_test("class TestCart(unittest.TestCase)")
+    assert spans == [[4, 4, 9], [8, 8, 9]]
+    _detail(_refused(outcome, "C9"), 5, 4)
+
+
 def test_c9_an_inner_uncited_test_inside_a_cited_describe_refuses_its_lines():
     # axis: G25 — the innermost span decides: line 4 is in the cited describe (start 1) and the uncited it (start 4)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/audit_test_removal_2434.md

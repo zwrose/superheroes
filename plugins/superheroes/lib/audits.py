@@ -205,8 +205,10 @@ def test_spans(path, text):
     enclosing span. The span's end is the last non-blank line included (the opening itself when none is). The
     start: the topmost line of the run of non-blank `@` lines at the opening's indent directly above it, else the
     opening. The reader reads indentation only: code whose indentation does not follow its nesting is read by
-    its indentation. It fails closed either way: a line read into an uncited span refuses (C9), and a line read
-    outside every span falls to C7's rule."""
+    its indentation. The reader matches lines, so it can be wrong in two directions. A line read into a span
+    refuses (C9) when the span is uncited, and a cited look-alike opening ties the lines under it, which clear.
+    A line read out of every span, because a test ended early on indentation or was not recognised, falls to
+    C7's stretch rule and clears when its removed stretch holds a cited line."""
     openings = test_openings(path, text)
     if openings is None:
         return None
