@@ -164,45 +164,6 @@ WRITE_REPORT_CONTRACT = (
     '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}, "refusals": []}'
 )
 
-_REVIEW_RESULT_KIND_DESCRIPTIONS = {
-    "findings": (
-        "a single JSON object whose payload key is `findings` (a list of finding objects; "
-        "include `investigated` when you read repo paths to ground the review)"
-    ),
-    "verdicts": (
-        "a single JSON object whose payload key is `verdicts` (a list of verdict objects)"
-    ),
-    "grouping": (
-        "a single JSON object whose payload key is `grouping` (the synthesis grouping payload)"
-    ),
-    "ruling": (
-        "a single JSON object with top-level `id`, `ruling`, and `reason` keys (an audit ruling)"
-    ),
-}
-if set(_REVIEW_RESULT_KIND_DESCRIPTIONS) != set(REVIEW_RESULT_KINDS):
-    raise AssertionError("REVIEW_RESULT_KIND_DESCRIPTIONS must cover REVIEW_RESULT_KINDS exactly")
-
-
-def REVIEW_RESULT_CONTRACT(expected_result_kind=None):
-    """Kind-aware review stdout contract — pinned seats get one kind; unpinned get all four."""
-    if expected_result_kind in REVIEW_RESULT_KINDS:
-        kind = expected_result_kind
-        return (
-            "Review result contract (your graded stdout must match this shape):\n"
-            "Emit %s as your final stdout with nothing after it.\n"
-            % _REVIEW_RESULT_KIND_DESCRIPTIONS[kind]
-        )
-    kinds_enumerated = ", ".join("`%s`" % k for k in REVIEW_RESULT_KINDS)
-    lines = [
-        "Review result contract (your graded stdout must match exactly one of these shapes):",
-        "The runner accepts these result kinds (%d): %s." % (len(REVIEW_RESULT_KINDS), kinds_enumerated),
-        "Emit exactly one matching JSON object as your final stdout with nothing after it.",
-    ]
-    for kind in REVIEW_RESULT_KINDS:
-        lines.append("  - `%s`: %s" % (kind, _REVIEW_RESULT_KIND_DESCRIPTIONS[kind]))
-    return "\n".join(lines) + "\n"
-
-
 REFUSAL_SANDBOX_ROOTS_UNRESOLVABLE = "sandbox-roots-unresolvable"
 REFUSAL_SANDBOX_UV_CACHE_UNRESOLVABLE = "sandbox-uv-cache-unresolvable"
 REFUSAL_SANDBOX_ACCESS_MALFORMED = "sandbox-access-malformed"

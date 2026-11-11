@@ -106,12 +106,10 @@ your channel.
 
 ### Delivery channels
 
-**stdout channel** — external, sandboxed seats that cannot write a file. Your
-final stdout is a single JSON object and nothing after it:
-
-`{"findings": [], "investigated": ["src/orders.py"], "readParts": [{"file": "src/orders.py", "lines": [[10, 42]]}]}`
-
-Wrap the finding array below as the `findings` value. List in `investigated`
+**stdout channel** — external, sandboxed seats that cannot write a file. The
+runner appends the result contract at the end of the order you were given; it is
+the one shape graded, and the finding array below is the `findings` value inside
+it. List in `investigated`
 every repo-relative path you actually read to ground the review — always,
 whether or not you found anything. The record is how the orchestrator knows
 the review happened. An empty `findings` array counts as clean only when
@@ -152,15 +150,15 @@ reads the channel, never your reasoning.
     "id": "<agent-name>-001",
     "severity": "Critical | Important | Minor | Nit",
     "dimension": "<one of the dimensions below>",
-    "taxonomy": "<the dimension's named taxonomy term, where one applies; optional>",
+    "taxonomy": "<the dimension's named taxonomy term, where one applies; null otherwise>",
     "title": "<short descriptive title>",
     "file": "<path relative to repo root>",
     "line": "<number or null>",
     "body": "<explanation with code references>",
     "suggestion": "<what to do, or null>",
-    "evidence": "<for Important/Critical: trigger + impact / the reachable path; omit or null for Minor/Nit>",
+    "evidence": "<for Important/Critical: trigger + impact / the reachable path; null for Minor/Nit>",
     "confidence": "High | Low",
-    "tradeoff": "<true only if multiple valid fix approaches exist; omit otherwise>",
+    "tradeoff": "<true only if multiple valid fix approaches exist; false otherwise>",
     "consequence": "<what goes wrong for the owner or the user if this is left unfixed, in plain words; code quality only when that is all it costs>",
     "consequenceKind": "code-quality | real",
     "kindOfMistake": {"kind": "<the kind of mistake this is, in a few plain words>", "places": [{"file": "<path>", "line": "<number or null>"}]},
@@ -169,8 +167,8 @@ reads the channel, never your reasoning.
 ]
 ```
 
-- `confidence` is the agent's own confidence after running the in-pass Chain-of-Verification (below). **High** = the chain passed cleanly. **Low** = emitted but genuinely unsure — it flags the finding for scrutiny rather than dropping a possibly-real issue. Required on Critical/Important (a **Low** Critical/Important MUST name exactly what is uncertain in its `evidence` line); may be omitted on Minor/Nit (treated as High). Low confidence does not, on its own, change the verdict beyond what the finding's severity already implies.
-- `taxonomy` carries the dimension's named taxonomy term where one applies (e.g. OWASP class for Security, defect class for Code, test smell for Test, failure class for Failure-Mode). Optional for most agents; **required** by the Failure-Mode reviewer. Omit when no named term applies to the finding.
+- `confidence` is the agent's own confidence after running the in-pass Chain-of-Verification (below). **High** = the chain passed cleanly. **Low** = emitted but genuinely unsure — it flags the finding for scrutiny rather than dropping a possibly-real issue. Required on Critical/Important (a **Low** Critical/Important MUST name exactly what is uncertain in its `evidence` line); may be null on Minor/Nit (treated as High). Low confidence does not, on its own, change the verdict beyond what the finding's severity already implies.
+- `taxonomy` carries the dimension's named taxonomy term where one applies (e.g. OWASP class for Security, defect class for Code, test smell for Test, failure class for Failure-Mode). Null when no named term applies; **required** by the Failure-Mode reviewer. Every key is always present.
 - `severity` is a **closed enum** — exactly one of `Critical`, `Important`, `Minor`, `Nit`. Do **not** emit any other scale: no `high`/`medium`/`low`, no `blocker`/`major`/`info`, no lowercase variants. A blocker is `Critical` or `Important`. Consumers fail **closed** — any unrecognized severity is treated as **blocking**, so an off-scale label mis-routes your finding rather than silently downgrading it.
 - `consequence` states what happens if the finding is left unfixed. A finding whose only cost is code quality says so. Emit the key on every finding (null only when you cannot state one).
 - `consequenceKind` is `code-quality` when the only cost of leaving the finding is code quality, and `real` for any other consequence. A code-quality finding the review leaves unfixed is decided as craft and listed for the owner's veto; a real one comes to the owner. Emit the key on every finding (null only when no consequence is stated).

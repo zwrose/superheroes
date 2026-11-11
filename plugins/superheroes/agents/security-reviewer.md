@@ -167,7 +167,7 @@ Emit findings per the base rubric's "Findings output format" section (schema and
 - `suggestion` may be `null` for Minor/Nit when no clean fix is obvious.
 - Severity caps from the base rubric apply: the Nit cap counts code-quality-only Nits, 5 per review, real-consequence Nits uncapped; Important/Critical uncapped (auth/IDOR findings are load-bearing).
 - Critical/Important findings should reference the canonical pattern in an existing handler when proposing the fix — point the author at a working example, not a description.
-- **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call (not a single obviously-correct fix), set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Omit the field otherwise (treated as `false`).
+- **Tradeoff flag.** If a finding has more than one reasonable fix and choosing between them is a judgment call (not a single obviously-correct fix), set `"tradeoff": true` on it. This routes the finding to the user instead of the auto-fixer. Set it to `false` otherwise.
 
 ## Examples of Good vs Bad Findings
 
