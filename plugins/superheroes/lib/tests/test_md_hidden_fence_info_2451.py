@@ -70,3 +70,31 @@ def test_e7_bare_opener_and_lookalike_content_stay_visible():
         assert md_hidden.scan(body).state_at(0) == V
     body = "````\n```text x\n````\n"
     assert md_hidden.scan(body).state_at(_line_start(body, "```text x")) == V
+
+
+@pytest.mark.parametrize("example, kept", [
+    ("```text\nsample\n```\n", "```"),
+    ("```bash\nrun a command\n```\n", "```"),
+    ("- ```text\n  sample\n  ```\n", "- ```"),
+    ("~~~ text\nsample\n~~~\n", "~~~"),
+], ids=["backtick", "bash", "list-item", "tilde"])
+def test_e8_a_language_tagged_example_above_the_section_keeps_its_fence(example, kept):
+    """Review finding (scoped finder, round 1 of the vet-897 review): a code example tagged with a language above "What
+    we're accepting" must not make the section disappear. The leftover reader blanks lines md_hidden does not read
+    VISIBLE and re-reads the fences from what is left; the opener keeps its fence run, so its closer still closes it and
+    the plain acceptance below counts. Oracle (cmark-gfm 0.29.0.gfm.13): the example renders as a code block and the
+    heading and bullet render as shown text."""
+    body = example + ACCEPTING + "- F-1 Slow retry loop\n"
+    assert la.missing(RECORD, body) == []
+    assert la._visible(body).split("\n")[0] == kept  # the opener keeps its fence run; its info string is blanked
+
+
+@pytest.mark.parametrize("section", [
+    "```text x\n```\nF-1 Slow retry loop\n",
+    "```bash\nrun a command\n```\n\n- F-1 Slow retry loop: merging accepts slower recovery.\n",
+], ids=["paragraph-after-fence", "bullet-after-fence"])
+def test_e9_a_language_tagged_example_inside_the_section_does_not_stop_the_acceptance(section):
+    """Review finding (same): inside the section, the opener's kept fence run is markup only, so the line reads shown and
+    does not end the item before the acceptance that follows the fence. Oracle (cmark-gfm 0.29.0.gfm.13): the fence renders
+    as a code block and "F-1 Slow retry loop" as shown text after it."""
+    assert la.missing(RECORD, ACCEPTING.lstrip("\n") + section) == []

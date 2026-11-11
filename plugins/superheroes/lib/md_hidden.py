@@ -74,12 +74,15 @@ _HTML_SPACE = frozenset(" \t\n\f\r")
 class Rendering:
     """The result of ``scan``. ``lines``: ``(offset, state)`` for every Markdown line start, in order. ``headings``:
     ``(offset, text, state)`` for every ATX heading that is a direct child of the document. ``unsure``: ``(offset, why)``
-    for each point from which the parse could not be sure (every line at or after the first is ``UNSURE``)."""
+    for each point from which the parse could not be sure (every line at or after the first is ``UNSURE``). ``fence_info``:
+    the offsets of the fence opener lines that carry an info string (each reads ``UNSURE``, since GitHub shows the info
+    string only as attributes), so a reader that blanks unshown lines can keep such a line's fence run."""
 
-    def __init__(self, lines, headings, unsure):
+    def __init__(self, lines, headings, unsure, fence_info=()):
         self.lines = tuple(lines)
         self.headings = tuple(headings)
         self.unsure = tuple(unsure)
+        self.fence_info = frozenset(fence_info)
         self._by_offset = dict(self.lines)
 
     def state_at(self, offset):
@@ -1175,7 +1178,7 @@ def _scan(body):
         if block.parent is parser.root:
             content = block.lines[0] if block.lines else ""
             headings.append((offsets[block.first], heading_text(content), state_of[block.first]))
-    return Rendering(lines, headings, sorted(unsure))
+    return Rendering(lines, headings, sorted(unsure), (offsets[i] for i in parser.fence_info if i < len(offsets)))
 
 
 def scan(body):
