@@ -371,3 +371,26 @@ def test_i_a_reopened_consequence_survives_a_synthesis_merge_into_another_code_q
     RD._set_terminal(state, "halted")
     rep = next(r for r in state[SC.DISPOSITION_LEDGER_KEY] if not r.get(SC.MERGED_INTO_FIELD))
     assert rep["disposition"] == "left-for-owner", rep  # the merged representative is never settled as craft
+
+
+def test_i_a_reopened_finding_whose_earlier_kind_is_unknown_never_settles_as_craft():
+    raw = C8._raw("record bug", line=4, consequence="lost work")  # the earlier finding named no consequence kind
+    state = _driver_state(_record_finding(raw, **{MARK: True}))
+    tidy = dict(raw, severity="Minor", consequence="harder to read", consequenceKind="code-quality")
+    C8._verify(state, [tidy], {tidy["title"]: "CONFIRMED"})
+    C8._synth(state, None)
+    assert C8._row(state, tidy).get("consequenceKind") is None
+    RD._set_terminal(state, "halted")
+    assert C8._row(state, tidy)["disposition"] == "left-for-owner"
+
+
+def test_i_a_reopened_finding_keeps_the_places_its_earlier_record_still_owes():
+    owed = {"kind": "unchecked input", "places": [{"file": "g.py", "line": 7}]}
+    raw = C8._raw("record bug", line=4, kindOfMistake=owed)
+    state = _driver_state(_record_finding(raw, **{MARK: True}))
+    narrower = dict(raw, kindOfMistake={"kind": "unchecked input", "places": []})
+    C8._verify(state, [narrower], {narrower["title"]: "CONFIRMED"})
+    C8._synth(state, None)
+    live = next(f for f in state["findings"] if f["title"] == narrower["title"])  # what the fix batch and the record read
+    places = live["kindOfMistake"]["places"]
+    assert any(p.get("file") == "g.py" and p.get("line") == 7 for p in places), places

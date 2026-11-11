@@ -5297,8 +5297,10 @@ def _carry_reopened_consequence(finding, entry):
     text, kind = finding_outcomes.merged_consequence([entry, finding])
     if text is not None:
         finding["consequence"] = text
-    if kind is not None:
-        finding["consequenceKind"] = kind
+    # an unknown merged kind (the earlier finding named none) stays unknown, as a synthesis merge leaves it: never code-quality
+    finding["consequenceKind"] = kind
+    # axis: a reopened record finding keeps the places it still owes, so a narrower repeat never drops a copy — see bite-proof record wo1_open_at_end_2445
+    verification.apply_kind_members(finding, [entry, finding], with_description=False)
 
 
 def _record_kept_disposition(state, key, entry, reason, grade_verdict, restore):
