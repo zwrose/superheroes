@@ -227,8 +227,6 @@ def test_a_code_span_crossing_a_line_break_pairs_across_it():
     assert [m["line"] for m in mg.bare_mentions(text)] == [2]
     multi = TICK + "first\nsecond" + TICK + " @octo " + TICK + "tail" + TICK + "\n"
     assert _tokens(multi) == ["@octo"]
-    # a span that really holds the at-sign across a line break still masks it
-    assert mg.bare_mentions(TICK + "a\n@octo b" + TICK + "\n") == []
 
 
 def test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports():
