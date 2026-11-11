@@ -639,3 +639,26 @@ def test_a_git_valid_suffix_beside_the_branch_is_another_branch(surface):
     # axis: only a delimiter git forbids in a name, or a prose mark, bounds the match; any other suffix (non-ASCII, # or %) is a longer branch
     pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
     assert L._named_open_pulls([surface], pulls) == []
+
+
+@pytest.mark.parametrize("branch,remedy", [
+    ("feature/fix+followup", "_CONTINUES_PR_REMEDY_RENAME"),
+    ("feature/part@2", "_CONTINUES_PR_REMEDY_RENAME"),
+    (BRANCH, "_CONTINUES_PR_REMEDY_WITHOUT_ADOPTION"),
+])
+def test_the_remedy_names_a_rename_when_the_pair_cannot_carry_the_branch(tmp_path, monkeypatch, branch, remedy):
+    # axis: a named branch valid_adopts_branch refuses gets the rename remedy, never one telling the advisor to set an adoptsBranch the validator rejects
+    repo = _github_repo(tmp_path)
+    _replace_pages(monkeypatch, lambda page: _answer([_pull(9, branch)]))
+    stamped = {"surfaces": ["origin/" + branch], "baseCommit": "a" * 40}
+    reason, detail = L._continues_pr_refusal(repo, stamped, _env())
+    assert reason == WITHOUT
+    assert detail["remedy"] == getattr(L, remedy)
+    assert L.valid_adopts_branch(branch) is (remedy == "_CONTINUES_PR_REMEDY_WITHOUT_ADOPTION")
+
+
+def test_the_word_branch_inside_the_matched_name_does_not_name_it():
+    # axis: the branch keyword is read outside the matched name's span, so docs/branch alone is a bare path
+    pulls = [{"number": NUMBER, "branch": "docs/branch", "head": PR_HEAD}]
+    assert L._named_open_pulls(["docs/branch"], pulls) == []
+    assert L._named_open_pulls(["the branch docs/branch"], pulls) == [{**pulls[0], "matchedIn": "the branch docs/branch"}]

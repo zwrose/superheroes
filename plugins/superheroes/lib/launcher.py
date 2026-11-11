@@ -3575,7 +3575,17 @@ _CONTINUES_PR_REMEDY_ADOPTS = (
     "This premise's adopts names pull request N, whose branch the launch continues, without the "
     "adoption pair. Read that pull request's head branch and head sha (gh api --hostname "
     "github.com repos/<owner>/<repo>/pulls/<N> --jq '.head.ref, .head.sha'), set them as "
-    "adoptsBranch and adoptsHead, and launch again."
+    "adoptsBranch and adoptsHead, and launch again. If the head branch has a character "
+    "adoptsBranch cannot carry (anything outside letters, digits and . _ / -), first push the "
+    "branch under a name without it and point the pull request's head at that branch."
+)
+_CONTINUES_PR_REMEDY_RENAME = (
+    "This launch continues an existing pull request's branch (continuedPulls names it), and that "
+    "branch's name has a character adoptsBranch cannot carry (anything outside letters, digits "
+    "and . _ / -), so the adoption pair cannot name it. Push the branch's head under a name "
+    "without that character, open or retarget the pull request from it, and launch again with "
+    "adoptsBranch set to the new name and adoptsHead to its pushed head; or, if the launch should "
+    "not continue that branch, take the branch out of surfaces."
 )
 _CONTINUES_PR_REMEDY_UNREAD = (
     "The open pull requests of the github.com origin could not be read (failedRead names the "
@@ -3762,7 +3772,7 @@ def _named_open_pulls(surfaces, pulls):
         for surface in surfaces:
             if not isinstance(surface, str):
                 continue
-            found = [m.group("marker") for m in whole.finditer(surface)]
+            matches = list(whole.finditer(surface))
             numbers = {
                 int(found)
                 for found in (
@@ -3770,9 +3780,14 @@ def _named_open_pulls(surfaces, pulls):
                 )
             }
             # axis: an origin/<branch> or branch:<branch> token names the pull request — see bite-proof record i2446_continues_pr
-            hit = any(marker is not None for marker in found)
-            # axis: the word branch beside the branch's name names the pull request — see bite-proof record i2446_continues_pr
-            hit = hit or (bool(_SURFACE_BRANCH_WORD.search(surface)) and bool(found))
+            hit = any(m.group("marker") is not None for m in matches)
+            # axis: the word branch beside the branch's name names the pull request, read outside the name's own span so a name holding the word (docs/branch) does not name itself — see bite-proof record i2446_continues_pr
+            hit = hit or any(
+                _SURFACE_BRANCH_WORD.search(
+                    surface[:m.start()] + " " * (m.end() - m.start()) + surface[m.end():]
+                )
+                for m in matches
+            )
             # axis: a #N's branch or branch of PR #N phrase names the pull request — see bite-proof record i2446_continues_pr
             hit = hit or pull["number"] in numbers
             if hit:
@@ -3827,8 +3842,13 @@ def _continues_pr_refusal(repo_root, stamped, env):
     named = _named_open_pulls(stamped.get("surfaces"), pulls)
     # axis: a surface that names an open pull request's branch refuses without the pair — see bite-proof record i2446_continues_pr
     if named:
+        # axis: a named branch the adoption pair cannot carry gets the remedy that renames it, never one the premise validator would refuse — see bite-proof record i2446_continues_pr
+        adoptable = all(valid_adopts_branch(pull["branch"]) for pull in named)
         return _CONTINUES_PR_WITHOUT_ADOPTION, {
-            "continuedPulls": named, "remedy": _CONTINUES_PR_REMEDY_WITHOUT_ADOPTION,
+            "continuedPulls": named,
+            "remedy": (
+                _CONTINUES_PR_REMEDY_WITHOUT_ADOPTION if adoptable else _CONTINUES_PR_REMEDY_RENAME
+            ),
         }
     return None
 
