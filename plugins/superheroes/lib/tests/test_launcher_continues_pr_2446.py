@@ -662,3 +662,27 @@ def test_the_word_branch_inside_the_matched_name_does_not_name_it():
     pulls = [{"number": NUMBER, "branch": "docs/branch", "head": PR_HEAD}]
     assert L._named_open_pulls(["docs/branch"], pulls) == []
     assert L._named_open_pulls(["the branch docs/branch"], pulls) == [{**pulls[0], "matchedIn": "the branch docs/branch"}]
+
+
+@pytest.mark.parametrize("branch", ["_followup", "a/" + "b" * 199, "feature/x.lock"])
+def test_every_name_the_validator_refuses_gets_the_rename_remedy(tmp_path, monkeypatch, branch):
+    # axis: the rename remedy follows valid_adopts_branch itself, so a leading underscore, an over-long name or a .lock ending gets it too
+    assert L.valid_adopts_branch(branch) is False
+    repo = _github_repo(tmp_path)
+    _replace_pages(monkeypatch, lambda page: _answer([_pull(9, branch)]))
+    stamped = {"surfaces": ["origin/" + branch], "baseCommit": "a" * 40}
+    assert L._continues_pr_refusal(repo, stamped, _env())[1]["remedy"] == L._CONTINUES_PR_REMEDY_RENAME
+
+
+def test_the_rename_remedy_recovers_the_launch(tmp_path, monkeypatch):
+    # axis: following the rename remedy (an adoptable branch carried in the pair) clears this check, and the old name refuses no more once its pull request is gone
+    repo = _github_repo(tmp_path)
+    renamed = "feature/fix-followup"
+    assert L.valid_adopts_branch(renamed)
+    _replace_pages(monkeypatch, lambda page: _answer([_pull(10, renamed)]))
+    stamped = {
+        "surfaces": ["origin/" + renamed], "baseCommit": "a" * 40,
+        "adoptsBranch": renamed, "adoptsHead": PR_HEAD,
+    }
+    assert L.adopts_premise_reason(stamped) is None
+    assert L._continues_pr_refusal(repo, stamped, _env()) is None

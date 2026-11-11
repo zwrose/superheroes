@@ -3575,18 +3575,27 @@ _CONTINUES_PR_REMEDY_ADOPTS = (
     "This premise's adopts names pull request N, whose branch the launch continues, without the "
     "adoption pair. Read that pull request's head branch and head sha (gh api --hostname "
     "github.com repos/<owner>/<repo>/pulls/<N> --jq '.head.ref, .head.sha'), set them as "
-    "adoptsBranch and adoptsHead, and launch again. If the head branch has a character "
-    "adoptsBranch cannot carry (anything outside letters, digits and . _ / -), first push the "
-    "branch under a name without it and point the pull request's head at that branch."
+    "adoptsBranch and adoptsHead, and launch again. A pull request's head branch cannot be "
+    "changed, so when its name is one adoptsBranch refuses (" + "%s" + "), push its head under "
+    "an adoptable name, open a pull request from that branch in place of N at the same stack "
+    "position, and launch with adopts naming the new pull request and the pair naming its branch."
 )
 _CONTINUES_PR_REMEDY_RENAME = (
     "This launch continues an existing pull request's branch (continuedPulls names it), and that "
-    "branch's name has a character adoptsBranch cannot carry (anything outside letters, digits "
-    "and . _ / -), so the adoption pair cannot name it. Push the branch's head under a name "
-    "without that character, open or retarget the pull request from it, and launch again with "
-    "adoptsBranch set to the new name and adoptsHead to its pushed head; or, if the launch should "
-    "not continue that branch, take the branch out of surfaces."
+    "branch's name is one adoptsBranch refuses (" + "%s" + "), so the adoption pair cannot name "
+    "it, and a pull request's head branch cannot be changed. Push the branch's head under an "
+    "adoptable name, open a pull request from that branch in place of the old one (close the old "
+    "one as superseded), and launch again with adoptsBranch set to the new name and adoptsHead to "
+    "its pushed head; or, if the launch should not continue that branch, take the branch out of "
+    "surfaces."
 )
+# What valid_adopts_branch accepts, in the words both remedies use.
+_ADOPTABLE_BRANCH_RULE = (
+    "an adoptable name starts with a letter or digit, holds only letters, digits and . _ / -, "
+    "is at most 200 characters, has no .. or //, and does not end in /, . or .lock"
+)
+_CONTINUES_PR_REMEDY_ADOPTS = _CONTINUES_PR_REMEDY_ADOPTS % _ADOPTABLE_BRANCH_RULE
+_CONTINUES_PR_REMEDY_RENAME = _CONTINUES_PR_REMEDY_RENAME % _ADOPTABLE_BRANCH_RULE
 _CONTINUES_PR_REMEDY_UNREAD = (
     "The open pull requests of the github.com origin could not be read (failedRead names the "
     "step), so whether this launch continues one is unknown. Check gh auth status and the origin "
