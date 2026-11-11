@@ -334,3 +334,40 @@ Decisive assertion: `(None is True) == True` (the account finding held no marker
 reader were not in the declared guarded-element set, so no neutralization was run on them. They are exercised by
 `test_a_settle_marks_only_a_bare_open_leftover_asked_to_mark_it` and `test_d_the_one_reader_is_an_identity_check_on_true`;
 that coverage is unproven by a red run.
+
+## Review round 1 additions (orchestrator-run)
+
+Two more guarded elements came with the review's round-1 fix, and the builder re-ran B1-B8 itself before the review
+(same counts as above, plus a reverse probe of B4: `open_at_end=True` unconditionally gave 4 failed, 41 passed, the
+deliberate-deferral siblings). Each probe below ran in a detached worktree of the fix commit, by a targeted edit undone
+by the inverse edit, detector unedited, with the command above (pycache prefix `/tmp/superheroes-pyc-probe2`); the
+restore receipt is an empty `git status --porcelain` in that worktree before it was removed.
+
+### B9 — the exact cross-session repeat keeps the earlier real consequence
+
+**Guarded element:** `plugins/superheroes/lib/round_driver.py` `_apply_repeat_marks`, the call to
+`_keep_reopened_consequence`. **Neutralization:** `if not mark["kept"] and mark["source"] == "exact" ...` became
+`if False and not mark["kept"] and ...`.
+
+**Raw red** (1 failed, 50 passed):
+
+```
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_an_exact_code_quality_repeat_of_a_marked_record_finding_keeps_its_real_consequence_to_the_settle
+1 failed, 50 passed in 19.19s
+```
+
+### B10 — the driver's keep-or-new call reads `decision_outcome`
+
+**Guarded element:** `plugins/superheroes/lib/round_driver.py` `_repeat_plan`, the `repeat_marks.decide(` argument.
+**Neutralization:** `repeat_marks.decision_outcome(entry)` became `entry["outcome"]`.
+
+**Raw red** (3 failed, 48 passed):
+
+```
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_the_driver_routes_a_repeat_of_a_marked_record_finding_as_new_and_keeps_an_unmarked_one[marked-judge]
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_the_driver_routes_a_repeat_of_a_marked_record_finding_as_new_and_keeps_an_unmarked_one[marked-exact]
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_an_exact_code_quality_repeat_of_a_marked_record_finding_keeps_its_real_consequence_to_the_settle
+3 failed, 48 passed in 3.54s
+```
+
+**Raw green** after both restores: `51 passed in 3.49s` (the fix commit's own run of the whole file).
