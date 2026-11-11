@@ -87,6 +87,10 @@ Raw green:
 
 ## E2: `[` in `_IMAGE_CLOSER_MOVERS` (`md_hidden.py:732`), axis: a description holding `[` keeps the unsure point
 
+The E2 body was corrected in a rework order (the earlier capture ran on a body missing its last first-line backtick, on
+which cmark-gfm shows ZQ1); this entry is the fresh capture on the corrected body, and the test now also asserts the
+body's first line (`assert E2_BODY.split("\n")[0] == "![a [b][r" + "`]`]]`"`).
+
 Neutralization (Edit): `frozenset("[`<\\")` -> `frozenset("`<\\")`.
 
 Command: `... -k test_e2_`
@@ -101,11 +105,12 @@ ___________ test_e2_open_bracket_in_the_description_keeps_the_point ____________
     def test_e2_open_bracket_in_the_description_keeps_the_point():
         """Oracle: ZQ1 sits in the image's alt text (hidden). The description holds ``[``, so the point stays and the ZQ1
         line is not VISIBLE."""
+        assert E2_BODY.split("\n")[0] == "![a [b][r" + "`]`]]`"
 >       assert _state_of_line_holding(E2_BODY, "ZQ1") != V
 E       AssertionError: assert 'visible' != 'visible'
-E        +  where 'visible' = _state_of_line_holding('![a [b][r`]`]]\nZQ1](https://example.invalid/x.png)\n\n[r`]: /v\n', 'ZQ1')
+E        +  where 'visible' = _state_of_line_holding('![a [b][r`]`]]`\nZQ1](https://example.invalid/x.png)\n\n[r`]: /v\n', 'ZQ1')
 
-/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py:92: AssertionError
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py:93: AssertionError
 _______ test_e2_a_truly_spanning_description_still_refuses_write_failed ________
 
     def test_e2_a_truly_spanning_description_still_refuses_write_failed():
@@ -115,21 +120,21 @@ _______ test_e2_a_truly_spanning_description_still_refuses_write_failed ________
 E       AssertionError: {'ok': True, 'verb': 'write', 'followups': [], 'receipt': 'https://x/c/1', ...}
 E       assert (True is False)
 
-/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py:99: AssertionError
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py:100: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py::test_e2_open_bracket_in_the_description_keeps_the_point
 FAILED plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py::test_e2_a_truly_spanning_description_still_refuses_write_failed
-2 failed, 16 deselected in 0.48s
+2 failed, 16 deselected in 0.43s
 ```
 
 Restore: inverse Edit, `frozenset("`<\\")` -> `frozenset("[`<\\")`.
-Restore receipt (read back after the green run): `732:_IMAGE_CLOSER_MOVERS = frozenset("[`<\\")  # what can move cmark-gfm's image closer past the first "]" (#2451)`
+Restore receipt (line read back before the green run): `732:_IMAGE_CLOSER_MOVERS = frozenset("[`<\\")  # what can move cmark-gfm's image closer past the first "]" (#2451)`
 
 Raw green:
 
 ```
 ..                                                                       [100%]
-2 passed, 16 deselected in 0.54s
+2 passed, 16 deselected in 0.66s
 ```
 
 ---
@@ -318,3 +323,13 @@ existing md_hidden/vet_slot suites with `-n auto` (`849 passed, 30 skipped in 3.
 
 The diff holds only the intended change: the `_IMAGE_CLOSER_MOVERS` constant, `_description_closes_on_its_line`, and the
 call-site condition and comment at line 1023.
+
+Rework order i2451-o2 (E2 body corrected and E2 re-captured): the whole new file ran green once after the restore
+(`18 passed in 0.50s`), and `git diff --stat ea012429 -- plugins/superheroes/lib/md_hidden.py` printed nothing
+(`md_hidden.py` is byte-identical to `ea012429`). `git diff --stat` (worktree root, taken after the test-file edit and
+before this record was edited, so it lists the test file only):
+
+```
+ plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+```
