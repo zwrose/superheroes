@@ -848,7 +848,7 @@ def check_slot_text(slot_text):
     # axis: slot text carrying a bare at-sign mention refuses write-failed with a bare-mention: detail before any edit — see bite-proof record wo_2453_mention_guard
     guard = mention_guard.check(slot_text)
     if not guard["ok"]:
-        tokens = ", ".join(sorted({m["token"] for m in guard["mentions"]}))
+        tokens = ", ".join(sorted({m["mention"] for m in guard["mentions"]}))
         raise _Refusal("write-failed", "bare-mention: slot text carries at-sign mentions GitHub reads as logins (%s); %s"
                        % (tokens, guard["remedy"]))
 

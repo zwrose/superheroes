@@ -81,7 +81,7 @@ GOOD = ("Result.\n\nping " + TICK + "@zwrose" + TICK + ", mail a.b@example.com\n
 
 
 def _tokens(text):
-    return [m["token"] for m in mg.bare_mentions(text)]
+    return [m["mention"] for m in mg.bare_mentions(text)]
 
 
 # ---------------------------------------------------------------- the truth table
@@ -109,7 +109,7 @@ def test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes():
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_2453_mention_guard.md
     for fence in (FENCE, "~~~"):
         text = "before\n" + fence + "\n@pytest.fixture\n@octo\n" + fence + "\nafter @octo\n"
-        assert mg.bare_mentions(text) == [{"line": 6, "token": "@octo"}]
+        assert mg.bare_mentions(text) == [{"line": 6, "mention": "@octo"}]
         assert mg.check("x\n" + fence + "\n@pytest.fixture\n@octo\n" + fence + "\n") == {"ok": True}
 
 
@@ -133,7 +133,7 @@ def test_g4_an_email_shaped_at_sign_is_not_a_login():
 
 def test_line_numbers_are_one_based_and_in_text_order():
     text = "a\n@one\n" + FENCE + "\n@no\n" + FENCE + "\nb @two\n"
-    assert mg.bare_mentions(text) == [{"line": 2, "token": "@one"}, {"line": 6, "token": "@two"}]
+    assert mg.bare_mentions(text) == [{"line": 2, "mention": "@one"}, {"line": 6, "mention": "@two"}]
 
 
 # ---------------------------------------------------------------- wrap
@@ -189,12 +189,29 @@ def test_e2_empty_text_is_clean():
     assert mg.bare_mentions("") == [] and mg.check("") == {"ok": True} and mg.wrap("") == ""
 
 
-def test_e3_an_unterminated_fence_masks_nothing():
-    # E3: an unterminated fence masks no line, so a list-contained fence whose indented closer md_fence reads
-    # as a new opener cannot hide the prose after it
+def test_e3_a_column_0_unterminated_fence_masks_to_the_end():
+    # E3: GFM renders a column-0 fence with no closer as code to the end of the document, so it masks every line
+    # after its opener; the text before it is still scanned
     text = "top\n" + FENCE + "\n@octo\nmore @octo\n"
-    assert _tokens(text) == ["@octo", "@octo"]
-    assert _tokens("@before\n" + text) == ["@before", "@octo", "@octo"]
+    assert mg.bare_mentions(text) == []
+    assert mg.check(text) == {"ok": True}
+    assert _tokens("@before\n" + text) == ["@before"]
+
+
+def test_e3_a_closed_fence_with_an_indented_closer_masks_nothing():
+    # E3: the opener is at column 0 but the closer is indented, which is what a list-contained fence looks like to
+    # md_fence; the two readings disagree, so the lines between are scanned
+    text = FENCE + "\n@octo\n  " + FENCE + "\nafter @hubot\n"
+    assert _tokens(text) == ["@octo", "@hubot"]
+    assert [m["line"] for m in mg.bare_mentions(text)] == [2, 4]
+
+
+def test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_fence():
+    # axis: G20 — md_fence pairs the indented closer (line 3) with the column-0 fence at line 7; that block's opener
+    # is indented, so it masks nothing and the mention on line 5 is reported
+    text = ("- " + FENCE + "\n  example\n  " + FENCE + "\n\nping @octo\n\n" + FENCE + "\nmore\n" + FENCE + "\n")
+    assert mg.bare_mentions(text) == [{"line": 5, "mention": "@octo"}]
+    assert mg.check(text)["reason"] == "bare-mention"
 
 
 def test_a_fence_inside_a_list_cannot_mask_the_prose_after_it():
@@ -212,6 +229,57 @@ def test_a_code_span_crossing_a_line_break_pairs_across_it():
     assert _tokens(multi) == ["@octo"]
     # a span that really holds the at-sign across a line break still masks it
     assert mg.bare_mentions(TICK + "a\n@octo b" + TICK + "\n") == []
+
+
+def test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports():
+    # axis: G17 — code masks a mention only when its own line pairs it too, so a backtick pair that exists only
+    # across the line break leaves the mention reported (a doubt reports)
+    text = TICK + "a\n@octo b" + TICK + "\n"
+    assert mg.bare_mentions(text) == [{"line": 2, "mention": "@octo"}]
+    assert mg.bare_mentions(mg.wrap(text)) == []
+
+
+def test_a_paragraph_grouping_that_crosses_a_heading_does_not_pair_a_backtick_across_blocks():
+    # axis: G18 — the paragraph reading pairs the first line's backtick with the second line's; the heading reading
+    # does not, and the mention between the spans is a doubt that reports
+    text = "# head " + TICK + "a\nmore" + TICK + " @octo " + TICK + "b" + TICK + "\n"
+    assert _tokens(text) == ["@octo"]
+
+
+def test_a_paragraph_grouping_that_crosses_a_list_item_does_not_pair_a_backtick_across_items():
+    # axis: G18 — the same across a list-item boundary
+    text = "- " + TICK + "a\n- b" + TICK + " @octo " + TICK + "c" + TICK + "\n"
+    assert _tokens(text) == ["@octo"]
+
+
+def test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell():
+    # axis: G19 — a row with no leading pipe is still a row: a backtick in one cell cannot pair with one in another
+    text = "a | b\n--- | ---\n" + TICK + " | @octo " + TICK + "\n"
+    assert [m["line"] for m in mg.bare_mentions(text)] == [3]
+    assert mg.bare_mentions(mg.wrap(text)) == []
+    inside = "a | b\n--- | ---\nx | " + TICK + "@octo" + TICK + "\n"
+    assert mg.bare_mentions(inside) == []
+
+
+def test_e4_an_escaped_pipe_is_no_cell_boundary():
+    # E4: a line with only an escaped pipe has no cell reading, so a span across the escaped pipe still masks
+    text = TICK + "a \\| @octo b" + TICK + "\n"
+    assert mg.bare_mentions(text) == []
+
+
+def test_a_link_destination_with_balanced_parentheses_is_left_alone():
+    # axis: G21 — the destination pattern takes one level of balanced parentheses, so the at-sign after `(b)` is
+    # still inside the destination
+    text = "[package](https://example.com/a(b)/@scope/pkg)\n"
+    assert mg.bare_mentions(text) == []
+    assert mg.wrap(text) == text
+    assert _tokens("[package](https://example.com/a(b)/x) then @octo\n") == ["@octo"]
+
+
+def test_e5_an_html_block_line_with_a_url_holding_an_at_sign_is_masked():
+    # E5: the raw-HTML path masks a URL's at-sign, and still reports the bare mention beside it
+    text = "<p>see https://example.com/@scope/pkg and @octo</p>\n"
+    assert _tokens(text) == ["@octo"]
 
 
 def test_table_cells_pair_code_spans_on_their_own():
@@ -253,8 +321,8 @@ def test_e4_a_mention_on_the_same_line_as_a_closed_span_but_outside_it_is_report
 
 def test_e5_crlf_line_endings_keep_fences_and_lines_working():
     fenced = "a\r\n" + FENCE + "\r\n@octo\r\n" + FENCE + "\r\n@bare\r\n"
-    assert mg.bare_mentions(fenced) == [{"line": 5, "token": "@bare"}]
-    assert mg.bare_mentions("x\r\n@octo\r\n") == [{"line": 2, "token": "@octo"}]
+    assert mg.bare_mentions(fenced) == [{"line": 5, "mention": "@bare"}]
+    assert mg.bare_mentions("x\r\n@octo\r\n") == [{"line": 2, "mention": "@octo"}]
     assert mg.wrap("x\r\n@octo\r\n") == "x\r\n" + TICK + "@octo" + TICK + "\r\n"
 
 
@@ -272,7 +340,7 @@ def test_cli_check_exits_0_on_ok_and_1_on_a_bare_mention(tmp_path):
     out = _cli("check", "--file", str(bad))
     assert out.returncode == 1
     assert json.loads(out.stdout) == {"ok": False, "reason": "bare-mention", "remedy": mg.REMEDY,
-                                      "mentions": [{"line": 3, "token": "@zwrose"}]}
+                                      "mentions": [{"line": 3, "mention": "@zwrose"}]}
 
 
 def test_e7_cli_check_with_a_missing_flag_or_an_unreadable_file_exits_2(tmp_path):
@@ -312,9 +380,9 @@ def _body_file(tmp_path, text):
     return str(path)
 
 
-def _assert_refusal(result, token="@zwrose"):
+def _assert_refusal(result, mention="@zwrose"):
     assert result["ok"] is False and result["reason"] == "bare-mention"
-    assert [m["token"] for m in result["mentions"]] == [token]
+    assert [m["mention"] for m in result["mentions"]] == [mention]
     assert result["remedy"] == mg.REMEDY
 
 
@@ -328,6 +396,21 @@ def test_g6_post_comment_refuses_a_bare_mention_before_any_gh_call(tmp_path):
     healthy = cb.post_comment("o/r", 1, _body_file(tmp_path, GOOD), run=run, env={})
     assert healthy["ok"] is True
     assert [c[:4] for c in run.calls] == [["gh", "api", "-X", "POST"]]
+
+
+@pytest.mark.parametrize("body", [
+    # a span that closes on line two leaves the mention outside it; the trailing backtick opens nothing
+    "begin " + TICK + "code\nend" + TICK + " then @octo " + TICK + "literal\n",
+    # a table row's cells pair on their own, so the backticks in two cells never make a span around the mention
+    "| a | b |\n| --- | --- |\n| " + TICK + " | @octo " + TICK + " |\n",
+], ids=["multi-line-span", "leading-pipe-table"])
+def test_g6_post_comment_refuses_a_mention_a_single_reading_would_have_masked(tmp_path, body):
+    # axis: G18, G19 — a mention one reading masks and another does not is a doubt: the writer refuses before any gh call
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo_2453_mention_guard.md
+    run = _Gh()
+    result = cb.post_comment("o/r", 1, _body_file(tmp_path, body), run=run, env={})
+    _assert_refusal(result, mention="@octo")
+    assert result["url"] is None and run.calls == []
 
 
 def test_g7_edit_comment_refuses_a_bare_mention_before_any_gh_call(tmp_path):
@@ -425,7 +508,7 @@ def test_g12_publish_refuses_a_staged_body_with_a_bare_mention_and_never_rewrite
     out = PBS.publish(sd, 7, runner=gh)
     assert PBS.REASON_BARE_MENTION == "bare-mention"
     assert (out["ok"], out["outcome"], out["reason"]) == (False, "refused", "bare-mention")
-    assert out["mentions"] == [{"line": bad.count("\n"), "token": "@zwrose"}]
+    assert out["mentions"] == [{"line": bad.count("\n"), "mention": "@zwrose"}]
     assert gh.edits() == []
     assert TPB._read(PBS.paths(sd)["staged"]) == bad
     assert TPB._receipt(sd) == out

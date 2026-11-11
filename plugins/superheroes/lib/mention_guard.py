@@ -9,7 +9,10 @@ Public API (stdlib only, plus the sibling `md_fence`):
 
 - `MENTION_RE`: GitHub's own mention grammar (the html-pipeline mention filter). Unmeasured here: the session
   cannot reach GitHub's render endpoint; the truth table in `tests/test_mention_guard.py` is the contract.
-- `bare_mentions(text)`: `[{"line": <1-based>, "token": "@login"}, ...]` in text order; `[]` for non-string text.
+- `bare_mentions(text)`: `[{"line": <1-based>, "mention": "@login"}, ...]` in text order; `[]` for non-string text.
+  The invariant: a mention is reported unless every reasonable reading of the text agrees it is not one. A doubt
+  about whether an at-sign sits in code reports it (the writers then refuse with a remedy, or `wrap` code-spans it);
+  a mask never rests on one parse alone.
 - `check(text)`: `{"ok": True}` or `{"ok": False, "reason": "bare-mention", "mentions": [...], "remedy": REMEDY}`.
 - `wrap(text)`: `text` with every bare mention in a code span whose delimiter is one backtick longer than the
   longest backtick run anywhere in `text`; idempotent; text with no bare mention comes back unchanged.
@@ -42,11 +45,11 @@ MENTION_RE = re.compile(
 _BACKTICK_RUN_RE = re.compile(r"`+")
 # A line that opens a raw HTML block (GFM block kinds 6 and 7, approximated: a tag at the line's start).
 _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
-_TABLE_ROW_RE = re.compile(r"^ {0,3}\|")
 _CODE_ELEMENT_RE = re.compile(r"<code>.*?</code>", re.IGNORECASE)
 # A link destination, an angle autolink or a bare URL: GitHub renders each as an anchor (or an attribute), and its
-# mention filter skips anchors, so an at-sign inside one is part of the address, never a mention.
-_URL_RE = re.compile(r"\]\([^)\s]*|<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)
+# mention filter skips anchors, so an at-sign inside one is part of the address, never a mention. A link destination
+# may hold one level of balanced parentheses.
+_URL_RE = re.compile(r"\]\((?:[^()\s]|\([^()\s]*\))*\)?|<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)
 
 
 def _urls(line):
@@ -104,20 +107,49 @@ def _cell_spans(line):
     return spans
 
 
+def _indented(line):
+    """True when `line` starts with whitespace."""
+    return line[:1] in (" ", "\t")
+
+
+def _has_unescaped_pipe(line):
+    """True when `line` holds a pipe not preceded by a backslash (a table row, with or without a leading pipe)."""
+    return any(ch == "|" and (i == 0 or line[i - 1] != "\\") for i, ch in enumerate(line))
+
+
+def _inside(spans, pos):
+    return any(start <= pos < stop for start, stop in spans)
+
+
 def _inert_lines(bare):
-    """Which lines sit inside a fenced block. An unterminated fence masks nothing: `md_fence` reads a fence inside
-    a list or blockquote as top-level text, so its indented closer would otherwise open a fence that masks every
-    line after it."""
-    scan = md_fence.scan(bare)
-    inert = list(scan.inert)
-    if scan.unterminated_opener_line is not None:
-        for i in range(scan.unterminated_opener_line - 1, len(inert)):
-            inert[i] = False
+    """Which lines sit inside a fenced block that every reading agrees is a fenced block. `md_fence` reads a fence
+    inside a list or blockquote as top-level text, so such a fence shows up as a block whose opener or closer is
+    indented, and its indented closer can pair with a later column-0 fence. A block masks its lines (opener through
+    closer, or through the end when unterminated, which GFM renders as code) only when its opener line has no
+    leading whitespace and, when closed, its closer line has none either; any other block masks nothing."""
+    kinds = md_fence.scan(bare).kinds
+    n = len(bare)
+    inert = [False] * n
+    i = 0
+    while i < n:
+        if kinds[i] != md_fence.KIND_OPENER:
+            i += 1
+            continue
+        j = i + 1
+        while j < n and kinds[j] == md_fence.KIND_CONTENT:
+            j += 1
+        closed = j < n and kinds[j] == md_fence.KIND_CLOSER
+        last = j if closed else n - 1
+        # axis: a fence masks its lines only when its opener (and, closed, its closer) is at column 0
+        if not _indented(bare[i]) and not (closed and _indented(bare[last])):
+            for k in range(i, last + 1):
+                inert[k] = True
+        i = last + 1
     return inert
 
 
 def _found(text):
-    """Every bare mention of `text` as `(line index, start, end, token, html)` in text order; `start` is the
+    """Every bare mention of `text` as `(line index, start, end, mention, html)` in text order; `start` is the
     at-sign and `html` says the line sits in a raw HTML block, where a code span is not code."""
     bare = [_bare_line(whole) for whole in md_fence.split_lines(text)]
     inert = _inert_lines(bare)
@@ -138,42 +170,39 @@ def _found(text):
                        if not any(start <= m.start() < stop for start, stop in elements))
             idx += 1
             continue
-        if _TABLE_ROW_RE.match(line):
-            # axis: a table row's code spans are paired cell by cell
-            blocks, spans = [(idx, 0)], _cell_spans(line)
-            end = idx + 1
-        else:
-            # axis: a paragraph's code spans are paired across its lines
-            end = idx
-            while (end < len(bare) and not inert[end] and bare[end].strip()
-                   and not _HTML_BLOCK_RE.match(bare[end]) and not _TABLE_ROW_RE.match(bare[end])):
-                end += 1
-            blocks, offset = [], 0
-            for k in range(idx, end):
-                blocks.append((k, offset))
-                offset += len(bare[k]) + 1
-            spans = _code_spans("\n".join(bare[idx:end]))
-        for k, offset in blocks:
-            # axis: an at-sign inside a link destination or a URL is part of the address, so it is never reported
-            urls = _urls(bare[k])
-            for m in MENTION_RE.finditer(bare[k]):
-                if any(start <= offset + m.start() < stop for start, stop in spans):
+        end = idx
+        while (end < len(bare) and not inert[end] and bare[end].strip()
+               and not _HTML_BLOCK_RE.match(bare[end])):
+            end += 1
+        paragraph_spans = _code_spans("\n".join(bare[idx:end]))
+        offset = 0
+        for k in range(idx, end):
+            row = bare[k]
+            line_spans = _code_spans(row)
+            cell_spans = _cell_spans(row) if _has_unescaped_pipe(row) else None
+            urls = _urls(row)
+            for m in MENTION_RE.finditer(row):
+                # axis: code masks a mention only when every reading agrees: its own line, its paragraph, and its cell
+                if (_inside(line_spans, m.start()) and _inside(paragraph_spans, offset + m.start())
+                        and (cell_spans is None or _inside(cell_spans, m.start()))):
                     continue
-                if any(start <= m.start() < stop for start, stop in urls):
+                # axis: an at-sign inside a link destination or a URL is part of the address, so it is never reported
+                if _inside(urls, m.start()):
                     continue
                 out.append((k, m.start(), m.end(), "@" + m.group(1), False))
+            offset += len(row) + 1
         idx = end
     return out
 
 
 def bare_mentions(text):
-    """`[{"line": <1-based int>, "token": "@login"}, ...]` for every bare mention in `text`, in text order;
-    `[]` for non-string text. Lines inside a closed fenced block and inline code spans (paired across a
-    paragraph's lines, and cell by cell on a table row) are masked; an unterminated fence and a raw HTML block
-    mask nothing."""
+    """`[{"line": <1-based int>, "mention": "@login"}, ...]` for every bare mention in `text`, in text order;
+    `[]` for non-string text. A closed or unterminated fenced block whose opener (and closer) sits at column 0
+    is masked; an inline code span masks only when its own line, its paragraph and (on a line with an unescaped
+    pipe) its table cell all pair it as code. A raw HTML block masks no code span."""
     if not isinstance(text, str):
         return []
-    return [{"line": idx + 1, "token": token} for idx, _start, _end, token, _html in _found(text)]
+    return [{"line": idx + 1, "mention": mention} for idx, _start, _end, mention, _html in _found(text)]
 
 
 def check(text):

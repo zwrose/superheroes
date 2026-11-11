@@ -627,3 +627,210 @@ E               raise _Refusal("bare-mention", "slot text carries at-sign mentio
 .                                                                        [100%]
 1 passed, 71 deselected in 2.12s
 ```
+
+## WO-4 — a conservative mention mask, and the result key `mention`
+
+Work order WO-4 of #2453 renamed the entry key to `mention`, made a mask rest on the intersection of readings (own line, paragraph, table cell), limited the fence mask to column-0 blocks, and let a link destination hold one level of balanced parentheses. The guarded-element set the order declared is G17, G18, G19, G20, G21; none is grouped. Detector file `plugins/superheroes/lib/tests/test_mention_guard.py` is unedited between each red and its green. Each neutralization is a targeted Edit-tool edit to `plugins/superheroes/lib/mention_guard.py` (each `old_string` occurred exactly once), undone by the inverse Edit; no `git checkout`, `restore`, `reset` or `stash`. Runs: `timeout 120 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2453 -m pytest plugins/superheroes/lib/tests/test_mention_guard.py -q -p no:cacheprovider -k <full test function name>`. The `UV_NATIVE_TLS` warning line is the only line left out of every capture; the pytest temp path in the G18 capture is sandbox scratch. No secrets, tokens, private URLs or PII appear; nothing was redacted. Because `mention_guard.py` carries this work order's own uncommitted edits, a clean diff against the head is not possible, so each restore receipt quotes the restored line back (with its line number) instead.
+
+| Element | Neutralization | Red detector | Red on the declared axis |
+|---|---|---|---|
+| G17 | reading (a) replaced by `True` | `test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports` | yes |
+| G18 | reading (b) replaced by `True` | `test_g6_post_comment_refuses_a_mention_a_single_reading_would_have_masked[multi-line-span]` | yes (the `[leading-pipe-table]` row stayed green: reading (c) alone catches it) |
+| G19 | reading (c) replaced by `True` | `test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell` | yes |
+| G20 | the fence indent rule replaced by `True` | `test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_fence` | yes |
+| G21 | destination pattern reverted to `\]\([^)\s]*` | `test_a_link_destination_with_balanced_parentheses_is_left_alone` | yes |
+
+### G17. Per-line reading (a) in the intersection (`mention_guard.py:186`)
+
+- **Axis:** a mention is masked by code only when its own line pairs it as code too.
+- **Detector:** `test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports`. The case only reading (a) catches is a span that exists only across the line break: backtick, `a`, newline, the mention, ` b`, backtick. The paragraph reading masks it, the line reading does not.
+- **Neutralization:** `if (_inside(line_spans, m.start()) and _inside(paragraph_spans, offset + m.start())` became `if (True and _inside(paragraph_spans, offset + m.start())`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports ________
+
+    def test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports():
+        # axis: G17 — code masks a mention only when its own line pairs it too, so a backtick pair that exists only
+        # across the line break leaves the mention reported (a doubt reports)
+        text = TICK + "a\n@octo b" + TICK + "\n"
+>       assert mg.bare_mentions(text) == [{"line": 2, "mention": "@octo"}]
+E       AssertionError: assert [] == [{'line': 2, ...on': '@octo'}]
+E         
+E         Right contains one more item: {'line': 2, 'mention': '@octo'}
+E         Use -v to get more diff
+
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:238: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports
+1 failed, 89 deselected in 2.12s
+```
+
+- **Restore:** inverse edit.
+- **Restore receipt:** line 186 quoted back: `                if (_inside(line_spans, m.start()) and _inside(paragraph_spans, offset + m.start())`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 89 deselected in 2.31s
+```
+
+### G18. Paragraph reading (b) in the intersection (`mention_guard.py:186`)
+
+- **Axis:** a mention is masked by code only when its paragraph, joined across its lines, pairs it as code too.
+- **Detector:** the multi-line writer regression `test_g6_post_comment_refuses_a_mention_a_single_reading_would_have_masked[multi-line-span]`.
+- **Neutralization:** `and _inside(paragraph_spans, offset + m.start())` became `and True` (at the head of the continuation line, before `and (cell_spans`).
+
+**Raw red** (exit 1; the failing row's traceback, with the parametrize decorator echo kept):
+
+```
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+_ test_g6_post_comment_refuses_a_mention_a_single_reading_would_have_masked[multi-line-span] _
+
+body = 'begin `code\nend` then @octo `literal\n'
+...
+        result = cb.post_comment("o/r", 1, _body_file(tmp_path, body), run=run, env={})
+>       _assert_refusal(result, mention="@octo")
+...
+    def _assert_refusal(result, mention="@zwrose"):
+>       assert result["ok"] is False and result["reason"] == "bare-mention"
+E       assert (True is False)
+
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:384: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_g6_post_comment_refuses_a_mention_a_single_reading_would_have_masked[multi-line-span]
+1 failed, 1 passed, 88 deselected in 3.56s
+```
+
+(Elided: the decorator source, the `tmp_path` line and the `result` dict line of the traceback. The writer posted: `ok` was `True`, so the mention reached `gh`.)
+
+- **Restore:** inverse edit.
+- **Restore receipt:** line 186 quoted back: `                if (_inside(line_spans, m.start()) and _inside(paragraph_spans, offset + m.start())`.
+
+**Raw green** (exit 0):
+
+```
+..                                                                       [100%]
+2 passed, 88 deselected in 1.96s
+```
+
+### G19. Cell reading (c) in the intersection (`mention_guard.py:187`)
+
+- **Axis:** on a line with an unescaped pipe, a mention is masked by code only when its cell pairs it as code too.
+- **Detector:** `test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell`.
+- **Neutralization:** `and (cell_spans is None or _inside(cell_spans, m.start()))):` became `and True):`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____ test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell _____
+
+    def test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell():
+        # axis: G19 — a row with no leading pipe is still a row: a backtick in one cell cannot pair with one in another
+        text = "a | b\n--- | ---\n" + TICK + " | @octo " + TICK + "\n"
+>       assert [m["line"] for m in mg.bare_mentions(text)] == [3]
+E       assert [] == [3]
+E         
+E         Right contains one more item: 3
+E         Use -v to get more diff
+
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:258: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell
+1 failed, 89 deselected in 2.09s
+```
+
+- **Restore:** inverse edit.
+- **Restore receipt:** line 187 quoted back: `                        and (cell_spans is None or _inside(cell_spans, m.start()))):`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 89 deselected in 1.84s
+```
+
+### G20. Fence indent rule in `_inert_lines` (`mention_guard.py:144`)
+
+- **Axis:** a fenced block masks its lines only when its opener, and its closer when it has one, is at column 0.
+- **Detector:** `test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_fence` (the extended list-fence case: the mention on line 5 must be reported).
+- **Neutralization:** `if not _indented(bare[i]) and not (closed and _indented(bare[last])):` became `if True:` (mask every `md_fence` block regardless of indent).
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_fence _
+
+    def test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_fence():
+        # axis: G20 — md_fence pairs the indented closer (line 3) with the column-0 fence at line 7; that block's opener
+        # is indented, so it masks nothing and the mention on line 5 is reported
+        text = ("- " + FENCE + "\n  example\n  " + FENCE + "\n\nping @octo\n\n" + FENCE + "\nmore\n" + FENCE + "\n")
+>       assert mg.bare_mentions(text) == [{"line": 5, "mention": "@octo"}]
+E       AssertionError: assert [] == [{'line': 5, ...on': '@octo'}]
+E         
+E         Right contains one more item: {'line': 5, 'mention': '@octo'}
+E         Use -v to get more diff
+
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:213: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_fence
+1 failed, 89 deselected in 2.06s
+```
+
+- **Restore:** inverse edit.
+- **Restore receipt:** line 144 quoted back: `        if not _indented(bare[i]) and not (closed and _indented(bare[last])):`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 89 deselected in 1.95s
+```
+
+### G21. Balanced-parenthesis link destination in `_URL_RE` (`mention_guard.py:52`)
+
+- **Axis:** a link destination may hold one level of balanced parentheses, so an at-sign after `(b)` is still part of the address.
+- **Detector:** `test_a_link_destination_with_balanced_parentheses_is_left_alone`.
+- **Neutralization:** the first alternative `\]\((?:[^()\s]|\([^()\s]*\))*\)?` was reverted to `\]\([^)\s]*`.
+
+**Raw red** (exit 1):
+
+```
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_______ test_a_link_destination_with_balanced_parentheses_is_left_alone ________
+
+    def test_a_link_destination_with_balanced_parentheses_is_left_alone():
+        # axis: G21 — the destination pattern takes one level of balanced parentheses, so the at-sign after `(b)` is
+        # still inside the destination
+        text = "[package](https://example.com/a(b)/@scope/pkg)\n"
+>       assert mg.bare_mentions(text) == []
+E       AssertionError: assert [{'line': 1, ...n': '@scope'}] == []
+E         
+E         Left contains one more item: {'line': 1, 'mention': '@scope'}
+E         Use -v to get more diff
+
+/home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:274: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_a_link_destination_with_balanced_parentheses_is_left_alone
+1 failed, 89 deselected in 2.32s
+```
+
+- **Restore:** inverse edit.
+- **Restore receipt:** line 52 quoted back: `_URL_RE = re.compile(r"\]\((?:[^()\s]|\([^()\s]*\))*\)?|<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)`.
+
+**Raw green** (exit 0):
+
+```
+.                                                                        [100%]
+1 passed, 89 deselected in 2.31s
+```
