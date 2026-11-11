@@ -311,6 +311,7 @@ class _Parser:
         self.html_blocks = []
         self.paras = []  # paragraphs, setext headings and ATX headings: the text blocks
         self.atx = []
+        self.fence_info = set()  # line indexes of fence openers that carry an info string
         self.idx = 0
         self.text = ""
         self.pos = 0
@@ -513,6 +514,8 @@ class _Parser:
                 block.fence_char = rest[0]
                 block.fence_len = min(run, _FENCE_CAP)
                 block.fence_offset = self.indent
+                if rest[run:].strip(" \t"):
+                    self.fence_info.add(self.idx)
                 self.pos = fns + run
                 if run > _FENCE_CAP:
                     self._note("fence run longer than 255")
@@ -1152,6 +1155,10 @@ def _scan(body):
             raw[line_index] = HIDDEN
     for line_index in inline_unsure:
         if line_index < len(raw):
+            raw[line_index] = UNSURE
+    # axis: a fence opener's info string shows only as attributes, so the line reads unsure — see bite-proof record i2451_md_hidden_image_same_line.md (E7)
+    for line_index in parser.fence_info:
+        if line_index < len(raw) and raw[line_index] == VISIBLE:
             raw[line_index] = UNSURE
 
     first_unsure = min((at for at, _ in unsure), default=None)

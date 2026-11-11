@@ -309,6 +309,181 @@ Then restored line 1040 by the inverse of Edit 1.
 
 ---
 
+## E7 (order i2451-o3, vet 897 V897-1): the fence-opener info-string reading (`md_hidden.py:518` and `:1160`), axis: a fence opener that carries an info string never reads VISIBLE
+
+Detector: `plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py` (tests `test_e7_*`). Guarded code: the
+`self.fence_info.add(self.idx)` at the opener (line 518, set declared at line 314) and the `_scan` override
+(`for line_index in parser.fence_info:` at line 1160). Every command below is run from the worktree root as
+`timeout 600 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py -q -p no:cacheprovider -k test_e7_`.
+Same capture conventions as above (the one `UV_NATIVE_TLS` line dropped; no redaction needed, bodies are generic).
+
+Neutralization (Edit): line 1161 `if line_index < len(raw) and raw[line_index] == VISIBLE:` -> `if False:`.
+
+Raw red:
+
+```
+F.FFFFF.                                                                 [100%]
+=================================== FAILURES ===================================
+________ test_e7_info_string_acceptance_under_a_badge_table_is_missing _________
+
+    def test_e7_info_string_acceptance_under_a_badge_table_is_missing():
+        """V897 (a): an acceptance written only in a fence opener's info string is never shown, so F-1 is still missing."""
+        body = TABLE + ACCEPTING + FENCE
+>       assert la.missing(RECORD, body) == [{"id": "F-1", "title": "Slow retry loop"}]
+E       AssertionError: assert [] == [{'id': 'F-1'... retry loop'}]
+E         
+E         Right contains one more item: {'id': 'F-1', 'title': 'Slow retry loop'}
+E         Use -v to get more diff
+
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:36: AssertionError
+_____ test_e7_fence_opener_with_info_string_is_not_visible[bare-document] ______
+
+body = '```text F-1 Slow retry loop\n```\n', bare = '```\n```\n'
+opener = '```text F-1 Slow retry loop'
+
+    @pytest.mark.parametrize("body, bare, opener", [
+        (FENCE, "```\n```\n", "```text F-1 Slow retry loop"),
+        (TABLE + "\n" + FENCE, TABLE + "\n```\n```\n", "```text F-1 Slow retry loop"),
+        ("- ```text x\n  y\n  ```\n", "- ```\n  y\n  ```\n", "- ```text x"),
+        ("> ```text x\n> y\n> ```\n", "> ```\n> y\n> ```\n", "> ```text x"),
+        ("~~~ x\ny\n~~~\n", "~~~\ny\n~~~\n", "~~~ x"),
+    ], ids=["bare-document", "image-above", "list-item", "blockquote", "tilde"])
+    def test_e7_fence_opener_with_info_string_is_not_visible(body, bare, opener):
+        """V897 (c), F7, F8: the opener line is not VISIBLE, and the reading is per line: ``unsure`` holds no entry (by reason)
+        that the same body with the info string removed does not hold."""
+        rendering = md_hidden.scan(body)
+>       assert rendering.state_at(_line_start(body, opener)) != V
+E       AssertionError: assert 'visible' != 'visible'
+E        +  where 'visible' = state_at(0)
+E        +    where state_at = <md_hidden.Rendering object at 0x7fd2de353c20>.state_at
+E        +    and   0 = _line_start('```text F-1 Slow retry loop\n```\n', '```text F-1 Slow retry loop')
+
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError
+______ test_e7_fence_opener_with_info_string_is_not_visible[image-above] _______
+
+body = '| Package | Age |\n|---|---|\n| [example-pkg-a](https://example.invalid/p/a) | [![age](https://example.invalid/b/0.sv...id/p/c) | [![age](https://example.invalid/b/2.svg)](https://example.invalid/d) |\n\n```text F-1 Slow retry loop\n```\n'
+bare = '| Package | Age |\n|---|---|\n| [example-pkg-a](https://example.invalid/p/a) | [![age](https://example.invalid/b/0.sv...c](https://example.invalid/p/c) | [![age](https://example.invalid/b/2.svg)](https://example.invalid/d) |\n\n```\n```\n'
+opener = '```text F-1 Slow retry loop'
+
+    @pytest.mark.parametrize("body, bare, opener", [
+        (FENCE, "```\n```\n", "```text F-1 Slow retry loop"),
+        (TABLE + "\n" + FENCE, TABLE + "\n```\n```\n", "```text F-1 Slow retry loop"),
+        ("- ```text x\n  y\n  ```\n", "- ```\n  y\n  ```\n", "- ```text x"),
+        ("> ```text x\n> y\n> ```\n", "> ```\n> y\n> ```\n", "> ```text x"),
+        ("~~~ x\ny\n~~~\n", "~~~\ny\n~~~\n", "~~~ x"),
+    ], ids=["bare-document", "image-above", "list-item", "blockquote", "tilde"])
+    def test_e7_fence_opener_with_info_string_is_not_visible(body, bare, opener):
+        """V897 (c), F7, F8: the opener line is not VISIBLE, and the reading is per line: ``unsure`` holds no entry (by reason)
+        that the same body with the info string removed does not hold."""
+        rendering = md_hidden.scan(body)
+>       assert rendering.state_at(_line_start(body, opener)) != V
+E       AssertionError: assert 'visible' != 'visible'
+E        +  where 'visible' = state_at(389)
+E        +    where state_at = <md_hidden.Rendering object at 0x7fd2de355640>.state_at
+E        +    and   389 = _line_start('| Package | Age |\n|---|---|\n| [example-pkg-a](https://example.invalid/p/a) | [![age](https://example.invalid/b/0.sv...id/p/c) | [![age](https://example.invalid/b/2.svg)](https://example.invalid/d) |\n\n```text F-1 Slow retry loop\n```\n', '```text F-1 Slow retry loop')
+
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError
+_______ test_e7_fence_opener_with_info_string_is_not_visible[list-item] ________
+
+body = '- ```text x\n  y\n  ```\n', bare = '- ```\n  y\n  ```\n'
+opener = '- ```text x'
+
+    @pytest.mark.parametrize("body, bare, opener", [
+        (FENCE, "```\n```\n", "```text F-1 Slow retry loop"),
+        (TABLE + "\n" + FENCE, TABLE + "\n```\n```\n", "```text F-1 Slow retry loop"),
+        ("- ```text x\n  y\n  ```\n", "- ```\n  y\n  ```\n", "- ```text x"),
+        ("> ```text x\n> y\n> ```\n", "> ```\n> y\n> ```\n", "> ```text x"),
+        ("~~~ x\ny\n~~~\n", "~~~\ny\n~~~\n", "~~~ x"),
+    ], ids=["bare-document", "image-above", "list-item", "blockquote", "tilde"])
+    def test_e7_fence_opener_with_info_string_is_not_visible(body, bare, opener):
+        """V897 (c), F7, F8: the opener line is not VISIBLE, and the reading is per line: ``unsure`` holds no entry (by reason)
+        that the same body with the info string removed does not hold."""
+        rendering = md_hidden.scan(body)
+>       assert rendering.state_at(_line_start(body, opener)) != V
+E       AssertionError: assert 'visible' != 'visible'
+E        +  where 'visible' = state_at(0)
+E        +    where state_at = <md_hidden.Rendering object at 0x7fd2de3547a0>.state_at
+E        +    and   0 = _line_start('- ```text x\n  y\n  ```\n', '- ```text x')
+
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError
+_______ test_e7_fence_opener_with_info_string_is_not_visible[blockquote] _______
+
+body = '> ```text x\n> y\n> ```\n', bare = '> ```\n> y\n> ```\n'
+opener = '> ```text x'
+
+    @pytest.mark.parametrize("body, bare, opener", [
+        (FENCE, "```\n```\n", "```text F-1 Slow retry loop"),
+        (TABLE + "\n" + FENCE, TABLE + "\n```\n```\n", "```text F-1 Slow retry loop"),
+        ("- ```text x\n  y\n  ```\n", "- ```\n  y\n  ```\n", "- ```text x"),
+        ("> ```text x\n> y\n> ```\n", "> ```\n> y\n> ```\n", "> ```text x"),
+        ("~~~ x\ny\n~~~\n", "~~~\ny\n~~~\n", "~~~ x"),
+    ], ids=["bare-document", "image-above", "list-item", "blockquote", "tilde"])
+    def test_e7_fence_opener_with_info_string_is_not_visible(body, bare, opener):
+        """V897 (c), F7, F8: the opener line is not VISIBLE, and the reading is per line: ``unsure`` holds no entry (by reason)
+        that the same body with the info string removed does not hold."""
+        rendering = md_hidden.scan(body)
+>       assert rendering.state_at(_line_start(body, opener)) != V
+E       AssertionError: assert 'visible' != 'visible'
+E        +  where 'visible' = state_at(0)
+E        +    where state_at = <md_hidden.Rendering object at 0x7fd2de354650>.state_at
+E        +    and   0 = _line_start('> ```text x\n> y\n> ```\n', '> ```text x')
+
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError
+_________ test_e7_fence_opener_with_info_string_is_not_visible[tilde] __________
+
+body = '~~~ x\ny\n~~~\n', bare = '~~~\ny\n~~~\n', opener = '~~~ x'
+
+    @pytest.mark.parametrize("body, bare, opener", [
+        (FENCE, "```\n```\n", "```text F-1 Slow retry loop"),
+        (TABLE + "\n" + FENCE, TABLE + "\n```\n```\n", "```text F-1 Slow retry loop"),
+        ("- ```text x\n  y\n  ```\n", "- ```\n  y\n  ```\n", "- ```text x"),
+        ("> ```text x\n> y\n> ```\n", "> ```\n> y\n> ```\n", "> ```text x"),
+        ("~~~ x\ny\n~~~\n", "~~~\ny\n~~~\n", "~~~ x"),
+    ], ids=["bare-document", "image-above", "list-item", "blockquote", "tilde"])
+    def test_e7_fence_opener_with_info_string_is_not_visible(body, bare, opener):
+        """V897 (c), F7, F8: the opener line is not VISIBLE, and the reading is per line: ``unsure`` holds no entry (by reason)
+        that the same body with the info string removed does not hold."""
+        rendering = md_hidden.scan(body)
+>       assert rendering.state_at(_line_start(body, opener)) != V
+E       AssertionError: assert 'visible' != 'visible'
+E        +  where 'visible' = state_at(0)
+E        +    where state_at = <md_hidden.Rendering object at 0x7fd2de3555b0>.state_at
+E        +    and   0 = _line_start('~~~ x\ny\n~~~\n', '~~~ x')
+
+/home/user/wt-2451/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_info_string_acceptance_under_a_badge_table_is_missing
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[bare-document]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[image-above]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[list-item]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[blockquote]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[tilde]
+6 failed, 2 passed in 0.25s
+```
+
+(The capture is verbatim. The two tests that passed are `test_e7_plain_acceptance_under_the_same_table_still_counts` and
+`test_e7_bare_opener_and_lookalike_content_stay_visible`, which are controls the neutralization must not move.)
+
+Restore (inverse Edit): line 1161 `if False:` -> `if line_index < len(raw) and raw[line_index] == VISIBLE:`.
+
+Restore receipt (lines 1159-1162 quoted back after the inverse Edit):
+
+```
+    # axis: a fence opener's info string shows only as attributes, so the line reads unsure — see bite-proof record i2451_md_hidden_image_same_line.md (E7)
+    for line_index in parser.fence_info:
+        if line_index < len(raw) and raw[line_index] == VISIBLE:
+            raw[line_index] = UNSURE
+```
+
+Raw green:
+
+```
+........                                                                 [100%]
+8 passed in 0.27s
+```
+
+---
+
 ## Final state
 
 After E6 the line-1040 `if` was restored. Clean-tree runs afterwards: the whole new file (`18 passed in 0.45s`) and the five
@@ -332,4 +507,16 @@ before this record was edited, so it lists the test file only):
 ```
  plugins/superheroes/lib/tests/test_md_hidden_image_same_line_2451.py | 3 ++-
  1 file changed, 2 insertions(+), 1 deletion(-)
+```
+
+Order i2451-o3 (E7): after the E7 restore the new file `test_md_hidden_fence_info_2451.py` ran green (`8 passed in 0.27s`), and
+the scoped selection (`plugins/superheroes/lib/tests/ -n auto -k "md_hidden or vet_slot or leftover or pr_sheet or pr_body or
+scanner or review_684 or calibration_disclosure or sanitized_view or 2451"`) ran `3659 passed, 31 skipped, 4 warnings in 43.12s`.
+`git diff --stat` (worktree root, taken after the E7 restore and before this record was edited; the new test file is untracked,
+so the stat does not list it):
+
+```
+ plugins/superheroes/lib/md_hidden.py                               | 7 +++++++
+ .../lib/tests/test_leftover_visible_within_line_2389.py            | 2 +-
+ 2 files changed, 8 insertions(+), 1 deletion(-)
 ```
