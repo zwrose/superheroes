@@ -603,3 +603,27 @@ def test_a_longer_name_or_a_bare_path_does_not_name_the_branch(surface):
     # axis: the branch is matched whole, so a longer name sharing its prefix, or a bare path, is not it
     pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
     assert L._named_open_pulls([surface], pulls) == []
+
+
+@pytest.mark.parametrize("surface", [
+    "(origin/build/2434-span-tie.)",
+    "**origin/build/2434-span-tie**",
+    "origin/closed,origin/build/2434-span-tie",
+    "see `branch:build/2434-span-tie`.",
+    "*branch* build/2434-span-tie;",
+])
+def test_markup_and_separators_around_the_branch_do_not_hide_it(surface):
+    # axis: any neighbour that cannot continue a branch-like name (emphasis, a comma, a period before a bracket) bounds the match
+    pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
+    assert L._named_open_pulls([surface], pulls) == [{**pulls[0], "matchedIn": surface}]
+
+
+@pytest.mark.parametrize("surface", [
+    "xorigin/build/2434-span-tie",
+    "origin/build/2434-span-tie+next",
+    "branch build/2434-span-tie@2",
+])
+def test_a_name_character_beside_the_branch_makes_it_another_name(surface):
+    # axis: a neighbouring name character means a longer branch-like name, not this branch
+    pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
+    assert L._named_open_pulls([surface], pulls) == []

@@ -3588,12 +3588,13 @@ _CONTINUES_PR_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?P<rest>.*)$", r
 _LOWER_HEX40 = re.compile(r"[0-9a-f]{40}")
 _OPEN_PULLS_PAGE_SIZE = 100
 _OPEN_PULLS_MAX_PAGES = 10
-# A branch name is found whole in a surface: after the start, a space or an opening quote or bracket
-# (with an optional origin/ or branch: marker), and before the end, a space, a closing quote or
-# bracket, or prose punctuation (a period only at the end or before a space, since git allows
-# periods inside a branch name and never a colon).
-_SURFACE_NAME_BEFORE = r"(?:^|(?<=[\s`'\"(\[<]))(?P<marker>origin/|branch:)?"
-_SURFACE_NAME_AFTER = r"(?=$|[\s`'\")\]>,;:!?]|\.(?:$|\s))"
+# A branch name is found whole in a surface (with an optional origin/ or branch: marker before it):
+# neither side may touch a character that would make it part of a longer branch-like name, so any
+# other neighbour (a space, quote, bracket, comma, colon, asterisk, end of text) bounds it, and a
+# period after it bounds it unless a name character follows (feature/x.bak is another name).
+_SURFACE_NAME_CHAR = r"A-Za-z0-9_/+@=-"
+_SURFACE_NAME_BEFORE = r"(?<![.%s])(?P<marker>origin/|branch:)?" % _SURFACE_NAME_CHAR
+_SURFACE_NAME_AFTER = r"(?![%s]|\.[%s])" % (_SURFACE_NAME_CHAR, _SURFACE_NAME_CHAR)
 _SURFACE_BRANCH_WORD = re.compile(r"(?i)\bbranch\b")
 _SURFACE_PR_BRANCH = re.compile(r"(?i)#(\d+)(?:['’]s)?\s+branch\b")
 _SURFACE_BRANCH_OF_PR = re.compile(r"(?i)\bbranch\s+of\s+(?:PR\s*)?#(\d+)")
