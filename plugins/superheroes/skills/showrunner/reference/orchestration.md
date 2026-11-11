@@ -683,6 +683,14 @@ Follow the doctrine rather than reconstructing a takeover from memory, which is 
   intake, or that `assess` recorded `stopped` on a handover, needs no session read (a plain
   handback is not a handover and still needs one, unless it is excused as above). No step of this
   check goes to the owner: every refusal's `remedy` names a step the advisor runs itself.
+- **Continue a pull request's branch only with the adoption pair.** A leg that continues an existing
+  pull request's branch, whether that pull request was built locally or in the cloud, carries
+  `adoptsBranch` (that branch) and `adoptsHead` (its pushed head). Without the pair the builder
+  pushes only to its own new branch, and the pull request's records split across two pull requests.
+  The launcher refuses, before spend, a workhorse premise that carries `adopts` without the pair or
+  whose `surfaces` name an open pull request's head branch without it
+  (`premise-continues-pr-without-adoption`), and fails closed when the open pull requests of the
+  github.com origin cannot be read (`premise-continues-pr-unread`). Each `remedy` names the fix.
 - **Adopt a layer that is behind its base.** Bring the adopted branch current with its base
   first: merge the base in and push, so the premise keeps its base (the usual route, standing
   craft). If that is not possible for an unstacked or bottom-layer adoption, set the premise's

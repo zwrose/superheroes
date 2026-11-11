@@ -120,6 +120,13 @@ the stack pair, a positive integer, and a layer above the bottom (`premise-adopt
 `premise-adopts-invalid`, `premise-adopts-bottom-layer`) —
 see Recovery for the adoption premise. An `adoptsHead` must descend from `baseCommit`, else launch
 refuses before spend (`premise-adopts-head-not-on-base`).
+Any leg that continues an existing pull request's branch, whether that pull request was built locally
+or in the cloud, carries `adoptsBranch`/`adoptsHead` naming that branch and its pushed head; the
+launcher refuses, before spend, a workhorse premise that carries `adopts` without the pair or whose
+`surfaces` name an open pull request's branch (`origin/<branch>`, `branch:<branch>`, the word `branch`
+beside the name, `#N's branch`, `branch of PR #N`) without it
+(`premise-continues-pr-without-adoption`), and fails closed when the open pull requests cannot be read
+(`premise-continues-pr-unread`), each with a `remedy`.
 An optional `dependency` names an open pull request whose READY vet the launch must be based on
 (`premise-dependency-invalid`, `dependency-closed-unmerged`, `dependency-open-ready-pr`,
 `dependency-read-unavailable`). **`launch` also refuses a

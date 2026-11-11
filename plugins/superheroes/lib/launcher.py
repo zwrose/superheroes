@@ -3561,6 +3561,259 @@ def _adopted_head_refusal(repo_root, stamped, env):
     return refusal("undecidable")
 
 
+_CONTINUES_PR_WITHOUT_ADOPTION = "premise-continues-pr-without-adoption"
+_CONTINUES_PR_UNREAD = "premise-continues-pr-unread"
+_CONTINUES_PR_REMEDY_WITHOUT_ADOPTION = (
+    "This launch continues an existing pull request's branch (continuedPulls names it) without "
+    "the adoption pair, so the builder would push only to its own new branch. Add adoptsBranch "
+    "set to that branch and adoptsHead set to its pushed head (the PR's head sha, which "
+    "continuedPulls gives) and launch again, so the builder adopts the branch and pushes to it; "
+    "or, if the launch should not continue that branch, take the branch out of surfaces (or drop "
+    "adopts)."
+)
+_CONTINUES_PR_REMEDY_ADOPTS = (
+    "This premise's adopts names pull request N, whose branch the launch continues, without the "
+    "adoption pair. Read that pull request's head branch and head sha (gh api --hostname "
+    "github.com repos/<owner>/<repo>/pulls/<N> --jq '.head.ref, .head.sha'), set them as "
+    "adoptsBranch and adoptsHead, and launch again."
+)
+_CONTINUES_PR_REMEDY_UNREAD = (
+    "The open pull requests of the github.com origin could not be read (failedRead names the "
+    "step), so whether this launch continues one is unknown. Check gh auth status and the origin "
+    "URL, then launch again; or add the adoption pair (adoptsBranch and adoptsHead) when the "
+    "launch does continue a pull request's branch."
+)
+_CONTINUES_PR_REPO_PART = re.compile(r"[A-Za-z0-9_.-]+")
+_CONTINUES_PR_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?P<rest>.*)$", re.DOTALL)
+_LOWER_HEX40 = re.compile(r"[0-9a-f]{40}")
+_OPEN_PULLS_PAGE_SIZE = 100
+_OPEN_PULLS_MAX_PAGES = 10
+_SURFACE_TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9._/:-]+")
+_SURFACE_BRANCH_WORD = re.compile(r"(?i)\bbranch\b")
+_SURFACE_PR_BRANCH = re.compile(r"(?i)#(\d+)(?:['’]s)?\s+branch\b")
+_SURFACE_BRANCH_OF_PR = re.compile(r"(?i)\bbranch\s+of\s+(?:PR\s*)?#(\d+)")
+
+
+def _remote_host_and_path(url):
+    """The ``(host, path)`` of a git remote URL, or None for a form that is no host (a local path,
+    ``file://``). ``path`` is everything after the host, ``""`` when the host has none."""
+    matched = _CONTINUES_PR_URL_RE.match(url)
+    if matched is not None:
+        rest = matched.group("rest")
+        slash = rest.find("/")
+        authority = rest if slash < 0 else rest[:slash]
+        tail = "" if slash < 0 else rest[slash + 1:]
+        host = authority.rsplit("@", 1)[-1]
+        if ":" in host:
+            host, port = host.split(":", 1)
+            if port.isdigit():
+                return host, tail
+            return host, ""
+        return host, tail
+    colon = url.find(":")
+    slash = url.find("/")
+    if colon < 0 or (0 <= slash < colon):
+        return None
+    return url[:colon].rsplit("@", 1)[-1], url[colon + 1:]
+
+
+def _origin_github_repo(repo_root, env):
+    """Where this checkout's pull requests live: ``("skip", None)`` when there is nothing to ask
+    (no origin, a host other than github.com, a local path or ``file://`` URL),
+    ``("github", (owner, repo))`` for a github.com origin, ``("unread", None)`` when git could not
+    run or a github.com origin does not name exactly ``owner/repo``."""
+    got = _git_scrubbed(
+        repo_root, "remote", "get-url", "origin", env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    # axis: a git that could not run leaves the origin unread — see bite-proof record i2446_continues_pr
+    if got is None:
+        return ("unread", None)
+    # axis: no origin is no remote and so no pull requests to continue — see bite-proof record i2446_continues_pr
+    if got.returncode != 0:
+        return ("skip", None)
+    split = _remote_host_and_path((got.stdout or "").strip())
+    # axis: a local path or file URL has no host and no pull requests — see bite-proof record i2446_continues_pr
+    if split is None:
+        return ("skip", None)
+    host, path = split
+    # axis: an origin on a host other than github.com is skipped, not read — see bite-proof record i2446_continues_pr
+    if host.lower() != "github.com":
+        return ("skip", None)
+    if path.startswith("/"):
+        path = path[1:]
+    if path.endswith("/"):
+        path = path[:-1]
+    if path.endswith(".git"):
+        path = path[:-4]
+    parts = path.split("/")
+    # axis: a github.com origin that does not name exactly owner/repo leaves the pull requests unread — see bite-proof record i2446_continues_pr
+    if len(parts) != 2 or not all(
+        _CONTINUES_PR_REPO_PART.fullmatch(part) and part.strip(".") for part in parts
+    ):
+        return ("unread", None)
+    return ("github", (parts[0], parts[1]))
+
+
+def _gh_open_pulls_page(owner, repo, page, env, timeout):
+    """One page of the open pull requests of github.com's ``owner/repo`` with ``gh``, pinned to
+    github.com whatever ``GH_HOST`` says; the completed process, or None when ``gh`` could not run
+    or timed out. Tests replace it."""
+    try:
+        return subprocess.run(
+            [
+                "gh", "api", "--hostname", "github.com",
+                "repos/%s/%s/pulls?state=open&per_page=%d&page=%d"
+                % (owner, repo, _OPEN_PULLS_PAGE_SIZE, page),
+            ],
+            capture_output=True,
+            text=True,
+            env=ll.scrub_env(env),
+            timeout=timeout,
+        )
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+
+
+def _open_pulls(repo_root, owner, repo, env):
+    """``(rows, failed)``: every open pull request of ``owner/repo`` headed in that repository, as
+    ``{"number", "branch", "head"}``, or ``([], <step>)`` when the list could not be read whole
+    (``gh-unrunnable``, ``gh-failed``, ``json``, ``row-shape``, ``page-cap``). A row whose head
+    repository is not this one (a fork, or a deleted fork) is skipped: its branch is not this
+    repository's to push."""
+    want = ("%s/%s" % (owner, repo)).lower()
+    rows = []
+    for page in range(1, _OPEN_PULLS_MAX_PAGES + 1):
+        done = _gh_open_pulls_page(owner, repo, page, env, _WORKTREE_GIT_TIMEOUT)
+        # axis: a gh that could not run leaves the open pull requests unread — see bite-proof record i2446_continues_pr
+        if done is None:
+            return [], "gh-unrunnable"
+        # axis: a gh that exits non-zero leaves the open pull requests unread — see bite-proof record i2446_continues_pr
+        if done.returncode != 0:
+            return [], "gh-failed"
+        try:
+            data = json.loads(done.stdout)
+        except (TypeError, ValueError):
+            return [], "json"
+        # axis: an answer that is not a list leaves the open pull requests unread — see bite-proof record i2446_continues_pr
+        if not isinstance(data, list):
+            return [], "json"
+        for row in data:
+            number = row.get("number") if isinstance(row, dict) else None
+            head = row.get("head") if isinstance(row, dict) else None
+            ref = head.get("ref") if isinstance(head, dict) else None
+            sha = head.get("sha") if isinstance(head, dict) else None
+            # axis: a row that is not a pull request with a number, branch and head sha leaves the list unread — see bite-proof record i2446_continues_pr
+            if (
+                not isinstance(number, int) or isinstance(number, bool) or number < 1
+                or not isinstance(ref, str)
+                or not isinstance(sha, str) or not _LOWER_HEX40.fullmatch(sha)
+            ):
+                return [], "row-shape"
+            head_repo = head.get("repo")
+            full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
+            # axis: a pull request headed in a fork or a deleted fork is skipped, not this repository's branch — see bite-proof record i2446_continues_pr
+            if not isinstance(full_name, str) or full_name.lower() != want:
+                continue
+            rows.append({"number": number, "branch": ref, "head": sha})
+        if len(data) < _OPEN_PULLS_PAGE_SIZE:
+            return rows, None
+    # axis: ten full pages may hide more, so the list is unread — see bite-proof record i2446_continues_pr
+    return [], "page-cap"
+
+
+# The read of the open pull requests; tests replace it.
+_open_pulls_fn = _open_pulls
+
+
+def _named_open_pulls(surfaces, pulls):
+    """The open pull requests a surface names by explicit wording, in ``pulls`` order, each once:
+    ``{"number", "branch", "head", "matchedIn"}`` with ``matchedIn`` the first surface that named it.
+
+    A surface names a pull request (branch B, number N) when a token of it is ``origin/B`` or
+    ``branch:B``; or it holds the word ``branch`` and a token is ``B``; or it reads ``#N's branch``
+    or ``branch of [PR] #N``. Tokens are runs of ``[A-Za-z0-9._/:-]`` less a trailing ``.``. A bare
+    path never names one, even when a branch is spelled the same."""
+    named = []
+    if not isinstance(surfaces, list):
+        return named
+    for pull in pulls:
+        branch = pull["branch"]
+        for surface in surfaces:
+            if not isinstance(surface, str):
+                continue
+            tokens = [
+                token.rstrip(".") for token in _SURFACE_TOKEN_SPLIT.split(surface) if token
+            ]
+            numbers = {
+                int(found)
+                for found in (
+                    _SURFACE_PR_BRANCH.findall(surface) + _SURFACE_BRANCH_OF_PR.findall(surface)
+                )
+            }
+            # axis: an origin/<branch> or branch:<branch> token names the pull request — see bite-proof record i2446_continues_pr
+            hit = "origin/" + branch in tokens or "branch:" + branch in tokens
+            # axis: the word branch beside the branch's name names the pull request — see bite-proof record i2446_continues_pr
+            hit = hit or (bool(_SURFACE_BRANCH_WORD.search(surface)) and branch in tokens)
+            # axis: a #N's branch or branch of PR #N phrase names the pull request — see bite-proof record i2446_continues_pr
+            hit = hit or pull["number"] in numbers
+            if hit:
+                named.append({**pull, "matchedIn": surface})
+                break
+    return named
+
+
+def _continues_pr_refusal(repo_root, stamped, env):
+    """None when the launch does not continue an existing pull request's branch, or carries the
+    adoption pair; else ``(reason, detail)``. A workhorse premise continues one when it carries
+    ``adopts`` or a ``surfaces`` entry names an open pull request's head branch (see
+    ``_named_open_pulls``).
+
+    Exempt both ways: a charter other than workhorse, and a premise carrying ``adoptsBranch`` and
+    ``adoptsHead``. Exempt the surface way only: a missing, non-GitHub or local origin, and the
+    layer below of a stack layer. ``adopts`` makes no read. The open pull requests that cannot be
+    read refuse ``premise-continues-pr-unread`` (fail closed); each refusal carries a ``remedy``.
+    """
+    # axis: a charter other than workhorse never pushes a branch, so it is exempt — see bite-proof record i2446_continues_pr
+    if stamped.get("charter", "workhorse") != "workhorse":
+        return None
+    # axis: a premise carrying the adoption pair already continues the branch, so it is exempt — see bite-proof record i2446_continues_pr
+    if "adoptsBranch" in stamped and "adoptsHead" in stamped:
+        return None
+    # axis: adopts without the pair refuses with no remote read, whatever the origin — see bite-proof record i2446_continues_pr
+    if "adopts" in stamped:
+        return _CONTINUES_PR_WITHOUT_ADOPTION, {
+            "continuedPulls": [{"number": stamped["adopts"], "matchedIn": "adopts"}],
+            "remedy": _CONTINUES_PR_REMEDY_ADOPTS,
+        }
+    kind, found = _origin_github_repo(repo_root, env)
+    # axis: an origin that is not a readable github.com repository is exempt — see bite-proof record i2446_continues_pr
+    if kind == "skip":
+        return None
+    # axis: an origin that could not be read refuses unread — see bite-proof record i2446_continues_pr
+    if kind == "unread":
+        return _CONTINUES_PR_UNREAD, {
+            "failedRead": "origin", "remedy": _CONTINUES_PR_REMEDY_UNREAD,
+        }
+    owner, repo = found
+    pulls, failed = _open_pulls_fn(repo_root, owner, repo, env)
+    # axis: open pull requests that could not be read refuse unread — see bite-proof record i2446_continues_pr
+    if failed:
+        return _CONTINUES_PR_UNREAD, {
+            "failedRead": failed, "remedy": _CONTINUES_PR_REMEDY_UNREAD,
+        }
+    position = stamped.get("layerPosition")
+    # axis: the layer below of a stack layer is its base, not a branch to continue, so it is exempt — see bite-proof record i2446_continues_pr
+    if isinstance(position, int) and not isinstance(position, bool) and position >= 2:
+        pulls = [pull for pull in pulls if pull["head"] != stamped.get("baseCommit")]
+    named = _named_open_pulls(stamped.get("surfaces"), pulls)
+    # axis: a surface that names an open pull request's branch refuses without the pair — see bite-proof record i2446_continues_pr
+    if named:
+        return _CONTINUES_PR_WITHOUT_ADOPTION, {
+            "continuedPulls": named, "remedy": _CONTINUES_PR_REMEDY_WITHOUT_ADOPTION,
+        }
+    return None
+
+
 _ADOPT_ORIGINAL_SESSION_LIVE = "adopt-original-session-live"
 _ADOPT_ORIGINAL_SESSION_UNREAD = "adopt-original-session-unread"
 _ADOPT_ORIGINAL_REMEDY_LIVE = (
@@ -4108,7 +4361,8 @@ def _check_premises(
     """Validate every premise a launch rests on, before anything is reserved or made.
 
     Walks preflight, validates the premise, applies the dependency and stack gates, checks that an
-    adopted head descends from the base and that no earlier cloud builder of an adopted branch is
+    adopted head descends from the base, that a leg continuing an existing pull request's branch
+    carries the adoption pair, and that no earlier cloud builder of an adopted branch is
     still live (`cloud_sessions_file` is the recorded session listing), composes the launch, resolves any named phone sizes
     through `run`, and checks the cloud base (cloud) or the worktree path (local), in that order.
     Returns `{"refusal": <accounted failure>}` on the first
@@ -4198,6 +4452,14 @@ def _check_premises(
     # An adopted head must descend from the resolved base, here and now, before anything is spent.
     # After the stack gate, so a pair off the adopted occupant keeps `adopts-branch-mismatch`.
     refusal = _adopted_head_refusal(repo_root, stamped_premise, env)
+    if refusal is not None:
+        reason, detail = refusal
+        return {"refusal": _refuse_unreserved(
+            ctx, reason, "premise", stamped_premise, preflight_result, **detail,
+        )}
+
+    # A leg that continues an existing pull request's branch carries the adoption pair, before anything is spent.
+    refusal = _continues_pr_refusal(repo_root, stamped_premise, env)
     if refusal is not None:
         reason, detail = refusal
         return {"refusal": _refuse_unreserved(
