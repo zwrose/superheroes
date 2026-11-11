@@ -558,6 +558,12 @@ def _decided_by(rep, outcome):
     return held if outcome is not None and isinstance(held, dict) else None
 
 
+def _valid_repeat_kept(rep):
+    """True when ``rep`` carries a `repeatKept` mark `_decide` reads (an outcome in the vocabulary and a reason)."""
+    kept = rep.get("repeatKept") if isinstance(rep, dict) else None
+    return isinstance(kept, dict) and kept.get("outcome") in review_findings_schema.OUTCOMES and bool(_text(kept.get("reason")))
+
+
 def _ungraded_keys(state):
     """The identity keys of the sweep hits the driver withheld ungraded: every sweep row's `ungradedKeys`, in every
     round. A row without the list (a session from before it was kept) holds none."""
@@ -867,6 +873,11 @@ def _findings_and_merges(state):
         raiser = (by_key[key] if key in by_key else row).get(sc.RAISED_BY_FIELD)
         if isinstance(raiser, str) and raiser.strip():
             held[sc.RAISED_BY_FIELD] = raiser
+        # axis: the account marks a finding open at its loop's end only when the settle on its representative was a bare left-for-owner, never a kept repeat's, a deferral's or a cited decision's — see bite-proof record wo1_open_at_end_2445
+        if (outcome == _LEFT_FOR_OWNER and rep is not None and not _valid_repeat_kept(rep)
+                and rep.get("disposition") == _LEFT_FOR_OWNER and _decided_by(rep, outcome) is None
+                and sc.open_at_loop_end(rep)):
+            held[sc.OPEN_AT_LOOP_END_FIELD] = True
         out.append({"id": _id(row, key), "findingKey": key, "outcome": outcome, "reason": reason,
                     "decidedBy": _decided_by(rep, outcome) if rep is not None else None,
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),

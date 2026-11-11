@@ -154,8 +154,13 @@ whatever this round's verdict was. The rules, in order:
    finding. When nothing has changed, it keeps the earlier outcome and the grade is not read.
 3. **Any other repeat** (`craft`, `left-for-owner`, `ruling`) keeps its earlier outcome. A session
    finding's earlier outcome is the one the review record would give it: a ledger `out-of-scope`
-   row is a `ruling` only when an attributed ruling stands for it, else `left-for-owner`.
-4. **A repeat of a finding still open** (not yet decided) is a new finding.
+   row is a `ruling` only when an attributed ruling stands for it, else `left-for-owner`. A
+   `left-for-owner` finding settled only because it was still open when its loop ended (marked
+   `openAtLoopEnd`) is not an outcome for this rule; rule 4 covers it.
+4. **A repeat of a finding still open** (not yet decided) is a new finding. So is a repeat of a
+   `left-for-owner` finding marked `openAtLoopEnd`, on both routes (the judge's name and exact
+   identity). A deliberate deferral (out of scope, a cited or pending ruling, author-justified)
+   is not marked and keeps rule 3.
 
 | Earlier outcome | Condition | Result | `fixHolds` |
 | --- | --- | --- | --- |
@@ -164,7 +169,8 @@ whatever this round's verdict was. The rules, in order:
 | `shown-wrong` | code changed (or unknown) and new grade `wrong` | kept, outcome `shown-wrong` | `null` |
 | `shown-wrong` | code changed (or unknown) and any other grade, or none | new finding | `null` |
 | `shown-wrong` | code unchanged (the new grade is not read) | kept, outcome `shown-wrong` | `null` |
-| `craft`, `left-for-owner`, `ruling` | any | kept, that outcome | `null` |
+| `left-for-owner` marked `openAtLoopEnd` (open when its loop ended) | any | new finding | `null` |
+| `craft`, `left-for-owner` (not marked `openAtLoopEnd`), `ruling` | any | kept, that outcome | `null` |
 | none (the earlier finding is open) | any | new finding | `null` |
 
 The grade is the new finding's own verifier grade from this round: `confirmed`, `plausible`,

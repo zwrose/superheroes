@@ -5,7 +5,9 @@ An earlier finding is a session ledger row decided in a round before this one, o
 latest earlier review record. A repeat is a new finding the synthesis judge names (by the order's `eN` ref)
 or whose identity key equals an earlier finding's; exact identity is the floor and wins over a name.
 `decide` is the one home of the keep-or-new decision table; no other site decides it. A kept repeat
-keeps the earlier finding's outcome; a repeat that is not kept routes as a new finding.
+keeps the earlier finding's outcome; a repeat that is not kept routes as a new finding. An earlier finding
+left for the owner only because it was still open when its loop ended (`openAtLoopEnd`) is read as open by
+`decision_outcome`, so its repeat is a new finding.
 
 Pure except `code_changed` (one `git diff --quiet`) and `read_file`; stdlib plus sibling modules; never
 raises on bad input.
@@ -19,6 +21,7 @@ import session_contract
 import verification
 
 FIXED, SHOWN_WRONG = review_findings_schema.OUTCOMES[:2]
+LEFT_FOR_OWNER = review_findings_schema.OUTCOMES[3]
 RULING = review_findings_schema.OUTCOMES[4]
 _SETTLED = frozenset(review_findings_schema.OUTCOMES[2:])
 _GIT_TIMEOUT_SECONDS = 30
@@ -37,6 +40,21 @@ def _text(value):
 def disposition_of(outcome):
     """The ledger disposition a kept outcome is written as, so the driver never reads it as open."""
     return "refuted" if outcome == SHOWN_WRONG else outcome
+
+
+def _open_at_end(finding, outcome):
+    """True when ``finding`` is left for the owner with no cited decision and carries the `openAtLoopEnd` marker."""
+    return (outcome == LEFT_FOR_OWNER and session_contract.decided_by_of(finding) is None
+            and session_contract.open_at_loop_end(finding))
+
+
+def decision_outcome(entry):
+    """The outcome `decide` reads for a pool ``entry``: None (open) when the entry carries `openAtLoopEnd`
+    exactly True, else the entry's own outcome. The pool's `outcome` field itself is never changed."""
+    # axis: an entry marked open at its loop's end reads as open, so its repeat is a new finding — see bite-proof record wo1_open_at_end_2445
+    if session_contract.open_at_loop_end(entry):
+        return None
+    return entry.get("outcome") if isinstance(entry, dict) else None
 
 
 def decide(outcome, grade_verdict, changed):
@@ -125,9 +143,13 @@ def session_entry(row, round_no, inputs):
     if isinstance(rep_grade, dict) and rep_grade.get("verdict") == "wrong" \
             and not (isinstance(grade, dict) and grade.get("verdict") == "wrong"):
         grade = rep_grade
+    # a merged member reads its representative's marker, since the decision stands on `rep`; a kept repeat never carries one
+    # axis: the pool entry carries the marker of the row the decision stands on, so an in-session repeat of an open-at-end finding reads open — see bite-proof record wo1_open_at_end_2445
+    marked = {session_contract.OPEN_AT_LOOP_END_FIELD: True} \
+        if isinstance(rep, dict) and "repeatKept" not in rep and _open_at_end(rep, outcome) else {}
     return _entry("session", key, row, outcome, round=decided,
                   family=copy.deepcopy(session_contract.disposition_family_snapshot(row)),
-                  grade=dict(grade) if isinstance(grade, dict) else None)
+                  grade=dict(grade) if isinstance(grade, dict) else None, **marked)
 
 
 def record_entry(finding):
@@ -146,8 +168,10 @@ def record_entry(finding):
         if not (_text(finding.get("file")) and _text(finding.get("title"))):
             return None
         key = opaque_key(finding)
+    # axis: the pool entry carries the record finding's marker, so a repeat of a finding left open at its loop's end reads open — see bite-proof record wo1_open_at_end_2445
+    marked = {session_contract.OPEN_AT_LOOP_END_FIELD: True} if _open_at_end(finding, outcome) else {}
     # axis: a record finding's judged head is unknown, so a repeat of one closed as wrong reads as changed code — see bite-proof record c1l8_wo_a_repeat_marks
-    return _entry("record", key, finding, outcome, head=None) if _text(key) else None
+    return _entry("record", key, finding, outcome, head=None, **marked) if _text(key) else None
 
 
 def read_earlier_findings(payload):
