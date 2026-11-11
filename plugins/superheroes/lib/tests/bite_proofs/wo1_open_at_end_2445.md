@@ -371,3 +371,21 @@ FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_an
 ```
 
 **Raw green** after both restores: `51 passed in 3.49s` (the fix commit's own run of the whole file).
+
+### B9, superseded — the carry moved before the synthesis merge
+
+The round-2 audit found B9's element too late in the fold: a repeat merged into another finding lost the
+consequence. `_keep_reopened_consequence` was removed; the guarded element is now `round_driver.py` `_repeat_plan`,
+the call to `_carry_reopened_consequence` on the staged finding. **Neutralization:** `if not kept and source == "exact"
+...` became `if False and not kept and source == "exact" ...`, in a detached worktree of commit `055d59a4`
+(pycache prefix `/tmp/superheroes-pyc-probe3`); restore receipt: empty `git status --porcelain` before removal.
+
+**Raw red** (2 failed, 50 passed):
+
+```
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_an_exact_code_quality_repeat_of_a_marked_record_finding_keeps_its_real_consequence_to_the_settle
+FAILED plugins/superheroes/lib/tests/test_open_at_end_repeats_2445.py::test_i_a_reopened_consequence_survives_a_synthesis_merge_into_another_code_quality_finding
+2 failed, 50 passed in 3.75s
+```
+
+**Raw green:** the same file with the two census tests, `62 passed in 9.78s`, on commit `055d59a4`.
