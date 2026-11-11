@@ -538,8 +538,11 @@ def test_the_layer_below_of_a_stack_layer_is_not_a_continued_branch(tmp_path, mo
 def test_a_fork_row_with_a_matching_branch_name_is_skipped(tmp_path, monkeypatch):
     # axis: a pull request headed in a fork or a deleted fork is not this repository's branch (E14)
     repo = _github_repo(tmp_path)
+    fork = _pull(1, BRANCH, full_name="someone/r")
+    fork["head"]["repo"]["id"] = 2
+    fork["base"] = {"repo": {"id": 1, "full_name": "o/r"}}
     rows = [
-        _pull(1, BRANCH, full_name="someone/r"),
+        fork,
         {"number": 2, "head": {"ref": BRANCH, "sha": PR_HEAD, "repo": None}},
         {"number": 3, "head": {"ref": BRANCH, "sha": PR_HEAD}},
     ]
@@ -551,3 +554,52 @@ def test_a_fork_row_with_a_matching_branch_name_is_skipped(tmp_path, monkeypatch
     got = L._open_pulls(repo, "o", "r", _env())
     assert got == ([{"number": 4, "branch": BRANCH, "head": PR_HEAD}], None)
     assert L._continues_pr_refusal(repo, stamped, _env())[0] == WITHOUT
+
+
+def test_a_renamed_repository_keeps_its_own_pull_requests_by_repository_id(tmp_path, monkeypatch):
+    # axis: the head and base repository ids decide same-repository, so an origin still naming the old slug keeps its pull requests
+    repo = _github_repo(tmp_path)
+    row = _pull(5, BRANCH, full_name="o/renamed")
+    row["head"]["repo"]["id"] = 1
+    row["base"] = {"repo": {"id": 1, "full_name": "o/renamed"}}
+    _replace_pages(monkeypatch, lambda page: _answer([row]))
+    assert L._open_pulls(repo, "o", "r", _env()) == (
+        [{"number": 5, "branch": BRANCH, "head": PR_HEAD}], None,
+    )
+    stamped = {"surfaces": ["origin/" + BRANCH], "baseCommit": "a" * 40}
+    assert L._continues_pr_refusal(repo, stamped, _env())[0] == WITHOUT
+
+
+def test_a_row_naming_another_repository_with_no_ids_leaves_the_list_unread(tmp_path, monkeypatch):
+    # axis: with no repository ids a head repository other than the origin's cannot be told from a rename, so the read fails closed
+    repo = _github_repo(tmp_path)
+    _replace_pages(monkeypatch, lambda page: _answer([_pull(6, BRANCH, full_name="o/renamed")]))
+    assert L._open_pulls(repo, "o", "r", _env()) == ([], "row-shape")
+    stamped = {"surfaces": ["origin/" + BRANCH], "baseCommit": "a" * 40}
+    reason, detail = L._continues_pr_refusal(repo, stamped, _env())
+    assert reason == UNREAD and detail["failedRead"] == "row-shape"
+
+
+@pytest.mark.parametrize("surface", [
+    "origin/build/2434-span-tie: finish review fixes",
+    "branch build/2434-span-tie: finish fixes",
+    "branch:build/2434-span-tie, then review",
+    "continue on branch build/2434-span-tie.",
+    "(origin/build/2434-span-tie)",
+])
+def test_prose_punctuation_after_the_branch_does_not_hide_it(surface):
+    # axis: a colon, comma, closing period or bracket after the branch name still names the pull request
+    pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
+    assert L._named_open_pulls([surface], pulls) == [{**pulls[0], "matchedIn": surface}]
+
+
+@pytest.mark.parametrize("surface", [
+    "origin/build/2434-span-tie-two",
+    "branch build/2434-span-tie/sub",
+    "origin/build/2434-span-tie.bak and more",
+    "build/2434-span-tie",
+])
+def test_a_longer_name_or_a_bare_path_does_not_name_the_branch(surface):
+    # axis: the branch is matched whole, so a longer name sharing its prefix, or a bare path, is not it
+    pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
+    assert L._named_open_pulls([surface], pulls) == []

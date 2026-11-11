@@ -3588,7 +3588,12 @@ _CONTINUES_PR_URL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*://(?P<rest>.*)$", r
 _LOWER_HEX40 = re.compile(r"[0-9a-f]{40}")
 _OPEN_PULLS_PAGE_SIZE = 100
 _OPEN_PULLS_MAX_PAGES = 10
-_SURFACE_TOKEN_SPLIT = re.compile(r"[^A-Za-z0-9._/:-]+")
+# A branch name is found whole in a surface: after the start, a space or an opening quote or bracket
+# (with an optional origin/ or branch: marker), and before the end, a space, a closing quote or
+# bracket, or prose punctuation (a period only at the end or before a space, since git allows
+# periods inside a branch name and never a colon).
+_SURFACE_NAME_BEFORE = r"(?:^|(?<=[\s`'\"(\[<]))(?P<marker>origin/|branch:)?"
+_SURFACE_NAME_AFTER = r"(?=$|[\s`'\")\]>,;:!?]|\.(?:$|\s))"
 _SURFACE_BRANCH_WORD = re.compile(r"(?i)\bbranch\b")
 _SURFACE_PR_BRANCH = re.compile(r"(?i)#(\d+)(?:['’]s)?\s+branch\b")
 _SURFACE_BRANCH_OF_PR = re.compile(r"(?i)\bbranch\s+of\s+(?:PR\s*)?#(\d+)")
@@ -3710,10 +3715,22 @@ def _open_pulls(repo_root, owner, repo, env):
             ):
                 return [], "row-shape"
             head_repo = head.get("repo")
-            full_name = head_repo.get("full_name") if isinstance(head_repo, dict) else None
-            # axis: a pull request headed in a fork or a deleted fork is skipped, not this repository's branch — see bite-proof record i2446_continues_pr
-            if not isinstance(full_name, str) or full_name.lower() != want:
+            # axis: a pull request headed in a deleted fork is skipped, not this repository's branch — see bite-proof record i2446_continues_pr
+            if not isinstance(head_repo, dict):
                 continue
+            base = row.get("base")
+            base_repo = base.get("repo") if isinstance(base, dict) else None
+            head_id = head_repo.get("id")
+            base_id = base_repo.get("id") if isinstance(base_repo, dict) else None
+            if _is_int(head_id) and _is_int(base_id):
+                # axis: the head and base repository ids decide same-repository, so an origin that still names a renamed repository keeps its own pull requests and a fork is skipped — see bite-proof record i2446_continues_pr
+                if head_id != base_id:
+                    continue
+            else:
+                full_name = head_repo.get("full_name")
+                # axis: with no ids, a head repository that is not the origin's own leaves the list unread, since a renamed repository and a fork cannot be told apart — see bite-proof record i2446_continues_pr
+                if not isinstance(full_name, str) or full_name.lower() != want:
+                    return [], "row-shape"
             rows.append({"number": number, "branch": ref, "head": sha})
         if len(data) < _OPEN_PULLS_PAGE_SIZE:
             return rows, None
@@ -3729,21 +3746,21 @@ def _named_open_pulls(surfaces, pulls):
     """The open pull requests a surface names by explicit wording, in ``pulls`` order, each once:
     ``{"number", "branch", "head", "matchedIn"}`` with ``matchedIn`` the first surface that named it.
 
-    A surface names a pull request (branch B, number N) when a token of it is ``origin/B`` or
-    ``branch:B``; or it holds the word ``branch`` and a token is ``B``; or it reads ``#N's branch``
-    or ``branch of [PR] #N``. Tokens are runs of ``[A-Za-z0-9._/:-]`` less a trailing ``.``. A bare
-    path never names one, even when a branch is spelled the same."""
+    A surface names a pull request (branch B, number N) when it holds B whole written ``origin/B``
+    or ``branch:B``; or it holds the word ``branch`` and B whole; or it reads ``#N's branch`` or
+    ``branch of [PR] #N``. B is matched as the complete name GitHub returned, whatever characters
+    git allowed in it, and prose punctuation after it (a colon, a comma, a closing period) does not
+    hide it. A bare path never names one, even when a branch is spelled the same."""
     named = []
     if not isinstance(surfaces, list):
         return named
     for pull in pulls:
         branch = pull["branch"]
+        whole = re.compile(_SURFACE_NAME_BEFORE + re.escape(branch) + _SURFACE_NAME_AFTER)
         for surface in surfaces:
             if not isinstance(surface, str):
                 continue
-            tokens = [
-                token.rstrip(".") for token in _SURFACE_TOKEN_SPLIT.split(surface) if token
-            ]
+            found = [m.group("marker") for m in whole.finditer(surface)]
             numbers = {
                 int(found)
                 for found in (
@@ -3751,9 +3768,9 @@ def _named_open_pulls(surfaces, pulls):
                 )
             }
             # axis: an origin/<branch> or branch:<branch> token names the pull request — see bite-proof record i2446_continues_pr
-            hit = "origin/" + branch in tokens or "branch:" + branch in tokens
+            hit = any(marker is not None for marker in found)
             # axis: the word branch beside the branch's name names the pull request — see bite-proof record i2446_continues_pr
-            hit = hit or (bool(_SURFACE_BRANCH_WORD.search(surface)) and branch in tokens)
+            hit = hit or (bool(_SURFACE_BRANCH_WORD.search(surface)) and bool(found))
             # axis: a #N's branch or branch of PR #N phrase names the pull request — see bite-proof record i2446_continues_pr
             hit = hit or pull["number"] in numbers
             if hit:
