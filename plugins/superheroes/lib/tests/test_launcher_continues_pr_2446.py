@@ -627,3 +627,15 @@ def test_a_name_character_beside_the_branch_makes_it_another_name(surface):
     # axis: a neighbouring name character means a longer branch-like name, not this branch
     pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
     assert L._named_open_pulls([surface], pulls) == []
+
+
+@pytest.mark.parametrize("surface", [
+    "origin/build/2434-span-tieé",
+    "origin/build/2434-span-tie#2",
+    "branch build/2434-span-tie%next",
+    "branch:build/2434-span-tie&more",
+])
+def test_a_git_valid_suffix_beside_the_branch_is_another_branch(surface):
+    # axis: only a delimiter git forbids in a name, or a prose mark, bounds the match; any other suffix (non-ASCII, # or %) is a longer branch
+    pulls = [{"number": NUMBER, "branch": BRANCH, "head": PR_HEAD}]
+    assert L._named_open_pulls([surface], pulls) == []
