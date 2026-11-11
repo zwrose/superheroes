@@ -216,8 +216,11 @@ def upsert(pr, family, key, body, plans_dir=None):
     delete the local fallback file once posted. Returns {"action", "id", "transit"} (plus "transitLine"
     when the comment GitHub holds differs from the body sent, or could not be read back)."""
     import cloud_builder  # imported here so the modules that import pr_comment (readout, and through it engine_adapter) keep their pinned closure
+    import mention_guard  # imported here for the same reason: the pinned closure of the modules that import pr_comment
     marker = render_marker(family, key)
     body = scrub(body)
+    # axis: a bare at-sign mention in the comment body is wrapped in a code span before the marker and the write — see bite-proof record wo_2453_mention_guard
+    body = mention_guard.wrap(body)
     if marker not in body:
         body = f"{marker}\n{body}"
     author = gh_user()

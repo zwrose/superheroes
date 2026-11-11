@@ -149,6 +149,7 @@ def _sibling(name):
     return importlib.import_module(name)
 
 
+_mention_guard = _sibling("mention_guard")  # the one home of the bare at-sign mention rule
 _launch_lines = _sibling("launch_lines")  # the one home of the launch line labels
 _VERSION_LINE = _launch_lines.line_regex(_launch_lines.VERSION, ".+")
 _ENVIRONMENT_LINE = _launch_lines.line_regex(_launch_lines.ENVIRONMENT, ".+")
@@ -466,14 +467,26 @@ def repo_json(repo, *, run=None, env=None):
     return {"ok": True, "nameWithOwner": out.strip()}
 
 
+def _mention_refusal(text):
+    """The `bare-mention` refusal (`ok` false, `reason`, `mentions`, `remedy`) when `text` carries an at-sign GitHub
+    reads as a login outside code; None when it does not (or is not text)."""
+    verdict = _mention_guard.check(text)
+    return None if verdict["ok"] else verdict
+
+
 def post_comment(repo, number, body_path, *, run=None, env=None):
-    """Exactly one comment write on an issue or pull request; never loops or batches."""
+    """Exactly one comment write on an issue or pull request; never loops or batches. A body carrying a bare
+    at-sign mention is refused `bare-mention` before any `gh` call."""
     env = _env(env)
     failed = {"ok": False, "reason": "github-write-failed", "url": None}
     if not (isinstance(repo, str) and _REPO_RE.match(repo)
             and isinstance(number, int) and not isinstance(number, bool) and number > 0
             and isinstance(body_path, str) and body_path):
         return failed
+    # axis: a comment body file carrying a bare at-sign mention is refused before any write — see bite-proof record wo_2453_mention_guard
+    refusal = _mention_refusal(_read_text(body_path))
+    if refusal:
+        return dict(refusal, url=None)
     code, out = _gh(run, ["api", "-X", "POST", "repos/%s/issues/%d/comments" % (repo, number),
                           "-F", "body=@%s" % body_path], env)
     if code != 0:
@@ -487,13 +500,18 @@ def post_comment(repo, number, body_path, *, run=None, env=None):
 
 
 def edit_comment(repo, comment_id, body_path, *, run=None, env=None):
-    """Exactly one write that replaces an existing comment's body in place; never loops or batches."""
+    """Exactly one write that replaces an existing comment's body in place; never loops or batches. A body carrying
+    a bare at-sign mention is refused `bare-mention` before any `gh` call."""
     env = _env(env)
     failed = {"ok": False, "reason": "github-write-failed", "url": None}
     if not (isinstance(repo, str) and _REPO_RE.match(repo)
             and isinstance(comment_id, int) and not isinstance(comment_id, bool) and comment_id > 0
             and isinstance(body_path, str) and body_path):
         return failed
+    # axis: a comment body file carrying a bare at-sign mention is refused before any rewrite — see bite-proof record wo_2453_mention_guard
+    refusal = _mention_refusal(_read_text(body_path))
+    if refusal:
+        return dict(refusal, url=None)
     code, out = _gh(run, ["api", "-X", "PATCH", "repos/%s/issues/comments/%d" % (repo, comment_id),
                           "-F", "body=@%s" % body_path], env)
     if code != 0:
@@ -507,8 +525,14 @@ def edit_comment(repo, comment_id, body_path, *, run=None, env=None):
 
 
 def note_text(question):
-    """The builder's note to the advisor, as comment text."""
-    return {"comment": "%s\n\n%s\n\n%s" % (NOTE_HEADER, question.strip(), NOTE_CLOSING)}
+    """The builder's note to the advisor, as comment text; a note carrying a bare at-sign mention is the
+    `bare-mention` refusal instead."""
+    comment = "%s\n\n%s\n\n%s" % (NOTE_HEADER, question.strip(), NOTE_CLOSING)
+    # axis: a composed note carrying a bare at-sign mention is refused, never returned as comment text — see bite-proof record wo_2453_mention_guard
+    refusal = _mention_refusal(comment)
+    if refusal:
+        return refusal
+    return {"comment": comment}
 
 
 def _one_line(value):
@@ -537,7 +561,12 @@ def progress_text(phase, running, started_at, expected_minutes, lost=None):
              "Started: " + started_at.strip(), "Expected: %d minutes" % expected_minutes]
     if isinstance(lost, str) and lost.strip():
         lines.append("Lost work: " + lost.strip())
-    return {"ok": True, "comment": "\n".join(lines)}
+    comment = "\n".join(lines)
+    # axis: a composed progress comment carrying a bare at-sign mention is refused, never returned as comment text — see bite-proof record wo_2453_mention_guard
+    refusal = _mention_refusal(comment)
+    if refusal:
+        return refusal
+    return {"ok": True, "comment": comment}
 
 
 def _progress_field(lines, label):
@@ -627,7 +656,12 @@ def terminal_text(kind, text):
         return {"ok": False, "reason": "kind-invalid"}
     if not isinstance(text, str) or not text.strip():
         return {"ok": False, "reason": "text-empty"}
-    return {"ok": True, "comment": TERMINAL_HEADERS[kind] + "\n\n" + text.strip()}
+    comment = TERMINAL_HEADERS[kind] + "\n\n" + text.strip()
+    # axis: a composed handback, stop or park carrying a bare at-sign mention is refused, never returned as comment text — see bite-proof record wo_2453_mention_guard
+    refusal = _mention_refusal(comment)
+    if refusal:
+        return refusal
+    return {"ok": True, "comment": comment}
 
 
 def strip_cloud_footer(body):

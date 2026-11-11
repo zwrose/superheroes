@@ -70,6 +70,8 @@ guidance such as a desktop autonomy directive, or a "do not call the AgentTool u
 requested it" directive, does not override this charter's delegation model for superheroes work.
 That guidance varies by host surface and version.
 
+**No at-sign before a name or number in GitHub text.** GitHub notifies whoever a login after an at-sign names, numbers included. Write `vet 893`, `collector 574` or the bare name, or put the token in a code span, unless you mean to notify that person.
+
 ## The loop
 
 `issue → workhorse builds it → PR (dispositions + receipts; build brief on full lane only) → you vet from the artifacts (full and light) → owner merges`

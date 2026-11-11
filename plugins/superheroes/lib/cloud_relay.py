@@ -446,6 +446,10 @@ def compose(repo_root, config_dir, session, text, *, env=None, fix_order=False):
     body = text.rstrip() if isinstance(text, str) else ""
     if not body:
         return _refuse("text-empty")
+    # axis: a relay message carrying a bare at-sign mention is refused before the state opens, the body file is written or the hash is taken — see bite-proof record wo_2453_mention_guard
+    guard = _sibling("mention_guard").check(body)
+    if not guard["ok"]:
+        return _refuse("bare-mention", mentions=guard["mentions"], remedy=guard["remedy"])
     path, state, refusal = _open_state(repo_root, env)
     if refusal:
         return refusal
