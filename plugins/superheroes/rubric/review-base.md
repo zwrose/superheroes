@@ -1,4 +1,4 @@
-<!-- rubric-version: 14 -->
+<!-- rubric-version: 15 -->
 # review-base
 
 The source of truth for review **severity, verification rules, findings format,
@@ -108,8 +108,13 @@ your channel.
 
 **stdout channel** — external, sandboxed seats that cannot write a file. The
 runner appends the result contract at the end of the order you were given; it is
-the one shape graded, and the finding array below is the `findings` value inside
-it. List in `investigated`
+the one shape graded. The fields this branch carries inside it look like this
+(a clean review of one file):
+
+`{"findings": [], "investigated": ["src/orders.py"], "readParts": [{"file": "src/orders.py", "lines": [[10, 42]]}]}`
+
+The finding array below is the `findings` value inside that contract. List in
+`investigated`
 every repo-relative path you actually read to ground the review — always,
 whether or not you found anything. The record is how the orchestrator knows
 the review happened. An empty `findings` array counts as clean only when
