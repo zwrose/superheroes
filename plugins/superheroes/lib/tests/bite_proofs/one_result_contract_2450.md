@@ -138,3 +138,42 @@ FAILED plugins/superheroes/lib/tests/test_one_result_contract_2450.py::test_elem
 ........                                                                 [100%]
 8 passed, 6 deselected in 1.97s
 ```
+
+## (e) element (a) runs inside its own tmp_path — `-k element_a`
+
+- **Axis:** every test that runs `ED.dispatch_review` writes its sanitized view and its dispatch journal only
+  under that test's own `tmp_path`. The assertion reads both from the run: the view path from the `run-opened`
+  record (`_review_opened_record(run_dir)["viewPath"]`) and the journal root from the run dir's
+  `journal-root.txt`; both must sit under `os.path.realpath(tmp_path)`.
+- **Neutralization:** in `test_one_result_contract_2450.py`, the line
+  `from test_engine_dispatch import _pin_temp_base_to_tmp_path  # noqa: F401  autouse: keeps views and journals under tmp_path`
+  was removed (the autouse fixture is then not active in the module).
+- **Raw red** (`-x`, so only the first parametrization ran; the `tmp_path` and view path are this sandbox's):
+```
+F
+=================================== FAILURES ===================================
+_____ test_element_a_codex_fed_prompt_states_one_result_contract[findings] _____
+...
+        tmp_root = os.path.realpath(str(tmp_path)) + os.sep
+>       assert os.path.realpath(opened["viewPath"]).startswith(tmp_root), opened["viewPath"]
+E       AssertionError: /tmp/claude-0/superheroes-sanitized-view-1
+E       assert False
+E        +  where False = <built-in method startswith of str object at 0x7f773917fa50>('/tmp/claude-0/pytest-of-root/pytest-12/test_element_a_codex_fed_promp0/')
+...
+/home/user/wt-2450/plugins/superheroes/lib/tests/test_one_result_contract_2450.py:122: AssertionError
+FAILED plugins/superheroes/lib/tests/test_one_result_contract_2450.py::test_element_a_codex_fed_prompt_states_one_result_contract[findings]
+!!!!!!!!!!!!!!!!!!!!!!!!!! stopping after 1 failures !!!!!!!!!!!!!!!!!!!!!!!!!!!!
+1 failed, 10 deselected in 6.70s
+```
+  (elided: the test body and the nested `where` lines, about 30 lines. The view landed in the shared system temp
+  folder, which is the defect the assertion detects. The red run left that folder behind outside the repo.)
+- **Restore:** the import line re-added by the inverse edit, directly above `import test_round_driver_order_channel as TROC`.
+- **Restore receipt:** lines 23-28 of the test file read back:
+  `from test_engine_dispatch import (` / `    ED, FakeRunner, _codex_seat, _fake_build_view, _repo, _review_opened_record, _valid_prompt,` / `)` /
+  `from test_engine_dispatch import _pin_temp_base_to_tmp_path  # noqa: F401  autouse: keeps views and journals under tmp_path` /
+  `import test_round_driver_order_channel as TROC`.
+- **Raw green:**
+```
+....                                                                     [100%]
+4 passed, 10 deselected in 4.78s
+```

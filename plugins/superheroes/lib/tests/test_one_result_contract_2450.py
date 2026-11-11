@@ -24,6 +24,7 @@ import test_round_orders as TRO
 from test_engine_dispatch import (
     ED, FakeRunner, _codex_seat, _fake_build_view, _repo, _review_opened_record, _valid_prompt,
 )
+from test_engine_dispatch import _pin_temp_base_to_tmp_path  # noqa: F401  autouse: keeps views and journals under tmp_path
 import test_round_driver_order_channel as TROC
 
 _TESTS = os.path.dirname(os.path.abspath(__file__))
@@ -115,7 +116,13 @@ def test_element_a_codex_fed_prompt_states_one_result_contract(tmp_path, phase, 
         run_dir=run_dir,
         max_wait=0,
     )
-    fed = _review_opened_record(run_dir)["fedPrompt"]
+    opened = _review_opened_record(run_dir)
+    with open(os.path.join(run_dir, "journal-root.txt"), encoding="utf-8") as fh:
+        journal_root = fh.read().strip()
+    tmp_root = os.path.realpath(str(tmp_path)) + os.sep
+    assert os.path.realpath(opened["viewPath"]).startswith(tmp_root), opened["viewPath"]
+    assert os.path.realpath(journal_root).startswith(tmp_root), journal_root
+    fed = opened["fedPrompt"]
     native = _codex_native_contract(kind)
     headings = [ln for ln in fed.splitlines() if ln.startswith(_CONTRACT_LINE_PREFIX)]
     assert len(headings) == 1, headings
