@@ -684,6 +684,9 @@ def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
     return None, _refuse("landing-missing", landingPath=env_path)
 
 
+read_landing_envelope = _read_landing_envelope  # the abandoned-session record writer reads un-ingested landings through this
+
+
 def _probe_store_entry(spath):
     """Return (present, refusal) for a store-path existence probe — fail-closed on ambiguity.
 

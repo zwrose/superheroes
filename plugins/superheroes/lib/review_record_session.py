@@ -11,7 +11,8 @@ CLI:
   review_record_session.py write --session-dir DIR --extras FILE --repo-root DIR [--abandoned REASON]
 
 --abandoned writes the record of a session the orchestrator closed before the loop ended: it reads
-not-reviewed, and says so.
+not-reviewed, and says so. It lists every planned seat that produced no result, among them the pending
+phase's planned seats whose result never landed, each as a reviewer that did not run.
 """
 from __future__ import annotations
 
@@ -39,7 +40,9 @@ import receipt_disclosures  # noqa: E402
 import record_paths  # noqa: E402
 import review_findings_schema  # noqa: E402
 import review_record  # noqa: E402
+import round_adapters  # noqa: E402
 import round_phases  # noqa: E402
+import round_records  # noqa: E402
 import seat_map_receipts  # noqa: E402
 import session_contract as sc  # noqa: E402
 import verification  # noqa: E402
@@ -495,7 +498,130 @@ def _slot_ran(state, key, row, env):
     return not (phase == sc.PANEL_PHASE and isinstance(status, dict) and status.get(seat) == "missing")
 
 
-def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
+def _no_result_reason(cmd, env):
+    """The `noResult` token for a recorded slot that did not run: the stored envelope's own reason when the vocabulary
+    holds it, else `recorded-missing`; `no-result` when no envelope is stored. Always a member of NO_RESULT_REASONS."""
+    if env is None:
+        return review_record.NO_RESULT
+    if env.get("schema") == sc.SEAT_MISSING_SCHEMA:
+        reason = env.get("reason")
+        return reason if isinstance(reason, str) and reason in review_record.NO_RESULT_REASONS else review_record.RECORDED_MISSING
+    payload = env.get("payload")
+    reason = payload.get("reason") if isinstance(payload, dict) else None
+    if isinstance(reason, str) and reason in dispatch_outcome.NOT_RUN_REASONS:
+        return reason
+    if isinstance(payload, dict) and payload.get("vacuous") is True:
+        return dispatch_outcome.REASON_VACUOUS
+    return review_record.RECORDED_MISSING  # a record-missing slot, or a receipt that is missing or stale
+
+
+def _slot_envelope(session_dir, key, attempt):
+    """(envelope, unreadable) for one slot at one attempt: the stored envelope, else the one still in the landing folder.
+    A landing that is present but cannot be read gives (None, True); nothing stored or landed gives (None, False)."""
+    phase, rnd, seat, occ = key
+    env = _envelope(_path(session_dir, key, attempt))
+    if env is not None:
+        return env, False
+    try:
+        env, refusal = round_records.read_landing_envelope(
+            session_dir, rnd, phase, record_paths.storage_key(seat, occ), attempt, occ)
+    except ValueError:
+        env, refusal = None, {"reason": "bad-argument"}
+    # axis: a landing that is present but cannot be read as a result is listed landing-unreadable, never taken for a result or for nothing — see bite-proof record i2436_abandoned_missing
+    if refusal is not None:
+        return None, refusal.get("reason") != "landing-missing"
+    # axis: a landing that is neither a seat-missing record nor a known seat-result envelope with a payload object is unreadable, never a result — see bite-proof record i2436_abandoned_missing
+    if not (isinstance(env, dict) and (env.get("schema") == sc.SEAT_MISSING_SCHEMA or (
+            env.get("schema") in round_records.SEAT_RESULT_SCHEMAS and isinstance(env.get("payload"), dict)))):
+        return None, True
+    return env, False
+
+
+def _is_result(env):
+    """True when the envelope is a real seat result: neither a seat-missing record nor a did-not-run payload."""
+    return isinstance(env, dict) and env.get("schema") != sc.SEAT_MISSING_SCHEMA \
+        and not dispatch_outcome.payload_did_not_run(env.get("payload"))
+
+
+def _newer_pending_attempt(state, session_dir, key, recorded_attempt):
+    """(envelope, unreadable) of the pending step's own attempt of this slot when that attempt is newer than the one the
+    journal recorded, else None: the slot was re-dispatched and the newer attempt is what the session last asked for."""
+    pending = state.get("pending")
+    attempt = pending.get("attempt") if isinstance(pending, dict) else None
+    if not (_int(attempt) and pending.get("phase") == key[0] and pending.get("round") == key[1]
+            and _int(recorded_attempt) and attempt > recorded_attempt):
+        return None
+    return _slot_envelope(session_dir, key, attempt)
+
+
+def _unfilled_pending(state, rnd, seat):
+    """Whether the round's governing seat map leaves the panel seat's lens unfilled."""
+    return round_phases.seat_lens(seat) in (
+        receipt_disclosures.unfilled_seats(seat_map_receipts.round_governing_map(state, rnd)) & set(round_phases.DIMENSIONS))
+
+
+def _pending_without_result(state, session_dir, rows, reviewers):
+    """Rows for the planned seats of the pending review phase that produced no result, to append to `reviewers`.
+
+    A seat whose orders went out but which never had a result recorded has no journal row, so no reviewer row; an
+    abandoned session lists it as a reviewer that did not run, by slot (a repeated roster key is its own slot).
+    A seat whose result is stored or still in the landing folder produced a result and is never listed.
+    An unfilled lens is listed once per round, by its lens, whatever the slicing."""
+    # axis: an abandoned session lists every planned seat of its pending review phase that produced no result, by slot identity — see bite-proof record i2436_abandoned_missing
+    pending = state.get("pending")
+    if not isinstance(pending, dict):
+        return []
+    phase, rnd, attempt = pending.get("phase"), pending.get("round"), pending.get("attempt")
+    # axis: only a pending review phase is read, and never synthesis, which groups findings and is no reviewer — see bite-proof record i2436_abandoned_missing
+    if not (_int(rnd) and _int(attempt) and isinstance(phase, str) and phase in round_adapters.ADAPTER_PHASES
+            and sc.run_kind_for_phase(phase) == sc.RUN_KIND_REVIEW and phase not in _UNLISTED_PHASES):
+        return []
+    roster, why = round_adapters.roster_for(phase, state, state.get("config") or {})
+    if why is not None:
+        raise Refusal(UNREADABLE, "the pending phase's planned seats")  # fail closed: an underivable roster is never an empty one
+    names = {v["name"] for v in reviewers}
+    out = []
+
+    def unfilled_row(seat):
+        # axis: an unfilled lens is one row per round named by its lens, so the slices of a sliced round never list it again — see bite-proof record i2436_abandoned_missing
+        row = _unfilled_reviewer(rnd, round_phases.seat_lens(seat))
+        if row["name"] not in names:
+            names.add(row["name"])
+            out.append(row)
+
+    # axis: a hand-submit session journals no seat, so it lists only its pending panel's seats that no seat status named — see bite-proof record i2436_abandoned_missing
+    if state.get("_submitUsed"):
+        if phase != sc.PANEL_PHASE:
+            return []
+        for seat in roster:
+            if _unfilled_pending(state, rnd, seat):
+                unfilled_row(seat)
+            elif f"{seat}{REVIEWER_ROUND_FORMAT.format(rnd=rnd)}" not in names:
+                row = _reviewer(state, rnd, seat, "", False, phase=phase)
+                row["noResult"] = review_record.NO_RESULT
+                names.add(row["name"])
+                out.append(row)
+        return out
+    slots = {k for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS and k[0] not in _UNLISTED_PHASES}
+    stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
+    # axis: a slot is reconciled by identity (phase, round, seat, occurrence) with the roster's own expansion, so a repeated audit key never hides its sibling — see bite-proof record i2436_abandoned_missing
+    for seat, occ in round_records.roster_slots(roster):
+        if (phase, rnd, seat, occ) in slots:
+            continue
+        env, unreadable = _slot_envelope(session_dir, (phase, rnd, seat, occ), attempt)
+        # axis: a seat whose stored or landed envelope is a real result produced one and is never listed — see bite-proof record i2436_abandoned_missing
+        if _is_result(env):
+            continue
+        if phase == sc.PANEL_PHASE and _unfilled_pending(state, rnd, seat):
+            unfilled_row(seat)
+            continue
+        row = _reviewer(state, rnd, seat, stem, False, env, None, None, None, phase)
+        row["noResult"] = review_record.LANDING_UNREADABLE if unreadable else _no_result_reason(None, env)
+        out.append(row)
+    return out
+
+
+def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None, abandoned=False):
     slots = {k: v for k, v in _slots(rows).items() if v[1].get("cmd") in _INGEST_CMDS
              and k[0] not in _UNLISTED_PHASES}
     envs = {k: _envelope(_path(session_dir, k, v[0])) for k, v in slots.items()}
@@ -524,16 +650,30 @@ def _reviewers(state, session_dir, rows, run_dirs, engine_run, raw_dir=None):
         # axis: a seat a later unread-part wave re-read is not listed as a review that did not run — see bite-proof record i2334_slice_recovery
         if phase == sc.PANEL_PHASE and key not in ran and seat in _recovered_seats(state, rnd):
             continue
+        newer = _newer_pending_attempt(state, session_dir, key, att) if abandoned and key not in ran else None
+        # axis: an abandoned session's recorded miss whose re-dispatched pending attempt produced a result is not listed — see bite-proof record i2436_abandoned_missing
+        if newer is not None and _is_result(newer[0]):
+            continue
         stem = "" if phase == sc.PANEL_PHASE else phase.removeprefix("dispatch-") + " "
         row = _reviewer(state, rnd, seat, stem, key in ran, env,
                         r.get("executionEvidence") if isinstance(r.get("executionEvidence"), dict) else None,
                         _text(r.get("citedHead")), bound.get(key), phase)
+        # axis: an abandoned session's recorded seat that did not run carries the reason its stored envelope gives — see bite-proof record i2436_abandoned_missing
+        if abandoned and key not in ran:
+            # axis: a re-dispatched pending attempt that landed a did-not-run result or an unreadable landing gives the reason; nothing landed keeps the recorded one — see bite-proof record i2436_abandoned_missing
+            if newer is not None and newer[1]:
+                row["noResult"] = review_record.LANDING_UNREADABLE
+            elif newer is not None and newer[0] is not None:
+                row["noResult"] = _no_result_reason(None, newer[0])
+            else:
+                row["noResult"] = _no_result_reason(r.get("cmd"), env)
         if phase == sc.PANEL_PHASE and key in ran:
             # axis: a panel reviewer that ran and reported no well-formed read list counts as having read nothing, never as unreported — see bite-proof record c1l5_wo_b_read_parts
             reported = body.get("readParts") if isinstance(body, dict) else None
             row["readParts"] = reported if review_record._items_fault(reported, review_record._part_fault) is None else []
         out.append(row)
-    out += [_unfilled_reviewer(rnd, seat) for rnd, names in unfilled.items() for seat in names
+    out += [_unfilled_reviewer(rnd, seat)
+            for rnd, names in unfilled.items() for seat in names
             if not any(k[0] == sc.PANEL_PHASE and k[2] == seat and k[1] > rnd for k in ran)]  # a later run recovers it
     return out, raw
 
@@ -1350,7 +1490,13 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
             reviewers, raw = [], []
     else:
         reviewers, raw = _reviewers(state, session_dir, rows, extras.get("runDirs", []),
-                                    review_record._readers(readers)["engine_run"], raw_dir)
+                                    review_record._readers(readers)["engine_run"], raw_dir, abandoned=abandoned is not None)
+    if abandoned is not None:  # the pending phase's planned seats that produced no result are reviewers that did not run
+        reviewers += _pending_without_result(state, session_dir, rows, reviewers)
+        # axis: every planned not-run row of an abandoned account carries a no-result reason, the hand-submit rows included, and an unfilled row takes its `unfilled` reason here and nowhere else — see bite-proof record i2436_abandoned_missing
+        for v in reviewers:
+            if v.get("planned") is True and v.get("ran") is False and "noResult" not in v:
+                v["noResult"] = UNFILLED if v.get("vendor") == UNFILLED else review_record.RECORDED_MISSING
     # a hand submit journals no seat: each seat its rounds say ran (credited or not, as `_status_reviewers` lists it) is a run with no figure
     # axis: a hand-submitted audit is one run per non-silent audit target, never one per auditor vendor — see bite-proof record i2307_session_cost
     hand = [REVIEWER_ROUND_SUFFIX.sub("", v["name"]) for v in reviewers if v.get("ran") and not v["name"].startswith("audits auditor")] + [
