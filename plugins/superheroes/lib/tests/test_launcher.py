@@ -8212,7 +8212,8 @@ def _launch_adoption(tmp_path, monkeypatch, members, adopts_the_base_head=False,
 def test_stack_gate_adoption_of_own_position_passes_and_records_stack_fields(tmp_path, monkeypatch):
   # bite-axis: adopts naming the occupant at layerPosition, on the layer below's branch, passes
     repo, result = _launch_adoption(
-        tmp_path, monkeypatch, lambda head: _adoption_members(head), adopts=4242,
+        tmp_path, monkeypatch, lambda head: _adoption_members(head, occupant_head=head),
+        adopts_the_base_head=True, adopts=4242, adoptsBranch="b2",
     )
     assert result["ok"] is True, result.get("reason")
     assert result["stackGate"]["applied"] is True

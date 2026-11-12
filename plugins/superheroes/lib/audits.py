@@ -11,6 +11,9 @@ unaudited fix (the expensive failure direction: a real defect ships believed fix
 uncertain / malformed / missing ruling collapses to `not-discharged` and is disclosed.
 """
 
+import os
+import re
+
 from finding_identity import finding_identity, place_pair as _place_key
 
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
@@ -67,14 +70,29 @@ TEST_MATCH_ANSWERS = ("matches", "weakened")
 # the pin rule (rubric/review-discipline.md) forbids pinning with a test, so no test can be asked for.
 REVIEW_GUARDED = "review-guarded"
 
+# The fourth answer `testWouldFail` may take (#2434): the fix only removes test lines that a worthless-test
+# finding cites, so no test can be asked for. The fold clears it only through `test_removal_clearance`.
+WORTHLESS_TEST_REMOVED = "worthless-test-removed"
+
+# The test smells (as `normalize_smell` reads a finding's `taxonomy`) whose finding asks for a test to be removed.
+WORTHLESS_TEST_SMELLS = frozenset({"wording-pin", "duplicate-test", "mock-echo", "cannot-fail"})
+
 
 def check_answers(name):
     """The answers check `name` accepts. The one home of the per-check answer set: the shape judge
     (`audit_checks_fault`) and the strict-mode schema (`engine_result_channel`) both read it. Only
-    `testWouldFail` may answer `review-guarded`."""
+    `testWouldFail` may answer `review-guarded` or `worthless-test-removed`."""
     if name == "testWouldFail":
-        return CHECK_ANSWERS + (REVIEW_GUARDED,)
+        return CHECK_ANSWERS + (REVIEW_GUARDED, WORTHLESS_TEST_REMOVED)
     return CHECK_ANSWERS
+
+
+def normalize_smell(text):
+    """A taxonomy label read as a test-smell name: lower-cased, every run of non-alphanumeric characters one
+    `-`, leading and trailing `-` stripped (`"Wording pin"` reads `wording-pin`). None when `text` is no string."""
+    if not isinstance(text, str):
+        return None
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
 
 
 # Path components that are never doctrine prose, even for a Markdown file: eval graders are scored
@@ -138,6 +156,267 @@ def prose_only_delta(target):
     other = [f for f in files if not _is_prose_path(f)]
     return not other, other
 
+
+def _plain_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+_ABSENT = object()
+
+
+# The languages whose test files the removal clearance can read (#2434): the extensions of each and the line
+# pattern that opens a test in it. A file in any other language has no reader, so it clears nothing.
+PYTHON_TEST_EXTENSIONS = frozenset({".py"})
+JS_TEST_EXTENSIONS = frozenset({".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"})
+PYTHON_TEST_OPENING = re.compile(r"^\s*(async\s+)?def\s+test\w*\s*\(|^\s*class\s+Test\w*\b")
+# The test functions of the common runners (`it`, `test`, `describe` and their aliases `specify`, `context`,
+# `suite`), their skipped (`x`) and focused (`f`) forms included, called directly or through a tagged template
+# (`test.each` followed by a backtick table).
+JS_TEST_OPENING = re.compile(r"^\s*(x|f)?(it|test|describe|specify|context|suite)(\.\w+)*\s*[(`]")
+
+
+def test_openings(path, text):
+    """The sorted 1-based line numbers at which the file `path` with content `text` opens a test, or None
+    when the language of `path` has no reader (an extension outside `PYTHON_TEST_EXTENSIONS` and
+    `JS_TEST_EXTENSIONS`). A reader matches a line, not a parse: a line inside a string or comment that looks like
+    an opening counts as one: an uncited look-alike makes the clearance refuse more, and a cited one ties the
+    lines indented under it (`test_spans`), which then clear. Lines are cut at `\\n`, as git counts
+    them."""
+    extension = os.path.splitext(path)[1].lower() if isinstance(path, str) else ""
+    if extension in PYTHON_TEST_EXTENSIONS:
+        pattern = PYTHON_TEST_OPENING
+    elif extension in JS_TEST_EXTENSIONS:
+        pattern = JS_TEST_OPENING
+    else:
+        return None
+    return [number for number, line in enumerate(text.split("\n"), 1) if pattern.match(line)]
+
+
+def _indent(line):
+    return len(line) - len(line.lstrip())
+
+
+def test_spans(path, text):
+    """None exactly when `test_openings(path, text)` is None; otherwise, in opening order, one `[start, opening,
+    end]` (1-based, `start <= opening <= end`) per opening `test_openings` returns, lines cut at `\\n`. The
+    end: scan the lines after the opening, skipping blank lines; the first non-blank line whose indent is `<=`
+    the opening's ends the span, unless its text starts with `}`, `)` or `]` and its indent equals the opening's
+    (it is then the last line of the span, and the scan goes on); a closer at a shallower indent belongs to the
+    enclosing span. The span's end is the last non-blank line included (the opening itself when none is). The
+    start: the topmost line of the run of non-blank `@` lines at the opening's indent directly above it, else the
+    opening. The reader reads indentation only: code whose indentation does not follow its nesting is read by
+    its indentation. The reader matches lines, so it can be wrong in two directions. A line read into a span
+    refuses (C9) when the span is uncited, and a cited look-alike opening ties the lines under it, which clear.
+    A line read out of every span, because a test ended early on indentation or was not recognised, falls to
+    C7's stretch rule and clears when its removed stretch holds a cited line."""
+    openings = test_openings(path, text)
+    if openings is None:
+        return None
+    lines, spans = text.split("\n"), []
+    for opening in openings:
+        indent, end, start = _indent(lines[opening - 1]), opening, opening
+        for number in range(opening + 1, len(lines) + 1):
+            line = lines[number - 1]
+            if not line.strip():
+                continue
+            if _indent(line) > indent or (_indent(line) == indent and line.lstrip()[0] in "})]"):
+                end = number
+            else:
+                break
+        while start > 1 and lines[start - 2].lstrip().startswith("@") and _indent(lines[start - 2]) == indent:
+            start -= 1
+        spans.append([start, opening, end])
+    return spans
+
+
+def _removal_files(target):
+    """The files of the target's driver-built `fixerRemoval` as `[(path, ranges, added, openings, spans, blank)]`,
+    or None when the record is absent, `unreadable`, or not exactly `{"files": [{"path": <non-empty str>,
+    "removed": [[start, end], ...], "added": <bool>, "testOpenings": <None or [<int >= 1>, ...]>, "testSpans":
+    <None or [[start, opening, end], ...]>, "blankLines": [<int >= 1>, ...]}, ...]}` with at least one file, one
+    record per path, and every range two plain integers with `1 <= start <= end` (fail closed: an unreadable
+    record clears nothing). `testOpenings` is the base file's test-opening lines (`test_openings`) and
+    `testSpans` its test spans (`test_spans`); None means its language has no reader, and the two are None
+    together, their openings the same. `blankLines` lists the blank lines inside the removed ranges."""
+    record = target.get("fixerRemoval") if isinstance(target, dict) else None
+    # axis: an absent, unreadable or malformed removal record is never readable — see bite-proof record audit_test_removal_2434
+    if not isinstance(record, dict) or "unreadable" in record:
+        return None
+    files = record.get("files")
+    if not isinstance(files, list) or not files:
+        return None
+    out, seen = [], set()
+    for entry in files:
+        if not isinstance(entry, dict):
+            return None
+        path, removed, added = entry.get("path"), entry.get("removed"), entry.get("added")
+        if not isinstance(path, str) or not path or path in seen:
+            return None
+        if not isinstance(added, bool) or not isinstance(removed, list):
+            return None
+        openings = entry.get("testOpenings", _ABSENT)
+        # axis: a row whose `testOpenings` is absent or not None-or-a-list-of-lines-from-1 makes the record unreadable — see bite-proof record audit_test_removal_2434
+        if openings is _ABSENT or not (openings is None or (
+                isinstance(openings, list) and all(_plain_int(n) and n >= 1 for n in openings))):
+            return None
+        spans, blank = entry.get("testSpans", _ABSENT), entry.get("blankLines", _ABSENT)
+        # axis: a row whose `testSpans` or `blankLines` is absent or malformed, or whose spans do not match its `testOpenings`, makes the record unreadable — see bite-proof record audit_test_removal_2434
+        if spans is _ABSENT or blank is _ABSENT or (spans is None) != (openings is None):
+            return None
+        if spans is not None and not (isinstance(spans, list) and all(
+                isinstance(s, list) and len(s) == 3 and all(_plain_int(n) for n in s) and 1 <= s[0] <= s[1] <= s[2]
+                for s in spans) and [s[1] for s in spans] == openings):
+            return None
+        if not (isinstance(blank, list) and all(_plain_int(n) and n >= 1 for n in blank)):
+            return None
+        ranges = []
+        for pair in removed:
+            if not (isinstance(pair, list) and len(pair) == 2 and all(_plain_int(n) for n in pair)):
+                return None
+            if not 1 <= pair[0] <= pair[1]:
+                return None
+            ranges.append((pair[0], pair[1]))
+        seen.add(path)
+        out.append((path, ranges, added, None if openings is None else list(openings),
+                    None if spans is None else [list(s) for s in spans], list(blank)))
+    return out
+
+
+def _worthless_test_smell(finding):
+    """`(smell, detail)`: the normalized `taxonomy` of a finding that is a Test finding labelled with one of the
+    `WORTHLESS_TEST_SMELLS` and carries a usable body, else `(None, <what is missing>)`."""
+    if not isinstance(finding, dict):
+        return None, "is not a finding"
+    # axis: only a Test finding is a worthless-test finding — see bite-proof record audit_test_removal_2434
+    if finding.get("dimension") != "Test":
+        return None, "dimension is %r, not 'Test'" % (finding.get("dimension"),)
+    smell = normalize_smell(finding.get("taxonomy"))
+    # axis: only a finding labelled with one of the worthless-test smells is one — see bite-proof record audit_test_removal_2434
+    if smell not in WORTHLESS_TEST_SMELLS:
+        return None, "taxonomy %r is not one of: %s" % (finding.get("taxonomy"), ", ".join(sorted(WORTHLESS_TEST_SMELLS)))
+    # axis: a worthless-test finding must give its reason in a body — see bite-proof record audit_test_removal_2434
+    if not has_usable_reason(finding.get("body")):
+        return None, "has no usable body giving its reason"
+    return smell, None
+
+
+def cited_lines(finding):
+    """The `(file, line)` places a finding cites at a plain integer line, in order, none twice: its own
+    `file`/`line` and the places of its kind of mistake. The one reading of what a finding cites: the clearance
+    conditions and the driver's citation-freshness check both use it."""
+    out = []
+    if isinstance(finding, dict) and isinstance(finding.get("file"), str) and _plain_int(finding.get("line")):
+        out.append((finding["file"], finding["line"]))
+    for file, line in target_places(finding):
+        if isinstance(file, str) and _plain_int(line) and (file, line) not in out:
+            out.append((file, line))
+    return out
+
+
+def test_removal_clearance(target):
+    """`(evidence, failing, detail)`: whether the target's fix is the removal of test lines a worthless-test
+    finding cites, judged only from driver-built data (the target's `fixerDelta`, `fixerRemoval`, its own
+    finding fields and its `batchFindings`), never from anything the auditor wrote. All of C1-C10 must hold:
+
+    C1  `fixerDelta` is readable, names at least one file, and every file is a test path;
+    C2  `fixerRemoval` is readable and well formed (see `_removal_files`);
+    C3  the removal record names exactly the delta's files;
+    C4  every file of the record added nothing and removed at least one range;
+    C5  the target is a Test finding labelled with a worthless-test smell, with a usable body;
+    C6  one of the target's own cited lines (its `file:line` or a kind-of-mistake place) lies in a removed range;
+    C7  every removed line that lies in no test span (`testSpans`; all lines, for a file with none) and is
+        neither cited nor blank (`blankLines`) has a cited line in its removed range; a cited line is the
+        target's or a fresh qualifying sibling's (a batch sibling that itself passes C5 and whose driver-built
+        `citationFresh` is True);
+    C8  every changed file is in a language the test-opening reader supports (`testOpenings` is not None);
+    C9  every removed line that is neither cited nor blank, and lies in a test span, has an innermost span (the
+        containing span with the greatest start) that opens on a cited line, so the fix cannot also delete an
+        unflagged test, or the rest of one, or the fixture around a flagged one;
+    C10 the target's `citationFresh` is True: the files its cited lines sit in did not change between the head
+        the finding was raised on and the fix's start head, so a cited line still points at what it cited.
+
+    On success `(evidence, None, None)` with `evidence` the dict the audit entry records
+    (`{"source": "finding", "finding", "taxonomy", "reason", "removed", "cited", "openings"}`; `cited` lists the
+    target's cited lines, then each fresh qualifying sibling's; `openings` lists, per file, the base file's test openings
+    inside its removed ranges, as a record of what the fix deleted; C9 judges lines, not openings); otherwise `(None, <first failing condition>, <short detail>)`."""
+    from size_count import is_test_path as _is_test_path  # noqa: E402 — lazy: the closure of this module stays unchanged
+    files = _delta_files(target)
+    # axis: an absent, unreadable or empty delta clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+    if not files:
+        return None, "C1", "no recorded delta"
+    # axis: a non-test file in the delta clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+    other = [f for f in files if not _is_test_path(f)]
+    if other:
+        return None, "C1", "the delta touches non-test %s" % ", ".join(other)
+    rows = _removal_files(target)
+    # axis: a removal record that is absent, unreadable or malformed clears nothing — see bite-proof record audit_test_removal_2434
+    if rows is None:
+        return None, "C2", "no readable removal record"
+    # axis: the removal record and the delta must name the same files — see bite-proof record audit_test_removal_2434
+    if {row[0] for row in rows} != set(files):
+        return None, "C3", "the removal record and the delta name different files"
+    for path, ranges, added, _o, _s, _b in rows:
+        # axis: a fix that adds a line to a file clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+        if added is not False:
+            return None, "C4", "%s has added lines" % path
+        # axis: a file with no removed range clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+        if not ranges:
+            return None, "C4", "%s has no removed lines" % path
+    smell, detail = _worthless_test_smell(target)
+    if smell is None:
+        return None, "C5", detail
+    own = cited_lines(target)
+    cited = list(own)
+    batch = target.get("batchFindings")
+    for sibling in batch if isinstance(batch, list) else ():
+        # axis: only a sibling that is itself a worthless-test finding, with a citation the driver found fresh, lends its cited lines — see bite-proof record audit_test_removal_2434
+        if _worthless_test_smell(sibling)[0] is not None and sibling.get("citationFresh") is True:
+            cited.extend(c for c in cited_lines(sibling) if c not in cited)
+
+    def _inside(places, path, rng):
+        return any(file == path and rng[0] <= line <= rng[1] for file, line in places)
+
+    # axis: one of the target's own cited lines must lie in a removed range — see bite-proof record audit_test_removal_2434
+    if not any(_inside(own, path, rng) for path, ranges, _a, _o, _s, _b in rows for rng in ranges):
+        return None, "C6", "no removed range holds a line the finding cites"
+    cited_set = set(cited)
+
+    def _tied(path, line, blank):
+        return (path, line) in cited_set or line in blank
+
+    for path, ranges, _a, _o, spans, blank in rows:
+        for rng in ranges:
+            # axis: a removed line outside every test span, neither cited nor blank, needs a cited line in its removed range, so the fix cannot also delete an uncited helper or fixture — see bite-proof record audit_test_removal_2434
+            if not _inside(cited, path, rng) and any(
+                    line not in blank and not any(s[0] <= line <= s[2] for s in spans or ())
+                    for line in range(rng[0], rng[1] + 1)):
+                return None, "C7", "%s lines %d-%d hold no cited line" % (path, rng[0], rng[1])
+    for path, _r, _a, openings, _s, _b in rows:
+        # axis: a file in a language the test-opening reader does not support clears nothing on the removal answer — see bite-proof record audit_test_removal_2434
+        if openings is None:
+            return None, "C8", "%s is in a language whose tests cannot be read" % path
+    for path, ranges, _a, _o, spans, blank in rows:
+        for rng in ranges:
+            for line in range(rng[0], rng[1] + 1):
+                inner = max((s for s in spans if s[0] <= line <= s[2]), key=lambda s: s[0], default=None)
+                # axis: a removed line, neither cited nor blank, whose innermost test span opens on an uncited line refuses, so the fix cannot also delete the rest of an unflagged test or the fixture around a flagged one — see bite-proof record audit_test_removal_2434
+                if inner is not None and not _tied(path, line, blank) and (path, inner[1]) not in cited_set:
+                    return None, "C9", "%s line %d is in the test that opens at line %d, which no finding cites" % (
+                        path, line, inner[1])
+    inside_openings = []
+    for path, ranges, _a, openings, _s, _b in rows:
+        within = sorted({n for n in openings if any(rng[0] <= n <= rng[1] for rng in ranges)})
+        inside_openings.append({"file": path, "lines": within})
+    # axis: a cited line that may have moved since the finding was raised ties nothing — see bite-proof record audit_test_removal_2434
+    if target.get("citationFresh") is not True:
+        return None, "C10", "the cited lines may have moved since the finding was raised"
+    reason = target["body"].strip()[:500]
+    return {"source": "finding", "finding": target.get("id"), "taxonomy": smell, "reason": reason,
+            "removed": [{"file": row[0], "ranges": [list(r) for r in row[1]]} for row in rows],
+            "cited": [{"file": file, "line": line} for file, line in cited],
+            "openings": inside_openings}, None, None
+
+
 MATCH_SAME = "same"
 MATCH_CHANGED_EXPLAINED = "changed-explained"
 MATCH_CHANGED_UNEXPLAINED = "changed-unexplained"
@@ -172,7 +451,7 @@ def _answered(entry, allowed):
 def audit_checks_fault(result, target=None):
     """None when an audit result answers the fix auditor's three checks (`checks.right`,
     `checks.brokeNothing`, `checks.testWouldFail`, each `{"answer": "yes"|"no", "why": <reason>}`; only
-    `testWouldFail` may also answer `review-guarded`, per `check_answers`) and,
+    `testWouldFail` may also answer `review-guarded` or `worthless-test-removed`, per `check_answers`) and,
     where `target` carries a `breakIt` whose match is `changed-explained`, the test comparison
     (`testMatch`: `{"answer": "matches"|"weakened", "why": <reason>}`); otherwise a short reason. With
     no target in hand only the `checks` shape is judged. The ONE judge of this shape: the payload
@@ -420,6 +699,8 @@ class _AuditFold:
         self.places_ignored = []
         self.review_guarded = []
         self.review_guard_refused = []
+        self.test_removal_cleared = []
+        self.test_removal_refused = []
         self.allowed_ids = set(i for i in (change_allowed_ids or ()) if isinstance(i, str))
         self.matched_ids = set()
 
@@ -520,6 +801,9 @@ class _AuditFold:
         finished, guarded = self._review_guard(base, fid, f, r, ruling)
         if finished:
             return
+        finished, removal = self._test_removal_guard(base, fid, f, r, ruling)
+        if finished:
+            return
 
         # A clearing result that names behaviour its finding does not name is accepted only when the
         # finding's ruling allows the change. Provenance (above) keeps its precedence.
@@ -538,10 +822,10 @@ class _AuditFold:
 
         if ruling == "discharged":
             self._fold_discharged(base, fid, reason, has_reason, evidence, unnamed_text, attributed,
-                                  fixes, reverts, guarded)
+                                  fixes, reverts, guarded, removal)
         elif ruling == "discharged-but-new-issue":
             self._fold_discharged_new_issue(base, fid, r, reason, has_reason, evidence, unnamed_text,
-                                            attributed, fixes, reverts, guarded)
+                                            attributed, fixes, reverts, guarded, removal)
         elif ruling == "not-discharged":
             self._fold_not_discharged(base, fid, r, reason, has_reason, unnamed_text, expected_auditor,
                                       keeps_new_issues)
@@ -759,6 +1043,32 @@ class _AuditFold:
             guarded = {"answer": REVIEW_GUARDED, "why": r["checks"]["testWouldFail"]["why"].strip()}
         return False, guarded
 
+    def _test_removal_guard(self, base, fid, f, r, ruling):
+        # A clearing ruling whose `testWouldFail` answers `worthless-test-removed` stands only when the fix
+        # attempt only removed test lines a worthless-test finding cites (`test_removal_clearance`, C1-C10),
+        # judged from the driver-built `fixerDelta`, `fixerRemoval` and the target's own finding fields — never
+        # from anything the auditor wrote. The answer is recorded only once the entry ends cleared.
+        removal = None
+        if ruling in _CLEARS and r["checks"]["testWouldFail"]["answer"] == WORTHLESS_TEST_REMOVED:
+            evidence, failing, detail = test_removal_clearance(f)
+            # axis: worthless-test-removed clears only when every condition C1-C10 holds; any other fix folds not-discharged — see bite-proof record audit_test_removal_2434
+            if evidence is None:
+                self.not_discharged.append(fid)
+                self.test_removal_refused.append(fid)
+                candidates = (_valid_new_issues(r.get("newIssues"), fid)
+                              if ruling == "discharged-but-new-issue" else [])
+                self.new_issues.extend(candidates)
+                base.update(ruling="not-discharged",
+                            reason=("audit check failed: testWouldFail: worthless-test-removed clears only a "
+                                    "fix that removes test lines a worthless-test finding cites; %s: %s"
+                                    % (failing, detail)))
+                self.audits.append(base)
+                return True, removal
+            evidence["finding"] = fid
+            removal = {"answer": WORTHLESS_TEST_REMOVED, "why": r["checks"]["testWouldFail"]["why"].strip(),
+                       "evidence": evidence}
+        return False, removal
+
     def _fold_malformed_unnamed(self, base, fid, r, ruling, unnamed):
         if ruling in _CLEARS and unnamed is not None and not isinstance(unnamed, str):
             self.malformed.append(fid)
@@ -790,7 +1100,7 @@ class _AuditFold:
         return False
 
     def _fold_discharged(self, base, fid, reason, has_reason, evidence, unnamed_text, attributed,
-                         fixes, reverts, guarded):
+                         fixes, reverts, guarded, removal=None):
         if has_reason and unnamed_text and fid not in self.allowed_ids and not attributed:
             self.refuse_unnamed_change(base, fid, unnamed_text, [])
             return
@@ -807,8 +1117,11 @@ class _AuditFold:
             # axis: a review-guarded id is listed only once its entry ends cleared — see bite-proof record audit_review_guarded_2341
             if guarded is not None:
                 self.review_guarded.append(fid)
-            if guarded is not None:
                 base["reviewGuarded"] = guarded
+            # a worthless-test-removed id is listed only once its entry ends cleared, as a review-guarded one is
+            if removal is not None:
+                self.test_removal_cleared.append(fid)
+                base["testRemoval"] = removal
             return
         # reasonless `discharged` is unusable — a bare "fixed" is exactly the unproven claim
         # this fold exists to reject.
@@ -820,7 +1133,7 @@ class _AuditFold:
         return
 
     def _fold_discharged_new_issue(self, base, fid, r, reason, has_reason, evidence, unnamed_text,
-                                   attributed, fixes, reverts, guarded):
+                                   attributed, fixes, reverts, guarded, removal=None):
         candidates = _valid_new_issues(r.get("newIssues"), fid)
         if candidates and unnamed_text and fid not in self.allowed_ids and not attributed:
             self.refuse_unnamed_change(base, fid, unnamed_text, candidates)
@@ -839,8 +1152,10 @@ class _AuditFold:
             self.discharged.append(fid)
             if guarded is not None:
                 self.review_guarded.append(fid)
-            if guarded is not None:
                 base["reviewGuarded"] = guarded
+            if removal is not None:
+                self.test_removal_cleared.append(fid)
+                base["testRemoval"] = removal
             return
         # a discharged-but-new-issue with no usable candidate is an unusable claim.
         self.malformed.append(fid)
@@ -896,6 +1211,8 @@ class _AuditFold:
             "placesIgnored": self.places_ignored,
             "reviewGuarded": self.review_guarded,
             "reviewGuardRefused": self.review_guard_refused,
+            "testRemovalCleared": self.test_removal_cleared,
+            "testRemovalRefused": self.test_removal_refused,
         }
 
 
@@ -942,7 +1259,13 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     `brokeNothing` with `review-guarded` for `testWouldFail` when the target's driver-built `fixerDelta`
     shows the fix attempt's whole delta is prose (`prose_only_delta`); with any other delta it is
     not-discharged and listed in `reviewGuardRefused`, and a cleared one is listed in `reviewGuarded`
-    and its entry records `reviewGuarded: {answer, why}`. A target carrying `breakIt`
+    and its entry records `reviewGuarded: {answer, why}`. A clearing ruling may instead answer `worthless-test-removed`
+    for `testWouldFail` (`right` and `brokeNothing` still `yes`); it stands only when `test_removal_clearance`
+    finds every condition C1-C10 true of the target's driver-built `fixerDelta`, `fixerRemoval`, own finding
+    fields and `batchFindings` (the fix only removes test lines a worthless-test finding cites); otherwise it is
+    not-discharged and listed in `testRemovalRefused`, its reason naming the first failing condition, and a
+    cleared one is listed in `testRemovalCleared` and its entry records `testRemoval: {answer, why, evidence}`.
+    A target carrying `breakIt`
     is blocked (not-discharged, listed in `testMismatch`) when its `match` is `missing` or
     `changed-unexplained`, or is `changed-explained` and the result's `testMatch` says `weakened`; each
     of its `audits` entries records `testMatch: {match, answer, blocking}`. Only a target that has a
@@ -950,7 +1273,7 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
 
     Returns {audits, discharged, notDischarged, newIssues, unaudited, ambiguous, malformed,
     unmatched, unauthenticated, echoMismatch, unnamedChange, attributedChange, testMismatch,
-    placesUnfixed, placesIgnored, reviewGuarded, reviewGuardRefused}. Each `audits` entry
+    placesUnfixed, placesIgnored, reviewGuarded, reviewGuardRefused, testRemovalCleared, testRemovalRefused}. Each `audits` entry
     carries the EFFECTIVE (post-fail-closed) ruling. The disclosure lists (unaudited/ambiguous/malformed/unauthenticated)
     are subsets of notDischarged that name WHY the finding could not be certified discharged;
     `unmatched` names results that hit no finding. `unauthenticated` names clearing rulings the

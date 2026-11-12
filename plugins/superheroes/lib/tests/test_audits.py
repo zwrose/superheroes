@@ -178,7 +178,8 @@ def test_never_raises_on_junk_input():
                             "unauthenticated", "echoMismatch", "unnamedChange",
                             "attributedChange", "testMismatch",
                             "placesUnfixed", "placesIgnored",
-                            "reviewGuarded", "reviewGuardRefused"}
+                            "reviewGuarded", "reviewGuardRefused",
+                            "testRemovalCleared", "testRemovalRefused"}
 
 
 def test_idless_finding_is_kept_not_discharged():
