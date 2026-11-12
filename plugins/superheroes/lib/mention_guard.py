@@ -37,9 +37,9 @@ REMEDY = ("GitHub notifies whoever a login after an at-sign names. Drop the at-s
           "'collector 574' or the bare name), or put the token in a code span; post a mention only when you mean "
           "to notify that person, and then outside the plugin's writers.")
 
-# axis: a bare at-sign GitHub reads as a login, outside fences and code spans, is reported — see bite-proof record wo_2453_mention_guard
+# axis: a bare at-sign (or its character code) GitHub reads as a login, outside fences and code spans, is reported — see bite-proof record wo_2453_mention_guard
 MENTION_RE = re.compile(
-    r"(?:^|(?<=\W))@((?>[a-z0-9][a-z0-9-]*))(?=\.+[ \t\W]|\.+$|[^0-9a-zA-Z_.]|$)",
+    r"(?:^|(?<=\W))(?:@|&#0*64;|&#x0*40;|&commat;)((?>[a-z0-9][a-z0-9-]*))(?=\.+[ \t\W]|\.+$|[^0-9a-zA-Z_.]|$)",
     re.IGNORECASE | re.MULTILINE,
 )
 _BACKTICK_RUN_RE = re.compile(r"`+")
@@ -50,15 +50,15 @@ _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
 _RAW_HTML_RE = re.compile(r"^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE | re.ASCII)
 _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE | re.ASCII)
 _HTML_OTHER_BLOCK_RE = re.compile(r"^ {0,3}<[!?]")  # a comment, instruction, declaration or CDATA block (GFM 2-5)
-_TAG_START_RE = re.compile(r"(?<!\\)<[A-Za-z/!?]")  # an HTML tag, comment or autolink start
+_TAG_START_RE = re.compile(r"<[A-Za-z/!?]")  # an HTML tag, comment or autolink start, escaped-looking or not
 _QUOTE_RE = re.compile("[\"']")
 _CHAIN_RE = re.compile(r"(?:[\w.-]*@[\w-]*)*")  # at-signs attached after a mention
 # Tag patterns fold case over ASCII only, so no look-alike closes a block. A code element masks; `\<code>` is literal.
 _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASCII)
-# A bare URL GitHub links (its mention filter skips anchors): a scheme spelt out, no look-alike, then a host of ASCII
-# letters, digits, dots and hyphens (an underscore host stays text). Its Unicode word and space classes stop it before
-# GitHub's autolinker does, which over-reports. No link-destination or angle shape masks anything.
-_URL_RE = re.compile(r"\b(?:[Hh][Tt][Tt][Pp][Ss]?|[Ff][Tt][Pp])://[A-Za-z0-9][A-Za-z0-9.-]*(?:[/?#:][^\s<>()]*)?"
+# A bare http(s) URL GitHub links (its mention filter skips anchors): a scheme spelt out, a host of ASCII letters,
+# digits, dots and hyphens (an underscore host stays text); a path running into a backtick, pipe or bracket masks
+# nothing. Unicode word and space classes stop it early, which over-reports. No link or angle shape masks anything.
+_URL_RE = re.compile(r"\b[Hh][Tt][Tt][Pp][Ss]?://[A-Za-z0-9][A-Za-z0-9.-]*(?:[/?#:][^\s<>()`|\[\]]*)?"
                      r"(?![^\s<>()])")
 
 
@@ -231,8 +231,8 @@ def _found(text):
         if html[idx]:
             # axis: a raw HTML block renders no code span, so its backticks mask nothing
             # axis: on a raw HTML line only a code element masks; a URL there is literal text GitHub may mention in
-            # axis: a code element holding a quote may start or end inside an attribute, so it masks nothing
-            elements = [m.span() for m in _CODE_ELEMENT_RE.finditer(line) if not _QUOTE_RE.search(m.group())]
+            # axis: a code element holding a quote, or on a line holding `<!`, may sit in an attribute or comment: no mask
+            elements = [m.span() for m in _CODE_ELEMENT_RE.finditer(line) if "<!" not in line and not _QUOTE_RE.search(m.group())]
             out.extend((idx, m.start(), m.end(), "@" + m.group(1), True) for m in MENTION_RE.finditer(line)
                        if not any(start <= m.start() < stop for start, stop in elements))
             idx += 1

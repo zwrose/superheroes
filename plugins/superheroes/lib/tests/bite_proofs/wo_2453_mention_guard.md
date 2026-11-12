@@ -30,13 +30,13 @@ Restore receipts: for a file the work order left untouched against head `85d7dfe
 ```
 FFFFFFFFFFFFF                                                            [100%]
 =================================== FAILURES ===================================
-_______________ test_g1_a_bare_mention_is_reported[ping @zwrose] _______________
+_______________ test_g1_a_bare_mention_is_reported[ping @zwrose-no-such-login-0000000000000000000] _______________
 
-text = 'ping @zwrose', tokens = ['@zwrose']
+text = 'ping @zwrose-no-such-login-0000000000000000000', tokens = ['@zwrose-no-such-login-0000000000000000000']
 
 >       assert _tokens(text) == tokens
-E       AssertionError: assert [] == ['@zwrose']
-E         Right contains one more item: '@zwrose'
+E       AssertionError: assert [] == ['@zwrose-no-such-login-0000000000000000000']
+E         Right contains one more item: '@zwrose-no-such-login-0000000000000000000'
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:92: AssertionError
 ...
@@ -72,7 +72,7 @@ Cause, measured with the neutralization still in the tree (`mg.bare_mentions`):
 
 ```
 decorator, fence masking neutralized: []
-plain login in same position: [{'line': 1, 'token': '@octo'}]
+plain login in same position: [{'line': 1, 'token': '@octo-no-such-login-000000000000000000000'}]
 ```
 
 `@pytest.fixture` is never matched by `MENTION_RE`: the login `pytest` is followed by `.f`, and the lookahead accepts a dot only when it is followed by whitespace or a non-word character, or ends the line. So a fenced `@pytest.fixture` row never reaches the fence check, and the fixture does not create the condition the assertion discriminates on (the rubric's second face of vacuity). Those rows stay green whether or not fences are masked; the G2-labelled test has the same fixture and the same defect. Per the order the test was not edited.
@@ -82,21 +82,21 @@ What does bite the fence check, and is **not** the designated proof: three other
 ```
 F.FF                                                                     [100%]
 ______________ test_line_numbers_are_one_based_and_in_text_order _______________
->       assert mg.bare_mentions(text) == [{"line": 2, "token": "@one"}, {"line": 6, "token": "@two"}]
-E       At index 1 diff: {'line': 4, 'token': '@no'} != {'line': 6, 'token': '@two'}
+>       assert mg.bare_mentions(text) == [{"line": 2, "token": "@one-no-such-login-0000000000000000000000"}, {"line": 6, "token": "@two-no-such-login-0000000000000000000000"}]
+E       At index 1 diff: {'line': 4, 'token': '@no-no-such-login-00000000000000000000000'} != {'line': 6, 'token': '@two-no-such-login-0000000000000000000000'}
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:134: AssertionError
 _________ test_e3_an_unterminated_fence_makes_the_lines_after_it_inert _________
 >       assert mg.bare_mentions(text) == []
-E       AssertionError: assert [{'line': 3, ...en': '@octo'}] == []
+E       AssertionError: assert [{'line': 3, ...en': '@octo-no-such-login-000000000000000000000'}] == []
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:193: AssertionError
 ___________ test_e5_crlf_line_endings_keep_fences_and_lines_working __________
->       assert mg.bare_mentions(fenced) == [{"line": 5, "token": "@bare"}]
-E       At index 0 diff: {'line': 3, 'token': '@octo'} != {'line': 5, 'token': '@bare'}
+>       assert mg.bare_mentions(fenced) == [{"line": 5, "token": "@bare-no-such-login-000000000000000000000"}]
+E       At index 0 diff: {'line': 3, 'token': '@octo-no-such-login-000000000000000000000'} != {'line': 5, 'token': '@bare-no-such-login-000000000000000000000'}
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:205: AssertionError
 3 failed, 1 passed, 68 deselected in 2.22s
 ```
 
-(Assertion bodies trimmed to the decisive `E` lines; the `Left contains one more item` lines are elided.) These reds are on the right axis (a fenced login is reported when it should not be), so fence masking is bitten by the suite, but the two rows the order and the test names point at do not bite it. Recommended cure, for the orchestrator: a fenced plain-login row (`@octo`) in `HEALTHY` and in `test_g2_…`, in place of or beside the decorator; that is a test edit outside this order and was not made.
+(Assertion bodies trimmed to the decisive `E` lines; the `Left contains one more item` lines are elided.) These reds are on the right axis (a fenced login is reported when it should not be), so fence masking is bitten by the suite, but the two rows the order and the test names point at do not bite it. Recommended cure, for the orchestrator: a fenced plain-login row (`@octo-no-such-login-000000000000000000000`) in `HEALTHY` and in `test_g2_…`, in place of or beside the decorator; that is a test edit outside this order and was not made.
 
 - **Restore:** inverse edit (`if False:` back to `if inert[idx]:`).
 - **Restore receipt:** `git status --porcelain` and `git diff --stat` on `mention_guard.py` printed nothing; `grep -n "if inert\[idx\]:"` printed `89:        if inert[idx]:`.
@@ -108,30 +108,30 @@ E       At index 0 diff: {'line': 3, 'token': '@octo'} != {'line': 5, 'token': '
 18 passed, 54 deselected in 1.94s
 ```
 
-**Re-proof after the fixture fix.** The two new `HEALTHY` rows (`` ```\n@octo\n``` `` and `~~~\n@octo\n~~~`) and an `@octo` line inside the fence of both texts in `test_g2_…` now create the condition the assertion discriminates on (`@octo` matches `MENTION_RE`, `@pytest.fixture` does not). The test file was not edited between the red and the green below.
+**Re-proof after the fixture fix.** The two new `HEALTHY` rows (`` ```\n@octo-no-such-login-000000000000000000000\n``` `` and `~~~\n@octo-no-such-login-000000000000000000000\n~~~`) and an `@octo-no-such-login-000000000000000000000` line inside the fence of both texts in `test_g2_…` now create the condition the assertion discriminates on (`@octo-no-such-login-000000000000000000000` matches `MENTION_RE`, `@pytest.fixture` does not). The test file was not edited between the red and the green below.
 
-- **Guarded element and axis:** fence masking in `_found` (`mention_guard.py:89`); lines `md_fence` marks inert are not scanned. Detectors: `test_healthy_rows_pass_untouched` (the two new fenced-`@octo` rows) and `test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes`.
+- **Guarded element and axis:** fence masking in `_found` (`mention_guard.py:89`); lines `md_fence` marks inert are not scanned. Detectors: `test_healthy_rows_pass_untouched` (the two new fenced-`@octo-no-such-login-000000000000000000000` rows) and `test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes`.
 - **Neutralization:** `if inert[idx]:` became `if False:` (targeted Edit, one occurrence).
 
 **Raw red** (exit 1; command `timeout 120 scripts/pinned-python -B -X pycache_prefix=/tmp/superheroes-pyc-2453 -m pytest plugins/superheroes/lib/tests/test_mention_guard.py -q -p no:cacheprovider -k "g2 or healthy"`; the `UV_NATIVE_TLS` warning line, the second `HEALTHY` failure's `E` detail lines beyond the first two, the `Use -v to get more diff` lines and the g2 source-line echo are elided; the three failing nodes are all shown):
 
 ```
 ....FF..........F....                                                    [100%]
-_____________ test_healthy_rows_pass_untouched[```\n@octo\n```\n] ______________
+_____________ test_healthy_rows_pass_untouched[```\n@octo-no-such-login-000000000000000000000\n```\n] ______________
 >       assert mg.bare_mentions(text) == []
-E       AssertionError: assert [{'line': 2, ...en': '@octo'}] == []
-E         Left contains one more item: {'line': 2, 'token': '@octo'}
+E       AssertionError: assert [{'line': 2, ...en': '@octo-no-such-login-000000000000000000000'}] == []
+E         Left contains one more item: {'line': 2, 'token': '@octo-no-such-login-000000000000000000000'}
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:102: AssertionError
-_____________ test_healthy_rows_pass_untouched[~~~\n@octo\n~~~\n] ______________
+_____________ test_healthy_rows_pass_untouched[~~~\n@octo-no-such-login-000000000000000000000\n~~~\n] ______________
 >       assert mg.bare_mentions(text) == []
-E       AssertionError: assert [{'line': 2, ...en': '@octo'}] == []
-E         Left contains one more item: {'line': 2, 'token': '@octo'}
+E       AssertionError: assert [{'line': 2, ...en': '@octo-no-such-login-000000000000000000000'}] == []
+E         Left contains one more item: {'line': 2, 'token': '@octo-no-such-login-000000000000000000000'}
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:102: AssertionError
 _________ test_g2_a_fenced_decorator_is_inert_in_backticks_and_tildes __________
->           assert mg.bare_mentions(text) == [{"line": 6, "token": "@octo"}]
-E           AssertionError: assert [{'line': 4, ...en': '@octo'}] == [{'line': 6, ...en': '@octo'}]
-E             At index 0 diff: {'line': 4, 'token': '@octo'} != {'line': 6, 'token': '@octo'}
-E             Left contains one more item: {'line': 6, 'token': '@octo'}
+>           assert mg.bare_mentions(text) == [{"line": 6, "token": "@octo-no-such-login-000000000000000000000"}]
+E           AssertionError: assert [{'line': 4, ...en': '@octo-no-such-login-000000000000000000000'}] == [{'line': 6, ...en': '@octo-no-such-login-000000000000000000000'}]
+E             At index 0 diff: {'line': 4, 'token': '@octo-no-such-login-000000000000000000000'} != {'line': 6, 'token': '@octo-no-such-login-000000000000000000000'}
+E             Left contains one more item: {'line': 6, 'token': '@octo-no-such-login-000000000000000000000'}
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:112: AssertionError
 3 failed, 18 passed, 53 deselected in 2.37s
 ```
@@ -158,18 +158,18 @@ The reds are on the expected assertions: `bare_mentions(text) == []` for the two
 
 ```
 FF............                                                           [100%]
-__________________ test_healthy_rows_pass_untouched[`@octo`] ___________________
+__________________ test_healthy_rows_pass_untouched[`@octo-no-such-login-000000000000000000000`] ___________________
 
-text = '`@octo`'
+text = '`@octo-no-such-login-000000000000000000000`'
 
 >       assert mg.bare_mentions(text) == []
-E       AssertionError: assert [{'line': 1, ...en': '@octo'}] == []
-E         Left contains one more item: {'line': 1, 'token': '@octo'}
+E       AssertionError: assert [{'line': 1, ...en': '@octo-no-such-login-000000000000000000000'}] == []
+E         Left contains one more item: {'line': 1, 'token': '@octo-no-such-login-000000000000000000000'}
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:100: AssertionError
 ...
-FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_healthy_rows_pass_untouched[`@octo`]
-FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_healthy_rows_pass_untouched[``a ` @octo``]
+FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_healthy_rows_pass_untouched[`@octo-no-such-login-000000000000000000000`]
+FAILED plugins/superheroes/lib/tests/test_mention_guard.py::test_healthy_rows_pass_untouched[``a ` @octo-no-such-login-000000000000000000000``]
 2 failed, 12 passed, 58 deselected in 2.28s
 ```
 
@@ -198,8 +198,8 @@ ______________ test_healthy_rows_pass_untouched[ops+@example.com] ______________
 text = 'ops+@example.com'
 
 >       assert mg.bare_mentions(text) == []
-E       AssertionError: assert [{'line': 1, ...: '@example'}] == []
-E         Left contains one more item: {'line': 1, 'token': '@example'}
+E       AssertionError: assert [{'line': 1, ...: '@example-no-such-login-000000000000000000'}] == []
+E         Left contains one more item: {'line': 1, 'token': '@example-no-such-login-000000000000000000'}
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:100: AssertionError
 ...
@@ -231,11 +231,11 @@ F                                                                        [100%]
 ______________ test_g5_wrap_never_pairs_with_an_existing_backtick ______________
 
     def test_g5_wrap_never_pairs_with_an_existing_backtick():
-        text = "broken " + TICK + " example @893"
+        text = "broken " + TICK + " example @8930000000000000000000000000000000000000"
         wrapped = mg.wrap(text)
 >       assert mg.bare_mentions(wrapped) == []
-E       AssertionError: assert [{'line': 1, 'token': '@893'}] == []
-E         Left contains one more item: {'line': 1, 'token': '@893'}
+E       AssertionError: assert [{'line': 1, 'token': '@8930000000000000000000000000000000000000'}] == []
+E         Left contains one more item: {'line': 1, 'token': '@8930000000000000000000000000000000000000'}
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:153: AssertionError
 1 failed, 71 deselected in 1.97s
@@ -267,7 +267,7 @@ F                                                                        [100%]
 
 result = {'ok': True, 'reason': None, 'url': 'https://github.com/o/r/issues/1#c1', 'transit': {'transit': 'not-checked', 'why': 'the text could not be read back'}, ...}
 
-    def _assert_refusal(result, token="@zwrose"):
+    def _assert_refusal(result, token="@zwrose-no-such-login-0000000000000000000"):
 >       assert result["ok"] is False and result["reason"] == "bare-mention"
 E       assert (True is False)
 
@@ -299,7 +299,7 @@ F                                                                        [100%]
 
 result = {'ok': True, 'reason': None, 'url': 'https://github.com/o/r/issues/1#c1', 'transit': {'transit': 'not-checked', 'why': 'the text could not be read back'}, ...}
 
-    def _assert_refusal(result, token="@zwrose"):
+    def _assert_refusal(result, token="@zwrose-no-such-login-0000000000000000000"):
 >       assert result["ok"] is False and result["reason"] == "bare-mention"
 E       assert (True is False)
 
@@ -327,11 +327,11 @@ E       assert (True is False)
 
 ```
 F                                                                        [100%]
->       _assert_refusal(cb.note_text("ping @zwrose"))
+>       _assert_refusal(cb.note_text("ping @zwrose-no-such-login-0000000000000000000"))
 
-result = {'comment': "Builder note for the advisor (cloud build).\n\nping @zwrose\n\nI'm waiting for your answer."}
+result = {'comment': "Builder note for the advisor (cloud build).\n\nping @zwrose-no-such-login-0000000000000000000\n\nI'm waiting for your answer."}
 
-    def _assert_refusal(result, token="@zwrose"):
+    def _assert_refusal(result, token="@zwrose-no-such-login-0000000000000000000"):
 >       assert result["ok"] is False and result["reason"] == "bare-mention"
                ^^^^^^^^^^^^
 E       KeyError: 'ok'
@@ -360,11 +360,11 @@ E       KeyError: 'ok'
 
 ```
 F                                                                        [100%]
->       _assert_refusal(cb.progress_text("building", "ping @zwrose", started, 30))
+>       _assert_refusal(cb.progress_text("building", "ping @zwrose-no-such-login-0000000000000000000", started, 30))
 
-result = {'ok': True, 'comment': 'Builder progress (cloud build).\n\nPhase: building\nNow running: ping @zwrose\nStarted: 2026-01-02T03:04:05Z\nExpected: 30 minutes'}
+result = {'ok': True, 'comment': 'Builder progress (cloud build).\n\nPhase: building\nNow running: ping @zwrose-no-such-login-0000000000000000000\nStarted: 2026-01-02T03:04:05Z\nExpected: 30 minutes'}
 
-    def _assert_refusal(result, token="@zwrose"):
+    def _assert_refusal(result, token="@zwrose-no-such-login-0000000000000000000"):
 >       assert result["ok"] is False and result["reason"] == "bare-mention"
 E       assert (True is False)
 
@@ -392,11 +392,11 @@ E       assert (True is False)
 
 ```
 F                                                                        [100%]
->           _assert_refusal(cb.terminal_text(kind, "ping @zwrose"))
+>           _assert_refusal(cb.terminal_text(kind, "ping @zwrose-no-such-login-0000000000000000000"))
 
-result = {'ok': True, 'comment': 'Builder handback (cloud build).\n\nping @zwrose'}
+result = {'ok': True, 'comment': 'Builder handback (cloud build).\n\nping @zwrose-no-such-login-0000000000000000000'}
 
-    def _assert_refusal(result, token="@zwrose"):
+    def _assert_refusal(result, token="@zwrose-no-such-login-0000000000000000000"):
 >       assert result["ok"] is False and result["reason"] == "bare-mention"
 E       assert (True is False)
 
@@ -428,7 +428,7 @@ F                                                                        [100%]
 
 result = {'ok': True, 'msgId': 'de7200c3c084', 'relay': 'superheroes-relay-claude-two-30b4c4ec', 'commentBodyFile': '/tmp/claud...e_r0/ledger-root/62ee07c15e0035ad2bfd2d49d520c5127420fbeef7fb8fa8f4110a4f8047153b/relay-messages/de7200c3c084.md', ...}
 
-    def _assert_refusal(result, token="@zwrose"):
+    def _assert_refusal(result, token="@zwrose-no-such-login-0000000000000000000"):
 >       assert result["ok"] is False and result["reason"] == "bare-mention"
 E       assert (True is False)
 
@@ -516,8 +516,8 @@ E       assert (True is False)
 ```
 F                                                                        [100%]
 >       assert mg.bare_mentions(sent) == []
-E       AssertionError: assert [{'line': 4, ...': '@zwrose'}] == []
-E         Left contains one more item: {'line': 4, 'token': '@zwrose'}
+E       AssertionError: assert [{'line': 4, ...': '@zwrose-no-such-login-0000000000000000000'}] == []
+E         Left contains one more item: {'line': 4, 'token': '@zwrose-no-such-login-0000000000000000000'}
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:447: AssertionError
 1 failed, 71 deselected in 2.30s
@@ -545,8 +545,8 @@ E         Left contains one more item: {'line': 4, 'token': '@zwrose'}
 F                                                                        [100%]
         body = rr.render(rec)
 >       assert mg.bare_mentions(body) == []
-E       AssertionError: assert [{'line': 4, ...': '@zwrose'}] == []
-E         Left contains one more item: {'line': 4, 'token': '@zwrose'}
+E       AssertionError: assert [{'line': 4, ...': '@zwrose-no-such-login-0000000000000000000'}] == []
+E         Left contains one more item: {'line': 4, 'token': '@zwrose-no-such-login-0000000000000000000'}
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:469: AssertionError
 1 failed, 71 deselected in 2.20s
@@ -578,8 +578,8 @@ F                                                                        [100%]
         assert plan.parts
         head = plan.head(list(range(1, len(plan.parts) + 1)))
 >       assert mg.bare_mentions(head) == []
-E       AssertionError: assert [{'line': 4, ...': '@zwrose'}] == []
-E         Left contains one more item: {'line': 4, 'token': '@zwrose'}
+E       AssertionError: assert [{'line': 4, ...': '@zwrose-no-such-login-0000000000000000000'}] == []
+E         Left contains one more item: {'line': 4, 'token': '@zwrose-no-such-login-0000000000000000000'}
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:481: AssertionError
 1 failed, 71 deselected in 2.26s
@@ -656,11 +656,11 @@ _______ test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports ________
     def test_a_span_the_line_alone_does_not_pair_is_a_doubt_and_reports():
         # axis: G17 — code masks a mention only when its own line pairs it too, so a backtick pair that exists only
         # across the line break leaves the mention reported (a doubt reports)
-        text = TICK + "a\n@octo b" + TICK + "\n"
->       assert mg.bare_mentions(text) == [{"line": 2, "mention": "@octo"}]
-E       AssertionError: assert [] == [{'line': 2, ...on': '@octo'}]
+        text = TICK + "a\n@octo-no-such-login-000000000000000000000 b" + TICK + "\n"
+>       assert mg.bare_mentions(text) == [{"line": 2, "mention": "@octo-no-such-login-000000000000000000000"}]
+E       AssertionError: assert [] == [{'line': 2, ...on': '@octo-no-such-login-000000000000000000000'}]
 E         
-E         Right contains one more item: {'line': 2, 'mention': '@octo'}
+E         Right contains one more item: {'line': 2, 'mention': '@octo-no-such-login-000000000000000000000'}
 E         Use -v to get more diff
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:238: AssertionError
@@ -692,12 +692,12 @@ F.                                                                       [100%]
 =================================== FAILURES ===================================
 _ test_g6_post_comment_refuses_a_mention_a_single_reading_would_have_masked[multi-line-span] _
 
-body = 'begin `code\nend` then @octo `literal\n'
+body = 'begin `code\nend` then @octo-no-such-login-000000000000000000000 `literal\n'
 ...
         result = cb.post_comment("o/r", 1, _body_file(tmp_path, body), run=run, env={})
->       _assert_refusal(result, mention="@octo")
+>       _assert_refusal(result, mention="@octo-no-such-login-000000000000000000000")
 ...
-    def _assert_refusal(result, mention="@zwrose"):
+    def _assert_refusal(result, mention="@zwrose-no-such-login-0000000000000000000"):
 >       assert result["ok"] is False and result["reason"] == "bare-mention"
 E       assert (True is False)
 
@@ -734,7 +734,7 @@ ____ test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell _____
 
     def test_a_table_row_without_a_leading_pipe_pairs_code_spans_cell_by_cell():
         # axis: G19 — a row with no leading pipe is still a row: a backtick in one cell cannot pair with one in another
-        text = "a | b\n--- | ---\n" + TICK + " | @octo " + TICK + "\n"
+        text = "a | b\n--- | ---\n" + TICK + " | @octo-no-such-login-000000000000000000000 " + TICK + "\n"
 >       assert [m["line"] for m in mg.bare_mentions(text)] == [3]
 E       assert [] == [3]
 E         
@@ -773,11 +773,11 @@ _ test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_f
     def test_a_fence_in_a_list_extended_cannot_pair_its_indented_closer_with_a_later_fence():
         # axis: G20 — md_fence pairs the indented closer (line 3) with the column-0 fence at line 7; that block's opener
         # is indented, so it masks nothing and the mention on line 5 is reported
-        text = ("- " + FENCE + "\n  example\n  " + FENCE + "\n\nping @octo\n\n" + FENCE + "\nmore\n" + FENCE + "\n")
->       assert mg.bare_mentions(text) == [{"line": 5, "mention": "@octo"}]
-E       AssertionError: assert [] == [{'line': 5, ...on': '@octo'}]
+        text = ("- " + FENCE + "\n  example\n  " + FENCE + "\n\nping @octo-no-such-login-000000000000000000000\n\n" + FENCE + "\nmore\n" + FENCE + "\n")
+>       assert mg.bare_mentions(text) == [{"line": 5, "mention": "@octo-no-such-login-000000000000000000000"}]
+E       AssertionError: assert [] == [{'line': 5, ...on': '@octo-no-such-login-000000000000000000000'}]
 E         
-E         Right contains one more item: {'line': 5, 'mention': '@octo'}
+E         Right contains one more item: {'line': 5, 'mention': '@octo-no-such-login-000000000000000000000'}
 E         Use -v to get more diff
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:213: AssertionError
@@ -812,11 +812,11 @@ _______ test_a_link_destination_with_balanced_parentheses_is_left_alone ________
     def test_a_link_destination_with_balanced_parentheses_is_left_alone():
         # axis: G21 — the destination pattern takes one level of balanced parentheses, so the at-sign after `(b)` is
         # still inside the destination
-        text = "[package](https://example.com/a(b)/@scope/pkg)\n"
+        text = "[package](https://example.com/a(b)/@scope-no-such-login-00000000000000000000/pkg)\n"
 >       assert mg.bare_mentions(text) == []
-E       AssertionError: assert [{'line': 1, ...n': '@scope'}] == []
+E       AssertionError: assert [{'line': 1, ...n': '@scope-no-such-login-00000000000000000000'}] == []
 E         
-E         Left contains one more item: {'line': 1, 'mention': '@scope'}
+E         Left contains one more item: {'line': 1, 'mention': '@scope-no-such-login-00000000000000000000'}
 E         Use -v to get more diff
 
 /home/user/wt-2453/plugins/superheroes/lib/tests/test_mention_guard.py:274: AssertionError
