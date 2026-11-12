@@ -74,12 +74,15 @@ _HTML_SPACE = frozenset(" \t\n\f\r")
 class Rendering:
     """The result of ``scan``. ``lines``: ``(offset, state)`` for every Markdown line start, in order. ``headings``:
     ``(offset, text, state)`` for every ATX heading that is a direct child of the document. ``unsure``: ``(offset, why)``
-    for each point from which the parse could not be sure (every line at or after the first is ``UNSURE``)."""
+    for each point from which the parse could not be sure (every line at or after the first is ``UNSURE``). ``fence_info``:
+    the offsets of the fence opener lines that carry an info string (each reads ``UNSURE``, since GitHub shows the info
+    string only as attributes), so a reader that blanks unshown lines can keep such a line's fence run."""
 
-    def __init__(self, lines, headings, unsure):
+    def __init__(self, lines, headings, unsure, fence_info=()):
         self.lines = tuple(lines)
         self.headings = tuple(headings)
         self.unsure = tuple(unsure)
+        self.fence_info = frozenset(fence_info)
         self._by_offset = dict(self.lines)
 
     def state_at(self, offset):
@@ -311,6 +314,8 @@ class _Parser:
         self.html_blocks = []
         self.paras = []  # paragraphs, setext headings and ATX headings: the text blocks
         self.atx = []
+        self.fence_info = set()  # line indexes of fence openers that carry an info string
+        self.fence_close = {}  # fence opener line index -> its closing fence line index (a fence closed by a fence line)
         self.idx = 0
         self.text = ""
         self.pos = 0
@@ -397,6 +402,7 @@ class _Parser:
                         if run > _FENCE_CAP:
                             self._note("fence run longer than 255")
                         if run >= container.fence_len:
+                            self.fence_close[container.first] = self.idx
                             self.tip = self._finalize(container)
                             return False, None
                 n = 0
@@ -513,6 +519,8 @@ class _Parser:
                 block.fence_char = rest[0]
                 block.fence_len = min(run, _FENCE_CAP)
                 block.fence_offset = self.indent
+                if rest[run:].strip(" \t"):
+                    self.fence_info.add(self.idx)
                 self.pos = fns + run
                 if run > _FENCE_CAP:
                     self._note("fence run longer than 255")
@@ -727,6 +735,24 @@ def _image_regions(text):
         regions.append((at + 2, min(end, len(text))))
         at = text.find("![", at + 2)
     return regions
+
+
+_IMAGE_CLOSER_MOVERS = frozenset("[`<\\")  # what can move cmark-gfm's image closer past the first "]" (#2451)
+
+
+def _description_closes_on_its_line(text, at):
+    """True when the image whose ``![`` starts at ``at`` provably closes its description on its own line (#2451): the
+    first ``]`` after it lies before the next newline, and the text between holds none of ``[``, a backtick, ``<`` or
+    a backslash. With no ``[`` inside, no bracket opener can sit above the image's opener on cmark-gfm's bracket
+    stack, so the first ``]`` is the one it tries against the image (it either closes the image there or removes the
+    opener); with no backtick, ``<`` or backslash inside, no code span, raw HTML, autolink or escape can hide that
+    ``]`` or move the closer later. Anything else (no ``]``, a newline first, or one of those four) returns False, so
+    the caller keeps its unsure point."""
+    close = text.find("]", at + 2)
+    nl = text.find("\n", at)
+    if close < 0 or 0 <= nl < close:
+        return False
+    return not _IMAGE_CLOSER_MOVERS.intersection(text[at + 2:close])
 
 
 def _destination_end(text, j):
@@ -1002,8 +1028,9 @@ def _inline_pass(lines, first, hidden_lines, sure_points, line_unsure, header=No
     regions = _link_regions(joined)
     for at in (m.start() for m in re.finditer(r"!\[", joined)):
         nl = joined.find("\n", at)
-        if nl >= 0 and "]" in joined[nl:]:
-            # vet 854: an image description may close on a later line, wherever cmark-gfm closes it; no bracket count
+        if nl >= 0 and "]" in joined[nl:] and not _description_closes_on_its_line(joined, at):
+            # vet 854: an image description may close on a later line, wherever cmark-gfm closes it, unless it provably
+            # closes on its own line (#2451)
             sure_points.add((first, "image description that may span lines"))
             break
     for r0, r1 in _inline_link_regions(joined):
@@ -1134,6 +1161,12 @@ def _scan(body):
     for line_index in inline_unsure:
         if line_index < len(raw):
             raw[line_index] = UNSURE
+    # axis: a fence opener's info string shows only as attributes, so the line reads unsure — see bite-proof record i2451_md_hidden_image_same_line.md (E7)
+    info_only = set()  # the opener lines this rule alone made unsure (their closers are not hidden by another rule)
+    for line_index in parser.fence_info:
+        if line_index < len(raw) and raw[line_index] == VISIBLE:
+            raw[line_index] = UNSURE
+            info_only.add(line_index)
 
     first_unsure = min((at for at, _ in unsure), default=None)
     lines = []
@@ -1149,7 +1182,12 @@ def _scan(body):
         if block.parent is parser.root:
             content = block.lines[0] if block.lines else ""
             headings.append((offsets[block.first], heading_text(content), state_of[block.first]))
-    return Rendering(lines, headings, sorted(unsure))
+    # axis: fence_info names an opener the info-string rule alone made unsure unless its closer reads HIDDEN, so a reader
+    # that keeps the opener's fence run never keeps it alone before shown lines; a closer only a sticky unsure point covers
+    # still names it (every later line blanks, and the fenced content stays fenced) — see bite-proof record i2451_md_hidden_image_same_line.md (E10)
+    kept = [i for i in info_only if state_of[i] == UNSURE
+            and (i not in parser.fence_close or state_of.get(parser.fence_close[i]) != HIDDEN)]
+    return Rendering(lines, headings, sorted(unsure), (offsets[i] for i in kept))
 
 
 def scan(body):
