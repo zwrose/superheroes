@@ -689,3 +689,19 @@ def test_a_complete_link_destination_still_masks_and_its_label_stays_prose():
     assert mg.bare_mentions("[package](https://www.npmjs.com/package/@playwright/test)\n") == []
     assert mg.bare_mentions("[pkg](/package/@scope/x)\n") == []
     assert _tokens("[ask @octo](/x)\n") == ["@octo"]
+
+
+@pytest.mark.parametrize("text,line", [
+    ("<pre>\n\n~~~\n</pre>\n@octo\n", 5),
+    ("<pre>\n\n" + TICK + "@octo" + TICK + "\n</pre>\n", 3),
+    ("<textarea>\n\n~~~\n</textarea>\n\nping @octo\n", 6),
+], ids=["pre-blank-tilde-then-prose", "pre-blank-backticks", "textarea-blank-tilde-then-prose"])
+def test_a_raw_text_html_block_runs_to_its_closing_tag(text, line):
+    # axis: a blank line does not end a pre/script/style/textarea block, so a fence shape there opens no fence
+    assert [m["line"] for m in mg.bare_mentions(text)] == [line]
+    assert mg.check(text)["reason"] == "bare-mention"
+
+
+def test_a_raw_text_block_closed_on_its_own_line_still_ends():
+    # healthy sibling: once the closing tag is seen, a real fence after it still masks
+    assert mg.bare_mentions("<pre>x</pre>\n\n" + FENCE + "\n@octo\n" + FENCE + "\n") == []
