@@ -864,3 +864,27 @@ def test_an_at_sign_written_as_a_character_code_is_reported(text):
 def test_a_character_code_after_a_word_character_is_no_mention():
     # healthy sibling
     assert mg.bare_mentions("mail x&#64;ok-no-such-login-00000000000000000000000 and &amp;ok\n") == []
+
+
+def test_a_no_break_space_line_does_not_end_an_html_block():
+    # axis: a GFM blank line holds only ASCII spaces and tabs, so a no-break space keeps the HTML block open
+    text = "<div>\n" + chr(160) + "\n~~~\n@alice-no-such-login-000000000000000000\n~~~\n</div>\n"
+    assert _tokens(text) == ["@alice-no-such-login-000000000000000000"]
+
+
+def test_a_space_only_line_still_ends_an_html_block():
+    # healthy sibling: after a real blank line the fence masks again
+    assert mg.bare_mentions("<div>\n \t\n~~~\n@ok-no-such-login-000000000000000000000\n~~~\n") == []
+
+
+def test_a_block_starting_inside_a_run_cannot_pair_backticks_across_it():
+    # axis: a reading starts from each line of the run, so a heading's backtick cannot pair across the next block
+    text = "# h " + TICK + "a\np " + TICK + "b\nc " + TICK + "@alice-no-such-login-000000000000000000" + TICK + " d " + TICK + "\n"
+    assert _tokens(text) == ["@alice-no-such-login-000000000000000000"]
+
+
+def test_code_spans_on_consecutive_lines_and_list_items_still_mask():
+    # healthy sibling
+    text = "use " + TICK + "@ok-no-such-login-000000000000000000000" + TICK + " here\n- item " + TICK + "x" + TICK + "\n"
+    assert mg.bare_mentions(text) == []
+    assert mg.bare_mentions(mg.wrap("# h " + TICK + "a\np @ok-no-such-login-000000000000000000000\n")) == []

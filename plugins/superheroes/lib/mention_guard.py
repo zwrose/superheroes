@@ -52,6 +52,7 @@ _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECA
 _HTML_OTHER_BLOCK_RE = re.compile(r"^ {0,3}<[!?]")  # a comment, instruction, declaration or CDATA block (GFM 2-5)
 _TAG_START_RE = re.compile(r"<[A-Za-z/!?]")  # an HTML tag, comment or autolink start, escaped-looking or not
 _QUOTE_RE = re.compile("[\"']")
+_BLANK_RE = re.compile(r"[ \t]*")  # GFM's blank line: ASCII spaces and tabs only (a no-break space is text)
 _CHAIN_RE = re.compile(r"(?:[\w.-]*@[\w-]*)*")  # at-signs attached after a mention
 # Tag patterns fold case over ASCII only, so no look-alike closes a block. A code element masks; `\<code>` is literal.
 _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASCII)
@@ -188,7 +189,7 @@ def _contexts(bare):
                 raw_close = None
             continue
         if in_html:
-            if not line.strip():
+            if _BLANK_RE.fullmatch(line):
                 in_html = False
                 continue
             # axis: a fence-shaped line inside a raw HTML block is literal text, so it opens no fence
@@ -237,29 +238,28 @@ def _found(text):
                        if not any(start <= m.start() < stop for start, stop in elements))
             idx += 1
             continue
-        if inert[idx] or not line.strip():
+        if inert[idx] or _BLANK_RE.fullmatch(line):
             idx += 1
             continue
         end = idx
-        while end < len(bare) and not inert[end] and bare[end].strip() and not html[end]:
+        while end < len(bare) and not inert[end] and not _BLANK_RE.fullmatch(bare[end]) and not html[end]:
             end += 1
-        paragraph_spans = _code_spans("\n".join(bare[idx:end]))
-        offset = 0
+        # axis: a block may start on any line of the run, so each reading from an earlier line must agree
+        readings = [_code_spans("\n".join(bare[s:end])) for s in range(idx, end)]
+        starts = [sum(len(r) + 1 for r in bare[idx:j]) for j in range(idx, end)]
         for k in range(idx, end):
             row = bare[k]
-            line_spans = _code_spans(row)
             cell_spans = _cell_spans(row) if _has_unescaped_pipe(row) else None
             urls = _urls(row)
             for m in MENTION_RE.finditer(row):
-                # axis: code masks a mention only when every reading agrees: its own line, its paragraph, and its cell
-                if (_inside(line_spans, m.start()) and _inside(paragraph_spans, offset + m.start())
+                # axis: code masks a mention only when every reading agrees: from each line of the run on, and its cell
+                if (all(_inside(readings[s], starts[k - idx] - starts[s] + m.start()) for s in range(k - idx + 1))
                         and (cell_spans is None or _inside(cell_spans, m.start()))):
                     continue
                 # axis: an at-sign inside a hosted bare URL is part of the address, so it is never reported
                 if _inside(urls, m.start()):
                     continue
                 out.append((k, m.start(), m.end(), "@" + m.group(1), False))
-            offset += len(row) + 1
         idx = end
     return out
 
