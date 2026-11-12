@@ -720,3 +720,18 @@ def test_a_non_ascii_look_alike_closes_no_raw_text_block():
     assert [m["line"] for m in mg.bare_mentions(text)] == [5]
     # healthy sibling: an ASCII closing tag in any case still closes it
     assert [m["line"] for m in mg.bare_mentions("<pre>\n</STYLE>\n</pre>\n~~~\nping @octo\n")] == [5]
+
+
+@pytest.mark.parametrize("text", [
+    "https://" + " " + "@octo\n",
+    "éhttps://example.com/@octo\n",
+    "http" + "ſ" + "://example.com/@octo\n",
+], ids=["nbsp-after-scheme", "accented-letter-before-scheme", "long-s-scheme"])
+def test_a_url_shape_github_would_not_autolink_masks_nothing(text):
+    # axis: the URL mask keeps Unicode space and word boundaries and matches no look-alike scheme
+    assert _tokens(text) == ["@octo"]
+
+
+def test_a_real_bare_url_still_masks_in_any_scheme_case():
+    # healthy sibling
+    assert mg.bare_mentions("see HTTPS://example.com/@ok and https://example.com/@ok\n") == []

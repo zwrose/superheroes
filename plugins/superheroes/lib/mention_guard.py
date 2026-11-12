@@ -49,8 +49,8 @@ _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
 # blank line.
 _RAW_HTML_RE = re.compile(r"^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE | re.ASCII)
 _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE | re.ASCII)
-# Tag and URL patterns fold case over ASCII only (re.ASCII): GFM does, so a non-ASCII look-alike such as a
-# long s never closes a block or masks a span.
+# Tag patterns fold case over ASCII only (re.ASCII), and the URL scheme spells its case out while keeping
+# Unicode word and space classes: GFM does both, so a non-ASCII look-alike never closes a block or masks a span.
 # A code element; a backslash-escaped `\<code>` is literal text, so it masks nothing.
 _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASCII)
 # A complete inline link ([label] then a parenthesised destination, closed), an angle autolink or a bare URL; an
@@ -58,7 +58,7 @@ _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASC
 # mention filter skips anchors, so an at-sign inside one is part of the address, never a mention. A link destination
 # may hold one level of balanced parentheses.
 _LINK_RE = re.compile(r"\[[^\]\n]*\](\((?:[^()\s]|\([^()\s]*\))*\))")
-_URL_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE | re.ASCII)
+_URL_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:[Hh][Tt][Tt][Pp][Ss]?|[Ff][Tt][Pp])://[^\s<>()]+")
 
 
 def _urls(line):
