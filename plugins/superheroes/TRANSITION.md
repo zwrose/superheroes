@@ -43,6 +43,8 @@ Check these in a consuming project when it adopts 0.49.0. Each step names the no
 - **After switching.** **Nothing is owed.** A finding left for the owner only because it was open when its review loop ended now counts as open for repeat matching: its repeats go to the fix or become their own finding, where they used to be kept with it. The record marks such a finding `openAtLoopEnd`; records written before the change read as before. See [Repeats: a finding open when its loop ended counts as open](#repeats-a-finding-open-when-its-loop-ended-counts-as-open).
 - **After switching.** **The fix auditor may answer `testWouldFail` with a fourth answer, `worthless-test-removed`, and a fix audit run opened before switching forfeits at collection.** It clears a fix that only removes test lines a worthless-test finding cites, in a Python, JavaScript or TypeScript test file, when every removed line is tied to a cited test (a cited line, a blank line, a line in a test whose opening is cited, or a line outside every test in a stretch holding a cited line) and the cited files are unchanged since the finding was raised. A native fix-audit run (`dispatch-audits`) opened before you switched saved a schema without the new answer; admitted after the switch it forfeits `native-schema-unreadable`. Re-dispatch that audit. A test-role finding cites the line it is about as `file:line`, on a line the change touched, and names the opening of each test that should go as a `kindOfMistake` place. See [Review: a fix that only removes worthless test lines clears its audit](#review-a-fix-that-only-removes-worthless-test-lines-clears-its-audit).
 - **After switching.** **Nothing is owed.** An abandoned review session's record now lists every planned seat that produced no result (a seat whose every attempt forfeited included) under `missingReviews`, each entry with a `reason`, and its test-lens line reads "did not run" when that seat is the test role; an owner go-ahead attaches to the entry as to any missing review. See [Review record: an abandoned session lists its seats that produced no result](#review-record-an-abandoned-session-lists-its-seats-that-produced-no-result).
+- **After switching.** **Nothing is owed.** The findings schema now lists a kind of mistake's `searchDescription` keys as `examples`, `kind`, `looksLike` (all still required), the order measured to stop codex review seats streaming whitespace instead of answering. See [Review: codex seats get the findings schema in the order that stops the whitespace stall](#review-codex-seats-get-the-findings-schema-in-the-order-that-stops-the-whitespace-stall).
+- **After switching.** **Nothing is owed.** `vet_slot.py write` no longer refuses a PR body that opens with a table of badge images: an image description that provably closes on its own line no longer makes later lines unsure, and a code fence's info string now reads as not shown. See [Vet slot: a badge-image table no longer blocks the write](#vet-slot-a-badge-image-table-no-longer-blocks-the-write).
 
 ### Launcher: a leg that continues a pull request's branch carries the adoption pair
 
@@ -177,6 +179,20 @@ The `leftover-not-accepted` detail from `vet_slot.py handback --pr` and a READY 
 - The record lists each such seat under `missingReviews` with a `reason` (an entry of a record that was not abandoned is still `{"name", "goAhead"}`), and its `whatIsMissing` line reads `<name> did not run (<reason>; the review session was abandoned before this seat produced a result)`. A seat whose result landed is not listed, and a pending roster that cannot be derived refuses `review-session-unreadable`.
 - A panel lens the seat map left unfilled is listed once, by its lens name, whether or not the round was sliced, so one go-ahead for that name covers it; a filled lens's slice seat that produced no result is still listed by its own slice name.
 - A session that ended writes the account and record it wrote before.
+
+### Review: codex seats get the findings schema in the order that stops the whitespace stall
+
+- **The change.** In `lib/review_findings_schema.py` and `lib/schemas/review-findings.schema.json`, a finding's `searchDescription` object lists its properties, and its `required` list, as `examples`, `kind`, `looksLike` (before: `kind`, `looksLike`, `examples`). All three stay required, and no answer rule changes.
+- **Why.** Under `--output-schema`, a codex seat could stream whitespace without end at the forced step from the long `looksLike` string to the required `examples`. With `examples` first, the #2441 investigation measured 0 stalls in 18 runs, against 11 in 20 before.
+- **Unchanged.** The other places where long text is followed by a required key are not reordered; a stalled seat is still recorded as missing.
+- **Replacement.** None.
+
+### Vet slot: a badge-image table no longer blocks the write
+
+- **Images.** `lib/md_hidden.py` still treats an image description that may close on a later line as unsure, except when the first `]` after `![` lies on the same line and the text between holds none of `[`, a backtick, `<` or a backslash. Then the description provably closes there, and later lines are read normally. A PR body that opens with a table of badge images no longer makes every later line unsure, so `vet_slot.py write` stops refusing it.
+- **Fence info strings.** The text after a code fence's opening backticks or tildes reads as not shown, since GitHub shows it only as an attribute. A reader that blanks unshown lines keeps the fence run itself, so the fence still pairs with its closer.
+- **Unchanged.** An image whose description holds one of those four characters, or closes on a later line, is still unsure.
+- **Replacement.** None: no command, refusal or result key changes.
 
 ## 0.48.0
 
