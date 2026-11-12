@@ -121,12 +121,27 @@ def _inside(spans, pos):
     return any(start <= pos < stop for start, stop in spans)
 
 
-def _inert_lines(bare):
+def _html_lines(bare):
+    """Which lines sit in a raw HTML block: from a line that opens one through the line before the next blank
+    line. Inside one, fence-shaped lines are literal text and backticks make no code span."""
+    html = [False] * len(bare)
+    in_html = False
+    for k, line in enumerate(bare):
+        if not line.strip():
+            in_html = False
+            continue
+        if in_html or _HTML_BLOCK_RE.match(line):
+            in_html = html[k] = True
+    return html
+
+
+def _inert_lines(bare, html):
     """Which lines sit inside a fenced block that every reading agrees is a fenced block. `md_fence` reads a fence
     inside a list or blockquote as top-level text, so such a fence shows up as a block whose opener or closer is
     indented, and its indented closer can pair with a later column-0 fence. A block masks its lines (opener through
     closer, or through the end when unterminated, which GFM renders as code) only when its opener line has no
-    leading whitespace and, when closed, its closer line has none either; any other block masks nothing."""
+    leading whitespace and, when closed, its closer line has none either, and its opener is not inside a raw HTML
+    block (`md_fence` does not see HTML blocks); any other block masks nothing."""
     kinds = md_fence.scan(bare).kinds
     n = len(bare)
     inert = [False] * n
@@ -141,7 +156,8 @@ def _inert_lines(bare):
         closed = j < n and kinds[j] == md_fence.KIND_CLOSER
         last = j if closed else n - 1
         # axis: a fence masks its lines only when its opener (and, closed, its closer) is at column 0
-        if not _indented(bare[i]) and not (closed and _indented(bare[last])):
+        # axis: a fence-shaped line inside a raw HTML block is literal text, so it opens no masking fence
+        if not html[i] and not _indented(bare[i]) and not (closed and _indented(bare[last])):
             for k in range(i, last + 1):
                 inert[k] = True
         i = last + 1
@@ -152,27 +168,24 @@ def _found(text):
     """Every bare mention of `text` as `(line index, start, end, mention, html)` in text order; `start` is the
     at-sign and `html` says the line sits in a raw HTML block, where a code span is not code."""
     bare = [_bare_line(whole) for whole in md_fence.split_lines(text)]
-    inert = _inert_lines(bare)
+    html = _html_lines(bare)
+    inert = _inert_lines(bare, html)
     out = []
-    in_html = False
     idx = 0
     while idx < len(bare):
         line = bare[idx]
-        if inert[idx] or not line.strip():
-            in_html = False if not line.strip() else in_html
-            idx += 1
-            continue
-        if in_html or _HTML_BLOCK_RE.match(line):
+        if html[idx]:
             # axis: a raw HTML block renders no code span, so its backticks mask nothing
-            in_html = True
             elements = [(m.start(), m.end()) for m in _CODE_ELEMENT_RE.finditer(line)] + _urls(line)
             out.extend((idx, m.start(), m.end(), "@" + m.group(1), True) for m in MENTION_RE.finditer(line)
                        if not any(start <= m.start() < stop for start, stop in elements))
             idx += 1
             continue
+        if inert[idx] or not line.strip():
+            idx += 1
+            continue
         end = idx
-        while (end < len(bare) and not inert[end] and bare[end].strip()
-               and not _HTML_BLOCK_RE.match(bare[end])):
+        while end < len(bare) and not inert[end] and bare[end].strip() and not html[end]:
             end += 1
         paragraph_spans = _code_spans("\n".join(bare[idx:end]))
         offset = 0

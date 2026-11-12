@@ -618,3 +618,15 @@ def test_g15_a_healthy_record_summary_is_unchanged():
     healthy = _record_with("big change, see " + TICK + "@zwrose" + TICK + " and a.b@example.com")
     body = rr.render(healthy)
     assert "big change, see " + TICK + "@zwrose" + TICK + " and a.b@example.com" in body.split("<details>")[0]
+
+
+@pytest.mark.parametrize("text,line", [
+    ("<div>\n~~~\n@octo\n~~~\n</div>\n", 3),
+    ("<div>\n~~~\n</div>\n\nping @octo\n", 5),
+    ("<div>\n~~~\n@octo\n</div>\n", 3),
+], ids=["closed-fence-in-html", "unterminated-fence-in-html-then-prose", "unterminated-fence-in-html"])
+def test_a_fence_shaped_line_inside_raw_html_masks_nothing(text, line):
+    # axis: inside a raw HTML block a fence-shaped line is literal text, so the mention stays reported and refused
+    assert [m["line"] for m in mg.bare_mentions(text)] == [line]
+    assert mg.check(text)["reason"] == "bare-mention"
+    assert mg.bare_mentions(mg.wrap(text)) == []
