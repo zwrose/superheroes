@@ -750,3 +750,69 @@ def test_a_url_with_no_host_or_an_angle_shape_masks_nothing(text):
 def test_a_real_bare_url_still_masks_in_any_scheme_case():
     # healthy sibling
     assert mg.bare_mentions("see HTTPS://example.com/@ok and https://example.com/@ok\n") == []
+
+
+@pytest.mark.parametrize("text", [
+    "see https://bad_host/@octo now\n",
+    "see https://a.b_c/@octo now\n",
+], ids=["underscore-host", "underscore-in-last-segment"])
+def test_a_url_whose_host_github_leaves_as_text_masks_nothing(text):
+    # axis: the URL mask takes a host of ASCII letters, digits, dots and hyphens only
+    assert _tokens(text) == ["@octo"]
+
+
+def test_a_url_with_a_clean_host_and_a_port_or_query_still_masks():
+    # healthy sibling
+    assert mg.bare_mentions("see https://example.com:8080/@ok and https://example.com?u=@ok now\n") == []
+
+
+@pytest.mark.parametrize("text, line", [
+    ("<!--\n~~~\n-->\n\nping @octo\n", 5),
+    ("<!--\n~~~\n-->\n@octo\n", 4),
+    ("<?x\n```\n?>\n@octo\n", 4),
+    ("<!X\n```\n>\n@octo\n", 4),
+], ids=["comment-then-blank", "comment", "processing-instruction", "declaration"])
+def test_a_fence_shaped_line_after_a_comment_or_declaration_opener_masks_nothing(text, line, tmp_path):
+    # axis: after a comment, processing-instruction or declaration block opens, no column-0 fence masks
+    assert [m["line"] for m in mg.bare_mentions(text)] == [line]
+    run = _Gh()
+    result = cb.post_comment("o/r", 1, _body_file(tmp_path, text), run=run, env={})
+    assert result["ok"] is False and result["reason"] == "bare-mention" and run.calls == []
+
+
+def test_a_fence_with_no_comment_before_it_still_masks():
+    # healthy sibling: a comment after a closed fence leaves that fence masking
+    assert mg.bare_mentions("```\n@ok\n```\n<!-- note -->\n") == []
+
+
+@pytest.mark.parametrize("text", [
+    'see <span title="`">@octo</span> `\n',
+    'see <a href="x">link</a> and `@octo`\n',
+], ids=["backtick-in-attribute", "span-after-a-tag"])
+def test_a_code_span_after_a_tag_start_masks_nothing(text):
+    # axis: a backtick after a tag start may sit inside an attribute, so that span and every later one mask nothing
+    assert _tokens(text) == ["@octo"]
+
+
+def test_a_code_span_before_any_tag_still_masks():
+    # healthy sibling: a span holding a tag does not stop a later span from masking
+    assert mg.bare_mentions("`<div>` and `@ok` then <b>x</b>\n") == []
+
+
+@pytest.mark.parametrize("text", [
+    '<div title="<code>">@octo</div></code>\n',
+    '<div title="<code>">@octo<span title="</code>"></span></div>\n',
+], ids=["opener-in-attribute", "both-tags-in-attributes"])
+def test_a_code_element_holding_a_quote_masks_nothing(text):
+    # axis: a code element holding a quote may start or end inside an attribute value, so it masks nothing
+    assert _tokens(text) == ["@octo"]
+
+
+def test_a_code_element_with_no_quote_still_masks():
+    # healthy sibling
+    assert mg.bare_mentions("<div><code>@ok</code></div>\n") == []
+
+
+def test_a_comment_that_ends_on_its_own_line_leaves_later_fences_masking():
+    # healthy sibling: a one-line marker comment (as the review record opens with) leaves its fences masking
+    assert mg.bare_mentions("<!-- marker -->\n```\n@ok\n```\n<?x ?>\n~~~\n@ok\n~~~\n") == []

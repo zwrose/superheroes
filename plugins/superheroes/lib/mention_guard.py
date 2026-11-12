@@ -49,6 +49,9 @@ _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
 # blank line.
 _RAW_HTML_RE = re.compile(r"^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE | re.ASCII)
 _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE | re.ASCII)
+_HTML_OTHER_BLOCK_RE = re.compile(r"^ {0,3}<[!?]")  # a comment, instruction, declaration or CDATA block (GFM 2-5)
+_TAG_START_RE = re.compile(r"(?<!\\)<[A-Za-z/!?]")  # an HTML tag, comment or autolink start
+_QUOTE_RE = re.compile("[\"']")
 # Tag patterns fold case over ASCII only (re.ASCII), so a non-ASCII look-alike never closes a block. The URL
 # scheme spells its case out, so no look-alike scheme matches; its Unicode word and space classes stop the mask
 # earlier than GitHub's autolinker does, which over-reports (the safe direction).
@@ -57,7 +60,9 @@ _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASC
 # A bare URL with a host (the first character after `://` an ASCII letter or digit): GitHub renders it as an anchor,
 # and its mention filter skips anchors, so an at-sign inside it is part of the address. No link-destination or
 # angle-autolink shape masks anything, since GitHub shows those literally in places the guard cannot tell apart.
-_URL_RE = re.compile(r"\b(?:[Hh][Tt][Tt][Pp][Ss]?|[Ff][Tt][Pp])://[A-Za-z0-9][^\s<>()]*")
+# Its host takes ASCII letters, digits, dots and hyphens only, since GitHub leaves an underscore host as text.
+_URL_RE = re.compile(r"\b(?:[Hh][Tt][Tt][Pp][Ss]?|[Ff][Tt][Pp])://[A-Za-z0-9][A-Za-z0-9.-]*(?:[/?#:][^\s<>()]*)?"
+                     r"(?![^\s<>()])")
 
 
 def _urls(line):
@@ -100,6 +105,11 @@ def _code_spans(line):
             continue
         spans.append((i, close[1]))
         i = close[1]
+    # axis: a span after a tag start not certainly closed may sit in an attribute: it and later spans mask nothing
+    for n, (start, _stop) in enumerate(spans):
+        tags = _TAG_START_RE.finditer(line, spans[n - 1][1] if n else 0, start)
+        if any(not _ends(line[m.start():start]) for m in tags):
+            return spans[:n]
     return spans
 
 
@@ -119,6 +129,15 @@ _FENCE_OPENER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _FENCE_CLOSER_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 _INDENTED_FENCE_RE = re.compile(r"^[ \t]+(`{3,}|~{3,})(.*)$")
 _ANY_CLOSER_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*$")
+
+
+def _ends(segment):
+    """True when the tag, comment, instruction or CDATA that opens `segment` certainly ends inside it."""
+    for opener, terminator in (("<!--", "-->"), ("<?", "?>"), ("<![CDATA[", "]]>")):
+        if segment.startswith(opener):
+            return terminator in segment[len(opener):]
+    end = segment.find(">")
+    return end > 1 and not _QUOTE_RE.search(segment, 0, end)
 
 
 def _has_unescaped_pipe(line):
@@ -144,6 +163,7 @@ def _contexts(bare):
     shadow = None
     raw_close = None
     in_html = False
+    fences_off = False
     for k, line in enumerate(bare):
         if shadow is not None:
             # axis: an indented opener's block masks nothing, and its closer is consumed so it opens no fence
@@ -180,12 +200,15 @@ def _contexts(bare):
             # axis: a fence-shaped line inside a raw HTML block is literal text, so it opens no fence
             html[k] = True
             continue
+        other = _HTML_OTHER_BLOCK_RE.match(line)
+        # axis: once a comment or declaration block stays open past its line, no column-0 fence masks
+        fences_off = fences_off or bool(other and not _ends(line[other.end() - 2:]))
         indented = _INDENTED_FENCE_RE.match(line)
         if indented and not (indented.group(1)[0] == "`" and "`" in indented.group(2)):
             shadow = indented.group(1)
             html[k] = True
             continue
-        opener = _FENCE_OPENER_RE.match(line)
+        opener = None if fences_off else _FENCE_OPENER_RE.match(line)
         if opener and not (opener.group(1)[0] == "`" and "`" in opener.group(2)):
             # axis: only a column-0 opener masks, so an indented (list or blockquote) fence masks nothing
             inert[k] = True
@@ -214,7 +237,8 @@ def _found(text):
         if html[idx]:
             # axis: a raw HTML block renders no code span, so its backticks mask nothing
             # axis: on a raw HTML line only a code element masks; a URL there is literal text GitHub may mention in
-            elements = [(m.start(), m.end()) for m in _CODE_ELEMENT_RE.finditer(line)]
+            # axis: a code element holding a quote may start or end inside an attribute, so it masks nothing
+            elements = [m.span() for m in _CODE_ELEMENT_RE.finditer(line) if not _QUOTE_RE.search(m.group())]
             out.extend((idx, m.start(), m.end(), "@" + m.group(1), True) for m in MENTION_RE.finditer(line)
                        if not any(start <= m.start() < stop for start, stop in elements))
             idx += 1
