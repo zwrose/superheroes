@@ -47,15 +47,19 @@ _BACKTICK_RUN_RE = re.compile(r"`+")
 _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
 # A code element; a backslash-escaped `\<code>` is literal text, so it masks nothing.
 _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE)
-# A link destination, an angle autolink or a bare URL: GitHub renders each as an anchor (or an attribute), and its
+# A complete inline link ([label] then a parenthesised destination, closed), an angle autolink or a bare URL; an
+# incomplete link shape masks nothing: GitHub renders each as an anchor (or an attribute), and its
 # mention filter skips anchors, so an at-sign inside one is part of the address, never a mention. A link destination
 # may hold one level of balanced parentheses.
-_URL_RE = re.compile(r"\]\((?:[^()\s]|\([^()\s]*\))*\)?|<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)
+_LINK_RE = re.compile(r"\[[^\]\n]*\](\((?:[^()\s]|\([^()\s]*\))*\))")
+_URL_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)
 
 
 def _urls(line):
-    """The extents of the link destinations and URLs on one line."""
-    return [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
+    """The extents of the complete link destinations (the parenthesised part only; the label stays prose) and
+    the URLs on one line."""
+    return ([m.span(1) for m in _LINK_RE.finditer(line)]
+            + [(m.start(), m.end()) for m in _URL_RE.finditer(line)])
 
 
 def _bare_line(whole):
@@ -110,6 +114,8 @@ def _cell_spans(line):
 
 _FENCE_OPENER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
 _FENCE_CLOSER_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
+_INDENTED_FENCE_RE = re.compile(r"^[ \t]+(`{3,}|~{3,})(.*)$")
+_ANY_CLOSER_RE = re.compile(r"^[ \t]*(`{3,}|~{3,})[ \t]*$")
 
 
 def _has_unescaped_pipe(line):
@@ -124,16 +130,26 @@ def _inside(spans, pos):
 def _contexts(bare):
     """`(inert, html)`: which lines sit inside a fenced block and which in a raw HTML block, read in one pass so
     neither is decided without the other. A fence opens only on a line that starts with three or more backticks
-    or tildes at column 0 (an indented one, as a fence inside a list or blockquote looks, opens nothing, so it can
-    never pair with a later fence); it masks through a column-0 closer (the same character, at least as long) or, unterminated, through
+    or tildes at column 0 (an indented one, as a fence inside a list or blockquote looks, masks nothing, and its own
+    closer is consumed with it, so that closer can never open a fence); it masks through a column-0 closer (the same character, at least as long) or, unterminated, through
     the end, which GFM renders as code; a block that closes on an indented closer masks nothing. A raw HTML block opens on a
     tag at a line's start outside a fence and runs to the next blank line; inside it a fence-shaped line is
     literal text."""
     inert = [False] * len(bare)
     html = [False] * len(bare)
     fence, fence_start = None, 0
+    shadow = None
     in_html = False
     for k, line in enumerate(bare):
+        if shadow is not None:
+            # axis: an indented opener's block masks nothing, and its closer is consumed so it opens no fence
+            closer = _ANY_CLOSER_RE.match(line)
+            if closer and closer.group(1)[0] == shadow[0] and len(closer.group(1)) >= len(shadow):
+                shadow = None
+                continue
+            # axis: inside an indented opener's block no reading is certain, so its lines take no code-span mask
+            html[k] = bool(line.strip())
+            continue
         if fence is not None:
             # axis: a line inside a fence is code, so a tag there opens no HTML block
             inert[k] = True
@@ -151,6 +167,11 @@ def _contexts(bare):
                 in_html = False
                 continue
             # axis: a fence-shaped line inside a raw HTML block is literal text, so it opens no fence
+            html[k] = True
+            continue
+        indented = _INDENTED_FENCE_RE.match(line)
+        if indented and not (indented.group(1)[0] == "`" and "`" in indented.group(2)):
+            shadow = indented.group(1)
             html[k] = True
             continue
         opener = _FENCE_OPENER_RE.match(line)

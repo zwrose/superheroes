@@ -511,6 +511,8 @@ def test_g12_publish_refuses_a_staged_body_with_a_bare_mention_and_never_rewrite
     assert TPB._read(PBS.paths(sd)["staged"]) == bad
     assert TPB._receipt(sd) == out
     assert "login" in PBS.record_line(sd)
+    # axis: the refusal carries the guard's remedy so the reader learns how to fix the body
+    assert out["remedy"] == mg.REMEDY
 
 
 def test_g12_a_healthy_staged_body_is_published(tmp_path):
@@ -653,3 +655,37 @@ def test_html_and_fence_context_are_read_in_one_pass(text, line):
     assert [m["line"] for m in mg.bare_mentions(text)] == [line]
     assert mg.check(text)["reason"] == "bare-mention"
     assert mg.bare_mentions(mg.wrap(text)) == []
+
+
+@pytest.mark.parametrize("text,line", [
+    ("  " + FENCE + "\nexample\n" + FENCE + "\n@octo\n", 4),
+    ("  ~~~\n~~~\nping @octo\n", 3),
+    ("- " + FENCE + "\n  x\n  " + FENCE + "\n" + FENCE + "\n@octo\n", 5),
+], ids=["indented-opener-column-0-closer", "indented-tilde-then-closer", "list-fence-then-column-0-fence-shape"])
+def test_an_indented_fence_consumes_its_closer_so_it_opens_no_masking_fence(text, line):
+    # axis: an indented opener masks nothing and takes its closer with it, so that closer opens no fence
+    assert line in [m["line"] for m in mg.bare_mentions(text)]
+    assert mg.check(text)["reason"] == "bare-mention"
+
+
+def test_a_real_column_0_fence_still_masks():
+    # healthy sibling: a fenced block at column 0 still masks its content
+    assert mg.bare_mentions(FENCE + "\n@octo\n" + FENCE + "\nplain\n") == []
+
+
+@pytest.mark.parametrize("text", [
+    "see ](@octo\n",
+    "[x](@octo\n",
+    "text ](@octo)\n",
+    "[x] (@octo)\n",
+], ids=["no-label-no-close", "no-close", "no-label", "space-before-paren"])
+def test_an_incomplete_link_shape_masks_nothing(text):
+    # axis: only a complete [label](destination) masks its destination; an incomplete shape masks nothing
+    assert _tokens(text) == ["@octo"]
+
+
+def test_a_complete_link_destination_still_masks_and_its_label_stays_prose():
+    # healthy sibling: a complete link's destination masks; its label is prose
+    assert mg.bare_mentions("[package](https://www.npmjs.com/package/@playwright/test)\n") == []
+    assert mg.bare_mentions("[pkg](/package/@scope/x)\n") == []
+    assert _tokens("[ask @octo](/x)\n") == ["@octo"]

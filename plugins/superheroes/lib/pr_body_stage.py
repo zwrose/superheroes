@@ -256,6 +256,8 @@ def _publish(session_dir, pr, runner):
     guard = mention_guard.check(staged)
     if not guard["ok"]:
         receipt["mentions"] = guard["mentions"]
+        # axis: the refusal carries the guard's remedy, so the reader learns how to fix the body
+        receipt["remedy"] = guard["remedy"]
         return done(OUTCOME_REFUSED, REASON_BARE_MENTION)
     audited = receipt["stagedSha256"] == _audited_sha(session_dir)
     # axis: a retried publish recognizes its own earlier success even when cloud egress appended its footer to the live body — see bite-proof record c1l10b_wo3_verify_rerun_seam
