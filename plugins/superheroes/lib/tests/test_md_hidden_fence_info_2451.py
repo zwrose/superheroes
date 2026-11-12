@@ -108,3 +108,13 @@ def test_e10_an_opener_whose_whole_fence_is_hidden_is_not_named():
     body = ("<div><!--\n\n```text\nhidden\n```\n\n<div>--></div>\n" + ACCEPTING + "- F-1 Slow retry loop\n")
     assert md_hidden.scan(body).fence_info == frozenset()
     assert la.missing(RECORD, body) == []
+
+
+def test_e10_an_opener_whose_closer_is_only_sticky_unsure_is_still_named():
+    """Scoped finder (round 3 of the vet-897 review): a closing run longer than 255 backticks records a sticky unsure
+    point at the closer. The opener is still named, so its fenced content stays fenced for the leftover reader and an
+    inline comment in it is never dropped to make a title. Oracle (cmark-gfm 0.29.0.gfm.13): the comment text shows
+    literally in the code block, so "Slow retry loop" is not shown; F-1 stays missing."""
+    body = ACCEPTING.lstrip("\n") + "```text\nF-1 Slow <!--extra-->retry loop\n" + "`" * 256 + "\n"
+    assert body.index("```text") in md_hidden.scan(body).fence_info
+    assert la.missing(RECORD, body) == [{"id": "F-1", "title": "Slow retry loop"}]

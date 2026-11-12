@@ -1182,10 +1182,11 @@ def _scan(body):
         if block.parent is parser.root:
             content = block.lines[0] if block.lines else ""
             headings.append((offsets[block.first], heading_text(content), state_of[block.first]))
-    # axis: fence_info names only an opener the info-string rule alone made unsure whose closer (when a fence line closes it)
-    # reads VISIBLE, so a reader that keeps the opener's fence run always keeps a closer that pairs with it — see bite-proof record i2451_md_hidden_image_same_line.md (E10)
+    # axis: fence_info names an opener the info-string rule alone made unsure unless its closer reads HIDDEN, so a reader
+    # that keeps the opener's fence run never keeps it alone before shown lines; a closer only a sticky unsure point covers
+    # still names it (every later line blanks, and the fenced content stays fenced) — see bite-proof record i2451_md_hidden_image_same_line.md (E10)
     kept = [i for i in info_only if state_of[i] == UNSURE
-            and (i not in parser.fence_close or state_of.get(parser.fence_close[i]) == VISIBLE)]
+            and (i not in parser.fence_close or state_of.get(parser.fence_close[i]) != HIDDEN)]
     return Rendering(lines, headings, sorted(unsure), (offsets[i] for i in kept))
 
 
