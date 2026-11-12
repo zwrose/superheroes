@@ -907,3 +907,16 @@ def test_a_long_run_with_no_mention_takes_no_suffix_readings(monkeypatch):
     assert mg.bare_mentions("".join("line " + TICK + "x" + TICK + " %d\n" % i for i in range(200))) == []
     assert calls == []
     assert mg.bare_mentions("a " + TICK + "@ok-no-such-login-000000000000000000000" + TICK + "\nb\n") == []
+
+
+def test_a_long_run_with_one_mention_parses_only_what_the_mention_needs(monkeypatch):
+    # axis: each line parses once and each reading only on demand, so cost does not grow with every suffix
+    calls = []
+    real = mg._code_spans
+    monkeypatch.setattr(mg, "_code_spans", lambda line: calls.append(1) or real(line))
+    text = "".join("item " + TICK + "safe" + TICK + "\n" for _ in range(300)) + "x " + TICK + "@ok-no-such-login-000000000000000000000" + TICK + "\n"
+    assert mg.bare_mentions(text) == []
+    assert len(calls) <= 302
+    many = "@octo-no-such-login-000000000000000000000 " * 500 + "\n"
+    calls.clear()
+    assert len(mg.bare_mentions(many)) == 500 and len(calls) <= 1

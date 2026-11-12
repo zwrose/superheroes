@@ -243,21 +243,20 @@ def _found(text):
         end = idx
         while end < len(bare) and not inert[end] and not _BLANK_RE.fullmatch(bare[end]) and not html[end]:
             end += 1
-        # axis: a block may start on any line of the run, so each reading from an earlier line on must agree
-        readings = ([_code_spans("\n".join(bare[s:end])) for s in range(idx, end)]
-                    if MENTION_RE.search("\n".join(bare[idx:end])) else [])  # a run with no mention takes no reading
-        starts = [sum(len(r) + 1 for r in bare[idx:j]) for j in range(idx, end)]
+        # axis: a block may start on any line of the run, so each reading from an earlier line on must agree; each is
+        # parsed once, only when a mention needs it, and the first that disagrees ends the check
+        readings, starts = {}, [0]
         for k in range(idx, end):
-            row = bare[k]
-            cell_spans = _cell_spans(row) if _has_unescaped_pipe(row) else None
-            for m in MENTION_RE.finditer(row):
-                # axis: code masks a mention only when every reading agrees: its line, from each line of the run on, its cell
-                if (_inside(_code_spans(row), m.start())
-                        and all(_inside(readings[s], starts[k - idx] - starts[s] + m.start()) for s in range(k - idx + 1))
-                        and (cell_spans is None or _inside(cell_spans, m.start()))):
+            row, found = bare[k], list(MENTION_RE.finditer(bare[k]))
+            starts.append(starts[-1] + len(row) + 1)
+            line_spans, urls = (_code_spans(row), _urls(row)) if found else ([], [])
+            cell_spans = _cell_spans(row) if found and _has_unescaped_pipe(row) else None
+            for m in found:
+                if (_inside(line_spans, m.start()) and all(_inside(readings[s] if s in readings else readings.setdefault(
+                        s, _code_spans("\n".join(bare[idx + s:end]))), starts[k - idx] - starts[s] + m.start())
+                        for s in range(k - idx + 1)) and (cell_spans is None or _inside(cell_spans, m.start()))):
                     continue
-                # axis: an at-sign inside a hosted bare URL is part of the address, so it is never reported
-                if _inside(_urls(row), m.start()):
+                if _inside(urls, m.start()):  # axis: an at-sign inside a hosted bare URL is part of the address
                     continue
                 out.append((k, m.start(), m.end(), "@" + m.group(1), False))
         idx = end
