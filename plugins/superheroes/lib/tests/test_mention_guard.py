@@ -265,19 +265,20 @@ def test_e4_an_escaped_pipe_is_no_cell_boundary():
     assert mg.bare_mentions(text) == []
 
 
-def test_a_link_destination_with_balanced_parentheses_is_left_alone():
-    # axis: G21 — the destination pattern takes one level of balanced parentheses, so the at-sign after `(b)` is
-    # still inside the destination
+def test_a_link_destination_masks_nothing_beyond_its_bare_url():
+    # axis: no link-destination mask exists; only a hosted bare URL masks, so the at-sign after `(b)` is reported
     text = "[package](https://example.com/a(b)/@scope/pkg)\n"
-    assert mg.bare_mentions(text) == []
-    assert mg.wrap(text) == text
-    assert _tokens("[package](https://example.com/a(b)/x) then @octo\n") == ["@octo"]
+    assert _tokens(text) == ["@scope"]
+    # healthy sibling: a hosted bare URL still masks its at-sign
+    assert mg.bare_mentions("[package](https://example.com/b/@scope/pkg)\n") == []
 
 
-def test_e5_an_html_block_line_with_a_url_holding_an_at_sign_is_masked():
-    # E5: the raw-HTML path masks a URL's at-sign, and still reports the bare mention beside it
+def test_e5_an_html_block_line_with_a_url_holding_an_at_sign_is_reported():
+    # E5: on a raw HTML line no URL masks, so the URL's at-sign is reported as well as the bare mention
     text = "<p>see https://example.com/@scope/pkg and @octo</p>\n"
-    assert _tokens(text) == ["@octo"]
+    assert _tokens(text) == ["@scope", "@octo"]
+    # healthy sibling: a code element on a raw HTML line still masks
+    assert mg.bare_mentions("<p><code>@octo</code></p>\n") == []
 
 
 def test_table_cells_pair_code_spans_on_their_own():
@@ -293,10 +294,11 @@ def test_an_at_sign_inside_a_link_or_url_is_left_alone():
     # axis: GitHub renders a link destination, an autolink and a bare URL as an anchor, which it never mentions in
     for text in ("[package](https://www.npmjs.com/package/@playwright/test)\n",
                  "see <https://www.npmjs.com/package/@playwright/test> now\n",
-                 "see https://www.npmjs.com/package/@playwright/test now\n",
-                 "<div><a href=\"https://www.npmjs.com/package/@playwright/test\">pkg</a></div>\n"):
+                 "see https://www.npmjs.com/package/@playwright/test now\n"):
         assert mg.bare_mentions(text) == []
         assert mg.wrap(text) == text
+    # a URL inside a raw HTML block masks nothing, so its at-sign is reported
+    assert _tokens("<div><a href=\"https://www.npmjs.com/package/@playwright/test\">pkg</a></div>\n") == ["@playwright"]
     # the link text is still prose, and a mention beside a URL is still reported
     assert _tokens("[ask @octo](https://example.com/x) and https://example.com/@ok then @hubot\n") == [
         "@octo", "@hubot"]
@@ -684,11 +686,13 @@ def test_an_incomplete_link_shape_masks_nothing(text):
     assert _tokens(text) == ["@octo"]
 
 
-def test_a_complete_link_destination_still_masks_and_its_label_stays_prose():
-    # healthy sibling: a complete link's destination masks; its label is prose
-    assert mg.bare_mentions("[package](https://www.npmjs.com/package/@playwright/test)\n") == []
-    assert mg.bare_mentions("[pkg](/package/@scope/x)\n") == []
+def test_a_link_destination_without_a_hosted_url_is_reported():
+    # axis: a destination is not masked as a destination, so a relative one is reported, as is an escaped link
+    assert _tokens("[pkg](/package/@scope/x)\n") == ["@scope"]
+    assert _tokens("\\[x](@octo)\n") == ["@octo"]
     assert _tokens("[ask @octo](/x)\n") == ["@octo"]
+    # healthy sibling: a hosted URL as the destination still masks
+    assert mg.bare_mentions("[package](https://www.npmjs.com/package/@playwright/test)\n") == []
 
 
 @pytest.mark.parametrize("text,line", [
@@ -726,9 +730,20 @@ def test_a_non_ascii_look_alike_closes_no_raw_text_block():
     "https://" + " " + "@octo\n",
     "éhttps://example.com/@octo\n",
     "http" + "ſ" + "://example.com/@octo\n",
-], ids=["nbsp-after-scheme", "accented-letter-before-scheme", "long-s-scheme"])
-def test_a_url_shape_github_would_not_autolink_masks_nothing(text):
-    # axis: the URL mask keeps Unicode space and word boundaries and matches no look-alike scheme
+], ids=["nbsp-after-scheme-over-reports", "accented-letter-before-scheme-over-reports", "long-s-scheme"])
+def test_a_url_shape_the_mask_does_not_recognise_with_certainty_reports(text):
+    # axis: the URL mask keeps Unicode space and word boundaries (stopping earlier than GitHub's autolinker, which
+    # over-reports) and matches no look-alike scheme
+    assert _tokens(text) == ["@octo"]
+
+
+@pytest.mark.parametrize("text", [
+    "see http://@octo now\n",
+    "see https:///@octo now\n",
+    "see <foo:@octo> now\n",
+], ids=["hostless-url", "empty-host-url", "angle-shape-unlinked-scheme"])
+def test_a_url_with_no_host_or_an_angle_shape_masks_nothing(text):
+    # axis: the bare-URL mask needs an ASCII letter or digit right after `://`, and no angle shape masks
     assert _tokens(text) == ["@octo"]
 
 

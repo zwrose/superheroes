@@ -49,23 +49,20 @@ _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
 # blank line.
 _RAW_HTML_RE = re.compile(r"^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE | re.ASCII)
 _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE | re.ASCII)
-# Tag patterns fold case over ASCII only (re.ASCII), and the URL scheme spells its case out while keeping
-# Unicode word and space classes: GFM does both, so a non-ASCII look-alike never closes a block or masks a span.
+# Tag patterns fold case over ASCII only (re.ASCII), so a non-ASCII look-alike never closes a block. The URL
+# scheme spells its case out, so no look-alike scheme matches; its Unicode word and space classes stop the mask
+# earlier than GitHub's autolinker does, which over-reports (the safe direction).
 # A code element; a backslash-escaped `\<code>` is literal text, so it masks nothing.
 _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASCII)
-# A complete inline link ([label] then a parenthesised destination, closed), an angle autolink or a bare URL; an
-# incomplete link shape masks nothing: GitHub renders each as an anchor (or an attribute), and its
-# mention filter skips anchors, so an at-sign inside one is part of the address, never a mention. A link destination
-# may hold one level of balanced parentheses.
-_LINK_RE = re.compile(r"\[[^\]\n]*\](\((?:[^()\s]|\([^()\s]*\))*\))")
-_URL_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:[Hh][Tt][Tt][Pp][Ss]?|[Ff][Tt][Pp])://[^\s<>()]+")
+# A bare URL with a host (the first character after `://` an ASCII letter or digit): GitHub renders it as an anchor,
+# and its mention filter skips anchors, so an at-sign inside it is part of the address. No link-destination or
+# angle-autolink shape masks anything, since GitHub shows those literally in places the guard cannot tell apart.
+_URL_RE = re.compile(r"\b(?:[Hh][Tt][Tt][Pp][Ss]?|[Ff][Tt][Pp])://[A-Za-z0-9][^\s<>()]*")
 
 
 def _urls(line):
-    """The extents of the complete link destinations (the parenthesised part only; the label stays prose) and
-    the URLs on one line."""
-    return ([m.span(1) for m in _LINK_RE.finditer(line)]
-            + [(m.start(), m.end()) for m in _URL_RE.finditer(line)])
+    """The extents of the bare URLs with a host on one line."""
+    return [(m.start(), m.end()) for m in _URL_RE.finditer(line)]
 
 
 def _bare_line(whole):
@@ -216,7 +213,8 @@ def _found(text):
         line = bare[idx]
         if html[idx]:
             # axis: a raw HTML block renders no code span, so its backticks mask nothing
-            elements = [(m.start(), m.end()) for m in _CODE_ELEMENT_RE.finditer(line)] + _urls(line)
+            # axis: on a raw HTML line only a code element masks; a URL there is literal text GitHub may mention in
+            elements = [(m.start(), m.end()) for m in _CODE_ELEMENT_RE.finditer(line)]
             out.extend((idx, m.start(), m.end(), "@" + m.group(1), True) for m in MENTION_RE.finditer(line)
                        if not any(start <= m.start() < stop for start, stop in elements))
             idx += 1
@@ -239,7 +237,7 @@ def _found(text):
                 if (_inside(line_spans, m.start()) and _inside(paragraph_spans, offset + m.start())
                         and (cell_spans is None or _inside(cell_spans, m.start()))):
                     continue
-                # axis: an at-sign inside a link destination or a URL is part of the address, so it is never reported
+                # axis: an at-sign inside a hosted bare URL is part of the address, so it is never reported
                 if _inside(urls, m.start()):
                     continue
                 out.append((k, m.start(), m.end(), "@" + m.group(1), False))

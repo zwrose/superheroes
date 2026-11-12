@@ -57,7 +57,7 @@ The `check` and `bare_mentions` entries are `{"line": <int>, "mention": "@login"
 The guard reports a mention unless every reasonable reading agrees it is not one: a doubt about whether a token is code reports it.
 A fenced block masks its lines only when its opener (and its closer, when it has one) is at column 0, and an unterminated column-0 fence masks to the end; an indented opener masks nothing and consumes its own closer, so that closer opens no fence. An inline code span masks only when its own line, its paragraph and, on a table row, its cell all pair it as code.
 Fence and raw-HTML context are read in one pass: a fence-shaped line inside raw HTML opens no fence, a `pre`, `script`, `style` or `textarea` block runs to any of those closing tags, and tag patterns fold case over ASCII only.
-A link destination masks only for a complete `[label](destination)` (one level of balanced parentheses), and only the destination; a bare URL masks only with a real scheme and Unicode word and space boundaries.
+No link destination or angle-bracket address masks anything; only a bare URL with a host (an ASCII letter or digit right after `://`, a real scheme, Unicode word and space boundaries) masks, and on a raw HTML line only a `<code>` element masks.
 
 ### Five doctrine and message fixes from a field report
 
