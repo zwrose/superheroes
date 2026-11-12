@@ -888,3 +888,22 @@ def test_code_spans_on_consecutive_lines_and_list_items_still_mask():
     text = "use " + TICK + "@ok-no-such-login-000000000000000000000" + TICK + " here\n- item " + TICK + "x" + TICK + "\n"
     assert mg.bare_mentions(text) == []
     assert mg.bare_mentions(mg.wrap("# h " + TICK + "a\np @ok-no-such-login-000000000000000000000\n")) == []
+
+
+@pytest.mark.parametrize("text", [
+    "say " + TICK + "@alice-no-such-login-000000000000000000\n# h " + TICK + "\n",
+    "# heading " + TICK + "@alice-no-such-login-000000000000000000\nnext " + TICK + "\n",
+], ids=["heading-after", "heading-before"])
+def test_a_span_must_close_on_the_mentions_own_line(text):
+    # axis: the line's own reading is required, so a later block cannot close a mention's span
+    assert _tokens(text) == ["@alice-no-such-login-000000000000000000"]
+
+
+def test_a_long_run_with_no_mention_takes_no_suffix_readings(monkeypatch):
+    # axis: a run with no mention is not parsed suffix by suffix
+    calls = []
+    real = mg._code_spans
+    monkeypatch.setattr(mg, "_code_spans", lambda line: calls.append(1) or real(line))
+    assert mg.bare_mentions("".join("line " + TICK + "x" + TICK + " %d\n" % i for i in range(200))) == []
+    assert calls == []
+    assert mg.bare_mentions("a " + TICK + "@ok-no-such-login-000000000000000000000" + TICK + "\nb\n") == []

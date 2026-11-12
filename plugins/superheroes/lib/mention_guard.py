@@ -230,8 +230,7 @@ def _found(text):
     while idx < len(bare):
         line = bare[idx]
         if html[idx]:
-            # axis: a raw HTML block renders no code span, so its backticks mask nothing
-            # axis: on a raw HTML line only a code element masks; a URL there is literal text GitHub may mention in
+            # axis: on a raw HTML line only a code element masks; its backticks and URLs are literal text
             # axis: a code element holding a quote, or on a line holding `<!`, may sit in an attribute or comment: no mask
             elements = [m.span() for m in _CODE_ELEMENT_RE.finditer(line) if "<!" not in line and not _QUOTE_RE.search(m.group())]
             out.extend((idx, m.start(), m.end(), "@" + m.group(1), True) for m in MENTION_RE.finditer(line)
@@ -244,20 +243,21 @@ def _found(text):
         end = idx
         while end < len(bare) and not inert[end] and not _BLANK_RE.fullmatch(bare[end]) and not html[end]:
             end += 1
-        # axis: a block may start on any line of the run, so each reading from an earlier line must agree
-        readings = [_code_spans("\n".join(bare[s:end])) for s in range(idx, end)]
+        # axis: a block may start on any line of the run, so each reading from an earlier line on must agree
+        readings = ([_code_spans("\n".join(bare[s:end])) for s in range(idx, end)]
+                    if MENTION_RE.search("\n".join(bare[idx:end])) else [])  # a run with no mention takes no reading
         starts = [sum(len(r) + 1 for r in bare[idx:j]) for j in range(idx, end)]
         for k in range(idx, end):
             row = bare[k]
             cell_spans = _cell_spans(row) if _has_unescaped_pipe(row) else None
-            urls = _urls(row)
             for m in MENTION_RE.finditer(row):
-                # axis: code masks a mention only when every reading agrees: from each line of the run on, and its cell
-                if (all(_inside(readings[s], starts[k - idx] - starts[s] + m.start()) for s in range(k - idx + 1))
+                # axis: code masks a mention only when every reading agrees: its line, from each line of the run on, its cell
+                if (_inside(_code_spans(row), m.start())
+                        and all(_inside(readings[s], starts[k - idx] - starts[s] + m.start()) for s in range(k - idx + 1))
                         and (cell_spans is None or _inside(cell_spans, m.start()))):
                     continue
                 # axis: an at-sign inside a hosted bare URL is part of the address, so it is never reported
-                if _inside(urls, m.start()):
+                if _inside(_urls(row), m.start()):
                     continue
                 out.append((k, m.start(), m.end(), "@" + m.group(1), False))
         idx = end
