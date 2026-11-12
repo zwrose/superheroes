@@ -816,3 +816,8 @@ def test_a_code_element_with_no_quote_still_masks():
 def test_a_comment_that_ends_on_its_own_line_leaves_later_fences_masking():
     # healthy sibling: a one-line marker comment (as the review record opens with) leaves its fences masking
     assert mg.bare_mentions("<!-- marker -->\n```\n@ok\n```\n<?x ?>\n~~~\n@ok\n~~~\n") == []
+
+
+def test_wrap_leaves_punctuation_after_a_mention_outside_the_span():
+    # healthy sibling: only an attached at-sign joins the span
+    assert mg.wrap("ping @octo, then @hubot.\n") == "ping `@octo`, then `@hubot`.\n"

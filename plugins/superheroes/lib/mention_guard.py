@@ -52,15 +52,12 @@ _RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECA
 _HTML_OTHER_BLOCK_RE = re.compile(r"^ {0,3}<[!?]")  # a comment, instruction, declaration or CDATA block (GFM 2-5)
 _TAG_START_RE = re.compile(r"(?<!\\)<[A-Za-z/!?]")  # an HTML tag, comment or autolink start
 _QUOTE_RE = re.compile("[\"']")
-# Tag patterns fold case over ASCII only (re.ASCII), so a non-ASCII look-alike never closes a block. The URL
-# scheme spells its case out, so no look-alike scheme matches; its Unicode word and space classes stop the mask
-# earlier than GitHub's autolinker does, which over-reports (the safe direction).
-# A code element; a backslash-escaped `\<code>` is literal text, so it masks nothing.
+_CHAIN_RE = re.compile(r"(?:[\w.-]*@[\w-]*)*")  # at-signs attached after a mention
+# Tag patterns fold case over ASCII only, so no look-alike closes a block. A code element masks; `\<code>` is literal.
 _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASCII)
-# A bare URL with a host (the first character after `://` an ASCII letter or digit): GitHub renders it as an anchor,
-# and its mention filter skips anchors, so an at-sign inside it is part of the address. No link-destination or
-# angle-autolink shape masks anything, since GitHub shows those literally in places the guard cannot tell apart.
-# Its host takes ASCII letters, digits, dots and hyphens only, since GitHub leaves an underscore host as text.
+# A bare URL GitHub links (its mention filter skips anchors): a scheme spelt out, no look-alike, then a host of ASCII
+# letters, digits, dots and hyphens (an underscore host stays text). Its Unicode word and space classes stop it before
+# GitHub's autolinker does, which over-reports. No link-destination or angle shape masks anything.
 _URL_RE = re.compile(r"\b(?:[Hh][Tt][Tt][Pp][Ss]?|[Ff][Tt][Pp])://[A-Za-z0-9][A-Za-z0-9.-]*(?:[/?#:][^\s<>()]*)?"
                      r"(?![^\s<>()])")
 
@@ -150,13 +147,10 @@ def _inside(spans, pos):
 
 
 def _contexts(bare):
-    """`(inert, html)`: which lines sit inside a fenced block and which in a raw HTML block, read in one pass so
-    neither is decided without the other. A fence opens only on a line that starts with three or more backticks
-    or tildes at column 0 (an indented one, as a fence inside a list or blockquote looks, masks nothing, and its own
-    closer is consumed with it, so that closer can never open a fence); it masks through a column-0 closer (the same character, at least as long) or, unterminated, through
-    the end, which GFM renders as code; a block that closes on an indented closer masks nothing. A raw HTML block opens on a
-    tag at a line's start outside a fence and runs to the next blank line; inside it a fence-shaped line is
-    literal text."""
+    """`(inert, html)`: which lines sit in a fenced block and which in a raw HTML block, read in one pass. A fence
+    opens only at column 0 (an indented one masks nothing and consumes its own closer) and masks through a column-0
+    closer or, unterminated, to the end; one closing on an indented closer masks nothing. A raw HTML block opens on a
+    tag at a line's start outside a fence and runs to the next blank line; a fence-shaped line in it is literal."""
     inert = [False] * len(bare)
     html = [False] * len(bare)
     fence, fence_start = None, 0
@@ -289,10 +283,9 @@ def check(text):
 
 
 def wrap(text):
-    """`text` with every bare mention wrapped in a code span. The delimiter is a backtick run one longer than the
-    longest backtick run anywhere in `text` (minimum 1), so it can never pair with an existing run; a space keeps
-    it from touching an adjacent backtick or backslash. Idempotent. Text with no bare mention, and non-string
-    text, comes back unchanged."""
+    """`text` with every bare mention, and any at-sign attached after it, in a code span whose backtick run is one
+    longer than any in `text`, a space keeping it off an adjacent backtick or backslash. Idempotent; text with no
+    bare mention, and non-string text, comes back unchanged."""
     if not isinstance(text, str):
         return text
     found = _found(text)
@@ -305,7 +298,14 @@ def wrap(text):
         by_line.setdefault(idx, []).append((start, end, html))
     for idx, extents in by_line.items():
         line = lines[idx]
-        for start, end, html in reversed(extents):
+        merged = []
+        for start, end, html in extents:
+            # axis: an at-sign attached after the token goes in the same span, so wrapping exposes no new mention
+            end += len(_CHAIN_RE.match(line, end).group())
+            if merged and start < merged[-1][1]:
+                start = merged.pop()[0]
+            merged.append((start, end, html))
+        for start, end, html in reversed(merged):
             if html:
                 # axis: in a raw HTML block a backtick is literal, so the token goes in a code element
                 line = line[:start] + "<code>" + line[start:end] + "</code>" + line[end:]
