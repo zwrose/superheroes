@@ -737,6 +737,16 @@ def _decide(own, by_key, rulings, exempt=None, ungraded=frozenset()):
         receipt = rep.get("dispositionReceipt")
         if isinstance(receipt, dict) and receipt.get("kind") == sc.FULL_PANEL_NOT_RERAISED:
             return _FIXED, f"fixed; the full panel in round {receipt.get('panelRound')} did not raise it again", rep
+        removal = receipt.get("testRemoval") if isinstance(receipt, dict) else None
+        evidence = removal.get("evidence") if isinstance(removal, dict) else None
+        if isinstance(evidence, dict):
+            # a fix the audit cleared as the removal of a worthless test names the evidence it cleared on
+            spans = ", ".join(f"{item.get('file')} lines {s}-{e}"
+                              for item in evidence.get("removed") or [] if isinstance(item, dict)
+                              for s, e in (r for r in item.get("ranges") or [] if isinstance(r, list) and len(r) == 2))
+            return (_FIXED, f"fixed and audited in round {rep.get('dispositionRound')}; cleared as the removal of a "
+                            f"worthless test: {evidence.get('taxonomy')} finding {evidence.get('finding')}, "
+                            f"removed {spans}", rep)
         return _FIXED, f"fixed and audited in round {rep.get('dispositionRound')}", rep
     if disp == "refuted":
         why = _text(rep.get("refutedReason"))
