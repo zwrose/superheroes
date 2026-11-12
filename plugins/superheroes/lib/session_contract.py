@@ -55,6 +55,8 @@ __all__ = (
     "CARRIED_FIRST_RAISED_ROUND",
     "DISPOSITION_SEQ_FIELD",
     "DISPOSITION_FAMILY_FIELDS",
+    "OPEN_AT_LOOP_END_FIELD",
+    "open_at_loop_end",
     "has_disposition_family",
     "disposition_family_snapshot",
     "apply_disposition_family",
@@ -398,10 +400,17 @@ def disposition_ledger_owner_classification(state):
     if value == DISPOSITION_LEDGER_OWNER_VALUE:
         return DISPOSITION_LEDGER_OWNER_RECOGNIZED
     return DISPOSITION_LEDGER_OWNER_UNRECOGNIZED
+OPEN_AT_LOOP_END_FIELD = "openAtLoopEnd"  # set only on a `left-for-owner` settle that was still open when its loop ended
 DISPOSITION_FAMILY_FIELDS = (
     "disposition", "dispositionRound", "dispositionReceipt", "placeResults", "refutedReason",
-    "outOfScopeReason", "followUp", MERGED_INTO_FIELD, "settledReason", "decidedBy",
+    "outOfScopeReason", "followUp", MERGED_INTO_FIELD, OPEN_AT_LOOP_END_FIELD, "settledReason", "decidedBy",
 )
+
+
+def open_at_loop_end(row):
+    """True only when ``row`` is a dict whose `openAtLoopEnd` is exactly ``True``: the one reader of the marker
+    a finding left for the owner only because it was still open when its loop ended carries (`"true"` or `1` read as absent)."""
+    return isinstance(row, dict) and row.get(OPEN_AT_LOOP_END_FIELD) is True
 
 
 def disposition_value(row):

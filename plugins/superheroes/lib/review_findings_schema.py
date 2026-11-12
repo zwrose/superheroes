@@ -78,14 +78,16 @@ _FALLBACK_FINDING_PROPERTY_SCHEMAS["kindOfMistake"] = {
         "places": {"type": "array", "items": _FALLBACK_PLACE_SCHEMA},
     },
 }
+# Key order is deliberate, `examples` first: codex streams whitespace at the forced
+# `looksLike` -> `examples` step (#2441); keep aligned with schemas/review-findings.schema.json.
 _FALLBACK_FINDING_PROPERTY_SCHEMAS["searchDescription"] = {
     "type": ["object", "null"],
     "additionalProperties": False,
-    "required": ["kind", "looksLike", "examples"],
+    "required": ["examples", "kind", "looksLike"],
     "properties": {
+        "examples": {"type": "array", "items": {"type": "string"}},
         "kind": {"type": "string"},
         "looksLike": {"type": "string"},
-        "examples": {"type": "array", "items": {"type": "string"}},
     },
 }
 
