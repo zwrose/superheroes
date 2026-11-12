@@ -630,3 +630,13 @@ def test_a_fence_shaped_line_inside_raw_html_masks_nothing(text, line):
     assert [m["line"] for m in mg.bare_mentions(text)] == [line]
     assert mg.check(text)["reason"] == "bare-mention"
     assert mg.bare_mentions(mg.wrap(text)) == []
+
+
+def test_a_tag_inside_a_fence_starts_no_html_block():
+    # axis: a fenced HTML example is code, so the escaped code-shaped prose after the fence is still scanned
+    text = "~~~\n<div>\n~~~\n\\<code>@octo\\</code>\n"
+    assert [m["line"] for m in mg.bare_mentions(text)] == [4]
+    assert mg.check(text)["reason"] == "bare-mention"
+    assert mg.bare_mentions(mg.wrap(text)) == []
+    # inside a real HTML block an escaped code tag masks nothing either
+    assert [m["line"] for m in mg.bare_mentions("<div>\n\\<code>@octo\\</code>\n</div>\n")] == [2]

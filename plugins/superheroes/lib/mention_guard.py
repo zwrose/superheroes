@@ -45,7 +45,8 @@ MENTION_RE = re.compile(
 _BACKTICK_RUN_RE = re.compile(r"`+")
 # A line that opens a raw HTML block (GFM block kinds 6 and 7, approximated: a tag at the line's start).
 _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
-_CODE_ELEMENT_RE = re.compile(r"<code>.*?</code>", re.IGNORECASE)
+# A code element; a backslash-escaped `\<code>` is literal text, so it masks nothing.
+_CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE)
 # A link destination, an angle autolink or a bare URL: GitHub renders each as an anchor (or an attribute), and its
 # mention filter skips anchors, so an at-sign inside one is part of the address, never a mention. A link destination
 # may hold one level of balanced parentheses.
@@ -121,16 +122,18 @@ def _inside(spans, pos):
     return any(start <= pos < stop for start, stop in spans)
 
 
-def _html_lines(bare):
+def _html_lines(bare, fenced):
     """Which lines sit in a raw HTML block: from a line that opens one through the line before the next blank
-    line. Inside one, fence-shaped lines are literal text and backticks make no code span."""
+    line. Inside one, fence-shaped lines are literal text and backticks make no code span. A tag on a line
+    inside a fenced block (`fenced`, the fence mask read without HTML context) is code, so it opens no block."""
     html = [False] * len(bare)
     in_html = False
     for k, line in enumerate(bare):
         if not line.strip():
             in_html = False
             continue
-        if in_html or _HTML_BLOCK_RE.match(line):
+        # axis: a tag inside a fenced block is code, so it never starts an HTML block
+        if in_html or (_HTML_BLOCK_RE.match(line) and not fenced[k]):
             in_html = html[k] = True
     return html
 
@@ -168,7 +171,7 @@ def _found(text):
     """Every bare mention of `text` as `(line index, start, end, mention, html)` in text order; `start` is the
     at-sign and `html` says the line sits in a raw HTML block, where a code span is not code."""
     bare = [_bare_line(whole) for whole in md_fence.split_lines(text)]
-    html = _html_lines(bare)
+    html = _html_lines(bare, _inert_lines(bare, [False] * len(bare)))
     inert = _inert_lines(bare, html)
     out = []
     idx = 0
