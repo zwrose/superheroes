@@ -108,9 +108,8 @@ def _cell_spans(line):
     return spans
 
 
-def _indented(line):
-    """True when `line` starts with whitespace."""
-    return line[:1] in (" ", "\t")
+_FENCE_OPENER_RE = re.compile(r"^(`{3,}|~{3,})(.*)$")
+_FENCE_CLOSER_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*$")
 
 
 def _has_unescaped_pipe(line):
@@ -122,57 +121,54 @@ def _inside(spans, pos):
     return any(start <= pos < stop for start, stop in spans)
 
 
-def _html_lines(bare, fenced):
-    """Which lines sit in a raw HTML block: from a line that opens one through the line before the next blank
-    line. Inside one, fence-shaped lines are literal text and backticks make no code span. A tag on a line
-    inside a fenced block (`fenced`, the fence mask read without HTML context) is code, so it opens no block."""
+def _contexts(bare):
+    """`(inert, html)`: which lines sit inside a fenced block and which in a raw HTML block, read in one pass so
+    neither is decided without the other. A fence opens only on a line that starts with three or more backticks
+    or tildes at column 0 (an indented one, as a fence inside a list or blockquote looks, opens nothing, so it can
+    never pair with a later fence); it masks through a column-0 closer (the same character, at least as long) or, unterminated, through
+    the end, which GFM renders as code; a block that closes on an indented closer masks nothing. A raw HTML block opens on a
+    tag at a line's start outside a fence and runs to the next blank line; inside it a fence-shaped line is
+    literal text."""
+    inert = [False] * len(bare)
     html = [False] * len(bare)
+    fence, fence_start = None, 0
     in_html = False
     for k, line in enumerate(bare):
-        if not line.strip():
-            in_html = False
+        if fence is not None:
+            # axis: a line inside a fence is code, so a tag there opens no HTML block
+            inert[k] = True
+            closer = _FENCE_CLOSER_RE.match(line)
+            if closer and closer.group(1)[0] == fence[0] and len(closer.group(1)) >= len(fence):
+                if line[:1] in (" ", "\t"):
+                    # axis: an indented closer is how a list-contained fence ends, so the readings disagree and the
+                    # block masks nothing
+                    for j in range(fence_start, k + 1):
+                        inert[j] = False
+                fence = None
             continue
-        # axis: a tag inside a fenced block is code, so it never starts an HTML block
-        if in_html or (_HTML_BLOCK_RE.match(line) and not fenced[k]):
-            in_html = html[k] = True
-    return html
-
-
-def _inert_lines(bare, html):
-    """Which lines sit inside a fenced block that every reading agrees is a fenced block. `md_fence` reads a fence
-    inside a list or blockquote as top-level text, so such a fence shows up as a block whose opener or closer is
-    indented, and its indented closer can pair with a later column-0 fence. A block masks its lines (opener through
-    closer, or through the end when unterminated, which GFM renders as code) only when its opener line has no
-    leading whitespace and, when closed, its closer line has none either, and its opener is not inside a raw HTML
-    block (`md_fence` does not see HTML blocks); any other block masks nothing."""
-    kinds = md_fence.scan(bare).kinds
-    n = len(bare)
-    inert = [False] * n
-    i = 0
-    while i < n:
-        if kinds[i] != md_fence.KIND_OPENER:
-            i += 1
+        if in_html:
+            if not line.strip():
+                in_html = False
+                continue
+            # axis: a fence-shaped line inside a raw HTML block is literal text, so it opens no fence
+            html[k] = True
             continue
-        j = i + 1
-        while j < n and kinds[j] == md_fence.KIND_CONTENT:
-            j += 1
-        closed = j < n and kinds[j] == md_fence.KIND_CLOSER
-        last = j if closed else n - 1
-        # axis: a fence masks its lines only when its opener (and, closed, its closer) is at column 0
-        # axis: a fence-shaped line inside a raw HTML block is literal text, so it opens no masking fence
-        if not html[i] and not _indented(bare[i]) and not (closed and _indented(bare[last])):
-            for k in range(i, last + 1):
-                inert[k] = True
-        i = last + 1
-    return inert
+        opener = _FENCE_OPENER_RE.match(line)
+        if opener and not (opener.group(1)[0] == "`" and "`" in opener.group(2)):
+            # axis: only a column-0 opener masks, so an indented (list or blockquote) fence masks nothing
+            inert[k] = True
+            fence, fence_start = opener.group(1), k
+            continue
+        if _HTML_BLOCK_RE.match(line):
+            html[k] = in_html = True
+    return inert, html
 
 
 def _found(text):
     """Every bare mention of `text` as `(line index, start, end, mention, html)` in text order; `start` is the
     at-sign and `html` says the line sits in a raw HTML block, where a code span is not code."""
     bare = [_bare_line(whole) for whole in md_fence.split_lines(text)]
-    html = _html_lines(bare, _inert_lines(bare, [False] * len(bare)))
-    inert = _inert_lines(bare, html)
+    inert, html = _contexts(bare)
     out = []
     idx = 0
     while idx < len(bare):

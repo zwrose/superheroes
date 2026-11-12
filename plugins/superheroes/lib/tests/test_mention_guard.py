@@ -640,3 +640,16 @@ def test_a_tag_inside_a_fence_starts_no_html_block():
     assert mg.bare_mentions(mg.wrap(text)) == []
     # inside a real HTML block an escaped code tag masks nothing either
     assert [m["line"] for m in mg.bare_mentions("<div>\n\\<code>@octo\\</code>\n</div>\n")] == [2]
+
+
+@pytest.mark.parametrize("text,line", [
+    ("<div>\n~~~\n</div>\n\n<div>\n" + TICK + "@octo" + TICK + "\n</div>\n", 6),
+    ("  ~~~\n\n<div>\n" + TICK + "@octo" + TICK + "\n</div>\n", 4),
+    ("<p>\n" + FENCE + "\n</p>\n\n<p>\n" + TICK + "@octo" + TICK + "\n</p>\n", 6),
+], ids=["html-fence-then-html", "indented-fence-then-html", "html-backtick-fence-then-html"])
+def test_html_and_fence_context_are_read_in_one_pass(text, line):
+    # axis: a fence-shaped line inside raw HTML, or an indented one, opens no fence, so a later HTML block is
+    # still read as HTML and its backticks mask nothing
+    assert [m["line"] for m in mg.bare_mentions(text)] == [line]
+    assert mg.check(text)["reason"] == "bare-mention"
+    assert mg.bare_mentions(mg.wrap(text)) == []
