@@ -484,6 +484,220 @@ Raw green:
 
 ---
 
+## Final-head re-run (vet 897 review fixes, by the build session at `8ced0b87`)
+
+The builder re-ran E7 and ran E8-E10 itself, in its own detached probe worktree checked out at `8ced0b874e528d2f956c0bb26f7edc1256e895e5` (the head after the vet-897 review converged). Every neutralization is one targeted Edit-tool edit, undone by the inverse Edit before the next; tests unedited; `git status --short` in the probe tree printed nothing after the last restore. Command for every run (probe tree root): `timeout 600 scripts/pinned-python -B -X pycache_prefix=<scratch>/pyc -m pytest plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py -q -p no:cacheprovider --tb=line -k <selection>`. Captures are verbatim except: the one `UV_NATIVE_TLS` deprecation line is dropped, the probe tree's scratch path is shown as `/path/to/worktree/`, and object addresses are shown as `0x...`. Nothing else was redacted.
+
+Declared guarded elements for the review fixes: E8 the leftover reader keeps a named opener's fence run (`leftover_accepting.py:132`); E9 the kept run reads shown (`leftover_accepting.py:138`); E10a only an opener the info-string rule alone made unsure is named (`md_hidden.py:1188`, the `info_only` and `state_of[i] == UNSURE` filters); E10b a closer that only a sticky unsure point covers still names its opener (`md_hidden.py:1189`, `!= HIDDEN`).
+
+### E7 (final head): the fence-opener info-string reading, axis: an opener with an info string never reads VISIBLE
+
+Neutralization (Edit): `md_hidden.py:1167` `if line_index < len(raw) and raw[line_index] == VISIBLE:` -> `if False:`; selection `test_e7_`.
+
+Raw red:
+
+```
+F.FFFFF.                                                                 [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert [] == [{'id': 'F-1'... retry loop'}]
+      
+      Right contains one more item: {'id': 'F-1', 'title': 'Slow retry loop'}
+      Use -v to get more diff
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:36: AssertionError: assert [] == [{'id': 'F-1'... retry loop'}]
+E   AssertionError: assert 'visible' != 'visible'
+     +  where 'visible' = state_at(0)
+     +    where state_at = <md_hidden.Rendering object at 0x...>.state_at
+     +    and   0 = _line_start('```text F-1 Slow retry loop\n```\n', '```text F-1 Slow retry loop')
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError: assert 'visible' != 'visible'
+E   AssertionError: assert 'visible' != 'visible'
+     +  where 'visible' = state_at(389)
+     +    where state_at = <md_hidden.Rendering object at 0x...>.state_at
+     +    and   389 = _line_start('| Package | Age |\n|---|---|\n| [example-pkg-a](https://example.invalid/p/a) | [![age](https://example.invalid/b/0.sv...id/p/c) | [![age](https://example.invalid/b/2.svg)](https://example.invalid/d) |\n\n```text F-1 Slow retry loop\n```\n', '```text F-1 Slow retry loop')
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError: assert 'visible' != 'visible'
+E   AssertionError: assert 'visible' != 'visible'
+     +  where 'visible' = state_at(0)
+     +    where state_at = <md_hidden.Rendering object at 0x...>.state_at
+     +    and   0 = _line_start('- ```text x\n  y\n  ```\n', '- ```text x')
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError: assert 'visible' != 'visible'
+E   AssertionError: assert 'visible' != 'visible'
+     +  where 'visible' = state_at(0)
+     +    where state_at = <md_hidden.Rendering object at 0x...>.state_at
+     +    and   0 = _line_start('> ```text x\n> y\n> ```\n', '> ```text x')
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError: assert 'visible' != 'visible'
+E   AssertionError: assert 'visible' != 'visible'
+     +  where 'visible' = state_at(0)
+     +    where state_at = <md_hidden.Rendering object at 0x...>.state_at
+     +    and   0 = _line_start('~~~ x\ny\n~~~\n', '~~~ x')
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:62: AssertionError: assert 'visible' != 'visible'
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_info_string_acceptance_under_a_badge_table_is_missing
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[bare-document]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[image-above]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[list-item]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[blockquote]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e7_fence_opener_with_info_string_is_not_visible[tilde]
+6 failed, 2 passed, 8 deselected in 3.26s
+```
+
+Restore: the inverse Edit.
+
+Raw green:
+
+```
+........                                                                 [100%]
+8 passed, 8 deselected in 0.52s
+```
+
+
+### E8: the leftover reader keeps a named opener's fence run, axis: a language-tagged example above the section keeps its fence, so the section is found
+
+Neutralization (Edit): `leftover_accepting.py:132` `run = _FENCE_RUN.match(line) if not shown[-1] and start in rendering.fence_info else None` -> `run = None` (the opener blanks whole); selection `test_e8_`.
+
+Raw red:
+
+```
+FFFF                                                                     [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+      
+      Left contains one more item: {'id': 'F-1', 'title': 'Slow retry loop'}
+      Use -v to get more diff
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:88: AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+E   AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+      
+      Left contains one more item: {'id': 'F-1', 'title': 'Slow retry loop'}
+      Use -v to get more diff
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:88: AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+E   AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+      
+      Left contains one more item: {'id': 'F-1', 'title': 'Slow retry loop'}
+      Use -v to get more diff
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:88: AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+E   AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+      
+      Left contains one more item: {'id': 'F-1', 'title': 'Slow retry loop'}
+      Use -v to get more diff
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:88: AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e8_a_language_tagged_example_above_the_section_keeps_its_fence[backtick]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e8_a_language_tagged_example_above_the_section_keeps_its_fence[bash]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e8_a_language_tagged_example_above_the_section_keeps_its_fence[list-item]
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e8_a_language_tagged_example_above_the_section_keeps_its_fence[tilde]
+4 failed, 12 deselected in 0.24s
+```
+
+Restore: the inverse Edit.
+
+Raw green:
+
+```
+....                                                                     [100%]
+4 passed, 12 deselected in 0.25s
+```
+
+
+### E9: the kept fence run reads shown, axis: a tagged fence inside the section does not stop the acceptance after it
+
+Neutralization (Edit): `leftover_accepting.py:138` `shown[-1] = True` -> `pass`; selection `test_e9_`.
+
+Raw red:
+
+```
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+      
+      Left contains one more item: {'id': 'F-1', 'title': 'Slow retry loop'}
+      Use -v to get more diff
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:100: AssertionError: assert [{'id': 'F-1'... retry loop'}] == []
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e9_a_language_tagged_example_inside_the_section_does_not_stop_the_acceptance[paragraph-after-fence]
+1 failed, 1 passed, 14 deselected in 0.23s
+```
+
+Restore: the inverse Edit.
+
+Raw green:
+
+```
+..                                                                       [100%]
+2 passed, 14 deselected in 0.22s
+```
+
+Only the `paragraph-after-fence` case reds: in `bullet-after-fence` a blank line already starts a new item, so that case is a control that holds with or without E9.
+
+
+### E10a: only an opener the info-string rule alone made unsure is named, axis: a fence hidden whole by an HTML comment is not named, so its delimiters blank together
+
+Neutralization (Edit): `md_hidden.py:1188-1189` `kept = [i for i in info_only if state_of[i] == UNSURE and (...)]` -> `kept = list(parser.fence_info)`; selection `test_e10_`.
+
+Raw red:
+
+```
+F.                                                                       [100%]
+=================================== FAILURES ===================================
+E   assert frozenset({11}) == frozenset()
+      
+      Extra items in the left set:
+      11
+      Use -v to get more diff
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:109: assert frozenset({11}) == frozenset()
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e10_an_opener_whose_whole_fence_is_hidden_is_not_named
+1 failed, 1 passed, 14 deselected in 0.22s
+```
+
+Restore: the inverse Edit.
+
+Raw green:
+
+```
+..                                                                       [100%]
+2 passed, 14 deselected in 0.22s
+```
+
+
+### E10b: a closer only a sticky unsure point covers still names its opener, axis: fenced content under an oversized closer stays fenced
+
+Neutralization (Edit): `md_hidden.py:1189` `state_of.get(parser.fence_close[i]) != HIDDEN` -> `== VISIBLE`; selection `test_e10_`.
+
+Raw red:
+
+```
+.F                                                                       [100%]
+=================================== FAILURES ===================================
+E   assert 25 in frozenset()
+     +  where 25 = <built-in method index of str object at 0x...>('```text')
+     +    where <built-in method index of str object at 0x...> = "## What we're accepting\n\n```text\nF-1 Slow <!--extra-->retry loop\n````````````````````````````````````````````````...````````````````````````````````````````````````````````````````````````````````````````````````````````````````````\n".index
+     +  and   frozenset() = <md_hidden.Rendering object at 0x...>.fence_info
+     +    where <md_hidden.Rendering object at 0x...> = <function scan at 0x...>("## What we're accepting\n\n```text\nF-1 Slow <!--extra-->retry loop\n````````````````````````````````````````````````...````````````````````````````````````````````````````````````````````````````````````````````````````````````````````\n")
+     +      where <function scan at 0x...> = md_hidden.scan
+/path/to/worktree/plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py:119: assert 25 in frozenset()
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_md_hidden_fence_info_2451.py::test_e10_an_opener_whose_closer_is_only_sticky_unsure_is_still_named
+1 failed, 1 passed, 14 deselected in 0.23s
+```
+
+Restore: the inverse Edit.
+
+Raw green:
+
+```
+..                                                                       [100%]
+2 passed, 14 deselected in 0.23s
+```
+
+Disclosure: removing the closer condition outright cannot go red, because a fence line never changes the HTML comment state, so a closer reads HIDDEN only when its opener does, and such an opener is already excluded by E10a. The condition is defensive; E10b proves its form (`!= HIDDEN` rather than `== VISIBLE`).
+
+
+After the last restore the whole file ran green:
+
+```
+................                                                         [100%]
+16 passed in 0.26s
+```
+
+
 ## Final state
 
 After E6 the line-1040 `if` was restored. Clean-tree runs afterwards: the whole new file (`18 passed in 0.45s`) and the five

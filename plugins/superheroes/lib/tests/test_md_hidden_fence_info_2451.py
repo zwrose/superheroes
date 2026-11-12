@@ -12,8 +12,10 @@ kept an acceptance written only in a fence opener's info string out of ``leftove
 ``md_hidden`` means every caller inherits it.
 
 Guard tests are named ``test_e7_*`` (E7: the fence-opener info-string reading, the ``fence_info`` add at the opener and the
-``_scan`` override); the bite-proof record is ``bite_proofs/i2451_md_hidden_image_same_line.md`` (section E7). Fake data
-only: no real gh, no network."""
+``_scan`` override), ``test_e8_*`` (E8: the leftover reader keeps a named opener's fence run), ``test_e9_*`` (E9: the kept
+run reads shown) and ``test_e10_*`` (E10: which openers ``Rendering.fence_info`` names); the bite-proof record is
+``bite_proofs/i2451_md_hidden_image_same_line.md`` (sections E7 and the final-head re-run). Fake data only: no real gh, no
+network."""
 import pytest
 
 import leftover_accepting as la
