@@ -45,8 +45,10 @@ MENTION_RE = re.compile(
 _BACKTICK_RUN_RE = re.compile(r"`+")
 # A line that opens a raw HTML block (GFM block kinds 6 and 7, approximated: a tag at the line's start).
 _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
-# A raw-text HTML block opener (GFM block kind 1): it ends at its closing tag, not at a blank line.
+# A raw-text HTML block opener (GFM block kind 1): it ends at a line holding any kind-1 closing tag, not at a
+# blank line.
 _RAW_HTML_RE = re.compile(r"^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE)
+_RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE)
 # A code element; a backslash-escaped `\<code>` is literal text, so it masks nothing.
 _CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE)
 # A complete inline link ([label] then a parenthesised destination, closed), an angle autolink or a bare URL; an
@@ -168,7 +170,8 @@ def _contexts(bare):
         if raw_close is not None:
             # axis: a raw-text HTML block (pre, script, style, textarea) runs to its closing tag, blank lines included
             html[k] = bool(line.strip())
-            if raw_close in line.lower():
+            # axis: any type-1 closing tag ends the block, whichever tag opened it
+            if _RAW_HTML_CLOSE_RE.search(line):
                 raw_close = None
             continue
         if in_html:
@@ -192,9 +195,8 @@ def _contexts(bare):
         raw = _RAW_HTML_RE.match(line)
         if raw:
             html[k] = True
-            close = "</" + raw.group(1).lower() + ">"
-            if close not in line.lower()[raw.end():]:
-                raw_close = close
+            if not _RAW_HTML_CLOSE_RE.search(line, raw.end()):
+                raw_close = True
             continue
         if _HTML_BLOCK_RE.match(line):
             html[k] = in_html = True

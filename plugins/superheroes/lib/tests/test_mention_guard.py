@@ -705,3 +705,10 @@ def test_a_raw_text_html_block_runs_to_its_closing_tag(text, line):
 def test_a_raw_text_block_closed_on_its_own_line_still_ends():
     # healthy sibling: once the closing tag is seen, a real fence after it still masks
     assert mg.bare_mentions("<pre>x</pre>\n\n" + FENCE + "\n@octo\n" + FENCE + "\n") == []
+
+
+def test_any_type_1_closing_tag_ends_a_raw_text_block():
+    # axis: a different kind-1 closing tag ends the block, so the later HTML block keeps the fence shape literal
+    text = "<pre>\n</style>\n</pre>\n~~~\nping @octo\n"
+    assert [m["line"] for m in mg.bare_mentions(text)] == [5]
+    assert mg.check(text)["reason"] == "bare-mention"
