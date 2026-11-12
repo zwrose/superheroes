@@ -712,3 +712,11 @@ def test_any_type_1_closing_tag_ends_a_raw_text_block():
     text = "<pre>\n</style>\n</pre>\n~~~\nping @octo\n"
     assert [m["line"] for m in mg.bare_mentions(text)] == [5]
     assert mg.check(text)["reason"] == "bare-mention"
+
+
+def test_a_non_ascii_look_alike_closes_no_raw_text_block():
+    # axis: tag case-folding is ASCII only, so a long-s look-alike closing tag leaves the pre block open
+    text = "<pre>\n</" + "ſ" + "tyle>\n~~~\n</pre>\nping @octo\n"
+    assert [m["line"] for m in mg.bare_mentions(text)] == [5]
+    # healthy sibling: an ASCII closing tag in any case still closes it
+    assert [m["line"] for m in mg.bare_mentions("<pre>\n</STYLE>\n</pre>\n~~~\nping @octo\n")] == [5]

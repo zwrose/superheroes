@@ -47,16 +47,18 @@ _BACKTICK_RUN_RE = re.compile(r"`+")
 _HTML_BLOCK_RE = re.compile(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:[\s/>]|$)")
 # A raw-text HTML block opener (GFM block kind 1): it ends at a line holding any kind-1 closing tag, not at a
 # blank line.
-_RAW_HTML_RE = re.compile(r"^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE)
-_RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE)
+_RAW_HTML_RE = re.compile(r"^ {0,3}<(pre|script|style|textarea)(?=[\s>]|$)", re.IGNORECASE | re.ASCII)
+_RAW_HTML_CLOSE_RE = re.compile(r"</(?:pre|script|style|textarea)>", re.IGNORECASE | re.ASCII)
+# Tag and URL patterns fold case over ASCII only (re.ASCII): GFM does, so a non-ASCII look-alike such as a
+# long s never closes a block or masks a span.
 # A code element; a backslash-escaped `\<code>` is literal text, so it masks nothing.
-_CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE)
+_CODE_ELEMENT_RE = re.compile(r"(?<!\\)<code>.*?</code>", re.IGNORECASE | re.ASCII)
 # A complete inline link ([label] then a parenthesised destination, closed), an angle autolink or a bare URL; an
 # incomplete link shape masks nothing: GitHub renders each as an anchor (or an attribute), and its
 # mention filter skips anchors, so an at-sign inside one is part of the address, never a mention. A link destination
 # may hold one level of balanced parentheses.
 _LINK_RE = re.compile(r"\[[^\]\n]*\](\((?:[^()\s]|\([^()\s]*\))*\))")
-_URL_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE)
+_URL_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]*:[^\s<>]*>|\b(?:https?|ftp)://[^\s<>()]+", re.IGNORECASE | re.ASCII)
 
 
 def _urls(line):
