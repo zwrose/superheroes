@@ -2298,8 +2298,10 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
         entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
+    # axis: a row settled open at its loop's end still owes its consequence and places on a re-raise, so a code-quality re-raise never turns it into craft — see bite-proof record wo1_open_at_end_2445
     if isinstance(existing, dict) and (
             not _disposition_is_current(existing) or _restaged_after(state, key, existing)
+            or session_contract.open_at_loop_end(existing)
             or _undispatched_ruling(state, _live_ruling_by_key(state),
                                     {k: ledger[i] for k, i in seen.items()}, key) is not None):
         # An unresolved finding re-raised keeps a consequence it held: a later code-quality report
@@ -3183,11 +3185,14 @@ def _settle_open_findings(state, cap=False):
                 pending["seq"], pending["ruling"], why_open)
         # a newer guidance decision on a merged member binds the finding over the older skip;
         # with no bound decision at all the out-of-scope reason stands
-        if (row.get("disposition") == "out-of-scope" and pending is None
-                and (not bound[key] or bound[key].get("ruling") == "out-of-scope")):
+        deferred_out_of_scope = (row.get("disposition") == "out-of-scope" and pending is None
+                                 and (not bound[key] or bound[key].get("ruling") == "out-of-scope"))
+        if deferred_out_of_scope:
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
+        # axis: a finding settled left-for-owner only because it was still open carries the marker; a deliberate deferral (out of scope, a pending ruling) never does — see bite-proof record wo1_open_at_end_2445
         result = finding_outcomes.settle(
-            content, ruling=bound[key], sources=sources, open_reason=reason)
+            content, ruling=bound[key], sources=sources, open_reason=reason,
+            open_at_end=not deferred_out_of_scope and pending is None)
         if key in ungraded and bound[key] is None:
             # an ungraded sweep hit keeps its settled outcome; its reason names the withheld sweep hit, not the generic open reason
             result = dict(result, reason=SWEEP_UNGRADED_REASON)
@@ -3199,6 +3204,8 @@ def _settle_open_findings(state, cap=False):
         carried = {}
         if row.get("disposition") == "out-of-scope":
             carried = {name: row[name] for name in ("outOfScopeReason", "followUp") if name in row}
+        if session_contract.open_at_loop_end(result):
+            carried[session_contract.OPEN_AT_LOOP_END_FIELD] = True
         _record_disposition(state, key, result["outcome"], state["round"],
                             settledReason=result["reason"], decidedBy=result["decidedBy"], **carried)
 
@@ -5255,8 +5262,11 @@ def _repeat_plan(state, grouping, session_dir, exact_only=None):
             staged, pool, repeat_marks.judge_refs(grouping) if judged else {}).items():
         finding = next(f for f in staged if f.get("id") == sid)
         kept, fix_holds = repeat_marks.decide(
-            entry["outcome"], _grade_verdict(finding), lambda e=entry: _repeat_changed(state, session_dir, e))
+            repeat_marks.decision_outcome(entry), _grade_verdict(finding),
+            lambda e=entry: _repeat_changed(state, session_dir, e))
         marks[sid] = {"finding": finding, "entry": entry, "source": source, "kept": kept, "fixHolds": fix_holds}
+        if not kept and source == "exact" and entry["source"] == "record" and session_contract.open_at_loop_end(entry):
+            _carry_reopened_consequence(finding, entry)
     kept_ids = {sid for sid, m in marks.items() if m["kept"]}
     # axis: a kept repeat is out of the survivors and every group before the merge, so it never merges into a fresh finding — see bite-proof record c1l8_wo_a_repeat_marks
     removed = kept_ids | {f.get("id") for f in refuted if isinstance(f, dict)}
@@ -5280,6 +5290,22 @@ def _record_repeat(state, key, repeat_of, repeat_kept):
         row.pop("repeatKept", None)
         if repeat_kept is not None:
             row["repeatKept"] = copy.deepcopy(repeat_kept)
+
+
+def _carry_reopened_consequence(finding, entry):
+    """An exact repeat of an earlier record's finding left open at its loop's end reopens that finding as this one:
+    merge the earlier consequence into the staged finding before the synthesis merge, so the merge and
+    `_sync_merged_consequences` carry it onto whichever row represents it and a later code-quality report never
+    turns a real consequence into craft. The in-session counterpart is `_seed_ledger_entry`'s preservation of a
+    marked row. Touches only the staged finding, never the ledger."""
+    # axis: a reopened record finding keeps its real consequence across sessions, also when synthesis merges it into another finding — see bite-proof record wo1_open_at_end_2445
+    text, kind = finding_outcomes.merged_consequence([entry, finding])
+    if text is not None:
+        finding["consequence"] = text
+    # an unknown merged kind (the earlier finding named none) stays unknown, as a synthesis merge leaves it: never code-quality
+    finding["consequenceKind"] = kind
+    # axis: a reopened record finding keeps the places it still owes, so a narrower repeat never drops a copy — see bite-proof record wo1_open_at_end_2445
+    verification.apply_kind_members(finding, [entry, finding], with_description=False)
 
 
 def _record_kept_disposition(state, key, entry, reason, grade_verdict, restore):

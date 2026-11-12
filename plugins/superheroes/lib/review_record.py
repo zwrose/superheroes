@@ -894,6 +894,10 @@ def _validate(a):
         chk(session_contract.RAISED_BY_FIELD not in f or (isinstance(f[session_contract.RAISED_BY_FIELD], str)
                                                           and f[session_contract.RAISED_BY_FIELD].strip() != ""),
             f"findings[{i}].{session_contract.RAISED_BY_FIELD}")
+        # axis: the open-at-loop-end marker is exactly true on a left-for-owner finding that cites no decision, never another value or outcome — see bite-proof record wo1_open_at_end_2445
+        chk(session_contract.OPEN_AT_LOOP_END_FIELD not in f or (
+            f[session_contract.OPEN_AT_LOOP_END_FIELD] is True and f.get("outcome") == _LEFT_FOR_OWNER
+            and decided_by is None), f"findings[{i}].{session_contract.OPEN_AT_LOOP_END_FIELD}")
         if "grade" in f:
             fault = _grade_fault(f["grade"])
             # axis: a grade is a verdict from the vocabulary with a reason, never a bare mark — see bite-proof record c1l1_wo_a_record_seam
@@ -1758,6 +1762,19 @@ def _recheck_decisions(findings, sources):
     return out, changes
 
 
+def _drop_stale_open_marker(findings):
+    """Each finding without the `openAtLoopEnd` marker it can no longer hold: the marker stays only on a finding that
+    is still left for the owner with no cited decision. A carried re-check that moved a marked finding to fixed, or an
+    owner-ruling citation set on it, ends the reason the marker stood for. Every other finding is returned as it is."""
+    out = []
+    for f in findings:
+        # axis: a finding that is no longer a bare left-for-owner one is written without the marker — see bite-proof record wo1_open_at_end_2445
+        stale = (session_contract.OPEN_AT_LOOP_END_FIELD in f
+                 and (f.get("outcome") != _LEFT_FOR_OWNER or session_contract.decided_by_of(f) is not None))
+        out.append({k: v for k, v in f.items() if k != session_contract.OPEN_AT_LOOP_END_FIELD} if stale else f)
+    return out
+
+
 def _earlier_session_record(prior, history, session_id):
     """The record of another session that the carried facts are read against: the first of `prior`, then `history`
     newest first, that is a record whose `sessionId` differs from ``session_id``; None when there is none. A rewrite of
@@ -1930,6 +1947,7 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
     findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], fc["sha"],
                                               lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head),
                                               earlier_other)
+    findings = _drop_stale_open_marker(findings)
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
