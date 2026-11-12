@@ -98,3 +98,13 @@ def test_e9_a_language_tagged_example_inside_the_section_does_not_stop_the_accep
     does not end the item before the acceptance that follows the fence. Oracle (cmark-gfm 0.29.0.gfm.13): the fence renders
     as a code block and "F-1 Slow retry loop" as shown text after it."""
     assert la.missing(RECORD, ACCEPTING.lstrip("\n") + section) == []
+
+
+def test_e10_an_opener_whose_whole_fence_is_hidden_is_not_named():
+    """Fix audit (round 2 of the vet-897 review): a tagged fence inside a raw HTML comment is hidden whole, opener and
+    closer alike, so ``fence_info`` does not name its opener; the leftover reader blanks both delimiters together and the
+    visible section after the comment still counts. Oracle (cmark-gfm 0.29.0.gfm.13 read as HTML5): the fence sits inside
+    the comment, and the heading and bullet after it are shown."""
+    body = ("<div><!--\n\n```text\nhidden\n```\n\n<div>--></div>\n" + ACCEPTING + "- F-1 Slow retry loop\n")
+    assert md_hidden.scan(body).fence_info == frozenset()
+    assert la.missing(RECORD, body) == []

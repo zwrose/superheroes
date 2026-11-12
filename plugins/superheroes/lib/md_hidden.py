@@ -315,6 +315,7 @@ class _Parser:
         self.paras = []  # paragraphs, setext headings and ATX headings: the text blocks
         self.atx = []
         self.fence_info = set()  # line indexes of fence openers that carry an info string
+        self.fence_close = {}  # fence opener line index -> its closing fence line index (a fence closed by a fence line)
         self.idx = 0
         self.text = ""
         self.pos = 0
@@ -401,6 +402,7 @@ class _Parser:
                         if run > _FENCE_CAP:
                             self._note("fence run longer than 255")
                         if run >= container.fence_len:
+                            self.fence_close[container.first] = self.idx
                             self.tip = self._finalize(container)
                             return False, None
                 n = 0
@@ -1160,9 +1162,11 @@ def _scan(body):
         if line_index < len(raw):
             raw[line_index] = UNSURE
     # axis: a fence opener's info string shows only as attributes, so the line reads unsure — see bite-proof record i2451_md_hidden_image_same_line.md (E7)
+    info_only = set()  # the opener lines this rule alone made unsure (their closers are not hidden by another rule)
     for line_index in parser.fence_info:
         if line_index < len(raw) and raw[line_index] == VISIBLE:
             raw[line_index] = UNSURE
+            info_only.add(line_index)
 
     first_unsure = min((at for at, _ in unsure), default=None)
     lines = []
@@ -1178,7 +1182,11 @@ def _scan(body):
         if block.parent is parser.root:
             content = block.lines[0] if block.lines else ""
             headings.append((offsets[block.first], heading_text(content), state_of[block.first]))
-    return Rendering(lines, headings, sorted(unsure), (offsets[i] for i in parser.fence_info if i < len(offsets)))
+    # axis: fence_info names only an opener the info-string rule alone made unsure whose closer (when a fence line closes it)
+    # reads VISIBLE, so a reader that keeps the opener's fence run always keeps a closer that pairs with it — see bite-proof record i2451_md_hidden_image_same_line.md (E10)
+    kept = [i for i in info_only if state_of[i] == UNSURE
+            and (i not in parser.fence_close or state_of.get(parser.fence_close[i]) == VISIBLE)]
+    return Rendering(lines, headings, sorted(unsure), (offsets[i] for i in kept))
 
 
 def scan(body):
