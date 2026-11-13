@@ -90,6 +90,8 @@ def _leftovers(record):
 
 
 _MARKER_LINE = re.compile(r"^<!-- superheroes:[^>]*-->\s*$")
+# a fence opener line up to the end of its opening run: container markers and indent, then three or more backticks or tildes
+_FENCE_RUN = re.compile(r"[^`~\r\n]*?(?:`{3,}|~{3,})")
 _TICKS = re.compile(r"`+")
 # a `<` GitHub's HTML tokenizer leaves data state on (#2389 V849-1): `<` + `!`, `?`, `/` not followed by `>`, or an ASCII
 # letter. These are exactly the entries out of `_DATA` in `md_hidden._tokenize`; the text after one may be hidden markup.
@@ -126,7 +128,15 @@ def _blanked_lines(body):
             shown.append(rendering.state_at(offset) == md_hidden.VISIBLE)
         except ValueError:
             shown.append(False)  # a line start md_hidden does not report reads as not visible: the cut fails closed
-        offset += len(line)
+        start, offset = offset, offset + len(line)
+        run = _FENCE_RUN.match(line) if not shown[-1] and start in rendering.fence_info else None
+        if run:
+            # axis: a fence opener whose info string md_hidden reads unsure keeps its fence run and only its info string
+            # blanks, so the fence still pairs with its closer when the blanked lines are re-read; what is kept is markup
+            # alone, so the line reads shown and does not stop its item — see bite-proof record i2451_md_hidden_image_same_line.md (E8)
+            out.append(run.group(0) + _terminator(line))
+            shown[-1] = True
+            continue
         # axis: a line md_hidden does not read VISIBLE keeps only its terminator, a marker line excepted — see bite-proof record i2389_scanner_line_boundaries.md
         out.append(line if shown[-1] or _MARKER_LINE.match(line) else _terminator(line))
     return out, shown
