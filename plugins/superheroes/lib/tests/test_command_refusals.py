@@ -619,6 +619,11 @@ def test_plain_command_rule_content():
     for phrase in ("one plain command per call", "script file", "file-write tool", "`;`", "`&&`", "`||`",
                    "pipe into a loop", "read-only"):
         assert phrase in rule, phrase
+    # axis: the rule prohibits the chain operators and the loop pipe, not merely names them — see bite-proof record wo1_2458_plain_command
+    assert "Never chain commands with `;`, `&&` or `||`, and never pipe into a loop." in rule
+    assert "Run one plain command per call." in rule
+    for permission in ("may chain", "may pipe", "can chain", "may run several"):
+        assert permission not in rule.lower(), permission
     # axis: the rule keeps the delete-rule carve-out and the no-file-write-tool sentence — see bite-proof record wo1_2458_plain_command
     assert "a delete never moves into the script" in rule
     assert "its own plain call" in rule
