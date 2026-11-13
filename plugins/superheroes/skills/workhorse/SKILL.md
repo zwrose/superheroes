@@ -472,6 +472,8 @@ tool. A command you intend to run, the preflight `gh` write included, is issued 
 Staging it in a file to dodge the gate is forbidden. An inline gated string blocks an unattended
 session on a permission prompt nobody answers.
 
+**No at-sign before a name or number in GitHub text.** GitHub notifies whoever a login after an at-sign names, numbers included. Write `vet 893`, `collector 574` or the bare name, or put the token in a code span, unless you mean to notify that person.
+
 **Await every dispatch in-turn**, by blocking on it or by invoking through the authorized entrypoint
 with `--max-wait` slices and re-invoking the originating verb on the same `--run-dir` until terminal,
 inside this turn. Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message.

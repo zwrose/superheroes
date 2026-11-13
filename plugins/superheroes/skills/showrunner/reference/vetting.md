@@ -127,7 +127,7 @@ escalation still fires on time.
 
 **Each entry carries three things:** **what it is**, **your recommendation**, and **the proposing
 vet's ordinal, stamped on it immutably**. It is **struck when the owner rules** — closing or
-declining an item removes it from the collector — and nothing re-numbers what remains.
+declining an item removes it from the collector — and nothing re-numbers what remains. Write the stamp as `vet 893` (or `ordinal 893`), never with an at-sign before the number: GitHub reads that as a login and notifies whoever owns it.
 
 **Age is a subtraction over ordinals, never a count of artifacts.** Receipts are edited in place,
 so they are neither a monotonic register nor one-per-vet, and every counting rule fails on that.

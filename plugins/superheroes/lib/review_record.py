@@ -51,6 +51,7 @@ import dispatch_outcome  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
+import mention_guard  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import returning_review  # noqa: E402
@@ -2909,7 +2910,8 @@ def render_plan(record):
         r = _flag_redactions(r)
         # axis: the writer's hash is taken of the exact object the JSON is built from, after the redaction flag and every shed step — see bite-proof record i2383_transit_record
         stamped = dict(r, sentSha256=_sent_sha(r))
-        return (f"{MARKER}\n{_summary(r, 0)}\n\n<details><summary>Full record</summary>\n\n```json\n"
+        # axis: the record comment's prose summary has each bare at-sign mention wrapped in a code span; the JSON block is untouched — see bite-proof record wo_2453_mention_guard
+        return (f"{MARKER}\n{mention_guard.wrap(_summary(r, 0))}\n\n<details><summary>Full record</summary>\n\n```json\n"
                 f"{_record_json(stamped)}\n```\n</details>")
 
     # The size bound is on what is posted (the JSON-escaped body), so it is measured here: shed the lane
@@ -2948,7 +2950,8 @@ def render_plan(record):
         # A head over the cap takes the compact summary, then the one-count reviewer line; the full lists
         # stay in the record's parts.
         for level in (0, 1, 2):
-            out = (f"{MARKER}\n{_summary(r, level)}\n\n{note}\n\n<details><summary>Full record (in parts)</summary>"
+            # axis: the head comment's prose summary has each bare at-sign mention wrapped in a code span; the index block is untouched — see bite-proof record wo_2453_mention_guard
+            out = (f"{MARKER}\n{mention_guard.wrap(_summary(r, level))}\n\n{note}\n\n<details><summary>Full record (in parts)</summary>"
                    f"\n\n```json\n{index}\n```\n</details>")
             if len(out) <= MAX_BODY_CHARS:
                 return out

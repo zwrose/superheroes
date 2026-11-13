@@ -47,6 +47,7 @@ governs.
 - **Disclose degradation** where the owner reads — the PR body, not a buried log.
 - **Park, don't presume.** When you cannot deliver truthfully, stop and say why. A
   truthful park beats a false ship; the product will lose deliveries to this, by design.
+- **No at-sign before a name or number in GitHub text.** GitHub notifies whoever a login after an at-sign names, numbers included. Write `vet 893`, `collector 574` or the bare name, or put the token in a code span, unless you mean to notify that person.
 
 ## Which session you are
 
