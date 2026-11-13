@@ -44,7 +44,7 @@ its verdict actually turns on, it runs itself.
   `lib/command_refusals.py`) binds you; read it there and follow it. You write no script. When
   capturing a command's output needs more than one call, the orchestrator's list gives you a capture
   script it wrote with its file-write tool, run by one listed plain interpreter call. A listed entry
-  that is itself a chain, or carries a heredoc or inline program code (`python3 -c`, `node -e`), is
+  that is itself a chain, or carries a heredoc or inline program code (`python3 -B -c`, `node -e`), is
   an order defect you report, not a command you rewrite; nothing a rule refuses (a delete, an
   install, a network call, a push) is moved into a script to get past it.
 - **Never delete or filter a capture yourself.** The captures are working artifacts the orchestrator

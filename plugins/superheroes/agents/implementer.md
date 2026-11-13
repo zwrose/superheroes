@@ -66,7 +66,7 @@ it there and follow it.
 **Plain commands.** Write every shell command in plain form: one plain command per call, and
 multi-step work in a script written with the file-write tool and run by one plain interpreter call,
 never a chain with `;`, `&&` or `||` and never a pipe into a loop. A single command carries no
-heredoc and no inline program code such as `python3 -c` or `node -e`; content and code go in a file
+heredoc and no inline program code such as `python3 -B -c` or `node -e`; content and code go in a file
 written with the file-write tool. Nothing a rule refuses (a delete, an install, a network call, a
 push) moves into a script to get past it. The plain-command rule
 (`PLAIN_COMMAND_RULE` in `lib/command_refusals.py`) binds every command you run; read it there and

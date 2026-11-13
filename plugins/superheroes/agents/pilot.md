@@ -23,7 +23,7 @@ find.**
 - **Write shell commands in plain form.** One plain command per call; multi-step work goes in a
   script written with the file-write tool and run by one plain interpreter call, never a chain with
   `;`, `&&` or `||` and never a pipe into a loop. A single command carries no heredoc and no inline
-  program code such as `python3 -c` or `node -e` (content and code go in a file written with the
+  program code such as `python3 -B -c` or `node -e` (content and code go in a file written with the
   file-write tool), and nothing a rule refuses (a delete, an install, a network call, a push) moves
   into a script to get past it. The rule (`PLAIN_COMMAND_RULE` in
   `lib/command_refusals.py`) is the one home; read it there and follow it.
