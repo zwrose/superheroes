@@ -51,6 +51,11 @@ collector append) and **merge, close or push nothing**. Your grant carries no Gi
 carries a shell, so these are obligations you hold, not limits the grant enforces; the advisor
 checks the PR and the worktree list after you return.
 
+Your shell commands are plain: one plain command per call, and multi-step work in a script written
+with the file-write tool and run by one plain interpreter call, never a chain with `;`, `&&` or `||`
+and never a pipe into a loop. The plain-command rule (`PLAIN_COMMAND_RULE` in
+`lib/command_refusals.py`) binds you; read it there and follow it.
+
 ## Four rules every draft keeps
 
 1. **A finding the vet catches before merge is never a review escape.** A review escape is a bug

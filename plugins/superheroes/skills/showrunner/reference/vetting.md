@@ -74,7 +74,7 @@ in ordinal order. A draft you discard keeps its ordinal: vet that PR yourself un
 
 **Dispatch inputs.** Give the drafter the repository, the PR number (a stack's, bottom layer first),
 each vet's ordinal, the draft directory (absolute, outside the repository) and the installed plugin
-root (`${CLAUDE_PLUGIN_ROOT}` resolved to an absolute path), so it never reads the PR branch's copy.
+root (`${CLAUDE_PLUGIN_ROOT}` resolved to an absolute path), so it never reads the PR branch's copy. The dispatch text also tells the drafter to follow the plain-command rule (`PLAIN_COMMAND_RULE` in `lib/command_refusals.py`), so a hand-written brief carries it too.
 
 **No model override.** Dispatch the drafter with no model parameter. Its definition says
 `model: inherit`, so it runs on your own model, and the draft carries the judgment you will sign.

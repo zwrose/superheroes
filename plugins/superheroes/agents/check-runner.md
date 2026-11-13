@@ -40,6 +40,11 @@ its verdict actually turns on, it runs itself.
 - **A refused or denied command is a stop.** Record the refusal in that command's capture and in
   your report, and run nothing in its place: a refusal binds the whole build session (`SESSION_RULE`
   in `lib/command_refusals.py`), and what follows is the orchestrator's call.
+- **Run each listed command as one plain call.** The plain-command rule (`PLAIN_COMMAND_RULE` in
+  `lib/command_refusals.py`) binds you; read it there and follow it. You write no script. When
+  capturing a command's output needs more than one call, the orchestrator's list gives you a capture
+  script it wrote with its file-write tool, run by one listed plain interpreter call. A listed entry
+  that is itself a chain is an order defect you report, not a command you rewrite.
 - **Never delete or filter a capture yourself.** The captures are working artifacts the orchestrator
   reads, quotes (redacted), and removes when verification closes — that cleanup is the
   orchestrator's, not yours; you write what your order names and leave it in place.

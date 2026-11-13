@@ -562,3 +562,177 @@ def test_every_delete_rule_carrier_carries_the_stop_and_delete_rule():
                 offenders.append(os.path.relpath(path, _PLUGIN_ROOT))
     # axis: every carrier of the delete rule also carries or cites the stop-and-delete rule — see bite-proof record wo_2412_stop_and_delete
     assert offenders == []
+
+
+# --- the plain-command rule (#2458) ---------------------------------------------------------
+
+
+def _split_top_level(value):
+    """Split ``value`` on commas that sit outside parentheses (a scoped grant may hold commas)."""
+    parts, depth, current = [], 0, []
+    for ch in value:
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _bash_granted(frontmatter):
+    """True when an agent's frontmatter grants Bash: no ``tools:`` line (all tools), ``*``, or a
+    ``Bash`` / ``Bash(...)`` entry."""
+    for line in frontmatter.splitlines():
+        if line.startswith("tools:"):
+            value = line[len("tools:"):].strip()
+            if value == "*":
+                return True
+            return any(e == "Bash" or e.startswith("Bash(") for e in _split_top_level(value))
+    return True
+
+
+def _split_agent(text):
+    """Return ``(frontmatter, body)``; a file with no frontmatter block is all body and no grant line."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return "", text
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return "\n".join(lines[1:i]), "\n".join(lines[i + 1:])
+    return "", text
+
+
+def _section(text, heading):
+    start = text.index(heading)
+    end = text.find("\n## ", start + 1)
+    return text[start:] if end == -1 else text[start:end]
+
+
+def test_plain_command_rule_content():
+    rule = CR.PLAIN_COMMAND_RULE
+    # axis: the rule names the one-plain-command-per-call form, the script route and the three chain operators — see bite-proof record wo1_2458_plain_command
+    for phrase in ("one plain command per call", "script file", "file-write tool", "`;`", "`&&`", "`||`",
+                   "pipe into a loop", "read-only"):
+        assert phrase in rule, phrase
+    # axis: the rule keeps the delete-rule carve-out and the no-file-write-tool sentence — see bite-proof record wo1_2458_plain_command
+    assert "a delete never moves into the script" in rule
+    assert "its own plain call" in rule
+    assert "A seat with no file-write tool runs only single plain commands" in rule
+
+
+def test_plain_command_rule_leaves_the_other_rules_unchanged():
+    # axis: the plain-command rule is its own constant, not folded into another rule's text — see bite-proof record wo1_2458_plain_command
+    for other in (CR.ORDER_TEXT, CR.DELETE_RULE, CR.STOP_AND_DELETE_RULE, CR.FILE_WRITE_RULE):
+        assert CR.PLAIN_COMMAND_RULE not in other
+    assert CR.ORDER_TEXT == CR.compose_order_text(CR.SANCTIONED_RETRIES)
+
+
+def test_census_plain_command_rule_write_prompt(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    prompt_path = _prompt(tmp_path, "Implement exactly the assigned work order.\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, prompt_path=prompt_path)
+    assert res["ok"] is True
+    with open(os.path.join(str(tmp_path / "run"), ED.PROMPT_NAME), encoding="utf-8") as fh:
+        staged = fh.read()
+    # axis: the plain-command rule reaches every dispatch-write order exactly once, after the delete rule — see bite-proof record wo1_2458_plain_command
+    assert staged.count(CR.PLAIN_COMMAND_RULE) == 1
+    assert staged.index(CR.DELETE_RULE) < staged.index(CR.PLAIN_COMMAND_RULE)
+
+
+def test_census_plain_command_rule_native_preamble(tmp_path, monkeypatch, capsys):
+    r = _make_repo(tmp_path)
+    _routed(monkeypatch)
+    code, _out = _open(capsys, r, deadline=600, items=["src/new.txt"])
+    assert code == 0
+    with open(os.path.join(os.path.realpath(r.run), "agent-prompt.md"), encoding="utf-8") as fh:
+        prompt = fh.read()
+    # axis: the plain-command rule reaches the native implementer preamble exactly once — see bite-proof record wo1_2458_plain_command
+    assert prompt.count(CR.PLAIN_COMMAND_RULE) == 1
+    assert prompt.index(CR.PLAIN_COMMAND_RULE) < prompt.index("The order follows, verbatim.")
+
+
+def test_every_bash_granted_agent_cites_the_plain_command_rule():
+    granted, offenders = set(), []
+    agents_dir = os.path.join(_PLUGIN_ROOT, "agents")
+    for name in sorted(os.listdir(agents_dir)):
+        if not name.endswith(".md"):
+            continue
+        with open(os.path.join(agents_dir, name), encoding="utf-8") as fh:
+            frontmatter, body = _split_agent(fh.read())
+        if not _bash_granted(frontmatter):
+            continue
+        granted.add(name[:-len(".md")])
+        if "`PLAIN_COMMAND_RULE`" not in body or "lib/command_refusals.py" not in body:
+            offenders.append(name)
+    # axis: the Bash-granted set is not read as empty by a parser regression — see bite-proof record wo1_2458_plain_command
+    assert granted >= {"check-runner", "implementer", "pilot", "vet-drafter"}
+    # axis: every Bash-granted agent cites the plain-command rule by name and home — see bite-proof record wo1_2458_plain_command
+    assert offenders == []
+
+
+@pytest.mark.parametrize("frontmatter,expected", [
+    ("name: x\ndescription: y", True),
+    ("name: x\ntools: *", True),
+    ("name: x\ntools: Read, Bash", True),
+    ("name: x\ntools: Bash(git:*)", True),
+    ("name: x\ntools: Read, Grep, Glob, Write", False),
+], ids=["no-tools-line", "star", "bash-entry", "scoped-bash", "no-bash"])
+def test_bash_grant_parser(frontmatter, expected):
+    # axis: the Bash-grant parser fails closed on an absent, wildcard or scoped grant — see bite-proof record wo1_2458_plain_command
+    assert _bash_granted(frontmatter) is expected
+
+
+# The one-home markers are the rule's own sentences, derived from the constant and never hand-copied.
+_PLAIN_COMMAND_SENTENCES = [
+    s.strip() for s in " ".join(CR.PLAIN_COMMAND_RULE.split()).split(". ") if s.strip()
+]
+
+
+def test_plain_command_rule_has_one_home():
+    # A copy of any sentence anywhere in the shipped plugin outside its home is a second copy;
+    # prose consumers cite the home instead. TRANSITION.md and CHANGELOG.md are history and are skipped.
+    assert len(_PLAIN_COMMAND_SENTENCES) >= 8
+    home = os.path.join("lib", "command_refusals.py")
+    copies = []
+    for root, dirs, files in os.walk(_PLUGIN_ROOT):
+        dirs[:] = [d for d in dirs if d not in ("tests", "__pycache__", ".git")]
+        for name in files:
+            if not name.endswith((".py", ".md", ".json", ".txt")):
+                continue
+            if name in ("TRANSITION.md", "CHANGELOG.md"):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, _PLUGIN_ROOT)
+            if rel == home:
+                continue
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                raw = fh.read()
+            # drop the quote-gap between adjacent string literals, then collapse whitespace
+            body = " ".join(re.sub(r'"\s*"', "", raw).split())
+            for sentence in _PLAIN_COMMAND_SENTENCES:
+                if sentence in body:
+                    copies.append((rel, sentence))
+    # axis: no sentence of the plain-command rule is hand-copied outside lib/command_refusals.py — see bite-proof record wo1_2458_plain_command
+    assert copies == []
+
+
+@pytest.mark.parametrize("relpath,heading", [
+    (os.path.join("rubric", "covenant.md"), None),
+    (os.path.join("skills", "showrunner", "SKILL.md"), None),
+    (os.path.join("skills", "showrunner", "reference", "vetting.md"), "## Parallel vets — the vet-drafter"),
+    (os.path.join("skills", "workhorse", "reference", "dispatch-mechanics.md"),
+     "## Check-runner — a plain shell task"),
+], ids=["covenant", "showrunner-skill", "vetting-vet-drafter", "dispatch-mechanics-check-runner"])
+def test_plain_command_rule_cited_by_session_surfaces(relpath, heading):
+    with open(os.path.join(_PLUGIN_ROOT, relpath), encoding="utf-8") as fh:
+        text = fh.read()
+    section = text if heading is None else _section(text, heading)
+    # axis: each session surface cites the plain-command rule by name and home, never carries its text — see bite-proof record wo1_2458_plain_command
+    assert "`PLAIN_COMMAND_RULE`" in section
+    assert "lib/command_refusals.py" in section
