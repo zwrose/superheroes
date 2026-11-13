@@ -172,6 +172,8 @@ hyphenated as `follow-ups`, repeated, or malformed) is a write the advisor's slo
 too. `handback` also refuses `owner-command-in-body` (§ Commands the owner runs). Fix the body and
 re-run until it prints `"ok": true`; once your lane ends, nobody can.
 
+Before opening or editing the PR, run `python3 -B <plugin root>/lib/mention_guard.py check --file <body file>` on the body; a `bare-mention` refusal names each token to fix.
+
 Before the ready marking, also run `python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/vet_slot.py" handback --pr <n>
 --repo <owner/name>` on the pushed PR, after its review record is written. It reads the latest review
 record and refuses `leftover-not-accepted`, naming each missing id with its title, while *What we're

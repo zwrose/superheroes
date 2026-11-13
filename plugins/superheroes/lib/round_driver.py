@@ -3619,7 +3619,7 @@ VERIFY_BASE_TOKEN = store_core.VERIFY_BASE_TOKEN
 def _verify_command(config):
     """The command `run-verify` hands the orchestrator, with `{baseRef}` bound to the session's
     pinned base commit. A touched-tests gate that diffs against main selects a stacked branch's
-    whole stack (PR #1332 vet 244, collector @244-3); the token lets the calibrated command diff
+    whole stack (PR #1332 vet 244, collector 244-3); the token lets the calibrated command diff
     against the pinned base instead. Without a full-hex pin the token stays verbatim — the gate's
     own `base ref does not resolve` refusal is the loud failure, never a silent fall-back to main."""
     cmd = config.get("verifyCommand", "none")
