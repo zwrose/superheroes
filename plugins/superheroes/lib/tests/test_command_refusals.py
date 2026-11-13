@@ -628,6 +628,16 @@ def test_plain_command_rule_content():
     assert "a delete never moves into the script" in rule
     assert "its own plain call" in rule
     assert "A seat with no file-write tool runs only single plain commands" in rule
+    # axis: the single-command allowance excludes a heredoc and inline program code, naming the inline forms — see bite-proof record wo2_2458_heredoc_inline
+    assert "That holds only for a command that carries no heredoc and no inline program code" in rule
+    for inline in ("python3 -c", "node -e", "bash -c"):
+        assert inline in rule, inline
+    # axis: nothing a rule or fence refuses as its own call moves into a script — see bite-proof record wo2_2458_heredoc_inline
+    assert ("nothing else a rule or a fence refuses as its own call (an install, a network call, a push) "
+            "moves into a script to get past it") in rule
+    # axis: the file-write carve-out stays one clause of the rule — see bite-proof record wo2_2458_heredoc_inline
+    assert ("where the file-write rule binds you, a file that rule sends to the file tools is never "
+            "written by the script") in rule
 
 
 def test_plain_command_rule_leaves_the_other_rules_unchanged():
