@@ -23,8 +23,10 @@ Warnings (never a refusal): the result's ``warnings`` list never changes ``ok``,
 or the CLI exit code. ``order-timeout-missing`` — an implementer order names a test suite or
 long-running command (``pytest``, ``npm test``, ``go test``, ``full suite`` …) and sets no
 ``--timeout``; checked on the template-masked text with code spans and fences kept. The budget
-and ``--timeout`` keywords and the suite command are read outside path spans, and ``--timeout``
-counts only as a whole flag token.
+and ``--timeout`` keywords and the suite command are read outside path spans, with a filename's
+sentence-final periods set aside on both reads, except that a path whose last segment is exactly
+``pytest``, ``jest`` or ``vitest`` (``.venv/bin/pytest``) keeps that segment visible to the
+suite-command read; ``--timeout`` counts only as a whole flag token.
 Per-kind table:
 | check | implementer |
 |---|---|
@@ -91,6 +93,7 @@ _SUITE_CMD = re.compile(
     r"(?<![\w.-])(?:pytest|npm\s+(?:run\s+)?test|yarn\s+test|pnpm\s+test|jest|vitest|go\s+test"
     r"|cargo\s+test|make\s+test|full\s+suite|test\s+suites?)(?!\w|\.\w)", re.I)
 _PATH_RUN = re.compile(r"[A-Za-z0-9_.~/-]+")
+_RUNNER_NAME = re.compile(r"pytest|jest|vitest")
 _TIMEOUT_FLAG = re.compile(r"(?<![\w-])--timeout(?![\w-])")
 _NATIVE = ('"resultKind"', "--output-schema")
 # Driver-bound verify-command token — not an unfilled order placeholder.
@@ -345,16 +348,27 @@ def _shape(text, expect_items):
     return None
 
 
-def _mask_path_spans(text, sentence_final=False):
+def _mask_path_spans(text, sentence_final=False, keep_runner=False):
     """Blank (same length) every path span: a maximal run of ``[A-Za-z0-9_.~/-]`` holding a ``/``
     or ending in a known extension. Only the run is blanked, never the whole whitespace token.
-    With ``sentence_final`` (the budget read), a filename's sentence-final periods are set aside
-    before the extension test (``budget2.md.``) and left in place."""
+    With ``sentence_final`` (the budget and timeout reads), a filename's sentence-final periods
+    are set aside before the extension test (``budget2.md.``) and left in place. With
+    ``keep_runner`` (the timeout read), a run whose last ``/``-separated segment is exactly
+    ``pytest``, ``jest`` or ``vitest`` keeps that segment visible (``.venv/bin/pytest``) and
+    blanks only the path before it."""
     def blank(m):
         run = m.group(0)
         if "/" in run:
+            cut = run.rfind("/") + 1
+            last = run[cut:]
+            name = last.rstrip(".") if sentence_final else last
+            # axis: on the timeout read, a path whose last segment is exactly a test-runner name still names that runner — see bite-proof record i2452_order_lint
+            # axis: only an exact runner name stays visible, never a longer last segment that starts with it — see bite-proof record i2452_order_lint
+            if keep_runner and _RUNNER_NAME.fullmatch(name):
+                return " " * cut + last
             return " " * len(run)
         # axis: for the budget read, a filename followed by a sentence period is still a path span — see bite-proof record i2452_order_lint
+        # axis: for the timeout read, a filename followed by a sentence period is still a path span — see bite-proof record i2452_order_lint
         core = run.rstrip(".") if sentence_final else run
         if core.lower().endswith(EXTENSIONS):
             return " " * len(core) + run[len(core):]
@@ -369,7 +383,7 @@ def _budget_ok(text):
 
 
 def _timeout_warnings(text):
-    masked = _mask_path_spans(text)
+    masked = _mask_path_spans(text, sentence_final=True, keep_runner=True)
     # axis: a --timeout inside a path span is not the flag — see bite-proof record i2452_order_lint
     # axis: only a whole --timeout flag token counts, never part of a longer word — see bite-proof record i2452_order_lint
     if _TIMEOUT_FLAG.search(masked):

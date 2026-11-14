@@ -125,3 +125,59 @@ def test_e8_at_most_n_commands_form_passes(tmp_path):
     r = OL.check_text("# WO\n\nYou may run at most 7 commands.\n", repo_root=root)
     assert r["ok"] is True
     assert _tokens(r) == []
+
+
+# F1: a test runner invoked by a path, with no timeout
+def test_f1_runner_invoked_by_path_without_timeout_warns(tmp_path):
+    # axis: a test runner named as the last segment of a path is still a suite command — see bite-proof record i2452_order_lint
+    root = _repo(tmp_path)
+    r = OL.check_text("# WO\n\nRun .venv/bin/pytest -q once.\n%s" % _BUDGET_LINE, repo_root=root)
+    assert _warned(r)
+
+
+# F2: the same with a node runner path
+def test_f2_node_runner_invoked_by_path_without_timeout_warns(tmp_path):
+    root = _repo(tmp_path)
+    r = OL.check_text("# WO\n\nRun node_modules/.bin/vitest -q once.\n%s" % _BUDGET_LINE,
+                      repo_root=root)
+    assert _warned(r)
+
+
+# F3: a sentence-final filename holding --timeout is not the flag
+def test_f3_sentence_final_timeout_filename_is_not_the_flag(tmp_path):
+    # axis: on the timeout read, a filename followed by a sentence period is still a path span — see bite-proof record i2452_order_lint
+    root = _repo(tmp_path)
+    r = OL.check_text("# WO\n\nRun pytest. Read --timeout.md.\n%s" % _BUDGET_LINE, repo_root=root)
+    assert _warned(r)
+
+
+# F4: a runner invoked by path that sets the flag does not warn
+def test_f4_runner_invoked_by_path_with_timeout_does_not_warn(tmp_path):
+    root = _repo(tmp_path)
+    r = OL.check_text("# WO\n\nRun .venv/bin/pytest --timeout=600 -q.\n%s" % _BUDGET_LINE,
+                      repo_root=root)
+    assert r["warnings"] == []
+
+
+# F5: plain paths that are not runners, with no suite command
+def test_f5_plain_paths_that_are_not_runners_do_not_warn(tmp_path):
+    root = _repo(tmp_path, ("lib/pytest-plugin.py", "tools/pytest/README.md"))
+    r = OL.check_text("# WO\n\nSee lib/pytest-plugin.py and tools/pytest/README.md.\n%s"
+                      % _BUDGET_LINE, repo_root=root)
+    assert r["warnings"] == []
+
+
+# F6: a bare runner with a spaced flag and a sentence-final value
+def test_f6_bare_runner_with_spaced_timeout_does_not_warn(tmp_path):
+    root = _repo(tmp_path)
+    r = OL.check_text("# WO\n\nRun pytest --timeout 600.\n%s" % _BUDGET_LINE, repo_root=root)
+    assert r["warnings"] == []
+
+
+# F7: a runner name inside a longer last segment is not kept visible
+def test_f7_runner_name_inside_a_longer_last_segment_does_not_warn(tmp_path):
+    # axis: only a last path segment that is exactly a runner name stays visible, never one that merely starts with it — see bite-proof record i2452_order_lint
+    root = _repo(tmp_path)
+    r = OL.check_text("# WO\n\nSee bin/pytest-watch for the watcher.\n%s" % _BUDGET_LINE,
+                      repo_root=root)
+    assert r["warnings"] == []
