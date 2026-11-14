@@ -160,9 +160,12 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    could be overwritten. Both also need a locally tracked stack, which a lane-built stack is not.
 
    (d) **A rebase conflict** aborts: `git rebase --abort`. Nothing was moved and every branch stays at
-   its vetted head. The stack goes to a fix leg: a builder lane adopts the layer and resolves the
-   conflict the ordinary way, by merge, and the stack is reviewed and vetted again. Never resolve a
-   conflict inside the straightening.
+   its vetted head. Such a conflict is one the vetted layer already resolved in a bring-current merge,
+   so a fix leg cannot clear it: its merge would find main already in the layer and do nothing. Never
+   send it to a fix leg, and never resolve it by hand. Rebuild that layer as one commit carrying its
+   vetted tree: `git commit-tree <vetted head>^{tree} -p <new head of the layer below> -m "<the layer's
+   PR title>"` (for the bottom layer, `-p <base>`), on no branch. The sha it prints is the layer's new
+   head. The layers above rebase onto it as in (c), and step (e)'s `prove` covers it as any layer.
 
    (e) **Prove before pushing.** `python3 -B <plugin root>/lib/stack_linear.py prove --repo-root
    <clone> --base <base> --layer <branch> <vetted head> <new head> ...`, one `--layer` per layer,

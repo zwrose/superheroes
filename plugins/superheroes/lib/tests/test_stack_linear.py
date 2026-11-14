@@ -918,6 +918,84 @@ def test_prove_layers_may_be_lists_as_well_as_tuples(stack):
     assert _prove(stack, triples)["proven"] is True
 
 
+def _git_rc(repo, *args):
+    """Run git in `repo` and return the finished process whatever its exit code (a conflict is the
+    expected outcome of some calls here, which `_git` would turn into an assertion failure)."""
+    return subprocess.run(["git", "-C", str(repo)] + _ID + list(args), capture_output=True,
+                          text=True, env=_GIT_ENV)
+
+
+@pytest.fixture()
+def conflict_stack(tmp_path):
+    """c0 on main holds one line in a.txt. Layer 1 (l1) commits F, changing that line one way; main
+    commits M, changing it another way; l1's vetted head V1 is `merge --no-ff M` with the conflict
+    resolved to a third text. Layer 2 (l2) branches off V1 and adds L2 touching another file, so its
+    vetted head V2 is L2. `base` is M, the main commit the vetted bottom contains."""
+    repo = tmp_path / "conflict"
+    repo.mkdir()
+    _git(repo, "init", "-q", "-b", "main")
+    _commit_file(repo, "a.txt", "base line\n", "c0")
+    _git(repo, "checkout", "-q", "-b", "l1")
+    _commit_file(repo, "a.txt", "line from the layer\n", "F")
+    _git(repo, "checkout", "-q", "main")
+    base = _commit_file(repo, "a.txt", "line from main\n", "M")
+    _git(repo, "checkout", "-q", "l1")
+    merged = _git_rc(repo, "merge", "--no-ff", "-m", "main into l1", "main")
+    assert merged.returncode != 0, "the bring-current merge must conflict: " + merged.stdout
+    with open(os.path.join(str(repo), "a.txt"), "w") as handle:
+        handle.write("line resolved in the merge\n")
+    _git(repo, "add", "a.txt")
+    _git(repo, "commit", "-q", "-m", "main into l1")
+    v1 = _head(repo)
+    _git(repo, "checkout", "-q", "-b", "l2")
+    v2 = _commit_file(repo, "b.txt", "layer two\n", "L2")
+    _git(repo, "checkout", "-q", "main")
+    return SimpleNamespace(repo=str(repo), base=base, v1=v1, v2=v2)
+
+
+def test_prove_a_layer_rebuilt_from_its_vetted_tree_after_a_rebase_conflict(conflict_stack):
+    repo, base, v1, v2 = (conflict_stack.repo, conflict_stack.base, conflict_stack.v1,
+                          conflict_stack.v2)
+    # step (c): replaying the bottom's own commit onto the base conflicts again, because the
+    # vetted head resolved that line inside a merge that the rebase drops.
+    _git(repo, "checkout", "-q", "--detach", v1)
+    rebase = _git_rc(repo, "rebase", "--onto", base, base, v1)
+    assert rebase.returncode != 0
+    assert "CONFLICT" in rebase.stdout
+    assert "UU a.txt" in _git(repo, "status", "--porcelain")
+    # step (d): abort, and nothing moved
+    _git(repo, "rebase", "--abort")
+    assert _git(repo, "rev-parse", "l1") == v1
+    assert _git(repo, "rev-parse", "l2") == v2
+    assert _head(repo) == v1
+    assert _git(repo, "status", "--porcelain") == ""
+
+    # step (d), the rebuild: one commit carrying the vetted tree, parented on the base, on no branch
+    n1 = _git(repo, "commit-tree", v1 + "^{tree}", "-p", base, "-m", "layer 1")
+    assert _git(repo, "rev-parse", n1 + "^") == base
+    assert _git(repo, "branch", "--contains", n1) == ""
+
+    # the layer above rebases onto the rebuilt head, with the vetted head of the layer below as upstream
+    _git(repo, "checkout", "-q", "--detach", v2)
+    _git(repo, "rebase", "-q", "--onto", n1, v1, v2)
+    n2 = _head(repo)
+    _git(repo, "checkout", "-q", "main")
+    assert _git(repo, "rev-parse", n2 + "^") == n1
+
+    # step (e): prove covers the rebuilt layer like any layer
+    result = sl.prove(repo_root=repo, base=base, layers=[("layer-1", v1, n1), ("layer-2", v2, n2)],
+                      run=_GitRun(), today=TODAY)
+    assert result["ok"] is True and result["proven"] is True and result["reason"] is None, result
+    assert [entry["branch"] for entry in result["layers"]] == ["layer-1", "layer-2"]
+    assert [entry["new"] for entry in result["layers"]] == [n1, n2]
+    assert all(entry["treeEqual"] and entry["onLayerBelow"] and entry["mergeCommits"] == []
+               for entry in result["layers"])
+    assert len(result["repin"]) == 2
+    assert result["repin"][0].startswith("Re-pinned 2026-11-14 (")
+    assert "layer-1 %s -> %s" % (v1, n1) in result["repin"][0]
+    assert "layer-2 %s -> %s" % (v2, n2) in result["repin"][1]
+
+
 # ---------------------------------------------------------------------------------------------
 # Command line.
 # ---------------------------------------------------------------------------------------------
