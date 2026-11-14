@@ -264,7 +264,10 @@ queue drops the stack. So when the stack's base has a merge queue (any method), 
 fails, the advisor straightens the stack once before the merge — every layer rebased onto the main
 commit the vetted bottom already contains, each layer's tree proved unchanged, one atomic push. The
 recipe is `skills/showrunner/reference/merge-train.md` § Merging a stack, item 4. A base with no
-queue keeps the merge-commit path.
+queue keeps the merge-commit path. A queue also drops a stack's upper layers when it has no free
+build slot for them, so the advisor queues a stack only when the queue has a free build slot for
+every layer (`skills/showrunner/reference/merge-train.md` § Merging a stack, item 5) and recovers a
+layer the queue removes as item 9 says.
 
 **One command merges the stack; never one PR at a time.**
 
@@ -278,7 +281,9 @@ merged, and a queued stack is not atomic. Resume a `poll-timeout` with
 `python3 -B <plugin root>/lib/stack_merge.py poll --repo <o/r> --top <n> --uuid <u> --sha <sha>`, using
 the `uuid` the result carries. `stack_merge.py merge` refuses `stack-not-linear` (the base has a merge
 queue, or the queue read failed, and a layer up to the top carries a merge commit) and
-`linearity-unreadable` (the layers cannot be read) before any request to GitHub.
+`linearity-unreadable` (the layers cannot be read) before any request to GitHub. On a queue base it
+then refuses `queue-slots-short` (fewer free build slots than layers) or `queue-slots-unreadable`
+(the slot read failed, a GraphQL refusal included) before any request.
 
 **A test never pins a layer's commit.** A squash merge leaves every layer's head unreachable from
 the trunk, so a test that reads a pinned layer commit (for example `git show <layer sha>:<path>`)
