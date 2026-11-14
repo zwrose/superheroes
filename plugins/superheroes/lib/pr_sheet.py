@@ -228,7 +228,8 @@ _DEPENDS = re.compile(
     # D1 a choice made somewhere else
     r"\b(?:only\s+)?(?:if|unless|once|when|after|until)\s+you\s+(?:pick|picked|choose|chose|chosen|answer|answered|rule|ruled"
     r"|select|selected|go\s+with|went\s+with)\s+\S+\s+(?:on|for|in|at|to)\s+(?:(?:the|that|your)\s+)?"
-    r"(?:(?:other|previous|next|earlier|later|first|second|above|below|cards?|questions?|decisions?|items?|collector)\b|\d+\b)"
+    r"(?:(?:other|previous|next|earlier|later|first|second|above|below|card|question|decision|item|collector)\b"
+    r"|(?:cards|questions|decisions|items)(?=\s+#?\d)|\d+\b)"  # a plural target names questions only when a number follows
     # D2 depending on an answer
     r"|\b(?:depending|depends|dependent|contingent|conditional)\s+on\s+(?:your|the|how\s+you|what\s+you|which)\b[^.;]{0,40}?"
     r"\b(?:answer|answered|ruling|ruled|pick|picked|choice|chose|choose|decision|decide)\b"

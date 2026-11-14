@@ -424,3 +424,19 @@ FAILED ...::test_a_card_depending_on_another_question_is_refused[g04-d1-a-plural
 
 Green after the fix, over the new file and the six sheet test files: `1006 passed in 20.01s`; the round-1 rows
 (`itemized`, `SKU1501`, `1501b`) stay green.
+
+## Review fix, round 3: a plural target needs a number
+
+The round-2 plurals also refused ordinary text ("for items bought as gifts", "for cards stored on file"). A plural target now
+counts only when a number follows it (`(?:cards|questions|decisions|items)(?=\s+#?\d)`); the singular targets keep their
+word boundary. Three accepted rows guard it, written before the fix and red on the code before it, with the detector unedited:
+
+```
+FAILED ...::test_a_healthy_card_still_builds[ok-a-plural-target-word-with-no-number]
+FAILED ...::test_a_healthy_card_still_builds[ok-payment-cards-with-no-number]
+FAILED ...::test_a_healthy_card_still_builds[ok-plural-questions-with-no-number]
+3 failed, 4 passed, 53 deselected in 0.74s
+```
+
+The four round-2 refused rows passed in that same run. Green after the fix, over the new file and the six sheet test
+files: `1009 passed in 20.75s`.
