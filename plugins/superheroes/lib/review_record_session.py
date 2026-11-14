@@ -1528,6 +1528,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     checked += _verify_via_checked(rounds)
     # axis: a break-it test kept in a higher stack layer, or a stack that could not be read, is named in the record — see bite-proof record wo_a_2463_stack_layers
     checked += _break_it_stack_checked(rounds)
+    checked += _malformed_test_checked(rounds)
     if abandoned is not None:
         checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
     elif interrupted:
@@ -1637,6 +1638,22 @@ def _break_it_stack_checked(rounds):
             elif stack.get("read") == "failed":
                 out.append("Break-it test %s (round %s): the stack could not be read (%s); the test reads "
                            "not-in-head" % (row.get("path"), n, stack.get("reason")))
+    return out
+
+
+def _malformed_test_checked(rounds):
+    """One `checked` line per row of every round's `breakItMalformed`, in round order: a break-it test a seat returned
+    that does not load, dropped from its finding."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        rows = rounds[n].get("breakItMalformed") if isinstance(rounds[n], dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            # axis: the review record names each dropped break-it test, its seat, finding and compile error — see bite-proof record wo_a_2460_break_it_unloadable
+            out.append("Break-it test dropped as malformed seat output (round %s): %s returned %s for %s:%s; it does "
+                       "not load (%s), so the finding stands without it and no commit or restore of it was asked."
+                       % (n, row.get("seat"), row.get("path"), row.get("file"), row.get("line"), row.get("error")))
     return out
 
 

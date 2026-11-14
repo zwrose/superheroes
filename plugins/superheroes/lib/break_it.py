@@ -1571,6 +1571,29 @@ def _not_run(head, block, reason):
     return _record(head, block, OUTCOME_NOT_RUN, reason)
 
 
+def load_error(block):
+    """The error text (``"IndentationError: unexpected indent (line 8)"``: class name, message, line) when ``block``
+    is a Python test whose content does not load because of an indentation error, else ``None``: the one rule for
+    a seat's malformed test. Only ``compile(content, path, "exec", dont_inherit=True)`` raising ``IndentationError``
+    (``TabError`` included) counts: indentation rules are the same in every Python 3, so the driver's own compile
+    agrees with any project interpreter, while other syntax is version-dependent. Any other ``SyntaxError``, a
+    non-``.py`` path, a non-string content, a non-dict and any other exception (a null byte) give ``None``; it
+    never raises."""
+    if not isinstance(block, dict):
+        return None
+    path, content = block.get("path"), block.get("content")
+    if not (isinstance(path, str) and path.endswith(".py") and isinstance(content, str)):
+        return None
+    try:
+        compile(content, path, "exec", dont_inherit=True)
+    except IndentationError as exc:
+        # axis: only an indentation error drops a seat's test; any other compile error keeps today's run — see bite-proof record wo_a_2460_break_it_unloadable
+        return "%s: %s (line %s)" % (type(exc).__name__, exc.msg, exc.lineno)
+    except Exception:  # noqa: BLE001 — a syntax error of another kind, a null byte: the test runs as before
+        return None
+    return None
+
+
 def transit_redacted(text):
     """True when ``text`` carries a transit redaction placeholder; False for a non-string."""
     return isinstance(text, str) and _TRANSIT_PLACEHOLDER_RE.search(text) is not None

@@ -43,7 +43,6 @@ derived placeholders (panel channel block, optional context lines) before substi
 ``context["placeholders"]``."""
 from __future__ import annotations
 
-import json
 import os
 import re
 import subprocess
@@ -337,19 +336,18 @@ def resolve_order_threat_model(core_path) -> tuple[str, str | None]:
         return "", "threat-model-read-failed:%s" % exc
 
 
-_RESULT_CHANNEL_NEUTRAL_DELIVERY = (
-    "Deliver the object on the runner's declared result channel: the runner appends "
-    "the authoritative result contract at the end of this prompt — when it names a "
-    "result file, write exactly that file and reply DONE; otherwise emit the object "
-    "as your final response with nothing after it. Never write a landing file "
-    "(read-only sandbox)."
+# The one deferral a stdout-channel order (every phase except sweep) carries in place of its own
+# result contract: the runner appends the one contract the dispatch reads (#2450).
+STDOUT_RESULT_DEFERRAL = (
+    "Return your result on the runner's declared result channel, exactly as the result "
+    "contract the runner appends at the end of this prompt states — that contract is the one "
+    "shape graded; any example in this order shows the payload's fields, not the envelope. "
+    "Never write a landing file (read-only sandbox)."
 )
 
 
-def _result_channel_neutral_delivery(stdout_example=None):
-    """Channel-neutral delivery prose for engine seats (stdout or typed-file)."""
-    if stdout_example is None:
-        return _RESULT_CHANNEL_NEUTRAL_DELIVERY
+def _result_channel_neutral_delivery(stdout_example):
+    """Sweep-only stdout delivery prose (a host reply phase keeps its own contract block, #2450)."""
     return (
         "Deliver the object on the runner's declared result channel: the runner appends "
         "the authoritative result contract at the end of this prompt — when it names a "
@@ -384,11 +382,7 @@ def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> 
     lines = [
         review_findings_schema.example_prompt_block(),
         "",
-        "Deliver a single JSON object of this shape on the runner's declared result channel: "
-        "the runner appends the authoritative result contract at the end of this prompt — "
-        "when it names a result file, write exactly that file and reply DONE; otherwise emit "
-        "the object as your final response with nothing after it. Never write a landing file "
-        "(read-only sandbox). Replace every value in the example above with your own review "
+        STDOUT_RESULT_DEFERRAL + " Replace every value in the example above with your own review "
         "content — do not echo the example. A review with nothing to flag emits "
         "`\"findings\": []` (an empty list).",
     ]
@@ -401,19 +395,12 @@ def _panel_stdout_delivery_text(include_investigated_reminder: bool = False) -> 
 
 
 def _stdout_payload_example(phase: str) -> tuple[str | None, str | None]:
-    """Minimal stdout JSON example derived from the phase payload contract — one home with the block above."""
+    """Sweep-only: minimal stdout JSON example derived from the phase payload contract. Every other
+    stdout-channel phase defers to the contract the runner appends (#2450)."""
     contract, reason = round_adapters.payload_contract(phase)
     if reason:
         return None, "payload-contract:%s" % reason
     required = contract.get("required") or []
-    if phase == round_phases.P_PANEL:
-        return json.dumps(
-            review_findings_schema.example_findings_object(), sort_keys=True,
-        ), None
-    if phase == round_phases.P_AUDITS:
-        # Audits stdout contract (id/ruling/reason) — not the findings-member schema; do not
-        # route through review_findings_schema.example_findings_object().
-        return '{"id": "...", "ruling": "...", "reason": "..."}', None
     if not required:
         return '{...}', None
     inner = ", ".join('"%s": [...]' % key for key in required)
@@ -442,14 +429,13 @@ def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | 
             "",
             "- Payload landing path: %s" % landing,
         ])
+    elif phase == round_phases.P_SWEEP:
+        stdout_example, reason = _stdout_payload_example(phase)
+        if reason:
+            return None, reason
+        lines.extend([_result_channel_neutral_delivery(stdout_example)])
     else:
-        if phase == round_phases.P_PANEL:
-            lines.extend([_RESULT_CHANNEL_NEUTRAL_DELIVERY])
-        else:
-            stdout_example, reason = _stdout_payload_example(phase)
-            if reason:
-                return None, reason
-            lines.extend([_result_channel_neutral_delivery(stdout_example)])
+        lines.extend([STDOUT_RESULT_DEFERRAL])
     return "\n".join(lines), None
 
 
@@ -562,18 +548,20 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
     landing = context.get("landing_path", "")
-    stdout_example, reason = _stdout_payload_example(phase)
     if channel == "stdout":
-        if reason:
-            ph["OUTPUT_CHANNEL_BLOCK"] = ""
-            return ph
-        if phase == round_phases.P_SYNTHESIS:
+        if phase == round_phases.P_SWEEP:
+            stdout_example, reason = _stdout_payload_example(phase)
+            if reason:
+                ph["OUTPUT_CHANNEL_BLOCK"] = ""
+                return ph
+            ph["OUTPUT_CHANNEL_BLOCK"] = _result_channel_neutral_delivery(stdout_example)
+        elif phase == round_phases.P_SYNTHESIS:
             ph["OUTPUT_CHANNEL_BLOCK"] = (
-                _result_channel_neutral_delivery(stdout_example)
+                STDOUT_RESULT_DEFERRAL
                 + " Every survivor id appears exactly once across all groups."
             )
         else:
-            ph["OUTPUT_CHANNEL_BLOCK"] = _result_channel_neutral_delivery(stdout_example)
+            ph["OUTPUT_CHANNEL_BLOCK"] = STDOUT_RESULT_DEFERRAL
     elif phase == round_phases.P_VERIFIERS:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             "Write your verdict payload to %s — the `verdicts` array carries exactly one entry "
@@ -648,10 +636,13 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
                   _format_residual_block(context).rstrip(),
                   format_threat_model_block(context).rstrip(),
                   format_rulings_block(context).rstrip()]
-        contract_block, creason = _format_payload_contract(phase)
-        if creason:
-            return _refuse(creason)
-        blocks.append(contract_block.rstrip())
+        # A stdout-channel order (every phase but sweep) states no contract of its own: the runner
+        # appends the one contract the dispatch reads (#2450). Host-seat and sweep orders keep theirs.
+        if context.get("host_seat") is True or phase == round_phases.P_SWEEP:
+            contract_block, creason = _format_payload_contract(phase)
+            if creason:
+                return _refuse(creason)
+            blocks.append(contract_block.rstrip())
         landing_block, lreason = _format_landing_block(context, phase)
         if lreason:
             return _refuse(lreason)
