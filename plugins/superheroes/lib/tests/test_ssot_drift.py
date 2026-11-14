@@ -1371,6 +1371,8 @@ _EXPECTED_RAW_MODE_READS = {
         # the returning-review decision is made only for a pull request's session; the mode is read off the single resolver's own result
         'if session_mode.resolve(_session_meta(session_dir), overrides)["mode"] != session_mode.MODE_PR:',
         '"MODE": mode_resolved["mode"],',
+        # the stack search runs only for a pull request's session; the mode is read off the single resolver's own result, and an unresolved mode is not a PR
+        'if (not mode["resolved"] or mode["mode"] != session_mode.MODE_PR',
     },
     "lib/review_base_guard.py": {
         'mode = meta.get("mode")',
