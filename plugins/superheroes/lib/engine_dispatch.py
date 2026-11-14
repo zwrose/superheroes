@@ -5282,7 +5282,10 @@ def _finish_review_grade_from_parse(
     pr_body_staged = bool(opened.get("prBodySourcePath")) or (
         isinstance(view_meta, dict) and view_meta.get("prBodyPath")
     )
-    if has_payload and pr_body_staged and not accepted:
+    # A synthesis judge groups the findings it is handed; its order (rubric/orders/dispatch-synthesis.md) asks for no `investigated` list, so a staged PR body does not make a non-empty grouping vacuous (issue 2475).
+    # axis: result kind at the PR-body vacuous forfeit — grouping is exempt, findings/verdicts/ruling are not
+    if (has_payload and pr_body_staged and not accepted
+            and kind != engine_adapter.review_payload_key("grouping")):
         engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
         return {
             "forfeit": True,
