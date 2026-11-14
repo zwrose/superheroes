@@ -27,8 +27,13 @@ import stack_linear as sl  # noqa: E402
 # cannot change the repos built here. Inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE
 # and the rest) are dropped first: git honours them over cwd, so a test run from inside another git
 # operation would otherwise point these fixture calls at that repository.
-_GIT_ENV = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-_GIT_ENV.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+def _fixture_git_env(environ):
+    env = {key: value for key, value in environ.items() if not key.startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    return env
+
+
+_GIT_ENV = _fixture_git_env(os.environ)
 _ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
 
 REPO = "o/r"
@@ -1156,6 +1161,26 @@ def test_prove_the_fixed_above_grammar_is_imported_when_the_check_runs_not_at_lo
 # ---------------------------------------------------------------------------------------------
 # The recipe's --no-rebase-merges flag.
 # ---------------------------------------------------------------------------------------------
+
+def test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_untouched(tmp_path):
+    bait = tmp_path / "bait.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bait)], check=True, capture_output=True,
+                   env=_fixture_git_env(os.environ))
+    before = sorted(p.relative_to(bait).as_posix() for p in bait.rglob("*"))
+    inherited = dict(os.environ, GIT_DIR=str(bait), GIT_WORK_TREE=str(tmp_path), GIT_INDEX_FILE=str(bait / "index"))
+    env = _fixture_git_env(inherited)
+    assert not {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} & set(env)
+    assert env["GIT_CONFIG_GLOBAL"] == os.devnull and env["GIT_CONFIG_NOSYSTEM"] == "1"
+    repo = tmp_path / "fixture"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=str(repo), check=True, capture_output=True, env=env)
+    (repo / "a.txt").write_text("a\n")
+    subprocess.run(["git", "add", "a.txt"], cwd=str(repo), check=True, capture_output=True, env=env)
+    subprocess.run(["git", *_ID, "commit", "-q", "-m", "a"], cwd=str(repo), check=True, capture_output=True, env=env)
+    assert (repo / ".git").is_dir()
+    assert sorted(p.relative_to(bait).as_posix() for p in bait.rglob("*")) == before, \
+        "a fixture git call under an inherited GIT_DIR wrote into the bait repository"
+
 
 _MERGE_TRAIN = os.path.join(os.path.dirname(_LIB), "skills", "showrunner", "reference", "merge-train.md")
 
