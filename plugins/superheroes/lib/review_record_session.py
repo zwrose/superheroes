@@ -844,6 +844,12 @@ def _stored_repeat(mark):
     return dict(mark, findingKey=review_record._key({"findingKey": key})) if isinstance(key, str) and key.strip() else mark
 
 
+def _without_kept(mark):
+    """A copy of the repeat mark without the `kept` stamp (which only this session's own decision writes); a mark
+    that is not an object is returned as it is."""
+    return {k: v for k, v in mark.items() if k != review_record.REPEAT_KEPT_FIELD} if isinstance(mark, dict) else mark
+
+
 def _stored_fix_group(group):
     """The fix group naming each member by its stored key, as `_stored_repeat` names the earlier finding; a
     malformed group is left for the writer to refuse."""
@@ -1042,6 +1048,7 @@ def _findings_and_merges(state):
         raise Refusal(UNREADABLE, "findings")
     content = dict(by_key, **{sc.finding_identity_key(f): f for f in live})
     audit_answers = _latest_audit_place_answers(state)
+    kept_verdicts = _kept_mark_verdicts(state)
     out, merged = [], {}
     for key, row in content.items():
         if row.get("summaryEntry"):
@@ -1055,6 +1062,17 @@ def _findings_and_merges(state):
         dim = row.get("dimension")
         # axis: a live row without a finding part keeps the ledger row's, so a newer row never erases an older row's part — see bite-proof record c1l1_wo_b_session_seam
         held = _finding_parts(row, by_key.get(key))
+        if isinstance(held.get("repeatOf"), dict):
+            # axis: a stale `kept` the ledger or row holds is dropped; only this session's own decision stamps it — see bite-proof record i2438_repeat_follows
+            held["repeatOf"] = _without_kept(held["repeatOf"])
+            # axis: the kept mark is stamped only on a finding that is its own representative and carries a valid `repeatKept`, never on a merged member — see bite-proof record i2438_repeat_follows
+            if rep is not None and sc.finding_identity_key(rep) == key and _valid_repeat_kept(rep):
+                grade = held.get("grade")
+                # axis: the verdict is the one the repeat was kept on (its round's repeat mark), never a grade the keep restored — see bite-proof record i2438_repeat_follows
+                verdict = kept_verdicts[key] if key in kept_verdicts else (
+                    grade.get("verdict") if isinstance(grade, dict) else None)
+                held["repeatOf"] = dict(held["repeatOf"], **{review_record.REPEAT_KEPT_FIELD: {
+                    "outcome": outcome, "verdict": verdict if verdict in review_record.GRADE_VERDICTS else None}})
         if "kindOfMistake" in held:
             # the one place the record finding's kind is built: each place's `fixed` is read from the disposition the decision stands on
             held["kindOfMistake"] = _kind_with_place_results(held["kindOfMistake"], by_key.get(key), by_key, audit_answers)
@@ -1079,7 +1097,27 @@ def _findings_and_merges(state):
                     "reviewer": ", ".join(map(str, dim)) if isinstance(dim, list) else _text(dim),
                     **{k: row.get(k) for k in ("title", "severity", "file", "line", "consequence")},
                     "body": row.get("body", row.get("detail")), **held})
+    for f in out:
+        kept = f["repeatOf"].get(review_record.REPEAT_KEPT_FIELD) if isinstance(f.get("repeatOf"), dict) else None
+        members = sorted(k for k, rep_key in merged.items() if rep_key == f["findingKey"])
+        if isinstance(kept, dict) and members:
+            # axis: a kept repeat names the findings merged into it, so the record writer settles them with it — see bite-proof record i2438_repeat_follows
+            f["repeatOf"] = dict(f["repeatOf"], **{review_record.REPEAT_KEPT_FIELD: dict(kept, members=members)})
     return out, merged
+
+
+def _kept_mark_verdicts(state):
+    """``{finding key: grade verdict or None}`` from the latest kept row of every round's `repeatMarks`: the verdict each
+    repeat was kept on. Rounds are read in integer order; a row that is not a kept mark with a key is skipped."""
+    rounds = state.get("rounds") if isinstance(state.get("rounds"), dict) else {}
+    out = {}
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        rows = rounds[n].get("repeatMarks") if isinstance(rounds[n], dict) else None
+        for row in rows if isinstance(rows, list) else ():
+            if isinstance(row, dict) and row.get("kept") is True and isinstance(row.get("findingKey"), str):
+                grade = row.get("grade")
+                out[row["findingKey"]] = grade.get("verdict") if isinstance(grade, dict) else None
+    return out
 
 
 def decision_inputs(state):
@@ -1572,6 +1610,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     if pr_body_line is not None:
         checked.append(pr_body_line)
     checked += _verify_via_checked(rounds)
+    checked += _malformed_test_checked(rounds)
     if abandoned is not None:
         checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
     elif interrupted:
@@ -1660,6 +1699,22 @@ def _verify_via_checked(rounds):
             out.append("Verify in round %s: CI workflow %s run %s on %s passed, in place of the local "
                        "verify command (%s)" % (n, via.get("workflow"), via.get("runId"),
                                                 str(via.get("headSha"))[:7], via.get("reason")))
+    return out
+
+
+def _malformed_test_checked(rounds):
+    """One `checked` line per row of every round's `breakItMalformed`, in round order: a break-it test a seat returned
+    that does not load, dropped from its finding."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        rows = rounds[n].get("breakItMalformed") if isinstance(rounds[n], dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            # axis: the review record names each dropped break-it test, its seat, finding and compile error — see bite-proof record wo_a_2460_break_it_unloadable
+            out.append("Break-it test dropped as malformed seat output (round %s): %s returned %s for %s:%s; it does "
+                       "not load (%s), so the finding stands without it and no commit or restore of it was asked."
+                       % (n, row.get("seat"), row.get("path"), row.get("file"), row.get("line"), row.get("error")))
     return out
 
 
@@ -1791,7 +1846,8 @@ def _fill(account, earlier, raisers_from=None):
             continue
         for part in ("grade", "repeatOf", "kindOfMistake"):
             if part not in f and part in old:
-                f[part] = _stored_repeat(old[part]) if part == "repeatOf" else old[part]
+                # axis: the earlier record's `kept` mark is never copied: it is this session's own decision's alone — see bite-proof record i2438_repeat_follows
+                f[part] = _without_kept(_stored_repeat(old[part])) if part == "repeatOf" else old[part]
         # axis: the earlier record's break-it runs stay ahead of this session's new ones, none twice — see bite-proof record c1l1_wo_b_session_seam
         # a present non-list value is left as supplied, so the writer refuses it as review-account-invalid
         if isinstance(old.get("breakItRuns"), list) and isinstance(f.get("breakItRuns", []), list):
@@ -1814,7 +1870,11 @@ def _carried(account, earlier):
             continue
         reason = f.get("reason")
         fresh = isinstance(reason, str) and reason and not reason.endswith(CARRIED)
-        out.append(dict(f, reason=reason + CARRIED if fresh else reason))
+        copied = dict(f, reason=reason + CARRIED if fresh else reason)
+        # axis: a carried finding's `kept` mark does not cross records; it is dropped from the copy — see bite-proof record i2438_repeat_follows
+        if isinstance(copied.get("repeatOf"), dict):
+            copied["repeatOf"] = _without_kept(copied["repeatOf"])
+        out.append(copied)
     return out
 
 

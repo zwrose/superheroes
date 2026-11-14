@@ -189,20 +189,31 @@ the session changes it through this verb and says why.
 python3 -B <plugin root>/lib/round_driver.py break-it-change --session-dir <session dir> --finding <id> --content-file <value> --why <value>
 ```
 
-The verb is accepted only while the round waits on the verifiers (the pending action is
-`dispatch-verifiers`). The path and the run command stay the reviewer's; only the test's content
+The verb is accepted while the round waits on the verifiers (the pending action is
+`dispatch-verifiers`), and at a fix step (`apply-fixes`, not a restore-only step) where `--finding`
+is a fix-batch row's `id` or its finding key (an `id` two rows share needs the key). The path and the
+run command stay the reviewer's; only the test's content
 changes. On success it returns `{"ok": true, "finding": <id>, "run": <the new run record>}`. The new
 run is the changed test run again in the working copy, and the second record carries the reason in
 its `changedWhy` field. The verb rewrites the finding's `suggestion` block with the changed content
 (same `path` and `run`), so the changed test is the one the build session writes and commits at `apply-fixes` and the kept
-check reads. It clears the pending verifier dispatch, so the next `next` re-emits the verifier
+check reads. At a fix step the same change goes onto every row that holds the finding (the live
+finding, the fix batch, the audit target and the ledger entry), so the audit compares against the
+changed test. It clears the pending verifier dispatch, so the next `next` re-emits the verifier
 orders at a fresh attempt carrying the changed test and both runs; a verifier result for the
-superseded attempt is refused.
+superseded attempt is refused. At a fix step it clears the pending fix step, so the next `next`
+re-emits `apply-fixes` at a fresh attempt from the changed rows; the step has not restarted, so the
+commits already made in it still count and the PR-body snapshot the step took is kept, and an edit
+of the staged PR body made since still counts at the fold.
 
 Each refusal is `{"ok": false, "reason": <token>}`:
 
-- `break-it-change-not-at-verifiers`: the pending action is not `dispatch-verifiers`.
-- `break-it-change-finding-unknown`: `--finding` names no staged finding.
+- `break-it-change-not-at-verifiers`: the round is at neither the verifiers nor a fix step: the step
+  is any other, a restore-only `apply-fixes` step, a step waiting on the test role's correction, or
+  the session is terminal.
+- `break-it-change-finding-unknown`: `--finding` names no staged finding; at a fix step, no row of the
+  current fix batch (an `id` two rows share names neither, and a finding of a later slice or one
+  already fixed in an earlier slice is not in it).
 - `break-it-change-no-test`: the finding carries no break-it test the driver ran.
 - `break-it-change-why-missing`: `--why` is absent or blank.
 - `break-it-change-content-unreadable`: the content file cannot be read.

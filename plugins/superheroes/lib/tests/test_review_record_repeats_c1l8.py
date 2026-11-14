@@ -343,7 +343,7 @@ def test_fr22_a_kept_repeat_of_a_craft_finding_reads_craft_and_changes_nothing_f
     rows = by_id(rec)
     assert (rows["f-1"]["outcome"], rows["f-2"]["outcome"]) == ("craft", "craft")
     assert rows["f-2"]["reason"] == KEPT_REASON.format("craft") and "repeatKept" not in rows["f-2"]
-    assert rows["f-2"]["repeatOf"] == mark(stored(KEY), id="f-1")
+    assert rows["f-2"]["repeatOf"] == dict(mark(stored(KEY), id="f-1"), **{rr.REPEAT_KEPT_FIELD: {"outcome": "craft", "verdict": None}})
     assert rec["leftForOwner"] == [] and rec["status"] != rr.AWAITS_OWNER
 
 

@@ -30,6 +30,13 @@ _cc_mod = importlib.util.module_from_spec(_cc_spec)
 _cc_spec.loader.exec_module(_cc_mod)
 TYPES: tuple[str, ...] = _cc_mod.TYPES
 
+# Load the one git-origin classifier from the plugin's lib (stdlib-only; not a package).
+_git_origin_spec = importlib.util.spec_from_file_location(
+    "git_origin", _SCRIPTS.parents[1] / "plugins" / "superheroes" / "lib" / "git_origin.py"
+)
+git_origin = importlib.util.module_from_spec(_git_origin_spec)
+_git_origin_spec.loader.exec_module(git_origin)
+
 _SUBJECT_RE_CACHE: dict[frozenset[str], re.Pattern[str]] = {}
 
 _RELEASE_MANIFEST = ".release-please-manifest.json"
@@ -579,14 +586,7 @@ def _run_gh(args: list[str]) -> Any:
 
 
 def _parse_remote_repo(url: str) -> str | None:
-    url = url.strip()
-    m = re.match(r"git@github\.com:(.+?)(?:\.git)?$", url)
-    if m:
-        return m.group(1)
-    m = re.match(r"https://github\.com/(.+?)(?:\.git)?/?$", url)
-    if m:
-        return m.group(1)
-    return None
+    return git_origin.github_slug(url)
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -671,7 +671,9 @@ def _find_release_pr(
             pr
             for pr in pulls
             if pr.get("head", {}).get("ref") == expected_ref
-            and pr.get("head", {}).get("repo", {}).get("full_name") == repo
+            and git_origin.same_repository(
+                pr.get("head", {}).get("repo", {}).get("full_name"), repo
+            )
             and pr.get("base", {}).get("ref") == base_branch
         ]
         if len(matches) > 1:
