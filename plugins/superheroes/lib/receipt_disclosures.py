@@ -734,6 +734,17 @@ def build_degraded_prose(state, form, journal=None):
                     "— the finding was kept without a recorded failing run"
                     % (rkey, len(not_run),
                        ", ".join("%s: %s" % (r.get("path"), r.get("reason")) for r in not_run)))
+        bim = declared.get("breakItMalformed")
+        if isinstance(bim, list):
+            # axis: the receipt discloses each break-it test dropped as malformed seat output
+            malformed = [r for r in bim if isinstance(r, dict)]
+            if malformed:
+                degraded_out.append(
+                    "break-it-test-malformed (round %s): %d break-it test(s) a seat returned did not load "
+                    "and were dropped from their findings, which stand without them (%s)"
+                    % (rkey, len(malformed),
+                       ", ".join("%s %s: %s" % (r.get("seat"), r.get("path"), r.get("error"))
+                                 for r in malformed)))
         vprov = declared.get("verifierProvenance")
         if vprov:
             ignored = [r for r in vprov if isinstance(r, dict) and r.get("outcome") == "verdicts-ignored"]

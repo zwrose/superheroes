@@ -479,3 +479,27 @@ def test_u_the_three_seat_paths_call_the_one_predicate_and_none_re_implements_it
     keys = {n.args[1].value for n in ast.walk(panel) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
             and n.func.id == "_record_round_wave" and isinstance(n.args[1], ast.Constant)}
     assert "breakItMalformed" in keys
+
+
+# ---- R: the receipt consumes the channel -------------------------------------------------------------------
+
+def _malformed_lines(round_record):
+    state = {"config": {}, "rounds": {"1": round_record}}
+    prose, _ = receipt_disclosures.build_degraded_prose(state, receipt_disclosures.RECEIPT_FORM_CERTIFIED)
+    return [line for line in prose if line.startswith("break-it-test-malformed")]
+
+
+def test_r_the_receipt_names_each_dropped_break_it_test():
+    rows = [{"seat": "test-role:s1", "path": "tests/test_a.py", "error": "unexpected indent (test_a.py, line 8)"},
+            {"seat": "test-role", "path": "tests/test_b.py", "error": "unindent does not match"}]
+    assert _malformed_lines({"breakItMalformed": rows}) == [
+        "break-it-test-malformed (round 1): 2 break-it test(s) a seat returned did not load and were dropped "
+        "from their findings, which stand without them (test-role:s1 tests/test_a.py: unexpected indent "
+        "(test_a.py, line 8), test-role tests/test_b.py: unindent does not match)"]
+
+
+@pytest.mark.parametrize("record", [{}, {"breakItMalformed": []}, {"breakItMalformed": "tests/t.py"},
+                                    {"breakItMalformed": ["tests/t.py", 3]}, {"breakItMalformed": None}],
+                         ids=["absent", "empty", "not a list", "non-dict rows", "none"])
+def test_r_a_round_without_a_usable_row_discloses_nothing(record):
+    assert _malformed_lines(record) == []
