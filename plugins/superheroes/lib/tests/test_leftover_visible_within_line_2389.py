@@ -522,7 +522,7 @@ def test_g7_fence_delimiter_an_opener_line_holding_an_opener_stays_an_opener():
     # audit of scoped-finder-003: an opener line holding an opener is left whole, so the sample below it stays fenced
     body = ("## What we're accepting\n\nNone.\n\n## How to see it\n\n```md <!-- note -->\n"
             "## What we're accepting\n\n- F-1 The retry loop never backs off\n```\n")
-    assert "```md <!-- note -->\n" in la._visible(body)
+    assert "```md <!-- note -->" not in la._visible(body)  # vet 897: a fence opener's info string is never shown (md_hidden reads it unsure)
     assert not f1_counted(body)
     assert missing(body), "the fenced sample acceptance must not count"
 

@@ -18,6 +18,7 @@ import subprocess
 import sys
 
 import cloud_builder
+import mention_guard
 import round_commit
 import round_records
 
@@ -44,6 +45,7 @@ REASON_PUBLISH_UNVERIFIED = "pr-body-publish-unverified"
 REASON_PR_INVALID = "pr-number-invalid"
 REASON_ALREADY_PUBLISHED = "already-published"
 REASON_LIVE_MOVED = "live-moved"
+REASON_BARE_MENTION = "bare-mention"
 
 OUTCOME_PUBLISHED = "published"
 OUTCOME_UNCHANGED = "unchanged"
@@ -61,6 +63,7 @@ _REFUSAL_PHRASES = {
     REASON_PUBLISH_FAILED: "GitHub did not accept the edit",
     REASON_PUBLISH_UNVERIFIED: "the body read back from GitHub after the edit did not match",
     REASON_PR_INVALID: "the PR number was not usable",
+    REASON_BARE_MENTION: "the staged PR-body text carries an at-sign GitHub reads as a login, which would notify that person",
 }
 
 
@@ -249,6 +252,13 @@ def _publish(session_dir, pr, runner):
     receipt["liveSha256"] = _sha(live)
     if _same_body(staged, original):
         return done(OUTCOME_UNCHANGED, None if _same_body(live, original) else REASON_LIVE_MOVED)
+    # axis: a staged PR body carrying a bare at-sign mention is refused before any audit step or PATCH, the staged bytes untouched — see bite-proof record wo_2453_mention_guard
+    guard = mention_guard.check(staged)
+    if not guard["ok"]:
+        receipt["mentions"] = guard["mentions"]
+        # axis: the refusal carries the guard's remedy, so the reader learns how to fix the body
+        receipt["remedy"] = guard["remedy"]
+        return done(OUTCOME_REFUSED, REASON_BARE_MENTION)
     audited = receipt["stagedSha256"] == _audited_sha(session_dir)
     # axis: a retried publish recognizes its own earlier success even when cloud egress appended its footer to the live body — see bite-proof record c1l10b_wo3_verify_rerun_seam
     if cloud_builder.transit_compare(staged, live)["transit"] == cloud_builder.TRANSIT_MATCHED:

@@ -144,12 +144,12 @@ shape is wrong and the thinking wins.
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Under
    `**Dispositions — completed.**`, write one bullet per build-record id, `- FU<n>: <disposition>`.
    The disposition begins with one of `fixed` (in this PR), `filed #<n>`, `folded into #<n>`,
-   `collector @<pointer>`, `declined` with its revisit trigger, or `info` — e.g. `filed #12`.
+   `collector <pointer>`, `declined` with its revisit trigger, or `info` — e.g. `filed #12` or `collector 574`.
    `filed #<n>` stands only when the owner's word for that filing exists, and the bullet names where
    it was given (e.g. `filed #12 (owner's word: <link>)`), or when a canonical exception in
    `skills/showrunner/reference/owner-decisions.md` § The tiers and the filing rule already covers
    the filing — name which exception applies and where the word was given. Anything else stays
-   `collector @<pointer>` until the word lands. Then
+   `collector <pointer>` until the word lands. Then
    write one marker line with the same ids, `<!-- superheroes:dispositions FU1 FU2 -->`, or
    `<!-- superheroes:dispositions none -->` only over a `none` build record. Other completed items
    may follow as prose. The slot writer compares the two markers and refuses the owner-half write
@@ -593,7 +593,7 @@ it:
   still carrying the reminder, which is a vet not yet written.
   A reminder still standing means the **owner-half write** is owed, not necessarily the receipt: you
   post the receipt first, so a failure between the two leaves the receipt posted and the reminder
-  intact. Check for your own existing receipt comment before posting a second one. (A rewrite that drops the heading
+  intact. Check for your own existing receipt comment before posting a second one. Before posting, run `python3 -B <plugin root>/lib/mention_guard.py check --file <receipt file>`; a `bare-mention` refusal names each token to drop the at-sign from. (A rewrite that drops the heading
   entirely is visible without either.) Marker-presence alone is **not sufficient** and no longer
   separates those two states: re-stamp the marker when a rewrite dropped it, and remember a slot can
   be marker-present and text-stale. The showrunner charter's **duty 4** backstop is where the check
@@ -629,7 +629,7 @@ Two artifacts, two skeletons. **The receipt comment:**
 receipt-integrity catches <…>; panel confirmation rate <rate or `not derivable from the receipt`>,
 inspection <what you did>; window: <…>
 **Dispositions — completed.**
-- FU<n>: <disposition: fixed | filed #… | folded into #… | collector @… | declined (trigger) | info> <…>
+- FU<n>: <disposition: fixed | filed #… | folded into #… | collector … | declined (trigger) | info> <…>
 <!-- superheroes:dispositions FU<n> … --> | <!-- superheroes:dispositions none -->
 <other completed items, as prose> | `None` (only over a `none` build record)
 <!-- superheroes:pending-proposals -->

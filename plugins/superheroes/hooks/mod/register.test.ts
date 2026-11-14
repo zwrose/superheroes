@@ -1,4 +1,4 @@
-import type { On, SessionCompactInput, SessionUsage } from 'claude-code'
+import type { On, RenderSurface, SessionCompactInput, SessionUsage } from 'claude-code'
 import { expect, mock, test } from 'claude-code/testing'
 import type { Engine, MockClock } from 'claude-code/testing'
 
@@ -113,7 +113,7 @@ type Rig = {
   // state writes the rig rejected
   denied: number
   // what `session.surfaces` answers (null: the read fails)
-  surfaces: readonly string[] | null
+  surfaces: readonly RenderSurface[] | null
   // the prompts the mod submitted, in order
   prompts: string[]
 }
@@ -231,7 +231,7 @@ function rig(
     }
     r.envs.push([e.name, e.value])
 
-    return { value: undefined }
+    return { value: {} }
   })
   on('env.get', (_$, e) => {
     if (options.isEnvGetBroken) {
@@ -769,6 +769,7 @@ async function measure($: Engine, r: Rig, tokens: number) {
 
 const BAND = {
   hasSurvey: false,
+  isCollapsed: false,
   isWorking: false,
   maxRows: 10,
   bodyColumns: 80,
@@ -866,7 +867,7 @@ test('other surfaces on the roster do not attend a non-interactive session', asy
   const r = rig(on, () => saveAnswer)
 
   await start($, false)
-  for (const surfaces of [['mobile'], ['vscode']]) {
+  for (const surfaces of [['mobile'], ['vscode']] satisfies RenderSurface[][]) {
     r.surfaces = surfaces
     await measure($, r, PAST)
     await r.clock.settle()
@@ -980,7 +981,7 @@ for (const [name, options, surfaces] of [
   ['a terminal entrypoint', { entrypoint: 'cli' }, []],
   ['no entrypoint at all', {}, []],
   ['a phone-only roster, not desktop-started', {}, ['mobile']],
-] as [string, Options, string[]][]) {
+] as [string, Options, RenderSurface[]][]) {
   test(`${name}: nothing runs automatically and no band is drawn`, async ($, on) => {
     const r = rig(on, answerSkip, options)
 

@@ -133,6 +133,8 @@ python3 -B "${CLAUDE_PLUGIN_ROOT}/lib/pr_comment.py" scrub
 **Done when:** every quoted diagnostic in the receipt went through the helper and then a hand pass,
 and the receipt says that scrubbing happened.
 
+**No at-sign before a name or number in GitHub text.** GitHub notifies whoever a login after an at-sign names, numbers included. Write `vet 893`, `collector 574` or the bare name, or put the token in a code span, unless you mean to notify that person.
+
 ## What you may write
 
 **Your only writes are the diagnosis comment (the receipt) and the incident issue itself, when none

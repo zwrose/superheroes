@@ -220,7 +220,8 @@ def test_t6_review_guarded_is_a_fault_on_any_check_but_test_would_fail(name):
 def test_t6_each_check_has_its_own_answer_set():
     assert audits.check_answers("right") == audits.CHECK_ANSWERS
     assert audits.check_answers("brokeNothing") == audits.CHECK_ANSWERS
-    assert audits.check_answers("testWouldFail") == audits.CHECK_ANSWERS + (audits.REVIEW_GUARDED,)
+    assert audits.check_answers("testWouldFail") == audits.CHECK_ANSWERS + (
+        audits.REVIEW_GUARDED, audits.WORTHLESS_TEST_REMOVED)
     assert audits.audit_checks_fault(_guarded()) is None
 
 

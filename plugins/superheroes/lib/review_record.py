@@ -47,9 +47,11 @@ import cloud_pass  # noqa: E402
 import countable_lines  # noqa: E402
 import command_refusals  # noqa: E402
 import decision_kinds  # noqa: E402
+import dispatch_outcome  # noqa: E402
 import finding_outcomes  # noqa: E402
 import gh_pages  # noqa: E402
 import lane_call  # noqa: E402
+import mention_guard  # noqa: E402
 import model_registry  # noqa: E402
 import pr_comment  # noqa: E402
 import returning_review  # noqa: E402
@@ -57,6 +59,7 @@ import review_diff_bytes  # noqa: E402
 import review_findings_schema as rfs  # noqa: E402
 import review_seats  # noqa: E402
 import round_phases  # noqa: E402
+import round_records  # noqa: E402
 import sanitized_view  # noqa: E402
 import seat_map as seat_map_module  # noqa: E402
 import session_contract  # noqa: E402
@@ -86,6 +89,14 @@ RAN_ENGINE_RECORD = "engine-record"
 RAN_REPORTED_BY_SESSION = "reported-by-session"
 RAN_NOT_RUN = "not-run"
 RAN_STATES = (RAN_ENGINE_RECORD, RAN_REPORTED_BY_SESSION, RAN_NOT_RUN)
+# The reason an abandoned session's planned seat produced no result, its one home: the account's `noResult` key on a
+# not-run row of an abandoned account, and `missingReviews[].reason` in the record. The session writer stamps only these.
+NO_RESULT = "no-result"  # the seat's orders went out and nothing came back, stored or landed
+LANDING_UNREADABLE = "landing-unreadable"  # something landed for the seat that could not be read as a result
+RECORDED_MISSING = "recorded-missing"  # the seat was recorded missing, with no reason of the record-missing vocabulary
+NO_RESULT_REASONS = frozenset(dispatch_outcome.NOT_RUN_REASONS) | frozenset(round_records.MISSING_REASONS) \
+    | frozenset({"unfilled", NO_RESULT, LANDING_UNREADABLE, RECORDED_MISSING})
+ABANDONED_MISSING_LINE = "{name} did not run ({reason}; the review session was abandoned before this seat produced a result)"
 _LEFT_FOR_OWNER = rfs.LEFT_FOR_OWNER
 _RULING = rfs.OUTCOMES[-1]
 _SHOWN_WRONG = rfs.OUTCOMES[1]
@@ -850,6 +861,10 @@ def _validate(a):
             chk(fault is None, f"reviewers[{i}].readParts{fault}")
         # axis: the not-run reason is no part of the account, on any reviewer row — see bite-proof record c1l2_wo2_not_run_retired
         chk(r.get("notRunReason") is None, f"reviewers[{i}].notRunReason")
+        # axis: a no-result reason rides only a planned, not-run row of an abandoned account, from the fixed vocabulary — see bite-proof record i2436_abandoned_missing
+        chk("noResult" not in r or (ab is not None and r.get("planned") is True and r.get("ran") is False
+                                    and isinstance(r["noResult"], str) and r["noResult"] in NO_RESULT_REASONS),
+            f"reviewers[{i}].noResult")
         chk("carriedFrom" not in r or _full_sha(r["carriedFrom"]), f"reviewers[{i}].carriedFrom")
     carried_review = a.get("carriedReview")
     if "carriedReview" in a:
@@ -880,6 +895,10 @@ def _validate(a):
         chk(session_contract.RAISED_BY_FIELD not in f or (isinstance(f[session_contract.RAISED_BY_FIELD], str)
                                                           and f[session_contract.RAISED_BY_FIELD].strip() != ""),
             f"findings[{i}].{session_contract.RAISED_BY_FIELD}")
+        # axis: the open-at-loop-end marker is exactly true on a left-for-owner finding that cites no decision, never another value or outcome — see bite-proof record wo1_open_at_end_2445
+        chk(session_contract.OPEN_AT_LOOP_END_FIELD not in f or (
+            f[session_contract.OPEN_AT_LOOP_END_FIELD] is True and f.get("outcome") == _LEFT_FOR_OWNER
+            and decided_by is None), f"findings[{i}].{session_contract.OPEN_AT_LOOP_END_FIELD}")
         if "grade" in f:
             fault = _grade_fault(f["grade"])
             # axis: a grade is a verdict from the vocabulary with a reason, never a bare mark — see bite-proof record c1l1_wo_a_record_seam
@@ -1655,7 +1674,10 @@ def _status(rec, unread=(), finding_lines=()):
     lines += [f"the session ended on {s7(d['session'])}, but the PR's final commit is {s7(d['code'])}"
               for d in rec["sessionDisagreements"] if d["fact"] == "finalCommit"]
     for m in rec["missingReviews"]:
-        lines.append(f"{m['name']} did not run" + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
+        # axis: an abandoned session's missing review names its reason in the abandoned wording; any other reads as before — see bite-proof record i2436_abandoned_missing
+        said = ABANDONED_MISSING_LINE.format(name=m["name"], reason=m["reason"]) if isinstance(m.get("reason"), str) \
+            else f"{m['name']} did not run"
+        lines.append(said + (f"; go-ahead: {_go_text(m['goAhead'])}" if m["goAhead"] else ""))
     ran = [v for v in rec["reviewers"] if v["planned"] and v["ran"] != "not-run"]
     if not ran:
         lines.append("no planned reviewer ran")
@@ -1739,6 +1761,19 @@ def _recheck_decisions(findings, sources):
         out.append(dict(f, outcome=new, reason=f"{why}; {reason}" if reason else reason))
         changes.append({"finding": _name(f), "from": outcome, "to": new, "why": why})
     return out, changes
+
+
+def _drop_stale_open_marker(findings):
+    """Each finding without the `openAtLoopEnd` marker it can no longer hold: the marker stays only on a finding that
+    is still left for the owner with no cited decision. A carried re-check that moved a marked finding to fixed, or an
+    owner-ruling citation set on it, ends the reason the marker stood for. Every other finding is returned as it is."""
+    out = []
+    for f in findings:
+        # axis: a finding that is no longer a bare left-for-owner one is written without the marker — see bite-proof record wo1_open_at_end_2445
+        stale = (session_contract.OPEN_AT_LOOP_END_FIELD in f
+                 and (f.get("outcome") != _LEFT_FOR_OWNER or session_contract.decided_by_of(f) is not None))
+        out.append({k: v for k, v in f.items() if k != session_contract.OPEN_AT_LOOP_END_FIELD} if stale else f)
+    return out
 
 
 def _earlier_session_record(prior, history, session_id):
@@ -1896,7 +1931,7 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
         return g.get("kind") != "standing-ruling" or finding_outcomes.on_record(
             {"kind": "canon", "ref": g["canonId"]}, sources())[0]
 
-    for v in reviewers:
+    for v, src in zip(reviewers, a["reviewers"]):
         if v["planned"] and v["ran"] == "not-run":
             mine = [g for g in a["goAheads"] if g["reviewer"] == v["name"]]
             complete = [g for g in mine if _go_ahead_ok(g)]
@@ -1905,13 +1940,15 @@ def build_record(account, readers, prior=None, history=(), session_uncertified=N
             if mine and not good:
                 notes.append(f"the go-ahead for {v['name']} is incomplete"
                              + (" (its Canon entry is not on record)" if complete else ""))
-            missing.append({"name": v["name"], "goAhead": good})
+            # axis: the missing entry carries the account row's no-result reason when it has one, and exactly name and goAhead otherwise — see bite-proof record i2436_abandoned_missing
+            missing.append({"name": v["name"], "goAhead": good, **({"reason": src["noResult"]} if "noResult" in src else {})})
     unread = [str(p) for p in a["rawFindingsFiles"] if rd["read_text"](p) is None]
     findings, rechecks = _recheck_decisions(findings, sources)
     earlier_other = _earlier_session_record(prior, history, a["sessionId"])
     findings, carried_rows = _recheck_carried(findings, a["carriedChecks"], fc["sha"],
                                               lambda commit, head: rd["is_ancestor"](a.get("repoRoot"), commit, head),
                                               earlier_other)
+    findings = _drop_stale_open_marker(findings)
     findings = [dict(f, sheetPart=rfs.OUTCOME_SHEET_PART.get(f.get("outcome"))) for f in findings]
     walls = [v["observation"].get("wallSeconds") for v in reviewers if v["ran"] == "engine-record"
              and isinstance(v.get("observation"), dict)]
@@ -2873,7 +2910,8 @@ def render_plan(record):
         r = _flag_redactions(r)
         # axis: the writer's hash is taken of the exact object the JSON is built from, after the redaction flag and every shed step — see bite-proof record i2383_transit_record
         stamped = dict(r, sentSha256=_sent_sha(r))
-        return (f"{MARKER}\n{_summary(r, 0)}\n\n<details><summary>Full record</summary>\n\n```json\n"
+        # axis: the record comment's prose summary has each bare at-sign mention wrapped in a code span; the JSON block is untouched — see bite-proof record wo_2453_mention_guard
+        return (f"{MARKER}\n{mention_guard.wrap(_summary(r, 0))}\n\n<details><summary>Full record</summary>\n\n```json\n"
                 f"{_record_json(stamped)}\n```\n</details>")
 
     # The size bound is on what is posted (the JSON-escaped body), so it is measured here: shed the lane
@@ -2912,7 +2950,8 @@ def render_plan(record):
         # A head over the cap takes the compact summary, then the one-count reviewer line; the full lists
         # stay in the record's parts.
         for level in (0, 1, 2):
-            out = (f"{MARKER}\n{_summary(r, level)}\n\n{note}\n\n<details><summary>Full record (in parts)</summary>"
+            # axis: the head comment's prose summary has each bare at-sign mention wrapped in a code span; the index block is untouched — see bite-proof record wo_2453_mention_guard
+            out = (f"{MARKER}\n{mention_guard.wrap(_summary(r, level))}\n\n{note}\n\n<details><summary>Full record (in parts)</summary>"
                    f"\n\n```json\n{index}\n```\n</details>")
             if len(out) <= MAX_BODY_CHARS:
                 return out

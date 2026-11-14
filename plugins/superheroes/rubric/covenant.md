@@ -47,6 +47,8 @@ governs.
 - **Disclose degradation** where the owner reads — the PR body, not a buried log.
 - **Park, don't presume.** When you cannot deliver truthfully, stop and say why. A
   truthful park beats a false ship; the product will lose deliveries to this, by design.
+- **No at-sign before a name or number in GitHub text.** GitHub notifies whoever a login after an at-sign names, numbers included. Write `vet 893`, `collector 574` or the bare name, or put the token in a code span, unless you mean to notify that person.
+- **Write shell commands in plain form.** One plain command per call; multi-step work goes in a script file written with the file-write tool and run by one plain interpreter call, never a chain with `;`, `&&` or `||` or a pipe into a loop, so no session or seat stalls on an approval nobody is there to answer. A single command carries no heredoc and no inline program code such as `python3 -B -c` or `node -e` (content and code go in a file written with the file-write tool), and nothing a rule refuses (a delete, an install, a network call, a push) moves into a script to get past it. A brief you write by hand for a helper carries this rule. Full rule: `PLAIN_COMMAND_RULE` in `lib/command_refusals.py`.
 
 ## Which session you are
 

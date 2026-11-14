@@ -1998,7 +1998,12 @@ def _seed_carried(state, cfg, returning):
     state["headDiff"] = state.get("reviewedDiff")
     state["fixBatch"] = list(audited.values())
     # axis: the audit's fixer delta diffs the unfiltered baseline against the head, so a file unchanged between the two never shows as an addition — see bite-proof record c1_followups_2288
-    state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline)
+    # `_returning_diffs` reads two diff texts (the earlier session's baseline and the round-1 diff), not a pinned head
+    # commit, so there is no exact head to diff the removal record against: `removal_head` stays None and the record
+    # reads unreadable, which fails the removal clearance closed for a carried finding.
+    state["_auditTargets"] = _audit_targets(state, cfg, hunks, reviewed_diff=baseline,
+                                            removal_base=cfg.get("returningAuditBase") or returning.get("lastReviewed"),
+                                            removal_head=None)
     state["fixBatch"] = []
     return True
 
@@ -2293,8 +2298,10 @@ def _seed_ledger_entry(state, ledger, seen, finding, key, round_no):
         entry.pop(session_contract.RAISED_SEQ_FIELD, None)
         entry.pop(session_contract.DISPOSITION_SEQ_FIELD, None)
         entry[session_contract.RAISED_ROUND_FIELD] = round_no
+    # axis: a row settled open at its loop's end still owes its consequence and places on a re-raise, so a code-quality re-raise never turns it into craft — see bite-proof record wo1_open_at_end_2445
     if isinstance(existing, dict) and (
             not _disposition_is_current(existing) or _restaged_after(state, key, existing)
+            or session_contract.open_at_loop_end(existing)
             or _undispatched_ruling(state, _live_ruling_by_key(state),
                                     {k: ledger[i] for k, i in seen.items()}, key) is not None):
         # An unresolved finding re-raised keeps a consequence it held: a later code-quality report
@@ -3178,11 +3185,14 @@ def _settle_open_findings(state, cap=False):
                 pending["seq"], pending["ruling"], why_open)
         # a newer guidance decision on a merged member binds the finding over the older skip;
         # with no bound decision at all the out-of-scope reason stands
-        if (row.get("disposition") == "out-of-scope" and pending is None
-                and (not bound[key] or bound[key].get("ruling") == "out-of-scope")):
+        deferred_out_of_scope = (row.get("disposition") == "out-of-scope" and pending is None
+                                 and (not bound[key] or bound[key].get("ruling") == "out-of-scope"))
+        if deferred_out_of_scope:
             reason = "out of scope: " + str(row.get("outOfScopeReason")) + "; " + why_open
+        # axis: a finding settled left-for-owner only because it was still open carries the marker; a deliberate deferral (out of scope, a pending ruling) never does — see bite-proof record wo1_open_at_end_2445
         result = finding_outcomes.settle(
-            content, ruling=bound[key], sources=sources, open_reason=reason)
+            content, ruling=bound[key], sources=sources, open_reason=reason,
+            open_at_end=not deferred_out_of_scope and pending is None)
         if key in ungraded and bound[key] is None:
             # an ungraded sweep hit keeps its settled outcome; its reason names the withheld sweep hit, not the generic open reason
             result = dict(result, reason=SWEEP_UNGRADED_REASON)
@@ -3194,6 +3204,8 @@ def _settle_open_findings(state, cap=False):
         carried = {}
         if row.get("disposition") == "out-of-scope":
             carried = {name: row[name] for name in ("outOfScopeReason", "followUp") if name in row}
+        if session_contract.open_at_loop_end(result):
+            carried[session_contract.OPEN_AT_LOOP_END_FIELD] = True
         _record_disposition(state, key, result["outcome"], state["round"],
                             settledReason=result["reason"], decidedBy=result["decidedBy"], **carried)
 
@@ -3607,7 +3619,7 @@ VERIFY_BASE_TOKEN = store_core.VERIFY_BASE_TOKEN
 def _verify_command(config):
     """The command `run-verify` hands the orchestrator, with `{baseRef}` bound to the session's
     pinned base commit. A touched-tests gate that diffs against main selects a stacked branch's
-    whole stack (PR #1332 vet 244, collector @244-3); the token lets the calibrated command diff
+    whole stack (PR #1332 vet 244, collector 244-3); the token lets the calibrated command diff
     against the pinned base instead. Without a full-hex pin the token stays verbatim — the gate's
     own `base ref does not resolve` refusal is the loud failure, never a silent fall-back to main."""
     cmd = config.get("verifyCommand", "none")
@@ -5250,8 +5262,11 @@ def _repeat_plan(state, grouping, session_dir, exact_only=None):
             staged, pool, repeat_marks.judge_refs(grouping) if judged else {}).items():
         finding = next(f for f in staged if f.get("id") == sid)
         kept, fix_holds = repeat_marks.decide(
-            entry["outcome"], _grade_verdict(finding), lambda e=entry: _repeat_changed(state, session_dir, e))
+            repeat_marks.decision_outcome(entry), _grade_verdict(finding),
+            lambda e=entry: _repeat_changed(state, session_dir, e))
         marks[sid] = {"finding": finding, "entry": entry, "source": source, "kept": kept, "fixHolds": fix_holds}
+        if not kept and source == "exact" and entry["source"] == "record" and session_contract.open_at_loop_end(entry):
+            _carry_reopened_consequence(finding, entry)
     kept_ids = {sid for sid, m in marks.items() if m["kept"]}
     # axis: a kept repeat is out of the survivors and every group before the merge, so it never merges into a fresh finding — see bite-proof record c1l8_wo_a_repeat_marks
     removed = kept_ids | {f.get("id") for f in refuted if isinstance(f, dict)}
@@ -5275,6 +5290,22 @@ def _record_repeat(state, key, repeat_of, repeat_kept):
         row.pop("repeatKept", None)
         if repeat_kept is not None:
             row["repeatKept"] = copy.deepcopy(repeat_kept)
+
+
+def _carry_reopened_consequence(finding, entry):
+    """An exact repeat of an earlier record's finding left open at its loop's end reopens that finding as this one:
+    merge the earlier consequence into the staged finding before the synthesis merge, so the merge and
+    `_sync_merged_consequences` carry it onto whichever row represents it and a later code-quality report never
+    turns a real consequence into craft. The in-session counterpart is `_seed_ledger_entry`'s preservation of a
+    marked row. Touches only the staged finding, never the ledger."""
+    # axis: a reopened record finding keeps its real consequence across sessions, also when synthesis merges it into another finding — see bite-proof record wo1_open_at_end_2445
+    text, kind = finding_outcomes.merged_consequence([entry, finding])
+    if text is not None:
+        finding["consequence"] = text
+    # an unknown merged kind (the earlier finding named none) stays unknown, as a synthesis merge leaves it: never code-quality
+    finding["consequenceKind"] = kind
+    # axis: a reopened record finding keeps the places it still owes, so a narrower repeat never drops a copy — see bite-proof record wo1_open_at_end_2445
+    verification.apply_kind_members(finding, [entry, finding], with_description=False)
 
 
 def _record_kept_disposition(state, key, entry, reason, grade_verdict, restore):
@@ -6697,6 +6728,10 @@ def _queue_fix_batch(state, config, rows, *, reset_accumulator=True, batch_index
     state["_fixBatchIndex"] = batch_index
     if not keep_step_start:
         state["_fixStepHead"] = _fix_step_head(config)
+        if batch_index == 0:
+            # the fix attempt's start head: the first slice's, never overwritten by a later slice, and kept past the
+            # step (unlike `_fixStepHead`) so the audit can diff the whole attempt — see `_fixer_removal`
+            state["_fixAttemptStartHead"] = state["_fixStepHead"]
         state.pop("_prBodyAtStep", None)
     state["step"] = P_APPLY_FIXES
     return "queued"
@@ -6972,6 +7007,93 @@ def _git_bytes(repo_root, *args):
     except (OSError, subprocess.SubprocessError):
         return None
     return proc.stdout if proc.returncode == 0 else None
+
+
+_REMOVAL_HUNK = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@")
+
+
+def _fixer_removal(config, base, head):
+    """The removal record of a fix: ``{"base", "head", "files": [{"path", "removed": [[start, end], ...],
+    "added": bool, "testOpenings": [line, ...] or None, "testSpans": [[start, opening, end], ...] or None,
+    "blankLines": [line, ...]}]}`` read from a plain zero-context diff of ``base`` to the
+    explicit commit ``head`` (never the live checkout HEAD) at ``config["repoRoot"]``. ``removed`` lists the
+    base-side line ranges (the reviewed head's line numbers) each hunk deleted, one range per hunk even when
+    ``diff.interHunkContext`` is set; ``added`` is True when any hunk adds a line. ``testOpenings`` is
+    ``audits.test_openings`` of the base blob of a file that has a removed range (None when its language has no
+    reader), and ``[]`` for a file with none; ``testSpans`` is ``audits.test_spans`` of the same blob (None or ``[]``
+    under the same conditions), and ``blankLines`` the sorted base-blob lines inside the removed ranges that are
+    blank (computed for a language with no reader too; ``[]`` for a file with no removed range). A file the fix
+    only added to still appears (``removed: []``, ``added: True``). The record is ``{"unreadable": <why>, "base", "head"}`` — never an exception — when a
+    commit is missing or does not resolve, git fails, the output is not UTF-8, the diff holds a header that is
+    not one path twice, a binary file, or a binary patch, or a base blob cannot be read or is not UTF-8 (so the
+    fold clears nothing on it). Git's own settings (textconv, external diff, color, renames) never shape it."""
+    def unreadable(why):
+        return {"unreadable": why, "base": base, "head": head}
+
+    repo_root = config.get("repoRoot") if isinstance(config, dict) else None
+    if not (_nonempty_str(repo_root) and _nonempty_str(base) and _nonempty_str(head)):
+        return unreadable("no repository, base commit or head commit to diff")
+    shas = []
+    for label, commit in (("base", base), ("head", head)):
+        resolved = (None if commit.startswith("-") else
+                    _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % commit))
+        sha = resolved.decode("utf-8", errors="replace").strip() if resolved is not None else ""
+        if not sha:
+            return unreadable("the %s commit %s does not resolve" % (label, commit))
+        shas.append(sha)
+    # axis: `--inter-hunk-context=0` keeps two deletions with an unchanged line between them two ranges, whatever `diff.interHunkContext` is configured — see bite-proof record audit_test_removal_2434
+    raw = _git_bytes(repo_root, "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--src-prefix=a/",
+                     "--dst-prefix=b/", "--no-renames", "--unified=0", "--inter-hunk-context=0", shas[0], shas[1])
+    if raw is None:
+        return unreadable("git could not diff the base commit to the head commit")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return unreadable("the diff is not UTF-8 text")
+    files, current = [], None
+    for line in text.split("\n"):
+        if line.startswith("diff --git "):
+            rest = line[len("diff --git "):]
+            span = len(rest) - 5
+            path = rest[2:2 + span // 2] if span > 0 and span % 2 == 0 else ""
+            # axis: a header that is not one path twice (a rename, a git-quoted name) makes the whole record unreadable — see bite-proof record audit_test_removal_2434
+            if not path or rest != "a/" + path + " b/" + path or any(f["path"] == path for f in files):
+                return unreadable("a diff header does not name one path twice: %s" % line)
+            current = {"path": path, "removed": [], "added": False}
+            files.append(current)
+        elif line.startswith("Binary files ") or line.startswith("GIT binary patch"):
+            # axis: a binary file or patch makes the whole record unreadable — see bite-proof record audit_test_removal_2434
+            return unreadable("the diff holds a binary file")
+        elif line.startswith("@@ "):
+            hunk = _REMOVAL_HUNK.match(line)
+            if hunk is None or current is None:
+                return unreadable("a hunk header cannot be read: %s" % line)
+            start = int(hunk.group(1))
+            old_count = 1 if hunk.group(2) is None else int(hunk.group(2))
+            new_count = 1 if hunk.group(3) is None else int(hunk.group(3))
+            if old_count > 0:
+                current["removed"].append([start, start + old_count - 1])
+            # axis: any hunk that adds a line marks its file as added to — see bite-proof record audit_test_removal_2434
+            if new_count > 0:
+                current["added"] = True
+    for entry in files:
+        if not entry["removed"]:
+            entry["testOpenings"], entry["testSpans"], entry["blankLines"] = [], [], []
+            continue
+        blob = _git_bytes(repo_root, "cat-file", "blob", "%s:%s" % (shas[0], entry["path"]))
+        try:
+            base_text = blob.decode("utf-8") if blob is not None else None
+        except UnicodeDecodeError:
+            base_text = None
+        # axis: a base file that cannot be read, or is not UTF-8, makes the whole record unreadable — see bite-proof record audit_test_removal_2434
+        if base_text is None:
+            return unreadable("the base file %s cannot be read as UTF-8 text" % entry["path"])
+        entry["testOpenings"] = audits.test_openings(entry["path"], base_text)
+        entry["testSpans"] = audits.test_spans(entry["path"], base_text)
+        lines = base_text.split("\n")
+        entry["blankLines"] = sorted({n for lo, hi in entry["removed"] for n in range(lo, min(hi, len(lines)) + 1)
+                                      if lines[n - 1].strip() == ""})
+    return {"base": shas[0], "head": shas[1], "files": files}
 
 
 def _git_fix_commit_facts(config, step_head, commits, test_paths):
@@ -7751,7 +7873,8 @@ def _audit_result_entry_fault(entry, index, target_ids, targets_by_id=None):
     checks_fault = audits.audit_checks_fault(entry, (targets_by_id or {}).get(rid))
     if checks_fault is not None:
         return ("%s is refused: %s; expected `checks` with `right`, `brokeNothing` and `testWouldFail`, "
-                "each {\"answer\": \"yes\" or \"no\" (`testWouldFail` may also be \"review-guarded\"), "
+                "each {\"answer\": \"yes\" or \"no\" (`testWouldFail` may also be \"review-guarded\" or "
+                "\"worthless-test-removed\"), "
                 "\"why\": <reason>}" % (where, checks_fault))
     # axis: the optional `places` answer is a list of {file, line, fixed} rows — `audits.place_answers_fault`, the fold's own judge
     places_fault = audits.place_answers_fault(entry)
@@ -8360,7 +8483,8 @@ def _enter_delta_round(state, config, panel_diff_seam=None, panel_head=None):
     state["fullPanelRan"] = False
     state["_auditTargets"] = _audit_targets(
         state, config, split.get("auditTargets") or {},
-        reviewed_diff=reviewed)
+        reviewed_diff=reviewed,
+        removal_base=state.get("_fixAttemptStartHead"), removal_head=_audit_head(state, config))
     state["_newSurface"], state["_fixDeltaDiff"] = fix_delta
     _record_round(state, "roundKind", "delta")
     _record_round(state, "focus", {"on": "fixes", "fixes": _fix_batch_keys(state)})
@@ -9009,11 +9133,73 @@ def _audit_fix_group(finding, key):
     return {"id": group["id"], "members": [m for m in group["members"] if m != key]}
 
 
-def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
+def _resolve_commit_sha(repo_root, commit, cache):
+    """The full sha ``commit`` names in ``repo_root`` (``cache`` holds the answers of one pass), or None when it
+    is blank, an option, or does not resolve to a commit."""
+    if not (_nonempty_str(repo_root) and _nonempty_str(commit)) or commit.startswith("-"):
+        return None
+    if commit not in cache:
+        resolved = _git_bytes(repo_root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % commit)
+        cache[commit] = (resolved.decode("utf-8", errors="replace").strip() or None) if resolved is not None else None
+    return cache[commit]
+
+
+def _raised_head(state, raised_round):
+    """The head a finding raised in round ``raised_round`` was raised on: round 1's is the session-setup head
+    (``config["headSha"]``, the head the round-1 orders are anchored on: a round-1 panel runs before any fix);
+    a later round's is the head the previous round's fix folded to (``rounds[<r-1>]["fixFoldHead"]``). None when
+    the round is no plain integer from 1 or no head is recorded for it."""
+    if not isinstance(raised_round, int) or isinstance(raised_round, bool) or raised_round < 1:
+        return None
+    if raised_round == 1:
+        config = state.get("config")
+        head = config.get("headSha") if isinstance(config, dict) else None
+    else:
+        rounds = state.get("rounds")
+        record = rounds.get(str(raised_round - 1)) if isinstance(rounds, dict) else None
+        head = record.get("fixFoldHead") if isinstance(record, dict) else None
+    return head if _nonempty_str(head) else None
+
+
+def _citation_freshness(state, config, finding, row, removal_base, removal_head, cache):
+    """``(fresh, check)``: whether the lines the target row cites still point at what they cited when the
+    finding was raised, and the facts that decided it (``{"raisedHead", "base", "files"}``, the heads as resolved
+    shas or None). Fresh only when the row cites at least one file, the head the finding was raised on
+    (``_raised_head``) and the removal base both resolve to commits, and those heads are equal or none of the
+    cited files differs between them. Every other case is False: no raised round or head, no repository or
+    removal head (a finding carried over from an earlier session), a git failure, or no cited file."""
+    repo_root = config.get("repoRoot") if isinstance(config, dict) else None
+    files = []
+    for file, _line in audits.cited_lines(row):
+        if file not in files:
+            files.append(file)
+    check = {"raisedHead": None, "base": None, "files": files}
+    # axis: a finding with no removal head (carried over from an earlier session) or no repository is never fresh — see bite-proof record audit_test_removal_2434
+    if not (_nonempty_str(repo_root) and _nonempty_str(removal_head)):
+        return False, check
+    raised = _resolve_commit_sha(repo_root, _raised_head(state, finding.get(session_contract.RAISED_ROUND_FIELD)), cache)
+    base = _resolve_commit_sha(repo_root, removal_base, cache)
+    check["raisedHead"], check["base"] = raised, base
+    # axis: a finding with no cited file, or a head that does not resolve, is never fresh — see bite-proof record audit_test_removal_2434
+    if not files or raised is None or base is None:
+        return False, check
+    if raised == base:
+        return True, check
+    # axis: a cited file that changed between the raised head and the removal base makes the citation stale — see bite-proof record audit_test_removal_2434
+    unchanged = _git_bytes(repo_root, "diff", "--no-ext-diff", "--no-textconv", "--quiet", raised, base, "--", *files)
+    return unchanged is not None, check
+
+
+def _audit_targets(state, config, audit_targets_map, reviewed_diff=None, removal_base=None, removal_head=None):
     """Location-grouped audit targets, each carrying the fixer's vendor so the orchestrator seats a
     DIFFERENT auditor vendor. Grounded in the fix batch (the fixed findings), attributed to the
     hunks that sit over their lines. Rows sharing a finding key collapse to one target — first
-    occurrence wins. A re-queued target keys by its findingKey marker, never by id."""
+    occurrence wins. A re-queued target keys by its findingKey marker, never by id.
+
+    Every target also carries ``fixerRemoval``, the removal record of the fix (``removal_base`` to
+    ``removal_head``, see ``_fixer_removal``); with no usable base or head it says it is unreadable. Every target
+    also carries ``citationFresh`` and ``citationCheck`` (see ``_citation_freshness``); each ``batchFindings``
+    sibling carries ``citationFresh`` alone, judged the same way."""
     fixer_vendor = config.get("fixerVendor")
     runner_only = bool(state.get("_advanceUsed"))
     maker_families, pinned_vendors = receipt_disclosures.auditor_constraints(state)
@@ -9035,6 +9221,8 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                          if file not in left_out}
     attempt_delta = (_attempt_fixer_delta(reviewed_diff, state.get("headDiff"), left_out)
                      if reviewed_diff is not None else None)
+    fixer_removal = _fixer_removal(config, removal_base, removal_head)
+    resolved_commits = {}
     batch_findings = []
     for bf in state.get("fixBatch") or []:
         if isinstance(bf, dict) and _finding_key_of(bf) not in [b["id"] for b in batch_findings]:
@@ -9042,12 +9230,18 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
                        "line": bf.get("line"), "title": bf.get("title")}
             # A sibling carries its scope: body, suggestion and its effective owner ruling, so the
             # auditor attributes a change to the finding whose scope names it.
-            for carried in ("body", "suggestion"):
+            # The dimension and taxonomy ride too: the removal judge (audits.test_removal_clearance) counts a
+            # sibling's cited lines only when that sibling is itself a worthless-test finding.
+            for carried in ("body", "suggestion", "dimension", "taxonomy"):
                 if bf.get(carried) is not None:
                     sibling[carried] = bf[carried]
             sibling_kind = _kind_of_mistake_projection(bf)
             if sibling_kind is not None:
                 sibling[KIND_OF_MISTAKE_FIELD] = sibling_kind
+            # A sibling lends its cited lines to the removal judge only when its own citation is fresh, judged as
+            # a target's is; the check's facts stay off the sibling.
+            sibling["citationFresh"] = _citation_freshness(
+                state, config, bf, sibling, removal_base, removal_head, resolved_commits)[0]
             sib_ruling, sib_seq = _carried_owner_ruling(
                 _row_decision(state, effective, ledger_by_key, sibling["id"]))
             if sib_ruling is not None:
@@ -9104,8 +9298,9 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             "evidence": f.get("evidence"),
         }
         # The auditor compares the fix with what the finding names: its body, suggestion and
-        # consequence ride every target, beside the hunks of the fix over the finding's line.
-        for carried in ("body", "suggestion", review_findings_schema.CONSEQUENCE_KEY):
+        # consequence ride every target, beside the hunks of the fix over the finding's line. The round it was raised
+        # in rides too, so a target re-queued into the next fix batch still has its citation judged fresh (C10).
+        for carried in ("body", "suggestion", review_findings_schema.CONSEQUENCE_KEY, session_contract.RAISED_ROUND_FIELD):
             if f.get(carried) is not None:
                 row[carried] = f[carried]
         # The kind of mistake rides every target with the other places it names (no earlier audit's `fixed` result):
@@ -9118,6 +9313,7 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
         # changed; `batchFindings` are the attempt's other findings (id, file, line, title).
         if attempt_delta is not None:
             row["fixerDelta"] = list(attempt_delta)
+        row["fixerRemoval"] = copy.deepcopy(fixer_removal)
         row["batchFindings"] = [b for b in batch_findings if b["id"] != tid]
         if _audit_fix_group(f, tid) is not None:
             row[verification.FIX_GROUP_FIELD] = _audit_fix_group(f, tid)
@@ -9150,6 +9346,10 @@ def _audit_targets(state, config, audit_targets_map, reviewed_diff=None):
             if "head" not in audited_head:
                 audited_head["head"] = _audit_head(state, config)
             row["breakIt"] = _break_it_target_facts(state, config, f, audited_head["head"])
+        # whether the lines this row cites still point at what they cited when the finding was raised: the fold's
+        # C10 reads `citationFresh`, and `citationCheck` shows the facts behind it
+        row["citationFresh"], row["citationCheck"] = _citation_freshness(
+            state, config, f, row, removal_base, removal_head, resolved_commits)
         if auditor_vendor is not None:
             row["auditorVendor"] = auditor_vendor
         return row
@@ -9504,8 +9704,13 @@ def _fold_audits(state, config, artifact, session_dir=None):
                                for p in a["places"] if isinstance(p, dict) and isinstance(p.get("fixed"), bool)]
                      for a in outcome["audits"]
                      if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("places"), list)}
+    removal_by_id = {a["id"]: a["testRemoval"] for a in outcome["audits"]
+                     if isinstance(a, dict) and isinstance(a.get("id"), str) and isinstance(a.get("testRemoval"), dict)}
     for tid in outcome.get("discharged") or []:
         receipt = _fixed_disposition_receipt(state, session_dir, tid, targets_by_id.get(tid))
+        if tid in removal_by_id:
+            # a fix cleared as the removal of a worthless test carries the evidence it cleared on, so the review record can name it
+            receipt = dict(receipt, testRemoval=copy.deepcopy(removal_by_id[tid]))
         _record_disposition(state, tid, "fixed", state["round"], dispositionReceipt=receipt,
                             placeResults=place_answers.get(tid) or None)
         # The discharge supersedes the closure's earlier dispositions the ruling had reopened.

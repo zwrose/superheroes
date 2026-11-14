@@ -22,6 +22,7 @@ import re
 
 import canon
 import review_findings_schema
+import session_contract  # no cycle: session_contract's imports never reach this module
 
 OWNER_RULING = "owner-ruling"
 DECISION_KINDS = ("canon", "residual", "sheet-answer", OWNER_RULING)
@@ -246,13 +247,16 @@ def on_record(decided_by, sources):
     return True, "sheet-answer %s" % _sheet_ref_text(ref)
 
 
-def settle(finding, *, ruling=None, sources=None, open_reason):
+def settle(finding, *, ruling=None, sources=None, open_reason, open_at_end=False):
     """Settle a finding the review left unfixed: {"outcome", "reason", "decidedBy"}.
 
     Craft when the only consequence is code quality (it wins over any ruling); a named ruling
     when the latest rulings-log row cites a decision that is on record; otherwise left for the
     owner, with open_reason and, when a cited decision did not resolve, why; that leftover keeps the citation,
     so the record writer can promote it if the decision is on record by write time. Never reads severity.
+
+    With ``open_at_end`` True, a leftover that cites no decision also carries `openAtLoopEnd: True`: it was left for
+    the owner only because it was still open when its loop ended. Craft, a ruling and a leftover that cites a decision never do.
     """
     outcomes = review_findings_schema.OUTCOMES
     craft, left_for_owner, ruled = outcomes[2], outcomes[3], outcomes[4]
@@ -268,7 +272,10 @@ def settle(finding, *, ruling=None, sources=None, open_reason):
         if resolved:
             return {"outcome": ruled, "reason": "decided by " + text, "decidedBy": decided_by}
         why = "; the cited decision is not on record: " + text
-    return {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
+    result = {"outcome": left_for_owner, "reason": open_reason + why, "decidedBy": decided_by}
+    if open_at_end and decided_by is None:
+        result[session_contract.OPEN_AT_LOOP_END_FIELD] = True
+    return result
 
 
 def decision_sources(repo_root, base_ref, sheet_answers=None, pr=None):

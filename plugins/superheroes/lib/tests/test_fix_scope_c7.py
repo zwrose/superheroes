@@ -779,7 +779,7 @@ def test_findings_sharing_a_hunk_each_list_the_sibling_and_the_template_clears_i
     guard, retry = RD._audit_targets(state, state["config"], {}, reviewed_diff=reviewed)
     assert [b["title"] for b in guard["batchFindings"]] == ["Retry"]
     assert [b["title"] for b in retry["batchFindings"]] == ["Guard"]
-    assert set(guard["batchFindings"][0]) == {"id", "file", "line", "title"}
+    assert set(guard["batchFindings"][0]) == {"id", "file", "line", "title", "citationFresh"}
     assert guard["fixerDelta"] == retry["fixerDelta"]
     text = open(os.path.join(os.path.dirname(__file__), "..", "..", "rubric", "orders",
                              "dispatch-audits.md")).read()
