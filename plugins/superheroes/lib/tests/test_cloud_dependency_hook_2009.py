@@ -31,7 +31,10 @@ import mode_registry  # noqa: E402
 import project_config as PC  # noqa: E402
 import store_core  # noqa: E402
 
-_GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+# inherited GIT_* routing (GIT_INDEX_FILE, GIT_DIR, GIT_WORK_TREE...) captured at collection would send a
+# fixture's git call to the caller's repository, so none of it is kept; the two pins are the only GIT_* kept
+_GIT_ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 ORIGIN = "https://github.com/acme/corner-shop.git"
 SOURCE = "https://github.com/acme/superheroes.git"
 COMMIT = "0123456789abcdef" * 2 + "01234567"

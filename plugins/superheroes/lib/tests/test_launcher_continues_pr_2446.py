@@ -14,6 +14,7 @@ import types
 
 import pytest
 
+import git_origin
 from test_launcher import (
     L,
     _adoption_members,
@@ -820,7 +821,7 @@ def test_each_page_timeout_is_clipped_to_the_launch_deadline(tmp_path, monkeypat
 @pytest.mark.parametrize("url", ["file://github.com/o/r.git", "FILE://github.com/o/r.git", "file:///srv/github.com/o/r.git"])
 def test_a_file_url_naming_github_is_a_local_origin(url):
     # axis: a file:// transport is local whatever host its authority names, so it is skipped, never read as GitHub
-    assert L._remote_host_and_path(url) is None
+    assert git_origin.host_and_path(url) is None
 
 
 def test_an_empty_branch_on_a_row_leaves_the_list_unread(tmp_path, monkeypatch):
