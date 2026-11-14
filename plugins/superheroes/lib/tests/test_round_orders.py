@@ -451,7 +451,7 @@ def test_template_body_does_not_restate_payload_contract(phase):
 # A golden whose phase's order is doctrine prose that changed is retired, never refreshed: the pin rule
 # (rubric/review-discipline.md § One home per rule, and the pin rule). Structure stays asserted on the
 # rendered order by the tests that read it.
-_RETIRED_GOLDENS = frozenset({RP.P_AUDITS, RP.P_SWEEP})
+_RETIRED_GOLDENS = frozenset({RP.P_AUDITS, RP.P_SWEEP, RP.P_PANEL, RP.P_SYNTHESIS})
 
 
 @pytest.mark.parametrize("phase", [p for p in _GOLDEN_CONTEXTS if p not in _RETIRED_GOLDENS])
@@ -536,7 +536,7 @@ def test_golden_stdout_channel_panel_order():
     )
     text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
     assert reason is None
-    assert RO._RESULT_CHANNEL_NEUTRAL_DELIVERY in text
+    assert RO.STDOUT_RESULT_DEFERRAL in text
     assert "final stdout" not in text.lower()
     assert "do not write a findings file" in text
 
@@ -1196,7 +1196,9 @@ def test_engine_verifiers_order_uses_verdict_stdout_contract():
     ctx = _base_context(host_seat=False, placeholders=_verifier_placeholders(channel="stdout"))
     text, reason = RO.render_order(RP.P_VERIFIERS, "verifier:x", ctx)
     assert reason is None
-    assert '{"verdicts":' in text
+    # #2450: the order states no envelope of its own — it defers to the runner's one contract
+    assert RO.STDOUT_RESULT_DEFERRAL in text
+    assert '{"verdicts":' not in text
     assert "Emit findings" not in text
 
 
