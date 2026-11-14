@@ -62,6 +62,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cli_contract  # noqa: E402
 import audits  # noqa: E402
 import break_it  # noqa: E402
+import break_it_layers  # noqa: E402
 import calibration_read  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
@@ -11068,8 +11069,8 @@ def _break_it_kept_step(state, config, session_dir=None):
             if stack_failure:
                 row["stack"] = {"read": "failed", "reason": stack_failure}
             elif layers is not None:
-                found = break_it.check_kept_in_layers(config.get("repoRoot"), config.get("baseRef"), layers,
-                                                      record, interpreter=interpreter)
+                found = break_it_layers.check_kept_in_layers(config.get("repoRoot"), config.get("baseRef"), layers,
+                                                             record, interpreter=interpreter)
                 if found["read"] != "ok":
                     row["stack"] = {"read": "failed", "reason": found["reason"], "searched": found["searched"]}
                 # axis: the step credits a copy found in a higher layer, naming the layer and commit, and does not park it — see bite-proof record wo_a_2463_stack_layers
@@ -11095,11 +11096,22 @@ def _break_it_kept_step(state, config, session_dir=None):
         why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
         stack = failed[0].get("stack")
         # axis: a park whose first failed row read the stack unsuccessfully says so after the existing text — see bite-proof record wo_a_2463_stack_layers
+        suffix = ""
+        if isinstance(stack, dict) and stack.get("read") == "failed":
+            suffix = "; the stack could not be read: %s" % stack.get("reason")
+        elif isinstance(stack, dict) and stack.get("read") == "ok":
+            # axis: a park whose first failed row read the stack and found a layer that held the test but did not pass or could not run it names that layer and why, so the owner is told the test is there, not that it is gone — see bite-proof record wo_e_2463_layer_dependencies
+            held = next((s for s in stack.get("searched") or [] if isinstance(s, dict)
+                         and (s.get("outcome") == break_it.KEPT_FAILING
+                              or (s.get("outcome") == break_it_layers.NOT_RUN and s.get("held") is True))), None)
+            if held:
+                suffix = ("; found in stack layer %s (PR %s) but it %s there: %s"
+                          % (held.get("position"), held.get("pr"),
+                             "did not pass" if held.get("outcome") == break_it.KEPT_FAILING else "could not run",
+                             held.get("reason") or held.get("runOutcome") or "failed"))
         _park_cannot_certify(
             state, "break-it test not kept: %s (%s%s)%s"
-            % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else "",
-               "; the stack could not be read: %s" % stack.get("reason")
-               if isinstance(stack, dict) and stack.get("read") == "failed" else ""))
+            % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else "", suffix))
         return True
     return False
 

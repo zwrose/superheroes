@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 
@@ -21,9 +22,13 @@ for _p in (_HERE, _LIB):
         sys.path.insert(0, _p)
 
 import break_it  # noqa: E402
+import break_it_layers  # noqa: E402
+import dependency_links  # noqa: E402
 import review_record_session as rs  # noqa: E402
 import round_driver as RD  # noqa: E402
 import stack_check  # noqa: E402
+from test_break_it_js_dependencies_2034 import (  # noqa: E402
+    NPM_RUN as JS_NPM_RUN, PACKAGE as JS_PACKAGE, PASSING as JS_PASSING, TEST_PATH as JS_TEST_PATH, _install_fake)
 from test_review_record_session import Fake, Session, extras  # noqa: E402
 
 PY = shlex.quote(sys.executable)
@@ -75,7 +80,7 @@ def _worktrees(repo):
 class Stack:
     """base <- layer-2 (reviewed, checked out) <- layer-3 (no test) <- layer-4 (the test, `layer4_body`)."""
 
-    def __init__(self, tmp_path, layer4_body=_PASSING):
+    def __init__(self, tmp_path, layer4_body=_PASSING, base_files=None, layer4_files=None):
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.tmp = tmp_path
         self.repo = tmp_path / "repo"
@@ -83,6 +88,9 @@ class Stack:
         _git(self.repo, "init", "-q")
         _git(self.repo, "symbolic-ref", "HEAD", "refs/heads/layer-2")
         _write(self.repo, "README.md", "fixture\n")
+        _write(self.repo, ".gitignore", ".venv/\n")
+        for rel, text in (base_files or {}).items():
+            _write(self.repo, rel, text)
         self.base = _commit(self.repo, "base")
         _write(self.repo, "src/lower.py", "LOWER = 1\n")
         self.layer2 = _commit(self.repo, "layer 2")
@@ -97,6 +105,8 @@ class Stack:
             _write(self.repo, "src/four.py", "FOUR = 4\n")
         else:
             _write(self.repo, TEST_PATH, layer4_body)
+        for rel, text in (layer4_files or {}).items():
+            _write(self.repo, rel, text)
         self.layer4 = _commit(self.repo, "layer 4")
         _git(self.repo, "checkout", "-q", "layer-2")
         self.scratch = tmp_path / "scratch"
@@ -107,11 +117,12 @@ class Stack:
         return [{"position": 3, "number": 103, "headRefName": "layer-3", "headRefOid": self.layer3},
                 {"position": 4, "number": 104, "headRefName": "layer-4", "headRefOid": self.layer4}]
 
-    def search(self, layers=GHOST, record=None):
-        return break_it.check_kept_in_layers(
+    def search(self, layers=GHOST, record=None, interpreter=GHOST):
+        return break_it_layers.check_kept_in_layers(
             str(self.repo), self.base, self.layers if layers is GHOST else layers,
             _record() if record is None else record,
-            interpreter=break_it.resolve_interpreter({"verifyCommand": "%s -c pass" % PY}),
+            interpreter=(break_it.resolve_interpreter({"verifyCommand": "%s -c pass" % PY})
+                         if interpreter is GHOST else interpreter),
             scratch=str(self.scratch))
 
 
@@ -343,7 +354,7 @@ def _finding():
 class World:
     """The reviewed layer (HEAD, detached) holds no test; the fix and its test sit on branch `layer-3`."""
 
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, fixed=True):
         self.repo = tmp_path / "repo"
         self.repo.mkdir()
         _git(self.repo, "init", "-q")
@@ -364,9 +375,10 @@ class World:
         (run,) = self.round_record["breakItRuns"]
         RD._record_disposition(self.state, run["findingKey"], "fixed", 1)
         _git(self.repo, "checkout", "-q", "-b", "layer-3")
-        _write(self.repo, CHARGE_PATH, _CHARGE_IDEMPOTENT)
+        if fixed:
+            _write(self.repo, CHARGE_PATH, _CHARGE_IDEMPOTENT)
         _write(self.repo, TEST_PATH, _TEST_FAILING)
-        self.layer3 = _commit(self.repo, "fix the retry")
+        self.layer3 = _commit(self.repo, "fix the retry" if fixed else "add the test, leave the retry")
         _git(self.repo, "checkout", "-q", "--detach", self.head)
         meta = {"repoRoot": str(self.repo), "headSha": self.head}
         meta.update(PR_META)
@@ -537,3 +549,260 @@ def test_10_the_record_names_the_layer_pr_branch_and_commit_or_the_failed_read(t
     assert len(lines) == 2 and "kept in stack layer 4 (PR 104, branch layer-4) at ccccccc" in lines[0], lines
     assert "the stack could not be read (stack-unreadable)" in lines[1], lines
     assert "ran the suite" in account["checked"]
+
+
+# --- a layer checkout gets the reviewed checkout's installed dependencies (code-001) -------------------------
+# bite-proof record wo_e_2463_layer_dependencies
+
+_GATE_TEST = (
+    "import os, sys\n"
+    "sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))\n"
+    "import charge_gate\n"
+    "assert charge_gate.OPEN, 'the gate is closed'\n")
+VENV = [".venv/bin/python"]
+
+
+def _venv(repo):
+    """An untracked, git-ignored .venv/bin/python that runs the current interpreter."""
+    target = repo / ".venv" / "bin" / "python"
+    target.parent.mkdir(parents=True)
+    target.write_text("#!/bin/sh\nexec %s \"$@\"\n" % PY)
+    target.chmod(0o755)
+
+
+def _spy_check_kept(monkeypatch):
+    calls, real = [], break_it.check_kept
+
+    def spy(root, base, head, record, **kwargs):
+        calls.append((root, head))
+        return real(root, base, head, record, **kwargs)
+
+    monkeypatch.setattr(break_it, "check_kept", spy)
+    return calls
+
+
+def _record_rows(searched, read="ok", reason=None):
+    stack = {"read": read, "foundIn": None, "searched": searched}
+    if reason:
+        stack["reason"] = reason
+    return {"1": {"breakItKept": [{"path": TEST_PATH, "outcome": "missing", "reason": "not-in-head", "run": None,
+                                   "stack": stack}]}}
+
+
+def test_t1_a_higher_layer_with_the_identical_test_that_fails_there_is_not_credited(tmp_path):
+    # axis: only a kept result credits a layer (G13): the identical bytes failing at the layer read failing, not found
+    s = Stack(tmp_path, layer4_body=_GATE_TEST, layer4_files={"src/charge_gate.py": "OPEN = False\n"})
+    held = _git(s.repo, "show", "%s:%s" % (s.layer4, TEST_PATH))
+    assert hashlib.sha256((held + "\n").encode()).hexdigest() == _record(_GATE_TEST)["sha256"]
+    got = s.search(record=_record(_GATE_TEST))
+    assert got["read"] == "ok" and got["foundIn"] is None and got["result"] is None, got
+    last = got["searched"][-1]
+    assert (last["position"], last["outcome"], last["runOutcome"]) == (4, break_it.KEPT_FAILING, "failed"), got
+    assert len(_worktrees(s.repo)) == 1
+
+
+def test_t2_a_relative_venv_interpreter_runs_in_the_layer_checkout_through_the_linked_folder(stack):
+    # axis: the reviewed checkout's interpreter folder is linked into the layer checkout (G14)
+    _venv(stack.repo)
+    assert _git(stack.repo, "status", "--porcelain") == ""
+    got = stack.search(interpreter=VENV)
+    assert got["read"] == "ok" and got["foundIn"]["position"] == 4, got
+    assert got["result"]["outcome"] == break_it.KEPT and got["searched"][-1]["runOutcome"] == "passed", got
+    assert len(_worktrees(stack.repo)) == 1 and list(stack.scratch.iterdir()) == []
+    assert (stack.repo / ".venv" / "bin" / "python").is_file()
+
+
+def test_t2_without_the_link_the_same_layer_is_not_found(stack, monkeypatch):
+    _venv(stack.repo)
+    monkeypatch.setattr(dependency_links, "_link_dependencies", lambda *a, **k: None)
+    got = stack.search(interpreter=VENV)
+    assert got["read"] == "ok" and got["foundIn"] is None, got
+    last = got["searched"][-1]
+    assert (last["outcome"], last["reason"], last["runOutcome"]) == (
+        break_it.KEPT_FAILING, "interpreter-unavailable", "not-run"), got
+
+
+@pytest.mark.skipif(shutil.which("node") is None or shutil.which("npm") is None,
+                    reason="node and npm are required to run a JavaScript break-it test")
+def test_t3_a_javascript_layer_runs_with_the_reviewed_checkouts_installed_node_modules(tmp_path, monkeypatch):
+    # axis: the reviewed checkout's node_modules is linked into the layer checkout (G14)
+    for key, value in (("npm_config_cache", str(tmp_path / "npm-cache")), ("npm_config_offline", "true"),
+                       ("npm_config_update_notifier", "false"), ("npm_config_fund", "false"),
+                       ("npm_config_audit", "false")):
+        monkeypatch.setenv(key, value)
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    _git(repo, "symbolic-ref", "HEAD", "refs/heads/layer-2")
+    _write(repo, "package.json", json.dumps(JS_PACKAGE))
+    _write(repo, ".gitignore", "node_modules/\n")
+    _write(repo, "vitest.config.mjs",
+           'import { defineConfig } from "vitest/config"; export default defineConfig({});\n')
+    _write(repo, "README.md", "fixture\n")
+    base = _commit(repo, "base")
+    _write(repo, "src/lower.js", "module.exports = 1;\n")
+    _commit(repo, "layer 2")
+    _git(repo, "checkout", "-q", "-b", "layer-3")
+    _write(repo, JS_TEST_PATH, JS_PASSING)
+    layer3 = _commit(repo, "layer 3")
+    _git(repo, "checkout", "-q", "layer-2")
+    _install_fake(repo / "node_modules")
+    assert _git(repo, "status", "--porcelain") == ""
+    scratch = tmp_path / "scratch"
+    scratch.mkdir()
+    record = {"path": JS_TEST_PATH, "command": JS_NPM_RUN, "content": JS_PASSING,
+              "sha256": hashlib.sha256(JS_PASSING.encode()).hexdigest()}
+    layers = [{"position": 3, "number": 103, "headRefName": "layer-3", "headRefOid": layer3}]
+    got = break_it_layers.check_kept_in_layers(str(repo), base, layers, record, scratch=str(scratch))
+    assert got["read"] == "ok" and got["foundIn"]["position"] == 3, got
+    assert got["searched"][0]["runOutcome"] == "passed", got
+    assert len(_worktrees(repo)) == 1 and list(scratch.iterdir()) == []
+    monkeypatch.setattr(dependency_links, "_link_dependencies", lambda *a, **k: None)
+    got = break_it_layers.check_kept_in_layers(str(repo), base, layers, record, scratch=str(scratch))
+    assert got["read"] == "ok" and got["foundIn"] is None, got
+    assert got["searched"][0]["outcome"] == break_it.KEPT_FAILING, got
+
+
+def test_t4_a_missing_interpreter_folder_means_not_run_and_not_credited(stack, monkeypatch):
+    # axis: a needed interpreter folder present nowhere is a not-run layer, never a run (G15)
+    calls = _spy_check_kept(monkeypatch)
+    got = stack.search(interpreter=VENV)
+    assert got["read"] == "ok" and got["foundIn"] is None and got["result"] is None, got
+    assert calls == [], calls
+    assert [(s["position"], s["outcome"], s["reason"], s["held"], s["runOutcome"]) for s in got["searched"]] == [
+        (3, "not-run", "dependency-missing:.venv", False, None),
+        (4, "not-run", "dependency-missing:.venv", True, None)], got
+    assert len(_worktrees(stack.repo)) == 1 and list(stack.scratch.iterdir()) == []
+    lines = rs._break_it_stack_checked(_record_rows(got["searched"]))
+    assert lines == [
+        "Break-it test %s (round 1): stack layer 3 (PR 103) at %s could not be checked (dependency-missing:.venv)"
+        % (TEST_PATH, stack.layer3[:7]),
+        "Break-it test %s (round 1): found in stack layer 4 (PR 104) at %s but it could not run there "
+        "(dependency-missing:.venv); the test reads not-in-head" % (TEST_PATH, stack.layer4[:7])], lines
+    assert not any("did not pass" in line for line in lines)
+
+
+def test_t5_a_dependency_folder_linking_into_a_tracked_part_of_the_checkout_is_not_linked(tmp_path, monkeypatch):
+    s = Stack(tmp_path, base_files={"vendor/pkg/index.js": "module.exports = 1;\n"})
+    os.symlink("vendor", s.repo / "node_modules")
+    calls = _spy_check_kept(monkeypatch)
+    got = s.search()
+    assert got["read"] == "ok" and got["foundIn"] is None and calls == [], (got, calls)
+    assert [(e["outcome"], e["reason"], e["held"]) for e in got["searched"]] == [
+        ("not-run", "dependency-link-unsafe", False), ("not-run", "dependency-link-unsafe", True)], got
+    assert len(_worktrees(s.repo)) == 1 and list(s.scratch.iterdir()) == []
+
+
+def test_t6_a_held_layer_that_fails_parks_naming_the_layer_and_the_record_says_so(tmp_path, monkeypatch):
+    # axis: the park names the first layer that held the test (G17) and the record line says it did not pass (G16)
+    world = World(tmp_path, fixed=False)
+    monkeypatch.setattr(RD, "_read_stack_membership", lambda pr, repo: world.membership())
+    assert world.step() is True
+    (row,) = world.round_record["breakItKept"]
+    assert (row["outcome"], row["reason"]) == (break_it.KEPT_MISSING, "not-in-head"), row
+    assert row["stack"]["read"] == "ok" and row["stack"]["foundIn"] is None, row
+    (entry,) = row["stack"]["searched"]
+    assert (entry["position"], entry["outcome"], entry["runOutcome"]) == (3, break_it.KEPT_FAILING, "failed"), entry
+    reason = world.state["certification"]["reason"]
+    assert "found in stack layer 3 (PR 103) but it did not pass there: failed" in reason, reason
+    assert "the stack could not be read" not in reason, reason
+    assert rs._break_it_stack_checked(world.state["rounds"]) == [
+        "Break-it test %s (round 1): found in stack layer 3 (PR 103) at %s but it did not pass there (failed); "
+        "the test reads not-in-head" % (TEST_PATH, world.layer3[:7])]
+    assert len(_worktrees(world.repo)) == 1
+
+
+def test_t6_a_failed_stack_read_keeps_only_its_own_park_suffix_but_the_record_keeps_the_held_layer(tmp_path, monkeypatch):
+    world = World(tmp_path, fixed=False)
+    monkeypatch.setattr(RD, "_read_stack_membership", lambda pr, repo: world.membership())
+    searched = [{"position": 3, "pr": 103, "commit": world.layer3, "outcome": "failing", "reason": None,
+                 "runOutcome": "failed"}]
+    monkeypatch.setattr(break_it_layers, "check_kept_in_layers", lambda *a, **k: {
+        "read": "failed", "reason": "layer-read-failed:ls-tree-failed", "foundIn": None, "result": None,
+        "searched": searched})
+    assert world.step() is True
+    reason = world.state["certification"]["reason"]
+    assert "the stack could not be read: layer-read-failed:ls-tree-failed" in reason, reason
+    assert "found in stack layer" not in reason, reason
+    lines = rs._break_it_stack_checked(world.state["rounds"])
+    assert len(lines) == 2 and "the stack could not be read (layer-read-failed:ls-tree-failed)" in lines[0], lines
+    assert "found in stack layer 3 (PR 103)" in lines[1] and "did not pass there" in lines[1], lines
+
+
+def test_t6_the_record_lines_for_the_other_searched_outcomes(tmp_path):
+    searched = [{"position": 3, "pr": 103, "commit": "d" * 40, "outcome": "missing", "reason": "not-in-head",
+                 "runOutcome": None},
+                {"position": 4, "pr": 104, "commit": "e" * 40, "outcome": "not-run",
+                 "reason": "dependency-link-unsafe", "held": True, "runOutcome": None}]
+    lines = rs._break_it_stack_checked(_record_rows(searched))
+    assert lines == ["Break-it test %s (round 1): found in stack layer 4 (PR 104) at eeeeeee but it could not run "
+                     "there (dependency-link-unsafe); the test reads not-in-head" % TEST_PATH], lines
+
+
+def test_t7_e3_a_link_that_fails_is_not_run_and_not_credited(stack, monkeypatch):
+    monkeypatch.setattr(dependency_links, "_link_dependencies",
+                        lambda *a, **k: dependency_links.REASON_DEPENDENCY_LINK_FAILED)
+    calls = _spy_check_kept(monkeypatch)
+    got = stack.search()
+    assert got["read"] == "ok" and got["foundIn"] is None and calls == [], (got, calls)
+    assert [(e["outcome"], e["reason"], e["held"]) for e in got["searched"]] == [
+        ("not-run", "dependency-link-failed", False), ("not-run", "dependency-link-failed", True)], got
+
+
+@pytest.mark.parametrize("interpreter", [sys.executable, None, "python3", ["python3"], ["./venv/bin/python"],
+                                         ["../x/bin/python"], []])
+def test_t7_e4_an_absolute_or_absent_interpreter_adds_no_extra_name(stack, monkeypatch, interpreter):
+    seen, real = [], dependency_links._link_dependencies
+
+    def spy(root, copy, names=dependency_links.DEPENDENCY_DIRS):
+        seen.append(tuple(names))
+        return real(root, copy, names=names)
+
+    monkeypatch.setattr(dependency_links, "_link_dependencies", spy)
+    stack.search(interpreter=interpreter)
+    assert seen == [("node_modules",)] * 2, seen
+
+
+def test_t7_e4_a_relative_interpreter_adds_its_first_component(stack, monkeypatch):
+    _venv(stack.repo)
+    seen, real = [], dependency_links._link_dependencies
+
+    def spy(root, copy, names=dependency_links.DEPENDENCY_DIRS):
+        seen.append(tuple(names))
+        return real(root, copy, names=names)
+
+    monkeypatch.setattr(dependency_links, "_link_dependencies", spy)
+    stack.search(interpreter=VENV)
+    assert seen == [("node_modules", ".venv")] * 2, seen
+
+
+def test_t7_e5_a_layer_head_that_tracks_node_modules_keeps_its_own(tmp_path, monkeypatch):
+    s = Stack(tmp_path, layer4_files={"node_modules/pkg/index.js": "module.exports = 1;\n"})
+    _write(s.repo, "node_modules/other/x.js", "1\n")  # installed in the reviewed checkout, untracked
+    seen, real = [], break_it.check_kept
+
+    def spy(root, base, head, record, **kwargs):
+        seen.append((head, os.path.islink(os.path.join(root, "node_modules")),
+                     os.path.isfile(os.path.join(root, "node_modules", "pkg", "index.js"))))
+        return real(root, base, head, record, **kwargs)
+
+    monkeypatch.setattr(break_it, "check_kept", spy)
+    s.search()
+    assert seen == [(s.layer3, True, False), (s.layer4, False, True)], seen
+    assert (s.repo / "node_modules" / "other" / "x.js").is_file()
+
+
+def test_t7_e6_a_raising_check_leaves_no_link_and_no_worktree_behind(stack, monkeypatch):
+    _venv(stack.repo)
+    seen = []
+
+    def boom(root, *args, **kwargs):
+        seen.append((os.path.islink(os.path.join(root, ".venv")), os.path.isdir(root)))
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(break_it, "check_kept", boom)
+    got = stack.search(interpreter=VENV)
+    assert got["read"] == "failed" and got["reason"] == "layer-search-error" and got["foundIn"] is None, got
+    assert seen == [(True, True)], seen
+    assert len(_worktrees(stack.repo)) == 1 and list(stack.scratch.iterdir()) == []
+    assert (stack.repo / ".venv" / "bin" / "python").is_file()
