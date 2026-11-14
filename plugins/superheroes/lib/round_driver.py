@@ -10847,8 +10847,10 @@ def _stack_layers_above(session_dir):
     when the stack could not be read."""
     meta = _session_meta(session_dir) if session_dir else {}
     pr, repo = meta.get("pr"), meta.get("repo")
-    # axis: only a PR session with a positive int pr and an owner/name repo can be a stack layer — see bite-proof record wo_a_2463_stack_layers
-    if (meta.get("mode") != "pr" or not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0
+    # axis: only a PR session with a positive int pr and an owner/name repo can be a stack layer; the mode is read through the one resolver (session_mode.resolve) and an unresolved mode is not a PR session — see bite-proof records wo_a_2463_stack_layers and wo_c_2463_mode_resolver
+    mode = session_mode.resolve(meta, {})
+    if (not mode["resolved"] or mode["mode"] != session_mode.MODE_PR
+            or not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0
             or not isinstance(repo, str) or not _OWNER_NAME.fullmatch(repo)):
         return None, None
     try:

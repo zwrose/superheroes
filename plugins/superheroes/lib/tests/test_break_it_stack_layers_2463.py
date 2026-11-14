@@ -289,6 +289,22 @@ def test_8_stack_layers_above_reads_only_a_linked_pr_sessions_higher_members(tmp
     assert RD._stack_layers_above(_session(tmp_path, **PR_META)) == (None, "stack-read-error")
 
 
+def test_8b_a_session_whose_mode_the_resolver_cannot_resolve_is_not_a_stack_layer(tmp_path, monkeypatch):
+    # e1/e2: an absent or invalid mode resolves to the fail-closed default "pr" but unresolved — it must not search
+    calls = []
+
+    def seam(pr, repo):
+        calls.append((pr, repo))
+        return _membership()
+
+    monkeypatch.setattr(RD, "_read_stack_membership", seam)
+    assert RD._stack_layers_above(_session(tmp_path, mode="bogus", pr=102, repo="owner/name")) == (None, None)
+    assert RD._stack_layers_above(_session(tmp_path, pr=102, repo="owner/name")) == (None, None)
+    assert calls == []
+    layers, failure = RD._stack_layers_above(_session(tmp_path, **PR_META))
+    assert failure is None and calls == [(102, "owner/name")] and [layer["position"] for layer in layers] == [3, 4]
+
+
 # --- end to end through the kept step -----------------------------------------------------------------
 
 _CHARGE_RETRYING = (
