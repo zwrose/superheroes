@@ -1090,6 +1090,12 @@ def write_result_contract_from_schema(schema, delivery=None):
     return "\n".join(lines) + "\n"
 
 
+NATIVE_NULL_FOR_OMITTED_LINE = (
+    "Every property the schema declares is present on the branch; where this prompt, or a rubric "
+    "or brief it points to, says to omit or leave out a field, write null for it."
+)
+
+
 def review_result_contract_from_schema(schema, delivery=None):
     """Derive native-channel review prompt contract prose from a declared schema dict."""
     if not isinstance(schema, dict):
@@ -1127,6 +1133,7 @@ def review_result_contract_from_schema(schema, delivery=None):
         % kind_list,
         "Every other payload property on the branch must be JSON null — only the named kind's "
         "payload may be populated.",
+        NATIVE_NULL_FOR_OMITTED_LINE,
         "`investigated` lists the repository paths you actually read while forming this result.",
         "`readParts` is the panel reviewer's read list on a `findings` branch (null on every other "
         "branch, and on a findings branch from a seat that owes none).",
