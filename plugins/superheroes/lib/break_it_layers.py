@@ -156,7 +156,7 @@ def check_kept_in_layers(repo_root, base, layers, record, *, runner=break_it.run
                              "runOutcome": run.get("outcome") if isinstance(run, dict) else None})
             # axis: only a kept result credits a layer; a changed, failing or not-regular copy is not the test held — see bite-proof record wo_a_2463_stack_layers
             if got["outcome"] == break_it.KEPT:
-                found ={"position": layer["position"], "pr": layer["number"],
+                found = {"position": layer["position"], "pr": layer["number"],
                          "branch": layer["headRefName"], "commit": oid}
                 return out("ok", None, found, got)
             # axis: a layer whose git read failed ends the search as failed, so no later layer is credited over an unread one — see bite-proof record wo_a_2463_stack_layers
