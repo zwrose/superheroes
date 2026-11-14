@@ -992,3 +992,75 @@ FAILED plugins/superheroes/lib/tests/test_scope_ruling_key_suffix_review.py::tes
 **Restore receipt:** `git diff` of `finding_outcomes.py` shows only the lookbehind, the docstring and the axis line.
 
 **Raw green:** the two break-it tests plus this record's test file: `88 passed in 0.91s`.
+
+---
+
+## E15 — a quoted span never names a ruling: `ruling_rest` (`finding_outcomes.py`), order O-2482-V925
+
+Axis: a quoted span (12 or more characters) of the verifier text that sits in a ruling's reason marks the text as resting on a
+ruling (`{"findingKey": None}`) but never names one; a key named whole names its ruling only when no quoted span attributes to a
+different ruling. So a REFUTED that quotes a decided ruling's reason, while meaning an undecided one, reads `left-for-owner` and
+never `ruling` citing the decided ruling's `decidedBy`.
+
+**Guarded element (one):** the rule that `quoted` never joins `named` (`len(named) == 1 and not quoted - named`). Detectors:
+`test_a7_...`, `test_a8_...`, `test_b4_...` at the unit and fold level, and `test_b5_...` / `test_b6_...` at the seam (the fold's
+own keys and reasons, `apply_verdicts`, the ledger row, `_findings_and_merges`). `test_a8b_...` and `test_b7_...` guard the other
+half of the rule (a whole key plus a span of the same ruling's reason keeps the key; a whole key plus a span of a different
+ruling's reason names none) and are not expected to go red under this neutralization; they pass in the red run below.
+
+**Neutralization:** the old attribution restored: two lines inserted after `quoted = _quoted_ruling_keys(text, ruling_reasons)`:
+`    named |= quoted  # NEUTRALIZATION E15` and `    quoted = set()  # NEUTRALIZATION E15`.
+
+**How the runs were made:** the order's pinned command
+`scripts/pinned-python -B -m pytest plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py -q -p no:cacheprovider`,
+once with the neutralization (its output was cut in the middle by the tool, 2436 characters, so it is not quoted: incomplete),
+then again with `--tb=line` added (traceback shape only; nothing filtered), which is the capture below. The uv notice line is
+omitted; no secrets or private URLs appear.
+
+**Raw red** (whole new file, `--tb=line`; the `-q` dots line and the failure lines, complete):
+
+```
+........................................FFFFF..............FFF.......... [ 80%]
+..................                                                       [100%]
+=================================== FAILURES ===================================
+E   AssertionError: assert {'findingKey'...hecked-index'} == {'findingKey': None}
+      Differing items:
+      {'findingKey': 'rk:src/foo.py:12:unchecked-index'} != {'findingKey': None}
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:147: AssertionError
+(the same block for the curly-double, backtick and whitespace-normalised params at line 147, and for line 157 and line 293)
+E   AssertionError: assert ('ruling' == 'left-for-owner'
+      - left-for-owner
+      + ruling)
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:333: AssertionError
+E   AssertionError: assert ('ruling' == 'left-for-owner'
+      - left-for-owner
+      + ruling)
+/home/user/wt-2478/plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py:344: AssertionError
+=========================== short test summary info ============================
+FAILED ...::test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_marks_a_ruling_but_names_none[straight-double]
+FAILED ...::test_a7_..._but_names_none[curly-double]
+FAILED ...::test_a7_..._but_names_none[backtick]
+FAILED ...::test_a7_..._but_names_none[whitespace-normalised]
+FAILED ...::test_a8_a_quoted_span_marks_a_ruling_with_no_key_whether_one_or_two_reasons_hold_it_and_a_short_or_absent_span_contributes_nothing
+FAILED ...::test_b4_the_fold_marks_a_refuted_that_quotes_the_standing_rulings_reason_with_no_key_and_leaves_a_code_refutation_unmarked
+FAILED ...::test_b5_a_refuted_quoting_a_decided_rulings_reason_while_meaning_an_undecided_one_reads_left_for_owner_never_the_decided_ruling
+FAILED ...::test_b6_a_refuted_that_quotes_out_of_scope_against_one_decided_ruling_reads_left_for_owner_never_ruling
+8 failed, 82 passed in 0.66s
+```
+
+(This record abbreviates the repeated blocks and the `FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::`
+path prefix with `...`; the live capture printed each in full.)
+
+**Restore:** inverse edit; both inserted lines removed, leaving `    quoted = _quoted_ruling_keys(text, ruling_reasons)` followed by
+`    if len(named) == 1 and not quoted - named:`.
+**Restore receipt:** a search of `finding_outcomes.py` for `NEUTRALIZATION` returned no match, and returned lines 71, 72 and 75:
+`    quoted = _quoted_ruling_keys(text, ruling_reasons)`, `    if len(named) == 1 and not quoted - named:` and
+`    if named or quoted or _RULING_PHRASE.search(text):`.
+
+**Raw green** (same command with `--tb=line`):
+
+```
+........................................................................ [ 80%]
+..................                                                       [100%]
+90 passed in 0.58s
+```

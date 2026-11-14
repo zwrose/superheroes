@@ -57,21 +57,22 @@ def _quoted_ruling_keys(text, ruling_reasons):
 
 
 def ruling_rest(text, ruling_keys=(), ruling_reasons=None):
-    """None when ``text`` does not rest on a scope ruling, else {"findingKey": <key or None>}: the key when exactly one
-    ruling is attributed, None when two or more are or only the ruling wording is. A ruling is attributed when its key (one of
-    ``ruling_keys``, non-blank strings) appears whole in the text, or a quoted span of the text sits in its reason
-    (``ruling_reasons``: key to reason)."""
-    # axis: a verifier reason that names exactly one standing ruling's key rests on that ruling — see bite-proof record wo1_scope_ruling_2478
+    """None when ``text`` does not rest on a scope ruling, else {"findingKey": <key or None>}. A key (one of ``ruling_keys``,
+    non-blank strings) appearing whole in the text names its ruling, and only when no quoted span points at a different ruling.
+    A quoted span of the text (at least `_QUOTE_MIN` characters) that sits in a ruling's reason (``ruling_reasons``: key to
+    reason) marks the text as resting on a ruling but never names one: it gives {"findingKey": None}, as do two whole keys and
+    the ruling wording alone."""
+    # axis: a verifier reason that names exactly one standing ruling's key whole rests on that ruling, unless a quoted span points at another — see bite-proof record wo1_scope_ruling_2478
     if not isinstance(text, str):
         return None
     keys = ruling_keys if isinstance(ruling_keys, (list, tuple, set, frozenset)) else ()
     named = {k for k in keys if isinstance(k, str) and k.strip() and _whole_key(k, text)}
-    # axis: a quoted span of the verifier's text that sits in a ruling's reason attributes to that ruling — see bite-proof record wo1_scope_ruling_2478
-    named |= _quoted_ruling_keys(text, ruling_reasons)
-    if len(named) == 1:
+    # axis: a quoted span that sits in a ruling's reason marks the text as resting on a ruling but never names one — see bite-proof record wo1_scope_ruling_2478 (E15)
+    quoted = _quoted_ruling_keys(text, ruling_reasons)
+    if len(named) == 1 and not quoted - named:
         return {"findingKey": next(iter(named))}
     # axis: a verifier reason that speaks of a standing/out-of-scope ruling rests on a ruling even with no key — see bite-proof record wo1_scope_ruling_2478
-    if len(named) > 1 or _RULING_PHRASE.search(text):
+    if named or quoted or _RULING_PHRASE.search(text):
         return {"findingKey": None}
     return None
 

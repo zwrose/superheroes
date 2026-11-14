@@ -140,26 +140,42 @@ OTHER = "rk:src/bar.py:3:other"
     pytest.param(f"the verifier saw it is `{QUOTE}` and left it", id="backtick"),
     pytest.param('the verifier saw it is "belongs   to\nthe  follow-up" and left it', id="whitespace-normalised"),
 ])
-def test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_attributes_to_that_ruling(text):
-    # axis: a quoted span of at least 12 characters found in exactly one live ruling's reason attributes to that ruling's key (E11)
+def test_a7_a_quoted_span_that_sits_in_exactly_one_rulings_reason_marks_a_ruling_but_names_none(text):
+    # axis: a quoted span of at least 12 characters found in one live ruling's reason marks the text as resting on a ruling with no key; it never names that ruling (E11, E15)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
     reasons = {KEY: "this " + QUOTE + ", per the owner", OTHER: "an unrelated reason"}
-    assert FO.ruling_rest(text, (), reasons) == {"findingKey": KEY}
-    assert FO.ruling_rest(text, [KEY, OTHER], reasons) == {"findingKey": KEY}
+    assert FO.ruling_rest(text, (), reasons) == {"findingKey": None}
+    assert FO.ruling_rest(text, [KEY, OTHER], reasons) == {"findingKey": None}
 
 
-def test_a8_a_quoted_span_in_two_rulings_reasons_names_no_single_key_and_a_short_or_absent_span_attributes_nothing():
-    # axis: a span found in two reasons is ambiguous (key None); a span under 12 characters or in no reason attributes nothing (E11)
+def test_a8_a_quoted_span_marks_a_ruling_with_no_key_whether_one_or_two_reasons_hold_it_and_a_short_or_absent_span_contributes_nothing():
+    # axis: a span found in one or two reasons marks a ruling, key None; a span under 12 characters or in no reason contributes nothing (E11, E15)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
     reasons = {KEY: "this " + QUOTE, OTHER: "also " + QUOTE + " here"}
     assert FO.ruling_rest(f'it is "{QUOTE}"', (), reasons) == {"findingKey": None}
     only_one = {KEY: "this " + QUOTE, OTHER: "something else entirely"}
-    assert FO.ruling_rest(f'it is "{QUOTE}"', (), only_one) == {"findingKey": KEY}
+    assert FO.ruling_rest(f'it is "{QUOTE}"', (), only_one) == {"findingKey": None}
     assert FO.ruling_rest('it is "belongs to"', (), only_one) is None  # 10 characters
     assert FO.ruling_rest('it is "something that no reason holds"', (), only_one) is None
     assert FO.ruling_rest(f"it is {QUOTE} with no quotes at all", (), only_one) is None
     # the key and a quote that name two different rulings are two rulings
     assert FO.ruling_rest(f'{OTHER} says "{QUOTE}"', [OTHER], only_one) == {"findingKey": None}
+
+
+def test_a8b_a_key_named_whole_names_its_ruling_only_when_no_quoted_span_points_at_a_different_ruling():
+    # axis: a whole key names its ruling only when `quoted - {key}` is empty; a quote from the same ruling's reason leaves the key (E15)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    reasons = {KEY: "this " + QUOTE + ", per the owner", OTHER: "an unrelated reason"}
+    # the key of OTHER named whole, a span from KEY's reason: the span attributes to a different ruling
+    assert FO.ruling_rest(f'{OTHER} covers it; it is "{QUOTE}"', [KEY, OTHER], reasons) == {"findingKey": None}
+    # the key of KEY named whole, a span from KEY's own reason: that key
+    assert FO.ruling_rest(f'{KEY} covers it; it is "{QUOTE}"', [KEY, OTHER], reasons) == {"findingKey": KEY}
+    # the key alone, and two whole keys, as before
+    assert FO.ruling_rest(f"{KEY} covers it", [KEY, OTHER], reasons) == {"findingKey": KEY}
+    assert FO.ruling_rest(f"{KEY} and {OTHER}", [KEY, OTHER], reasons) == {"findingKey": None}
+    # no keys and no reasons: the phrase decides alone
+    assert FO.ruling_rest(f'it is "{QUOTE}"') is None
+    assert FO.ruling_rest("the standing ruling covers it") == {"findingKey": None}
 
 
 @pytest.mark.parametrize("reasons", [None, "not a map", ["x"], {KEY: None}, {KEY: 5}, {None: QUOTE}, {"": QUOTE}, {"  ": QUOTE}])
@@ -267,20 +283,82 @@ def test_b3_the_fold_marks_a_refuted_that_names_only_the_standing_rulings_key_wi
     assert [e["disposition"] for e in state["dispositionLedger"] if e.get("findingKey") == key] == ["refuted"]
 
 
-def test_b4_the_fold_marks_a_refuted_that_quotes_the_standing_rulings_reason_and_leaves_a_code_refutation_unmarked():
-    # axis: _fold_verifiers hands apply_verdicts the live standing rulings' reasons, so a quoted reason marks the drop (E13)
+def test_b4_the_fold_marks_a_refuted_that_quotes_the_standing_rulings_reason_with_no_key_and_leaves_a_code_refutation_unmarked():
+    # axis: _fold_verifiers hands apply_verdicts the live standing rulings' reasons, so a quoted reason marks the drop, naming no ruling (E13, E15)
     # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
     reason = f'the cited code is fine; the finding "{QUOTED_RULING_REASON}" and is not raised here'
     assert FO.ruling_rest(reason) is None  # no phrase and no key: only the quoted reason can mark it
     state, key = fold(reason)
     (drop,) = state["rounds"]["1"]["verify"]["drops"]
-    assert drop["grade"]["restsOnRuling"] == {"findingKey": KEY}
+    assert drop["grade"]["restsOnRuling"] == {"findingKey": None}
     assert ledger_grade(state, key) == drop["grade"]
     # healthy sibling: a refutation on the code, with a quoted span no ruling holds, stays unmarked
     state, key = fold(ON_CODE)
     (drop,) = state["rounds"]["1"]["verify"]["drops"]
     assert drop["grade"] == {"verdict": "wrong", "reason": ON_CODE}
     assert ledger_grade(state, key) == {"verdict": "wrong", "reason": ON_CODE}
+
+
+# ---- the seam: the fold's keys and reasons, the ledger, and the record's account (E15) ----------------------------------
+
+R1_KEY = "rk:src/foo.py:12:unchecked-index"  # an advisor-only ruling: provenance, no decidedBy
+R2_KEY = "rk:src/bar.py:3:retry-loop"  # an owner ruling: decidedBy, and a reason holding a backticked path
+R2_REASON = "the retry in `plugins/superheroes/lib/verification.py` belongs to the follow-up"
+OOS_KEY = "rk:src/baz.py:9:other"
+OOS_REASON = "this is out of scope for the change"
+
+
+def seam_account(verifier_reason, rulings):
+    """The account `_findings_and_merges` gives a REFUTED with ``verifier_reason``: the grade comes from `apply_verdicts` with
+    the keys and reasons of `_standing_rulings_for_orders`, exactly as `_fold_verifiers` builds them, and the drop is recorded
+    on the ledger row. ``rulings`` are the session's `rule` out-of-scope rulings. Returns the one account finding."""
+    log = [dict(r, source="rule") for r in rulings]
+    standing, failure = RD._standing_rulings_for_orders({"rulingsLog": log, "dispositionLedger": [], "findings": []})
+    assert failure is None and sorted(r["findingKey"] for r in standing) == sorted(r["findingKey"] for r in rulings)
+    staged = V.stage_ids([{"file": "a.py", "title": "Unchecked index", "severity": "Important"}])
+    done = V.apply_verdicts(staged, [{"id": "v0", "verdict": "REFUTED", "reason": verifier_reason}],
+                            [r["findingKey"] for r in standing], {r["findingKey"]: r.get("reason") for r in standing})
+    (drop,) = done["drops"]
+    state = {"dispositionLedger": [refuted_row(drop["grade"])], "findings": [], "rulingsLog": log}
+    (found,), _merged = RS._findings_and_merges(state)
+    return found
+
+
+def test_b5_a_refuted_quoting_a_decided_rulings_reason_while_meaning_an_undecided_one_reads_left_for_owner_never_the_decided_ruling():
+    # axis: a quoted span of a ruling's reason never names that ruling, so the record cannot cite R2's decision for a refutation that meant R1 (E15)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    r1 = ruling_row(findingKey=R1_KEY, decidedBy=None, seq=1)
+    r2 = ruling_row(findingKey=R2_KEY, reason=R2_REASON, seq=2)
+    found = seam_account("the standing ruling covers the retry in `plugins/superheroes/lib/verification.py`", [r1, r2])
+    assert found["outcome"] == "left-for-owner" and found["outcome"] != "ruling"
+    assert found["decidedBy"] is None
+    # the same words with the ruling wording removed still mark a ruling, and still name none
+    found = seam_account("the retry in `plugins/superheroes/lib/verification.py` is handled elsewhere", [r1, r2])
+    assert found["outcome"] == "left-for-owner" and found["decidedBy"] is None
+
+
+def test_b6_a_refuted_that_quotes_out_of_scope_against_one_decided_ruling_reads_left_for_owner_never_ruling():
+    # axis: the quoted words `out of scope` (12 characters) in a decided ruling's reason mark the refutation but name no ruling (E15)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    found = seam_account('the verifier ruled "out of scope"', [ruling_row(findingKey=OOS_KEY, reason=OOS_REASON)])
+    assert found["outcome"] == "left-for-owner" and found["outcome"] != "ruling"
+    assert found["decidedBy"] is None
+
+
+def test_b7_healthy_sibling_a_refuted_naming_the_decided_rulings_key_whole_still_reads_ruling_with_its_decision():
+    # axis: a key named whole, with no quoted span from another ruling, names its ruling, so the record cites that ruling's decidedBy (E15)
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    r1 = ruling_row(findingKey=R1_KEY, decidedBy=None, seq=1)
+    r2 = ruling_row(findingKey=R2_KEY, reason=R2_REASON, seq=2)
+    found = seam_account(f"{R2_KEY} covers the retry", [r1, r2])
+    assert found["outcome"] == "ruling" and found["decidedBy"] == OWNER
+    # the key plus a span of its own reason is still that ruling
+    found = seam_account(f"{R2_KEY} covers the retry in `plugins/superheroes/lib/verification.py`", [r1, r2])
+    assert found["outcome"] == "ruling" and found["decidedBy"] == OWNER
+    # the key of R2 plus a span of R1's reason: the span attributes to a different ruling, so no ruling is named
+    r1_quoted = ruling_row(findingKey=R1_KEY, decidedBy=None, reason="it belongs to the follow-up work", seq=1)
+    found = seam_account(f'{R2_KEY} covers it, and "belongs to the follow-up work"', [r1_quoted, r2])
+    assert found["outcome"] == "left-for-owner" and found["decidedBy"] is None
 
 
 # ---- DoD-2: a ruling that cites no decision, or no key at all, is left for the owner ----------------------------
