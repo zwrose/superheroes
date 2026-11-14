@@ -189,9 +189,13 @@ def _lane_account(repo_root, env, config_dir=None, account_id=None):
 
 def _lapses(repo_root, env, config_dir=None, environment=None, account_id=None):
     """The lapse date in the setup record of the account the lane ran on (`_lane_account` names it). When
-    `environment` is a non-empty string the record must name that environment. None when the account
-    cannot be resolved, the latest check failed, or the record is missing, unreadable, for another
-    environment or has no date."""
+    `environment` is a non-empty string the record must name that environment; when it is None (a PR with
+    no lane) any environment will do; an `environment` that is present but empty or not a string is unread
+    and never matches a record. None when the account cannot be resolved, the latest check failed, or the
+    record is missing, unreadable, for another environment or has no date."""
+    # axis: an environment that is present but empty or not a string is unread and matches no record, while None (no lane) asks for none — see bite-proof record i2452_empty_ids
+    if environment is not None and not (isinstance(environment, str) and environment):
+        return None
     cs = _sib("cloud_setup")
     account = _lane_account(repo_root, env, config_dir, account_id)
     if account and _sib("cloud_check").read_failed_check(repo_root, account) is not None:
