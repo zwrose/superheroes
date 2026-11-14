@@ -1526,6 +1526,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     if pr_body_line is not None:
         checked.append(pr_body_line)
     checked += _verify_via_checked(rounds)
+    # axis: a break-it test kept in a higher stack layer, or a stack that could not be read, is named in the record — see bite-proof record wo_a_2463_stack_layers
+    checked += _break_it_stack_checked(rounds)
     if abandoned is not None:
         checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
     elif interrupted:
@@ -1614,6 +1616,27 @@ def _verify_via_checked(rounds):
             out.append("Verify in round %s: CI workflow %s run %s on %s passed, in place of the local "
                        "verify command (%s)" % (n, via.get("workflow"), via.get("runId"),
                                                 str(via.get("headSha"))[:7], via.get("reason")))
+    return out
+
+
+def _break_it_stack_checked(rounds):
+    """One `checked` line per break-it kept row that searched the stack layers above the reviewed one."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        rows = rounds[n].get("breakItKept") if isinstance(rounds[n], dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            stack = row.get("stack") if isinstance(row, dict) else None
+            if not isinstance(stack, dict):
+                continue
+            found = stack.get("foundIn")
+            if stack.get("read") == "ok" and isinstance(found, dict):
+                out.append("Break-it test %s (round %s): kept in stack layer %s (PR %s, branch %s) at %s, "
+                           "not in the reviewed layer's head"
+                           % (row.get("path"), n, found.get("position"), found.get("pr"), found.get("branch"),
+                              str(found.get("commit"))[:7]))
+            elif stack.get("read") == "failed":
+                out.append("Break-it test %s (round %s): the stack could not be read (%s); the test reads "
+                           "not-in-head" % (row.get("path"), n, stack.get("reason")))
     return out
 
 

@@ -1943,6 +1943,85 @@ def _body_search(repo_root, base, head, record, today, res, runner, interpreter,
     return res(KEPT_FAILING, run.get("reason"), run)
 
 
+_HEX40 = re.compile(r"[0-9a-f]{40}")
+
+
+def _layer_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _layer_valid(layer):
+    if not isinstance(layer, dict):
+        return False
+    oid, ref = layer.get("headRefOid"), layer.get("headRefName")
+    return (isinstance(oid, str) and bool(_HEX40.fullmatch(oid.lower()))
+            and isinstance(ref, str) and bool(ref) and not ref.startswith("-")
+            and _layer_int(layer.get("position")) and _layer_int(layer.get("number")))
+
+
+def _layer_present(repo_root, layer):
+    """Whether the layer's exact commit is in the repository, fetched from origin by branch when it is not."""
+    oid = layer["headRefOid"]
+    if _git(repo_root, "cat-file", "-e", oid + "^{commit}").returncode == 0:
+        return True
+    _git(repo_root, "fetch", "--no-tags", "--quiet", "origin", layer["headRefName"])
+    return _git(repo_root, "cat-file", "-e", oid + "^{commit}").returncode == 0
+
+
+def _layer_remove(repo_root, path):
+    try:
+        if _git(repo_root, "worktree", "remove", "--force", path).returncode != 0:
+            _remove_folder(path)
+            _git(repo_root, "worktree", "prune")
+    except Exception:  # a failed removal never changes the result
+        pass
+
+
+def check_kept_in_layers(repo_root, base, layers, record, *, runner=run_one, interpreter=_UNSET, scratch=None):
+    """Whether a break-it test missing from the reviewed head is kept in a layer ABOVE it in the stack.
+    ``layers`` is the layers above the reviewed one, lowest first, each ``{"position", "number", "headRefName",
+    "headRefOid"}``; each is checked out clean (a detached worktree outside every repository) and run through
+    ``check_kept``. Returns ``{"read": "ok"|"failed", "reason", "foundIn", "result", "searched"}``; never raises."""
+    searched = []
+
+    def out(read, reason=None, found=None, result=None):
+        return {"read": read, "reason": reason, "foundIn": found, "result": result, "searched": searched}
+
+    try:
+        # axis: a layer list that is not a list, or an entry without a full commit id, a safe branch name and int position/number, fails the read — see bite-proof record wo_a_2463_stack_layers
+        if not isinstance(layers, list) or not all(_layer_valid(layer) for layer in layers):
+            return out("failed", "layer-malformed")
+        for layer in layers:
+            oid = layer["headRefOid"]
+            # axis: a layer head absent after the fetch fails the read, never reads as not held there — see bite-proof record wo_a_2463_stack_layers
+            if not _layer_present(repo_root, layer):
+                return out("failed", "layer-head-unreadable")
+            folder, why = _scratch_folder(repo_root, scratch)
+            if why:
+                return out("failed", "scratch-unresolved")
+            path = os.path.join(folder, "break-it-layer-" + uuid.uuid4().hex)
+            try:
+                if _git(repo_root, "worktree", "add", "--detach", "--quiet", path, oid).returncode != 0:
+                    return out("failed", "layer-checkout-failed")
+                got = check_kept(path, base, oid, record, runner=runner, interpreter=interpreter, scratch=scratch)
+            finally:
+                _layer_remove(repo_root, path)
+            searched.append({"position": layer["position"], "pr": layer["number"], "commit": oid,
+                             "outcome": got["outcome"], "reason": got["reason"]})
+            # axis: only a kept result credits a layer; a changed, failing or not-regular copy is not the test held — see bite-proof record wo_a_2463_stack_layers
+            if got["outcome"] == KEPT:
+                found = {"position": layer["position"], "pr": layer["number"],
+                         "branch": layer["headRefName"], "commit": oid}
+                return out("ok", None, found, got)
+            # axis: a layer whose git read failed ends the search as failed, so no later layer is credited over an unread one — see bite-proof record wo_a_2463_stack_layers
+            if got["outcome"] == KEPT_UNRESOLVED:
+                return out("failed", "layer-read-failed:" + str(got["reason"]))
+        return out("ok")
+    # axis: the search never raises; any error reads as a failed stack read, never a credit — see bite-proof record wo_a_2463_stack_layers
+    except Exception:
+        return out("failed", "layer-search-error")
+
+
 def check_kept(repo_root, base, head, record, *, runner=run_one, interpreter=_UNSET, scratch=None):
     """Whether the break-it test the loop ran is still in the final change, unchanged and passing.
     Returns ``{"path", "outcome", "reason", "run"}``; ``outcome`` is one of the ``KEPT*`` values."""
