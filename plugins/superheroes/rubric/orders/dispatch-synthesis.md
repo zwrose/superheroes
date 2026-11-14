@@ -16,9 +16,8 @@ review. Your job is **not** keep/drop — you group issues that share the same r
 - Project conventions: CLAUDE.md at {{CLAUDE_MD_PATH}}, and the project profile.
 
 ## Your task
-Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids,
-repeatOf}` echoing the staged ids verbatim — **no severities**; only `group_id`, `member_ids` and
-`repeatOf`.
+Group issues that share the same root cause. Each group is `{member_ids, repeatOf}`, echoing
+the staged ids verbatim — **no severities**.
 {{OUTPUT_CHANNEL_BLOCK}}
 
 Then mark repeats. For each group, set `repeatOf` to the `ref` of the one `earlier` finding the
