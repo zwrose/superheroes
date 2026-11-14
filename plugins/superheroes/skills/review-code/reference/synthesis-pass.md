@@ -195,8 +195,13 @@ A kept repeat follows its earlier finding's current outcome in the record. When 
 `fixed` by the time the record is written (fixed later in the session, or moved to fixed by a
 carried check that held), the repeat is decided by the table's `fixed` row on the grade it was kept
 with: `wrong` reads `fixed` (the fix holds); any other grade, or none, keeps its own outcome, and a
-kept `left-for-owner` repeat is then its own owner card, since nothing holds it. Every other earlier
-outcome leaves the repeat as kept.
+kept `left-for-owner` repeat is then its own owner card, since nothing holds it. When the earlier
+finding reads `ruling` with a cited decision that is on record when the record is written (for
+example the owner ruled on its card), a kept `left-for-owner` repeat reads that ruling: it carries
+the same cited decision, its reason leads with the citation and names the earlier finding, and it
+adds no owner card or leftover line; findings merged into it follow it with the citation; if the
+citation later stops resolving it goes back to `left-for-owner` like any cited ruling. A ruling
+with no cited decision, and every other earlier outcome, leaves the repeat as kept.
 
 This section is the rule's one prose home; the module `repeat_marks` is its code home. Other docs
 link here.
