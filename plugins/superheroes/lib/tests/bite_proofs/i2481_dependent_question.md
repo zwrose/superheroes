@@ -440,3 +440,19 @@ FAILED ...::test_a_healthy_card_still_builds[ok-plural-questions-with-no-number]
 
 The four round-2 refused rows passed in that same run. Green after the fix, over the new file and the six sheet test
 files: `1009 passed in 20.75s`.
+
+## Review fix, round 4: a plural target by position
+
+The round-3 rule dropped "only if you pick b for the questions above". A plural D1 target now also counts before `above` or
+`below`, and D6 takes plurals ("the other questions", "questions above"). Three refused rows guard it, written before the
+fix and red on the code before it, with the detector unedited:
+
+```
+FAILED ...::test_a_card_depending_on_another_question_is_refused[g04-d1-a-plural-target-by-position]
+FAILED ...::test_a_card_depending_on_another_question_is_refused[g09-d6-plural-questions-above]
+FAILED ...::test_a_card_depending_on_another_question_is_refused[g09-d6-the-other-questions]
+3 failed, 1 passed, 59 deselected in 0.69s
+```
+
+Green after the fix, over the new file and the six sheet test files: `1012 passed in 19.68s`; the round-3 accepted rows
+("items bought as gifts", "cards stored on file", "questions buyers ask") stay green.

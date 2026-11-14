@@ -229,7 +229,8 @@ _DEPENDS = re.compile(
     r"\b(?:only\s+)?(?:if|unless|once|when|after|until)\s+you\s+(?:pick|picked|choose|chose|chosen|answer|answered|rule|ruled"
     r"|select|selected|go\s+with|went\s+with)\s+\S+\s+(?:on|for|in|at|to)\s+(?:(?:the|that|your)\s+)?"
     r"(?:(?:other|previous|next|earlier|later|first|second|above|below|card|question|decision|item|collector)\b"
-    r"|(?:cards|questions|decisions|items)(?=\s+#?\d)|\d+\b)"  # a plural target names questions only when a number follows
+    # a plural target names questions only when a number, "above" or "below" follows it
+    r"|(?:cards|questions|decisions|items)(?=\s+(?:#?\d|above\b|below\b))|\d+\b)"
     # D2 depending on an answer
     r"|\b(?:depending|depends|dependent|contingent|conditional)\s+on\s+(?:your|the|how\s+you|what\s+you|which)\b[^.;]{0,40}?"
     r"\b(?:answer|answered|ruling|ruled|pick|picked|choice|chose|choose|decision|decide)\b"
@@ -242,8 +243,8 @@ _DEPENDS = re.compile(
     # D5 a bare dashed collector reference
     r"|(?<![\w-])\d{3,}-\d{1,2}(?![\w-])"
     # D6 the other question by position
-    r"|\bthe\s+(?:other|previous|next|earlier|later|first|second|last)\s+(?:card|question|decision|collector\s+item)\b"
-    r"|\b(?:card|question|decision)\s+(?:above|below)\b", re.IGNORECASE)
+    r"|\bthe\s+(?:other|previous|next|earlier|later|first|second|last)\s+(?:cards?|questions?|decisions?|collector\s+items?)\b"
+    r"|\b(?:cards?|questions?|decisions?)\s+(?:above|below)\b", re.IGNORECASE)
 # Axis: a collector number written as a PR (#N, PR N) names a pull request, not a question.
 _AS_PR = re.compile(r"(?:#|\bPR\s)$", re.IGNORECASE)
 
