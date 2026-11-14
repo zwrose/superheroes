@@ -24,8 +24,11 @@ import stack_linear as sl  # noqa: E402
 
 # pinned condition: every fixture git call ignores the user's and the system's git config and passes its
 # commit identity inline, so a host whose global config rewrites hooks, signing or default branches
-# cannot change the repos built here.
-_GIT_ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+# cannot change the repos built here. Inherited GIT_* variables (GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE
+# and the rest) are dropped first: git honours them over cwd, so a test run from inside another git
+# operation would otherwise point these fixture calls at that repository.
+_GIT_ENV = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+_GIT_ENV.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 _ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
 
 REPO = "o/r"
@@ -1154,6 +1157,24 @@ def test_prove_the_fixed_above_grammar_is_imported_when_the_check_runs_not_at_lo
 # The recipe's --no-rebase-merges flag.
 # ---------------------------------------------------------------------------------------------
 
+_MERGE_TRAIN = os.path.join(os.path.dirname(_LIB), "skills", "showrunner", "reference", "merge-train.md")
+
+
+def _recipe_rebase_flags():
+    """The flags the shipped recipe's straightening rebases pass, read from merge-train.md § Merging a
+    stack, item 4 (c): the words between `git rebase` and `--onto` in each of its two rebase commands."""
+    with open(_MERGE_TRAIN, encoding="utf-8") as fh:
+        text = fh.read()
+    start = text.index("(c) **Rebase on pinned shas.**")
+    end = text.index("(d) **A rebase conflict**", start)
+    step = " ".join(text[start:end].split())
+    commands = re.findall(r"`(git rebase [^`]*)`", step)
+    assert len(commands) == 2, commands
+    flags = [cmd.split("--onto", 1)[0].split()[2:] for cmd in commands]
+    assert flags[0] == flags[1], flags
+    return flags[0]
+
+
 def test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit(tmp_path):
     repo = tmp_path / "flag"
     repo.mkdir()
@@ -1182,8 +1203,8 @@ def test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_mer
                        bodies={101: ""}, run=_GitRun(), today=TODAY)
     _assert_not_proven(refused, "merge-commit-remains")
 
-    # the recipe's command with the flag: no merge commit, and prove proves
-    _git(repo, "rebase", "-q", "--no-rebase-merges", "--onto", base, base, vetted)
+    # the recipe's command as shipped (its flags read from merge-train.md): no merge commit, and prove proves
+    _git(repo, "rebase", "-q", *_recipe_rebase_flags(), "--onto", base, base, vetted)
     flat = _head(repo)
     _git(repo, "checkout", "-q", "main")
     assert flat != kept
