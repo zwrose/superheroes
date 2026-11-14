@@ -407,3 +407,20 @@ FAILED ...::test_a_healthy_card_still_builds[ok-another-collector-number-before-
 
 Green after the fix, over the new file and the six sheet test files: `1002 passed in 19.89s`. The line numbers quoted in
 G1 to G13 above are those of the commit each entry was recorded on; the fix moved none of the guarded elements' text.
+
+## Review fix, round 2: plural targets in D1
+
+The round-1 boundary stopped D1 matching a plural target ("only if you pick b for questions 12 and 13"). D1's target now
+allows `cards?`, `questions?`, `decisions?` and `items?` before the boundary. Four refused rows guard it, written before the
+fix and red on the code before it, with the detector unedited (`-k plural` over the new test file):
+
+```
+FAILED ...::test_a_card_depending_on_another_question_is_refused[g04-d1-a-plural-question-target]
+FAILED ...::test_a_card_depending_on_another_question_is_refused[g04-d1-a-plural-card-target]
+FAILED ...::test_a_card_depending_on_another_question_is_refused[g04-d1-a-plural-decision-target]
+FAILED ...::test_a_card_depending_on_another_question_is_refused[g04-d1-a-plural-item-target]
+4 failed, 53 deselected in 0.70s
+```
+
+Green after the fix, over the new file and the six sheet test files: `1006 passed in 20.01s`; the round-1 rows
+(`itemized`, `SKU1501`, `1501b`) stay green.
