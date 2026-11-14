@@ -15,7 +15,8 @@ stack whose layers carry merge commits, so a queue base with a merge commit in a
 below the top is refused `stack-not-linear` with no request sent, and a stack whose layers, queue
 or commits cannot be read (or whose budget ran out) is refused `linearity-unreadable`. A base with
 no queue merges as before. After a linear check on a queue base, `merge` reads the queue's free build
-slots and refuses `queue-slots-short` (fewer free slots than the layers at or below the top) or
+slots and refuses `queue-slots-short` (fewer free slots than the unmerged layers at or below the
+top), `queue-slots-never-fits` (more of those layers than the queue's build limit) or
 `queue-slots-unreadable` (the slot read failed or was ambiguous, a cloud session's GraphQL refusal
 included) before any request. The check, the PUT and the polling share the one invocation budget."""
 import argparse
@@ -56,6 +57,7 @@ REASON_STACK_NOT_LINEAR = "stack-not-linear"
 REASON_LINEARITY_UNREADABLE = "linearity-unreadable"
 REASON_QUEUE_SLOTS_SHORT = "queue-slots-short"
 REASON_QUEUE_SLOTS_UNREADABLE = "queue-slots-unreadable"
+REASON_QUEUE_SLOTS_NEVER_FITS = "queue-slots-never-fits"
 
 STATUS_PENDING = "pending"
 STATUS_MERGED = "merged"
@@ -362,8 +364,10 @@ def _poll_loop(repo, top, sha, uuid, start, poll_timeout, poll_interval, timeout
 
 
 def _layers_to_merge(membership):
-    """Return (base branch, layer numbers bottom to top) from an ok membership read, covering
-    the layers at or below the queried top, or None when the read cannot name them."""
+    """Return (base branch, layer numbers bottom to top, unmerged count) from an ok membership
+    read, covering the layers at or below the queried top, or None when the read cannot name
+    them. The unmerged count is the number of those layers whose state is not MERGED: the
+    layers the merge still has to put through the queue."""
     stack = membership.get("stack")
     queried = membership.get("queried")
     members = membership.get("members")
@@ -374,6 +378,7 @@ def _layers_to_merge(membership):
     if not (isinstance(base, str) and base and _is_int(position)):
         return None
     layers = []
+    unmerged = 0
     for member in members:
         if not isinstance(member, dict):
             return None
@@ -384,7 +389,10 @@ def _layers_to_merge(membership):
         # axis: only layers at or below the top merge — a member above it is ignored
         if member_position <= position:
             layers.append(number)
-    return base, layers
+            # axis: a merged layer needs no build slot; any other state, unreadable included, does
+            if member.get("state") != "MERGED":
+                unmerged += 1
+    return base, layers, unmerged
 
 
 def _linear_gate(*, repo, top, end, timeout, run, monotonic):
@@ -410,7 +418,7 @@ def _linear_gate(*, repo, top, end, timeout, run, monotonic):
     if named is None or not named[1]:
         return (REASON_LINEARITY_UNREADABLE,
                 "stack membership names no layer at or below pull request %d" % top)
-    base, layers = named
+    base, layers, unmerged = named
 
     # axis: the merge-queue read shares the invocation deadline
     queue = merge_queue.read(repo=repo, branch=base, timeout=timeout, deadline_at=end,
@@ -428,7 +436,10 @@ def _linear_gate(*, repo, top, end, timeout, run, monotonic):
                                      run=run, monotonic=monotonic)
     # axis: a complete linear read on a queue base asks the queue for a free build slot per layer
     if linear.get("ok") is True:
-        slots = merge_queue.slots(repo=repo, branch=base, layers=len(layers), timeout=timeout,
+        # axis: with every layer at or below the top already merged, no layer needs a build slot
+        if unmerged == 0:
+            return None
+        slots = merge_queue.slots(repo=repo, branch=base, layers=unmerged, timeout=timeout,
                                   deadline_at=end, run=run, monotonic=monotonic)
         # axis: a slots answer that is not an object with a fits key is queue-slots-unreadable
         if not isinstance(slots, dict) or "fits" not in slots:
@@ -440,6 +451,10 @@ def _linear_gate(*, repo, top, end, timeout, run, monotonic):
         # axis: a slots answer of fits false with the slots-short reason is queue-slots-short
         if slots.get("fits") is False and slots.get("reason") == merge_queue.REASON_SLOTS_SHORT:
             return (REASON_QUEUE_SLOTS_SHORT, slots.get("detail"))
+        # axis: a slots answer of fits false with slots-never-fits is queue-slots-never-fits
+        if (slots.get("fits") is False
+                and slots.get("reason") == merge_queue.REASON_SLOTS_NEVER_FITS):
+            return (REASON_QUEUE_SLOTS_NEVER_FITS, slots.get("detail"))
         # axis: any other slots answer (unreadable, bad argument, a fits that is not a bool) is
         # queue-slots-unreadable
         return (REASON_QUEUE_SLOTS_UNREADABLE, "merge queue slots: %s: %s" % (

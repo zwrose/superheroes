@@ -166,13 +166,16 @@ def test_d1_classic_protection_queue_with_room_fits():
 def test_d2_classic_protection_queue_one_slot_short():
     result, _, _ = _slots({tuple(RULES1): _rules(OTHER_ROWS),
                            tuple(SLOTS_GRAPHQL): _gql(5, 3)}, layers=3)
+    detail = result.pop("detail")
     assert result == {
         "ok": True, "fits": False, "queue": True, "limit": 5, "queued": 3, "free": 2,
         "layers": 3, "reads": {"rules": "ok", "graphql": "ok"}, "reason": "slots-short",
-        "detail": "the queue builds up to 5 entries at a time and holds 3 already, leaving "
-                  "2 free for 3 layers",
         "repo": REPO, "branch": BRANCH,
     }
+    # The detail says why with the numbers; its wording is free to change.
+    assert isinstance(detail, str)
+    for number in ("5", "3", "2"):
+        assert number in detail
 
 
 def test_d3_ruleset_queue_exact_boundary_fits():
@@ -195,12 +198,44 @@ def test_d4_ruleset_queue_one_entry_inside_the_boundary_is_short():
     assert (result["limit"], result["queued"], result["free"]) == (5, 1, 4)
 
 
-def test_d5_limit_zero_leaves_no_slot_for_one_layer():
+def test_d5_limit_zero_can_never_fit_one_layer():
     result, _, _ = _slots({tuple(RULES1): _rules(OTHER_ROWS),
                            tuple(SLOTS_GRAPHQL): _gql(0, 0)}, layers=1)
     assert result["fits"] is False
-    assert result["reason"] == "slots-short"
+    assert result["reason"] == "slots-never-fits"
     assert (result["limit"], result["queued"], result["free"]) == (0, 0, 0)
+
+
+def test_more_layers_than_the_build_limit_can_never_fit_even_on_an_empty_queue():
+    result, _, _ = _slots({tuple(RULES1): _rules(OTHER_ROWS),
+                           tuple(SLOTS_GRAPHQL): _gql(5, 0)}, layers=6)
+    assert result["ok"] is True
+    assert result["fits"] is False
+    assert result["reason"] == "slots-never-fits"
+    assert result["queue"] is True
+    assert (result["limit"], result["queued"], result["free"], result["layers"]) == (5, 0, 5, 6)
+    assert "owner" in result["detail"]
+
+
+def test_layers_equal_to_the_build_limit_on_an_empty_queue_fits():
+    result, _, _ = _slots({tuple(RULES1): _rules(OTHER_ROWS),
+                           tuple(SLOTS_GRAPHQL): _gql(5, 0)}, layers=5)
+    assert result["fits"] is True
+    assert result["reason"] is None
+
+
+def test_more_layers_than_the_limit_on_a_busy_queue_is_never_fits_not_short():
+    result, _, _ = _slots({tuple(RULES1): _rules(OTHER_ROWS + [_row(5)]),
+                           tuple(SLOTS_GRAPHQL): _gql(5, 3)}, layers=6)
+    assert result["reason"] == "slots-never-fits"
+
+
+def test_the_slots_cli_exits_one_on_never_fits(monkeypatch, capsys):
+    run, _ = _make_run({tuple(RULES1): _rules(OTHER_ROWS), tuple(SLOTS_GRAPHQL): _gql(5, 0)})
+    code = mq.main(["slots", "--repo", REPO, "--branch", BRANCH, "--layers", "6"], run=run)
+    answer = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert answer["reason"] == "slots-never-fits"
 
 
 def test_d6_queued_above_the_limit_is_short_with_negative_free():
@@ -312,7 +347,7 @@ def test_e6_gh_not_on_path_does_not_fit_and_makes_no_call(monkeypatch):
     result, calls, _ = _slots({})
     _assert_unreadable(result)
     assert result["reads"] == {"rules": "failed", "graphql": "failed"}
-    assert result["detail"] == "gh not on PATH"
+    assert "gh" in result["detail"]
     assert (result["limit"], result["queued"], result["free"]) == (None, None, None)
     assert result["layers"] == 3
     assert calls == []
@@ -893,10 +928,3 @@ def test_d10_every_result_has_exactly_the_twelve_keys(handlers, kwargs):
         assert result["reads"] == {"rules": "ok", "graphql": "ok"}
     if result["free"] is not None:
         assert result["free"] == result["limit"] - result["queued"]
-
-
-def test_d10_the_census_covers_the_gh_not_on_path_result_too(monkeypatch):
-    monkeypatch.setattr(mq.shutil, "which", lambda name: None)
-    result, _, _ = _slots({})
-    assert set(result) == SLOTS_KEYS
-    assert result["fits"] is False

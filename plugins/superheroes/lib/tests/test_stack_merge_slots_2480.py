@@ -436,3 +436,56 @@ def test_a_membership_or_queue_refusal_never_reads_slots(env):
     _assert_refusal(result, "linearity-unreadable")
     assert env.calls["slots"] == []
     assert calls == []
+
+
+# --- review round 1: merged layers, an all-merged stack, and a stack that can never fit -----------
+
+def _membership_with_states(states, numbers=(103, 104, 105)):
+    """The default membership with each member's `state` set, bottom to top."""
+    answer = _membership(numbers=numbers)
+    for member, state in zip(answer["members"], states):
+        member["state"] = state
+    return answer
+
+
+def test_a_merged_layer_needs_no_build_slot(env):
+    env.read_membership = _membership_with_states(("MERGED", "OPEN", "OPEN"))
+    result, calls, run = _go()
+    _assert_merged(result)
+    assert [c["layers"] for c in env.calls["slots"]] == [2]
+    assert [c["prs"] for c in env.calls["check_rest"]] == [[103, 104, 105]]
+
+
+def test_a_layer_whose_state_is_not_merged_or_unreadable_still_needs_a_slot(env):
+    env.read_membership = _membership_with_states(("CLOSED", None, "OPEN"))
+    _go()
+    assert [c["layers"] for c in env.calls["slots"]] == [3]
+
+
+def test_a_stack_with_every_layer_merged_needs_no_slot_and_reads_none(env):
+    env.read_membership = _membership_with_states(("MERGED", "MERGED", "MERGED"))
+    result, calls, run = _go()
+    _assert_merged(result)
+    assert env.calls["slots"] == []
+    assert calls == [PUT_ARGV]
+
+
+NEVER_FITS_DETAIL = ("the stack has 6 layers and the queue builds at most 5 entries at a time, "
+                     "so it can never fit the queue as it stands; it needs the owner: split the "
+                     "stack, or the owner's word for another way through")
+
+
+def test_slots_never_fits_is_queue_slots_never_fits_with_its_detail_and_no_request(env):
+    env.slots = _slots_answer(fits=False, reason="slots-never-fits", detail=NEVER_FITS_DETAIL,
+                              layers=6, limit=5, queued=0, free=5)
+    result, calls, run = _go()
+    _assert_refusal(result, "queue-slots-never-fits")
+    assert result["detail"] == NEVER_FITS_DETAIL
+    assert calls == []
+
+
+@pytest.mark.parametrize("fits", [True, None, 0, "false"])
+def test_slots_never_fits_with_a_fits_that_is_not_exactly_false_is_not_never_fits(env, fits):
+    env.slots = _slots_answer(fits=fits, reason="slots-never-fits", detail=NEVER_FITS_DETAIL)
+    result, calls, run = _go()
+    assert result["reason"] != "queue-slots-never-fits"

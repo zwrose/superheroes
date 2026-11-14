@@ -494,7 +494,14 @@ def _e2e_run(commits):
     with no merge_queue row, and `commits` (pull request number -> rows) for the commit pages."""
     calls = []
     pull = _fixture_text("pulls_2077.json")
-    stack = _fixture_text("stacks_2078.json")
+    # The recorded stack was read after it merged, so its members read MERGED; the gate counts
+    # only unmerged layers as needing a build slot, so the stack is served as the open stack it
+    # was when it went to merge (state open, no merged_at), every other recorded field kept.
+    recorded = json.loads(_fixture_text("stacks_2078.json"))
+    for member in recorded["pull_requests"]:
+        member["state"] = "open"
+        member["merged_at"] = None
+    stack = json.dumps(recorded)
     refused = _proc(_fixture_text("graphql_refused.stdout"), returncode=1,
                     stderr=_fixture_text("graphql_refused.stderr"))
     pages = {

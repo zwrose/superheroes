@@ -221,17 +221,20 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    drops the layers above it (GitHub documents that all pull requests above a removed one are removed
    too). Immediately before the command, after item 3's re-read, run `python3 -B <plugin
    root>/lib/merge_queue.py slots --repo <owner/name> --branch <the stack's baseRefName> --layers
-   <the number of layers the sheet lists>`. Exit 0 → merge. `slots-short` → hold the stack: do not
+   <the number of the sheet's layers not yet merged>`. Exit 0 → merge. `slots-short` → hold the stack: do not
    queue it, say why (the result's `detail`: the limit, the entries already queued, the free count
    and the layer count), and while it waits queue no single pull request onto that base, so the
-   slots drain; re-run `slots` when the queue's entries have merged. `slots-unreadable` → hold the
+   slots drain; re-run `slots` when the queue's entries have merged. `slots-never-fits` → the
+   stack has more layers than the queue's build limit, so no wait ever makes room: hold it, never
+   retry or queue it, and take it to the owner with the `detail` (split the stack, or the owner's
+   word for another way through). `slots-unreadable` → hold the
    stack and report the `detail`; never queue on a read that failed. Any other non-zero exit
    (`bad-argument`) is not merged either, and the result's `reason` is reported. The check runs on
    every base (a base with no queue answers exit 0 with `queue: false`), so the advisor never has
    to decide first whether the base has a queue. The stack's word is unchanged by a hold: the merge
    goes ahead once `slots` exits 0, after item 3's re-read again. In a cloud session
-   `stack_merge.py merge` makes this check itself (it refuses `queue-slots-short` and
-   `queue-slots-unreadable`), so a cloud advisor hands a queue-base stack to a seat that can read
+   `stack_merge.py merge` makes this check itself (it refuses `queue-slots-short`,
+   `queue-slots-never-fits` and `queue-slots-unreadable`), so a cloud advisor hands a queue-base stack to a seat that can read
    GraphQL.
 
    In a cloud session the equivalent is `python3 -B <plugin-root>/lib/stack_merge.py merge --repo

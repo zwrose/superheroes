@@ -15,7 +15,8 @@ paginate flag, whose link URLs the cloud proxy refuses.
 for every layer of a stack? It answers `fits: true` only when both reads succeeded and either
 both say there is no queue, or GraphQL gives a readable limit and entry count, every rules
 `merge_queue` row carries the same limit, and `limit - queued >= layers`. Every other outcome,
-an unreadable one included, answers `fits: false`."""
+an unreadable one included, answers `fits: false`. A stack with more layers than the limit can
+never fit, so it answers `slots-never-fits`, a hold that waiting never clears."""
 import argparse
 import json
 import math
@@ -39,6 +40,7 @@ MAX_DETAIL = 500
 REASON_BAD_ARGUMENT = "bad-argument"
 REASON_SLOTS_SHORT = "slots-short"
 REASON_SLOTS_UNREADABLE = "slots-unreadable"
+REASON_SLOTS_NEVER_FITS = "slots-never-fits"
 
 SOURCE_RULES = "rules"
 SOURCE_GRAPHQL = "graphql"
@@ -505,6 +507,15 @@ def slots(*, repo, branch, layers, timeout=GH_TIMEOUT, deadline_at=None, run=Non
         return unreadable(rules_detail or
                           "rules max_entries_to_build %s differs from graphql "
                           "maximumEntriesToBuild %s" % (rules_limit, limit))
+
+    # axis: more layers than the build limit can never fit, however far the queue drains
+    if layers > limit:
+        return _slots_result(
+            repo, branch, layers, queue=queue, limit=limit, queued=queued, free=free,
+            reads=reads, reason=REASON_SLOTS_NEVER_FITS,
+            detail="the stack has %d layers and the queue builds at most %d entries at a time, "
+                   "so it can never fit the queue as it stands; it needs the owner: split the "
+                   "stack, or the owner's word for another way through" % (layers, limit))
 
     # axis: fewer free build slots than layers — the stack does not fit
     if free < layers:

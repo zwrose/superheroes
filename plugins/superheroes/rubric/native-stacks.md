@@ -267,7 +267,9 @@ recipe is `skills/showrunner/reference/merge-train.md` § Merging a stack, item 
 queue keeps the merge-commit path. A queue also drops a stack's upper layers when it has no free
 build slot for them, so the advisor queues a stack only when the queue has a free build slot for
 every layer (`skills/showrunner/reference/merge-train.md` § Merging a stack, item 5) and recovers a
-layer the queue removes as item 9 says.
+layer the queue removes as item 9 says. A stack with more unmerged layers than the queue's build
+limit can never fit, so it is held and goes to the owner; it never merges through the queue as it
+stands.
 
 **One command merges the stack; never one PR at a time.**
 
@@ -282,7 +284,8 @@ merged, and a queued stack is not atomic. Resume a `poll-timeout` with
 the `uuid` the result carries. `stack_merge.py merge` refuses `stack-not-linear` (the base has a merge
 queue, or the queue read failed, and a layer up to the top carries a merge commit) and
 `linearity-unreadable` (the layers cannot be read) before any request to GitHub. On a queue base it
-then refuses `queue-slots-short` (fewer free build slots than layers) or `queue-slots-unreadable`
+then refuses `queue-slots-short` (fewer free build slots than unmerged layers),
+`queue-slots-never-fits` (more unmerged layers than the build limit) or `queue-slots-unreadable`
 (the slot read failed, a GraphQL refusal included) before any request.
 
 **A test never pins a layer's commit.** A squash merge leaves every layer's head unreachable from

@@ -897,6 +897,12 @@ FAILED plugins/superheroes/lib/tests/test_merge_queue_slots_2480.py::test_e20_ru
 
 ## S9 — fewer free build slots than layers is slots-short
 
+**Later boundary (review round 1).** The review found that this guard alone holds a stack with more
+layers than the queue's build limit forever, with a reason that says to wait. A guard placed before
+S9 now answers `slots-never-fits` for `layers > limit`, so S9 governs only a stack that fits the
+limit; `test_d5` moved to the new guard (limit 0 can never fit one layer). The new guard's proof is
+in `i2480_review_r1.md`. The captures below are from before that guard existed.
+
 **neutralization:** `if free < layers:` → `if False:  # bite-proof` (the short queue falls through to the fit answer).
 
 **red** (`-k "test_d2 or test_d4 or test_d5 or test_d6 or test_e22_rules_failed_and_graphql_queue_short or test_d9_cli_short"`; the 1 pass is the `test_e22_...short` test, which expects an unreadable answer either way):
