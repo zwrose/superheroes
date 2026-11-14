@@ -347,11 +347,16 @@ def _shape(text, expect_items):
 
 def _mask_path_spans(text):
     """Blank (same length) every path span: a maximal run of ``[A-Za-z0-9_.~/-]`` holding a ``/``
-    or ending in a known extension. Only the run is blanked, never the whole whitespace token."""
+    or ending in a known extension once its sentence-final periods are set aside (``budget2.md.``).
+    Only the run is blanked, never the whole whitespace token."""
     def blank(m):
         run = m.group(0)
-        if "/" in run or run.lower().endswith(EXTENSIONS):
+        if "/" in run:
             return " " * len(run)
+        # axis: a filename followed by a sentence period is still a path span — see bite-proof record i2452_order_lint
+        core = run.rstrip(".")
+        if core.lower().endswith(EXTENSIONS):
+            return " " * len(core) + run[len(core):]
         return run
     return _PATH_RUN.sub(blank, text)
 

@@ -53,6 +53,15 @@ def test_e1_budget_word_only_inside_a_path_is_missing(tmp_path, cite, files):
     assert _tokens(r) == [OL.TOKEN_BUDGET_MISSING]
 
 
+# E1, sentence-final: a filename that ends a sentence keeps its period outside the extension test
+@pytest.mark.parametrize("cite", ["budget2.md.", "budget2.md..."])
+def test_e1_a_sentence_final_filename_is_still_a_path(tmp_path, cite):
+    # axis: a filename followed by a sentence period is still a path span — see bite-proof record i2452_order_lint
+    root = _repo(tmp_path)
+    r = OL.check_text("# WO\n\nSee %s\n" % cite, repo_root=root)
+    assert _tokens(r) == [OL.TOKEN_BUDGET_MISSING]
+
+
 # E2: a real budget line beside a path
 def test_e2_real_budget_line_beside_a_path_passes(tmp_path):
     root = _repo(tmp_path)
