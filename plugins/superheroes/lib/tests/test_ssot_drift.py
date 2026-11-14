@@ -4267,8 +4267,7 @@ _FINDINGS_EXAMPLE_HAND_LITERALS = (
 # Enumerated emitting sites — one line per site when adding a new emitter.
 _REVIEW_FINDINGS_EXAMPLE_EMITTING_SITES = (
     ("C1", "lib/engine_dispatch.py", "_dispatch_review_impl", "review_findings_schema.example_prompt_block"),
-    ("C2a", "lib/round_orders.py", "_stdout_payload_example", "review_findings_schema.example_findings_object"),
-    ("C2b", "lib/round_orders.py", "_panel_stdout_delivery_text", "review_findings_schema.example_prompt_block"),
+    ("C2b","lib/round_orders.py", "_panel_stdout_delivery_text", "review_findings_schema.example_prompt_block"),
 )
 
 
