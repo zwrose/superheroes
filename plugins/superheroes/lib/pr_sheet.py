@@ -121,6 +121,15 @@ knows and no others. It recognizes three shapes, each ending in a number: "decis
 "list item"), "item 12 on your list" (also in or from, the list or the collector), and "collector" followed by a hash and
 the number, or by "number" or "entry" and the number. A card that carries its own options is never scanned.
 
+A card whose option or recommendation text depends on another question is refused with `dependent-question`: ask the two as one
+card whose options name each combination, or hold the card until the other is ruled and ask it then. This is a best-effort scan
+over each card's option labels and consequences and its recommendation's text and reason (never its question or its context),
+recognizing: a choice made on another card or item ("only if you pick b on ..."), "depending on your answer" or "the ruling ...",
+"the same choice as ...", a collector, decision or list item, or a card or question, named by number, a bare dashed reference
+such as 1435-1, "the other card" or "the other question", and the number of another collector item on the same sheet unless it
+is written as a PR (#N, PR N). A card's own collector number is not another question. On a card with no options, text the
+list-item pointer check already refuses is reported by that check alone.
+
 A spec PR has no review record (review-crew never reviews a spec), so its sheet is built from the spec's own artifacts, chosen
 only by the input's spec key: an input without it still needs --record, so a code PR missing its record still refuses. The
 checks record (<folder>/checks-record.md) gives the reviewer (its - Seat: line's family and - Same family: line) and the rounds
@@ -214,6 +223,30 @@ _STORE_KEYS = ("answers", "verdict", "walk")
 _POINTER = re.compile(r"\b(?:decision|collector|list)\s+item\s+#?\d+"
                       r"|\bitem\s+#?\d+\s+(?:on|in|from)\s+(?:your|the)\s+(?:list|collector)\b"
                       r"|\bcollector\s+(?:#\d+|(?:number|entry)\s+#?\d+)", re.IGNORECASE)
+# Axis: option or recommendation text that conditions on, or names, another question; six wordings (D1-D6), the group "numbered" being D4.
+_DEPENDS = re.compile(
+    # D1 a choice made somewhere else
+    r"\b(?:only\s+)?(?:if|unless|once|when|after|until)\s+you\s+(?:pick|picked|choose|chose|chosen|answer|answered|rule|ruled"
+    r"|select|selected|go\s+with|went\s+with)\s+\S+\s+(?:on|for|in|at|to)\s+(?:(?:the|that|your)\s+)?"
+    r"(?:(?:other|previous|next|earlier|later|first|second|above|below|card|question|decision|item|collector)\b"
+    # a plural target names questions only when a number, "above" or "below" follows it
+    r"|(?:cards|questions|decisions|items)(?=\s+(?:#?\d|above\b|below\b))|\d+\b)"
+    # D2 depending on an answer
+    r"|\b(?:depending|depends|dependent|contingent|conditional)\s+on\s+(?:your|the|how\s+you|what\s+you|which)\b[^.;]{0,40}?"
+    r"\b(?:answer|answered|ruling|ruled|pick|picked|choice|chose|choose|decision|decide)\b"
+    # D3 the same answer as another
+    r"|\b(?:same|matching)\s+(?:choice|answer|pick|option|letter|ruling)\s+(?:as|you\s+(?:gave|made|picked|chose))\b"
+    r"|\bwhichever\s+(?:option\s+)?you\s+(?:pick|picked|choose|chose)\s+(?:on|for|in|at)\b"
+    # D4 a question named by number
+    r"|(?P<numbered>\b(?:collector|decision|list)\s+item\s+#?\d+(?:-\d+)?\b|\bcollector\s+(?:#\d+|(?:number|entry)\s+#?\d+)"
+    r"|\b(?:card|question)\s+#?\d+(?:-\d+)?\b|\b(?:if|unless|once|when)\s+item\s+#?\d+(?:-\d+)?\s+(?:is|was|gets|goes|lands|stays)\b)"
+    # D5 a bare dashed collector reference
+    r"|(?<![\w-])\d{3,}-\d{1,2}(?![\w-])"
+    # D6 the other question by position
+    r"|\bthe\s+(?:other|previous|next|earlier|later|first|second|last)\s+(?:cards?|questions?|decisions?|collector\s+items?)\b"
+    r"|\b(?:cards?|questions?|decisions?)\s+(?:above|below)\b", re.IGNORECASE)
+# Axis: a collector number written as a PR (#N, PR N) names a pull request, not a question.
+_AS_PR = re.compile(r"(?:#|\bPR\s)$", re.IGNORECASE)
 
 
 def _shape(d, inferred=()):
@@ -896,6 +929,36 @@ def _shown(card):
     return texts + [card["recommendation"][k] for k in ("text", "reason") if k in card.get("recommendation", {})]
 
 
+def _dependencies(card, own, numbers):
+    """(field, found) for each place a card's option or recommendation text depends on another question, in field then match order.
+
+    own is the card's own collector number (None for any other card); numbers is every collector number on the sheet."""
+    rec = card.get("recommendation") or {}
+    fields = [(f"option {o['id']}", o[k]) for o in card["options"] for k in ("label", "consequence")]
+    fields += [("recommendation", rec[k]) for k in ("text", "reason") if k in rec]
+    others = sorted((n for n in numbers if n != own), reverse=True)
+    # Axis: another collector number on the sheet, written bare (a whole token: not part of a longer number, a word or
+    # an identifier such as SKU1501, and not dashed to another number); D7.
+    bare = re.compile(r"(?<!\w)(?<!\d-)(?:" + "|".join(str(n) for n in others) + r")(?!\w)(?!-\d)") if others else None
+    found_in = []
+    for field, text in fields:
+        # Axis: on a card with no options, text the list-item pointer check already refuses (a _DEPENDS span overlapping a _POINTER span) is left to that check.
+        pointers = [] if card["options"] else [(p.start(), p.end()) for p in _POINTER.finditer(text)]
+        for hit in _DEPENDS.finditer(text):
+            if any(hit.start() < end and start < hit.end() for start, end in pointers):
+                continue
+            if hit.group("numbered") and own is not None:
+                digits = re.search(r"(\d+)(-\d+)?", hit.group(0))
+                # Axis: a card's own collector number, written without a dash part, is not another question; D8.
+                if int(digits.group(1)) == own and not digits.group(2) and not re.match(r"-\d", text[hit.end():]):
+                    continue
+            found_in.append((field, hit.group(0)))
+        if bare is not None:
+            # Axis: a number written as a PR (#N, PR N) names a pull request, not a collector item; the exemption of D7.
+            found_in.extend((field, hit.group(0)) for hit in bare.finditer(text) if not _AS_PR.search(text[:hit.start()]))
+    return found_in
+
+
 def _walk(walk, place):
     """The walk as the sheet carries it; place(path) is a picture's sheet src, or None when it cannot be copied."""
     def picture(pic):
@@ -1270,7 +1333,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
     by_pr = {r["pr"]: r for r in recs}
     recs = [by_pr[n] for n in allowed] if stack else recs
     top, tag = recs[-1], (lambda r: f"#{r['pr']}: " if stack else "")
-    cards, decided_for_you, places = [], [], []
+    cards, decided_for_you, places, owners = [], [], [], []  # owners: each card's own collector number, None for any other card
     for r in recs:
         for n, f in enumerate(r["findings"]):
             # axis: a kept left-for-owner repeat adds no card; the earlier finding holds it — see bite-proof record c1l8_wo_b_record_repeats
@@ -1291,16 +1354,19 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                                 _section(words["ifLeft"], "paragraph", call.get("ifLeft", f["consequence"]))],
                                options, call.get("recommendation")))
             places.append("leftovers " + next(k for k in _lookups(kind, r["pr"], f) if k in leftovers))
+            owners.append(None)
     if breakdown is not None:
         filed = breakdown["body"] + breakdown["artifact"]
         cards.append(_card("b-", number, "breakdown", words["breakdownKind"], _fill(words["breakdownTitle"], count=len(breakdown["body"])) if len(breakdown["body"]) != 1 else words["breakdownTitleOne"],
                            [_section(words["ifLeft"], "bullets", filed)], [], None))
         places.append(None)
+        owners.append(None)
     for it in advisor.get("items", []):
         block = "bullets" if isinstance(it["ifLeft"], list) else "paragraph"
         cards.append(_card("i-", number, it["id"], it["kind"], it["title"], [_section(words["ifLeft"], block, it["ifLeft"])],
                            _options(it["options"], words, False), it.get("recommendation")))
         places.append(f"items {it['id']}")
+        owners.append(None)
     for it in advisor.get("collectorItems", []):
         rec = it["recommendation"]
         cards.append(_card("k-", number, it["number"], _fill(words["collectorKind"], number=it["number"]), it["title"],
@@ -1311,6 +1377,7 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
                            {"text": _fill(words["collectorRecommendation"], letter=rec["optionId"], text=rec["text"]),
                             "reason": rec["reason"], "optionId": rec["optionId"]}))
         places.append(f"collectorItems {it['number']}")
+        owners.append(it["number"])
     spec = advisor.get("closesSpec")
     if spec:
         context = [_section(words["ifLeft"], "paragraph", words["closureIfLeft"]),
@@ -1318,11 +1385,17 @@ def build(records, advisor, words, place=None, previous=None, bodies=None, spec_
         cards.append(_card("c-", number, spec["spec"], words["closureKind"],
                            _fill(words["closureQuestion"], spec=spec["spec"]), context, [], None))
         places.append("closesSpec")
+        owners.append(None)
     pointing = [f"{where}: card {card['question']!r} sends the owner to a list item ({found.group(0)!r}) instead of carrying that "
                 "decision's options; put the decision on this sheet as a collectorItems card, or give this card its own options"
                 for where, card in zip(places, cards) if where is not None and not card["options"] for text in _shown(card) for found in _POINTER.finditer(text)]
-    if pointing:
-        raise Refusal(pointing)
+    numbers = {it["number"] for it in advisor.get("collectorItems", [])}
+    dependent = [f"dependent-question: {where or 'breakdown'}: card {card['question']!r} {field} depends on another question ({found!r}); "
+                 "a question must be answerable on its own: ask the two as one card whose options name each combination, "
+                 "or hold this card until the other question is ruled and ask it then"
+                 for where, card, own in zip(places, cards, owners) for field, found in _dependencies(card, own, numbers)]
+    if pointing or dependent:
+        raise Refusal(pointing + dependent)
     if len({c["id"] for c in [*cards, *decided_for_you]}) != len(cards) + len(decided_for_you):
         raise Refusal(["two cards would share an id: the same finding or item appears twice"])
     reviewers, caught, craft, decided, history = [], [], [], [], []
