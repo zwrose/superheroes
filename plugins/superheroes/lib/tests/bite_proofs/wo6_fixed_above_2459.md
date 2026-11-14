@@ -269,7 +269,13 @@ FAILED plugins/superheroes/lib/tests/test_stack_linear.py::test_recipe_rebase_fl
 
 git in this environment is 2.43.0 and runs both `rebase.rebaseMerges` and `--no-rebase-merges`.
 
-**The fixture's git environment (same fix commit):** `_GIT_ENV` now drops every inherited `GIT_*` variable before setting `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`. That is fixture hygiene, not a detector, and it carries no separate bite-proof: running the file under an inherited `GIT_DIR` to show the difference stops before any test runs, because the repository's own pytest source guard runs `git rev-parse --show-toplevel` and fails under that `GIT_DIR` (`source_guard: git rev-parse --show-toplevel failed (exit 128): fatal: this operation must be run in a work tree`).
+**The fixture's git environment.** `_GIT_ENV` is built by `_fixture_git_env(os.environ)`, which drops every inherited `GIT_*` variable before setting `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`. Its detector is `test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_untouched`: under an inherited `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` pointing at a bait bare repository, the env carries none of them, and a real `git init`, `add` and `commit` built with it leave the bait's files unchanged. (Running the whole file under an inherited `GIT_DIR` is not possible: the repository's own pytest source guard runs `git rev-parse --show-toplevel` and fails under it first.) Re-run by the orchestrator in a detached probe worktree at `a529e339`.
+
+**neutralization (in `_fixture_git_env`, `test_stack_linear.py` line 31):** `if not key.startswith("GIT_")` → `if True`.
+
+**red** (`-k "fixture_git_env"`, `--tb=line`): the inherited selectors survive into the env — `AssertionError: assert not ({'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE'} & {…})` at `test_stack_linear.py:1172` (the right-hand set is the env's key names, elided here); `FAILED …::test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_untouched`; `1 failed, 218 deselected`.
+
+**restore:** the inverse edit; `git status` in the probe tree printed nothing. **green** (whole file): `219 passed`.
 
 ## B7 — a `--pr-body` file that cannot be read as UTF-8 is `bad-argument`
 
