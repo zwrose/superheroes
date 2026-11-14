@@ -18,7 +18,10 @@ from test_engine_dispatch_write import (  # noqa: F401
 )
 from test_size_tripwire_fold_1582 import _head, _implementing_runner, _opened_record
 
-_GIT_ENV = {**os.environ, "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
+# inherited GIT_* routing (GIT_INDEX_FILE, GIT_DIR, GIT_WORK_TREE...) captured at collection would send a
+# fixture's git call to the caller's repository, so none of it is kept; the two pins are the only GIT_* kept
+_GIT_ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 
 
 def _git(cwd, *args):

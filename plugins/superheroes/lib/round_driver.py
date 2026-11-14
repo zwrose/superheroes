@@ -62,6 +62,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import cli_contract  # noqa: E402
 import audits  # noqa: E402
 import break_it  # noqa: E402
+import break_it_layers  # noqa: E402
 import calibration_read  # noqa: E402
 import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
@@ -103,6 +104,7 @@ import seat_map_receipts  # noqa: E402
 import session_contract  # noqa: E402
 import session_mode  # noqa: E402
 import slicing  # noqa: E402
+import stack_check  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
 from finding_identity import finding_identity, finding_label, normalize_title, place_pair  # noqa: E402
@@ -10893,6 +10895,49 @@ def _never_sent_outcome(state, key, entry, ledger_by_key):
     return outcomes[3]
 
 
+def _read_stack_membership(pr, repo):
+    """The seam tests replace: the reviewed PR's stack membership as ``stack_check.read_membership`` returns it."""
+    return stack_check.read_membership(pr=pr, repo=repo)
+
+
+_OWNER_NAME = re.compile(r"[^/\s]+/[^/\s]+")
+
+
+def _stack_layers_above(session_dir):
+    """``(layers, failure)``: the stack layers above the reviewed PR, lowest first, each ``{"position", "number",
+    "headRefName", "headRefOid"}``; ``(None, None)`` when the session is not a layer of a stack; ``(None, reason)``
+    when the stack could not be read."""
+    meta = _session_meta(session_dir) if session_dir else {}
+    pr, repo = meta.get("pr"), meta.get("repo")
+    # axis: only a PR session with a positive int pr and an owner/name repo can be a stack layer; the mode is read through the one resolver (session_mode.resolve) and an unresolved mode is not a PR session — see bite-proof records wo_a_2463_stack_layers and wo_c_2463_mode_resolver
+    mode = session_mode.resolve(meta, {})
+    if (not mode["resolved"] or mode["mode"] != session_mode.MODE_PR
+            or not isinstance(pr, int) or isinstance(pr, bool) or pr <= 0
+            or not isinstance(repo, str) or not _OWNER_NAME.fullmatch(repo)):
+        return None, None
+    try:
+        result = _read_stack_membership(pr, repo)
+    except Exception:
+        return None, "stack-read-error"
+    if not isinstance(result, dict):
+        return None, "stack-unreadable"
+    if not result.get("ok"):
+        # axis: not-linked is the only refusal that means "not a stack"; every other refusal is a failed read — see bite-proof record wo_a_2463_stack_layers
+        if result.get("reason") == stack_check.REASON_NOT_LINKED:
+            return None, None
+        return None, str(result.get("reason") or "") or "stack-unreadable"
+    queried, members = result.get("queried"), result.get("members")
+    if (not isinstance(queried, dict) or not isinstance(queried.get("position"), int)
+            or isinstance(queried.get("position"), bool) or not isinstance(members, list)):
+        return None, "stack-unreadable"
+    # axis: only members above the reviewed PR's position are searched, lowest first — see bite-proof record wo_a_2463_stack_layers
+    above = sorted((m for m in members if isinstance(m, dict) and isinstance(m.get("position"), int)
+                    and not isinstance(m.get("position"), bool) and m["position"] > queried["position"]),
+                   key=lambda m: m["position"])
+    return [{"position": m["position"], "number": m.get("number"), "headRefName": m.get("headRefName"),
+             "headRefOid": m.get("headRefOid")} for m in above], None
+
+
 def _break_it_kept_step(state, config, session_dir=None):
     """Before certifying: each fixed break-it finding's test must be a regular tracked file in the
     final diff with the exact bytes the loop ran, and pass at the final head. Returns True when it
@@ -10963,6 +11008,7 @@ def _break_it_kept_step(state, config, session_dir=None):
     # axis: the kept check reads the session head through the one resolver, meta.json first, so a round-1 session whose head only meta.json records is never headless — see bite-proof record wo_1_2393_kept_head
     head = _session_head(session_dir, config)
     rows, failed = list(exempt_rows), []
+    stack_read = None  # the stack membership, read at most once per step
     for key in list(latest) + [k for k in skipped if k not in latest]:
         run = latest.get(key)
         if run is None:
@@ -11009,14 +11055,34 @@ def _break_it_kept_step(state, config, session_dir=None):
             rows.append(row)
             failed.append(row)
             continue
-        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head,
-                                  _restored_run_record(state, key, run, latest_round[key], entry),
-                                  interpreter=break_it.resolve_interpreter(config))
+        record = _restored_run_record(state, key, run, latest_round[key], entry)
+        interpreter = break_it.resolve_interpreter(config)
+        got = break_it.check_kept(config.get("repoRoot"), config.get("baseRef"), head, record,
+                                  interpreter=interpreter)
         row = {"findingKey": key, "path": got.get("path"), "outcome": got.get("outcome"),
                "reason": got.get("reason"), "run": got.get("run")}
+        # axis: only a not-in-head miss searches the layers above; every other outcome keeps its row exactly — see bite-proof record wo_a_2463_stack_layers
+        if got.get("outcome") == break_it.KEPT_MISSING and got.get("reason") == "not-in-head":
+            if stack_read is None:
+                stack_read = _stack_layers_above(session_dir)
+            layers, stack_failure = stack_read
+            if stack_failure:
+                row["stack"] = {"read": "failed", "reason": stack_failure}
+            elif layers is not None:
+                found = break_it_layers.check_kept_in_layers(config.get("repoRoot"), config.get("baseRef"), layers,
+                                                             record, interpreter=interpreter)
+                if found["read"] != "ok":
+                    row["stack"] = {"read": "failed", "reason": found["reason"], "searched": found["searched"]}
+                # axis: the step credits a copy found in a higher layer, naming the layer and commit, and does not park it — see bite-proof record wo_a_2463_stack_layers
+                elif found["foundIn"]:
+                    row = {"findingKey": key, "path": got.get("path"), "outcome": break_it.KEPT,
+                           "reason": "in-higher-layer", "run": found["result"]["run"],
+                           "stack": {"read": "ok", "foundIn": found["foundIn"], "searched": found["searched"]}}
+                else:
+                    row["stack"] = {"read": "ok", "foundIn": None, "searched": found["searched"]}
         rows.append(row)
         # axis: a fixed break-it finding whose test is not kept parks, it never certifies
-        if got.get("outcome") != break_it.KEPT:
+        if row.get("outcome") != break_it.KEPT:
             failed.append(row)
     _record_round(state, "breakItKept", rows)
     unchecked = sum(1 for r in rows if r["outcome"] == "not-required")
@@ -11028,9 +11094,24 @@ def _break_it_kept_step(state, config, session_dir=None):
                  unchecked, ruled_out))
     if failed:
         why = failed[0]["reason"] or (failed[0].get("run") or {}).get("output")
+        stack = failed[0].get("stack")
+        # axis: a park whose first failed row read the stack unsuccessfully says so after the existing text — see bite-proof record wo_a_2463_stack_layers
+        suffix = ""
+        if isinstance(stack, dict) and stack.get("read") == "failed":
+            suffix = "; the stack could not be read: %s" % stack.get("reason")
+        elif isinstance(stack, dict) and stack.get("read") == "ok":
+            # axis: a park whose first failed row read the stack and found a layer that held the test but did not pass or could not run it names that layer and why, so the owner is told the test is there, not that it is gone — see bite-proof record wo_e_2463_layer_dependencies
+            held = next((s for s in stack.get("searched") or [] if isinstance(s, dict)
+                         and (s.get("outcome") == break_it.KEPT_FAILING
+                              or (s.get("outcome") == break_it_layers.NOT_RUN and s.get("held") is True))), None)
+            if held:
+                suffix = ("; found in stack layer %s (PR %s) but it %s there: %s"
+                          % (held.get("position"), held.get("pr"),
+                             "did not pass" if held.get("outcome") == break_it.KEPT_FAILING else "could not run",
+                             held.get("reason") or held.get("runOutcome") or "failed"))
         _park_cannot_certify(
-            state, "break-it test not kept: %s (%s%s)"
-            % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else ""))
+            state, "break-it test not kept: %s (%s%s)%s"
+            % (failed[0]["path"], failed[0]["outcome"], ": %s" % str(why)[-200:] if why else "", suffix))
         return True
     return False
 

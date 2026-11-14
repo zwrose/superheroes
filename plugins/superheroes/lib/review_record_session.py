@@ -1564,6 +1564,8 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     if pr_body_line is not None:
         checked.append(pr_body_line)
     checked += _verify_via_checked(rounds)
+    # axis: a break-it test kept in a higher stack layer, or a stack that could not be read, is named in the record — see bite-proof record wo_a_2463_stack_layers
+    checked += _break_it_stack_checked(rounds)
     checked += _malformed_test_checked(rounds)
     if abandoned is not None:
         checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
@@ -1654,6 +1656,47 @@ def _verify_via_checked(rounds):
                        "verify command (%s)" % (n, via.get("workflow"), via.get("runId"),
                                                 str(via.get("headSha"))[:7], via.get("reason")))
     return out
+
+
+def _break_it_stack_checked(rounds):
+    """One `checked` line per break-it kept row that searched the stack layers above the reviewed one."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        rows = rounds[n].get("breakItKept") if isinstance(rounds[n], dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            stack = row.get("stack") if isinstance(row, dict) else None
+            if not isinstance(stack, dict):
+                continue
+            found = stack.get("foundIn")
+            if stack.get("read") == "ok" and isinstance(found, dict):
+                out.append("Break-it test %s (round %s): kept in stack layer %s (PR %s, branch %s) at %s, "
+                           "not in the reviewed layer's head"
+                           % (row.get("path"), n, found.get("position"), found.get("pr"), found.get("branch"),
+                              str(found.get("commit"))[:7]))
+            elif stack.get("read") == "failed":
+                out.append("Break-it test %s (round %s): the stack could not be read (%s); the test reads "
+                           "not-in-head" % (row.get("path"), n, stack.get("reason")))
+            if not isinstance(found, dict) and isinstance(stack.get("searched"), list):
+                for layer in stack["searched"]:
+                    if isinstance(layer, dict):
+                        out.extend(_break_it_layer_line(row.get("path"), n, layer))
+    return out
+
+
+def _break_it_layer_line(path, n, layer):
+    """The `checked` line (as a list of zero or one) for a stack layer a break-it test search could not credit."""
+    outcome, held = layer.get("outcome"), layer.get("held")
+    where = (path, n, layer.get("position"), layer.get("pr"), str(layer.get("commit"))[:7])
+    why = layer.get("reason") or layer.get("runOutcome") or "failed"
+    # axis: a layer that held the test but did not pass or could not run it is recorded as found there and not passing, and a layer that could not be checked is never reported as holding it — see bite-proof record wo_e_2463_layer_dependencies
+    if outcome == "failing" or (outcome == "not-run" and held is True):
+        verb = "did not pass" if outcome == "failing" else "could not run"
+        return ["Break-it test %s (round %s): found in stack layer %s (PR %s) at %s but it %s there (%s); the test "
+                "reads not-in-head" % (where + (verb, why))]
+    if outcome == "not-run":
+        return ["Break-it test %s (round %s): stack layer %s (PR %s) at %s could not be checked (%s)"
+                % (where + (why,))]
+    return []
 
 
 def _malformed_test_checked(rounds):
