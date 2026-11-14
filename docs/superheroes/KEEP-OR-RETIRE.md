@@ -1394,9 +1394,10 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
 - **Start date.** 2026-09-21.
 - **Condition.** Citation-based, 45 days: receipts relying on the file's rules over its window. On
   firing, a proposal to the owner at a gardening pass.
-- **Last demonstrated benefit.** unknown.
-- **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Last demonstrated benefit.** 2026-11-09 (gardening pass 7): three stack merges relied on the
+  file's rules in the window (PRs #2359/#2360, #2376/#2378, #2390/#2391).
+- **Consumer evidence.** superheroes: the three stacks above; a consuming project: unmeasured.
+- **Decision.** keep (gardening pass 7, 2026-11-09).
 - **Notes.** capability-gap — the file exists to compensate for a model that reaches for the
   pre-native mental model; evidence observed on the Claude family.
 
@@ -1591,7 +1592,8 @@ the comparator fails toward alerting (per D1's fail-toward-alerting rule).
   plan or schema mismatch). On firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** unknown.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** folded into discovery #1376 (owner, 2026-11-09, gardening pass 7: "add this as a
+  consideration to the test pilot overhaul discovery that's filed"); keep until that discovery decides.
 - **Notes.** structural — the A1–D11 contract is load-bearing orchestration machinery; churn
   evidence observed on engine-7-class dispatches in a consuming project (the assessment record,
   C1/H2).
@@ -2246,9 +2248,11 @@ entry may later split when a pass needs a finer reading; "fewer and coarser" is 
   45 days of waves proposes retirement — the record is the launch ledger's `engine-auth` evidence. On
   firing, a proposal to the owner at a gardening pass.
 - **Last demonstrated benefit.** Wave preflight catches dead engines and channel drift before any
-  builder launches — the dispatch selftest validates configuration only, not liveness.
+  builder launches — the dispatch selftest validates configuration only, not liveness. The probe ran
+  at both the 0.47.0 and 0.48.0 adoptions and before every wave to 2026-11-09 (latest 13:00Z: claude,
+  codex and cursor pass), with no live seat failing afterwards on a cause it covers.
 - **Consumer evidence.** unmeasured.
-- **Decision.** keep-until-condition-fires.
+- **Decision.** keep (gardening pass 7, 2026-11-09).
 - **Notes.** capability-gap — detection replaces version pinning. Tag: `wave-preflight`.
 
 #### S19 — Order lint (deterministic half + semantic seat)
