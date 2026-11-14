@@ -644,7 +644,7 @@ def test_f6_a_verifier_result_for_the_superseded_attempt_is_refused(fx, tmp_path
     assert fresh["attempt"] != old["attempt"]
 
 
-@pytest.mark.parametrize("step", [RD.P_PANEL, RD.P_APPLY_FIXES])
+@pytest.mark.parametrize("step", [RD.P_PANEL, RD.P_VERIFY])
 def test_f4_the_verb_at_any_other_step_is_refused_and_leaves_the_state_alone(fx, tmp_path, step):
     session = str(fx.session)
     TRD._drive_to_phase(session, fx.config, _respond(_seats(test_role=[_attached()]), _apply_fixes(fx)), step)

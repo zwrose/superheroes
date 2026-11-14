@@ -1564,6 +1564,7 @@ def account_from_session(session_dir, extras, readers=None, raw_dir=None, abando
     if pr_body_line is not None:
         checked.append(pr_body_line)
     checked += _verify_via_checked(rounds)
+    checked += _malformed_test_checked(rounds)
     if abandoned is not None:
         checked += [ABANDONED_CHECKED % abandoned.strip(), UNFOLDED_FINDINGS_CHECKED]
     elif interrupted:
@@ -1652,6 +1653,22 @@ def _verify_via_checked(rounds):
             out.append("Verify in round %s: CI workflow %s run %s on %s passed, in place of the local "
                        "verify command (%s)" % (n, via.get("workflow"), via.get("runId"),
                                                 str(via.get("headSha"))[:7], via.get("reason")))
+    return out
+
+
+def _malformed_test_checked(rounds):
+    """One `checked` line per row of every round's `breakItMalformed`, in round order: a break-it test a seat returned
+    that does not load, dropped from its finding."""
+    out = []
+    for n in sorted((n for n in rounds if str(n).isdigit()), key=int):
+        rows = rounds[n].get("breakItMalformed") if isinstance(rounds[n], dict) else None
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            # axis: the review record names each dropped break-it test, its seat, finding and compile error — see bite-proof record wo_a_2460_break_it_unloadable
+            out.append("Break-it test dropped as malformed seat output (round %s): %s returned %s for %s:%s; it does "
+                       "not load (%s), so the finding stands without it and no commit or restore of it was asked."
+                       % (n, row.get("seat"), row.get("path"), row.get("file"), row.get("line"), row.get("error")))
     return out
 
 

@@ -2825,6 +2825,9 @@ _ALL_CHANNELS = {
     "gateGuidanceRowCarried": [{"index": 0, "title": "orphan row"}],
     "breakItRuns": [{"role": "test-role", "path": "tests/test_x.py", "outcome": "failed",
                      "findingKey": "k"}],
+    "breakItMalformed": [{"seat": "test-role", "title": "bug", "file": "tests/test_x.py", "line": 1,
+                          "path": "tests/test_x.py",
+                          "error": "IndentationError: unexpected indent (line 2)"}],
     "breakItKept": [{"findingKey": "k", "path": "tests/test_x.py", "outcome": "kept"}],
     "verifyVia": {"via": "local", "command": "make test"},
 }
