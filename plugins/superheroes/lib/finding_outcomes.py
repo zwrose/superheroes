@@ -41,8 +41,10 @@ _QUOTE_MIN = 12
 
 
 def _whole_key(key, text):
-    """True when ``key`` is in ``text`` and is not the start of a longer key (`…@L1` is not found inside `…@L12`)."""
-    return re.search(re.escape(key) + r"(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])", text) is not None
+    """True when ``key`` is in ``text`` and is neither the start nor the end of a longer key (`…@L1` is not found inside
+    `…@L12`, and `a.py::…` is not found inside `src/a.py::…`)."""
+    # axis: a key counts only with a boundary on both sides, so a shorter path's ruling is never read inside a longer path — see bite-proof record wo1_scope_ruling_2478
+    return re.search(r"(?<![A-Za-z0-9_@/.:-])" + re.escape(key) + r"(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])", text) is not None
 
 
 def _quoted_ruling_keys(text, ruling_reasons):

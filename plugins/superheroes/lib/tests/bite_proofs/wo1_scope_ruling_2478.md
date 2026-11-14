@@ -965,3 +965,30 @@ suites ran green after the restores: the nine-file suite `389 passed` (its first
 `test_layer2e_staged_ids_1272.py::test_e1_...`; both fakes were given the keyword, as the order allows, and it was re-run), and the
 `-k` suite `2392 passed, 4 skipped` (the four skips are `test_round_driver_run_verify_2133.py` lines 617, 635, 657 and 693,
 each `claude write sandbox: /proc belongs to another PID namespace ...`, sandbox-only).
+
+---
+
+## E14 — the leading key boundary: `_whole_key` (`finding_outcomes.py`), added by review session 3's fix group fg-63a9c07a50a4
+
+Axis: a ruling key counts only with a boundary on both sides, so the ruling on `a.py::…` is never read inside a code
+refutation that cites `src/a.py::…`. Typed by the build session at review-code's `apply-fixes` step; the two tests are the
+test role's break-it tests, written byte for byte.
+
+**Neutralization:** the pre-fix code is the neutralized state: `_whole_key` without the leading lookbehind
+`(?<![A-Za-z0-9_@/.:-])`.
+
+**Raw red** (the two break-it tests, before the fix):
+
+```
+E   AssertionError: assert {'verdict': '...ed index@L3'}} == {'verdict': '...ed index@L3.'}
+      Left contains 1 more item:
+      {'restsOnRuling': {'findingKey': 'a.py::unchecked index@L3'}}
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_left_boundary_breakit_2478.py::test_code_refutation_does_not_inherit_a_suffix_paths_ruling
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_key_suffix_review.py::test_code_refutation_at_a_longer_path_does_not_inherit_a_suffix_ruling
+2 failed in 0.25s
+```
+
+**Restore:** the fix adds the lookbehind; nothing else in `_whole_key` changed.
+**Restore receipt:** `git diff` of `finding_outcomes.py` shows only the lookbehind, the docstring and the axis line.
+
+**Raw green:** the two break-it tests plus this record's test file: `88 passed in 0.91s`.
