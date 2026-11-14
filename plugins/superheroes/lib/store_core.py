@@ -26,6 +26,7 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import calibration_paths  # noqa: E402  (sibling; stdlib-only leaf)
+import git_origin  # noqa: E402  (sibling; stdlib-only leaf)
 
 GIT_OK = "ok"
 GIT_DECLINED = "declined"        # git ran and exited non-zero — an authoritative "no"
@@ -213,6 +214,9 @@ def normalize_remote(url):
         return None
     s = url.strip()
     if not s:
+        return None
+    # axis: a file:// URL is a local transport whatever its authority names, so it has no host/path key — see bite-proof record i2452_git_origin
+    if git_origin.is_file_url(s):
         return None
     # scp-like: git@host:org/repo.git
     m = re.match(r"^[^@/]+@([^:/]+):(.+)$", s)

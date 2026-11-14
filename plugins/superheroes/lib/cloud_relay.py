@@ -227,15 +227,15 @@ def read_comment(repo, comment_id, *, env=None, run=None):
 
 def lane_repo(repo_root, *, env=None, run=None):
     """(`owner/name`, None) of the GitHub repository the `repo_root` checkout's `origin` remote names, or
-    (None, "lane-repo-unreadable") when git fails, the remote is empty or not on github.com, or the path is not
-    exactly `<owner>/<name>` of `[A-Za-z0-9._-]+` (neither part `.` or `..`)."""
+    (None, "lane-repo-unreadable") when git fails, the remote is empty, a `file://` URL, or not on github.com,
+    www.github.com or ssh.github.com, or the path is not exactly `<owner>/<name>` of `[A-Za-z0-9._-]+` (neither
+    part made only of dots). The classifier is `git_origin`; the slug keeps its case as written."""
     code, out, _ = _call(run, ["git", "-C", str(repo_root), "remote", "get-url", "origin"], _env(env), _LIST_TIMEOUT)
-    normalized = _sibling("store_core").normalize_remote(out) if code == 0 and out.strip() else None
-    parts = normalized.split("/") if isinstance(normalized, str) else []
-    if (len(parts) == 3 and parts[0] == "github.com"
-            and all(re.fullmatch(r"[A-Za-z0-9._-]+", part) and part not in (".", "..") for part in parts[1:])):
-        return "%s/%s" % (parts[1], parts[2]), None
-    return None, "lane-repo-unreadable"
+    slug = _sibling("git_origin").github_slug(out) if code == 0 and out.strip() else None
+    # axis: an origin the classifier does not read as an owner/name GitHub repository names no lane repository — see bite-proof record i2452_git_origin
+    if slug is None:
+        return None, "lane-repo-unreadable"
+    return slug, None
 
 
 def _state_path(repo_root, env):
