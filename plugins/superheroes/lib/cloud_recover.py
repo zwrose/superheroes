@@ -592,7 +592,10 @@ def _from_elsewhere(pull, repo):
     """Whether the pull request's head lives in a repository other than `repo` (a fork)."""
     head = pull.get("head")
     source = head.get("repo") if isinstance(head, dict) else None
-    return isinstance(source, dict) and isinstance(source.get("full_name"), str) and source["full_name"] != repo
+    return (
+        isinstance(source, dict) and isinstance(source.get("full_name"), str)
+        and not _sib("git_origin").same_repository(source["full_name"], repo)
+    )
 
 
 def _primary(entries, repo, premise, env, run):
