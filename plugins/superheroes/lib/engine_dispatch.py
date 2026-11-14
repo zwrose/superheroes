@@ -6674,10 +6674,6 @@ def _dispatch_review_impl(seat, *, prompt_path,
                 fed_prompt += _prompt_section_sep + engine_result_channel.review_result_contract_from_schema(
                     native_schema, delivery=delivery,
                 )
-            if delivery == engine_result_channel.RESULT_DELIVERY_ARGV:
-                fed_prompt += _prompt_section_sep + engine_adapter.REVIEW_RESULT_CONTRACT(
-                    expected_result_kind,
-                )
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
