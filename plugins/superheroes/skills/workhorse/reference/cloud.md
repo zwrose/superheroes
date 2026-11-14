@@ -117,7 +117,8 @@ branch.
 2. **Bring the layers below forward.** Run `git fetch origin <lower branch>`, merge with
    `git merge --no-ff FETCH_HEAD`, and push plainly. Never rebase and never force-push. Before
    handback, fetch again and run `git merge-base --is-ancestor FETCH_HEAD HEAD`, which confirms the
-   build holds the layer below's current head.
+   build holds the layer below's current head. The merge commits this leaves are removed by the
+   advisor at merge time when the base has a merge queue; the builder never rebases or force-pushes.
 3. **Open the pull request with the layer below's branch as its base**, through REST:
    `gh api -X POST repos/<o>/<r>/pulls -f head=<branch> -f base=<lower branch> -f title=<title> -F body=@<body.md>`,
    or through the session's GitHub tools with the same base. Check `base.ref` in the result. An

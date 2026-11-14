@@ -227,7 +227,7 @@ gh stack merge [<stack-number> | <pr-number>] --yes --squash
 ```
 
 Use `--merge`, `--rebase`, or `--merge-method` instead of `--squash` when that is what the repository
-requires.
+requires. `gh pr merge` refuses a stacked pull request, so `gh stack merge` is the merge command.
 
 Every member **up to and including** the chosen pull request is merged into the base branch in **one
 direct, atomic, all-or-nothing operation — if any pull request cannot be merged, none are**. With no
@@ -254,9 +254,17 @@ overview](https://docs.github.com/en/pull-requests/reference/stacked-pull-reques
 runs. The ancestry condition the tooling states is the one `gh stack rebase` restores: **each branch
 in the stack has the tip of the previous layer in its commit history**. A merge of the layer below
 (or of the base, at the bottom) into a layer puts that tip in its history, and the observed field
-case is that a stack whose every layer carried such merge commits merged atomically. What is known
-to break the requirement is a layer whose branch no longer descends from the tip of the layer below
-— a lower layer that moved after the layer above was last updated.
+case is that a stack whose every layer carried such merge commits merged atomically by a direct
+merge. What is known to break the requirement is a layer whose branch no longer descends from the tip
+of the layer below — a lower layer that moved after the layer above was last updated.
+
+**A base with a merge queue drops a stack whose layers carry merge commits.** A direct merge accepts
+such a stack. A merge queue does not: a squash queue rejects it as `invalid_merge_commit`, and the
+queue drops the stack. So when the stack's base has a merge queue (any method), or the queue read
+fails, the advisor straightens the stack once before the merge — every layer rebased onto the main
+commit the vetted bottom already contains, each layer's tree proved unchanged, one atomic push. The
+recipe is `skills/showrunner/reference/merge-train.md` § Merging a stack, item 4. A base with no
+queue keeps the merge-commit path.
 
 **One command merges the stack; never one PR at a time.**
 
@@ -268,7 +276,9 @@ result with its `uuid` prints before the 600-second host cap. Exit 0 means GitHu
 `merge-enqueued` (added to a merge queue), `merge-failed` and `poll-timeout` (still pending) are not
 merged, and a queued stack is not atomic. Resume a `poll-timeout` with
 `python3 -B <plugin root>/lib/stack_merge.py poll --repo <o/r> --top <n> --uuid <u> --sha <sha>`, using
-the `uuid` the result carries.
+the `uuid` the result carries. `stack_merge.py merge` refuses `stack-not-linear` (the base has a merge
+queue, or the queue read failed, and a layer up to the top carries a merge commit) and
+`linearity-unreadable` (the layers cannot be read) before any request to GitHub.
 
 **A test never pins a layer's commit.** A squash merge leaves every layer's head unreachable from
 the trunk, so a test that reads a pinned layer commit (for example `git show <layer sha>:<path>`)
@@ -305,7 +315,9 @@ to the layer's head:
   lower tip in the layer's history, which is the ancestry condition § How a stack merges states.
   Do not use `gh pr update-branch`. The REST endpoint behind it was **observed** to refuse a
   stacked pull request with a **403**. That is a field observation on a public-preview feature, not
-  a documented GitHub rule. This is how a superheroes lane brings a layer current.
+  a documented GitHub rule. This is how a superheroes lane brings a layer current. The merge commits
+  this leaves are removed once, at merge time, by the advisor's straightening when the base has a
+  merge queue (§ How a stack merges); the lane still never rebases or force-pushes.
 - **Cascading rebase** — GitHub's server-side **Rebase stack** action from a pull request in the
   stack. `gh stack checkout <n>`, then `gh stack rebase`, then `gh stack push` is GitHub's own
   named CLI equivalent, and it belongs to a **local tracked stack an operator owns end to end**,
@@ -373,7 +385,14 @@ membership.
 review. It breaks review continuity on that pull request and moves a head other layers are based
 on. This is not the **disclosed cascading rebase** of § How a stack stays current — on a lane's
 layer that means GitHub's server-side **Rebase stack** action only — and it is not `gh stack sync`
-or `gh stack rebase`/`gh stack push` on a **local tracked** stack the builder owns end to end.
+or `gh stack rebase`/`gh stack push` on a **local tracked** stack the builder owns end to end. The
+one sanctioned rewrite is the advisor's merge-time straightening of a stack for a merge-queue base:
+tree-proven, pushed once, under the owner's standing grant (`skills/showrunner/SKILL.md` duty 6). A
+builder's rewrite stays an anti-pattern.
+
+**Merging a merge-commit stack into a queue base** — merging a stack whose layers carry merge commits
+into a base that has a merge queue. The queue drops it as `invalid_merge_commit`. Straighten the
+stack first (`skills/showrunner/reference/merge-train.md` § Merging a stack, item 4).
 
 **Reading the stack's copy of a register from inside a layer** — a layer's worktree carries whatever
 the layers below it wrote, which can be a stale or amended copy. The copy that grades a child is
