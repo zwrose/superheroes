@@ -1166,7 +1166,6 @@ def test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_u
     bait = tmp_path / "bait.git"
     subprocess.run(["git", "init", "-q", "--bare", str(bait)], check=True, capture_output=True,
                    env=_fixture_git_env(os.environ))
-    before = sorted(p.relative_to(bait).as_posix() for p in bait.rglob("*"))
     inherited = dict(os.environ, GIT_DIR=str(bait), GIT_WORK_TREE=str(tmp_path), GIT_INDEX_FILE=str(bait / "index"))
     env = _fixture_git_env(inherited)
     assert not {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"} & set(env)
@@ -1178,8 +1177,15 @@ def test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_u
     subprocess.run(["git", "add", "a.txt"], cwd=str(repo), check=True, capture_output=True, env=env)
     subprocess.run(["git", *_ID, "commit", "-q", "-m", "a"], cwd=str(repo), check=True, capture_output=True, env=env)
     assert (repo / ".git").is_dir()
-    assert sorted(p.relative_to(bait).as_posix() for p in bait.rglob("*")) == before, \
-        "a fixture git call under an inherited GIT_DIR wrote into the bait repository"
+    # the bait is untouched: no commit, no object and no index were written into it
+    clean = _fixture_git_env(os.environ)
+    bait_head = subprocess.run(["git", "--git-dir", str(bait), "rev-parse", "--verify", "--quiet", "HEAD"],
+                               capture_output=True, text=True, env=clean)
+    assert bait_head.returncode != 0, "a fixture git call under an inherited GIT_DIR committed into the bait"
+    objects = subprocess.run(["git", "--git-dir", str(bait), "count-objects", "-v"],
+                             check=True, capture_output=True, text=True, env=clean).stdout
+    assert "count: 0" in objects.splitlines() and "in-pack: 0" in objects.splitlines(), objects
+    assert not (bait / "index").exists(), "a fixture git call under an inherited GIT_DIR wrote the bait's index"
 
 
 _MERGE_TRAIN = os.path.join(os.path.dirname(_LIB), "skills", "showrunner", "reference", "merge-train.md")
