@@ -23,7 +23,7 @@ with the `<expr>` named in each entry. Every capture omits the one leading line 
 | B3 | `_check_fixed_above`, `if named not in new_of:` | a line naming a PR outside the stack refuses `fixed-above-unknown-layer` | `test_prove_line_naming_a_pr_outside_the_stack_is_unknown_layer` | proven |
 | B4 | `_validate_prove`, `if missing:` | bodies given but a layer's PR has no string body is `bad-argument` | `test_prove_bodies_that_do_not_fit_the_layers_are_bad_argument_and_run_nothing[missing-body/empty-bodies/body-none/body-bytes/key-is-string]` | proven |
 | B5 | `_prove_cli_inputs`, `if layer[3] not in bodies:` | a layer without its `--pr-body` is `bad-argument` naming `--pr-body` | `test_cli_prove_without_a_pr_body_for_every_layer_is_bad_argument` | proven |
-| B6 | `merge-train.md` item 4 (c) `--no-rebase-merges` | with the clone's `rebase.rebaseMerges` on, the recipe's rebase without the flag keeps a merge commit | `test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit` | proven (by the contrast) |
+| B6 | `merge-train.md` item 4 (c) `--no-rebase-merges` | the flag removed from the shipped recipe: in a clone with `rebase.rebaseMerges` on, the recipe's rebase keeps a merge commit | `test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit` (reads the recipe's flags) | proven (recipe neutralized, test unedited; re-proved after review) |
 | B7 | `_prove_cli_inputs`, `except (OSError, ValueError)` | a `--pr-body` file that is missing, a directory or not UTF-8 is `bad-argument`, never read as empty or raised | `test_cli_prove_pr_body_file_that_cannot_be_read_is_bad_argument` | proven |
 
 **Not neutralized (guards the order did not declare, covered by tests but without a red of their own):** `_validate_prove` clauses for a layer pr that is not a positive int, a repeated pr, a triple layer while bodies are given, and bodies that is not a dict (their cases are in the B4 parametrized test, `test_prove_a_bad_pr_is_bad_argument_even_without_bodies` and the `triple-with-bodies`, `duplicate-pr`, `pr-*`, `bodies-list`, `bodies-string` ids, all green); the git-failed branches of `_check_fixed_above` (`test_prove_ancestry_check_failing_on_a_line_is_git_failed_not_current`, `test_prove_lookup_raising_on_a_line_is_git_failed`); the `_prove_cli_inputs` clauses for a non-integer `--layer`/`--pr-body` pr and a repeated `--pr-body` pr; the lazy-import test. These are **unproven** here: no neutralization was run for them.
@@ -251,38 +251,31 @@ FAILED plugins/superheroes/lib/tests/test_stack_linear.py::test_cli_prove_withou
 
 ## B6 — the recipe's `--no-rebase-merges` flag
 
-The detector is the flag test's own contrast. In a throwaway repo whose own config sets `rebase.rebaseMerges=true`, the recipe's rebase **without** the flag keeps a merge commit (asserted, and `prove` then refuses `merge-commit-remains`), and **with** the flag the rebased head has no merge commit and `prove` proves. The red half shows the contrast assertion bites: with the repo's setting turned off (the neutralization), the no-flag arm no longer keeps a merge commit, so the assertion that says why the flag is in the recipe fails.
+**Superseded (review-code round 1 at `8232be66`, finding "B6 changes the fixture instead of neutralizing the recipe flag").** The first proof of this element neutralized the test's own fixture (the throwaway repo's `rebase.rebaseMerges` setting), and the test then hard-coded the flag, so removing it from the recipe could not turn the test red. The test now reads the straightening rebase's flags from `merge-train.md` § Merging a stack, item 4 (c) (`_recipe_rebase_flags`: the words between `git rebase` and `--onto` in each of the step's two rebase commands, which must agree), and this proof neutralizes the recipe itself, with the test unedited. Re-run by the orchestrator in a detached probe worktree at `70af7d7c`.
 
-**neutralization (in the test, the throwaway repo's config):** `_git(repo, "config", "rebase.rebaseMerges", "true")` and `assert _git(repo, "config", "--get", "rebase.rebaseMerges") == "true"` → the value `"false"` in both, marked `# bite-proof`.
+**neutralization (the shipped recipe, `plugins/superheroes/skills/showrunner/reference/merge-train.md` lines 155-156):** `--no-rebase-merges` removed from both `git rebase` commands of item 4 (c).
 
-**red** (`-k "recipe_rebase_flag"`):
+**red** (`-k "recipe_rebase_flag"`, `--tb=line`): with the flag gone, the recipe's rebase in a clone with `rebase.rebaseMerges=true` keeps the merge commit — it produces the same head as the no-flag arm, so `assert flat != kept` fails:
 ```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_ test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit _
-/home/user/wt-2459-wo6/plugins/superheroes/lib/tests/test_stack_linear.py:1179: in test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit
-    assert _git(repo, "rev-list", "--merges", base + ".." + kept) != "", \
-E   AssertionError: without the flag the clone's rebase.rebaseMerges keeps a merge commit
-E   assert '' != ''
-E    +  where '' = _git(PosixPath('/tmp/claude-0/pytest-of-root/pytest-131/test_recipe_rebase_flag_keeps_0/flag'), 'rev-list', '--merges', (('f21ceb8cf820373359b66d3a2ac777a5ca89ea1c' + '..') + 'a4e656a67490c24e039d625bee4d058f564f62bf'))
+/home/user/wt-2459-probe7/plugins/superheroes/lib/tests/test_stack_linear.py:1210: AssertionError: assert 'b2a42fe90dfbe5225e2eb6bc5eac808e45e5c337' != 'b2a42fe90dfbe5225e2eb6bc5eac808e45e5c337'
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stack_linear.py::test_recipe_rebase_flag_keeps_a_clone_that_rebases_merges_from_keeping_a_merge_commit
-1 failed, 217 deselected in 0.53s
+1 failed, 217 deselected in 9.03s
 ```
 
-**restore:** the two lines set back to `"true"` by the inverse edit.
-**restored lines:**
-```python
-    _git(repo, "config", "rebase.rebaseMerges", "true")
-    assert _git(repo, "config", "--get", "rebase.rebaseMerges") == "true"
-```
-**green** (same `-k`; the no-flag arm keeps a merge commit, the flag arm does not, `prove` proves it):
-```
-.                                                                        [100%]
-1 passed, 217 deselected in 0.69s
-```
+**restore:** the flag put back in both commands by the inverse edit; `git status` in the probe tree printed nothing.
 
-git in this environment is 2.43.0 and runs both `rebase.rebaseMerges` and `--no-rebase-merges` (the green run above executed both).
+**green** (the whole file, at `70af7d7c`): `218 passed`.
+
+git in this environment is 2.43.0 and runs both `rebase.rebaseMerges` and `--no-rebase-merges`.
+
+**The fixture's git environment.** `_GIT_ENV` is built by `_fixture_git_env(os.environ)`, which drops every inherited `GIT_*` variable before setting `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM`. Its detector is `test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_untouched`: under an inherited `GIT_DIR`, `GIT_WORK_TREE` and `GIT_INDEX_FILE` pointing at a bait bare repository, the env carries none of them, and a real `git init`, `add` and `commit` built with it leave the bait's files unchanged. (Running the whole file under an inherited `GIT_DIR` is not possible: the repository's own pytest source guard runs `git rev-parse --show-toplevel` and fails under it first.) Re-run by the orchestrator in a detached probe worktree at `a529e339`, and again at `a7a8e4e7` after the bait check moved from listing the bait's files to asking git (HEAD, `count-objects`, the index file), which the whole-tree text-set gate requires: the same neutralization went red the same way (`1 failed, 218 deselected`) and the restored file was green (`219 passed`).
+
+**neutralization (in `_fixture_git_env`, `test_stack_linear.py` line 31):** `if not key.startswith("GIT_")` → `if True`.
+
+**red** (`-k "fixture_git_env"`, `--tb=line`): the inherited selectors survive into the env — `AssertionError: assert not ({'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE'} & {…})` at `test_stack_linear.py:1172` (the right-hand set is the env's key names, elided here); `FAILED …::test_fixture_git_env_drops_inherited_git_selectors_so_a_bait_repository_is_untouched`; `1 failed, 218 deselected`.
+
+**restore:** the inverse edit; `git status` in the probe tree printed nothing. **green** (whole file): `219 passed`.
 
 ## B7 — a `--pr-body` file that cannot be read as UTF-8 is `bad-argument`
 
