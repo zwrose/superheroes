@@ -176,16 +176,23 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    nothing is pushed. `tree-changed` means the rebase changed a
    file: treat it as a content change, which falls to the "content changed" branch (the
    unequal-digest branch of `skills/showrunner/reference/vet-receipt.md` spine field 1), never a push.
-   On `fixed-above-stale`, edit each named line in that layer's PR body to the `replacement` `prove`
-   printed (the rewritten head, whose files `prove` showed unchanged), record the swap with the
-   dated re-pin line, save the bodies again and re-run `prove`; nothing is pushed until it passes.
-   `fixed-above-unknown-layer` stops the straightening: the line names a PR outside this stack.
+   On `fixed-above-stale`, edit each named line in that layer's saved body file, never the PR
+   itself, to the `replacement` `prove` printed (the rewritten head, whose files `prove` showed
+   unchanged), and re-run `prove` on the edited files; nothing is pushed until it passes, and no PR
+   body changes before the push. `fixed-above-unknown-layer` stops the straightening: the line
+   names a PR outside this stack.
 
    (f) **Push once.** Run the `push` argv that `prove` printed, as it is: one atomic push, every
    lease pinned to the vetted head. It rides the owner's standing grant, recorded in the project's
    Canon, for this straightening (`skills/showrunner/SKILL.md` duty 6), with the reason stated on
    the stack's sheet. Without that Canon entry the push asks its own word, as any force-push does. A
-   refused lease (a head moved since the vet) fails the whole push: re-read and start over.
+   refused lease (a head moved since the vet) fails the whole push: re-read and start over. A
+   refused push changed no branch and no PR body, so every fixed-above line still names a commit
+   its layer holds. Only after the push succeeds, publish each edited body file to its PR
+   (`gh api -X PATCH repos/<o>/<r>/pulls/<n> -F body=@<file>`), read it back, and record each swap
+   with the dated re-pin line. If a publish fails after the push, save every layer's current PR
+   body again and re-run `prove` with the same layers: it names each line still stale, with its
+   replacement; publish those and run it again until it passes.
 
    (g) **Re-pin and merge.** Re-pin each layer's receipt with the `repin` line `prove` printed
    (old head, new head, equal tree hash). Wait for CI green on every new head, selected by workflow
