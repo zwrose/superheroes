@@ -411,6 +411,62 @@ def test_9c_a_stack_that_cannot_be_read_parks_names_why_and_credits_nothing(worl
     assert "the stack could not be read: stack-unreadable" in world.state["certification"]["reason"]
 
 
+# --- the three negative cases, at the step level: identical on the base code and the head code --------------
+# Each patches the seam with raising=False so the same test runs where the seam does not exist (the base code,
+# which has no stack search) and reads the same park there as here.
+
+def _layer_commit(world, files):
+    """A real, locally present commit on top of the reviewed head, left as a loose commit (HEAD back on the head)."""
+    for rel, text in files.items():
+        _write(world.repo, rel, text)
+    oid = _commit(world.repo, "layer above")
+    _git(world.repo, "checkout", "-q", "--detach", world.head)
+    return oid
+
+
+def _members_above(world, oids):
+    out = _membership()
+    out["members"] = [m for m in out["members"] if m["position"] not in (3, 4)]
+    for position, oid in zip((3, 4), oids):
+        out["members"].append({"position": position, "number": 100 + position, "headRefName": "layer-%d" % position,
+                               "headRefOid": oid, "state": "OPEN"})
+
+    return out
+
+
+def _assert_parks_not_in_head(world):
+    assert world.step() is True
+    (row,) = world.round_record["breakItKept"]
+    assert (row["outcome"], row["reason"]) == ("missing", "not-in-head"), row
+    assert "(missing: not-in-head)" in world.state["certification"]["reason"], world.state["certification"]
+    assert "break-it test not kept: %s (missing: not-in-head)" % TEST_PATH in world.state["certification"]["reason"]
+
+
+def test_11_n1_a_pr_that_is_not_a_stack_layer_parks_not_in_head(world, monkeypatch):
+    monkeypatch.setattr(RD, "_read_stack_membership",
+                        lambda pr, repo: _refusal(stack_check.REASON_NOT_LINKED), raising=False)
+    _assert_parks_not_in_head(world)
+
+
+def test_11_n2_a_stack_layer_with_no_layer_above_holding_the_test_parks_not_in_head(world, monkeypatch):
+    # layer 3 and layer 4 are real local commits above the reviewed head; neither holds the test path
+    layer3 = _layer_commit(world, {"src/three.py": "THREE = 3\n"})
+    layer4 = _layer_commit(world, {"src/four.py": "FOUR = 4\n"})
+    monkeypatch.setattr(RD, "_read_stack_membership",
+                        lambda pr, repo: _members_above(world, [layer3, layer4]), raising=False)
+    _assert_parks_not_in_head(world)
+
+
+def test_11_n3_a_layer_above_holding_a_non_matching_body_parks_not_in_head(world, monkeypatch):
+    # layer 3 holds no test; layer 4 (the top) holds a file at the test's path with a different body (other sha256)
+    layer3 = _layer_commit(world, {"src/three.py": "THREE = 3\n"})
+    layer4 = _layer_commit(world, {TEST_PATH: _OTHER})
+    assert hashlib.sha256(_OTHER.encode()).hexdigest() != hashlib.sha256(_TEST_FAILING.encode()).hexdigest()
+    monkeypatch.setattr(RD, "_read_stack_membership",
+                        lambda pr, repo: _members_above(world, [layer3, layer4]), raising=False)
+    _assert_parks_not_in_head(world)
+
+
 # --- the review record --------------------------------------------------------------------------------
 
 _FOUND = {"path": TEST_PATH, "outcome": "kept", "reason": "in-higher-layer", "run": None,
