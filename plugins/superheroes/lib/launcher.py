@@ -3900,7 +3900,8 @@ def _listing_value(text):
 
 
 def _listing_row_ok(row):
-    if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+    # axis: a row whose id is empty or not a string is not a recorded host shape, so it never matches a lane — see bite-proof record i2452_empty_ids
+    if not isinstance(row, dict) or not isinstance(row.get("id"), str) or not row["id"]:
         return False
     if any(k in row and not isinstance(row[k], str) for k in _LISTING_STRING_FIELDS):
         return False
@@ -3959,7 +3960,7 @@ def _page_created_by_environment(pages):
 
     Every row needs a parseable UTC ``created_at`` and the rows must run newest-created first
     (non-increasing); an empty page, an unparseable stamp or a page out of order proves nothing.
-    A row with no ``environment_id`` is left out of the map, so it never proves a lane's absence.
+    A row with no ``environment_id``, or an empty one, is left out of the map, so it never proves a lane's absence.
     """
     rows = pages[0]["data"]
     stamps = [_listing_created_ts(row) for row in rows]
@@ -3970,7 +3971,8 @@ def _page_created_by_environment(pages):
     newest = {}
     for row, stamp in zip(rows, stamps):
         env_id = row.get("environment_id")
-        if isinstance(env_id, str) and stamp > newest.get(env_id, float("-inf")):
+        # axis: a row whose environment_id is empty or not a string is left out of the map, so it never proves absence — see bite-proof record i2452_empty_ids
+        if isinstance(env_id, str) and env_id and stamp > newest.get(env_id, float("-inf")):
             newest[env_id] = stamp
     return newest
 
@@ -4290,16 +4292,20 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
     live = []
     unproven = []
     for launch_id, info in candidates.items():
-        if info.get("cloudSessionId") is not None:
-            matched = [row for row in rows if row["id"] == info["cloudSessionId"]]
+        session_id = info.get("cloudSessionId")
+        confirmed = isinstance(session_id, str) and bool(session_id)
+        # axis: a lane whose cloudSessionId is empty or not a string is unconfirmed, matched by title only, and absence never proves it gone — see bite-proof record i2452_empty_ids
+        if confirmed:
+            matched = [row for row in rows if row["id"] == session_id]
         else:
             matched = [row for row in rows if row.get("title") == info["cloudSessionName"]]
         if not matched:
             started_ts = info.get("startedTs")
             lane_env = info.get("cloudEnvironment")
+            # axis: a lane whose cloudEnvironment is empty or not a string proves nothing by absence — see bite-proof record i2452_empty_ids
             newest = (
                 created_by_env.get(lane_env)
-                if created_by_env is not None and isinstance(lane_env, str) else None
+                if created_by_env is not None and isinstance(lane_env, str) and lane_env else None
             )
             if launch_id in limited:
                 continue
@@ -4308,7 +4314,7 @@ def _original_session_pass(repo_root, issue, stamped, sessions_file, env, reads)
                 newest is None or not isinstance(started_ts, (int, float))
                 or isinstance(started_ts, bool)
                 or newest < started_ts + _ADOPT_ABSENCE_SKEW_SECONDS
-                or info.get("cloudSessionId") is None
+                or not confirmed
             ):
                 unproven.append(launch_id)
             continue

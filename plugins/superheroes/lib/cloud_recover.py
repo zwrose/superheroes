@@ -296,8 +296,9 @@ def _push_time(repo, name, sha, env, run):
         return None
     if not isinstance(events, list):
         return None
+    # axis: an event supplies the push time only when its ref is the branch's own; a missing, empty or non-string ref never counts — see bite-proof record i2452_empty_ids
     return next((_epoch(e.get("timestamp")) for e in events if isinstance(e, dict) and e.get("after") == sha
-                 and (not isinstance(e.get("ref"), str) or e["ref"] == ref)), None)
+                 and isinstance(e.get("ref"), str) and e["ref"] == ref), None)
 
 
 def _branch_entry(repo_root, repo, name, sha, env, run):
