@@ -749,7 +749,7 @@ def test_t7_e3_a_link_that_fails_is_not_run_and_not_credited(stack, monkeypatch)
         ("not-run", "dependency-link-failed", False), ("not-run", "dependency-link-failed", True)], got
 
 
-@pytest.mark.parametrize("interpreter", [sys.executable, None, "python3", ["python3"], ["./venv/bin/python"],
+@pytest.mark.parametrize("interpreter", [sys.executable, None, "python3", ["python3"], ["./python3"],
                                          ["../x/bin/python"], []])
 def test_t7_e4_an_absolute_or_absent_interpreter_adds_no_extra_name(stack, monkeypatch, interpreter):
     seen, real = [], dependency_links._link_dependencies
@@ -773,6 +773,21 @@ def test_t7_e4_a_relative_interpreter_adds_its_first_component(stack, monkeypatc
 
     monkeypatch.setattr(dependency_links, "_link_dependencies", spy)
     stack.search(interpreter=VENV)
+    assert seen == [("node_modules", ".venv")] * 2, seen
+
+
+@pytest.mark.parametrize("interpreter", [["./.venv/bin/python"], "./.venv/bin/python", ["././.venv/bin/python"]])
+def test_t7_e4_a_dot_slash_prefixed_interpreter_still_adds_its_folder(stack, monkeypatch, interpreter):
+    # axis: a harmless leading ./ on a relative interpreter is stripped before its first folder is read, so the layer checkout still gets the reviewed checkout's .venv — see bite-proof record wo_e_2463_layer_dependencies
+    _venv(stack.repo)
+    seen, real = [], dependency_links._link_dependencies
+
+    def spy(root, copy, names=dependency_links.DEPENDENCY_DIRS):
+        seen.append(tuple(names))
+        return real(root, copy, names=names)
+
+    monkeypatch.setattr(dependency_links, "_link_dependencies", spy)
+    stack.search(interpreter=interpreter)
     assert seen == [("node_modules", ".venv")] * 2, seen
 
 

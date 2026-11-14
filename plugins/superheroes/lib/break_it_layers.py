@@ -54,13 +54,14 @@ def _layer_remove(repo_root, path):
 
 def _extra_name(interpreter):
     """The interpreter's own folder to link: the first path component of a relative interpreter of more than one
-    component (``.venv`` for ``.venv/bin/python``), else None (a bare name, an absolute path, ``.``/``..`` first,
-    no interpreter)."""
+    component, after any leading ``./`` (``.venv`` for ``.venv/bin/python`` and ``./.venv/bin/python``), else None
+    (a bare name, an absolute path, ``..`` first, no interpreter)."""
     value = interpreter[0] if isinstance(interpreter, list) and interpreter else interpreter
     if not isinstance(value, str) or not value or os.path.isabs(value):
         return None
-    parts = [part for part in value.replace(os.sep, "/").split("/") if part]
-    if len(parts) < 2 or parts[0] in (".", ".."):
+    # axis: a harmless leading ./ is stripped before the first folder is read, so ./.venv/bin/python links .venv — see bite-proof record wo_e_2463_layer_dependencies
+    parts = [part for part in value.replace(os.sep, "/").split("/") if part and part != "."]
+    if len(parts) < 2 or parts[0] == "..":
         return None
     return parts[0]
 
