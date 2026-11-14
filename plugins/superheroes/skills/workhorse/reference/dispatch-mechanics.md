@@ -1083,7 +1083,11 @@ is `agents/check-runner.md`.
 
 1. **Author the command list.** Write the exact commands, with a byte ceiling per command and an
    order-wide ceiling. Nothing else bounds the sum. For each command, name the paths outside the
-   repository where the seat writes its stdout, stderr, and exit code.
+   repository where the seat writes its stdout, stderr, and exit code. Write each entry as one plain
+   command (`PLAIN_COMMAND_RULE` in `lib/command_refusals.py`). The seat holds no file-write tool, so
+   when an entry needs more than one call (a capture with its header line, redirects and exit code,
+   or a loop), write it as a script with your own file-write tool and list its one plain interpreter
+   call.
 2. **Resolve the model.** Run this call with the seat bundle written out:
    `python3 -B <plugin root>/lib/dispatch_guard.py check --seat '{"vendor":"<claude or codex>","model":null,"effort":null,"role":"mechanical"}'`. The
    `effort` key is required and may be null; a seat without it is refused (`effort-key-absent`).

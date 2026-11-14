@@ -70,6 +70,8 @@ guidance such as a desktop autonomy directive, or a "do not call the AgentTool u
 requested it" directive, does not override this charter's delegation model for superheroes work.
 That guidance varies by host surface and version.
 
+**A brief you write by hand carries the plain-command rule.** When you brief a subagent or helper yourself (a general-purpose agent, a mechanical-duty recipe, a vet-drafter), the brief tells it to follow `PLAIN_COMMAND_RULE` in `lib/command_refusals.py`: one plain command per call, multi-step work in a script file run by one plain interpreter call. The plugin's own agent files carry it; a hand-written brief carries it only when you put it there.
+
 **No at-sign before a name or number in GitHub text.** GitHub notifies whoever a login after an at-sign names, numbers included. Write `vet 893`, `collector 574` or the bare name, or put the token in a code span, unless you mean to notify that person.
 
 ## The loop

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """The one home of the refused-command stop rule, the refusal-entry shape (#2011), the
 file-write rule (#2067, #2126), the delete rule (#2314), the stop-and-delete rule (#2412), and the
-session-wide refusal rule and its sanctioned retry exceptions (#2431).
+session-wide refusal rule and its sanctioned retry exceptions (#2431), and the plain-command rule
+(#2458).
 
 Every order the plugin writes for a fixer or an implementer carries `ORDER_TEXT`,
-`FILE_WRITE_RULE`, `DELETE_RULE` and `STOP_AND_DELETE_RULE` (#2412); no order surface keeps a hand
-copy of any, except that `agents/implementer.md` keeps a census-tested copy of the stop rule
-(`STOP_RULE`, `REFUSAL_MEANING`, `ENTRY_SHAPE`). `refusals_fault` is the one check of a result's
-`refusals` list. Leaf module: stdlib only, imports nothing from `lib/`.
+`FILE_WRITE_RULE`, `DELETE_RULE`, `STOP_AND_DELETE_RULE` (#2412) and `PLAIN_COMMAND_RULE` (#2458);
+no order surface keeps a hand copy of any, except that `agents/implementer.md` keeps a
+census-tested copy of the stop rule (`STOP_RULE`, `REFUSAL_MEANING`, `ENTRY_SHAPE`).
+`refusals_fault` is the one check of a result's `refusals` list. Leaf module: stdlib only, imports
+nothing from `lib/`.
 """
 
 STOP_RULE = (
@@ -23,6 +25,29 @@ STOP_RULE = (
     "entry's route. A second refusal, and any refusal about what the command does (a delete, a "
     "push, a network call, a permission), stays a stop; so does every other form. A refused "
     "command that carries a delete is never only about its form."
+)
+
+PLAIN_COMMAND_RULE = (
+    "Write every shell command in plain form, so that no command waits on an approval nobody is "
+    "there to give: a chained, looping or variable-dependent command cannot be pre-approved, and "
+    "it is held for the owner's approval even in auto mode. Run one plain command per call. A "
+    "single command on its own, such as a read-only `git`, `gh api` or `cat`, stays fine as one "
+    "plain call. That holds only for a command that carries no heredoc and no inline program code "
+    "(`python3 -c`, `node -e`, `bash -c` and the like): file content and code go in a file written "
+    "with the file-write tool, and that file is then run or read by one plain call. Put "
+    "multi-step work (a loop, several file operations, anything that needs a "
+    "shell variable) in a script file in your own scratch directory, written with the file-write "
+    "tool, and run it with one plain interpreter call such as `bash <path>` or `python3 <path>`. "
+    "Never chain commands with `;`, `&&` or `||`, and never pipe into a loop. Make directories "
+    "and copy or move files with the file tools or inside such a script, never as chained shell "
+    "commands. Two rules still bind beside this one and are not loosened by it: a delete never "
+    "moves into the script, it stays its own plain call as the delete rule says, and nothing else "
+    "a rule or a fence refuses as its own call (an install, a network call, a push) moves into a "
+    "script to get past it; and where the "
+    "file-write rule binds you, a file that rule sends to the file tools is never written by the "
+    "script. A seat with no file-write tool runs only single plain commands and leaves any "
+    "multi-step script to the seat that dispatched it. This rule prevents a refusal about a "
+    "command's form; when one happens anyway, the stop rule governs it."
 )
 
 # The sanctioned retry exceptions: the only acts a seat may take after another seat's refusal, or
