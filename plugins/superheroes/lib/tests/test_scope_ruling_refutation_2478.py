@@ -623,3 +623,19 @@ def test_g1_the_standing_rulings_block_and_the_verifier_order_say_a_ruling_is_no
     order = (Path(__file__).resolve().parents[2] / "rubric" / "orders" / "dispatch-verifiers.md").read_text(encoding="utf-8")
     flat = " ".join(order.split())
     assert "is never evidence about the code, so a REFUTED that rests on a ruling rather than on the code names that ruling's key" in flat
+
+
+def test_a12_a_ruling_key_is_not_found_inside_a_minted_hash_suffixed_key():
+    # axis: _whole_key's boundary excludes `#`, so the ruling on key K is never read inside the distinct minted key
+    # `K#<12 hex>` (session_contract.minted_identity_key, a clamped title); naming K itself still names it
+    # bite-proof: plugins/superheroes/lib/tests/bite_proofs/wo1_scope_ruling_2478.md
+    import session_contract as sc
+    long_title = "unchecked index " + "word " * 80
+    minted = sc.minted_identity_key({"file": "a.py", "line": 3, "title": long_title})
+    base = sc.location_key({"file": "a.py", "line": 3, "title": long_title})
+    assert "#" in minted and minted.startswith(base)
+    # a code refutation citing the distinct suffixed finding is not the ruling on the base key
+    assert FO.ruling_rest(f"the check at {minted} rejects the index", [base]) is None
+    # naming the base key itself, whole, still names it
+    assert FO.ruling_rest(f"{base} covers this", [base]) == {"findingKey": base}
+    assert FO.ruling_rest(f"covered by {base}.", [base]) == {"findingKey": base}

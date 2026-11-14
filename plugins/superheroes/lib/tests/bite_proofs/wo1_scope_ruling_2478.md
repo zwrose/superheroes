@@ -1064,3 +1064,33 @@ path prefix with `...`; the live capture printed each in full.)
 ..................                                                       [100%]
 90 passed in 0.58s
 ```
+
+Builder's re-run of E15 (detached worktree at 2731bbe3): E15a, quoted keys merged back into `named`: 8 failed (a7 ×4, a8,
+b4, b5, b6), 82 passed. E15b, the guard `and not quoted - named` removed: 3 failed (a8, a8b, b7), 87 passed. Restore
+receipt: `git status --porcelain` empty; green 90 passed.
+
+---
+
+## E16 — the `#` key boundary: `_whole_key` (`finding_outcomes.py`), added by review session 4's fix
+
+Axis: a ruling key K is never read inside a distinct minted key `K#<12 hex>` (`session_contract.minted_identity_key`, a
+clamped title, or the driver's identity-collision suffix); naming K whole still names it. Typed by the build session at
+review-code's `apply-fixes` step.
+
+**Neutralization:** the trailing lookahead `(?![A-Za-z0-9_@/#]|[-.:][A-Za-z0-9_])` back to
+`(?![A-Za-z0-9_@/]|[-.:][A-Za-z0-9_])` (no `#`).
+
+**Raw red** (`--tb=line`, the scope-ruling test file; the long title is abbreviated `…`):
+
+```
+E   AssertionError: assert {'findingKey': 'a.py::unchecked index word … word@L3'} is None
+FAILED plugins/superheroes/lib/tests/test_scope_ruling_refutation_2478.py::test_a12_a_ruling_key_is_not_found_inside_a_minted_hash_suffixed_key
+1 failed, 90 passed in 0.65s
+```
+
+**Restore:** the inverse edit, back to `(?![A-Za-z0-9_@/#]|[-.:][A-Za-z0-9_])`.
+**Restore receipt:** `git diff --stat` after the restore lists only the intended fix (`finding_outcomes.py` 3 lines, the
+test file +16).
+
+**Raw green:** the scope-ruling, left-boundary and key-suffix test files with `test_verification.py` and
+`test_review_record_session.py`: `226 passed in 3.37s`.
