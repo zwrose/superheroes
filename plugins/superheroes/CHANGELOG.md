@@ -1,5 +1,38 @@
 # Changelog
 
+## [0.49.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.48.0...superheroes-v0.49.0) (2026-11-14)
+
+
+### Features
+
+* **superheroes:** a leg that continues an existing PR's branch must carry the adoption pair ([#2447](https://github.com/zwrose/superheroes/issues/2447)) ([ecc599c](https://github.com/zwrose/superheroes/commit/ecc599c8b7eab75a7f52a62a477369d1ed91f16b))
+* **superheroes:** every command-running seat writes its commands in plain form ([#2461](https://github.com/zwrose/superheroes/issues/2461)) ([7ecf48f](https://github.com/zwrose/superheroes/commit/7ecf48fb927e85bfb181f0c46bd15564b9ded738))
+* **superheroes:** no plugin text pings people — guard bare at-sign mentions in GitHub writers ([#2457](https://github.com/zwrose/superheroes/issues/2457)) ([1c2f6ea](https://github.com/zwrose/superheroes/commit/1c2f6ea953f2f8b2f4e6d8d82e2577421eec4276))
+* **superheroes:** run repository-sweep searchers as a named read-only agent ([#2403](https://github.com/zwrose/superheroes/issues/2403)) ([4d95376](https://github.com/zwrose/superheroes/commit/4d95376705db1d634397677b4887c0b8f26622c0))
+* **superheroes:** the advisor makes lane calls at any hour, recorded for veto ([#2428](https://github.com/zwrose/superheroes/issues/2428)) ([b109cd7](https://github.com/zwrose/superheroes/commit/b109cd78c034794389bcbef87e16b5f75ba3d377))
+* **superheroes:** the advisor writes the PR-body lines that record an owner acceptance ([#2425](https://github.com/zwrose/superheroes/issues/2425)) ([4b7d4f1](https://github.com/zwrose/superheroes/commit/4b7d4f14db0d2d4463e061b6ddbe3da15a6814e1))
+
+
+### Bug Fixes
+
+* **superheroes:** a break-it test on a finding never sent for fixing no longer blocks the certificate ([#2404](https://github.com/zwrose/superheroes/issues/2404)) ([d9a1fef](https://github.com/zwrose/superheroes/commit/d9a1fef46b008ef11afdfde5dc9aba2fc9287c68))
+* **superheroes:** a finding open when its review loop ended counts as open for repeat matching ([#2448](https://github.com/zwrose/superheroes/issues/2448)) ([61647bd](https://github.com/zwrose/superheroes/commit/61647bd2a7371decf46fcf807404ae1b8b59c401))
+* **superheroes:** a fix that only removes worthless test lines can clear its fix audit ([#2444](https://github.com/zwrose/superheroes/issues/2444)) ([a66e73a](https://github.com/zwrose/superheroes/commit/a66e73a61f6a9e3b0ce4b33e682ac83b2b51b4d8))
+* **superheroes:** a matching comment and later lane activity read a silent relay's message delivered ([#2422](https://github.com/zwrose/superheroes/issues/2422)) ([e1dc699](https://github.com/zwrose/superheroes/commit/e1dc6995b9b9cb49deecbb210bcdd44ba7527995))
+* **superheroes:** a refusal binds the whole build session, with one list of sanctioned retries ([#2433](https://github.com/zwrose/superheroes/issues/2433)) ([29c87a1](https://github.com/zwrose/superheroes/commit/29c87a13937804687577d3b71e3005f63883f35c))
+* **superheroes:** a register can declare a child that consumes no entry ([#2432](https://github.com/zwrose/superheroes/issues/2432)) ([03d8ca7](https://github.com/zwrose/superheroes/commit/03d8ca76c280f7eb60214702b75969687d0fc441))
+* **superheroes:** a title word glued to inline markup does not count in the leftover check ([#2406](https://github.com/zwrose/superheroes/issues/2406)) ([79eb51a](https://github.com/zwrose/superheroes/commit/79eb51ad4c121787b07b8105203aa5aedbf094c4))
+* **superheroes:** an abandoned review session's record lists every planned seat that produced no result ([#2440](https://github.com/zwrose/superheroes/issues/2440)) ([6adc682](https://github.com/zwrose/superheroes/commit/6adc682d462329345febfd25ac8af20c1bb87fc7))
+* **superheroes:** an image description that closes on its own line no longer makes md_hidden unsure of later lines ([#2456](https://github.com/zwrose/superheroes/issues/2456)) ([8558c28](https://github.com/zwrose/superheroes/commit/8558c28e0835eb952532ba4bd4369c1df3a43ddf))
+* **superheroes:** five small doctrine and message fixes from a field report ([#2414](https://github.com/zwrose/superheroes/issues/2414)) ([237816c](https://github.com/zwrose/superheroes/commit/237816c3364b5b2ee2e7c4a3cd5f015e7ba38829))
+* **superheroes:** give every build seat one stop-and-delete rule ([#2421](https://github.com/zwrose/superheroes/issues/2421)) ([2b39beb](https://github.com/zwrose/superheroes/commit/2b39bebeb2ee6b4e39589057a6fb63ff332d0a46))
+* **superheroes:** list searchDescription keys as examples, kind, looksLike ([#2454](https://github.com/zwrose/superheroes/issues/2454)) ([b00c850](https://github.com/zwrose/superheroes/commit/b00c850377ec0afed376da55aec2b55643bc3bf7))
+* **superheroes:** say when a leftover shares one acceptance with another ([#2405](https://github.com/zwrose/superheroes/issues/2405)) ([2c1c054](https://github.com/zwrose/superheroes/commit/2c1c05443b2ba3dbdcbda58ba36152c1cf6bc954))
+* **superheroes:** scale the test role's attempt and retry ceilings with its slice ([#2423](https://github.com/zwrose/superheroes/issues/2423)) ([bd112c6](https://github.com/zwrose/superheroes/commit/bd112c6b56c8e295a46049892ad27d346e467486))
+* **superheroes:** skip the post-merge CI wait when the merged tree is the tree CI passed ([#2402](https://github.com/zwrose/superheroes/issues/2402)) ([ba17e8a](https://github.com/zwrose/superheroes/commit/ba17e8a38f06ca0929bdd874f6b427ad49d9cb4b))
+* **superheroes:** the duplication lens reads jscpd's report from a file, so very large trees get a reading ([#2416](https://github.com/zwrose/superheroes/issues/2416)) ([136f6ed](https://github.com/zwrose/superheroes/commit/136f6edcf448e5ffac5bd8ac6c78f692f38b2401))
+* **superheroes:** the wave watch reopens a local lane resumed after its outcome ([#2417](https://github.com/zwrose/superheroes/issues/2417)) ([53f083a](https://github.com/zwrose/superheroes/commit/53f083a9a033612ec55dc702fb5baa996e1d2fac))
+
 ## [0.48.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.47.0...superheroes-v0.48.0) (2026-11-08)
 
 
