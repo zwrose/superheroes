@@ -14,7 +14,10 @@ Before the PUT, `merge` checks linearity when the base branch has a merge queue:
 stack whose layers carry merge commits, so a queue base with a merge commit in any layer at or
 below the top is refused `stack-not-linear` with no request sent, and a stack whose layers, queue
 or commits cannot be read (or whose budget ran out) is refused `linearity-unreadable`. A base with
-no queue merges as before. The check, the PUT and the polling share the one invocation budget."""
+no queue merges as before. After a linear check on a queue base, `merge` reads the queue's free build
+slots and refuses `queue-slots-short` (fewer free slots than the layers at or below the top) or
+`queue-slots-unreadable` (the slot read failed or was ambiguous, a cloud session's GraphQL refusal
+included) before any request. The check, the PUT and the polling share the one invocation budget."""
 import argparse
 import json
 import math
@@ -51,6 +54,8 @@ REASON_MERGE_ENQUEUED = "merge-enqueued"
 REASON_POLL_TIMEOUT = "poll-timeout"
 REASON_STACK_NOT_LINEAR = "stack-not-linear"
 REASON_LINEARITY_UNREADABLE = "linearity-unreadable"
+REASON_QUEUE_SLOTS_SHORT = "queue-slots-short"
+REASON_QUEUE_SLOTS_UNREADABLE = "queue-slots-unreadable"
 
 STATUS_PENDING = "pending"
 STATUS_MERGED = "merged"
@@ -421,9 +426,24 @@ def _linear_gate(*, repo, top, end, timeout, run, monotonic):
     # axis: the commit read shares the invocation deadline
     linear = stack_linear.check_rest(repo=repo, prs=layers, timeout=timeout, deadline_at=end,
                                      run=run, monotonic=monotonic)
-    # axis: a complete linear read lets the merge go
+    # axis: a complete linear read on a queue base asks the queue for a free build slot per layer
     if linear.get("ok") is True:
-        return None
+        slots = merge_queue.slots(repo=repo, branch=base, layers=len(layers), timeout=timeout,
+                                  deadline_at=end, run=run, monotonic=monotonic)
+        # axis: a slots answer that is not an object with a fits key is queue-slots-unreadable
+        if not isinstance(slots, dict) or "fits" not in slots:
+            return (REASON_QUEUE_SLOTS_UNREADABLE,
+                    "merge queue slots: the answer is not an object with a fits key")
+        # axis: only a slots answer of exactly fits true lets the merge go
+        if slots.get("fits") is True:
+            return None
+        # axis: a slots answer of fits false with the slots-short reason is queue-slots-short
+        if slots.get("fits") is False and slots.get("reason") == merge_queue.REASON_SLOTS_SHORT:
+            return (REASON_QUEUE_SLOTS_SHORT, slots.get("detail"))
+        # axis: any other slots answer (unreadable, bad argument, a fits that is not a bool) is
+        # queue-slots-unreadable
+        return (REASON_QUEUE_SLOTS_UNREADABLE, "merge queue slots: %s: %s" % (
+            slots.get("reason"), slots.get("detail")))
     # axis: a merge commit in a layer on a queue base is stack-not-linear
     if linear.get("reason") == stack_linear.REASON_STACK_NOT_LINEAR:
         return (REASON_STACK_NOT_LINEAR, linear.get("detail"))
