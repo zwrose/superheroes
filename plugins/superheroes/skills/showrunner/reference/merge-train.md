@@ -152,8 +152,10 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
 
    (c) **Rebase on pinned shas.** Fetch the stack's branches. `<base>` is the main commit the vetted
    bottom already contains: the newest main commit its history holds, never a newer main. Bottom:
-   `git rebase --onto <base> <base> <vetted bottom head>`. Each layer above: `git rebase --onto <new
-   head of the layer below> <vetted head of the layer below> <vetted head of this layer>`. Every
+   `git rebase --no-rebase-merges --onto <base> <base> <vetted bottom head>`. Each layer above: `git
+   rebase --no-rebase-merges --onto <new head of the layer below> <vetted head of the layer below>
+   <vetted head of this layer>`. The flag is explicit because a clone with git's
+   `rebase.rebaseMerges` setting on would otherwise keep the merge commits. Every
    rebase runs on a detached head, so no branch moves. Do not use `gh stack rebase` or `gh stack
    push`: `gh stack rebase` fetches and rebases onto the newest trunk, and `gh stack push`
    re-fetches and leases against the refreshed tracking refs, so a head that moved after the proof
@@ -168,10 +170,16 @@ against a stack **number** can act on a pull request the owner never saw. Nothin
    head. The layers above rebase onto it as in (c), and step (e)'s `prove` covers it as any layer.
 
    (e) **Prove before pushing.** `python3 -B <plugin root>/lib/stack_linear.py prove --repo-root
-   <clone> --base <base> --layer <branch> <vetted head> <new head> ...`, one `--layer` per layer,
-   bottom to top. Any refusal stops, and nothing is pushed. `tree-changed` means the rebase changed a
+   <clone> --base <base> --layer <branch> <vetted head> <new head> <pr> ... --pr-body <pr> <file>
+   ...`, one `--layer` and one `--pr-body` per layer, bottom to top. Save each layer's current PR
+   body to a file first (`gh api repos/<o>/<r>/pulls/<n> --jq .body`). Any refusal stops, and
+   nothing is pushed. `tree-changed` means the rebase changed a
    file: treat it as a content change, which falls to the "content changed" branch (the
    unequal-digest branch of `skills/showrunner/reference/vet-receipt.md` spine field 1), never a push.
+   On `fixed-above-stale`, edit each named line in that layer's PR body to the `replacement` `prove`
+   printed (the rewritten head, whose files `prove` showed unchanged), record the swap with the
+   dated re-pin line, save the bodies again and re-run `prove`; nothing is pushed until it passes.
+   `fixed-above-unknown-layer` stops the straightening: the line names a PR outside this stack.
 
    (f) **Push once.** Run the `push` argv that `prove` printed, as it is: one atomic push, every
    lease pinned to the vetted head. It rides the owner's standing grant, recorded in the project's
