@@ -427,6 +427,31 @@ def test_9c_a_stack_that_cannot_be_read_parks_names_why_and_credits_nothing(worl
     assert "the stack could not be read: stack-unreadable" in world.state["certification"]["reason"]
 
 
+def test_12_a_changed_test_on_the_reviewed_head_never_reaches_the_stack_search(world, monkeypatch):
+    # the reviewed head holds a file at the recorded path whose body differs (changed / sha256-differs) while a
+    # higher layer (layer-3) still holds the original passing test: only missing / not-in-head may search the stack
+    assert hashlib.sha256(_OTHER.encode()).hexdigest() != hashlib.sha256(_TEST_FAILING.encode()).hexdigest()
+    _write(world.repo, TEST_PATH, _OTHER)
+    changed_head = _commit(world.repo, "reviewed head with a different test body")
+    assert changed_head != world.head
+    meta = {"repoRoot": str(world.repo), "headSha": changed_head}
+    meta.update(PR_META)
+    (world.session / RD.round_records.META_FILE).write_text(json.dumps(meta))
+    calls = []
+
+    def seam(pr, repo):
+        calls.append((pr, repo))
+        return world.membership()
+
+    monkeypatch.setattr(RD, "_read_stack_membership", seam)
+    assert world.step() is True, world.state.get("certification")
+    (row,) = world.round_record["breakItKept"]
+    assert (row["outcome"], row["reason"]) == (break_it.KEPT_CHANGED, "sha256-differs"), row
+    assert row["path"] == TEST_PATH, row
+    assert "stack" not in row, row
+    assert calls == [], calls
+
+
 # --- the three negative cases, at the step level: identical on the base code and the head code --------------
 # Each patches the seam with raising=False so the same test runs where the seam does not exist (the base code,
 # which has no stack search) and reads the same park there as here.
