@@ -26,7 +26,10 @@ PY = shlex.quote(sys.executable)
 # commit identity inline; production timing or environment shape the pin makes unobservable: a host whose
 # global config rewrites hooks, signing or default branches (the code under test reads the repo with the
 # caller's own environment, so this pin covers only the fixture's own commits).
-_GIT_ENV = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+# inherited GIT_* routing (GIT_INDEX_FILE, GIT_DIR, GIT_WORK_TREE...) captured at collection would send a
+# fixture's git call to the caller's repository, so none of it is kept; the two pins are the only GIT_* kept
+_GIT_ENV = {**{k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
+            "GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1"}
 _ID = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
 
 TEST_PATH = "tests/test_charge_once.py"
